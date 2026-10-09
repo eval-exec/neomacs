@@ -1,0 +1,1501 @@
+error[E0277]: `Rc<()>` cannot be sent between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |       ------------------ ^------
+  |       |                  |
+  |  _____|__________________within this `{closure@$DIR/tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24: 4:31}`
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `Rc<()>` cannot be sent between threads safely
+  |
+  = help: within `{closure@$DIR/tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24: 4:31}`, the trait `Send` is not implemented for `Rc<()>`
+note: required because it appears within the type `PhantomData<Rc<()>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut GcHeader` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut GcHeader` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut GcHeader`
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut ConsCell` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut ConsCell` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut ConsCell`
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Cell<usize>` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `Cell<usize>` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `Cell<usize>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicUsize` instead
+note: required because it appears within the type `gc::jit_state::JitHeapState`
+ --> src/tagged/gc/jit_state.rs
+  |
+  | pub(crate) struct JitHeapState {
+  |                   ^^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>`
+note: required because it appears within the type `Option<std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut HashTableObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut HashTableObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut HashTableObj`
+note: required because it appears within the type `PhantomData<*mut HashTableObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<*mut HashTableObj>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<*mut HashTableObj>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut FinalizerObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut FinalizerObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut FinalizerObj`
+note: required because it appears within the type `PhantomData<*mut FinalizerObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<*mut FinalizerObj>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<*mut FinalizerObj>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut *mut MarkerObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut *mut MarkerObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut *mut MarkerObj`
+note: required because it appears within the type `PhantomData<*mut *mut MarkerObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<*mut *mut MarkerObj>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<*mut *mut MarkerObj>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut u8` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut u8` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut u8`
+note: required because it appears within the type `gc::cons_blocks::ConsBlock`
+ --> src/tagged/gc/cons_blocks.rs
+  |
+  | pub(super) struct ConsBlock {
+  |                   ^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::cons_blocks::ConsBlock>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::cons_blocks::ConsBlock>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::cons_blocks::ConsBlock>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*const ()` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*const ()` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `TaggedValue`
+ --> src/tagged/value.rs
+  |
+  | pub struct TaggedValue(pub(crate) usize, ThreadConfined);
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::CanonicalEmptyString`
+ --> src/tagged/gc.rs
+  |
+  | enum CanonicalEmptyString {
+  |      ^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `gc::CanonicalEmptyStrings`
+ --> src/tagged/gc.rs
+  |
+  | struct CanonicalEmptyStrings {
+  |        ^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut FloatObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut FloatObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut FloatObj`
+note: required because it appears within the type `gc::arena_pages::MappedFloatRange`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct MappedFloatRange {
+  |                   ^^^^^^^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::MappedFloatRange>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::MappedFloatRange>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::MappedFloatRange>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut VecLikeHeader` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut VecLikeHeader` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut VecLikeHeader`
+note: required because it appears within the type `gc::arena_pages::MappedVecLikeObject`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct MappedVecLikeObject {
+  |                   ^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::MappedVecLikeObject>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::MappedVecLikeObject>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::MappedVecLikeObject>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut StringObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut StringObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut StringObj`
+note: required because it appears within the type `gc::arena_pages::MappedStringObject`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct MappedStringObject {
+  |                   ^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::MappedStringObject>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::MappedStringObject>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::MappedStringObject>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut VectorObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut VectorObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut VectorObj`
+note: required because it appears within the type `PhantomData<*mut VectorObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::arena_pages::ObjectPage<VectorObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectPage<T: PagedObject> {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::ObjectPage<VectorObj>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::ObjectPage<VectorObj>>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::ObjectPage<VectorObj>>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `gc::arena_pages::ObjectArena<VectorObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectArena<T: PagedObject> {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut ByteCodeObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut ByteCodeObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut ByteCodeObj`
+note: required because it appears within the type `PhantomData<*mut ByteCodeObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::arena_pages::ObjectPage<ByteCodeObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectPage<T: PagedObject> {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::ObjectPage<ByteCodeObj>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::ObjectPage<ByteCodeObj>>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::ObjectPage<ByteCodeObj>>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `gc::arena_pages::ObjectArena<ByteCodeObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectArena<T: PagedObject> {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut LambdaObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut LambdaObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut LambdaObj`
+note: required because it appears within the type `PhantomData<*mut LambdaObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::arena_pages::ObjectPage<LambdaObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectPage<T: PagedObject> {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::ObjectPage<LambdaObj>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::ObjectPage<LambdaObj>>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::ObjectPage<LambdaObj>>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `gc::arena_pages::ObjectArena<LambdaObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectArena<T: PagedObject> {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut MacroObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut MacroObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut MacroObj`
+note: required because it appears within the type `PhantomData<*mut MacroObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::arena_pages::ObjectPage<MacroObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectPage<T: PagedObject> {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::ObjectPage<MacroObj>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::ObjectPage<MacroObj>>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::ObjectPage<MacroObj>>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `gc::arena_pages::ObjectArena<MacroObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectArena<T: PagedObject> {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut RecordObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut RecordObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut RecordObj`
+note: required because it appears within the type `PhantomData<*mut RecordObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::arena_pages::ObjectPage<RecordObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectPage<T: PagedObject> {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::ObjectPage<RecordObj>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::ObjectPage<RecordObj>>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::ObjectPage<RecordObj>>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `gc::arena_pages::ObjectArena<RecordObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectArena<T: PagedObject> {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut SymbolWithPosObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut SymbolWithPosObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut SymbolWithPosObj`
+note: required because it appears within the type `PhantomData<*mut SymbolWithPosObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::arena_pages::ObjectPage<SymbolWithPosObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectPage<T: PagedObject> {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::ObjectPage<SymbolWithPosObj>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::ObjectPage<SymbolWithPosObj>>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::ObjectPage<SymbolWithPosObj>>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `gc::arena_pages::ObjectArena<SymbolWithPosObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectArena<T: PagedObject> {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut MarkerObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut MarkerObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut MarkerObj`
+note: required because it appears within the type `PhantomData<*mut MarkerObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::arena_pages::ObjectPage<MarkerObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectPage<T: PagedObject> {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::ObjectPage<MarkerObj>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::ObjectPage<MarkerObj>>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::ObjectPage<MarkerObj>>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `gc::arena_pages::ObjectArena<MarkerObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectArena<T: PagedObject> {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*mut BignumObj` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*mut BignumObj` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*mut BignumObj`
+note: required because it appears within the type `PhantomData<*mut BignumObj>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::arena_pages::ObjectPage<BignumObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectPage<T: PagedObject> {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gc::arena_pages::ObjectPage<BignumObj>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gc::arena_pages::ObjectPage<BignumObj>>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gc::arena_pages::ObjectPage<BignumObj>>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `gc::arena_pages::ObjectArena<BignumObj>`
+ --> src/tagged/gc/arena_pages.rs
+  |
+  | pub(super) struct ObjectArena<T: PagedObject> {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*const LispSymbol` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*const LispSymbol` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*const LispSymbol`
+note: required because it appears within the type `symbol::ObarrayScanEntry`
+ --> src/emacs_core/runtime/symbol/mod.rs
+  |
+  | struct ObarrayScanEntry {
+  |        ^^^^^^^^^^^^^^^^
+note: required because it appears within the type `PhantomData<symbol::ObarrayScanEntry>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<symbol::ObarrayScanEntry>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<symbol::ObarrayScanEntry>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `symbol::ObarrayScanSnapshot`
+ --> src/emacs_core/runtime/symbol/mod.rs
+  |
+  | pub(crate) struct ObarrayScanSnapshot {
+  |                   ^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Option<symbol::ObarrayScanSnapshot>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*const Atomic<u32>` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*const Atomic<u32>` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `*const Atomic<u32>`
+help: the trait `Sync` is implemented for `Atomic<T>`
+ --> $RUST/core/src/sync/atomic.rs
+  |
+  | unsafe impl<T: AtomicPrimitive> Sync for Atomic<T> {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `symbol::ObarrayScanEntry`
+ --> src/emacs_core/runtime/symbol/mod.rs
+  |
+  | struct ObarrayScanEntry {
+  |        ^^^^^^^^^^^^^^^^
+note: required because it appears within the type `PhantomData<symbol::ObarrayScanEntry>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<symbol::ObarrayScanEntry>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<symbol::ObarrayScanEntry>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `symbol::ObarrayScanSnapshot`
+ --> src/emacs_core/runtime/symbol/mod.rs
+  |
+  | pub(crate) struct ObarrayScanSnapshot {
+  |                   ^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Option<symbol::ObarrayScanSnapshot>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Cell<()>` cannot be shared between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `Cell<()>` cannot be shared between threads safely
+  |
+  = help: within `TaggedHeap`, the trait `Sync` is not implemented for `Cell<()>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock`
+note: required because it appears within the type `PhantomData<Cell<()>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `gc::scan_contract::ScanStorageLease`
+ --> src/tagged/gc/scan_contract.rs
+  |
+  | pub(crate) struct ScanStorageLease {
+  |                   ^^^^^^^^^^^^^^^^
+note: required because it appears within the type `symbol::ObarrayScanEntry`
+ --> src/emacs_core/runtime/symbol/mod.rs
+  |
+  | struct ObarrayScanEntry {
+  |        ^^^^^^^^^^^^^^^^
+note: required because it appears within the type `PhantomData<symbol::ObarrayScanEntry>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<symbol::ObarrayScanEntry>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<symbol::ObarrayScanEntry>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `symbol::ObarrayScanSnapshot`
+ --> src/emacs_core/runtime/symbol/mod.rs
+  |
+  | pub(crate) struct ObarrayScanSnapshot {
+  |                   ^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Option<symbol::ObarrayScanSnapshot>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `*const ()` cannot be sent between threads safely
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |       std::thread::spawn(move || {
+  |  _____------------------_^
+  | |     |
+  | |     required by a bound introduced by this call
+5 | |         let _ = reader.finish();
+6 | |     });
+  | |_____^ `*const ()` cannot be sent between threads safely
+  |
+  = help: within `gc::cold_gc::ConcurrentHashMutatorState`, the trait `Send` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `TaggedValue`
+ --> src/tagged/value.rs
+  |
+  | pub struct TaggedValue(pub(crate) usize, ThreadConfined);
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `PhantomData<TaggedValue>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<TaggedValue>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<TaggedValue>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `gc::cold_gc::ConcurrentHashMutatorState`
+ --> src/tagged/gc/cold_gc.rs
+  |
+  | pub(super) struct ConcurrentHashMutatorState {
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: required for `std::sync::Mutex<gc::cold_gc::ConcurrentHashMutatorState>` to implement `Sync`
+  = note: required for `Arc<std::sync::Mutex<gc::cold_gc::ConcurrentHashMutatorState>>` to implement `Send`
+  = note: required because it appears within the type `(NonZero<usize>, Arc<std::sync::Mutex<gc::cold_gc::ConcurrentHashMutatorState>>)`
+  = note: required for `hashbrown::raw::RawTable<(NonZero<usize>, Arc<std::sync::Mutex<gc::cold_gc::ConcurrentHashMutatorState>>)>` to implement `Send`
+note: required because it appears within the type `hashbrown::map::HashMap<NonZero<usize>, Arc<std::sync::Mutex<gc::cold_gc::ConcurrentHashMutatorState>>, rustc_hash::FxBuildHasher>`
+ --> /rust/deps/hashbrown-0.16.1/src/map.rs:185:11
+note: required because it appears within the type `HashMap<NonZero<usize>, Arc<std::sync::Mutex<gc::cold_gc::ConcurrentHashMutatorState>>, rustc_hash::FxBuildHasher>`
+ --> $RUST/std/src/collections/hash/map.rs
+  |
+  | pub struct HashMap<
+  |            ^^^^^^^
+  = note: required for `std::sync::Mutex<HashMap<NonZero<usize>, Arc<std::sync::Mutex<gc::cold_gc::ConcurrentHashMutatorState>>, rustc_hash::FxBuildHasher>>` to implement `Sync`
+note: required because it appears within the type `gc::cold_gc::ConcurrentClaimsState`
+ --> src/tagged/gc/cold_gc.rs
+  |
+  | pub(super) struct ConcurrentClaimsState {
+  |                   ^^^^^^^^^^^^^^^^^^^^^
+  = note: required for `std::ptr::Unique<gc::cold_gc::ConcurrentClaimsState>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<gc::cold_gc::ConcurrentClaimsState>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `Option<std::boxed::Box<gc::cold_gc::ConcurrentClaimsState>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `gc::census::GenCensus`
+ --> src/tagged/gc/census.rs
+  |
+  | pub(super) struct GenCensus {
+  |                   ^^^^^^^^^
+  = note: required for `std::ptr::Unique<gc::census::GenCensus>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<gc::census::GenCensus>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `Option<std::boxed::Box<gc::census::GenCensus>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `TaggedHeap`
+ --> src/tagged/gc.rs
+  |
+  | pub struct TaggedHeap {
+  |            ^^^^^^^^^^
+  = note: required for `&TaggedHeap` to implement `Send`
+note: required because it appears within the type `RootBatchReader<'_>`
+ --> src/tagged/transport/root_batch.rs
+  |
+  | pub struct RootBatchReader<'r> {
+  |            ^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/p0s3_ui/reader_cannot_cross_threads.rs:4:24
+  |
+4 |     std::thread::spawn(move || {
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`

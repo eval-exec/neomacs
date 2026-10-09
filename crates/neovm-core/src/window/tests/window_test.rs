@@ -1781,7 +1781,7 @@ fn prepared_and_active_chrome_strings_are_rooted_by_their_shared_roots() {
     ));
     let collect = |heap: &mut crate::tagged::gc::TaggedHeap| {
         let mut roots = Vec::new();
-        crate::tagged::transport::collect_shared_root_gc_roots(heap.heap_identity(), &mut roots);
+        crate::tagged::transport::collect_shared_root_gc_roots(&heap, &mut roots);
         heap.collect_exact(roots.into_iter());
     };
     // SAFETY: `displayed` was just allocated by this heap. All collections
@@ -1851,7 +1851,7 @@ fn frozen_chrome_clone_keeps_shared_root_alive_until_last_collection_drop() {
 
     let collect = |heap: &mut crate::tagged::gc::TaggedHeap| {
         let mut roots = Vec::new();
-        crate::tagged::transport::collect_shared_root_gc_roots(heap.heap_identity(), &mut roots);
+        crate::tagged::transport::collect_shared_root_gc_roots(&heap, &mut roots);
         heap.collect_exact(roots.into_iter());
     };
     collect(&mut heap);

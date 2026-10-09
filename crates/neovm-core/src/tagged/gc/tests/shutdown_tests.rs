@@ -293,13 +293,19 @@ fn heap_drop_requests_real_marker_stop_and_retains_reachable_storage() {
     }
     let mut obarray = crate::emacs_core::symbol::Obarray::new();
     obarray.set_symbol_value("abandoned-marker-root", root);
-    // SAFETY: capture and publication occur on this test's only writer.
-    let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
-    let snapshot = obarray.scan_snapshot(&world);
-    heap.set_pending_obarray_scan(snapshot);
-    heap.concurrent_begin();
-    heap.seed_root(root);
-    heap.launch_concurrent_mark();
+    // SAFETY: this fixture owns heap and obarray without TLS writer aliases;
+    // start, capture and publication run without callbacks or safepoints.
+    let permit = unsafe { heap.permit_concurrent_mark() }.unwrap();
+    let mut capture = permit.begin();
+    let snapshot = {
+        // SAFETY: capture runs on that sole admitted heap/obarray writer
+        // before the worker can inspect any of the snapshots.
+        let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(capture.heap_mut()) };
+        obarray.scan_snapshot(&world)
+    };
+    capture.heap_mut().set_pending_obarray_scan(snapshot);
+    capture.heap_mut().seed_root(root);
+    capture.launch().unwrap();
     let completion = heap.gc_exited.take().unwrap();
     drop(heap);
     drop(obarray);

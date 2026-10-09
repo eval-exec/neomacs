@@ -295,7 +295,7 @@ impl Context {
         // Values that any thread holds through this heap's `SharedRoot`s.
         group("shared_roots");
         crate::tagged::transport::collect_shared_root_gc_roots(
-            self.tagged_heap.heap_identity(),
+            &self.tagged_heap,
             &mut registry_roots,
         );
         for root in registry_roots.drain(..) {

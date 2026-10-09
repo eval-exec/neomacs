@@ -1,0 +1,5 @@
+error[E0599]: no method named `launch` found for struct `ConcurrentMarkPermit<'heap>` in the current scope
+ --> tests/p0s3_ui/permit_before_begin_cannot_launch.rs:4:20
+  |
+4 |     let _ = permit.launch();
+  |                    ^^^^^^ method not found in `ConcurrentMarkPermit<'_>`

@@ -83,7 +83,7 @@ fn retirement_during_capture_and_readmission_preserve_the_new_root() {
         });
         barrier.wait();
         let mut snapshot = Vec::new();
-        collect_shared_root_gc_roots(identity, &mut snapshot);
+        collect_shared_root_gc_roots(&heap, &mut snapshot);
         holder.join().unwrap();
         // Retirement racing capture may leave the old root in this snapshot
         // for one collection, or may exclude it. It never fabricates a root.
@@ -101,7 +101,7 @@ fn retirement_during_capture_and_readmission_preserve_the_new_root() {
         drop(current);
         drop(collector);
         snapshot.clear();
-        collect_shared_root_gc_roots(identity, &mut snapshot);
+        collect_shared_root_gc_roots(&heap, &mut snapshot);
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].bits(), new.bits());
         heap.collect_exact(snapshot.into_iter());
@@ -114,7 +114,7 @@ fn retirement_during_capture_and_readmission_preserve_the_new_root() {
         drop(new_root);
         assert!(existing_table(identity).is_none());
         let mut no_roots = Vec::new();
-        collect_shared_root_gc_roots(identity, &mut no_roots);
+        collect_shared_root_gc_roots(&heap, &mut no_roots);
         assert!(no_roots.is_empty());
         heap.collect_exact(no_roots.into_iter());
         assert!(!heap.owns_heap_value_for_test(new));

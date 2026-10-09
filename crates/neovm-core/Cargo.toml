@@ -36,6 +36,7 @@ md-5.workspace = true
 getrandom.workspace = true
 base64.workspace = true
 num_enum.workspace = true
+typed-index-collections.workspace = true
 thiserror.workspace = true
 static_assertions.workspace = true
 strum.workspace = true
@@ -188,6 +189,10 @@ sha2.workspace = true
 [[test]]
 name = "thread_safety_contracts"
 path = "tests/thread_safety_contracts.rs"
+
+[[test]]
+name = "p0s3_contracts"
+path = "tests/p0s3_contracts.rs"
 
 [[test]]
 name = "compat_all"
