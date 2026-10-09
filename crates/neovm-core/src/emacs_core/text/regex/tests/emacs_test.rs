@@ -491,6 +491,76 @@ fn bounded_search_view_leaves_a_distant_gap_in_place() {
     assert_eq!(observed, "OK (2001 nil 2001 1)");
 }
 
+/// Literal `search-forward'/`search-backward' over a range the gap splits
+/// must find exactly what they find when the text is one piece, and (as in
+/// GNU) leave the gap where it is.  Every gap position, start and bound is
+/// tried, for byte, ASCII-fold, case-table (including a five-byte character
+/// folding to ASCII), unibyte and non-local (non-ASCII fold) matching, and the
+/// empty needle, with matches straddling the gap.
+#[test]
+fn literal_search_across_every_gap_position_matches_contiguous_text() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((failures nil)
+      (raw (string #x3fff80 #x3fff81)))
+  (dolist (case `(("abcabcABCabc" nil ("abc" "ABC" "ca" "cab" "c" ""))
+                  ("xαβγ ΑΒΓ αβγx" nil ("αβγ" "ΑΒΓ" "γ α" "x"))
+                  ("aé中bÉ中cé" nil ("é中b" "É中" "中" "bÉ"))
+                  (,(concat "ab" raw "cd" raw "AB") nil
+                   (,(concat raw "c") ,raw "ab" ,(concat "d" raw)))
+                  ("x[a]y]A[z" canon ("[a]" "]a[" "a" "]"))
+                  (,(string ?x #x300000 #x300000 ?x ?k ?k ?K #x300000) canon-wide
+                   ("kk" "k" ,(string #x300000 ?x) ,(string ?k #x300000)))
+                  ("aBc\377AbC\200abc" unibyte ("abc" "\377a" "c\200" "B"))))
+    (pcase-let ((`(,text ,mode ,needles) case))
+      (dolist (fold '(nil t))
+        (dolist (needle needles)
+          (let* ((run
+                  (lambda (gap)
+                    (with-temp-buffer
+                      (when (eq mode 'unibyte) (set-buffer-multibyte nil))
+                      (when (memq mode '(canon canon-wide))
+                        (let ((table (copy-case-table (standard-case-table))))
+                          (if (eq mode 'canon)
+                              (set-case-syntax-pair ?\[ ?\] table)
+                            ;; A five-byte character folding to ASCII: the
+                            ;; widest match a literal of this length can make.
+                            (set-case-syntax-pair #x300000 ?k table))
+                          (set-case-table table)))
+                      (insert text)
+                      (when gap (goto-char gap) (insert "z") (delete-char -1))
+                      (let ((case-fold-search fold)
+                            (parked (gap-position))
+                            (out nil))
+                        (dotimes (i (1+ (buffer-size)))
+                          (let ((s (1+ i)))
+                            (dolist (bound (list nil (min (point-max) (+ s 3))
+                                                 (max (point-min) (- s 3))))
+                              (goto-char s)
+                              (push (and (or (null bound) (>= bound s))
+                                         (search-forward needle bound t)
+                                         (list (match-beginning 0) (match-end 0) (point)))
+                                    out)
+                              (goto-char s)
+                              (push (and (or (null bound) (<= bound s))
+                                         (search-backward needle bound t)
+                                         (list (match-beginning 0) (match-end 0) (point)))
+                                    out))))
+                        (list (and gap (/= parked gap) 'gap-not-parked)
+                              (and gap (/= (gap-position) parked) 'gap-moved)
+                              out)))))
+                 (reference (nth 2 (funcall run nil))))
+            (dotimes (g (1+ (length text)))
+              (let ((got (funcall run (1+ g))))
+                (unless (and (null (nth 0 got)) (null (nth 1 got))
+                             (equal (nth 2 got) reference))
+                  (push (list text mode fold needle (1+ g) (nth 0 got) (nth 1 got))
+                        failures)))))))))
+  (or failures 'ok))"#,
+    );
+    assert_eq!(observed, "OK ok");
+}
+
 #[test]
 fn test_simple_literal() {
     crate::test_utils::init_test_tracing();

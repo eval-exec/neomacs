@@ -2957,7 +2957,169 @@ fn with_buffer_emacs_bytes<R>(
 
     let mut text = Vec::new();
     buf.copy_emacs_byte_range_to(range, &mut text);
+    #[cfg(test)]
+    note_search_range_copy(text.len());
     f(&text)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Bytes the buffer search seam copied out of the buffer, so tests can
+    /// tell a search that reads the text in place from one that copies it.
+    static SEARCH_RANGE_COPY_BYTES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_search_range_copy(bytes: usize) {
+    SEARCH_RANGE_COPY_BYTES.with(|copied| copied.set(copied.get() + bytes));
+}
+
+/// Bytes copied by buffer searches on this thread since the last call.
+#[cfg(test)]
+pub(crate) fn take_search_range_copy_bytes() -> usize {
+    SEARCH_RANGE_COPY_BYTES.with(|copied| copied.replace(0))
+}
+
+/// Whether every literal match is decided by the bytes it covers alone.
+///
+/// Byte comparison, ASCII folding, unibyte folding and case-table folding
+/// compare the text one character at a time.  Case-folding a non-ASCII
+/// literal in a multibyte buffer does not: it picks Unicode or Emacs
+/// folding by whether the whole slice is valid UTF-8, so a piece of the
+/// range could be searched differently from the whole.
+fn literal_match_is_local(literal: &[u8], multibyte: bool, case_fold: bool, canon: bool) -> bool {
+    !literal.is_empty() && (canon || !case_fold || literal.is_ascii() || !multibyte)
+}
+
+/// The most buffer bytes a match of LITERAL can cover: folding may pair
+/// each of its characters with a text character of any length.
+fn literal_max_match_len(literal: &[u8]) -> usize {
+    literal
+        .len()
+        .saturating_mul(crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH)
+}
+
+/// Where the second of exactly two contiguous pieces of RANGE starts: the
+/// gap backend with its gap strictly inside RANGE.
+fn gap_split_point(buf: &Buffer, range: EmacsByteRange) -> Option<usize> {
+    let mut pieces = 0usize;
+    let mut first_len = 0usize;
+    let _ = buf.try_for_each_emacs_byte_range_chunk(range, |chunk| {
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        pieces += 1;
+        if pieces == 1 {
+            first_len = chunk.len();
+        }
+        if pieces > 2 { Err(()) } else { Ok(()) }
+    });
+    (pieces == 2).then_some(range.start().get() + first_len)
+}
+
+/// POS moved back to the first byte of its character, not below FLOOR.
+fn char_head_at_or_before(buf: &Buffer, mut pos: usize, floor: usize) -> usize {
+    if buf.get_multibyte() {
+        let mut steps = 0;
+        while pos > floor
+            && steps < crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH
+            && buf
+                .emacs_byte_at_pos(EmacsBytePos::new(pos))
+                .is_some_and(|byte| byte & 0xC0 == 0x80)
+        {
+            pos -= 1;
+            steps += 1;
+        }
+    }
+    pos
+}
+
+/// POS moved forward to the next character start, not beyond CEILING.
+fn char_head_at_or_after(buf: &Buffer, mut pos: usize, ceiling: usize) -> usize {
+    if buf.get_multibyte() {
+        let mut steps = 0;
+        while pos < ceiling
+            && steps < crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH
+            && buf
+                .emacs_byte_at_pos(EmacsBytePos::new(pos))
+                .is_some_and(|byte| byte & 0xC0 == 0x80)
+        {
+            pos += 1;
+            steps += 1;
+        }
+    }
+    pos
+}
+
+/// Literal search of a range the buffer gap splits, reading both halves in
+/// place.
+///
+/// GNU's `simple_search' and `boyer_moore' walk the two gap halves.  The
+/// matchers here take one slice, so a range straddling the gap was copied
+/// whole on every call: a `search-forward' loop over a buffer with its gap
+/// mid-text copied the rest of the buffer per match (70% of its time, 9x
+/// GNU).  A match spans at most MAX_MATCH_LEN bytes and, by
+/// `literal_match_is_local', depends on those bytes alone.  So each match
+/// lies wholly before the gap, wholly after it, or within MAX_MATCH_LEN of
+/// it; the last kind are all inside a small copied window around the gap.
+/// Searching the pieces in order yields the match FIND would return for the
+/// whole range: the leftmost, or the rightmost when BACKWARD.
+///
+/// FIND returns its slice's leftmost (rightmost) match, relative to the
+/// slice.  The result is relative to RANGE's start.  `None` when RANGE is
+/// not two pieces; the caller then searches it as one slice.
+fn literal_search_split_by_gap(
+    buf: &Buffer,
+    range: EmacsByteRange,
+    max_match_len: usize,
+    backward: bool,
+    find: impl Fn(&[u8]) -> Option<MatchGroup>,
+) -> Option<Option<MatchGroup>> {
+    if buf.has_contiguous_emacs_byte_range(range) {
+        return None;
+    }
+    let gap = gap_split_point(buf, range)?;
+    let (start, end) = (range.start().get(), range.end().get());
+    let in_piece = |from: usize, to: usize| {
+        buf.with_contiguous_emacs_byte_range(EmacsByteRange::from_usize(from, to), &find)
+            .map(|found| found.map(|matched| matched.shift(from - start)))
+    };
+    let around_gap = || {
+        let from = char_head_at_or_before(buf, gap.saturating_sub(max_match_len).max(start), start);
+        let to = char_head_at_or_after(buf, gap.saturating_add(max_match_len).min(end), end);
+        let mut window = Vec::with_capacity(to - from);
+        buf.copy_emacs_byte_range_to(EmacsByteRange::from_usize(from, to), &mut window);
+        #[cfg(test)]
+        note_search_range_copy(window.len());
+        find(&window).map(|matched| matched.shift(from - start))
+    };
+    if backward {
+        // Every match starting at or after the gap lies wholly after it.
+        if let Some(after) = in_piece(gap, end)? {
+            return Some(Some(after));
+        }
+        // None does, so the window's rightmost match starts before the gap;
+        // it holds every match starting at or after its own start.
+        if let Some(near) = around_gap() {
+            return Some(Some(near));
+        }
+        return in_piece(start, gap);
+    }
+    let before = in_piece(start, gap)?;
+    // A match crossing the gap starts after `gap - max_match_len'.
+    if let Some(before) = before
+        && start + before.start() + max_match_len <= gap
+    {
+        return Some(Some(before));
+    }
+    // The window holds every match starting from `gap - max_match_len' on
+    // (and so `before'), complete when it starts before the gap.
+    if let Some(near) = around_gap()
+        && start + near.start() < gap
+    {
+        return Some(Some(near));
+    }
+    in_piece(gap, end)
 }
 
 /// [`with_buffer_emacs_bytes`] for the regex-engine search paths.
@@ -3235,15 +3397,17 @@ pub(crate) fn search_forward_into(
     // during search; route through the buffer's case-canon table then, else
     // keep the fast hardwired ASCII/Unicode folding.
     let translation = buffer_search_translation(buf, case_fold);
-    let found =
-        with_buffer_emacs_bytes(
-            buf,
-            EmacsByteRange::new(start, limit),
-            |text| match &translation {
-                Some(trt) => canon_fold_literal_find(text, &literal, multibyte, trt),
-                None => literal_find_emacs_bytes(text, &literal, multibyte, case_fold),
-            },
-        );
+    let range = EmacsByteRange::new(start, limit);
+    let find = |text: &[u8]| match &translation {
+        Some(trt) => canon_fold_literal_find(text, &literal, multibyte, trt),
+        None => literal_find_emacs_bytes(text, &literal, multibyte, case_fold),
+    };
+    let found = literal_match_is_local(&literal, multibyte, case_fold, translation.is_some())
+        .then(|| {
+            literal_search_split_by_gap(buf, range, literal_max_match_len(&literal), false, find)
+        })
+        .flatten()
+        .unwrap_or_else(|| with_buffer_emacs_bytes(buf, range, find));
 
     if let Some(found) = found {
         let matched = found.shift(start.get());
@@ -3309,15 +3473,17 @@ pub(crate) fn search_backward_into(
     let multibyte = buf.get_multibyte();
     let literal = coerce_pattern_to_buffer_bytes(pattern, multibyte);
     let translation = buffer_search_translation(buf, case_fold);
-    let found =
-        with_buffer_emacs_bytes(
-            buf,
-            EmacsByteRange::new(limit, end),
-            |text| match &translation {
-                Some(trt) => canon_fold_literal_rfind(text, &literal, multibyte, trt),
-                None => literal_rfind_emacs_bytes(text, &literal, multibyte, case_fold),
-            },
-        );
+    let range = EmacsByteRange::new(limit, end);
+    let find = |text: &[u8]| match &translation {
+        Some(trt) => canon_fold_literal_rfind(text, &literal, multibyte, trt),
+        None => literal_rfind_emacs_bytes(text, &literal, multibyte, case_fold),
+    };
+    let found = literal_match_is_local(&literal, multibyte, case_fold, translation.is_some())
+        .then(|| {
+            literal_search_split_by_gap(buf, range, literal_max_match_len(&literal), true, find)
+        })
+        .flatten()
+        .unwrap_or_else(|| with_buffer_emacs_bytes(buf, range, find));
 
     if let Some(found) = found {
         let matched = found.shift(limit.get());

@@ -4097,6 +4097,51 @@ fn regex_search_across_mid_buffer_gap() {
     assert_eq!(back.as_int(), Some(15));
 }
 
+/// A literal search loop over a buffer whose gap sits mid-text reads the
+/// two halves in place.  It used to copy the rest of the buffer on every
+/// call (quadratic in the matches; 70% of a `search-forward' loop, 9x GNU).
+#[test]
+fn literal_search_loop_reads_a_gap_split_buffer_in_place() {
+    let mut ev = crate::emacs_core::eval::Context::new();
+    ev.eval_str(
+        "(progn (let ((i 0)) \
+           (while (< i 1000) \
+             (insert \"lorem ipsum dolor sit amet chaperone consectetur\\n\") \
+             (setq i (1+ i)))) \
+         (goto-char (/ (point-max) 2)) (insert \"z\") (delete-region (1- (point)) (point)) nil)",
+    )
+    .expect("build gap-split buffer");
+    for (case_fold, needle, direction) in [
+        ("t", "CHAPERONE", "forward"),
+        ("nil", "chaperone", "forward"),
+        ("t", "CHAPERONE", "backward"),
+        ("nil", "chaperone", "backward"),
+    ] {
+        super::take_search_range_copy_bytes();
+        let (from, search) = if direction == "forward" {
+            ("(point-min)", "search-forward")
+        } else {
+            ("(point-max)", "search-backward")
+        };
+        let found = ev
+            .eval_str(&format!(
+                "(let ((case-fold-search {case_fold}) (n 0)) (goto-char {from}) \
+                   (while ({search} \"{needle}\" nil t) (setq n (1+ n))) n)"
+            ))
+            .expect("search loop");
+        let copied = super::take_search_range_copy_bytes();
+        assert_eq!(
+            found.as_int(),
+            Some(1000),
+            "{direction} case-fold={case_fold}"
+        );
+        assert!(
+            copied < 4096,
+            "{direction} case-fold={case_fold}: copied {copied} bytes of a 50K buffer"
+        );
+    }
+}
+
 /// Reference implementation for the literal searchers: the exact
 /// sliding-window shapes the linear-time versions replaced.
 #[cfg(test)]
