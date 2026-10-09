@@ -676,6 +676,9 @@ impl Default for ThreadManager {
 impl GcTrace for ThreadManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
         for thread in self.threads.values() {
+            if let Some(name) = &thread.name {
+                name.trace_roots(roots);
+            }
             roots.push(thread.function);
             roots.push(thread.result);
             roots.push(thread.buffer_disposition);
@@ -692,6 +695,20 @@ impl GcTrace for ThreadManager {
         }
         for value in self.thread_handles.values() {
             roots.push(*value);
+        }
+        // These Rust-owned names preserve Lisp text-property plists, just as
+        // GNU's scanned mutex/condition pseudovector name fields do.
+        for name in self
+            .mutexes
+            .values()
+            .filter_map(|mutex| mutex.name.as_ref())
+            .chain(
+                self.condition_vars
+                    .values()
+                    .filter_map(|condition| condition.name.as_ref()),
+            )
+        {
+            name.trace_roots(roots);
         }
         for value in self.mutex_handles.values() {
             roots.push(*value);

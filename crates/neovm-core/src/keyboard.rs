@@ -1638,6 +1638,23 @@ enum KeyEchoState {
     },
 }
 
+impl crate::gc_trace::GcTrace for KeyEchoState {
+    fn trace_roots(&self, roots: &mut Vec<Value>) {
+        self.trace_roots_with(&mut |root| roots.push(root));
+    }
+
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        match self {
+            Self::Inactive => {}
+            Self::Immediate { prompt } => {
+                if let Some(text) = prompt {
+                    text.trace_roots_with(visit);
+                }
+            }
+        }
+    }
+}
+
 /// Semantic pieces of a keyboard-owned echo message.
 ///
 /// Keeping key names distinct from prose makes it impossible to change the
@@ -2103,6 +2120,9 @@ impl Default for KBoard {
 
 impl crate::gc_trace::GcTrace for KBoard {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
+        // GNU marks echo_prompt for every keyboard, including parked ones
+        // (keyboard.c:14638); the Context echo message is only the active copy.
+        self.key_echo_state.trace_roots(roots);
         if let Some(event) = self.unread_selection_event {
             roots.push(event);
         }

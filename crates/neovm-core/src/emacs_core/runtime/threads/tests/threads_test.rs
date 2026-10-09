@@ -3,6 +3,63 @@ use super::*;
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt};
 use crate::heap_types::LispString;
 
+fn retained_name_survives_gc(factory: &str, getter: &str) {
+    let mut ctx = Context::new();
+    ctx.eval_str(&format!("(setq retained-name-object {factory})"))
+        .unwrap();
+    let name = ctx
+        .eval_str(&format!("({getter} retained-name-object)"))
+        .unwrap();
+    let mut plists = Vec::new();
+    name.as_lisp_string()
+        .unwrap()
+        .intervals()
+        .for_each_root(|plist| plists.push(plist));
+    assert!(!plists.is_empty());
+    for _ in 0..3 {
+        ctx.gc_collect_exact();
+        for &plist in &plists {
+            assert!(
+                ctx.tagged_heap.owns_heap_value_for_test(plist),
+                "{getter} retained a reclaimed name interval plist"
+            );
+        }
+    }
+    let face = ctx
+        .eval_str(&format!(
+            "(get-text-property 0 'face ({getter} retained-name-object))"
+        ))
+        .unwrap();
+    assert_eq!(
+        crate::emacs_core::print::print_value(&face),
+        "(retained-face)"
+    );
+}
+
+#[test]
+fn gc_preserves_thread_name_interval_plists() {
+    retained_name_survives_gc(
+        "(make-thread (lambda () nil) (propertize \"thread name\" 'face '(retained-face)))",
+        "thread-name",
+    );
+}
+
+#[test]
+fn gc_preserves_mutex_name_interval_plists() {
+    retained_name_survives_gc(
+        "(make-mutex (propertize \"mutex name\" 'face '(retained-face)))",
+        "mutex-name",
+    );
+}
+
+#[test]
+fn gc_preserves_condition_variable_name_interval_plists() {
+    retained_name_survives_gc(
+        "(make-condition-variable (make-mutex) (propertize \"condition name\" 'face '(retained-face)))",
+        "condition-name",
+    );
+}
+
 // -- ThreadManager unit tests -------------------------------------------
 
 #[test]
