@@ -1880,6 +1880,12 @@ impl Obarray {
         self.symbol_value_id(intern(name))
     }
 
+    /// Copy a symbol's global value without borrowing its mutable value cell.
+    #[inline]
+    pub fn symbol_value_copied(&self, name: &str) -> Option<Value> {
+        self.symbol_value_id_copied(intern(name))
+    }
+
     /// GNU's `Vfoo` / `foo` / `BVAR (current_buffer, foo)` -- the one spelling
     /// for "what the C code reads here", given the buffer that is current.
     ///
@@ -4242,6 +4248,31 @@ impl Obarray {
         None
     }
 
+    /// Copy the global default, including a per-buffer forwarder's default.
+    ///
+    /// Aliases and localized variables retain the same resolution rules as a
+    /// global read. No returned value borrows a symbol, BLV or descriptor slot.
+    pub fn default_value_id_copied(&self, id: SymId) -> Option<Value> {
+        let mut current = id;
+        for _ in 0..50 {
+            let sym = self.slot(current)?;
+            match sym.value_cell() {
+                ValueCell::Plain(value) => return (!value.is_unbound()).then_some(value),
+                ValueCell::Alias(target) => current = target,
+                ValueCell::Localized(_) => {
+                    let value = self.blv(current)?.defcell.cons_cdr();
+                    return (!value.is_unbound()).then_some(value);
+                }
+                ValueCell::Forwarded(fwd) => {
+                    return fwd
+                        .load()
+                        .or_else(|| fwd.as_buffer_obj_fwd().map(|buf_fwd| buf_fwd.default));
+                }
+            }
+        }
+        None
+    }
+
     /// Follow function indirection (defalias chains).
     /// Returns the final function value, following symbol aliases.
     pub fn indirect_function(&self, name: &str) -> Option<Value> {
@@ -4611,3 +4642,7 @@ mod fn_stamps_tests;
 #[cfg(test)]
 #[path = "tests/buffer_local_global_read_test.rs"]
 mod buffer_local_global_read_tests;
+
+#[cfg(test)]
+#[path = "tests/copied_value_test.rs"]
+mod copied_value_tests;
