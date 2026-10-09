@@ -246,3 +246,7 @@ path = "tests/pixel_measurement.rs"
 [[test]]
 name = "coding_safety"
 path = "tests/coding_safety.rs"
+
+[[test]]
+name = "coding_detection"
+path = "tests/coding_detection.rs"

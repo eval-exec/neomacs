@@ -1509,6 +1509,41 @@ pub(crate) fn charset_leading_byte(charset: SymId) -> Option<CharsetLeadingByte>
     })
 }
 
+/// Byte ranges of a registered charset, in external (most significant first)
+/// order. Detection validates this code space, independently of Unicode maps.
+pub(crate) struct CharsetCodeSpace {
+    bytes: Vec<std::ops::RangeInclusive<u8>>,
+}
+
+impl CharsetCodeSpace {
+    pub(crate) fn dimension(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub(crate) fn accepts(&self, index: usize, byte: i32) -> bool {
+        u8::try_from(byte)
+            .ok()
+            .is_some_and(|byte| self.bytes[index].contains(&byte))
+    }
+}
+
+/// Snapshot the structural byte ranges without loading the character map.
+pub(crate) fn charset_code_space(charset: SymId) -> Option<CharsetCodeSpace> {
+    CHARSET_REGISTRY.with(|slot| {
+        let reg = slot.borrow();
+        let info = reg.charsets.get(&reg.resolve_name(charset))?;
+        let bytes = (0..charset_dimension(info))
+            .rev()
+            .map(|index| {
+                let first = u8::try_from(charset_byte_min(info, index)).ok()?;
+                let last = u8::try_from(charset_byte_max(info, index)).ok()?;
+                (first <= last).then_some(first..=last)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(CharsetCodeSpace { bytes })
+    })
+}
+
 /// A charset resolved ONCE, so decoding a string does not re-resolve it for
 /// every character.
 ///

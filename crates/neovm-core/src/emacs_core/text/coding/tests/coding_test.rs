@@ -2020,7 +2020,7 @@ fn find_operation_coding_system_validates_operation_target_like_gnu() {
 
 /// Build (priorities, cat_system) matching GNU's runtime state (UTF-8/English
 /// language environment, the default).
-fn gnu_detect_state() -> (Vec<usize>, [Option<SymId>; CODING_CAT_MAX]) {
+fn gnu_detect_state() -> CodingDetectionBindings {
     // (category enum index, bound coding-system base name), in GNU priority order.
     let order: [(CodingCat, &str); 20] = [
         (CodingCat::Utf8Nosig, "utf-8"),
@@ -2056,7 +2056,12 @@ fn gnu_detect_state() -> (Vec<usize>, [Option<SymId>; CODING_CAT_MAX]) {
             priorities.push(cat);
         }
     }
-    (priorities, cat_system)
+    let mgr = CodingSystemManager::new();
+    CodingDetectionBindings {
+        priorities,
+        systems: cat_system,
+        charset: CharsetDetectionPlan::for_coding_system(&mgr, intern("iso-latin-1")),
+    }
 }
 
 fn detect_list(bytes: &[u8]) -> Vec<String> {
@@ -2064,10 +2069,9 @@ fn detect_list(bytes: &[u8]) -> Vec<String> {
 }
 
 fn detect_list_mb(bytes: &[u8], src_chars: usize, multibytep: bool) -> Vec<String> {
-    let (priorities, cat_system) = gnu_detect_state();
+    let bindings = gnu_detect_state();
     let v = detect_categories(
-        &priorities,
-        &cat_system,
+        &bindings,
         bytes,
         src_chars,
         multibytep,
@@ -2473,15 +2477,14 @@ fn register_jisx0208_for_detect() {
 const ISO7_DESIGNATION: &[u8] = b"\x1b$B$3\x1b(B";
 
 fn detect_highest_with_front(front: Option<CodingCat>) -> String {
-    let (mut priorities, cat_system) = gnu_detect_state();
+    let mut bindings = gnu_detect_state();
     if let Some(cat) = front {
         let c = cat as usize;
-        priorities.retain(|&x| x != c);
-        priorities.insert(0, c);
+        bindings.priorities.retain(|&x| x != c);
+        bindings.priorities.insert(0, c);
     }
     let v = detect_categories(
-        &priorities,
-        &cat_system,
+        &bindings,
         ISO7_DESIGNATION,
         6,
         false,
