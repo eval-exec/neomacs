@@ -198,3 +198,51 @@ fn arithmetic_opcodes_answer_integer_operands_directly() {
         );
     }
 }
+
+#[test]
+fn division_opcode_preserves_fixnum_boundaries_and_slow_conditions() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let cases = [
+        ("most-negative-fixnum", "-1"),
+        ("most-negative-fixnum", "1"),
+        ("most-negative-fixnum", "2"),
+        ("most-positive-fixnum", "-1"),
+        ("most-positive-fixnum", "1"),
+        ("-7", "3"),
+        ("7", "-3"),
+        ("-7", "-3"),
+        ("0", "1"),
+        ("1", "0"),
+        ("most-negative-fixnum", "0"),
+        ("(1+ most-positive-fixnum)", "-1"),
+        ("7.0", "-3"),
+        ("\"not a number\"", "1"),
+    ];
+    let mut f = ByteCodeFunction::new(crate::emacs_core::value::LambdaParams {
+        required: vec![
+            crate::emacs_core::intern::SymId(1),
+            crate::emacs_core::intern::SymId(2),
+        ],
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Div, Op::Return];
+    f.max_stack = 8;
+    for (lhs, rhs) in cases {
+        let a = eval.eval_str(lhs).unwrap();
+        let a = rooted(&mut eval, a);
+        let b = eval.eval_str(rhs).unwrap();
+        let b = rooted(&mut eval, b);
+        let want = slow(&mut eval, ArithGenericKind::Div, &[a, b]);
+        let got = Vm::from_context(&mut eval).execute(&f, vec![a, b]);
+        assert_eq!(
+            crate::emacs_core::error::format_eval_result(
+                &got.map_err(crate::emacs_core::error::map_flow)
+            ),
+            want,
+            "{lhs} / {rhs}"
+        );
+    }
+}

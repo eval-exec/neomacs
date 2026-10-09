@@ -5315,16 +5315,9 @@ impl<'a> Vm<'a> {
                         let len = stk!().len();
                         let b = stk!()[len - 1];
                         let a = stk!()[len - 2];
-                        if a.is_fixnum() && b.is_fixnum() {
-                            let av = a.xfixnum();
-                            let bv = b.xfixnum();
-                            // The range check matters: most-negative-fixnum / -1
-                            // exceeds most-positive-fixnum and must promote to a
-                            // bignum via the builtin, like GNU.
-                            if bv != 0 && !(av == Value::MOST_NEGATIVE_FIXNUM && bv == -1) {
-                                // Emacs truncation division (towards zero), matching C semantics
-                                let res = av / bv;
-                                stk!()[len - 2] = Value::fixnum(res);
+                        if let (Some(av), Some(bv)) = (a.as_fixnum_value(), b.as_fixnum_value()) {
+                            if let Some(res) = av.checked_div(bv) {
+                                stk!()[len - 2] = Value::from_fixnum(res);
                                 stk!().pop();
                             } else {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
