@@ -596,12 +596,24 @@ impl<'a> CharPropertyResolver<'a> {
     }
 }
 
+/// The property carrier determines whether GNU's text defaults are eligible.
+/// Text and overlay callers share direct/category/alias precedence, but only
+/// text consults `default-text-properties` (GNU intervals.c:1741-1742).
+/// This carries no mutator state and may be shared across threads.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(test, derive(strum::EnumIter))]
+enum CharPropertyCarrier {
+    Text,
+    Overlay,
+}
+static_assertions::assert_impl_all!(CharPropertyCarrier: Send, Sync);
+
 fn lookup_char_property_from_direct<F>(
     obarray: &Obarray,
     buffers: &BufferManager,
     mut direct_get: F,
     prop: Value,
-    textprop: bool,
+    carrier: CharPropertyCarrier,
 ) -> Value
 where
     F: FnMut(Value) -> Option<Value>,
@@ -631,17 +643,16 @@ where
         aliases = aliases.cons_cdr();
         Some(alias)
     });
-    let default = textprop
-        .then(|| {
-            current_textprop_variable_value(
-                obarray,
-                buffers,
-                TextPropertyControlVariable::DefaultTextProperties,
-            )
-            .filter(|value| value.is_cons())
-            .and_then(|defaults| plist_get_value(defaults, prop))
-        })
-        .flatten();
+    let default = match carrier {
+        CharPropertyCarrier::Text => current_textprop_variable_value(
+            obarray,
+            buffers,
+            TextPropertyControlVariable::DefaultTextProperties,
+        )
+        .filter(|value| value.is_cons())
+        .and_then(|defaults| plist_get_value(defaults, prop)),
+        CharPropertyCarrier::Overlay => None,
+    };
     resolve_effective_char_property(
         direct,
         |category, property| {
@@ -673,7 +684,7 @@ pub(crate) fn lookup_text_property_from_plist_slice(
         buffers,
         |name| plist_slice_get_value(plist, name),
         prop,
-        true,
+        CharPropertyCarrier::Text,
     )
 }
 
@@ -689,7 +700,7 @@ fn lookup_string_text_property(
         buffers,
         |name| table.get_property_at_char_pos(string_char_pos(char_pos), name),
         prop,
-        true,
+        CharPropertyCarrier::Text,
     )
 }
 
@@ -723,7 +734,7 @@ fn lookup_buffer_text_property_at_char_pos(
             }
         },
         prop,
-        true,
+        CharPropertyCarrier::Text,
     )
 }
 
@@ -767,7 +778,7 @@ pub(crate) fn lookup_buffer_text_property_at_emacs_byte_pos(
             buf.text_props_get_property_at_char_pos(pos, name)
         },
         prop,
-        true,
+        CharPropertyCarrier::Text,
     )
 }
 
@@ -785,7 +796,7 @@ pub(crate) fn lookup_overlay_property(
         buffers,
         |name| plist_get_value(plist, name),
         prop,
-        false,
+        CharPropertyCarrier::Overlay,
     )
 }
 
@@ -1961,7 +1972,7 @@ pub(crate) fn builtin_get_text_property_in_state(
             buffers,
             |_| None,
             prop,
-            true,
+            CharPropertyCarrier::Text,
         ));
     }
 
@@ -3723,7 +3734,7 @@ pub(crate) fn builtin_text_property_not_all_in_state(
                 }
             },
             prop,
-            true,
+            CharPropertyCarrier::Text,
         );
         !eq_value(&found, val)
     });
@@ -3897,3 +3908,7 @@ pub(crate) fn builtin_remove_overlays(
 #[cfg(test)]
 #[path = "tests/textprop_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/char_property_carrier_test.rs"]
+mod char_property_carrier_tests;
