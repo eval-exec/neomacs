@@ -301,19 +301,16 @@ fn frame_face_hash_table_eval_returns_stable_frame_owned_table() {
 fn ensure_startup_compat_variables_backfills_missing_xfaces_state() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    for name in [
-        "face-filters-always-match",
-        "face--new-frame-defaults",
-        "face-default-stipple",
-        "scalable-fonts-allowed",
-        "face-ignored-fonts",
-        "face-remapping-alist",
-        "face-font-rescale-alist",
-        "face-near-same-color-threshold",
-        "face-font-lax-matched-attributes",
-    ] {
-        eval.obarray_mut().makunbound(name);
-    }
+    // GNU protects these forwarded built-ins from makunbound (data.c:
+    // 1799-1808). A normal nil assignment to the object-forwarded table
+    // reaches the repair branch without detaching any built-in value cell.
+    eval.set_variable("face--new-frame-defaults", Value::NIL);
+    assert_eq!(
+        eval.obarray()
+            .symbol_value("face--new-frame-defaults")
+            .copied(),
+        Some(Value::NIL)
+    );
 
     ensure_startup_compat_variables(&mut eval);
 
