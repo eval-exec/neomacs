@@ -1768,9 +1768,9 @@ fn completion_state_reads_use_predeclared_symbols() {
 fn repeated_mx_completion_does_not_intern_during_candidate_scan() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    let obarray = *eval
+    let obarray = eval
         .obarray
-        .symbol_value("obarray")
+        .symbol_value_copied("obarray")
         .expect("global obarray proxy");
     let args = vec![
         Value::string(""),

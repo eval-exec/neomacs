@@ -3873,7 +3873,7 @@ fn command_execute_calls_function() {
         .unwrap();
     assert!(result.is_truthy());
 
-    let ran = *ev.obarray.symbol_value("exec-ran").unwrap();
+    let ran = ev.obarray.symbol_value_copied("exec-ran").unwrap();
     assert!(ran.is_truthy());
 }
 

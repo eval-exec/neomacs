@@ -1535,7 +1535,7 @@ fn dynamic_or_global_symbol_value_in_state(
     _dynamic: &[OrderedRuntimeBindingMap],
     name: &str,
 ) -> Option<Value> {
-    obarray.symbol_value(name).cloned()
+    obarray.symbol_value_copied(name)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1557,7 +1557,7 @@ fn dynamic_buffer_or_global_symbol_value_in_state(
     if let Some(v) = buf.get_buffer_local_by_sym_id_gated(sym, obarray.is_localized(sym)) {
         return Some(v);
     }
-    obarray.symbol_value(name).cloned()
+    obarray.symbol_value_copied(name)
 }
 
 fn prefix_numeric_value(value: &Value) -> i64 {

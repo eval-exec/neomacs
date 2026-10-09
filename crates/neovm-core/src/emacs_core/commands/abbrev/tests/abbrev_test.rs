@@ -382,8 +382,7 @@ fn define_abbrev_system_force_matches_gnu_overwrite_and_storage() {
     );
     assert!(
         eval.obarray()
-            .symbol_value("abbrevs-changed")
-            .copied()
+            .symbol_value_copied("abbrevs-changed")
             .unwrap_or(Value::NIL)
             .is_nil()
     );
@@ -455,7 +454,7 @@ fn test_define_abbrev_table_and_lookup() {
     builtin_define_abbrev_table(&mut eval, vec![Value::symbol("test-table"), Value::NIL]).unwrap();
 
     // The symbol value should be an abbrev table
-    let table = eval.obarray().symbol_value("test-table").cloned().unwrap();
+    let table = eval.obarray().symbol_value_copied("test-table").unwrap();
     let result = builtin_abbrev_table_p(&mut eval, vec![table]).unwrap();
     assert!(result.is_truthy());
 }
@@ -470,8 +469,7 @@ fn test_insert_abbrev_table_description_writes_buffer_text() {
 
     let table = eval
         .obarray()
-        .symbol_value("test-table")
-        .cloned()
+        .symbol_value_copied("test-table")
         .expect("test-table value");
     builtin_define_abbrev(
         &mut eval,
