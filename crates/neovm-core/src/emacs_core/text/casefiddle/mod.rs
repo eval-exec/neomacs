@@ -78,6 +78,16 @@ fn upcase_char_override(code: i64, casetab: &CaseTableOverride) -> i64 {
 
 /// Uppercase a single character code, returning the new code.
 fn upcase_char(code: i64) -> i64 {
+    upcase_char_with_unicode(code, || match code_to_char(code) {
+        Some(c) => c.to_uppercase().next().map(|u| u as i64).unwrap_or(code),
+        None => code,
+    })
+}
+
+/// Resolve GNU's overrides before evaluating the Unicode fallback. A caller
+/// already resolving a Unicode expansion can supply its existing scalar.
+#[inline(always)]
+fn upcase_char_with_unicode(code: i64, unicode: impl FnOnce() -> i64) -> i64 {
     if preserve_casefiddle_upcase_payload(code) {
         return code;
     }
@@ -90,15 +100,7 @@ fn upcase_char(code: i64) -> i64 {
         8115 | 8131 | 8179 => return code + 9,
         _ => {}
     }
-    match code_to_char(code) {
-        Some(c) => {
-            let mut upper = c.to_uppercase();
-            // to_uppercase() may yield multiple chars (e.g. German eszett);
-            // take only the first to stay consistent with Emacs behavior.
-            upper.next().map(|u| u as i64).unwrap_or(code)
-        }
-        None => code,
-    }
+    unicode()
 }
 
 fn preserve_casefiddle_upcase_payload(code: i64) -> bool {
@@ -551,6 +553,28 @@ pub(crate) fn casify_text_with_extents(
         };
         pos += len;
         let char_action = action.character_action(word_state);
+        if multibyte && matches!(char_action, CharacterCaseAction::Unchanged) {
+            // GNU casefiddle.c:130-137 leaves in-word initials unchanged.
+            // Copy the canonical source unit without Unicode remapping or
+            // re-encoding, while retaining original syntax and typed extents.
+            out.extend_from_slice(&bytes[pos - len..pos]);
+            let unit = crate::buffer::TextExtent::new(
+                crate::buffer::CharLen::new(1),
+                crate::buffer::EmacsByteLen::new(len),
+            );
+            extent(CaseExtent {
+                source_pos: crate::buffer::CharPos0::new(source_index),
+                source_extent: unit,
+                output_extent: unit,
+            });
+            source_index += 1;
+            word_state = if is_word(code) {
+                CasingWordState::Inside
+            } else {
+                CasingWordState::Outside
+            };
+            continue;
+        }
         let was_inword = matches!(word_state, CasingWordState::Inside);
         let next_word = code == 0x03a3
             && was_inword
@@ -640,13 +664,31 @@ pub(crate) fn casify_text_with_extents(
                     }
                 }
                 CharacterCaseAction::Title => {
+                    let upper = ch.to_uppercase();
+                    let upper_count = upper.clone().count();
                     if titlecase_combining_iota_override(code as i64).is_some()
-                        || (ch.to_uppercase().count() > 1
-                            && !titlecase_uses_precomposed_upcase(code as i64))
+                        || (upper_count > 1 && !titlecase_uses_precomposed_upcase(code as i64))
                     {
                         titlecase_word_initial(ch)
                             .chars()
                             .for_each(|ch| emit(ch as u32));
+                        expanded = true;
+                    } else {
+                        // Reuse this character's Unicode lookup for GNU's
+                        // simple titlecase before the installed-table fallback.
+                        let code = i64::from(code);
+                        let title = upcase_char_with_unicode(code, || {
+                            upper.clone().next().map(|ch| ch as i64).unwrap_or(code)
+                        });
+                        let simple_title = matches!(code,
+                            452..=460 | 497..=499 | 4304..=4346 | 4349..=4351 |
+                            8064..=8071 | 8080..=8087 | 8096..=8103 | 8115 | 8131 | 8179)
+                            || (title != code && upper_count == 1);
+                        emit(if simple_title {
+                            title
+                        } else {
+                            upcase_char_override(code, casetab)
+                        } as u32);
                         expanded = true;
                     }
                 }
