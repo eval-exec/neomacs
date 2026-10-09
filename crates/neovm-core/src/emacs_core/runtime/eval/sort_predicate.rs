@@ -47,9 +47,9 @@ impl EnteredLispDepth {
 
     #[inline(always)]
     fn stack_placement(self) -> BufferedStackPlacement {
-        if self.get() >= STACK_GROWTH_PROBE_START_DEPTH
-            && self.get().is_multiple_of(STACK_GROWTH_PROBE_INTERVAL)
-        {
+        // Positive multiples start at the first probe. Pin that relationship
+        // below so a policy change cannot silently skip its lower bound.
+        if self.get().is_multiple_of(STACK_GROWTH_PROBE_INTERVAL) {
             BufferedStackPlacement::Sampled
         } else {
             BufferedStackPlacement::Caller
@@ -62,6 +62,10 @@ const _: () = assert!(std::mem::align_of::<EnteredLispDepth>() == std::mem::alig
 const _: () =
     assert!(std::mem::size_of::<Option<EnteredLispDepth>>() == std::mem::size_of::<usize>());
 const _: () = assert!(std::mem::size_of::<BufferedStackPlacement>() == 1);
+const _: () = {
+    assert!(STACK_GROWTH_PROBE_INTERVAL > 0);
+    assert!(STACK_GROWTH_PROBE_START_DEPTH == STACK_GROWTH_PROBE_INTERVAL);
+};
 static_assertions::assert_type_ne_all!(EnteredLispDepth, usize);
 static_assertions::assert_impl_all!(EnteredLispDepth: Copy, Send, Sync);
 static_assertions::assert_impl_all!(BufferedStackPlacement: Copy, Send, Sync);
