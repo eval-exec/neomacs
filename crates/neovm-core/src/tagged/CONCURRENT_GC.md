@@ -4,7 +4,9 @@ A background GC thread marks concurrently with the mutator, which stops only
 for two short safe-point handshakes per cycle (root snapshot at the start,
 mark termination at the end). This is the Go-style design: concurrent
 tri-color mark, SATB (snapshot-at-the-beginning / Yuasa) deletion barrier,
-cooperative safe points, precise (non-conservative) rooting.
+cooperative safe points, precise (non-conservative) rooting. Each heap has
+its own GC thread (`GcWorker`), so no heap's mark or drop ever waits behind
+another heap's mark.
 
 STATUS: the concurrent collector is the ONLY sliced/marking collector. The
 old incremental slicer and the `NEOVM_GC_CONCURRENT` / `NEOVM_GC_SATB` env

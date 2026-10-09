@@ -461,7 +461,7 @@ impl TaggedHeap {
         } else {
             GcRequest::ConcurrentMark(job)
         };
-        gc_thread().send(request).expect("neovm-gc thread is gone");
+        self.gc_worker.send(request);
         self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
         self.pace_mark_start = Some(std::time::Instant::now());
@@ -800,13 +800,14 @@ impl TaggedHeap {
     }
 
     /// Request stop without waiting, then retain every allocation the marker
-    /// can reach. The global worker may still be scanning its start snapshots.
+    /// can reach. This heap's worker may still be scanning its start snapshots.
     pub(super) fn abandon_concurrent_mark(&mut self) {
         self.gc_stop.store(true, Ordering::Release);
         // Drop cannot acquire the wake mutex. A notify missed before the
         // worker waits is bounded by its existing 100us timeout; stop remains
         // visible until it exits. No storage is reclaimed during that delay.
         self.gc_wake.1.notify_all();
+        self.gc_worker.detach_abandoned();
         std::mem::forget(std::mem::take(&mut self.cons_blocks));
         std::mem::forget(std::mem::take(&mut self.float_arena.pages));
         std::mem::forget(std::mem::take(&mut self.string_arena.pages));
