@@ -1076,10 +1076,19 @@ impl SortRuntime for super::eval::Context {
                 None => self.apply2_resolved_subr(designator, subr, epoch, arg0, arg1),
             },
             SortPredicate::NumericLessp { subr, epoch } => {
-                self.apply2_resolved_subr(subr, subr, epoch, arg0, arg1)
+                // Ordinary list/keyed-vector callers already publish and root
+                // their values. Keep the captured GNU funcall frame through
+                // finish even when the proven body returns a signal.
+                match self.begin_buffered_native_sort_call(predicate, arg0, arg1) {
+                    Some(call) => self.finish_buffered_native_sort_call(call),
+                    None => self.apply2_resolved_subr(subr, subr, epoch, arg0, arg1),
+                }
             }
             SortPredicate::StringLessp { subr, epoch } => {
-                self.apply2_sort_string_lessp(subr, epoch, arg0, arg1)
+                match self.begin_buffered_native_sort_call(predicate, arg0, arg1) {
+                    Some(call) => self.finish_buffered_native_sort_call(call),
+                    None => self.apply2_sort_string_lessp(subr, epoch, arg0, arg1),
+                }
             }
         }
     }

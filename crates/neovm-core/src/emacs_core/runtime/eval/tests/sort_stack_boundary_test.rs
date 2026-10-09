@@ -5,7 +5,7 @@
 use super::{
     Context, EVAL_STACK_RED_ZONE, STACK_GROWTH_PROBE_INTERVAL, STACK_GROWTH_PROBE_START_DEPTH,
 };
-use crate::emacs_core::builtins::higher_order::builtin_sort_slice;
+use crate::emacs_core::builtins::higher_order::{SortPredicate, SortRuntime, builtin_sort_slice};
 use crate::emacs_core::value::Value;
 use crate::tagged::collection_reads::capture;
 use crate::tagged::mutate::LispCollectionRevision;
@@ -247,6 +247,80 @@ fn native_sort_batches_at_sampled_depths_on_both_stack_placements() {
                 );
                 for (ordinal, value) in vector.as_vector_data().unwrap().iter().enumerate() {
                     predicate.assert_element(*value, ordinal);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, EnumIter)]
+enum NativeCallOutcome {
+    Success,
+    Signal,
+}
+
+#[derive(Clone, Copy, Debug, EnumIter)]
+enum CollectionPressure {
+    Idle,
+    Stress,
+}
+
+impl CollectionPressure {
+    fn apply(self, context: &mut Context) {
+        context.gc_stress = match self {
+            Self::Idle => false,
+            Self::Stress => true,
+        };
+    }
+}
+
+#[test]
+fn published_native_sort_calls_restore_frames_on_success_and_signal() {
+    crate::test_utils::init_test_tracing();
+    for placement in NativeStackPlacement::iter() {
+        for sampled in SampledEntryDepth::iter() {
+            for predicate in NativePredicate::iter() {
+                for pressure in CollectionPressure::iter() {
+                    for outcome in NativeCallOutcome::iter() {
+                        let mut eval = crate::test_utils::runtime_startup_context();
+                        let captured = eval.resolve_sort_predicate(predicate.callable());
+                        let left = match outcome {
+                            NativeCallOutcome::Success => predicate.element(0),
+                            NativeCallOutcome::Signal => Value::list(vec![Value::symbol("bad")]),
+                        };
+                        let right = predicate.element(1);
+                        let list = Value::list(vec![right, left]);
+                        // Published callers own these roots for their complete
+                        // sort, including a signal-hook collection at finish.
+                        // This fresh Context owns them until it is dropped.
+                        let subr = match captured {
+                            SortPredicate::NumericLessp { subr, .. }
+                            | SortPredicate::StringLessp { subr, .. } => subr,
+                            SortPredicate::ValueLt
+                            | SortPredicate::Generic(_)
+                            | SortPredicate::Subr { .. } => {
+                                panic!("fixture must capture a native body")
+                            }
+                        };
+                        eval.push_specpdl_root(subr);
+                        eval.push_specpdl_root(left);
+                        eval.push_specpdl_root(right);
+                        eval.push_specpdl_root(list);
+                        pressure.apply(&mut eval);
+                        let mut caller = SampledCallerDepth::enter(&mut eval, sampled);
+                        let result = placement.run(|| {
+                            builtin_sort_slice(caller.context(), &[list, predicate.callable()])
+                        });
+                        match outcome {
+                            NativeCallOutcome::Success => {
+                                assert_eq!(result.unwrap(), list);
+                                assert_eq!(list.cons_car(), left);
+                                assert_eq!(list.cons_cdr().cons_car(), right);
+                            }
+                            NativeCallOutcome::Signal => assert!(result.is_err()),
+                        }
+                        caller.assert_native_call_restored();
+                    }
                 }
             }
         }

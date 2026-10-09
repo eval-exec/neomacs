@@ -41,3 +41,7 @@ mod native_storage_boundaries;
 #[cfg(test)]
 #[path = "gd_e_sort/sampled_native_boundaries.rs"]
 mod sampled_native_boundaries;
+
+#[cfg(test)]
+#[path = "gd_e_sort/published_native_boundaries.rs"]
+mod published_native_boundaries;
