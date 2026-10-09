@@ -20,7 +20,7 @@ pub mod visited_file_modtime;
 
 pub use buffer::{
     Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LabeledRestriction,
-    LabeledRestrictionLabel, SavedRestrictionKind, SavedRestrictionState,
+    LabeledRestrictionLabel, SavedLabeledRestrictions, SavedRestrictionKind, SavedRestrictionState,
 };
 pub(crate) use buffer_text::BufferText;
 pub use edit_transaction::TranspositionAnchorPolicy;

@@ -3471,6 +3471,39 @@ fn manager_save_restriction_state_restores_labeled_stack() {
 }
 
 #[test]
+fn saved_labeled_restrictions_round_trip_and_drop_on_killed_buffer() {
+    crate::test_utils::init_test_tracing();
+    let mut mgr = BufferManager::new();
+    let id = mgr.create_buffer("saved-labeled-drop");
+    mgr.set_current(id);
+    mgr.get_mut(id).unwrap().insert("abcdefgh");
+    let _ = mgr.internal_labeled_narrow_to_emacs_byte_range(
+        id,
+        EmacsByteRange::from_usize(1, 5),
+        Value::symbol("tag"),
+    );
+
+    let saved = mgr
+        .save_current_restriction_state()
+        .expect("restriction state should save");
+    // Outermost bounds plus the user label.
+    let restrictions = saved
+        .labeled_restrictions
+        .as_slice()
+        .expect("the labeled stack was saved");
+    assert_eq!(restrictions.len(), 2);
+    assert_eq!(saved.clone(), saved);
+    let copy = saved.labeled_restrictions.clone();
+    assert_eq!(copy.into_inner().map(|stack| stack.len()), Some(2));
+
+    // Restoring into a killed buffer discards the saved stack through the
+    // out-of-line drop and leaves no labeled restriction behind.
+    assert!(mgr.kill_buffer(id));
+    mgr.restore_saved_restriction_state(saved);
+    assert_eq!(mgr.current_labeled_restriction_bounds(id), None);
+}
+
+#[test]
 fn manager_reset_outermost_restrictions_restores_current_innermost_after_mutation() {
     crate::test_utils::init_test_tracing();
     let mut mgr = BufferManager::new();

@@ -2136,12 +2136,63 @@ pub enum SavedRestrictionKind {
 pub struct SavedRestrictionState {
     pub buffer_id: BufferId,
     pub restriction: SavedRestrictionKind,
-    pub labeled_restrictions: Option<Vec<LabeledRestriction>>,
+    pub labeled_restrictions: SavedLabeledRestrictions,
+}
+
+/// The labeled-restriction stack a `save-restriction` entry saved, as GNU's
+/// `save_restriction_save` (editfns.c) saves `labeled_restrictions_save ()`
+/// beside the plain restriction.
+///
+/// Normal restoration transfers the vector back to the buffer. Dropping an
+/// abandoned state or restoring it into a killed buffer frees the vector.
+/// That free runs out of line in the
+/// `#[cold] #[inline(never)]` [`Drop::drop`] below. As plain drop glue it was
+/// free to fold into every function that owns a [`SavedRestrictionState`];
+/// under fat LTO it folded into `Vm::run_loop` (about 25 instructions on the
+/// 2026-10-06 vmport branch), moving the bytecode interpreter's code although
+/// nothing in the interpreter had changed.
+///
+/// This wrapper owns the vector allocation. Labels and marker ids remain
+/// traced through `SavedRestrictionState`; access and restoration follow the
+/// enclosing evaluator's mutator ownership. It adds no shared mutable state
+/// or thread-local cache.
+#[repr(transparent)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedLabeledRestrictions(mem::ManuallyDrop<Option<Vec<LabeledRestriction>>>);
+
+impl SavedLabeledRestrictions {
+    /// The saved restrictions, outermost first, or `None` when the buffer had
+    /// none.
+    pub fn as_slice(&self) -> Option<&[LabeledRestriction]> {
+        self.0.as_deref()
+    }
+
+    /// Hand the saved restrictions back for restoring.
+    pub fn into_inner(mut self) -> Option<Vec<LabeledRestriction>> {
+        let restrictions = self.0.take();
+        // Nothing is left to free, so skip the out-of-line drop call.
+        mem::forget(self);
+        restrictions
+    }
+}
+
+impl From<Option<Vec<LabeledRestriction>>> for SavedLabeledRestrictions {
+    fn from(restrictions: Option<Vec<LabeledRestriction>>) -> Self {
+        Self(mem::ManuallyDrop::new(restrictions))
+    }
+}
+
+impl Drop for SavedLabeledRestrictions {
+    #[cold]
+    #[inline(never)]
+    fn drop(&mut self) {
+        drop(self.0.take());
+    }
 }
 
 impl SavedRestrictionState {
     pub fn trace_roots(&self, roots: &mut Vec<Value>) {
-        if let Some(restrictions) = &self.labeled_restrictions {
+        if let Some(restrictions) = self.labeled_restrictions.as_slice() {
             for restriction in restrictions {
                 if let LabeledRestrictionLabel::User(label) = restriction.label {
                     roots.push(label);
@@ -2173,7 +2224,7 @@ impl SavedRestrictionState {
                 roots.push(value);
             }
         }
-        if let Some(restrictions) = &self.labeled_restrictions {
+        if let Some(restrictions) = self.labeled_restrictions.as_slice() {
             for restriction in restrictions {
                 if let Some(value) = buffer.marker_value_by_id(restriction.beg_marker) {
                     roots.push(value);
@@ -7176,7 +7227,7 @@ impl BufferManager {
         Some(SavedRestrictionState {
             buffer_id,
             restriction,
-            labeled_restrictions,
+            labeled_restrictions: labeled_restrictions.into(),
         })
     }
 
@@ -7224,7 +7275,7 @@ impl BufferManager {
             self.replace_labeled_restrictions(buffer_id, None);
             return;
         }
-        self.replace_labeled_restrictions(buffer_id, saved.labeled_restrictions);
+        self.replace_labeled_restrictions(buffer_id, saved.labeled_restrictions.into_inner());
         match saved.restriction {
             SavedRestrictionKind::None => {
                 let _ = self.widen_buffer_fully(buffer_id);
