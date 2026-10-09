@@ -284,8 +284,7 @@ fn run_window_default_hook_value(
     }
     let global_hook_value = eval
         .obarray
-        .default_value_id(hook_sym)
-        .copied()
+        .default_value_id_copied(hook_sym)
         .unwrap_or(Value::NIL);
     if global_hook_value.is_nil() {
         return Ok(Value::NIL);
@@ -1512,8 +1511,7 @@ pub(crate) fn builtin_current_window_configuration(
         save_snapshot_persistent_window_parameters(
             &mut snapshot,
             eval.obarray
-                .symbol_value("window-persistent-parameters")
-                .copied()
+                .symbol_value_copied("window-persistent-parameters")
                 .unwrap_or(Value::NIL),
         );
         let roots = window_configuration_snapshot_roots(&snapshot);
@@ -1934,8 +1932,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     let hook_sym = hook_runtime::hook_symbol_by_name(eval, "window-configuration-change-hook");
     let global_hook_value = eval
         .obarray
-        .default_value_id(hook_sym)
-        .copied()
+        .default_value_id_copied(hook_sym)
         .unwrap_or(Value::NIL);
     let selected_window = frame_state.selected_window;
     let window_ids = frame_state.window_list();
@@ -2067,8 +2064,7 @@ pub(crate) fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>
     // never reaches here.)
     let features = eval
         .obarray
-        .symbol_value_id(features_symbol_id())
-        .copied()
+        .symbol_value_id_copied(features_symbol_id())
         .unwrap_or(Value::NIL);
     if super::cons_list::builtin_memq_values(feature, features, eval.symbols_with_pos_enabled)?
         .is_nil()

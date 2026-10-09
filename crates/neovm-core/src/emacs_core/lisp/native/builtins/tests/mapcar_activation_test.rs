@@ -393,8 +393,7 @@ fn mapcar_activation_debugger_runs_before_bytecode_callback() {
     assert_eq!(
         print_value(
             &ctx.obarray()
-                .symbol_value("mapact-debug-calls")
-                .copied()
+                .symbol_value_copied("mapact-debug-calls")
                 .unwrap()
         ),
         "((lambda))"
@@ -448,8 +447,7 @@ fn mapcar_activation_debug_on_entry_preserves_backtrace_and_next_element_redefin
     assert_eq!((ctx.depth, ctx.specpdl.len()), before);
     let calls = ctx
         .obarray()
-        .symbol_value("mapact-entry-calls")
-        .copied()
+        .symbol_value_copied("mapact-entry-calls")
         .unwrap();
     assert_eq!(
         calls.cons_cdr(),
@@ -460,8 +458,7 @@ fn mapcar_activation_debug_on_entry_preserves_backtrace_and_next_element_redefin
     assert_eq!(
         print_value(
             &ctx.obarray()
-                .symbol_value("mapact-entry-args")
-                .copied()
+                .symbol_value_copied("mapact-entry-args")
                 .unwrap()
         ),
         "(1)",

@@ -163,7 +163,7 @@ fn gnu_configuration_across_record_keeps_unchanged_buffer_callbacks_silent() {
     );
     run_redisplay_window_change_hooks(&mut eval).expect("restored real hook pass");
     assert_eq!(
-        eval.obarray.symbol_value("d5-buffer-calls").copied(),
+        eval.obarray.symbol_value_copied("d5-buffer-calls"),
         Some(Value::NIL)
     );
 }
@@ -195,8 +195,7 @@ fn gnu_configuration_across_record_notifies_actual_outgoing_and_restored_buffers
     run_redisplay_window_change_hooks(&mut eval).expect("restored hook pass");
     let calls = eval
         .obarray
-        .symbol_value("d5-buffer-calls")
-        .copied()
+        .symbol_value_copied("d5-buffer-calls")
         .expect("calls");
     let names = crate::emacs_core::value::list_to_vec(&calls).expect("list");
     assert_eq!(names.len(), 2, "old and new local hooks run once each");
@@ -230,7 +229,7 @@ fn gnu_configuration_temporary_same_epoch_buffer_excursion_is_silent() {
         .expect("restore in same epoch");
     run_redisplay_window_change_hooks(&mut eval).expect("same-epoch hook pass");
     assert_eq!(
-        eval.obarray.symbol_value("d5-buffer-calls").copied(),
+        eval.obarray.symbol_value_copied("d5-buffer-calls"),
         Some(Value::NIL)
     );
 }

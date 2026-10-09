@@ -818,9 +818,8 @@ pub(crate) fn builtin_number_to_string(
             super::print::format_float_with_output_format(
                 args[0].xfloat(),
                 ctx.obarray
-                    .symbol_value("float-output-format")
-                    .filter(|v| v.is_string())
-                    .copied(),
+                    .symbol_value_copied("float-output-format")
+                    .filter(|v| v.is_string()),
             ),
         )),
         ValueKind::Veclike(VecLikeType::Bignum) => {

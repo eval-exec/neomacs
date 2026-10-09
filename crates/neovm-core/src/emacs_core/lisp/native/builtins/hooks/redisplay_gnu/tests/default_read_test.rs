@@ -83,7 +83,7 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
     );
     assert_eq!(signal.data, vec![Value::symbol(void_hook)]);
     assert_eq!(
-        eval.obarray.symbol_value("d5-default-hook-calls").copied(),
+        eval.obarray.symbol_value_copied("d5-default-hook-calls"),
         Some(Value::fixnum(1))
     );
     assert_eq!(
@@ -115,7 +115,7 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
     );
     assert_eq!(eval.specpdl.len(), bindings);
     assert_eq!(
-        eval.obarray.symbol_value("inhibit-redisplay").copied(),
+        eval.obarray.symbol_value_copied("inhibit-redisplay"),
         Some(Value::NIL)
     );
 }

@@ -1700,18 +1700,16 @@ pub(crate) fn is_global_obarray_proxy(eval: &super::eval::Context, value: &Value
         *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("neovm--obarray-object"))
     }
     eval.obarray()
-        .symbol_value_id(neovm_obarray_object_sym())
-        .is_some_and(|proxy| *proxy == *value)
+        .symbol_value_id_copied(neovm_obarray_object_sym())
+        .is_some_and(|proxy| proxy == *value)
 }
 
 fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
     eval.obarray()
-        .symbol_value("obarray")
-        .copied()
+        .symbol_value_copied("obarray")
         .unwrap_or_else(|| {
             eval.obarray()
-                .symbol_value("neovm--obarray-object")
-                .copied()
+                .symbol_value_copied("neovm--obarray-object")
                 .unwrap_or(Value::NIL)
         })
 }
@@ -2432,8 +2430,7 @@ pub(crate) fn menu_bar_top_level_items_for_frame(
     } else {
         let obey_overriding_local_maps = eval
             .obarray
-            .symbol_value("overriding-local-map-menu-flag")
-            .copied()
+            .symbol_value_copied("overriding-local-map-menu-flag")
             .is_some_and(|value| value.is_truthy());
         let mut maps = crate::emacs_core::keymap::current_active_maps_for_position_read_only(
             eval,
@@ -2452,7 +2449,7 @@ pub(crate) fn menu_bar_top_level_items_for_frame(
 }
 
 fn move_menu_bar_final_items(eval: &super::eval::Context, items: &mut Vec<(Value, String)>) {
-    let Some(mut final_items) = eval.obarray().symbol_value("menu-bar-final-items").copied() else {
+    let Some(mut final_items) = eval.obarray().symbol_value_copied("menu-bar-final-items") else {
         return;
     };
     while final_items.is_cons() {
@@ -2518,8 +2515,7 @@ fn selected_frame_value(eval: &mut super::eval::Context) -> Value {
 fn maybe_transform_mouse_position(eval: &mut super::eval::Context, value: Value) -> EvalResult {
     let transform = eval
         .obarray
-        .symbol_value("mouse-position-function")
-        .copied()
+        .symbol_value_copied("mouse-position-function")
         .unwrap_or(Value::NIL);
     if transform.is_truthy() {
         eval.apply(transform, vec![value])
@@ -2602,7 +2598,7 @@ fn dynamic_or_global_symbol_value_in_state(
     _dynamic: &[OrderedRuntimeBindingMap],
     name: &str,
 ) -> Option<Value> {
-    obarray.symbol_value(name).copied()
+    obarray.symbol_value_copied(name)
 }
 
 pub(crate) fn builtin_new_fontset(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
@@ -5328,13 +5324,11 @@ pub(crate) fn builtin_dump_emacs_portable(
     }
     let saved_post_gc_hook = ctx
         .obarray()
-        .symbol_value("post-gc-hook")
-        .copied()
+        .symbol_value_copied("post-gc-hook")
         .unwrap_or(Value::NIL);
     let saved_command_line_processed = ctx
         .obarray()
-        .symbol_value("command-line-processed")
-        .copied()
+        .symbol_value_copied("command-line-processed")
         .unwrap_or(Value::NIL);
     // `process-environment` is a `DEFVAR_LISP` (`src/callproc.c:2144`) that
     // `lisp/eshell/esh-var.el` and `lisp/progmodes/compile.el` localise, so it

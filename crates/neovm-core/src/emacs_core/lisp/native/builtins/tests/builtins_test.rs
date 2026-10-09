@@ -2290,13 +2290,13 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("mib-last-clone-buffer")
+            .symbol_value_copied("mib-last-clone-buffer")
             .and_then(|v| v.as_utf8_str()),
         Some("*mib-clone*")
     );
     assert_eq!(
-        eval.obarray().symbol_value("mib-buffer-list-ran"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("mib-buffer-list-ran"),
+        Some(Value::T)
     );
 
     eval.obarray_mut()
@@ -2317,14 +2317,14 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
 
     assert_eq!(
         eval.obarray()
-            .symbol_value("mib-last-clone-buffer")
+            .symbol_value_copied("mib-last-clone-buffer")
             .and_then(|v| v.as_utf8_str()),
         Some("*mib-clone-inhibit*"),
         "clone-indirect-buffer-hook should still run"
     );
     assert_eq!(
-        eval.obarray().symbol_value("mib-buffer-list-ran"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("mib-buffer-list-ran"),
+        Some(Value::NIL),
         "buffer-list-update-hook should be inhibited"
     );
 }
@@ -8170,9 +8170,7 @@ fn defvar_1_binds_only_when_default_is_unbound() {
     .expect("defvar-1 should succeed");
     assert_eq!(result, Value::symbol("vm-defvar-1"));
     assert_eq!(
-        eval.obarray()
-            .symbol_value_id(intern("vm-defvar-1"))
-            .copied(),
+        eval.obarray().symbol_value_id_copied(intern("vm-defvar-1")),
         Some(Value::fixnum(7))
     );
 
@@ -8183,9 +8181,7 @@ fn defvar_1_binds_only_when_default_is_unbound() {
     .expect("second defvar-1 should succeed");
     assert_eq!(result, Value::symbol("vm-defvar-1"));
     assert_eq!(
-        eval.obarray()
-            .symbol_value_id(intern("vm-defvar-1"))
-            .copied(),
+        eval.obarray().symbol_value_id_copied(intern("vm-defvar-1")),
         Some(Value::fixnum(7))
     );
 }
@@ -8208,7 +8204,7 @@ fn defconst_1_sets_value_and_risky_local_property_without_constant_trap() {
     assert_eq!(result, Value::symbol("vm-defconst-1"));
     let symbol = intern("vm-defconst-1");
     assert_eq!(
-        eval.obarray().symbol_value_id(symbol).copied(),
+        eval.obarray().symbol_value_id_copied(symbol),
         Some(Value::fixnum(11))
     );
     assert_eq!(
@@ -8226,7 +8222,7 @@ fn defconst_1_sets_value_and_risky_local_property_without_constant_trap() {
     )
     .expect("GNU allows setting a defconst variable");
     assert_eq!(
-        eval.obarray().symbol_value_id(symbol).copied(),
+        eval.obarray().symbol_value_id_copied(symbol),
         Some(Value::fixnum(12))
     );
 }
@@ -16127,7 +16123,7 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
     assert_eq!(second, Value::fixnum(1));
     assert_eq!(eval.macro_expand_calls - calls0, 2);
     assert_eq!(
-        eval.obarray().symbol_value("vm-macroexpand-count").copied(),
+        eval.obarray().symbol_value_copied("vm-macroexpand-count"),
         Some(Value::fixnum(2))
     );
 
@@ -16143,7 +16139,7 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
     assert_eq!(fourth, Value::fixnum(2));
     assert_eq!(eval.macro_expand_calls - calls0, 4);
     assert_eq!(
-        eval.obarray().symbol_value("vm-macroexpand-count").copied(),
+        eval.obarray().symbol_value_copied("vm-macroexpand-count"),
         Some(Value::fixnum(4))
     );
 }
@@ -16183,8 +16179,7 @@ fn macroexpand_runtime_repeated_expansions_survive_exact_gc() {
     assert_eq!(eval.macro_expand_calls - calls0, 2);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-macroexpand-gc-count")
-            .copied(),
+            .symbol_value_copied("vm-macroexpand-gc-count"),
         Some(Value::fixnum(2))
     );
 }
