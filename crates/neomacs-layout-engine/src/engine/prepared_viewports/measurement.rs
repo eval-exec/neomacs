@@ -20,7 +20,9 @@ impl PreparedViewports {
         let start = match scope {
             WindowLayoutQueryScope::Rows { start, .. }
             | WindowLayoutQueryScope::Pixels { start, .. } => start,
-            WindowLayoutQueryScope::Viewport | WindowLayoutQueryScope::Position { .. } => {
+            WindowLayoutQueryScope::Viewport
+            | WindowLayoutQueryScope::Position { .. }
+            | WindowLayoutQueryScope::TextExtent { .. } => {
                 return None;
             }
         };
@@ -82,7 +84,9 @@ impl PreparedViewports {
                     .iter()
                     .take_while(|row| row.y < pixel_bottom.expect("pixel extent"))
                     .count(),
-                WindowLayoutQueryScope::Viewport | WindowLayoutQueryScope::Position { .. } => {
+                WindowLayoutQueryScope::Viewport
+                | WindowLayoutQueryScope::Position { .. }
+                | WindowLayoutQueryScope::TextExtent { .. } => {
                     return None;
                 }
             };

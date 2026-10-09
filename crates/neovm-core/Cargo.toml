@@ -238,3 +238,7 @@ dead_code = "warn"
 [[test]]
 name = "gnu_overlay_deletion_allocations"
 path = "tests/gnu_overlay_deletion_allocations.rs"
+
+[[test]]
+name = "pixel_measurement"
+path = "tests/pixel_measurement.rs"

@@ -1781,6 +1781,10 @@ impl WindowOutputEmitter {
         self.geometry.test_posn_object_extent_mode = Some(mode);
     }
 
+    pub(crate) fn set_source_extent(&mut self, extent: crate::types::WindowSourceExtent) {
+        self.geometry.source_extent = extent;
+    }
+
     pub(crate) fn begin_update(&self, evaluator: &mut Context) {
         let _ = self.with_live_update(evaluator, |update| update.begin_update());
     }

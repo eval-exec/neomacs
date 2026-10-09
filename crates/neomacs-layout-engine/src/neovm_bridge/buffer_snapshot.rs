@@ -30,6 +30,7 @@ pub(crate) struct LayoutBufferSnapshot {
     accessible_start_emacs_byte: EmacsBytePos,
     accessible_end_emacs_byte: EmacsBytePos,
     accessible_end_char: CharPos0,
+    source_context_end: CharPos0,
     overlays: OverlaySnapshot,
     /// Symbol plists for the category symbols actually referenced by this
     /// buffer's text and overlays. Capturing this sparse set keeps layout
@@ -53,6 +54,17 @@ impl LayoutBufferSnapshot {
         Self::capture_buffer(buffer, None)
     }
 
+    /// Project a query's source boundary without narrowing the live buffer.
+    /// Ordinary runs stop here, while complete composed elements retain the
+    /// original narrowed buffer as their readable context.
+    pub(crate) fn with_accessible_end(mut self, end: CharPos0) -> Self {
+        self.accessible_end_char = end.min(self.accessible_end_char);
+        self.accessible_end_emacs_byte = self
+            .text_snapshot
+            .char_pos_to_emacs_byte_pos(self.accessible_end_char);
+        self
+    }
+
     // Resolve layout variables once, with the caller's global defaults already
     // available. Window snapshots must not build and then replace a complete
     // buffer-local-only variable table on every layout attempt.
@@ -65,6 +77,7 @@ impl LayoutBufferSnapshot {
             accessible_start_emacs_byte: buffer.point_min_emacs_byte_pos(),
             accessible_end_emacs_byte: buffer.point_max_emacs_byte_pos(),
             accessible_end_char: buffer.point_max_char_pos(),
+            source_context_end: buffer.point_max_char_pos(),
             vars: resolve_layout_vars(buffer, obarray),
             overlays: buffer.overlays().snapshot(),
             category_symbol_plists: FxHashMap::default(),
@@ -295,18 +308,26 @@ impl LayoutBufferView for LayoutBufferSnapshot {
         self.accessible_end_char
     }
 
+    fn layout_measurement_context_end(&self) -> Option<CharPos0> {
+        (self.accessible_end_char < self.source_context_end).then_some(self.source_context_end)
+    }
+
     fn layout_total_emacs_byte_len(&self) -> EmacsByteLen {
         self.text_snapshot.emacs_byte_len()
     }
 
     fn layout_char_pos_to_emacs_byte_pos(&self, charpos: CharPos0) -> EmacsBytePos {
         self.text_snapshot
-            .char_pos_to_emacs_byte_pos(charpos.min(self.accessible_end_char))
+            .char_pos_to_emacs_byte_pos(charpos.min(self.source_context_end))
     }
 
     fn layout_emacs_byte_pos_to_char_pos(&self, bytepos: EmacsBytePos) -> CharPos0 {
-        self.text_snapshot
-            .emacs_byte_pos_to_char_pos(bytepos.min(self.accessible_end_emacs_byte))
+        self.text_snapshot.emacs_byte_pos_to_char_pos(
+            bytepos.min(
+                self.text_snapshot
+                    .char_pos_to_emacs_byte_pos(self.source_context_end),
+            ),
+        )
     }
 
     fn layout_copy_emacs_byte_range_to(&self, range: EmacsByteRange, out: &mut Vec<u8>) {

@@ -33,6 +33,8 @@ mod mode_line_flow_policy;
 pub fn mode_line_flow_enabled() -> bool {
     mode_line_flow_policy::enabled()
 }
+mod text_measurement;
+use text_measurement::TextMeasurement;
 mod mode_line_gc;
 mod mode_line_numeric_padding;
 pub(crate) mod motion;
@@ -276,8 +278,8 @@ struct LineColumn {
 /// whose size is not a whole number of cells -- an image.  A column count
 /// cannot represent a 200-pixel image in a 9-pixel cell at all: that is why
 /// the unit is part of the type rather than a multiplier applied by each
-/// caller.  Text still uses the monospace approximation, contributing
-/// [`TextCellPixels::width`] per column.
+/// caller. The canonical producer supplies font-resolved metrics when a
+/// frontend is present; the startup/batch scanner uses [`TextCellPixels`].
 ///
 /// `max_width` is the value GNU's `window_text_pixel_size` returns -- `x -
 /// start_x` over the walked display lines, which [`MeasuredRange`] defines --
@@ -576,33 +578,55 @@ fn calc_space_columns(spec: Value, align_to: bool) -> Option<f64> {
     None
 }
 
-/// Resolve a `(space ...)` plist to the number of columns the space occupies,
-/// honoring `:width`/`:align-to` (the column-affecting subset GNU's display
-/// iterator resolves via `calc_pixel_width_or_height`).  `cur_col` is the column
-/// at the spec, needed for `:align-to` (which is an absolute target column).
-/// Returns `None` when the spec carries no column-bearing keyword we model.
-fn space_spec_advance_columns(plist: Value, cur_col: usize) -> Option<usize> {
-    let qcwidth = Value::symbol(":width");
-    let qcalign = Value::symbol(":align-to");
-
-    // `:width N` => advance N columns from the current position.
-    if let Some(width) = super::plist::plist_get(plist, &qcwidth)
-        && !width.is_nil()
-        && let Some(cols) = calc_space_columns(width, false)
-    {
-        return Some(cols.max(0.0).round() as usize);
+/// Preserve absolute pixel operands when no frontend row producer is available.
+/// Ordinary numeric operands retain the batch scanner's column semantics.
+fn fallback_space_element(
+    eval: &super::eval::Context,
+    frame: FrameId,
+    plist: Value,
+    column: usize,
+) -> Option<DisplayElement> {
+    for (keyword, align) in [(":width", false), (":align-to", true)] {
+        let Some(spec) = super::plist::plist_get(plist, &Value::symbol(keyword)) else {
+            continue;
+        };
+        if !spec.is_nil()
+            && let Some(columns) = calc_space_columns(spec, align)
+        {
+            let columns = columns.max(0.0).round() as usize;
+            let advance = if align {
+                columns.saturating_sub(column)
+            } else {
+                columns
+            };
+            return Some(DisplayElement::Cells(advance as f32));
+        }
+        if spec.is_cons() && spec.cons_cdr().is_nil() {
+            let operand = spec.cons_car();
+            let pixels = operand
+                .as_fixnum()
+                .map(|n| n as f64)
+                .or_else(|| operand.as_float());
+            if let Some(pixels) = pixels.filter(|pixels| pixels.is_finite()) {
+                let frame = eval.frames.get(frame)?;
+                let cell = TextCellPixels::new(
+                    frame.char_width,
+                    frame.char_height,
+                    frame.font_cell_ascent(),
+                );
+                let origin = if align {
+                    column as f32 * cell.width
+                } else {
+                    0.0
+                };
+                return Some(DisplayElement::Pixels(ElementExtent {
+                    advance: (pixels as f32 - origin).max(0.0),
+                    ascent: cell.ascent,
+                    descent: cell.descent(),
+                }));
+            }
+        }
     }
-
-    // `:align-to COL` => advance so the running column reaches COL (never go
-    // backwards, matching GNU which never produces a negative-width space).
-    if let Some(align) = super::plist::plist_get(plist, &qcalign)
-        && !align.is_nil()
-        && let Some(target) = calc_space_columns(align, true)
-    {
-        let target = target.max(0.0).round() as usize;
-        return Some(target.saturating_sub(cur_col));
-    }
-
     None
 }
 
@@ -1470,8 +1494,7 @@ fn display_element_run(
 
     let element = match super::display_spec::display_spec_kind(display) {
         super::display_spec::DisplaySpecKind::Space => {
-            let width = space_spec_advance_columns(display.cons_cdr(), cur_column)?;
-            DisplayElement::Cells(width as f32)
+            fallback_space_element(eval, frame, display.cons_cdr(), cur_column)?
         }
         // An image replaces its text only on a frame that can display one:
         // GNU's `valid_image_p` is false without a window system, and the
@@ -1716,7 +1739,7 @@ fn process_overlay_strings_at(
 ///
 /// The string carries its OWN `display` text properties: a `(space :align-to N)`
 /// / `(space :width N)` advances/jumps the running column exactly like the same
-/// spec in buffer text (resolved via the shared [`space_spec_advance_columns`]),
+/// spec in buffer text (resolved via the shared [`fallback_space_element`]),
 /// replacing the covered string chars.  Embedded newlines end the current line
 /// (updating the max width) and reset the column to 0 — critical for the
 /// multi-line vertico candidate after-string, whose widest line determines the
@@ -1811,7 +1834,7 @@ fn string_display_element_run(
 
     let element = match super::display_spec::display_spec_kind(display) {
         super::display_spec::DisplaySpecKind::Space => {
-            DisplayElement::Cells(space_spec_advance_columns(display.cons_cdr(), cur_col)? as f32)
+            fallback_space_element(eval, frame, display.cons_cdr(), cur_col)?
         }
         super::display_spec::DisplaySpecKind::Image
             if eval
@@ -5908,17 +5931,18 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
     // `(space :align-to N)` stretch, or an image, which contributes its own
     // width and its own baseline split.
     let edge = explicit_x_limit.or(body_edge);
-    let mut text_metrics = region_text_metrics_with_display(
-        eval,
-        fid,
-        buf_id,
-        measured,
-        apply_trim,
+    let mut text_metrics = TextMeasurement {
+        frame: fid,
+        window: wid,
+        buffer: buf_id,
+        range: measured,
+        trim: apply_trim,
         cell,
-        CharColumnWidth::One,
+        columns: CharColumnWidth::One,
         edge,
         y_limit,
-    );
+    }
+    .measure(eval)?;
     if offset_landed_on_occupied_row && from_pos >= to_pos {
         // GNU keeps the adjusted iterator's current row in the vertical
         // extent even when its original, pre-clipped TO is now at or before
@@ -9973,6 +9997,7 @@ pub(crate) fn builtin_buffer_text_pixel_size(
     // at the accessible portion's start.
     let edge = match x_limit {
         Some(pixels) => Some(RowEdge::new(pixels as f32, line_wrap)),
+        None if args.get(2).is_some_and(|limit| limit.is_t()) => None,
         None => eval.frames.get(fid).and_then(|frame| {
             let window = frame.find_window(window_id)?;
             window_body_row_edge(
@@ -9985,17 +10010,18 @@ pub(crate) fn builtin_buffer_text_pixel_size(
             )
         }),
     };
-    let metrics = region_text_metrics_with_display(
-        eval,
-        fid,
-        buffer_id,
-        MeasuredRange::starting_at(range.start(), range.end()),
-        false,
+    let metrics = TextMeasurement {
+        frame: fid,
+        window: window_id,
+        buffer: buffer_id,
+        range: MeasuredRange::starting_at(range.start(), range.end()),
+        trim: false,
         cell,
-        CharColumnWidth::DisplayWidth,
+        columns: CharColumnWidth::DisplayWidth,
         edge,
-        y_limit.map(|pixels| pixels as f32),
-    );
+        y_limit: y_limit.map(|pixels| pixels as f32),
+    }
+    .measure(eval)?;
 
     if metrics.lines == 0 {
         return Ok(Value::cons(Value::fixnum(0), Value::fixnum(0)));

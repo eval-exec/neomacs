@@ -5,7 +5,7 @@ use crate::display_when::DisplayWhenEndBoundary;
 use crate::neovm_bridge::{
     LayoutBufferView, LayoutCharPropertyLookup, buffer_has_active_display_table,
 };
-use crate::types::{MiniWindowMeasurement, WindowParams};
+use crate::types::{WindowParams, WindowSourceExtent};
 use neovm_core::buffer::CharPos0;
 use neovm_core::emacs_core::{Context, Value};
 
@@ -17,7 +17,7 @@ pub(super) fn condition_end_boundary(
     fontify_end: i64,
 ) -> DisplayWhenEndBoundary {
     let inclusive = DisplayWhenEndBoundary::InclusiveAnchor;
-    if params.mini_measurement != MiniWindowMeasurement::ToEnd
+    if params.source_extent != WindowSourceExtent::AccessibleEnd
         || !eval.gnu_redisplay_hooks_policy_enabled()
         || params.selective_display != 0
         || fontify_end != params.accessible_end_charpos().get()

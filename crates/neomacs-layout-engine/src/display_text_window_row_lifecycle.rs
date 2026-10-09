@@ -263,7 +263,7 @@ pub(crate) struct TextWindowBeginRequest {
     text_clip_bounds: neomacs_display_protocol::types::Rect,
     selected: bool,
     first_row: DisplayTextRowBegin,
-    row_capacity: crate::output::window_request::OutputWindowRowCapacity,
+    source_extent: crate::types::WindowSourceExtent,
 }
 
 pub(crate) struct TextWindowTailFinalizeRequest<'a> {
@@ -528,12 +528,12 @@ impl TextWindowBeginRequest {
             text_clip_bounds,
             selected,
             first_row,
-            row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
+            source_extent: crate::types::WindowSourceExtent::Viewport,
         }
     }
 
-    pub(crate) fn with_growing_rows(mut self) -> Self {
-        self.row_capacity = crate::output::window_request::OutputWindowRowCapacity::Growing;
+    pub(crate) fn with_source_extent(mut self, extent: crate::types::WindowSourceExtent) -> Self {
+        self.source_extent = extent;
         self
     }
 
@@ -555,6 +555,7 @@ impl TextWindowBeginRequest {
                 .frame_manager()
                 .posn_object_extent_mode(self.frame_id),
         );
+        output_emitter.set_source_extent(self.source_extent);
         output_emitter.begin_update(evaluator);
         begin_text_window_output_and_row(
             output,
@@ -569,7 +570,14 @@ impl TextWindowBeginRequest {
                 text_clip_bounds: self.text_clip_bounds,
                 selected: self.selected,
                 first_row: self.first_row,
-                row_capacity: self.row_capacity,
+                row_capacity: match self.source_extent {
+                    crate::types::WindowSourceExtent::Viewport => {
+                        crate::output::window_request::OutputWindowRowCapacity::Fixed
+                    }
+                    crate::types::WindowSourceExtent::AccessibleEnd => {
+                        crate::output::window_request::OutputWindowRowCapacity::Growing
+                    }
+                },
             },
         );
         output_emitter

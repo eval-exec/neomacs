@@ -151,6 +151,11 @@ pub(crate) trait LayoutBufferView {
     fn layout_point_min_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_char_pos(&self) -> CharPos0;
+    /// Readable context for complete display elements. A measurement stop can
+    /// fall inside a composition; actual buffer narrowing still bounds it.
+    fn layout_measurement_context_end(&self) -> Option<CharPos0> {
+        None
+    }
     fn layout_total_emacs_byte_len(&self) -> EmacsByteLen;
     fn layout_char_pos_to_emacs_byte_pos(&self, charpos: CharPos0) -> EmacsBytePos;
     fn layout_emacs_byte_pos_to_char_pos(&self, bytepos: EmacsBytePos) -> CharPos0;
@@ -1698,7 +1703,8 @@ pub fn window_params_from_neovm_with_font_sizing(
         // Normalize to the layout engine's internal 0-based char positions.
         window_start: lisp_char_pos_to_layout_i64(window_start),
         measurement_rows: None,
-        mini_measurement: crate::types::MiniWindowMeasurement::Presentation,
+        measurement_width: None,
+        source_extent: crate::types::WindowSourceExtent::Viewport,
         measurement_pixels: None,
         query_target: None,
         force_start,
