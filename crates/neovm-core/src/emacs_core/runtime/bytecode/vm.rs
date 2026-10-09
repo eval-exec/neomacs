@@ -2099,9 +2099,30 @@ impl BytecodeTierPolicy {
     }
 }
 
+/// The floor-adjusted depth check rejected a call. This scalar decision carries
+/// neither Lisp values nor permission to use a context or collect its roots.
+#[must_use]
+#[derive(Debug, thiserror::Error)]
+enum BytecodeDepthOverflow {
+    #[error("Lisp nesting exceeds ‘max-lisp-eval-depth’")]
+    Confirmed,
+}
+
+impl BytecodeDepthOverflow {
+    #[inline(always)]
+    fn into_flow(self) -> Flow {
+        match self {
+            Self::Confirmed => signal(
+                LispCondition::Error,
+                vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
+            ),
+        }
+    }
+}
+
 /// The bytecode VM execution engine.
 ///
-/// Operates on an Context's obarray and dynamic binding stack.
+/// Operates on a Context's obarray and dynamic binding stack.
 pub struct Vm<'a> {
     ctx: &'a mut crate::emacs_core::eval::Context,
     recent_interpreter_call: RecentInterpreterCall,
@@ -2423,9 +2444,9 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     fn bytecode_depth_exceeded_published(&mut self) -> Result<(), Flow> {
-        match self.bytecode_depth_exceeded() {
+        match self.check_bytecode_call_depth() {
             Ok(()) => Ok(()),
-            Err(flow) => Err(self.ctx.finish_lisp_depth_overflow(flow)),
+            Err(overflow) => Err(self.ctx.finish_lisp_depth_overflow(overflow.into_flow())),
         }
     }
 
@@ -2435,9 +2456,13 @@ impl<'a> Vm<'a> {
     /// the original cursor in the driver and never cross this boundary.
     #[cold]
     #[inline(never)]
-    fn finish_live_bytecode_depth_overflow(&mut self, cursor: StackCursor, flow: Flow) -> Flow {
+    fn finish_live_bytecode_depth_overflow(
+        &mut self,
+        cursor: StackCursor,
+        overflow: BytecodeDepthOverflow,
+    ) -> Flow {
         cursor.publish(self.ctx);
-        self.ctx.finish_lisp_depth_overflow(flow)
+        self.ctx.finish_lisp_depth_overflow(overflow.into_flow())
     }
 
     /// Enter a bytecode call whose caller has already published its operands.
@@ -2464,14 +2489,25 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     pub(crate) fn bytecode_depth_exceeded(&mut self) -> Result<(), Flow> {
+        self.check_bytecode_call_depth()
+            .map_err(BytecodeDepthOverflow::into_flow)
+    }
+
+    /// The cached driver keeps its cursor live through this scalar check.
+    /// Allocate the signal only after confirmed rejection publishes that cursor.
+    #[cold]
+    #[inline(never)]
+    fn check_live_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
+        self.check_bytecode_call_depth()
+    }
+
+    #[inline(always)]
+    fn check_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
         if self.ctx.max_depth < 100 {
             self.ctx.max_depth = 100;
         }
         if self.ctx.depth > self.ctx.max_depth {
-            return Err(signal(
-                "error",
-                vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
-            ));
+            return Err(BytecodeDepthOverflow::Confirmed);
         }
         Ok(())
     }
@@ -4997,9 +5033,9 @@ impl<'a> Vm<'a> {
                             // callee sealed and stack-verified.
                             self.ctx.depth += 1;
                             if self.ctx.depth > self.ctx.max_depth {
-                                if let Err(flow) = self.bytecode_depth_exceeded() {
+                                if let Err(overflow) = self.check_live_bytecode_call_depth() {
                                     let flow =
-                                        self.finish_live_bytecode_depth_overflow(cursor, flow);
+                                        self.finish_live_bytecode_depth_overflow(cursor, overflow);
                                     resume_flow!(flow);
                                 }
                             }

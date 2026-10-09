@@ -444,3 +444,4 @@ exempt	emacs_core/runtime/bytecode/vm.rs	Vm::unbind_frame_target	run_loop,inline
 
 exempt	emacs_core/runtime/bytecode/vm.rs	Vm::finish_live_bytecode_depth_overflow	run_loop	# GNU rejected-depth dispatch publishes live operands; cold boundary pending a new protected census
 exempt	emacs_core/runtime/bytecode/vm.rs	Vm::bytecode_depth_exceeded_published	run_loop	# GNU depth dispatch with already-published operands; cold boundary pending a new protected census
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::check_live_bytecode_call_depth	run_loop	# Scalar depth rejection precedes signal allocation; cold boundary pending a new protected census
