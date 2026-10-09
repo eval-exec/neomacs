@@ -921,6 +921,32 @@ pub struct ProcessManager {
     /// Environment variable overrides (for `setenv`/`getenv`).
     pub(super) env_overrides: HashMap<LispString, Option<LispString>>,
     pub(super) wait_backend: ProcessWaitBackend,
+    pub(super) read_scratch: ProcessReadScratch,
+}
+
+/// The buffer every process read fills.
+///
+/// GNU reads into a per-call `SAFE_ALLOCA' of `readmax' bytes: never zeroed,
+/// and a big one is fresh pages.  A new zeroed `Vec' per read cost a memset
+/// of the whole read ceiling, 5 MiB under a large `read-process-output-max':
+/// 41% of a pipe-throughput profile and 6% of a streamed chat reply.  A read
+/// uses only the bytes it got, and the decoded run owns its copy, so one
+/// buffer serves every read; it is zeroed once, when it grows.
+#[derive(Default)]
+pub(super) struct ProcessReadScratch(Vec<u8>);
+
+impl ProcessReadScratch {
+    /// LEN bytes to read into.  Their contents are whatever the last read
+    /// left; callers use only the prefix a read reports.
+    pub(super) fn get(&mut self, len: usize) -> &mut [u8] {
+        if self.0.len() < len {
+            // A fresh zeroed allocation rather than `resize': the allocator
+            // returns a big one as untouched zero pages, so only the bytes
+            // reads actually write become resident.
+            self.0 = vec![0u8; len];
+        }
+        &mut self.0[..len]
+    }
 }
 
 /// Transactional ownership of a `make-pipe-process` writer while a child is
@@ -5559,6 +5585,7 @@ impl ProcessManager {
             default_read_config: ProcessReadConfig::default(),
             env_overrides: HashMap::new(),
             wait_backend: ProcessWaitBackend::new(),
+            read_scratch: ProcessReadScratch::default(),
         }
     }
 
@@ -6451,7 +6478,7 @@ impl ProcessManager {
             let _ = sys::set_fd_nonblocking(fd);
         }
 
-        let mut buf = vec![0u8; read_len];
+        let mut buf = self.read_scratch.get(read_len);
         let full_read_len = buf.len();
         #[cfg(windows)]
         let result = {
@@ -6497,7 +6524,7 @@ impl ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        let mut buf = vec![0u8; read_len];
+        let mut buf = self.read_scratch.get(read_len);
         let full_read_len = buf.len();
         let result = port.read(&mut buf);
         process_output_read_from_io_result(
@@ -6527,7 +6554,7 @@ impl ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        let mut buf = vec![0u8; read_len];
+        let mut buf = self.read_scratch.get(read_len);
         let full_read_len = buf.len();
         let result = reader.read(&mut buf);
         process_output_read_from_io_result(
@@ -6555,7 +6582,7 @@ impl ProcessManager {
         }
         let read_len = process_read_buffer_len(proc);
         if let Some(ref mut tls) = proc.live_io.tls_stream {
-            let mut buf = vec![0u8; read_len];
+            let mut buf = self.read_scratch.get(read_len);
             let full_read_len = buf.len();
             let result = tls.read_process_output(&mut buf);
             let read = process_output_read_from_io_result(
@@ -6578,7 +6605,7 @@ impl ProcessManager {
                 Unsupported,
             }
 
-            let mut buf = vec![0u8; read_len];
+            let mut buf = self.read_scratch.get(read_len);
             let full_read_len = buf.len();
             let raw_read = {
                 let socket = proc.live_io.network_socket.as_mut().expect("checked above");
