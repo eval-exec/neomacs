@@ -233,7 +233,9 @@ impl Context {
     /// A successful begin retains the ordinary frame until finish. A native
     /// error only constructs Flow here: the caller must publish live vector
     /// state and roots before finish can dispatch signal hooks or the debugger.
-    #[inline]
+    // This entry is used only by sort comparisons. Keep its proof at the
+    // comparison site so native begin and finish can retain the same runtime.
+    #[inline(always)]
     pub(crate) fn begin_buffered_native_sort_call(
         &mut self,
         predicate: SortPredicate,

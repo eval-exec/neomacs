@@ -357,7 +357,8 @@ impl<R: SortRuntime> SortRuntime for Runtime<'_, R> {
         let (left, right) = (*left, *right);
         self.call_published(move |runtime| runtime.compare_sort_keys(&left, &right))
     }
-    #[inline]
+    // Keep the guarded native entry and finish at this private sort site.
+    #[inline(always)]
     fn call_sort_predicate(
         &mut self,
         predicate: SortPredicate,

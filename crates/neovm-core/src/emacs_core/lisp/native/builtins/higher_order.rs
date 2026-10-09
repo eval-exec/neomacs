@@ -1093,6 +1093,8 @@ impl SortRuntime for super::eval::Context {
         }
     }
 
+    // This adapter belongs only to the buffered sort comparison path.
+    #[inline(always)]
     fn begin_native_sort_call(
         &mut self,
         predicate: SortPredicate,
