@@ -172,8 +172,7 @@ fn mode_line_frame_title_throw_restores_edit_adjusted_point() {
         let window = Value::make_window(frame.selected_window.0);
         let format = eval
             .obarray
-            .symbol_value("fx2-title-format")
-            .copied()
+            .symbol_value_copied("fx2-title-format")
             .expect("format");
         let result = try_format_frame_title_for_display(eval, format, window, Value::NIL, 80);
         if let Err(flow) = result {

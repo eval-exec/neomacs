@@ -41,8 +41,7 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
 pub(crate) fn ensure_startup_compat_variables(eval: &mut crate::emacs_core::eval::Context) {
     match eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()
+        .symbol_value_copied("face--new-frame-defaults")
     {
         Some(table) if table.is_hash_table() => seed_face_new_frame_defaults_table(table),
         _ => eval.set_variable(
@@ -67,7 +66,7 @@ pub(crate) fn ensure_startup_compat_variables(eval: &mut crate::emacs_core::eval
         ("face-font-lax-matched-attributes", Value::T),
     ];
     for (name, value) in defaults {
-        if eval.obarray().symbol_value(name).is_none() {
+        if eval.obarray().symbol_value_copied(name).is_none() {
             eval.set_variable(name, value);
         }
     }
@@ -195,8 +194,7 @@ pub(crate) fn ensure_face_new_frame_defaults_entry(
 ) -> Option<Value> {
     let table = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()?;
+        .symbol_value_copied("face--new-frame-defaults")?;
     // The table is fully seeded once at bootstrap (`register_bootstrap_vars`)
     // and again at startup (`ensure_startup_compat_variables`). Re-seeding here
     // -- on every ensure/lookup -- rebuilt every face's cons + lface vector only
@@ -243,8 +241,7 @@ pub(crate) fn remove_face_new_frame_defaults_entry(
 ) {
     let Some(table) = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()
+        .symbol_value_copied("face--new-frame-defaults")
     else {
         return;
     };
@@ -282,8 +279,7 @@ pub(crate) fn lookup_face_new_frame_defaults_vector(
 ) -> Option<Value> {
     let table = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()?;
+        .symbol_value_copied("face--new-frame-defaults")?;
     let entry = lookup_frame_face_hash_entry(table, key)?;
     if entry.is_cons() {
         Some(entry.cons_cdr())

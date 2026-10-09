@@ -245,25 +245,20 @@ fn register_bootstrap_vars_matches_gnu_defaults() {
     register_bootstrap_vars(&mut obarray);
 
     assert_eq!(
-        obarray.symbol_value("face-default-stipple").copied(),
+        obarray.symbol_value_copied("face-default-stipple"),
         Some(Value::string("gray3"))
     );
     assert_eq!(
-        obarray
-            .symbol_value("face-near-same-color-threshold")
-            .copied(),
+        obarray.symbol_value_copied("face-near-same-color-threshold"),
         Some(Value::fixnum(30_000))
     );
     assert_eq!(
-        obarray
-            .symbol_value("face-font-lax-matched-attributes")
-            .copied(),
+        obarray.symbol_value_copied("face-font-lax-matched-attributes"),
         Some(Value::T)
     );
 
     let table = obarray
-        .symbol_value("face--new-frame-defaults")
-        .copied()
+        .symbol_value_copied("face--new-frame-defaults")
         .expect("face--new-frame-defaults");
     if !table.is_hash_table() {
         panic!("face--new-frame-defaults must be a hash table");
@@ -307,21 +302,19 @@ fn ensure_startup_compat_variables_backfills_missing_xfaces_state() {
     eval.set_variable("face--new-frame-defaults", Value::NIL);
     assert_eq!(
         eval.obarray()
-            .symbol_value("face--new-frame-defaults")
-            .copied(),
+            .symbol_value_copied("face--new-frame-defaults"),
         Some(Value::NIL)
     );
 
     ensure_startup_compat_variables(&mut eval);
 
     assert_eq!(
-        eval.obarray().symbol_value("face-default-stipple").copied(),
+        eval.obarray().symbol_value_copied("face-default-stipple"),
         Some(Value::string("gray3"))
     );
     let table = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()
+        .symbol_value_copied("face--new-frame-defaults")
         .expect("face hash table backfilled");
     if !table.is_hash_table() {
         panic!("face--new-frame-defaults must be a hash table");
@@ -355,8 +348,7 @@ fn ensure_startup_compat_variables_reseeds_existing_face_defaults_table() {
 
     let table = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()
+        .symbol_value_copied("face--new-frame-defaults")
         .expect("face hash table should stay bound");
     let hash_table = table
         .as_hash_table()

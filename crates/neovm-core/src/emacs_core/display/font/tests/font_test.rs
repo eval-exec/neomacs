@@ -189,8 +189,7 @@ fn context_prebinds_gnu_font_style_tables() {
 
     let weight_table = eval
         .obarray
-        .symbol_value("font-weight-table")
-        .copied()
+        .symbol_value_copied("font-weight-table")
         .expect("font-weight-table");
     let rows = weight_table.as_vector_data().expect("weight table vector");
     assert_eq!(rows.len(), 11);
@@ -201,8 +200,7 @@ fn context_prebinds_gnu_font_style_tables() {
 
     let slant_table = eval
         .obarray
-        .symbol_value("font-slant-table")
-        .copied()
+        .symbol_value_copied("font-slant-table")
         .expect("font-slant-table");
     let rows = slant_table.as_vector_data().expect("slant table vector");
     assert_eq!(rows.len(), 5);
@@ -213,8 +211,7 @@ fn context_prebinds_gnu_font_style_tables() {
 
     let width_table = eval
         .obarray
-        .symbol_value("font-width-table")
-        .copied()
+        .symbol_value_copied("font-width-table")
         .expect("font-width-table");
     let rows = width_table.as_vector_data().expect("width table vector");
     assert_eq!(rows.len(), 9);
@@ -305,8 +302,7 @@ fn gnu_font_style_tables_are_constant_symbols() {
     assert!(!eval.obarray.is_constant("font-log"));
     assert_eq!(
         eval.obarray
-            .symbol_value("font-log")
-            .copied()
+            .symbol_value_copied("font-log")
             .expect("font-log"),
         Value::T
     );

@@ -30,8 +30,7 @@ fn mode_line_outer_binding_signals_preserve_non_error_conditions_and_scopes() {
                 let window = Value::make_window(frame.selected_window.0);
                 let format = eval
                     .obarray
-                    .symbol_value("fx2-outer-format")
-                    .copied()
+                    .symbol_value_copied("fx2-outer-format")
                     .unwrap();
                 format_mode_line_for_display_with_sources(eval, format, window, Value::NIL, 80);
             }));

@@ -473,8 +473,7 @@ fn internal_lisp_face_p_is_a_pure_read_of_the_live_table() {
 
     let table = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()
+        .symbol_value_copied("face--new-frame-defaults")
         .expect("face--new-frame-defaults is bound at startup");
     let count_before = table.as_hash_table().expect("hash table").data.len();
 

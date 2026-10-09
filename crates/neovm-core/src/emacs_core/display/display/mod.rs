@@ -91,7 +91,7 @@ fn dynamic_or_global_symbol_value_in_state(
     _dynamic: &[crate::emacs_core::value::OrderedRuntimeBindingMap],
     name: &str,
 ) -> Option<Value> {
-    obarray.symbol_value(name).cloned()
+    obarray.symbol_value_copied(name)
 }
 
 fn display_string_text(value: &Value) -> Option<String> {
@@ -2054,8 +2054,7 @@ fn x_popup_menu_interactive_loop(
             // will never be requested. Keep its pending native anchor intact.
             let mut unread = ctx
                 .obarray
-                .symbol_value("unread-command-events")
-                .copied()
+                .symbol_value_copied("unread-command-events")
                 .unwrap_or(Value::NIL);
             for key in keys.iter().rev() {
                 unread = Value::cons(*key, unread);

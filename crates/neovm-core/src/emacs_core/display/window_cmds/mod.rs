@@ -6028,7 +6028,7 @@ fn scroll_lines_in_state(
                 .and_then(|v| v.as_fixnum())
                 .unwrap_or(24);
             let ctx = obarray
-                .symbol_value("next-screen-context-lines")
+                .symbol_value_copied("next-screen-context-lines")
                 .and_then(|v| v.as_fixnum())
                 .unwrap_or(2);
             return -((wh - ctx).max(1) * direction);
@@ -6046,7 +6046,7 @@ fn scroll_lines_in_state(
         .and_then(|v| v.as_fixnum())
         .unwrap_or(24);
     let ctx = obarray
-        .symbol_value("next-screen-context-lines")
+        .symbol_value_copied("next-screen-context-lines")
         .and_then(|v| v.as_fixnum())
         .unwrap_or(2);
     (wh - ctx).max(1) * direction

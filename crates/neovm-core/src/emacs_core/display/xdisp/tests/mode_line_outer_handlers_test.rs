@@ -44,8 +44,7 @@ fn mode_line_outer_binding_errors_block_outer_handlers_and_debugger() {
             let window = eval.frames.selected_frame().unwrap().selected_window;
             let format = eval
                 .obarray
-                .symbol_value("fx2-outer-format")
-                .copied()
+                .symbol_value_copied("fx2-outer-format")
                 .unwrap();
             format_mode_line_for_display_with_sources(
                 eval,

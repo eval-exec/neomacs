@@ -205,8 +205,7 @@ fn iconify_frame_action(
     if frame.parent_frame.as_frame_id().is_some() {
         let child_policy = eval
             .obarray()
-            .symbol_value("iconify-child-frame")
-            .copied()
+            .symbol_value_copied("iconify-child-frame")
             .unwrap_or(Value::NIL);
         if child_policy.is_nil() {
             return Ok(IconifyFrameAction::Noop);

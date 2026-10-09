@@ -108,24 +108,27 @@ fn test_register_bootstrap_vars_include_tab_bar_display_vars() {
     let mut obarray = crate::emacs_core::symbol::Obarray::new();
     register_bootstrap_vars(&mut obarray);
 
-    assert_eq!(obarray.symbol_value("inhibit-redisplay"), Some(&Value::NIL));
     assert_eq!(
-        obarray.symbol_value("auto-resize-tab-bars"),
-        Some(&Value::T)
+        obarray.symbol_value_copied("inhibit-redisplay"),
+        Some(Value::NIL)
+    );
+    assert_eq!(
+        obarray.symbol_value_copied("auto-resize-tab-bars"),
+        Some(Value::T)
     );
     // `auto-raise-tab-bar-buttons' is a GNU `DEFVAR_BOOL' (`src/xdisp.c:38704'),
     // so it is declared by `defvar_bool::GNU_BOOL_VARIABLES' rather than here.
     assert_eq!(
-        obarray.symbol_value("tab-bar-border"),
-        Some(&Value::symbol("internal-border-width"))
+        obarray.symbol_value_copied("tab-bar-border"),
+        Some(Value::symbol("internal-border-width"))
     );
     assert_eq!(
-        obarray.symbol_value("tab-bar-button-margin"),
-        Some(&Value::fixnum(1))
+        obarray.symbol_value_copied("tab-bar-button-margin"),
+        Some(Value::fixnum(1))
     );
     assert_eq!(
-        obarray.symbol_value("fontification-functions"),
-        Some(&Value::NIL)
+        obarray.symbol_value_copied("fontification-functions"),
+        Some(Value::NIL)
     );
     assert!(obarray.is_special("fontification-functions"));
     let fontification_functions = intern("fontification-functions");
@@ -153,8 +156,8 @@ fn test_register_bootstrap_vars_include_tab_bar_display_vars() {
         );
     }
     assert_eq!(
-        obarray.default_value_id(intern("display-line-numbers-offset")),
-        Some(&Value::fixnum(0))
+        obarray.default_value_id_copied(intern("display-line-numbers-offset")),
+        Some(Value::fixnum(0))
     );
 }
 
@@ -171,8 +174,8 @@ fn display_line_numbers_assignment_is_buffer_local_on_set() {
     );
     assert_eq!(
         eval.obarray()
-            .default_value_id(intern("display-line-numbers")),
-        Some(&Value::NIL)
+            .default_value_id_copied(intern("display-line-numbers")),
+        Some(Value::NIL)
     );
 }
 

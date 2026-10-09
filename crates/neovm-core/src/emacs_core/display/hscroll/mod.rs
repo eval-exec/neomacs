@@ -351,7 +351,7 @@ fn leaf_hscroll(window: &Window) -> i64 {
 /// variable, in columns.
 fn hscroll_margin_cols(ctx: &Context) -> i64 {
     ctx.obarray
-        .symbol_value("hscroll-margin")
+        .symbol_value_copied("hscroll-margin")
         .and_then(|v| v.as_int())
         .unwrap_or(5)
         .clamp(0, 1_000_000)
@@ -487,7 +487,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
                     && mode == AutoHscrollMode::CurrentLine,
                 line_truncated,
                 point_at_eol,
-                step: HscrollStep::decode(ctx.obarray.symbol_value("hscroll-step")),
+                step: HscrollStep::decode(ctx.obarray.symbol_value_copied("hscroll-step").as_ref()),
             });
         }
     }

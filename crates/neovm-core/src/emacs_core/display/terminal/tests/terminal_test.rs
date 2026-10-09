@@ -747,7 +747,7 @@ fn make_terminal_frame_opens_and_owns_an_explicit_secondary_tty() {
     // A fresh Context never seeded the variable, so this fails if the frame
     // creation path forgets to publish the attaching terminal's answer.
     assert_eq!(
-        eval.obarray.symbol_value("tty-erase-char").copied(),
+        eval.obarray.symbol_value_copied("tty-erase-char"),
         Some(Value::fixnum(127)),
         "creating a tty frame must publish that terminal's ERASE byte"
     );

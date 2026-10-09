@@ -43,7 +43,7 @@ impl Context {
             .obarray()
             .read_localized_in_buffer(symbol, buffer)
             .or_else(|| buffer.buffer_local_value_id(symbol))
-            .or_else(|| self.obarray().symbol_value_id(symbol).copied())
+            .or_else(|| self.obarray().symbol_value_id_copied(symbol))
             .unwrap_or(Value::NIL);
         (!value.is_unbound()).then_some(value)
     }
@@ -91,8 +91,9 @@ impl Context {
                 global = true;
                 hooks = Some(
                     self.obarray()
-                        .default_value_id(Value::symbol("pre-command-hook").as_symbol_id().unwrap())
-                        .copied()
+                        .default_value_id_copied(
+                            Value::symbol("pre-command-hook").as_symbol_id().unwrap(),
+                        )
                         .unwrap_or(Value::NIL),
                 );
                 continue;
