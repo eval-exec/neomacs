@@ -749,7 +749,7 @@ fn sink_cannot_call_advised_aset(all_passes: bool) {
     // Check before dereferencing the returned string: the old implementation
     // could already have collected the virtual cons's copied string.
     assert_eq!(
-        ctx.obarray.symbol_value("gnuop--sink-calls").copied(),
+        ctx.obarray.symbol_value_copied("gnuop--sink-calls"),
         Some(Value::make_int(0)),
         "Baset never invokes collecting advice"
     );

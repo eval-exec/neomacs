@@ -1852,7 +1852,7 @@ fn vm_bytecode_varref_and_varset_ignore_interpreter_lexenv_like_gnu() {
         Value::list_from_slice(&[dynamic_value, updated_value])
     );
     assert_eq!(
-        eval.obarray.symbol_value_id(sym).copied(),
+        eval.obarray.symbol_value_id_copied(sym),
         Some(updated_value)
     );
     assert_eq!(lexical_binding.cons_cdr(), lexical_value);
@@ -2252,8 +2252,8 @@ fn vm_alias_writeback_assert_graph(eval: &Context, fixture: &VmAliasWritebackFix
     assert_eq!(fixture.cell.cons_cdr(), fixture.cell);
     assert_eq!(fixture.binding.cons_cdr(), fixture.replacement);
     assert_eq!(
-        eval.obarray.symbol_value_id(fixture.symbol),
-        Some(&fixture.replacement)
+        eval.obarray.symbol_value_id_copied(fixture.symbol),
+        Some(fixture.replacement)
     );
     assert_eq!(eval.bc_buf[fixture.stack_base], fixture.replacement);
 }
@@ -5311,8 +5311,8 @@ fn vm_kill_emacs_runs_hooks_on_shared_runtime() {
         other => panic!("kill-emacs should unwind after running hooks, got {other:?}"),
     }
     assert_eq!(
-        eval.obarray().symbol_value("vm-kill-hook-log"),
-        Some(&Value::symbol("ran"))
+        eval.obarray().symbol_value_copied("vm-kill-hook-log"),
+        Some(Value::symbol("ran"))
     );
     assert_eq!(
         eval.shutdown_request(),

@@ -7016,7 +7016,7 @@ impl<'a> Vm<'a> {
         {
             return binding.as_value().unwrap_or(Value::NIL);
         }
-        if let Some(value) = self.ctx.obarray.symbol_value(name).copied() {
+        if let Some(value) = self.ctx.obarray.symbol_value_copied(name) {
             return value;
         }
         if name == "nil" {
