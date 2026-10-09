@@ -175,6 +175,9 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
                 refs,
                 vmctx_var,
                 ptr_ty,
+                forward_atomics: super::atomic_forward::ForwardAtomics::for_isa(
+                    sink.module().isa(),
+                ),
                 call_args_slot,
                 call_result_slot,
                 rootwin: None,

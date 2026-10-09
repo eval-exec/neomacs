@@ -1567,9 +1567,7 @@ fn emit_inline_record_type_of(
         vmctx,
         (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let debug = fb
-        .ins()
-        .uload8(types::I64, flags, cell, LISP_BOOL_FWD_VALUE_OFFSET as i32);
+    let debug = super::atomic_forward::load_bool(fb, cell, LISP_BOOL_FWD_VALUE_OFFSET);
     let object = band_imm_p(fb, arg, !(TAG_MASK as i64));
     let type_tag = fb.ins().uload8(types::I64, flags, object, type_off as i32);
     let not_record = fb.ins().bxor_imm_u(type_tag, record_tag);
@@ -2230,9 +2228,7 @@ pub(crate) fn emit_mir_inline_entry_guard(
         vmctx,
         (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let debug = fb
-        .ins()
-        .uload8(types::I64, flags, cell, LISP_BOOL_FWD_VALUE_OFFSET as i32);
+    let debug = super::atomic_forward::load_bool(fb, cell, LISP_BOOL_FWD_VALUE_OFFSET);
     let depth = fb.ins().load(
         rt.ptr_ty,
         flags,
@@ -3321,6 +3317,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 refs,
                 vmctx_var,
                 ptr_ty,
+                forward_atomics: super::atomic_forward::ForwardAtomics::for_isa(
+                    sink.module().isa(),
+                ),
                 call_args_slot,
                 call_result_slot,
                 rootwin: None,
@@ -4180,6 +4179,8 @@ pub(crate) struct RtCtx {
     pub(crate) vmctx_var: Variable,
     /// Pointer type of the target (for `stack_addr`).
     pub(crate) ptr_ty: Type,
+    /// Compiler-only target policy for publishing atomic descriptor slots.
+    pub(crate) forward_atomics: super::ForwardAtomics,
     /// Spill buffer for outgoing call arguments (max `Call` nargs in the body).
     pub(crate) call_args_slot: StackSlot,
     /// 8-byte result slot the call shim writes through.

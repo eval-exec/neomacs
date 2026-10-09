@@ -515,3 +515,41 @@ fn major_symbol_generic_cons_write_retraces_current_children_before_sweep() {
         }
     }
 }
+
+// Append inside tagged/gc/tests/major_symbol_preimage_test.rs. This reuses
+// that module's existing heap, MarkPhase and satb fixtures; no new GC seam.
+
+#[test]
+fn atomic_forwarder_stores_keep_root_preimages_before_publication() {
+    use crate::emacs_core::forward::{
+        LispInteger, alloc_intfwd, alloc_kboard_objfwd, alloc_objfwd,
+    };
+    for enabled in [false, true] {
+        let mut heap = heap(enabled);
+        set_tagged_heap(&mut heap);
+        let first = heap.alloc_cons(TaggedValue::fixnum(11), TaggedValue::NIL);
+        let second = heap.alloc_cons(TaggedValue::fixnum(22), TaggedValue::NIL);
+        let object = alloc_objfwd(first);
+        let keyboard = alloc_kboard_objfwd(second);
+        let integer = alloc_intfwd(LispInteger::from_i64(i64::MAX));
+        let integer_old = integer.get();
+        assert!(integer_old.is_bignum());
+        let phase = MarkPhase::synthetic(&mut heap);
+        object.set(TaggedValue::NIL);
+        keyboard.set(TaggedValue::T);
+        integer.set(LispInteger::from_i64(0));
+        assert_eq!(integer.get_i64(), 0);
+        assert!(object.get().is_nil());
+        assert_eq!(keyboard.get().bits(), TaggedValue::T.bits());
+        let old_roots = satb(&heap);
+        assert!(old_roots.iter().any(|value| value.bits() == first.bits()));
+        assert!(old_roots.iter().any(|value| value.bits() == second.bits()));
+        assert!(
+            old_roots
+                .iter()
+                .any(|value| value.bits() == integer_old.bits())
+        );
+        phase.stop_synthetic(&mut heap);
+        drop(phase);
+    }
+}

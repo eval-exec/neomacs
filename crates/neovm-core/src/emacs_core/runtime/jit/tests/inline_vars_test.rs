@@ -864,3 +864,64 @@ fn unbind_sites_meet_across_paths() {
         }
     }
 }
+
+// Append inside jit/tests/inline_vars_test.rs. This uses its existing fixture,
+// native runner, shim counters and synthetic concurrent-mark test API. Actual
+// execution evaluates Lisp and therefore MUST run through sandbox-run.sh.
+
+#[test]
+fn atomic_forwarder_active_mark_routes_set_bind_and_unbind_through_satb() {
+    let mut ev = fixture();
+    eval_ok(&mut ev, "(setq ivt-obj (list 'old-object))");
+    let before_set = ev
+        .obarray
+        .forwarder(intern("ivt-obj"))
+        .and_then(|descriptor| descriptor.owned_value())
+        .expect("rooted object forwarder");
+    // Archive complete construction CLIF only if the gate runner requests
+    // its own scratch directory. Both bind and unbind live in the let body.
+    let mut leaves = None;
+    let clif = super::compile_pipeline_tests::captured_clif(|| {
+        let set = compile(&ev, ALL, &Prog::setq(), "ivt-obj");
+        let bind_unbind = compile(&ev, ALL, &Prog::let_call(), "ivt-obj");
+        leaves = Some((set, bind_unbind));
+    });
+    assert_eq!(clif.len(), 2);
+    if let Some(directory) = std::env::var_os("NEOVM_P74_CLIF_DIR") {
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).expect("owned CLIF evidence directory");
+        std::fs::write(directory.join("forwarder-varset.clif"), &clif[0])
+            .expect("archive varset CLIF");
+        std::fs::write(directory.join("forwarder-varbind-unbind.clif"), &clif[1])
+            .expect("archive varbind and unbind CLIF");
+    }
+    let (set, bind_unbind) = leaves.expect("both bodies compiled");
+    let replacement = Value::list(vec![Value::symbol("new-object")]);
+    let binding = Value::list(vec![Value::symbol("bound-object")]);
+    ev.tagged_heap.set_concurrent_active_for_test(true);
+    let (set_result, set_calls) = run(&mut ev, &set, &[replacement]);
+    let set_preimages = ev.tagged_heap.take_satb_shared_for_test();
+    let (let_result, let_calls) = run(&mut ev, &bind_unbind, &[binding]);
+    let let_preimages = ev.tagged_heap.take_satb_shared_for_test();
+    ev.tagged_heap.set_concurrent_active_for_test(false);
+    assert_eq!(set_result, "(new-object)");
+    assert_eq!(set_calls.varset, 1, "active mark refuses inline varset");
+    assert!(
+        set_preimages
+            .iter()
+            .any(|value| value.bits() == before_set.bits())
+    );
+    assert_eq!(let_result, "(body (new-object))");
+    assert_eq!(let_calls.varbind, 1, "active mark refuses inline varbind");
+    assert_eq!(let_calls.unbind, 1, "active mark refuses inline unbind");
+    assert!(
+        let_preimages
+            .iter()
+            .any(|value| value.bits() == replacement.bits())
+    );
+    assert!(
+        let_preimages
+            .iter()
+            .any(|value| value.bits() == binding.bits())
+    );
+}

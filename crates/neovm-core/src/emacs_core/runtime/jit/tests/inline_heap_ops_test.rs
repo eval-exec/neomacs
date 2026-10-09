@@ -214,6 +214,7 @@ fn cons_store_clif(
             refs,
             vmctx_var,
             ptr_ty: types::I64,
+            forward_atomics: crate::emacs_core::jit::compile::ForwardAtomics::for_isa(module.isa()),
             call_args_slot: args_slot,
             call_result_slot: result_slot,
             rootwin: None,

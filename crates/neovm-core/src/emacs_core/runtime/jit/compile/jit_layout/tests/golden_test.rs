@@ -15,6 +15,16 @@ fn words_at(base: *const u8, offset: usize) -> usize {
     unsafe { base.add(offset).cast::<usize>().read_unaligned() }
 }
 
+/// An aligned atomic forwarder word at its pinned JIT offset.
+fn atomic_word_at(base: *const u8, offset: usize) -> usize {
+    // SAFETY: callers pass a live descriptor's pinned, aligned AtomicValue
+    // field; repr(transparent) puts its AtomicUsize at offset zero.
+    unsafe {
+        (&*base.add(offset).cast::<std::sync::atomic::AtomicUsize>())
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
 fn entry_words(entry: &SpecBinding) -> [u64; ENTRY_WORDS] {
     // SAFETY: a live entry of `ENTRY_WORDS` aligned words, read as bits.
     unsafe {
@@ -380,13 +390,15 @@ fn variable_words_are_where_compiled_code_reads_them() {
     let bool_fwd = ev.obarray.forwarder(intern("neovm--jl-bool")).expect("fwd");
     let int_fwd = ev.obarray.forwarder(intern("neovm--jl-int")).expect("fwd");
     let bool_base = std::ptr::from_ref(bool_fwd).cast::<u8>();
-    // SAFETY: a live Boolean descriptor's flag byte.
+    // SAFETY: the offset is pinned to this live AtomicBool field.
+    let bool_slot = unsafe {
+        &*bool_base
+            .add(LISP_BOOL_FWD_VALUE_OFFSET)
+            .cast::<std::sync::atomic::AtomicBool>()
+    };
+    assert!(bool_slot.load(std::sync::atomic::Ordering::Relaxed));
     assert_eq!(
-        unsafe { bool_base.add(LISP_BOOL_FWD_VALUE_OFFSET).read() },
-        1
-    );
-    assert_eq!(
-        words_at(
+        atomic_word_at(
             std::ptr::from_ref(int_fwd).cast(),
             LISP_INT_FWD_VALUE_OFFSET
         ),
@@ -394,12 +406,12 @@ fn variable_words_are_where_compiled_code_reads_them() {
     );
     let obj = crate::emacs_core::forward::alloc_objfwd(Value::fixnum(9));
     assert_eq!(
-        words_at(std::ptr::from_ref(obj).cast(), LISP_OBJ_FWD_VALUE_OFFSET),
+        atomic_word_at(std::ptr::from_ref(obj).cast(), LISP_OBJ_FWD_VALUE_OFFSET),
         Value::fixnum(9).bits()
     );
     let kbd = crate::emacs_core::forward::alloc_kboard_objfwd(Value::fixnum(11));
     assert_eq!(
-        words_at(
+        atomic_word_at(
             std::ptr::from_ref(kbd).cast(),
             LISP_KBOARD_OBJ_FWD_VALUE_OFFSET
         ),

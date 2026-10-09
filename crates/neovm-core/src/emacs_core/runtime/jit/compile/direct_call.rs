@@ -504,11 +504,10 @@ pub(crate) fn emit_direct_bytecode_call(
         vmctx,
         (CONTEXT_OBARRAY_OFFSET + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let debug = fb.ins().uload8(
-        types::I64,
-        flags,
+    let debug = super::atomic_forward::load_bool(
+        fb,
         cell,
-        crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET as i32,
+        crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET,
     );
     let armed_debugger = icmp_imm_p(fb, IntCC::NotEqual, debug, 0);
     next(fb, armed_debugger);

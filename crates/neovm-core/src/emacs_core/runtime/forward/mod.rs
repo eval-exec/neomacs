@@ -68,7 +68,7 @@
 use super::value::Value;
 use crate::buffer::buffer::BufferSlotPredicateError;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use std::cell::UnsafeCell;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Discriminant for [`LispFwd`]. Mirrors GNU `enum Lisp_Fwd_Type`
@@ -91,6 +91,8 @@ pub enum LispFwdType {
     /// keyboard's per-kboard storage.
     KboardObj = 4,
 }
+
+static_assertions::assert_impl_all!(LispFwdType: Copy, Clone, std::fmt::Debug, Send, Sync);
 
 impl LispFwdType {
     pub fn from_gnu_code(code: u8) -> Option<Self> {
@@ -126,10 +128,19 @@ impl LispFwdType {
 #[derive(Debug)]
 pub struct LispFwd {
     ty: LispFwdType,
-    // The body fields differ per variant; `slot` reads them.
+    // `slot` can expose BufferObj registration metadata containing a raw
+    // Value, so an erased header is confined even when a concrete body is atomic.
+    _thread_confined: PhantomData<*const ()>,
 }
 
-static_assertions::assert_not_impl_any!(LispFwd: Copy, Clone);
+static_assertions::assert_impl_all!(LispFwd: std::fmt::Debug);
+static_assertions::assert_not_impl_any!(LispFwd: Copy, Clone, Send, Sync);
+const _: () = {
+    assert!(std::mem::size_of::<LispFwd>() == 1);
+    assert!(std::mem::align_of::<LispFwd>() == 1);
+    assert!(std::mem::offset_of!(LispFwd, ty) == 0);
+    assert!(std::mem::size_of::<PhantomData<*const ()>>() == 0);
+};
 
 /// A descriptor body that begins with a [`LispFwd`] header (GNU's `struct
 /// Lisp_Intfwd`, `Lisp_Boolfwd`, ...): the safe upcast every installer uses
@@ -158,9 +169,10 @@ macro_rules! fwd_descriptor {
             fn header(&self) -> &LispFwd {
                 debug_assert_eq!(self.ty, Self::TYPE);
                 // SAFETY: the body is `#[repr(C)]` and its first field is
-                // the `LispFwdType` a `LispFwd` consists of, so the body's
-                // address is a valid header address; the returned borrow
-                // has the body's lifetime.
+                // the same `LispFwdType` at offset zero. LispFwd's only other
+                // field is a zero-sized PhantomData, with no validity or
+                // storage requirements; size/alignment are pinned below.
+                // The returned borrow has the body's lifetime.
                 unsafe { &*std::ptr::from_ref(self).cast::<LispFwd>() }
             }
         }
@@ -195,6 +207,9 @@ pub enum ForwardSlot<'a> {
     KboardObj(&'a LispKboardObjFwd),
 }
 
+static_assertions::assert_impl_all!(ForwardSlot<'static>: Copy, Clone, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(ForwardSlot<'static>: Send, Sync);
+
 /// A value one forward type has accepted, in the form that type stores.
 ///
 /// Produced only by [`LispFwd::store`], and the only argument the forwarded
@@ -213,6 +228,9 @@ pub enum ForwardStore {
     /// already passed).
     Object(Value),
 }
+
+static_assertions::assert_impl_all!(ForwardStore: Copy, Clone, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(ForwardStore: Send, Sync);
 
 impl ForwardStore {
     /// The Lisp object a read of the slot will return after this store.
@@ -317,36 +335,13 @@ impl LispFwd {
         }
     }
 
-    /// [`Self::load`] as a reference into the descriptor's slot, for the
-    /// `&Value`-returning symbol accessors (`Obarray::symbol_value_id`,
-    /// `default_value_id`).
-    ///
-    /// The slot is written in place, so a caller must copy the value before
-    /// anything can store to the variable; a reference held across a store
-    /// is undefined behaviour. That is why this is not public and its
-    /// callers are ratcheted (`value_ref_guard`): P7.4 replaces them with
-    /// copied values and removes it.
-    pub(super) fn load_ref(&'static self) -> Option<&'static Value> {
-        match self.slot() {
-            ForwardSlot::Int(int_fwd) => Some(int_fwd.get_ref()),
-            ForwardSlot::Bool(bool_fwd) => Some(if bool_fwd.get() {
-                &Value::T
-            } else {
-                &Value::NIL
-            }),
-            ForwardSlot::Obj(obj_fwd) => Some(obj_fwd.get_ref()),
-            ForwardSlot::KboardObj(kbd_fwd) => Some(kbd_fwd.get_ref()),
-            ForwardSlot::BufferObj(_) => None,
-        }
-    }
-
     /// Duplicate a descriptor that OWNS mutable state, so two obarrays never
     /// share one slot.
     ///
     /// `Int`, `Bool`, `Obj` and `KboardObj` hold the variable's value;
-    /// `BufferObj` holds only immutable registration metadata (offset,
-    /// predicate, default) and is safe to share, which is why it answers
-    /// `None`.
+    /// `BufferObj` holds immutable registration metadata (offset,
+    /// predicate, default) that stays in the owning heap, so it answers
+    /// `None`. This does not admit a raw default Value to another thread.
     pub fn clone_stateful(&self) -> Option<&'static Self> {
         match self.slot() {
             // Re-wrapping without re-checking is sound only here, inside the
@@ -460,6 +455,8 @@ pub enum ForwardStoreError {
     Predicate(BufferSlotPredicateError),
 }
 
+static_assertions::assert_impl_all!(ForwardStoreError: Copy, Clone, std::fmt::Debug, Send, Sync);
+
 impl From<BufferSlotPredicateError> for ForwardStoreError {
     fn from(error: BufferSlotPredicateError) -> Self {
         Self::Predicate(error)
@@ -477,6 +474,9 @@ impl From<BufferSlotPredicateError> for ForwardStoreError {
 /// [`LispIntFwd::set`] accepts.
 #[derive(Copy, Clone, Debug)]
 pub struct LispInteger(Value);
+
+static_assertions::assert_impl_all!(LispInteger: Copy, Clone, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(LispInteger: Send, Sync);
 
 impl LispInteger {
     /// GNU `CHECK_INTEGER (newval)` followed by `integer_to_intmax`.
@@ -520,38 +520,85 @@ impl LispInteger {
     }
 }
 
+/// A descriptor-owned Lisp word with atomic publication.
+///
+/// The integer bits are shared; a loaded raw Value still belongs to the
+/// descriptor's heap and must be used under that heap's mutator/root protocol.
+/// Private construction and storage prevent a borrowed Value from aliasing
+/// an atomic slot. All concurrent readers, including generated code and the
+/// marker, must use atomic access. The JIT-read representation is pinned below.
+#[repr(transparent)]
+struct AtomicValue(AtomicUsize);
+
+static_assertions::assert_impl_all!(AtomicValue: std::fmt::Debug, Send, Sync);
+static_assertions::assert_not_impl_any!(AtomicValue: Copy, Clone);
+const _: () = {
+    assert!(std::mem::size_of::<AtomicValue>() == std::mem::size_of::<Value>());
+    assert!(std::mem::align_of::<AtomicValue>() == std::mem::align_of::<Value>());
+    assert!(std::mem::offset_of!(AtomicValue, 0) == 0);
+};
+
+impl AtomicValue {
+    #[inline]
+    fn new(value: Value) -> Self {
+        Self(AtomicUsize::new(value.bits()))
+    }
+
+    #[inline(always)]
+    fn load(&self) -> Value {
+        Value::from_bits(self.0.load(Ordering::Acquire))
+    }
+
+    /// Called by the owning mutator: retain the old root before publishing
+    /// its replacement. Atomicity alone does not admit an unrelated heap or
+    /// an unregistered non-mutator writer to this descriptor's root protocol.
+    #[inline(always)]
+    fn store(&self, value: Value) {
+        crate::tagged::gc::note_root_overwrite(self.load());
+        self.0.store(value.bits(), Ordering::Release);
+    }
+}
+
+impl std::fmt::Debug for AtomicValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Formatting an atomic descriptor must not traverse an unrooted heap
+        // object on the thread formatting it. Report the encoded word only.
+        f.debug_tuple("AtomicValue")
+            .field(&format_args!("{:#x}", self.0.load(Ordering::Acquire)))
+            .finish()
+    }
+}
+
 /// `Lisp_Intfwd`: forward to an integer slot (`src/lisp.h:3124`).
 ///
-/// GNU stores an `intmax_t`. Neomacs stores the Lisp integer itself so the
-/// `&Value`-returning symbol accessors have a stable address to hand back, but
-/// the field is private and [`Self::set`] takes a [`LispInteger`], so the slot
-/// is exactly as unable to hold a string as GNU's `intmax_t` is.
+/// GNU stores an `intmax_t`. Neomacs stores the Lisp integer in an atomic
+/// word, read as a copy; a bignum is rooted through the owning obarray. The
+/// private field and [`Self::set`]'s [`LispInteger`] argument keep a string
+/// out of this slot just as GNU's `intmax_t` does.
 #[repr(C)]
 pub struct LispIntFwd {
     ty: LispFwdType,
     /// Always an integer inside `intmax_t` range -- see [`LispInteger`].
-    /// `UnsafeCell` because the descriptor is shared as `&'static` while the
-    /// single Lisp thread writes through it, mirroring the `val.plain` symbol
-    /// cell, which is likewise written in place behind a shared borrow.
-    value: UnsafeCell<Value>,
+    /// Concurrent root scans and the mutator use the same atomic word.
+    value: AtomicValue,
+    /// The integer may be a heap-backed bignum. Atomic storage alone does
+    /// not register a reader with its heap or keep that object alive.
+    _mutator: PhantomData<*const ()>,
 }
 
 /// Byte offset of a [`LispIntFwd`]'s slot (a Lisp integer), for JIT code's
 /// inline read and fixnum store (P1.4 Stage B).
 pub(crate) const LISP_INT_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispIntFwd, value);
 
-// Safety: a `LispIntFwd` is only ever mutated from the Lisp thread that owns
-// its `Obarray`, exactly like the symbol value cells beside it; the `Sync`
-// bound is needed solely so the descriptor can be a `&'static` shared with the
-// GC's root scan, which reads it atomically (`load_slot`).
-unsafe impl Sync for LispIntFwd {}
+static_assertions::assert_impl_all!(LispIntFwd: std::fmt::Debug);
+static_assertions::assert_not_impl_any!(LispIntFwd: Copy, Clone, Send, Sync);
 
 impl LispIntFwd {
     /// GNU `do_symval_forwarding`'s `Lisp_Fwd_Int` arm (`src/data.c:1341-1342`),
     /// which wraps the C slot back up with `make_int`.
     #[inline]
     pub fn get(&self) -> Value {
-        load_slot(&self.value)
+        self.value.load()
     }
 
     /// The slot as GNU's C reads it: a plain `intmax_t`, no Lisp object.
@@ -574,17 +621,11 @@ impl LispIntFwd {
         }
     }
 
-    /// Borrow the stored integer, for [`LispFwd::load_ref`] only.
-    #[inline]
-    fn get_ref(&'static self) -> &'static Value {
-        unsafe { &*self.value.get() }
-    }
-
     /// The store half of GNU's `Lisp_Fwd_Int` arm. Takes a [`LispInteger`],
     /// so there is no spelling of this call that stores a non-integer.
     #[inline]
     pub fn set(&self, value: LispInteger) {
-        store_slot(&self.value, value.value());
+        self.value.store(value.value());
     }
 }
 
@@ -619,6 +660,9 @@ pub(crate) static DEBUG_ON_NEXT_CALL_ABSENT: LispBoolFwd = LispBoolFwd {
     value: AtomicBool::new(false),
 };
 
+static_assertions::assert_impl_all!(LispBoolFwd: std::fmt::Debug, Send, Sync);
+static_assertions::assert_not_impl_any!(LispBoolFwd: Copy, Clone);
+
 impl LispBoolFwd {
     #[inline]
     pub fn get(&self) -> bool {
@@ -648,45 +692,36 @@ impl LispBoolFwd {
 ///
 /// GNU's descriptor holds `&globals.f_Vfoo`, a slot inside `struct
 /// emacs_globals` that `staticpro` roots.  Neomacs's holds the slot itself,
-/// for the same reason [`LispIntFwd`] does: the descriptor is leaked at
-/// registration, so it is a stable address the `&Value`-returning symbol
-/// accessors can hand back, and the obarray's root scan roots it exactly the
-/// way `staticpro` roots GNU's.
+/// at a stable address used by symbol cells and generated code. Loads copy
+/// the atomic word; the obarray's root scan roots it as `staticpro` roots
+/// GNU's. The descriptor remains mutator-local: sharing the atomic bits is
+/// not admission of its heap-backed Value to an unregistered reader.
 #[repr(C)]
 pub struct LispObjFwd {
     ty: LispFwdType,
-    /// `UnsafeCell` for the same reason as [`LispIntFwd`]'s slot: the
-    /// descriptor is shared as `&'static` while the single Lisp thread writes
-    /// through it, mirroring the `val.plain` symbol cell beside it.
-    value: UnsafeCell<Value>,
+    /// Concurrent root scans and the mutator use the same atomic word.
+    value: AtomicValue,
+    _mutator: PhantomData<*const ()>,
 }
 
 /// Byte offset of a [`LispObjFwd`]'s slot, for JIT code's inline read and
 /// store (P1.4 Stage B).
 pub(crate) const LISP_OBJ_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispObjFwd, value);
 
-// Safety: identical to `LispIntFwd` -- mutated only from the Lisp thread that
-// owns its `Obarray`; `Sync` is needed solely so the descriptor can be the
-// `&'static` the GC root scan reads atomically (`load_slot`).
-unsafe impl Sync for LispObjFwd {}
+static_assertions::assert_impl_all!(LispObjFwd: std::fmt::Debug);
+static_assertions::assert_not_impl_any!(LispObjFwd: Copy, Clone, Send, Sync);
 
 impl LispObjFwd {
     /// GNU `do_symval_forwarding`'s `Lisp_Fwd_Obj` arm (`src/data.c:1343-1344`).
     #[inline]
     pub fn get(&self) -> Value {
-        load_slot(&self.value)
-    }
-
-    /// Borrow the stored value, for [`LispFwd::load_ref`] only.
-    #[inline]
-    fn get_ref(&'static self) -> &'static Value {
-        unsafe { &*self.value.get() }
+        self.value.load()
     }
 
     /// The store half of GNU's `Lisp_Fwd_Obj` arm (`src/data.c:1489-1516`).
     #[inline]
     pub fn set(&self, value: Value) {
-        store_slot(&self.value, value);
+        self.value.store(value);
     }
 }
 
@@ -712,6 +747,9 @@ pub struct LispBufferObjFwd {
     /// creation. Mirrors GNU `buffer_defaults`.
     pub default: Value,
 }
+
+static_assertions::assert_impl_all!(LispBufferObjFwd: Copy, Clone, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(LispBufferObjFwd: Send, Sync);
 
 impl LispBufferObjFwd {
     /// GNU `do_symval_forwarding`'s `Lisp_Fwd_Buffer_Obj` arm plus
@@ -779,8 +817,9 @@ impl LispBufferObjFwd {
 #[repr(C)]
 pub struct LispKboardObjFwd {
     ty: LispFwdType,
-    /// See [`LispObjFwd`] for why this is an `UnsafeCell`.
-    value: UnsafeCell<Value>,
+    /// The same atomic storage and root protocol as [`LispObjFwd`].
+    value: AtomicValue,
+    _mutator: PhantomData<*const ()>,
 }
 
 /// Byte offset of a [`LispKboardObjFwd`]'s slot, for JIT code's inline read
@@ -788,63 +827,47 @@ pub struct LispKboardObjFwd {
 pub(crate) const LISP_KBOARD_OBJ_FWD_VALUE_OFFSET: usize =
     std::mem::offset_of!(LispKboardObjFwd, value);
 
-/// Read a descriptor's `Value` slot with an atomic Acquire load, the
-/// counterpart of [`store_slot`] (and of the GC root scan's
-/// `load_value_atomic`).
-#[inline(always)]
-fn load_slot(slot: &UnsafeCell<Value>) -> Value {
-    // SAFETY: the slot is one machine word, as `AtomicUsize` is (asserted
-    // below), and every access to it is atomic.
-    Value::from_bits(unsafe { (*slot.get().cast::<AtomicUsize>()).load(Ordering::Acquire) })
-}
-
-/// Write a descriptor's `Value` slot: note the pre-image for the
-/// snapshot-at-the-beginning mark, then publish VALUE with a Release store.
-///
-/// The store goes through the cell's raw pointer and never forms a `&mut
-/// Value`: a `&Value` from [`LispFwd::load_ref`] may be live, and a `&mut`
-/// beside it would be undefined behaviour even if neither were read.
-#[inline(always)]
-fn store_slot(slot: &UnsafeCell<Value>, value: Value) {
-    crate::tagged::gc::note_root_overwrite(load_slot(slot));
-    // SAFETY: as in `load_slot`.
-    unsafe { (*slot.get().cast::<AtomicUsize>()).store(value.bits(), Ordering::Release) };
-}
-
-// A slot is one `Value` word the JIT reads and writes whole.
+// Pin the physical layout generated code bakes. Replacing the word by a
+// real atomic and adding zero-size thread markers must not move any slot.
 const _: () = {
-    assert!(std::mem::size_of::<UnsafeCell<Value>>() == std::mem::size_of::<usize>());
-    assert!(std::mem::size_of::<AtomicBool>() == 1);
-};
-
-// The descriptor layouts compiled code bakes (`jit::compile::jit_layout`),
-// pinned to their numbers so a field change cannot move them silently. The
-// three value words sit at an aligned word offset, so each can become an
-// atomic word in place without moving: what the GC's concurrent root scan
-// needs once every access to them is atomic.
-const _: () = {
-    use std::mem::{align_of, size_of};
+    use std::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<AtomicValue>() == size_of::<usize>());
+    assert!(align_of::<AtomicValue>() == align_of::<AtomicUsize>());
+    assert!(size_of::<AtomicBool>() == 1);
+    assert!(align_of::<AtomicBool>() == 1);
+    assert!(size_of::<PhantomData<*const ()>>() == 0);
+    assert!(align_of::<PhantomData<*const ()>>() == 1);
     assert!(LISP_INT_FWD_VALUE_OFFSET == 8);
     assert!(LISP_OBJ_FWD_VALUE_OFFSET == 8);
     assert!(LISP_KBOARD_OBJ_FWD_VALUE_OFFSET == 8);
     assert!(LISP_BOOL_FWD_VALUE_OFFSET == 1);
-    assert!(LISP_INT_FWD_VALUE_OFFSET % align_of::<AtomicUsize>() == 0);
-    assert!(LISP_OBJ_FWD_VALUE_OFFSET % align_of::<AtomicUsize>() == 0);
-    assert!(LISP_KBOARD_OBJ_FWD_VALUE_OFFSET % align_of::<AtomicUsize>() == 0);
-    assert!(size_of::<AtomicUsize>() == size_of::<UnsafeCell<Value>>());
-    assert!(align_of::<LispIntFwd>() >= align_of::<AtomicUsize>());
-    assert!(align_of::<LispObjFwd>() >= align_of::<AtomicUsize>());
-    assert!(align_of::<LispKboardObjFwd>() >= align_of::<AtomicUsize>());
+    assert!(LISP_INT_FWD_VALUE_OFFSET % align_of::<AtomicValue>() == 0);
+    assert!(LISP_OBJ_FWD_VALUE_OFFSET % align_of::<AtomicValue>() == 0);
+    assert!(LISP_KBOARD_OBJ_FWD_VALUE_OFFSET % align_of::<AtomicValue>() == 0);
+    assert!(align_of::<LispIntFwd>() == 8);
+    assert!(align_of::<LispObjFwd>() == 8);
+    assert!(align_of::<LispKboardObjFwd>() == 8);
+    assert!(align_of::<LispBoolFwd>() == 1);
     assert!(size_of::<LispIntFwd>() == 16);
     assert!(size_of::<LispObjFwd>() == 16);
     assert!(size_of::<LispKboardObjFwd>() == 16);
+    assert!(offset_of!(LispIntFwd, _mutator) == 16);
+    assert!(offset_of!(LispObjFwd, _mutator) == 16);
+    assert!(offset_of!(LispKboardObjFwd, _mutator) == 16);
     assert!(size_of::<LispBoolFwd>() == 2);
+    // Immutable buffer metadata retains its original repr(C) offsets too.
+    assert!(offset_of!(LispBufferObjFwd, offset) == 2);
+    assert!(offset_of!(LispBufferObjFwd, local_flags_idx) == 4);
+    assert!(offset_of!(LispBufferObjFwd, predicate) == 6);
+    assert!(offset_of!(LispBufferObjFwd, default) == 8);
+    assert!(size_of::<LispBufferObjFwd>() == 16);
+    assert!(align_of::<LispBufferObjFwd>() == 8);
 };
 
 impl std::fmt::Debug for LispIntFwd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LispIntFwd")
-            .field("value", &self.get())
+            .field("value", &self.value)
             .finish()
     }
 }
@@ -860,7 +883,7 @@ impl std::fmt::Debug for LispBoolFwd {
 impl std::fmt::Debug for LispObjFwd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LispObjFwd")
-            .field("value", &self.get())
+            .field("value", &self.value)
             .finish()
     }
 }
@@ -868,7 +891,7 @@ impl std::fmt::Debug for LispObjFwd {
 impl std::fmt::Debug for LispKboardObjFwd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LispKboardObjFwd")
-            .field("value", &self.get())
+            .field("value", &self.value)
             .finish()
     }
 }
@@ -883,28 +906,22 @@ impl std::fmt::Debug for LispBufferObjFwd {
     }
 }
 
-// Safety: see `LispObjFwd`.
-unsafe impl Sync for LispKboardObjFwd {}
+static_assertions::assert_impl_all!(LispKboardObjFwd: std::fmt::Debug);
+static_assertions::assert_not_impl_any!(LispKboardObjFwd: Copy, Clone, Send, Sync);
 
 impl LispKboardObjFwd {
     /// GNU `do_symval_forwarding`'s `Lisp_Fwd_Kboard_Obj` arm
     /// (`src/data.c:1352-1356`).
     #[inline]
     pub fn get(&self) -> Value {
-        load_slot(&self.value)
-    }
-
-    /// Borrow the stored value, for [`LispFwd::load_ref`] only.
-    #[inline]
-    fn get_ref(&'static self) -> &'static Value {
-        unsafe { &*self.value.get() }
+        self.value.load()
     }
 
     /// GNU `store_symval_forwarding`'s `Lisp_Fwd_Kboard_Obj` arm
     /// (`src/data.c:1529-1536`), which checks nothing.
     #[inline]
     pub fn set(&self, value: Value) {
-        store_slot(&self.value, value);
+        self.value.store(value);
     }
 }
 
@@ -959,15 +976,15 @@ pub fn alloc_boolfwd(initial: bool) -> &'static LispBoolFwd {
 /// slot.
 ///
 /// Leaked for the same reason as [`alloc_boolfwd`]: GNU's descriptors are
-/// static C objects, and the `&Value`-returning symbol accessors hand out
-/// borrows of the slot, so the descriptor must outlive every reader.  Unlike
-/// GNU's, this slot IS the storage, so whoever installs it must also register
-/// it as a GC root -- `Obarray::install_objfwd` is the only caller and does
-/// exactly that.
+/// static C objects, and symbol cells and generated code retain the
+/// descriptor's address. Unlike GNU's, this slot is the storage, so its
+/// installer must also register it as a GC root; `Obarray::install_objfwd`
+/// performs that registration.
 pub fn alloc_objfwd(initial: Value) -> &'static LispObjFwd {
     Box::leak(Box::new(LispObjFwd {
         ty: LispFwdType::Obj,
-        value: UnsafeCell::new(initial),
+        value: AtomicValue::new(initial),
+        _mutator: PhantomData,
     }))
 }
 
@@ -976,19 +993,21 @@ pub fn alloc_objfwd(initial: Value) -> &'static LispObjFwd {
 pub fn alloc_kboard_objfwd(initial: Value) -> &'static LispKboardObjFwd {
     Box::leak(Box::new(LispKboardObjFwd {
         ty: LispFwdType::KboardObj,
-        value: UnsafeCell::new(initial),
+        value: AtomicValue::new(initial),
+        _mutator: PhantomData,
     }))
 }
 
 /// Allocate a process-lifetime integer forwarder, GNU's `DEFVAR_INT` slot.
 ///
 /// Leaked for the same reason as [`alloc_boolfwd`]: GNU's descriptors are
-/// static C objects, and the `&Value`-returning symbol accessors hand out
-/// borrows of the slot, so the descriptor must outlive every reader.
+/// static C objects, and symbol cells and generated code retain the
+/// descriptor's stable address.
 pub fn alloc_intfwd(initial: LispInteger) -> &'static LispIntFwd {
     Box::leak(Box::new(LispIntFwd {
         ty: LispFwdType::Int,
-        value: UnsafeCell::new(initial.value()),
+        value: AtomicValue::new(initial.value()),
+        _mutator: PhantomData,
     }))
 }
 
@@ -999,3 +1018,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/forward_module_test.rs"]
 mod gnu_parity_tests;
+
+#[cfg(test)]
+#[path = "tests/atomic_forward_test.rs"]
+mod atomic_tests;

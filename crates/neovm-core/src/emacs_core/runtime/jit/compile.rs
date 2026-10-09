@@ -4105,6 +4105,8 @@ pub(crate) mod heap_inline;
 #[path = "tests/inline_heap_ops_test.rs"]
 mod inline_heap_ops_tests;
 
+mod atomic_forward;
+pub(crate) use atomic_forward::ForwardAtomics;
 #[cfg(test)]
 #[path = "tests/gen0_tracked_collection_revision_test.rs"]
 mod gen0_tracked_collection_revision_tests;
