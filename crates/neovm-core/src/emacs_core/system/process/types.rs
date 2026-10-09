@@ -932,6 +932,11 @@ pub struct ProcessManager {
 /// 41% of a pipe-throughput profile and 6% of a streamed chat reply.  A read
 /// uses only the bytes it got, and the decoded run owns its copy, so one
 /// buffer serves every read; it is zeroed once, when it grows.
+///
+/// It keeps the largest read ceiling any process has used, for the life of
+/// the process manager: 5 MiB in the measured configuration.  A huge
+/// `read-process-output-max' only costs the pages reads actually touched,
+/// since the allocation is fresh zero pages.
 #[derive(Default)]
 pub(super) struct ProcessReadScratch(Vec<u8>);
 
