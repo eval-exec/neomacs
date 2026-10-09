@@ -392,21 +392,23 @@ pub(super) fn gnu_style_sort_items<R: SortRuntime>(
     merge_force_collapse(runtime, items, &mut pending, lessp_fn, &mut min_gallop)
 }
 
-fn sort_item_less<R: SortRuntime>(
+// GNU sort.c:198-214,234-245 compares keys alone; values are moved afterward.
+// Keep the comparator interface scalar even when a cold fallback borrows keys.
+fn sort_keys_less<R: SortRuntime>(
     runtime: &mut R,
-    left: SortItem,
-    right: SortItem,
+    left_key: Value,
+    right_key: Value,
     lessp_fn: SortPredicate,
 ) -> Result<bool, Flow> {
     if matches!(lessp_fn, SortPredicate::ValueLt) {
         return Ok(matches!(
-            runtime.compare_sort_keys(&left.key, &right.key)?,
+            runtime.compare_sort_keys(&left_key, &right_key)?,
             std::cmp::Ordering::Less
         ));
     }
 
     Ok(runtime
-        .call_sort_predicate(lessp_fn, left.key, right.key)?
+        .call_sort_predicate(lessp_fn, left_key, right_key)?
         .is_truthy())
 }
 
@@ -431,7 +433,7 @@ fn binarysort<R: SortRuntime>(
             let mut right = start;
             while left < right {
                 let mid = left + ((right - left) >> 1);
-                if sort_item_less(runtime, pivot, items.item(mid), lessp_fn)? {
+                if sort_keys_less(runtime, pivot.key, items.item(mid).key, lessp_fn)? {
                     right = mid;
                 } else {
                     left = mid + 1;
@@ -470,12 +472,17 @@ fn count_run<R: SortRuntime>(
     }
 
     let mut run_len = 2;
-    if sort_item_less(runtime, items.item(lo + 1), items.item(lo), lessp_fn)? {
+    if sort_keys_less(
+        runtime,
+        items.item(lo + 1).key,
+        items.item(lo).key,
+        lessp_fn,
+    )? {
         while lo + run_len < hi
-            && sort_item_less(
+            && sort_keys_less(
                 runtime,
-                items.item(lo + run_len),
-                items.item(lo + run_len - 1),
+                items.item(lo + run_len).key,
+                items.item(lo + run_len - 1).key,
                 lessp_fn,
             )?
         {
@@ -484,10 +491,10 @@ fn count_run<R: SortRuntime>(
         Ok((run_len, RunDirection::Descending))
     } else {
         while lo + run_len < hi
-            && !sort_item_less(
+            && !sort_keys_less(
                 runtime,
-                items.item(lo + run_len),
-                items.item(lo + run_len - 1),
+                items.item(lo + run_len).key,
+                items.item(lo + run_len - 1).key,
                 lessp_fn,
             )?
         {
@@ -611,10 +618,15 @@ fn gallop_left<R: SortRuntime>(
     let mut last_offset = 0isize;
     let mut offset = 1isize;
 
-    if sort_item_less(runtime, items.item(hint as usize), key, lessp_fn)? {
+    if sort_keys_less(runtime, items.item(hint as usize).key, key.key, lessp_fn)? {
         let max_offset = n - hint;
         while offset < max_offset {
-            if sort_item_less(runtime, items.item((hint + offset) as usize), key, lessp_fn)? {
+            if sort_keys_less(
+                runtime,
+                items.item((hint + offset) as usize).key,
+                key.key,
+                lessp_fn,
+            )? {
                 last_offset = offset;
                 offset = (offset << 1) + 1;
             } else {
@@ -629,7 +641,12 @@ fn gallop_left<R: SortRuntime>(
     } else {
         let max_offset = hint + 1;
         while offset < max_offset {
-            if sort_item_less(runtime, items.item((hint - offset) as usize), key, lessp_fn)? {
+            if sort_keys_less(
+                runtime,
+                items.item((hint - offset) as usize).key,
+                key.key,
+                lessp_fn,
+            )? {
                 break;
             }
             last_offset = offset;
@@ -646,7 +663,7 @@ fn gallop_left<R: SortRuntime>(
     last_offset += 1;
     while last_offset < offset {
         let mid = last_offset + ((offset - last_offset) >> 1);
-        if sort_item_less(runtime, items.item(mid as usize), key, lessp_fn)? {
+        if sort_keys_less(runtime, items.item(mid as usize).key, key.key, lessp_fn)? {
             last_offset = mid + 1;
         } else {
             offset = mid;
@@ -678,10 +695,15 @@ fn gallop_right<R: SortRuntime>(
     let mut last_offset = 0isize;
     let mut offset = 1isize;
 
-    if sort_item_less(runtime, key, items.item(hint as usize), lessp_fn)? {
+    if sort_keys_less(runtime, key.key, items.item(hint as usize).key, lessp_fn)? {
         let max_offset = hint + 1;
         while offset < max_offset {
-            if sort_item_less(runtime, key, items.item((hint - offset) as usize), lessp_fn)? {
+            if sort_keys_less(
+                runtime,
+                key.key,
+                items.item((hint - offset) as usize).key,
+                lessp_fn,
+            )? {
                 last_offset = offset;
                 offset = (offset << 1) + 1;
             } else {
@@ -697,7 +719,12 @@ fn gallop_right<R: SortRuntime>(
     } else {
         let max_offset = n - hint;
         while offset < max_offset {
-            if sort_item_less(runtime, key, items.item((hint + offset) as usize), lessp_fn)? {
+            if sort_keys_less(
+                runtime,
+                key.key,
+                items.item((hint + offset) as usize).key,
+                lessp_fn,
+            )? {
                 break;
             }
             last_offset = offset;
@@ -713,7 +740,7 @@ fn gallop_right<R: SortRuntime>(
     last_offset += 1;
     while last_offset < offset {
         let mid = last_offset + ((offset - last_offset) >> 1);
-        if sort_item_less(runtime, key, items.item(mid as usize), lessp_fn)? {
+        if sort_keys_less(runtime, key.key, items.item(mid as usize).key, lessp_fn)? {
             offset = mid;
         } else {
             last_offset = mid + 1;
@@ -829,7 +856,12 @@ fn merge_lo<R: SortRuntime>(
             let mut bcount = 0;
 
             loop {
-                if sort_item_less(runtime, items.item(right_index), left[left_index], lessp_fn)? {
+                if sort_keys_less(
+                    runtime,
+                    items.item(right_index).key,
+                    left[left_index].key,
+                    lessp_fn,
+                )? {
                     items.put(dest, items.item(right_index));
                     dest += 1;
                     right_index += 1;
@@ -1025,10 +1057,10 @@ fn merge_hi<R: SortRuntime>(
             let mut bcount = 0;
 
             loop {
-                if sort_item_less(
+                if sort_keys_less(
                     runtime,
-                    right[right_index as usize],
-                    items.item(left_index as usize),
+                    right[right_index as usize].key,
+                    items.item(left_index as usize).key,
                     lessp_fn,
                 )? {
                     items.put(dest as usize, items.item(left_index as usize));

@@ -337,7 +337,7 @@ impl<R: SortRuntime> SortRuntime for Runtime<'_, R> {
         }
     }
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow> {
-        self.call_published(|runtime| runtime.call_sort_function1(function, arg))
+        self.call_published(move |runtime| runtime.call_sort_function1(function, arg))
     }
     fn call_sort_function2(
         &mut self,
@@ -345,14 +345,17 @@ impl<R: SortRuntime> SortRuntime for Runtime<'_, R> {
         left: Value,
         right: Value,
     ) -> Result<Value, Flow> {
-        self.call_published(|runtime| runtime.call_sort_function2(function, left, right))
+        self.call_published(move |runtime| runtime.call_sort_function2(function, left, right))
     }
     fn compare_sort_keys(
         &mut self,
         left: &Value,
         right: &Value,
     ) -> Result<std::cmp::Ordering, Flow> {
-        self.call_published(|runtime| runtime.compare_sort_keys(left, right))
+        // Copy handles before entering the cold publication helper: references
+        // to these keys belong only to that helper's owned closure.
+        let (left, right) = (*left, *right);
+        self.call_published(move |runtime| runtime.compare_sort_keys(&left, &right))
     }
     #[inline]
     fn call_sort_predicate(
@@ -364,9 +367,8 @@ impl<R: SortRuntime> SortRuntime for Runtime<'_, R> {
         match self.inner.begin_native_sort_call(predicate, left, right) {
             Some(call) if call.result.is_ok() => self.inner.finish_native_sort_call(call),
             Some(call) => self.finish_published_error(call),
-            None => {
-                self.call_published(|runtime| runtime.call_sort_predicate(predicate, left, right))
-            }
+            None => self
+                .call_published(move |runtime| runtime.call_sort_predicate(predicate, left, right)),
         }
     }
 }
