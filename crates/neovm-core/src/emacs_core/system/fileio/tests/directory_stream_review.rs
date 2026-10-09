@@ -59,3 +59,49 @@ fn retry_distinguishes_end_of_stream_from_permanent_errors() {
     }
     assert_eq!(polls, 0);
 }
+
+#[test]
+fn retry_requires_native_errno_instead_of_a_synthesized_error_kind() {
+    for kind in [io::ErrorKind::Interrupted, io::ErrorKind::WouldBlock] {
+        let mut polls = 0;
+        let result = next_with_retry(
+            || Err(io::Error::new(kind, "synthetic error without native errno")),
+            || {
+                polls += 1;
+                Ok(())
+            },
+        );
+        match result {
+            Err(DirectoryNextError::Io(error)) => {
+                assert_eq!(error.kind(), kind);
+                assert_eq!(error.raw_os_error(), None);
+            }
+            other => panic!("non-OS error must remain permanent: {other:?}"),
+        }
+        assert_eq!(polls, 0);
+    }
+}
+
+#[test]
+fn native_errors_keep_their_sources_and_gnu_opening_data() {
+    use std::error::Error;
+
+    let opening = DirectoryReadError::from(io::Error::from_raw_os_error(libc::EACCES));
+    let source = opening
+        .source()
+        .unwrap()
+        .downcast_ref::<io::Error>()
+        .unwrap();
+    assert_eq!(source.raw_os_error(), Some(libc::EACCES));
+    let (action, error) = opening.into_parts();
+    assert_eq!(action, "Opening directory");
+    assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+
+    let reading = DirectoryNextError::from(io::Error::from_raw_os_error(libc::EIO));
+    let source = reading
+        .source()
+        .unwrap()
+        .downcast_ref::<io::Error>()
+        .unwrap();
+    assert_eq!(source.raw_os_error(), Some(libc::EIO));
+}
