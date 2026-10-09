@@ -70,6 +70,12 @@ pub(super) fn render_frame_root_glyphs(
             },
         );
     });
+    // render_frame_glyphs has returned from queue.submit of the root pass.
+    neomacs_display_protocol::present_trace::record(
+        neomacs_display_protocol::present_trace::Stage::Submit,
+        render.emacs_frame_id,
+        frame.presentation_id,
+    );
     if let Some(raster) = raster {
         let region = neomacs_renderer_wgpu::renderer::SnapshotRegion::new(
             &raster.texture,

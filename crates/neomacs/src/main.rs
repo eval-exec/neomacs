@@ -3601,6 +3601,7 @@ fn run_gui_main_thread(
         }
     };
 
+    neomacs_display_protocol::present_trace::shutdown();
     if evaluator_exit.restart {
         tracing::warn!("restart requested via kill-emacs, but restart is not implemented yet");
     }
@@ -4409,6 +4410,9 @@ pub fn run(mode: RuntimeMode) {
         },
     };
     let _logging_guard = neovm_core::logging::init(log_target);
+    // Start an opt-in presentation trace writer before any render or
+    // evaluator lock can record a stage.
+    neomacs_display_protocol::present_trace::init();
     Context::initialize_termination_signals(startup.noninteractive);
 
     if mode == RuntimeMode::Raw

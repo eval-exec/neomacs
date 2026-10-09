@@ -20,6 +20,10 @@ nutype.workspace = true
 serde_json = "1"
 strum.workspace = true
 tracing.workspace = true
+crossbeam-channel.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 neomacs-infra.workspace = true

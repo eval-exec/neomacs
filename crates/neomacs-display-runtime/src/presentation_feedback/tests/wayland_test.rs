@@ -13,6 +13,48 @@ fn submission(serial: u64, layout: u64) -> Submission {
 }
 
 #[test]
+fn trace_only_feedback_requires_explicit_enablement() {
+    assert!(matches!(
+        initial_state(None, || false),
+        ObserverState::Disabled
+    ));
+    assert!(matches!(
+        initial_state(None, || true),
+        ObserverState::Uninitialized(None)
+    ));
+}
+
+#[test]
+fn receipt_feedback_does_not_depend_on_trace_enablement() {
+    let path = PathBuf::from("/run/neomacs-receipt");
+    let state = initial_state(Some(path.clone()), || {
+        panic!("receipt feedback must not depend on tracing")
+    });
+    assert!(matches!(state, ObserverState::Uninitialized(Some(actual)) if actual == path));
+}
+
+#[test]
+fn trace_only_feedback_never_advances_file_receipts() {
+    let mut receipts = Receipts {
+        path: None,
+        latest_presented: 0,
+        clock_id: Some(1),
+        pending: PendingReceipts::default(),
+    };
+    receipts.pending.requested(1, observe_platform_now());
+    receipts.observe(NativeFeedback::Presented(ConfirmedPresentation {
+        submission: submission(1, 100),
+        timestamp: CompositorTimestamp {
+            clock_id: 1,
+            seconds: 42,
+            nanoseconds: 123,
+        },
+    }));
+    assert!(receipts.pending.0.is_empty());
+    assert_eq!(receipts.latest_presented, 0);
+}
+
+#[test]
 fn pending_receipts_wake_without_new_input_and_stop_after_ack_or_timeout() {
     let now = observe_platform_now();
     let mut pending = PendingReceipts::default();
@@ -36,7 +78,7 @@ fn receipt_identifies_confirmed_layout_not_latest_requested_layout() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("receipt");
     let mut receipts = Receipts {
-        path: path.clone(),
+        path: Some(path.clone()),
         latest_presented: 0,
         clock_id: Some(1),
         pending: PendingReceipts::default(),

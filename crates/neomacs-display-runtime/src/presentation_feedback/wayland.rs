@@ -62,7 +62,7 @@ impl PendingReceipts {
 }
 
 struct Receipts {
-    path: PathBuf,
+    path: Option<PathBuf>,
     latest_presented: u64,
     clock_id: Option<u32>,
     pending: PendingReceipts,
@@ -78,6 +78,11 @@ impl Receipts {
         let confirmed = match feedback {
             NativeFeedback::Presented(confirmed) => confirmed,
             NativeFeedback::Discarded(submission) => {
+                neomacs_display_protocol::present_trace::record(
+                    neomacs_display_protocol::present_trace::Stage::Discarded,
+                    submission.frame,
+                    submission.layout,
+                );
                 tracing::debug!(?submission, "native presentation discarded");
                 return;
             }
@@ -98,6 +103,12 @@ impl Receipts {
             .checked_mul(1_000_000_000)
             .and_then(|seconds| seconds.checked_add(u64::from(timestamp.nanoseconds)))
         {
+            neomacs_display_protocol::present_trace::presented(
+                submission.frame,
+                submission.layout,
+                timestamp.clock_id,
+                nanoseconds,
+            );
             neomacs_display_protocol::input_latency::projected_confirmed(
                 submission.frame,
                 submission.serial,
@@ -114,6 +125,7 @@ impl Receipts {
                 },
             );
         }
+        let Some(path) = &self.path else { return };
         if submission.serial <= self.latest_presented {
             return;
         }
@@ -131,8 +143,8 @@ impl Receipts {
             timestamp.seconds,
             timestamp.nanoseconds
         );
-        let temporary = self.path.with_extension("pending");
-        match fs::write(&temporary, receipt).and_then(|()| fs::rename(&temporary, &self.path)) {
+        let temporary = path.with_extension("pending");
+        match fs::write(&temporary, receipt).and_then(|()| fs::rename(&temporary, path)) {
             Ok(()) => self.latest_presented = submission.serial,
             Err(error) => tracing::warn!(%error, "cannot write native presentation receipt"),
         }
@@ -215,7 +227,7 @@ struct Session {
 }
 
 impl Session {
-    fn connect(window: &dyn Window, path: PathBuf) -> Result<Self, String> {
+    fn connect(window: &dyn Window, path: Option<PathBuf>) -> Result<Self, String> {
         let RawDisplayHandle::Wayland(display) = window
             .display_handle()
             .map_err(|error| error.to_string())?
@@ -299,7 +311,7 @@ impl Session {
 
 enum ObserverState {
     Disabled,
-    Uninitialized(PathBuf),
+    Uninitialized(Option<PathBuf>),
     Active(Session),
 }
 
@@ -307,20 +319,29 @@ pub(crate) struct PresentationObserver {
     state: ObserverState,
 }
 
+fn initial_state(path: Option<PathBuf>, trace_enabled: impl FnOnce() -> bool) -> ObserverState {
+    match path {
+        Some(path) => ObserverState::Uninitialized(Some(path)),
+        None if trace_enabled() => ObserverState::Uninitialized(None),
+        None => ObserverState::Disabled,
+    }
+}
+
 impl PresentationObserver {
     pub(crate) fn new() -> Self {
         Self {
-            state: std::env::var_os("NEOMACS_GUI_PRESENTATION_RECEIPT")
-                .or_else(|| {
-                    std::env::var_os("NEOMACS_INPUT_LATENCY_FILE").map(|path| {
-                        PathBuf::from(path)
-                            .with_extension("receipt")
-                            .into_os_string()
+            state: initial_state(
+                std::env::var_os("NEOMACS_GUI_PRESENTATION_RECEIPT")
+                    .or_else(|| {
+                        std::env::var_os("NEOMACS_INPUT_LATENCY_FILE").map(|path| {
+                            PathBuf::from(path)
+                                .with_extension("receipt")
+                                .into_os_string()
+                        })
                     })
-                })
-                .map_or(ObserverState::Disabled, |path| {
-                    ObserverState::Uninitialized(path.into())
-                }),
+                    .map(PathBuf::from),
+                neomacs_display_protocol::present_trace::enabled,
+            ),
         }
     }
 

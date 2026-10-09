@@ -334,6 +334,11 @@ fn render_frame_window_contents_reserved(
     let mut frame = render
         .take_current_frame_for_render(&acquired)
         .ok_or(FrameRenderFailure::AwaitingContent)?;
+    neomacs_display_protocol::present_trace::record(
+        neomacs_display_protocol::present_trace::Stage::RenderStart,
+        render.emacs_frame_id,
+        frame.presentation_id,
+    );
     feature_plan.prepare_frame(&mut frame);
     render.begin_presentable_render();
     if extra_line_spacing != 0.0 || extra_letter_spacing != 0.0 {

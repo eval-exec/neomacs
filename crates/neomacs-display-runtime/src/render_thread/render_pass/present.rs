@@ -190,6 +190,11 @@ impl RenderApp {
             window.pre_present_notify();
         }
         renderer.queue().present(output);
+        neomacs_display_protocol::present_trace::record(
+            neomacs_display_protocol::present_trace::Stage::Present,
+            emacs_frame_id,
+            frame.presentation_id,
+        );
         // This projection describes the frame just handed to the compositor.
         // Keep input publication at submission; native confirmation is separate.
         if let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) {
