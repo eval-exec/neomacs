@@ -415,7 +415,7 @@ impl LiveChangeRange {
     }
 
     /// Re-measure only when callback Lisp could have invalidated the bytes.
-    #[inline]
+    #[inline(always)]
     fn refresh(&mut self, ctx: &crate::emacs_core::eval::Context) -> TextEditRange {
         if let Some(before) = self.before_callbacks.take() {
             let buffer = ctx.buffers.current_buffer_id();
@@ -642,6 +642,7 @@ fn prepare_buffer_change(
 /// signal_before_change), but its bind is a C specpdl push; ours was ~590 Ir
 /// of bind+unbind per modification, and with nothing to run under it the
 /// binding is unobservable.
+#[inline(always)]
 fn before_change_hooks_quiet(
     ctx: &crate::emacs_core::eval::Context,
     current_id: crate::buffer::BufferId,
@@ -762,6 +763,7 @@ pub(crate) fn signal_before_property_change(
     .map(|_| ())
 }
 
+#[inline(always)]
 fn deactivate_mark_after_preparing_change(
     ctx: &mut crate::emacs_core::eval::Context,
 ) -> Result<(), Flow> {

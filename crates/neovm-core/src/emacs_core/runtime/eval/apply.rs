@@ -1515,7 +1515,7 @@ impl Context {
         self.unbind_suffix_to(count, result)
     }
 
-    #[inline]
+    #[inline(always)]
     fn unbind_suffix_to(&mut self, count: usize, result: EvalResult) -> EvalResult {
         self.pop_simple_specpdl_suffix(count);
         if self.specpdl.len() > count {
@@ -1549,6 +1549,7 @@ impl Context {
     /// is a store; `drain_unwind_to` is the path that roots them.  The symbol's shape is read when the entry is popped, not
     /// when it was pushed: a watcher added or a local made inside the `let`
     /// body sends that entry to the general path, as in GNU.
+    #[inline(always)]
     pub(crate) fn pop_simple_specpdl_suffix(&mut self, count: usize) {
         use crate::emacs_core::symbol::{SymbolRedirect, SymbolTrappedWrite};
         while self.specpdl.len() > count {
