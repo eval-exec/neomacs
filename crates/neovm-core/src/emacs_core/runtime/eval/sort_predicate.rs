@@ -3,6 +3,14 @@ use super::*;
 use crate::emacs_core::builtins::higher_order::{NativeSortCall, SortPredicate};
 use crate::tagged::header::{SubrFn2, SubrFnManySlice};
 
+/// Captured native bodies have distinct arity and pointer proofs. Naming the
+/// body keeps validation and invocation exhaustive when a body kind is added.
+#[derive(Clone, Copy, Debug)]
+enum BufferedSortBody {
+    NumericLessp,
+    StringLessp,
+}
+
 impl Context {
     /// A captured `string-lessp` implementation, including `string<` aliases.
     ///
@@ -93,10 +101,16 @@ impl Context {
         // its ordinary dispatch path so a rejected fast begin never counts twice.
         #[cfg(feature = "vm-profile")]
         return None;
-        let (subr, epoch) = match predicate {
-            SortPredicate::NumericLessp { subr, epoch }
-            | SortPredicate::StringLessp { subr, epoch } => (subr, epoch),
-            _ => return None,
+        let (subr, epoch, body) = match predicate {
+            SortPredicate::NumericLessp { subr, epoch } => {
+                (subr, epoch, BufferedSortBody::NumericLessp)
+            }
+            SortPredicate::StringLessp { subr, epoch } => {
+                (subr, epoch, BufferedSortBody::StringLessp)
+            }
+            SortPredicate::ValueLt | SortPredicate::Generic(_) | SortPredicate::Subr { .. } => {
+                return None;
+            }
         };
         let entered_depth = self.depth.checked_add(1)?;
         if !self.attention_clear(super::AttentionMask::QUIT)
@@ -130,29 +144,36 @@ impl Context {
         }
         // Read and verify the captured object's current body on each call.
         // Arity changes and registration rewrites take the published slow path.
-        let numeric_body = match (predicate, entry.function) {
-            (SortPredicate::NumericLessp { .. }, Some(SubrFn::ManySlice(body)))
-                if entry.min_args <= 2
-                    && entry.max_args.is_none_or(|maximum| maximum >= 2)
-                    && std::ptr::fn_addr_eq(
-                        body,
+        match body {
+            BufferedSortBody::NumericLessp => {
+                let Some(SubrFn::ManySlice(actual)) = entry.function else {
+                    return None;
+                };
+                if entry.min_args > 2
+                    || entry.max_args.is_some_and(|maximum| maximum < 2)
+                    || !std::ptr::fn_addr_eq(
+                        actual,
                         builtins::builtin_num_lt_slice as SubrFnManySlice,
-                    ) =>
-            {
-                true
+                    )
+                {
+                    return None;
+                }
             }
-            (SortPredicate::StringLessp { .. }, Some(SubrFn::A2(body)))
-                if entry.min_args == 2
-                    && entry.max_args == Some(2)
-                    && std::ptr::fn_addr_eq(
-                        body,
+            BufferedSortBody::StringLessp => {
+                let Some(SubrFn::A2(actual)) = entry.function else {
+                    return None;
+                };
+                if entry.min_args != 2
+                    || entry.max_args != Some(2)
+                    || !std::ptr::fn_addr_eq(
+                        actual,
                         builtins::strings::builtin_string_lessp_2 as SubrFn2,
-                    ) =>
-            {
-                false
+                    )
+                {
+                    return None;
+                }
             }
-            _ => return None,
-        };
+        }
 
         // These guards prove the fast halves of enter_interpreted_eval_depth,
         // maybe_quit, maybe_gc, debug-on-call, and maybe_grow_eval_stack. The
@@ -162,10 +183,11 @@ impl Context {
         self.push_backtrace_frame(subr, &[left, right]);
         // The per-call pointer proof above identifies these exact bodies.
         // Invoke them directly instead of rebuilding generic SubrFn dispatch.
-        let result = if numeric_body {
-            builtins::builtin_num_lt_slice(self, &[left, right])
-        } else {
-            builtins::strings::builtin_string_lessp_2(self, left, right)
+        let result = match body {
+            BufferedSortBody::NumericLessp => builtins::builtin_num_lt_slice(self, &[left, right]),
+            BufferedSortBody::StringLessp => {
+                builtins::strings::builtin_string_lessp_2(self, left, right)
+            }
         }
         .map_err(|flow| self.validate_throw(flow));
         Some(NativeSortCall { frame_base, result })

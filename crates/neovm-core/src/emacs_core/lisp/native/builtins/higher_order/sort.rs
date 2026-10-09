@@ -1,37 +1,130 @@
 //! GNU TimSort storage and merging. Vector sorts read and write the live
 //! Lisp vector, retaining no slice borrow across Lisp callbacks.
-use super::{Flow, SortItem, SortPredicate, SortRootBatch, SortRootSlot, SortRuntime, Value};
+#![deny(clippy::undocumented_unsafe_blocks)]
+#![deny(clippy::wildcard_enum_match_arm)]
+use super::{Flow, SortDirection, SortItem, SortPredicate, SortRuntime, Value};
 use std::ops::Range;
 
 #[cfg(test)]
 #[path = "../tests/gd_e_sort_stack_temporary.rs"]
 mod gd_e_sort_stack_temporary_tests;
 
+#[cfg(test)]
+#[path = "../tests/gd_e_sort_root_domains_test.rs"]
+mod gd_e_sort_root_domains_tests;
+
+/// Whether a comparator can expose temporary values to Lisp/GC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ValueRooting {
+    Unneeded,
+    Required,
+}
+impl ValueRooting {
+    #[inline]
+    pub(super) fn is_required(self) -> bool {
+        match self {
+            Self::Unneeded => false,
+            Self::Required => true,
+        }
+    }
+}
+
+/// Borrows one mutator until its temporary roots have been restored. The sealed
+/// backends restore only Rust root storage: Drop cannot run Lisp, block, or panic.
+/// The borrowed runtime prevents a scope from being restored in another runtime.
+#[derive(Debug)]
+#[must_use = "keep the root guard alive while comparisons can collect"]
+pub(super) struct SortRootGuard<'a, R: SortRuntime> {
+    runtime: &'a mut R,
+    scope: Option<R::RootScope>,
+}
+
+impl<'a, R: SortRuntime> SortRootGuard<'a, R> {
+    #[inline]
+    pub(super) fn new(runtime: &'a mut R, rooting: ValueRooting) -> Self {
+        let scope = match rooting {
+            ValueRooting::Unneeded => None,
+            ValueRooting::Required => Some(runtime.save_sort_roots()),
+        };
+        Self { runtime, scope }
+    }
+
+    #[inline]
+    pub(super) fn runtime(&mut self) -> &mut R {
+        self.runtime
+    }
+}
+
+impl<R: SortRuntime> Drop for SortRootGuard<'_, R> {
+    #[inline]
+    fn drop(&mut self) {
+        if let Some(scope) = self.scope.take() {
+            self.runtime.restore_sort_roots(scope);
+        }
+    }
+}
+
+/// GNU's scratch regime; after heap scratch is allocated, it never returns to
+/// stack scratch. This is a simulated GNU lifetime, not Rust Vec allocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TemporaryStorage {
+    Stack,
+    Heap,
+}
+
+/// Persistent stack roots survive for the sort; heap roots track one merge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TemporaryRootRetention {
+    WholeSort,
+    Merge,
+}
+impl TemporaryRootRetention {
+    #[inline]
+    pub(super) fn is_merge_scoped(self) -> bool {
+        match self {
+            Self::WholeSort => false,
+            Self::Merge => true,
+        }
+    }
+}
+
 /// Storage belongs to one mutator invocation. Shared heap stores go through
 /// the runtime barriers; no pointer to vector backing survives a Lisp call.
-pub(super) trait SortStorage {
+pub(super) trait SortReadStorage {
     fn len(&self) -> usize;
     #[inline]
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
     fn item(&self, index: usize) -> SortItem;
+    #[inline]
+    fn snapshot(&self, range: Range<usize>) -> Vec<SortItem> {
+        range.map(|index| self.item(index)).collect()
+    }
+}
+
+/// Writable storage and its rooting backend must agree on the slot domain.
+pub(super) trait SortStorage<Slot>: SortReadStorage {
     fn put(&mut self, index: usize, item: SortItem);
     #[inline]
     fn insertion_pivot(&self, _: usize, pivot: SortItem) -> SortItem {
         pivot
     }
     #[inline]
-    fn needs_value_roots(&self) -> bool {
-        false
+    fn value_rooting(&self) -> ValueRooting {
+        ValueRooting::Unneeded
     }
     #[inline]
-    fn root_insertion_key(&self, _: &mut impl SortRuntime, _: SortItem) {}
+    fn root_insertion_key(&self, _: &mut impl SortRuntime<RootSlot = Slot>, _: SortItem) {}
     /// Retain a copy made into GNU's persistent stack temporary array.
-    /// False means the temporary values need the merge's remaining-value roots.
+    /// Merge retention needs roots for the remaining temporary values.
     #[inline]
-    fn retain_stack_temporary(&mut self, _: &mut impl SortRuntime, _: &[SortItem]) -> bool {
-        false
+    fn retain_stack_temporary(
+        &mut self,
+        _: &mut impl SortRuntime<RootSlot = Slot>,
+        _: &[SortItem],
+    ) -> TemporaryRootRetention {
+        TemporaryRootRetention::Merge
     }
     /// Scratch list storage is discarded on failure. Live vector storage
     /// restores relocated values only when GNU registered unwind cleanup.
@@ -42,12 +135,8 @@ pub(super) trait SortStorage {
     fn reverse(&mut self, range: Range<usize>);
     fn copy_within(&mut self, range: Range<usize>, dest: usize);
     fn copy_from(&mut self, dest: usize, source: &[SortItem]);
-    #[inline]
-    fn snapshot(&self, range: Range<usize>) -> Vec<SortItem> {
-        range.map(|index| self.item(index)).collect()
-    }
 }
-impl SortStorage for [SortItem] {
+impl SortReadStorage for [SortItem] {
     #[inline]
     fn len(&self) -> usize {
         self.len()
@@ -56,6 +145,12 @@ impl SortStorage for [SortItem] {
     fn item(&self, index: usize) -> SortItem {
         self[index]
     }
+    #[inline]
+    fn snapshot(&self, range: Range<usize>) -> Vec<SortItem> {
+        self[range].to_vec()
+    }
+}
+impl<Slot> SortStorage<Slot> for [SortItem] {
     #[inline]
     fn put(&mut self, index: usize, item: SortItem) {
         self[index] = item;
@@ -72,23 +167,20 @@ impl SortStorage for [SortItem] {
     fn copy_from(&mut self, dest: usize, source: &[SortItem]) {
         self[dest..dest + source.len()].copy_from_slice(source);
     }
-    #[inline]
-    fn snapshot(&self, range: Range<usize>) -> Vec<SortItem> {
-        self[range].to_vec()
-    }
 }
 /// A call-local borrowed view; it retains no heap borrow or shared cache.
-struct SortRange<'a, S: SortStorage + ?Sized> {
+#[derive(Debug)]
+struct SortRange<'a, S: ?Sized> {
     storage: &'a S,
     range: Range<usize>,
 }
-impl<'a, S: SortStorage + ?Sized> SortRange<'a, S> {
+impl<'a, S: ?Sized> SortRange<'a, S> {
     #[inline]
     fn new(storage: &'a S, range: Range<usize>) -> Self {
         Self { storage, range }
     }
 }
-impl<S: SortStorage + ?Sized> SortStorage for SortRange<'_, S> {
+impl<S: SortReadStorage + ?Sized> SortReadStorage for SortRange<'_, S> {
     #[inline]
     fn len(&self) -> usize {
         self.range.len()
@@ -97,42 +189,34 @@ impl<S: SortStorage + ?Sized> SortStorage for SortRange<'_, S> {
     fn item(&self, index: usize) -> SortItem {
         self.storage.item(self.range.start + index)
     }
-    fn put(&mut self, _: usize, _: SortItem) {
-        unreachable!()
-    }
-    fn reverse(&mut self, _: Range<usize>) {
-        unreachable!()
-    }
-    fn copy_within(&mut self, _: Range<usize>, _: usize) {
-        unreachable!()
-    }
-    fn copy_from(&mut self, _: usize, _: &[SortItem]) {
-        unreachable!()
-    }
 }
 
 /// Keys, when supplied, are private to the sorting invocation and rooted by
 /// its existing root scope. Values always reside in the Lisp vector.
-pub(super) struct VectorSortStorage {
+#[derive(Debug)]
+pub(super) struct VectorSortStorage<Slot> {
     pub(super) vector: Value,
     pub(super) keys: Option<Vec<Value>>,
     // GNU sort.c:175-182 keeps this array in the sort's stack frame. Its
     // previously written values remain visible to conservative C-stack GC,
     // including after a later merge switches to heap temporary storage.
-    stack_temporary_roots: Vec<SortRootSlot>,
-    heap_temporary_allocated: bool,
+    stack_temporary_roots: Vec<Slot>,
+    temporary_storage: TemporaryStorage,
+    _owner: std::marker::PhantomData<*const ()>,
 }
-impl VectorSortStorage {
+
+impl<Slot> VectorSortStorage<Slot> {
     pub(super) fn new(vector: Value) -> Self {
         Self {
             vector,
             keys: None,
             stack_temporary_roots: Vec::new(),
-            heap_temporary_allocated: false,
+            temporary_storage: TemporaryStorage::Stack,
+            _owner: std::marker::PhantomData,
         }
     }
 }
-impl SortStorage for VectorSortStorage {
+impl<Slot> SortReadStorage for VectorSortStorage<Slot> {
     #[inline]
     fn len(&self) -> usize {
         self.vector.as_vector_data().unwrap().len()
@@ -145,6 +229,8 @@ impl SortStorage for VectorSortStorage {
             key: self.keys.as_ref().map_or(value, |keys| keys[index]),
         }
     }
+}
+impl<Slot> SortStorage<Slot> for VectorSortStorage<Slot> {
     #[inline]
     fn insertion_pivot(&self, index: usize, pivot: SortItem) -> SortItem {
         if self.keys.is_some() {
@@ -157,8 +243,8 @@ impl SortStorage for VectorSortStorage {
         }
     }
     #[inline]
-    fn needs_value_roots(&self) -> bool {
-        true
+    fn value_rooting(&self) -> ValueRooting {
+        ValueRooting::Required
     }
     #[inline]
     fn has_merge_cleanup(&self) -> bool {
@@ -166,10 +252,11 @@ impl SortStorage for VectorSortStorage {
         // or merge_getmem registers it upon the first heap temporary allocation
         // (GNU sort.c:1109-1121,525-526,613-619). Small stack-only merges leave
         // their completed writes visible when a comparison signals.
-        self.heap_temporary_allocated || (self.keys.is_some() && self.len() >= 128)
+        self.temporary_storage == TemporaryStorage::Heap
+            || (self.keys.is_some() && self.len() >= 128)
     }
     #[inline]
-    fn root_insertion_key(&self, runtime: &mut impl SortRuntime, pivot: SortItem) {
+    fn root_insertion_key(&self, runtime: &mut impl SortRuntime<RootSlot = Slot>, pivot: SortItem) {
         // Keyed insertion retains only its key (already rooted with all keys),
         // then reads its live value after the comparisons (GNU sort.c:234,253).
         if self.keys.is_none() {
@@ -178,9 +265,9 @@ impl SortStorage for VectorSortStorage {
     }
     fn retain_stack_temporary(
         &mut self,
-        runtime: &mut impl SortRuntime,
+        runtime: &mut impl SortRuntime<RootSlot = Slot>,
         source: &[SortItem],
-    ) -> bool {
+    ) -> TemporaryRootRetention {
         // GNU merge_init reserves 256 unkeyed slots, or separate key/value
         // areas with min(ceil(length / 2), 128) slots (sort.c:489-509).
         let capacity = if self.keys.is_some() {
@@ -190,9 +277,9 @@ impl SortStorage for VectorSortStorage {
         };
         // merge_getmem never returns to temparray after its first allocation,
         // even when a subsequent merge would fit there (sort.c:604-635).
-        if self.heap_temporary_allocated || source.len() > capacity {
-            self.heap_temporary_allocated = true;
-            return false;
+        if self.temporary_storage == TemporaryStorage::Heap || source.len() > capacity {
+            self.temporary_storage = TemporaryStorage::Heap;
+            return TemporaryRootRetention::Merge;
         }
         // sortslice_memcpy overwrites only the new prefix (sort.c:651,776).
         // Reuse its roots and preserve the untouched tail from earlier merges;
@@ -205,7 +292,7 @@ impl SortStorage for VectorSortStorage {
                     .push(runtime.root_sort_slot(item.value));
             }
         }
-        true
+        TemporaryRootRetention::WholeSort
     }
     #[inline]
     fn put(&mut self, index: usize, item: SortItem) {
@@ -255,9 +342,9 @@ struct PendingRun {
 
 const GALLOP_WIN_MIN: usize = 7;
 
-pub(super) fn gnu_style_sort_items(
-    runtime: &mut impl SortRuntime,
-    items: &mut (impl SortStorage + ?Sized),
+pub(super) fn gnu_style_sort_items<R: SortRuntime>(
+    runtime: &mut R,
+    items: &mut (impl SortStorage<R::RootSlot> + ?Sized),
     lessp_fn: SortPredicate,
 ) -> Result<(), Flow> {
     let len = items.len();
@@ -272,9 +359,10 @@ pub(super) fn gnu_style_sort_items(
     let mut remaining = len;
 
     while remaining > 0 {
-        let (mut run_len, descending) = count_run(runtime, items, base, len, lessp_fn)?;
-        if descending {
-            items.reverse(base..base + run_len);
+        let (mut run_len, direction) = count_run(runtime, items, base, len, lessp_fn)?;
+        match direction {
+            RunDirection::Ascending => {}
+            RunDirection::Descending => items.reverse(base..base + run_len),
         }
         if run_len < minrun {
             let force = remaining.min(minrun);
@@ -304,8 +392,8 @@ pub(super) fn gnu_style_sort_items(
     merge_force_collapse(runtime, items, &mut pending, lessp_fn, &mut min_gallop)
 }
 
-fn sort_item_less(
-    runtime: &mut impl SortRuntime,
+fn sort_item_less<R: SortRuntime>(
+    runtime: &mut R,
     left: SortItem,
     right: SortItem,
     lessp_fn: SortPredicate,
@@ -322,9 +410,9 @@ fn sort_item_less(
         .is_truthy())
 }
 
-fn binarysort(
-    runtime: &mut impl SortRuntime,
-    items: &mut (impl SortStorage + ?Sized),
+fn binarysort<R: SortRuntime>(
+    runtime: &mut R,
+    items: &mut (impl SortStorage<R::RootSlot> + ?Sized),
     lo: usize,
     hi: usize,
     mut start: usize,
@@ -335,7 +423,8 @@ fn binarysort(
     }
     while start < hi {
         let pivot = items.item(start);
-        let roots = items.needs_value_roots().then(|| runtime.save_sort_roots());
+        let mut roots = SortRootGuard::new(runtime, items.value_rooting());
+        let runtime = roots.runtime();
         items.root_insertion_key(runtime, pivot);
         let result = (|| {
             let mut left = lo;
@@ -353,25 +442,31 @@ fn binarysort(
             items.put(left, pivot);
             Ok(())
         })();
-        if let Some(roots) = roots {
-            runtime.restore_sort_roots(roots);
-        }
+        drop(roots);
         result?;
         start += 1;
     }
     Ok(())
 }
 
-fn count_run(
-    runtime: &mut impl SortRuntime,
-    items: &(impl SortStorage + ?Sized),
+/// Direction discovered in one input run, distinct from the output option.
+#[derive(Clone, Copy, Debug)]
+enum RunDirection {
+    Ascending,
+    Descending,
+}
+const _: () = assert!(std::mem::size_of::<RunDirection>() == std::mem::size_of::<bool>());
+
+fn count_run<R: SortRuntime>(
+    runtime: &mut R,
+    items: &(impl SortReadStorage + ?Sized),
     lo: usize,
     hi: usize,
     lessp_fn: SortPredicate,
-) -> Result<(usize, bool), Flow> {
+) -> Result<(usize, RunDirection), Flow> {
     debug_assert!(lo < hi);
     if lo + 1 == hi {
-        return Ok((1, false));
+        return Ok((1, RunDirection::Ascending));
     }
 
     let mut run_len = 2;
@@ -386,7 +481,7 @@ fn count_run(
         {
             run_len += 1;
         }
-        Ok((run_len, true))
+        Ok((run_len, RunDirection::Descending))
     } else {
         while lo + run_len < hi
             && !sort_item_less(
@@ -398,7 +493,7 @@ fn count_run(
         {
             run_len += 1;
         }
-        Ok((run_len, false))
+        Ok((run_len, RunDirection::Ascending))
     }
 }
 
@@ -432,9 +527,9 @@ fn powerloop(s1: usize, n1: usize, n2: usize, n: usize) -> i32 {
     result
 }
 
-fn found_new_run(
-    runtime: &mut impl SortRuntime,
-    items: &mut (impl SortStorage + ?Sized),
+fn found_new_run<R: SortRuntime>(
+    runtime: &mut R,
+    items: &mut (impl SortStorage<R::RootSlot> + ?Sized),
     pending: &mut Vec<PendingRun>,
     new_len: usize,
     total_len: usize,
@@ -456,9 +551,9 @@ fn found_new_run(
     Ok(())
 }
 
-fn merge_force_collapse(
-    runtime: &mut impl SortRuntime,
-    items: &mut (impl SortStorage + ?Sized),
+fn merge_force_collapse<R: SortRuntime>(
+    runtime: &mut R,
+    items: &mut (impl SortStorage<R::RootSlot> + ?Sized),
     pending: &mut Vec<PendingRun>,
     lessp_fn: SortPredicate,
     min_gallop: &mut usize,
@@ -473,9 +568,9 @@ fn merge_force_collapse(
     Ok(())
 }
 
-fn merge_at(
-    runtime: &mut impl SortRuntime,
-    items: &mut (impl SortStorage + ?Sized),
+fn merge_at<R: SortRuntime>(
+    runtime: &mut R,
+    items: &mut (impl SortStorage<R::RootSlot> + ?Sized),
     pending: &mut Vec<PendingRun>,
     index: usize,
     lessp_fn: SortPredicate,
@@ -493,153 +588,143 @@ fn merge_at(
     Ok(())
 }
 
-fn gallop_left(
-    runtime: &mut impl SortRuntime,
+fn gallop_left<R: SortRuntime>(
+    runtime: &mut R,
     key: SortItem,
-    items: &(impl SortStorage + ?Sized),
+    items: &(impl SortReadStorage + ?Sized),
     hint: usize,
     lessp_fn: SortPredicate,
-    retain_key: bool,
+    retain_key: ValueRooting,
 ) -> Result<usize, Flow> {
     // GNU keeps the gallop key in a C local across comparator calls. A
     // callback can remove its original vector slot and collect in that call.
-    let roots = retain_key.then(|| runtime.save_sort_roots());
-    if retain_key {
+    let mut roots = SortRootGuard::new(runtime, retain_key);
+    let runtime = roots.runtime();
+    if retain_key.is_required() {
         runtime.root_sort_slot(key.key);
     }
-    let result = (|| {
-        debug_assert!(!items.is_empty());
-        debug_assert!(hint < items.len());
+    debug_assert!(!items.is_empty());
+    debug_assert!(hint < items.len());
 
-        let n = items.len() as isize;
-        let hint = hint as isize;
-        let mut last_offset = 0isize;
-        let mut offset = 1isize;
+    let n = items.len() as isize;
+    let hint = hint as isize;
+    let mut last_offset = 0isize;
+    let mut offset = 1isize;
 
-        if sort_item_less(runtime, items.item(hint as usize), key, lessp_fn)? {
-            let max_offset = n - hint;
-            while offset < max_offset {
-                if sort_item_less(runtime, items.item((hint + offset) as usize), key, lessp_fn)? {
-                    last_offset = offset;
-                    offset = (offset << 1) + 1;
-                } else {
-                    break;
-                }
-            }
-            if offset > max_offset {
-                offset = max_offset;
-            }
-            last_offset += hint;
-            offset += hint;
-        } else {
-            let max_offset = hint + 1;
-            while offset < max_offset {
-                if sort_item_less(runtime, items.item((hint - offset) as usize), key, lessp_fn)? {
-                    break;
-                }
+    if sort_item_less(runtime, items.item(hint as usize), key, lessp_fn)? {
+        let max_offset = n - hint;
+        while offset < max_offset {
+            if sort_item_less(runtime, items.item((hint + offset) as usize), key, lessp_fn)? {
                 last_offset = offset;
                 offset = (offset << 1) + 1;
-            }
-            if offset > max_offset {
-                offset = max_offset;
-            }
-            let k = last_offset;
-            last_offset = hint - offset;
-            offset = hint - k;
-        }
-
-        last_offset += 1;
-        while last_offset < offset {
-            let mid = last_offset + ((offset - last_offset) >> 1);
-            if sort_item_less(runtime, items.item(mid as usize), key, lessp_fn)? {
-                last_offset = mid + 1;
             } else {
-                offset = mid;
+                break;
             }
         }
-        Ok(offset as usize)
-    })();
-    if let Some(roots) = roots {
-        runtime.restore_sort_roots(roots);
+        if offset > max_offset {
+            offset = max_offset;
+        }
+        last_offset += hint;
+        offset += hint;
+    } else {
+        let max_offset = hint + 1;
+        while offset < max_offset {
+            if sort_item_less(runtime, items.item((hint - offset) as usize), key, lessp_fn)? {
+                break;
+            }
+            last_offset = offset;
+            offset = (offset << 1) + 1;
+        }
+        if offset > max_offset {
+            offset = max_offset;
+        }
+        let k = last_offset;
+        last_offset = hint - offset;
+        offset = hint - k;
     }
-    result
+
+    last_offset += 1;
+    while last_offset < offset {
+        let mid = last_offset + ((offset - last_offset) >> 1);
+        if sort_item_less(runtime, items.item(mid as usize), key, lessp_fn)? {
+            last_offset = mid + 1;
+        } else {
+            offset = mid;
+        }
+    }
+    Ok(offset as usize)
 }
 
-fn gallop_right(
-    runtime: &mut impl SortRuntime,
+fn gallop_right<R: SortRuntime>(
+    runtime: &mut R,
     key: SortItem,
-    items: &(impl SortStorage + ?Sized),
+    items: &(impl SortReadStorage + ?Sized),
     hint: usize,
     lessp_fn: SortPredicate,
-    retain_key: bool,
+    retain_key: ValueRooting,
 ) -> Result<usize, Flow> {
     // GNU keeps the gallop key in a C local across comparator calls. A
     // callback can remove its original vector slot and collect in that call.
-    let roots = retain_key.then(|| runtime.save_sort_roots());
-    if retain_key {
+    let mut roots = SortRootGuard::new(runtime, retain_key);
+    let runtime = roots.runtime();
+    if retain_key.is_required() {
         runtime.root_sort_slot(key.key);
     }
-    let result = (|| {
-        debug_assert!(!items.is_empty());
-        debug_assert!(hint < items.len());
+    debug_assert!(!items.is_empty());
+    debug_assert!(hint < items.len());
 
-        let n = items.len() as isize;
-        let hint = hint as isize;
-        let mut last_offset = 0isize;
-        let mut offset = 1isize;
+    let n = items.len() as isize;
+    let hint = hint as isize;
+    let mut last_offset = 0isize;
+    let mut offset = 1isize;
 
-        if sort_item_less(runtime, key, items.item(hint as usize), lessp_fn)? {
-            let max_offset = hint + 1;
-            while offset < max_offset {
-                if sort_item_less(runtime, key, items.item((hint - offset) as usize), lessp_fn)? {
-                    last_offset = offset;
-                    offset = (offset << 1) + 1;
-                } else {
-                    break;
-                }
-            }
-            if offset > max_offset {
-                offset = max_offset;
-            }
-            let k = last_offset;
-            last_offset = hint - offset;
-            offset = hint - k;
-        } else {
-            let max_offset = n - hint;
-            while offset < max_offset {
-                if sort_item_less(runtime, key, items.item((hint + offset) as usize), lessp_fn)? {
-                    break;
-                }
+    if sort_item_less(runtime, key, items.item(hint as usize), lessp_fn)? {
+        let max_offset = hint + 1;
+        while offset < max_offset {
+            if sort_item_less(runtime, key, items.item((hint - offset) as usize), lessp_fn)? {
                 last_offset = offset;
                 offset = (offset << 1) + 1;
-            }
-            if offset > max_offset {
-                offset = max_offset;
-            }
-            last_offset += hint;
-            offset += hint;
-        }
-
-        last_offset += 1;
-        while last_offset < offset {
-            let mid = last_offset + ((offset - last_offset) >> 1);
-            if sort_item_less(runtime, key, items.item(mid as usize), lessp_fn)? {
-                offset = mid;
             } else {
-                last_offset = mid + 1;
+                break;
             }
         }
-        Ok(offset as usize)
-    })();
-    if let Some(roots) = roots {
-        runtime.restore_sort_roots(roots);
+        if offset > max_offset {
+            offset = max_offset;
+        }
+        let k = last_offset;
+        last_offset = hint - offset;
+        offset = hint - k;
+    } else {
+        let max_offset = n - hint;
+        while offset < max_offset {
+            if sort_item_less(runtime, key, items.item((hint + offset) as usize), lessp_fn)? {
+                break;
+            }
+            last_offset = offset;
+            offset = (offset << 1) + 1;
+        }
+        if offset > max_offset {
+            offset = max_offset;
+        }
+        last_offset += hint;
+        offset += hint;
     }
-    result
+
+    last_offset += 1;
+    while last_offset < offset {
+        let mid = last_offset + ((offset - last_offset) >> 1);
+        if sort_item_less(runtime, key, items.item(mid as usize), lessp_fn)? {
+            offset = mid;
+        } else {
+            last_offset = mid + 1;
+        }
+    }
+    Ok(offset as usize)
 }
 
-fn merge_runs(
-    runtime: &mut impl SortRuntime,
-    items: &mut (impl SortStorage + ?Sized),
+fn merge_runs<R: SortRuntime>(
+    runtime: &mut R,
+    items: &mut (impl SortStorage<R::RootSlot> + ?Sized),
     base: usize,
     left_len: usize,
     right_len: usize,
@@ -657,7 +742,7 @@ fn merge_runs(
         &SortRange::new(items, left_base..left_base + left_len),
         0,
         lessp_fn,
-        items.needs_value_roots(),
+        items.value_rooting(),
     )?;
     left_base += skipped;
     left_len -= skipped;
@@ -671,7 +756,7 @@ fn merge_runs(
         &SortRange::new(items, right_base..right_base + right_len),
         right_len - 1,
         lessp_fn,
-        items.needs_value_roots(),
+        items.value_rooting(),
     )?;
     if right_len == 0 {
         return Ok(());
@@ -689,9 +774,9 @@ fn merge_runs(
 }
 
 #[allow(clippy::too_many_arguments)] // TimSort merge state follows the reference algorithm directly
-fn merge_lo(
-    runtime: &mut impl SortRuntime,
-    items: &mut (impl SortStorage + ?Sized),
+fn merge_lo<R: SortRuntime>(
+    runtime: &mut R,
+    items: &mut (impl SortStorage<R::RootSlot> + ?Sized),
     left_base: usize,
     mut left_len: usize,
     right_base: usize,
@@ -703,12 +788,19 @@ fn merge_lo(
     // Stack temporary roots belong to the whole sort; heap roots follow the
     // remaining relocation range marked by GNU merge_markmem (sort.c:538-543).
     let stack_temporary = items.retain_stack_temporary(runtime, &left);
-    let scoped_value_roots = items.needs_value_roots() && !stack_temporary;
-    let root_scope = scoped_value_roots.then(|| runtime.save_sort_roots());
-    let temp_roots = if scoped_value_roots {
-        runtime.root_sort_batch(&left)
+    let scoped_value_roots =
+        items.value_rooting().is_required() && stack_temporary.is_merge_scoped();
+    let merge_rooting = if scoped_value_roots {
+        ValueRooting::Required
     } else {
-        SortRootBatch::Slots(Vec::new())
+        ValueRooting::Unneeded
+    };
+    let mut root_scope = SortRootGuard::new(runtime, merge_rooting);
+    let runtime = root_scope.runtime();
+    let temp_roots = if scoped_value_roots {
+        runtime.root_sort_batch(left.iter().map(|item| item.value))
+    } else {
+        R::RootBatch::default()
     };
     let mut left_index = 0;
     let mut right_index = right_base;
@@ -790,7 +882,7 @@ fn merge_lo(
                     &left[left_index..left_index + left_len],
                     0,
                     lessp_fn,
-                    items.needs_value_roots(),
+                    items.value_rooting(),
                 )?;
                 acount = k;
                 if k != 0 {
@@ -831,7 +923,7 @@ fn merge_lo(
                     &SortRange::new(items, right_index..right_index + right_len),
                     0,
                     lessp_fn,
-                    items.needs_value_roots(),
+                    items.value_rooting(),
                 )?;
                 bcount = k;
                 if k != 0 {
@@ -875,16 +967,13 @@ fn merge_lo(
     if result.is_err() && items.has_merge_cleanup() {
         items.copy_from(dest, &left[left_index..left_index + left_len]);
     }
-    if let Some(scope) = root_scope {
-        runtime.restore_sort_roots(scope);
-    }
     result
 }
 
 #[allow(clippy::too_many_arguments)] // TimSort merge state follows the reference algorithm directly
-fn merge_hi(
-    runtime: &mut impl SortRuntime,
-    items: &mut (impl SortStorage + ?Sized),
+fn merge_hi<R: SortRuntime>(
+    runtime: &mut R,
+    items: &mut (impl SortStorage<R::RootSlot> + ?Sized),
     left_base: usize,
     mut left_len: usize,
     right_base: usize,
@@ -894,12 +983,19 @@ fn merge_hi(
 ) -> Result<(), Flow> {
     let right = items.snapshot(right_base..right_base + right_len);
     let stack_temporary = items.retain_stack_temporary(runtime, &right);
-    let scoped_value_roots = items.needs_value_roots() && !stack_temporary;
-    let root_scope = scoped_value_roots.then(|| runtime.save_sort_roots());
-    let temp_roots = if scoped_value_roots {
-        runtime.root_sort_batch(&right)
+    let scoped_value_roots =
+        items.value_rooting().is_required() && stack_temporary.is_merge_scoped();
+    let merge_rooting = if scoped_value_roots {
+        ValueRooting::Required
     } else {
-        SortRootBatch::Slots(Vec::new())
+        ValueRooting::Unneeded
+    };
+    let mut root_scope = SortRootGuard::new(runtime, merge_rooting);
+    let runtime = root_scope.runtime();
+    let temp_roots = if scoped_value_roots {
+        runtime.root_sort_batch(right.iter().map(|item| item.value))
+    } else {
+        R::RootBatch::default()
     };
     let mut dest = (right_base + right_len - 1) as isize;
     let mut left_index = (left_base + left_len - 1) as isize;
@@ -995,7 +1091,7 @@ fn merge_hi(
                         &SortRange::new(items, left_base..left_base + left_len),
                         left_len - 1,
                         lessp_fn,
-                        items.needs_value_roots(),
+                        items.value_rooting(),
                     )?;
                 acount = k;
                 if k != 0 {
@@ -1043,7 +1139,7 @@ fn merge_hi(
                         &right[..right_len],
                         right_len - 1,
                         lessp_fn,
-                        items.needs_value_roots(),
+                        items.value_rooting(),
                     )?;
                 bcount = k;
                 if k != 0 {
@@ -1096,9 +1192,6 @@ fn merge_hi(
     if result.is_err() && right_len > 0 && items.has_merge_cleanup() {
         items.copy_from(dest as usize + 1 - right_len, &right[..right_len]);
     }
-    if let Some(scope) = root_scope {
-        runtime.restore_sort_roots(scope);
-    }
     result
 }
 
@@ -1107,40 +1200,54 @@ fn merge_hi(
 /// a backing slice; short raw reads/writes permit recursive value< comparisons
 /// to inspect the same live vector. No heap reference spans a comparison, and
 /// the bulk mutation guard excludes collector safe points for this invocation.
-struct ValueLtStorage {
+#[derive(Debug)]
+struct ValueLtStorage<Slot> {
+    _root_backend: std::marker::PhantomData<Slot>,
     values: *mut Value,
     len: usize,
-    heap_temporary: bool,
+    temporary_storage: TemporaryStorage,
 }
-impl SortStorage for ValueLtStorage {
+impl<Slot> SortReadStorage for ValueLtStorage<Slot> {
     fn len(&self) -> usize {
         self.len
     }
     fn item(&self, index: usize) -> SortItem {
         assert!(index < self.len);
+        // SAFETY: slots belong to the guarded live vector backing; checked
+        // bounds and the pure comparator exclude relocation or collection.
         let value = unsafe { *self.values.add(index) };
         SortItem { value, key: value }
     }
+}
+impl<Slot> SortStorage<Slot> for ValueLtStorage<Slot> {
     fn put(&mut self, index: usize, item: SortItem) {
         assert!(index < self.len);
+        // SAFETY: slots belong to the guarded live vector backing; checked
+        // bounds and the pure comparator exclude relocation or collection.
         unsafe {
             *self.values.add(index) = item.value;
         }
     }
-    fn retain_stack_temporary(&mut self, _: &mut impl SortRuntime, source: &[SortItem]) -> bool {
-        if self.heap_temporary || source.len() > 256 {
-            self.heap_temporary = true;
-            false
+    fn retain_stack_temporary(
+        &mut self,
+        _: &mut impl SortRuntime<RootSlot = Slot>,
+        source: &[SortItem],
+    ) -> TemporaryRootRetention {
+        if self.temporary_storage == TemporaryStorage::Heap || source.len() > 256 {
+            self.temporary_storage = TemporaryStorage::Heap;
+            TemporaryRootRetention::Merge
         } else {
-            true
+            TemporaryRootRetention::WholeSort
         }
     }
     fn has_merge_cleanup(&self) -> bool {
-        self.heap_temporary
+        self.temporary_storage == TemporaryStorage::Heap
     }
     fn reverse(&mut self, range: Range<usize>) {
         assert!(range.end <= self.len);
         for offset in 0..range.len() / 2 {
+            // SAFETY: slots belong to the guarded live vector backing; checked
+            // bounds and the pure comparator exclude relocation or collection.
             unsafe {
                 std::ptr::swap(
                     self.values.add(range.start + offset),
@@ -1151,6 +1258,8 @@ impl SortStorage for ValueLtStorage {
     }
     fn copy_within(&mut self, range: Range<usize>, dest: usize) {
         assert!(range.end <= self.len && dest + range.len() <= self.len);
+        // SAFETY: slots belong to the guarded live vector backing; checked
+        // bounds and the pure comparator exclude relocation or collection.
         unsafe {
             std::ptr::copy(
                 self.values.add(range.start),
@@ -1162,30 +1271,33 @@ impl SortStorage for ValueLtStorage {
     fn copy_from(&mut self, dest: usize, source: &[SortItem]) {
         assert!(dest + source.len() <= self.len);
         for (index, item) in source.iter().enumerate() {
+            // SAFETY: slots belong to the guarded live vector backing; checked
+            // bounds and the pure comparator exclude relocation or collection.
             unsafe {
                 *self.values.add(dest + index) = item.value;
             }
         }
     }
 }
-pub(super) fn sort_value_lt_vector(
-    runtime: &mut impl SortRuntime,
+pub(super) fn sort_value_lt_vector<R: SortRuntime>(
+    runtime: &mut R,
     vector: Value,
-    reverse: bool,
+    reverse: SortDirection,
 ) -> Result<(), Flow> {
     // SAFETY: value< is pure and cannot collect or reallocate the vector.
     unsafe {
         crate::tagged::mutate::with_vector_slots_mut(vector, |values, len| {
-            let mut storage = ValueLtStorage {
+            let mut storage = ValueLtStorage::<R::RootSlot> {
+                _root_backend: std::marker::PhantomData,
                 len,
                 values,
-                heap_temporary: false,
+                temporary_storage: TemporaryStorage::Stack,
             };
-            if reverse {
+            if reverse.is_descending() {
                 storage.reverse(0..storage.len);
             }
             let result = gnu_style_sort_items(runtime, &mut storage, SortPredicate::ValueLt);
-            if result.is_ok() && reverse {
+            if result.is_ok() && reverse.is_descending() {
                 storage.reverse(0..storage.len);
             }
             result
