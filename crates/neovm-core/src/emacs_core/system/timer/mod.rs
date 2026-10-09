@@ -126,14 +126,14 @@ impl super::eval::Context {
     fn capture_gnu_timer_batch(&self) -> GnuTimerBatch {
         let ordinary = self
             .obarray
-            .symbol_value("timer-list")
-            .and_then(super::value::list_to_vec)
+            .symbol_value_copied("timer-list")
+            .and_then(|value| super::value::list_to_vec(&value))
             .unwrap_or_default();
 
         let idle = if self.current_idle_duration().is_some() {
             self.obarray
-                .symbol_value("timer-idle-list")
-                .and_then(super::value::list_to_vec)
+                .symbol_value_copied("timer-idle-list")
+                .and_then(|value| super::value::list_to_vec(&value))
                 .unwrap_or_default()
         } else {
             Vec::new()
@@ -158,8 +158,8 @@ impl super::eval::Context {
     ) -> Option<Duration> {
         let timers = self
             .obarray
-            .symbol_value("timer-list")
-            .and_then(super::value::list_to_vec)
+            .symbol_value_copied("timer-list")
+            .and_then(|value| super::value::list_to_vec(&value))
             .unwrap_or_default();
         let now = GnuTimerTimestamp::now();
 
@@ -174,8 +174,8 @@ impl super::eval::Context {
     pub(crate) fn next_idle_gnu_timer_timeout(&self) -> Option<Duration> {
         let idle_now = self.current_idle_timer_timestamp()?;
         self.obarray
-            .symbol_value("timer-idle-list")
-            .and_then(super::value::list_to_vec)
+            .symbol_value_copied("timer-idle-list")
+            .and_then(|value| super::value::list_to_vec(&value))
             .unwrap_or_default()
             .into_iter()
             .filter_map(pending_gnu_idle_timer)

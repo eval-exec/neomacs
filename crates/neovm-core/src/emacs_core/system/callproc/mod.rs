@@ -966,7 +966,7 @@ fn obarray_lisp_string_variable(
     name: &str,
     fallback: &str,
 ) -> Result<LispString, Flow> {
-    let value = obarray.symbol_value(name).copied().unwrap_or(Value::NIL);
+    let value = obarray.symbol_value_copied(name).unwrap_or(Value::NIL);
     if value.is_nil() {
         Ok(LispString::from_utf8(fallback))
     } else {

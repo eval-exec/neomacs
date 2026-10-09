@@ -579,7 +579,7 @@ impl Context {
     fn profiler_settings(&self) -> (usize, usize) {
         let bounded_setting = |name: &str, default: usize, maximum: usize| {
             self.obarray
-                .symbol_value(name)
+                .symbol_value_copied(name)
                 .and_then(|value| value.as_fixnum())
                 .map(|value| value.clamp(0, maximum as i64) as usize)
                 .unwrap_or(default)

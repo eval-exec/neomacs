@@ -2391,7 +2391,9 @@ fn validate_file_truename_counter(counter: &Value) -> Result<(), Flow> {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn temporary_file_directory_for_eval(eval: &Context) -> Option<crate::heap_types::LispString> {
-    let val = eval.obarray.symbol_value("temporary-file-directory")?;
+    let val = eval
+        .obarray
+        .symbol_value_copied("temporary-file-directory")?;
     val.as_lisp_string().cloned()
 }
 
@@ -3080,7 +3082,7 @@ fn raw_default_directory_value_for_eval(eval: &Context) -> Option<Value> {
 }
 
 fn invocation_directory_absolute_value_for_eval(eval: &Context) -> Option<Value> {
-    let value = eval.obarray.symbol_value("invocation-directory").copied()?;
+    let value = eval.obarray.symbol_value_copied("invocation-directory")?;
     let filename = value.as_lisp_string()?;
     if lisp_file_name_absolute_system_p(filename) {
         Some(value)
@@ -7151,7 +7153,7 @@ pub(crate) fn builtin_do_auto_save(
 
     let auto_save_visited = eval
         .obarray
-        .symbol_value("auto-save-visited-file-name")
+        .symbol_value_copied("auto-save-visited-file-name")
         .is_some_and(|v| v.is_truthy());
 
     // Collect buffer ids to process

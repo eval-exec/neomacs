@@ -573,7 +573,7 @@ pub(crate) fn builtin_print_preprocess(
     // GNU: does nothing if `print-circle' is nil.
     let print_circle = eval
         .obarray
-        .symbol_value("print-circle")
+        .symbol_value_copied("print-circle")
         .is_some_and(|v| v.is_truthy());
     if !print_circle {
         return Ok(Value::NIL);
@@ -581,16 +581,16 @@ pub(crate) fn builtin_print_preprocess(
 
     let print_gensym = eval
         .obarray
-        .symbol_value("print-gensym")
+        .symbol_value_copied("print-gensym")
         .is_some_and(|v| v.is_truthy());
     let print_continuous_numbering = eval
         .obarray
-        .symbol_value("print-continuous-numbering")
+        .symbol_value_copied("print-continuous-numbering")
         .is_some_and(|v| v.is_truthy());
 
     // GNU: `if (!HASH_TABLE_P (Vprint_number_table)) Vprint_number_table = make-hash-table :test eq`.
-    let table_value = match eval.obarray.symbol_value("print-number-table") {
-        Some(v) if v.is_hash_table() => *v,
+    let table_value = match eval.obarray.symbol_value_copied("print-number-table") {
+        Some(v) if v.is_hash_table() => v,
         _ => {
             let table = Value::hash_table(super::super::value::HashTableTest::Eq);
             eval.set_variable("print-number-table", table);
