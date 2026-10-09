@@ -1300,8 +1300,8 @@ struct SortItem {
     key: Value,
 }
 
-pub(crate) fn stable_sort_values_with(
-    runtime: &mut impl SortRuntime,
+pub(crate) fn stable_sort_values_with<R: SortRuntime>(
+    runtime: &mut R,
     values: &[Value],
     key_fn: Value,
     lessp_fn: Value,
@@ -1316,6 +1316,22 @@ pub(crate) fn stable_sort_values_with(
     let lessp_fn = runtime.resolve_sort_predicate(lessp_fn);
     if let Some(callable) = lessp_fn.callable() {
         runtime.root_sort_value(callable);
+    }
+
+    if key_fn.is_nil() {
+        // GNU fns.c:2381-2424 keeps one private value array for list sorts.
+        // Every value is rooted by the owning list invocation, including when
+        // a predicate changes the original list and collects its old elements.
+        let mut sorted = values.to_vec();
+        let mut storage = sort::UnkeyedListStorage::new(&mut sorted);
+        if reverse.is_descending() {
+            sort::SortStorage::<R::RootSlot>::reverse(&mut storage, 0..values.len());
+        }
+        gnu_style_sort_items(runtime, &mut storage, lessp_fn)?;
+        if reverse.is_descending() {
+            sort::SortStorage::<R::RootSlot>::reverse(&mut storage, 0..values.len());
+        }
+        return Ok(sorted);
     }
 
     let mut items: Vec<SortItem> = values

@@ -168,6 +168,70 @@ impl<Slot> SortStorage<Slot> for [SortItem] {
         self[dest..dest + source.len()].copy_from_slice(source);
     }
 }
+
+/// GNU fns.c:2381-2424 sorts an unkeyed list in a private value array.
+/// Keys equal values by construction; primary moves need only one handle.
+/// The owning list sort roots every input value for the complete invocation.
+/// Lisp can mutate the original list and its elements, never this Rust array.
+#[derive(Debug)]
+pub(super) struct UnkeyedListStorage<'values> {
+    values: &'values mut [Value],
+    _owner: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl<'values> UnkeyedListStorage<'values> {
+    pub(super) fn new(values: &'values mut [Value]) -> Self {
+        Self {
+            values,
+            _owner: std::marker::PhantomData,
+        }
+    }
+}
+
+const _: () = assert!(
+    std::mem::size_of::<UnkeyedListStorage<'static>>() == std::mem::size_of::<&mut [Value]>()
+);
+
+impl SortReadStorage for UnkeyedListStorage<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+    #[inline]
+    fn item(&self, index: usize) -> SortItem {
+        let value = self.values[index];
+        SortItem { value, key: value }
+    }
+}
+
+impl<Slot> SortStorage<Slot> for UnkeyedListStorage<'_> {
+    #[inline]
+    fn put(&mut self, index: usize, item: SortItem) {
+        self.values[index] = item.value;
+    }
+    #[inline]
+    fn has_merge_cleanup(&self) -> bool {
+        // Failed private scratch is discarded before any list write-back.
+        false
+    }
+    #[inline]
+    fn reverse(&mut self, range: Range<usize>) {
+        self.values[range].reverse();
+    }
+    #[inline]
+    fn copy_within(&mut self, range: Range<usize>, dest: usize) {
+        self.values.copy_within(range, dest);
+    }
+    #[inline]
+    fn copy_from(&mut self, dest: usize, source: &[SortItem]) {
+        for (slot, item) in self.values[dest..dest + source.len()]
+            .iter_mut()
+            .zip(source)
+        {
+            *slot = item.value;
+        }
+    }
+}
 /// A call-local borrowed view; it retains no heap borrow or shared cache.
 #[derive(Debug)]
 struct SortRange<'a, S: ?Sized> {
