@@ -2216,12 +2216,46 @@ fn scan_for_column(
     buffer_id: crate::buffer::BufferId,
     target: ColumnTarget,
 ) -> Result<ColumnScan, Flow> {
+    // This memo exists only for this scan. Property probes execute no Lisp;
+    // native composition registration does not modify character widths.
+    // Cache numeric non-ASCII widths, never display vectors or tab positions.
+    #[derive(Clone, Copy, Debug)]
+    struct CachedCharacterWidth {
+        code: u32,
+        width: usize,
+    }
+    #[derive(Debug)]
+    struct ColumnWidthMemo {
+        table: crate::encoding::CharacterWidthTable,
+        entries: [Option<CachedCharacterWidth>; 8],
+    }
+    impl ColumnWidthMemo {
+        fn from_context(ctx: &super::eval::Context) -> Self {
+            Self {
+                table: crate::encoding::CharacterWidthTable::from_context(ctx),
+                entries: [None; 8],
+            }
+        }
+        #[inline(always)]
+        fn width(&mut self, code: u32) -> usize {
+            let slot = ((code ^ (code >> 8)) as usize) % self.entries.len();
+            if let Some(entry) = self.entries[slot]
+                && entry.code == code
+            {
+                return entry.width;
+            }
+            let width = self.table.width(code);
+            self.entries[slot] = Some(CachedCharacterWidth { code, width });
+            width
+        }
+    }
+
     let (end_byte, goal) = match target {
         ColumnTarget::Position(pos) => (Some(pos), usize::MAX),
         ColumnTarget::Column(goal) => (None, goal.get()),
     };
     let control_rendering = std::cell::OnceCell::new();
-    let character_widths = std::cell::OnceCell::new();
+    let mut character_widths = None;
     let (mut scan, line_end, tab_width, line_end_policy, encoding) = {
         let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
             signal(
@@ -2436,7 +2470,7 @@ fn scan_for_column(
             } else {
                 match encoding {
                     super::casefiddle::CaseEncoding::Multibyte => character_widths
-                        .get_or_init(|| crate::encoding::CharacterWidthTable::from_context(ctx))
+                        .get_or_insert_with(|| ColumnWidthMemo::from_context(ctx))
                         .width(code),
                     super::casefiddle::CaseEncoding::Unibyte => 4,
                 }

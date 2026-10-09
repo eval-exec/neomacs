@@ -131,3 +131,24 @@ fn gdh_columns_live_character_width_table() {
         expect_test::expect!["OK (((15 (8 3) 20) (15 (8 3) 20)) 6 4 2 (1000 0 3 1000 1000))"],
     );
 }
+
+// GNU indent.c:805-816 reads live widths. Each scan must refresh its table
+// while repeated characters and memo hash collisions retain exact widths.
+#[test]
+fn gdh_columns_width_memo_live_calls_and_collisions() {
+    parity(
+        r#"(let ((char-width-table (copy-sequence char-width-table)))
+   (aset char-width-table ?é 7)
+   (aset char-width-table #x1e8 9)
+   (with-temp-buffer
+     (insert "éǨé")
+     (let ((first (current-column)))
+       (aset char-width-table ?é 3)
+       (goto-char 1) (current-column) (goto-char (point-max))
+       (let ((second (current-column)))
+         (aset char-width-table ?é 0)
+         (goto-char 1) (current-column) (goto-char (point-max))
+         (list first second (current-column))))))"#,
+        expect_test::expect!["OK (23 15 9)"],
+    );
+}
