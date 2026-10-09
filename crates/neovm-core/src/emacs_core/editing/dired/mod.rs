@@ -1020,10 +1020,9 @@ fn filter_by_completion_regexps(
 
 /// Extract the list of ignored extensions from the `completion-ignored-extensions` variable.
 fn get_ignored_extensions(obarray: &super::symbol::Obarray) -> Vec<LispString> {
-    let Some(val) = obarray.symbol_value("completion-ignored-extensions") else {
+    let Some(val) = obarray.symbol_value_copied("completion-ignored-extensions") else {
         return Vec::new();
     };
-    let val = *val;
     let Some(items) = list_to_vec(&val) else {
         return Vec::new();
     };

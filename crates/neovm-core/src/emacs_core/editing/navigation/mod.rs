@@ -139,7 +139,7 @@ fn dynamic_or_global_symbol_value(eval: &super::eval::Context, name: &str) -> Op
         return Some(v);
     }
 
-    eval.obarray.symbol_value(name).cloned()
+    eval.obarray.symbol_value_copied(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -261,8 +261,7 @@ pub(crate) fn check_point_motion_hooks(
     }
     let inhibit = eval
         .obarray
-        .symbol_value_id(inhibit_point_motion_hooks_sym())
-        .cloned()
+        .symbol_value_id_copied(inhibit_point_motion_hooks_sym())
         .unwrap_or(Value::NIL);
     if inhibit.is_truthy() {
         return Ok(());
@@ -437,8 +436,7 @@ pub(crate) fn adjust_for_intangible(
 ) -> EmacsBytePos {
     let inhibit = eval
         .obarray
-        .symbol_value_id(inhibit_point_motion_hooks_sym())
-        .cloned()
+        .symbol_value_id_copied(inhibit_point_motion_hooks_sym())
         .unwrap_or(Value::NIL);
     if inhibit.is_truthy() {
         return pos;

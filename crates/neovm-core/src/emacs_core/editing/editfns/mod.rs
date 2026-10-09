@@ -252,7 +252,7 @@ pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context)
             SymbolRedirect::Plainval => {
                 return ctx
                     .obarray
-                    .symbol_value_id(sym)
+                    .symbol_value_id_copied(sym)
                     .is_some_and(|v| !v.is_unbound() && v.is_truthy());
             }
             // The arm a booted session takes: the code-conversion work buffer
@@ -280,7 +280,7 @@ pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context)
                 }
                 return ctx
                     .obarray
-                    .symbol_value_id(sym)
+                    .symbol_value_id_copied(sym)
                     .is_some_and(|v| !v.is_unbound() && v.is_truthy());
             }
             SymbolRedirect::Varalias => {}
@@ -594,7 +594,7 @@ fn deactivate_mark_set_is_noop(
         return false;
     }
     match symbol.redirect() {
-        SymbolRedirect::Plainval => ctx.obarray.symbol_value_id(sym).copied() == Some(Value::T),
+        SymbolRedirect::Plainval => ctx.obarray.symbol_value_id_copied(sym) == Some(Value::T),
         SymbolRedirect::Localized => {
             ctx.buffers
                 .current_buffer()
@@ -965,8 +965,7 @@ fn combine_after_change_calls_active(ctx: &crate::emacs_core::eval::Context) -> 
             {
                 let default_val = ctx
                     .obarray
-                    .default_value_id(before_sym)
-                    .copied()
+                    .default_value_id_copied(before_sym)
                     .unwrap_or(Value::NIL);
                 return default_val.is_nil();
             }

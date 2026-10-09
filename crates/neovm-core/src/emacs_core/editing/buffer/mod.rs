@@ -353,7 +353,7 @@ pub(crate) fn builtin_find_buffer(eval: &mut super::eval::Context, args: Vec<Val
         .iter()
         .rev()
         .find_map(|frame| frame.get(&name_id).cloned())
-        .or_else(|| obarray.symbol_value(name).cloned())
+        .or_else(|| obarray.symbol_value_copied(name))
         .ok_or_else(|| signal(LispCondition::VoidVariable, vec![Value::symbol(name)]))?;
 
     let mut scan_order = Vec::new();

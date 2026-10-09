@@ -723,15 +723,26 @@ fn init_indent_vars_sets_defaults() {
     let mut obarray = super::super::symbol::Obarray::new();
     init_indent_vars(&mut obarray);
 
-    assert_eq!(obarray.symbol_value("tab-width").unwrap().as_int(), Some(8));
+    assert_eq!(
+        obarray.symbol_value_copied("tab-width").unwrap().as_int(),
+        Some(8)
+    );
     // `indent-tabs-mode' is a GNU `DEFVAR_BOOL' (`src/indent.c:2575') that
     // `bindings.el:1048' then makes buffer-local, so it is declared by
     // `defvar_bool::GNU_BOOL_VARIABLES' rather than here.
     assert_eq!(
-        obarray.symbol_value("standard-indent").unwrap().as_int(),
+        obarray
+            .symbol_value_copied("standard-indent")
+            .unwrap()
+            .as_int(),
         Some(4)
     );
-    assert!(obarray.symbol_value("tab-stop-list").unwrap().is_nil());
+    assert!(
+        obarray
+            .symbol_value_copied("tab-stop-list")
+            .unwrap()
+            .is_nil()
+    );
 
     // All should be special (dynamically bound)
     assert!(obarray.is_special("tab-width"));

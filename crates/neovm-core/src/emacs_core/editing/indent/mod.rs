@@ -1354,7 +1354,7 @@ pub(crate) fn dynamic_buffer_or_global_symbol_value(
     {
         return Some(value);
     }
-    obarray.symbol_value(name).copied()
+    obarray.symbol_value_copied(name)
 }
 
 fn tab_width_in_state(
@@ -2695,7 +2695,7 @@ pub(crate) fn compute_motion(eval: &mut super::eval::Context, args: Vec<Value>) 
     let tab_width = crate::buffer::buffer::lookup_buffer_slot("tab-width")
         .map(|info| buf.slots[info.offset.index()])
         .or_else(|| buf.get_buffer_local("tab-width"))
-        .or_else(|| obarray.symbol_value("tab-width").copied())
+        .or_else(|| obarray.symbol_value_copied("tab-width"))
         .and_then(|value: Value| match value.kind() {
             ValueKind::Fixnum(n) if n > 0 => Some(n as usize),
             _ => None,
