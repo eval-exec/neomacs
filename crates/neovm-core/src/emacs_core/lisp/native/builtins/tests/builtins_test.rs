@@ -9799,6 +9799,134 @@ fn large_length_predicates_signal_circular_list_like_gnu() {
     }
 }
 
+/// GNU `Fapply` measures the spread list with `list_length` and `concat`
+/// measures list arguments with `Flength` before using them, so a circular
+/// list signals `circular-list` instead of growing the argument vector
+/// without bound (apply) or spinning without a quit check (concat).
+#[test]
+fn apply_and_concat_signal_circular_list_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::Context::new();
+    for (src, expected) in [
+        (
+            "(let ((c (list 1 2 3))) (setcdr (nthcdr 2 c) c) (condition-case e (apply '+ 1 c) (error (car e))))",
+            "circular-list",
+        ),
+        (
+            "(let ((c (list '+ 1 2))) (setcdr (nthcdr 2 c) (cdr c)) (condition-case e (apply c) (error (car e))))",
+            "circular-list",
+        ),
+        (
+            "(let ((c (list 97 98))) (setcdr (cdr c) c) (condition-case e (concat \"x\" c) (error (car e))))",
+            "circular-list",
+        ),
+        (
+            "(condition-case e (apply '+ 1 '(2 . 3)) (error e))",
+            "(wrong-type-argument listp 3)",
+        ),
+        (
+            "(condition-case e (concat \"a\" '(97 98 . 99)) (error e))",
+            "(wrong-type-argument listp 99)",
+        ),
+        (
+            "(let ((c (list 97))) (setcdr c c) (condition-case e (concat 'foo c) (error e)))",
+            "(wrong-type-argument sequencep foo)",
+        ),
+        (
+            "(let ((c (list 97))) (setcdr c c) (condition-case e (concat '(a) c) (error e)))",
+            "(wrong-type-argument characterp a)",
+        ),
+        (
+            "(let ((c (list 97))) (setcdr c c) (condition-case e (concat [a] c) (error e)))",
+            "(wrong-type-argument characterp a)",
+        ),
+        (
+            "(let ((c (list 97))) (setcdr c c) (condition-case e (concat (make-bool-vector 1 nil) c) (error (car e))))",
+            "wrong-type-argument",
+        ),
+        (
+            "(condition-case e (concat '(a . 3) 'foo) (error e))",
+            "(wrong-type-argument listp 3)",
+        ),
+        ("(apply '+ 1 '(2 3))", "6"),
+        ("(concat \"a\" '(98 99) [100])", "\"abcd\""),
+    ] {
+        let value = ev.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
+        assert_eq!(
+            crate::emacs_core::print_value_with_eval(&ev, &value),
+            expected,
+            "{src}"
+        );
+    }
+}
+
+/// GNU `list_length` (behind `length`, `mapcar`'s `Flength`, `Fapply` and
+/// `concat`) walks with `FOR_EACH_TAIL`, whose tortoise stays on the head
+/// for the first 4096 steps and then jumps to the tail at each power of two
+/// (lisp.h `FOR_EACH_TAIL_STEP_CYCLEP`); `circular-list`'s datum is the
+/// tail that met it. So a cycle through the head reports the original list
+/// (`eq`), while a prefixed or long cycle reports a later cons. For each
+/// shape (PREFIX CYCLE) the row holds, per caller, the index of the
+/// signalled cons, whether it is `eq` to the list and the datum count.
+/// Callers: interpreted `length`, `apply` alone and with a fixed argument,
+/// `concat`, `mapcar`, then GNU-compiled `concat` (Bconcat2), `apply`
+/// (Bcall) and `length` (Blength). Expected value from GNU 32.0.50.
+#[test]
+fn list_length_callers_signal_gnu_circular_list_data() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::Context::new();
+    let src = r#"(let ((callers
+       (list (lambda (l) (length l))
+             (lambda (l) (apply '+ l))
+             (lambda (l) (apply '+ 1 l))
+             (lambda (l) (concat "x" l))
+             (lambda (l) (mapcar 'identity l))
+             (make-byte-code 257 "\300\1P\207" ["x"] 3)
+             (make-byte-code 257 "\300\301\302\3#\207" [apply + 1] 5)
+             (make-byte-code 257 "G\207" [] 2)))
+      (shapes '((0 1) (0 3) (1 2) (2 3) (0 5000) (3 5000) (4096 1) (4097 3)))
+      (results nil))
+  (while shapes
+    (let ((prefix (car (car shapes)))
+          (cycle (car (cdr (car shapes))))
+          (row nil)
+          (fns callers))
+      (while fns
+        (let ((l (make-list (+ prefix cycle) 97)))
+          (setcdr (nthcdr (+ prefix cycle -1) l) (nthcdr prefix l))
+          (setq row
+                (cons (condition-case e
+                          (funcall (car fns) l)
+                        (circular-list
+                         (let ((i 0) (tail l))
+                           (while (and (< i 20000) (null (eq tail (car (cdr e)))))
+                             (setq tail (cdr tail) i (1+ i)))
+                           (list i (eq l (car (cdr e))) (length (cdr e))))))
+                      row)))
+        (setq fns (cdr fns)))
+      (setq results (cons (nreverse row) results)))
+    (setq shapes (cdr shapes)))
+  (nreverse results))"#;
+    let row = |datum: &str| format!("({})", vec![datum; 8].join(" "));
+    let gnu = format!(
+        "({})",
+        [
+            "(0 t 1)",
+            "(0 t 1)",
+            "(2 nil 1)",
+            "(4 nil 1)",
+            "(3192 nil 1)",
+            "(3192 nil 1)",
+            "(4096 nil 1)",
+            "(4097 nil 1)",
+        ]
+        .map(row)
+        .join(" ")
+    );
+    let value = ev.eval_str(src).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(crate::emacs_core::print_value_with_eval(&ev, &value), gnu);
+}
+
 #[test]
 fn vconcat_signals_circular_list_like_gnu() {
     crate::test_utils::init_test_tracing();
