@@ -1323,13 +1323,13 @@ pub(crate) fn stable_sort_values_with<R: SortRuntime>(
         // Every value is rooted by the owning list invocation, including when
         // a predicate changes the original list and collects its old elements.
         let mut sorted = values.to_vec();
-        let mut storage = sort::UnkeyedListStorage::new(&mut sorted);
+        let mut storage = sort::UnkeyedListStorage::<R::RootSlot>::new(&mut sorted);
         if reverse.is_descending() {
-            sort::SortStorage::<R::RootSlot>::reverse(&mut storage, 0..values.len());
+            storage.reverse(0..values.len());
         }
         gnu_style_sort_items(runtime, &mut storage, lessp_fn)?;
         if reverse.is_descending() {
-            sort::SortStorage::<R::RootSlot>::reverse(&mut storage, 0..values.len());
+            storage.reverse(0..values.len());
         }
         return Ok(sorted);
     }

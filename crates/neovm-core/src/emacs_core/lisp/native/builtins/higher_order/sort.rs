@@ -174,25 +174,28 @@ impl<Slot> SortStorage<Slot> for [SortItem] {
 /// The owning list sort roots every input value for the complete invocation.
 /// Lisp can mutate the original list and its elements, never this Rust array.
 #[derive(Debug)]
-pub(super) struct UnkeyedListStorage<'values> {
+pub(super) struct UnkeyedListStorage<'values, Slot> {
     values: &'values mut [Value],
+    _root_backend: std::marker::PhantomData<Slot>,
     _owner: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-impl<'values> UnkeyedListStorage<'values> {
+impl<'values, Slot> UnkeyedListStorage<'values, Slot> {
     pub(super) fn new(values: &'values mut [Value]) -> Self {
         Self {
             values,
+            _root_backend: std::marker::PhantomData,
             _owner: std::marker::PhantomData,
         }
     }
 }
 
 const _: () = assert!(
-    std::mem::size_of::<UnkeyedListStorage<'static>>() == std::mem::size_of::<&mut [Value]>()
+    std::mem::size_of::<UnkeyedListStorage<'static, super::SortRootSlot>>()
+        == std::mem::size_of::<&mut [Value]>()
 );
 
-impl SortReadStorage for UnkeyedListStorage<'_> {
+impl<Slot> SortReadStorage for UnkeyedListStorage<'_, Slot> {
     #[inline]
     fn len(&self) -> usize {
         self.values.len()
@@ -204,7 +207,7 @@ impl SortReadStorage for UnkeyedListStorage<'_> {
     }
 }
 
-impl<Slot> SortStorage<Slot> for UnkeyedListStorage<'_> {
+impl<Slot> SortStorage<Slot> for UnkeyedListStorage<'_, Slot> {
     #[inline]
     fn put(&mut self, index: usize, item: SortItem) {
         self.values[index] = item.value;
