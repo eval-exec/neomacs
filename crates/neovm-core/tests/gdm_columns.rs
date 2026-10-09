@@ -96,3 +96,38 @@ fn gdm_columns_selective_display_glyph_interactions() {
         ]],
     );
 }
+
+// GNU indent.c:805-816; buffer.h:1708-1715. Multibyte widths read the live
+// char-width-table; display vectors take precedence and unibyte high bytes
+// remain octal columns. Expectations are refreshed from GNU Emacs 31.1.
+#[test]
+fn gdh_columns_live_character_width_table() {
+    parity(
+        r#" (let ((char-width-table (copy-sequence char-width-table)))
+   (aset char-width-table ?é 7)
+   (aset char-width-table ?中 0)
+   (aset char-width-table #x3fff80 6)
+   (aset char-width-table ?a 9)
+   (list
+    (mapcar (lambda (props)
+              (with-temp-buffer
+                (insert "aé中é")
+                (when props (put-text-property 1 2 'face 'bold))
+                (list (current-column)
+                      (progn (goto-char 1) (list (move-to-column 3) (point)))
+                      (progn (goto-char (point-max)) (indent-to 20) (current-column)))))
+            '(nil t))
+    (with-temp-buffer (insert (string #x3fff80)) (current-column))
+    (with-temp-buffer (set-buffer-multibyte nil) (insert (unibyte-string 233)) (current-column))
+    (with-temp-buffer
+      (setq buffer-display-table (make-display-table))
+      (aset buffer-display-table ?é [?x ?y])
+      (insert "é") (current-column))
+    (mapcar (lambda (width)
+              (let ((char-width-table (copy-sequence char-width-table)))
+                (aset char-width-table ?é width)
+                (with-temp-buffer (insert "é") (current-column))))
+            '(-1 0 3 1000 1001))))"#,
+        expect_test::expect!["OK (((15 (8 3) 20) (15 (8 3) 20)) 6 4 2 (1000 0 3 1000 1000))"],
+    );
+}

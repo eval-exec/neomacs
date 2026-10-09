@@ -649,7 +649,7 @@ pub(crate) fn char_width_for_code_with_display_table(
 /// GNU's CHARACTER_WIDTH (src/buffer.h:1708-1715) gives printable ASCII its fixed
 /// width, then consults the live char-width-table for non-ASCII characters.
 pub(crate) struct CharacterWidthPolicy<'ctx> {
-    width_table: std::cell::OnceCell<Option<Value>>,
+    width_table: std::cell::OnceCell<CharacterWidthTable>,
     display_table: Option<Value>,
     control: std::cell::OnceCell<ControlCharacterDisplay>,
     tab_width: std::cell::OnceCell<usize>,
@@ -709,24 +709,8 @@ impl<'ctx> CharacterWidthPolicy<'ctx> {
             },
             _ => self
                 .width_table
-                .get_or_init(|| {
-                    self.context
-                        .eval_symbol_by_id(intern("char-width-table"))
-                        .ok()
-                        .filter(crate::emacs_core::chartable::is_char_table)
-                })
-                .and_then(|table| {
-                    crate::emacs_core::chartable::ct_lookup(&table, i64::from(code)).ok()
-                })
-                .and_then(|width| width.as_fixnum())
-                .map(|width| {
-                    if (0..=1000).contains(&width) {
-                        width as usize
-                    } else {
-                        1000
-                    }
-                })
-                .unwrap_or_else(|| char_width_for_code_without_display_table(i64::from(code))),
+                .get_or_init(|| CharacterWidthTable::from_context(self.context))
+                .width(code),
         }
     }
 
@@ -745,6 +729,44 @@ impl<'ctx> CharacterWidthPolicy<'ctx> {
                 .sum();
         }
         self.character_width(code)
+    }
+}
+
+/// Call-local view of GNU's live non-ASCII character widths. Table entries
+/// remain live; only the table identity is captured. Used by scans without Lisp
+/// callbacks. Value confines this view to its owning mutator; no shared cache
+/// of Lisp state is introduced.
+#[derive(Debug)]
+pub(crate) struct CharacterWidthTable {
+    table: Option<Value>,
+}
+
+impl CharacterWidthTable {
+    pub(crate) fn from_context(ctx: &Context) -> Self {
+        // Only the process-global symbol identity is shared among mutators.
+        static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+        let symbol = *SYMBOL.get_or_init(|| intern("char-width-table"));
+        Self {
+            table: ctx
+                .eval_symbol_by_id(symbol)
+                .ok()
+                .filter(crate::emacs_core::chartable::is_char_table),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn width(&self, code: u32) -> usize {
+        self.table
+            .and_then(|table| crate::emacs_core::chartable::ct_lookup(&table, i64::from(code)).ok())
+            .and_then(|width| width.as_fixnum())
+            .map(|width| {
+                if (0..=1000).contains(&width) {
+                    width as usize
+                } else {
+                    1000
+                }
+            })
+            .unwrap_or_else(|| char_width_for_code_without_display_table(i64::from(code)))
     }
 }
 

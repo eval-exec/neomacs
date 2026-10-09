@@ -2221,6 +2221,7 @@ fn scan_for_column(
         ColumnTarget::Column(goal) => (None, goal.get()),
     };
     let control_rendering = std::cell::OnceCell::new();
+    let character_widths = std::cell::OnceCell::new();
     let (mut scan, line_end, tab_width, line_end_policy, encoding) = {
         let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
             signal(
@@ -2433,7 +2434,12 @@ fn scan_for_column(
                     .get_or_init(|| control_rendering_in_state(buf))
                     .width()
             } else {
-                buffer_char_display_width(buf, scan_pos, code)
+                match encoding {
+                    super::casefiddle::CaseEncoding::Multibyte => character_widths
+                        .get_or_init(|| crate::encoding::CharacterWidthTable::from_context(ctx))
+                        .width(code),
+                    super::casefiddle::CaseEncoding::Unibyte => 4,
+                }
             };
             (code, char_len, width)
         };
