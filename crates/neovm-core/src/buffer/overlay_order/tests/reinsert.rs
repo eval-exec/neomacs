@@ -46,15 +46,19 @@ fn conversion_reinsert_preserves_exact_gnu_topology_without_changing_arena_or_id
             .collect();
         let mut reference = GnuOverlayOrder::new();
         for identity in 0..count {
-            assert!(reference.insert_by(identity, |existing| {
-                starts[&identity].cmp(&starts[&existing])
-            }));
+            assert!(
+                reference
+                    .insert_by(identity, |existing| {
+                        starts[&identity].cmp(&starts[&existing])
+                    })
+                    .is_ok()
+            );
         }
         // Include vacant slots, so a conversion cannot silently select a
         // different already-free slot or reorder the owner's existing free list.
         if count > 3 {
             for identity in (0..count).filter(|identity| identity % 7 == 0) {
-                assert!(reference.remove(identity));
+                assert!(reference.remove(identity).is_ok());
                 starts.remove(&identity);
             }
         }
@@ -91,13 +95,17 @@ fn conversion_reinsert_preserves_exact_gnu_topology_without_changing_arena_or_id
                 // Reference is the existing GNU-compatible remove/insert
                 // implementation. Reuse must preserve full topology, because
                 // future front-advancing edits expose pre-order, not just rank.
-                assert!(reference.remove(identity));
+                assert!(reference.remove(identity).is_ok());
                 starts.insert(identity, new_begin);
                 assert!(
-                    reference.insert_by(identity, |existing| new_begin.cmp(&starts[&existing]))
+                    reference
+                        .insert_by(identity, |existing| new_begin.cmp(&starts[&existing]))
+                        .is_ok()
                 );
                 assert!(
-                    retained.reinsert_by(identity, |existing| new_begin.cmp(&starts[&existing]))
+                    retained
+                        .reinsert_by(identity, |existing| new_begin.cmp(&starts[&existing]))
+                        .is_ok()
                 );
                 reference.assert_invariants();
                 retained.assert_invariants();
@@ -126,9 +134,12 @@ fn conversion_reinsert_preserves_exact_gnu_topology_without_changing_arena_or_id
 #[test]
 fn conversion_reinsert_missing_identity_keeps_the_tree_untouched() {
     let mut order = GnuOverlayOrder::<u16>::new();
-    assert!(order.insert_by(1, |_| Ordering::Equal));
+    assert!(order.insert_by(1, |_| Ordering::Equal).is_ok());
     let before = node_slots(&order);
-    assert!(!order.reinsert_by(2, |_| panic!("missing identity must not compare")));
+    assert_eq!(
+        order.reinsert_by(2, |_| panic!("missing identity must not compare")),
+        Err(GnuOverlayOrderError::MissingIdentity)
+    );
     assert_eq!(node_slots(&order), before);
     order.assert_invariants();
 }
