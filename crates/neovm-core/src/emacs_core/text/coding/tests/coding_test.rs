@@ -1965,8 +1965,8 @@ fn text_quoting_style_variable_defaults_to_nil() {
     crate::test_utils::init_test_tracing();
     let eval = crate::emacs_core::eval::Context::new();
     assert_eq!(
-        eval.obarray.symbol_value("text-quoting-style"),
-        Some(&Value::NIL)
+        eval.obarray.symbol_value_copied("text-quoting-style"),
+        Some(Value::NIL)
     );
 }
 

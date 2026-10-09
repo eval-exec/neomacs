@@ -1850,8 +1850,7 @@ fn assq_cell_eq(key: Value, list: Value) -> Result<Value, Flow> {
 fn char_code_property_cell(eval: &Context, prop: Value) -> Result<Value, Flow> {
     let alist = eval
         .obarray
-        .symbol_value("char-code-property-alist")
-        .copied()
+        .symbol_value_copied("char-code-property-alist")
         .unwrap_or(Value::NIL);
     assq_cell_eq(prop, alist)
 }

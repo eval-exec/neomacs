@@ -409,9 +409,7 @@ pub(crate) fn builtin_set_standard_case_table(
 }
 
 fn ensure_standard_case_table_object_in_state(obarray: &mut super::symbol::Obarray) -> EvalResult {
-    if let Some(value) = obarray
-        .symbol_value_id(standard_case_table_object_symbol_id())
-        .cloned()
+    if let Some(value) = obarray.symbol_value_id_copied(standard_case_table_object_symbol_id())
         && is_case_table(&value)
     {
         return Ok(value);

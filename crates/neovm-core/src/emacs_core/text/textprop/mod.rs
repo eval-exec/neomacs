@@ -1322,7 +1322,7 @@ pub(crate) fn verify_text_read_only_emacs_byte_range_in_state(
     let iro = inhibit_read_only_sym();
     let inhibit = buf
         .get_buffer_local_by_sym_id_gated(iro, obarray.is_localized(iro))
-        .unwrap_or_else(|| obarray.symbol_value_id(iro).copied().unwrap_or(Value::NIL));
+        .unwrap_or_else(|| obarray.symbol_value_id_copied(iro).unwrap_or(Value::NIL));
     // INTERVAL_GENERALLY_WRITABLE_P: when inhibit-read-only is non-nil
     // and not a list, every interval is writable regardless of its
     // read-only property.  GNU intervals.h:210.
@@ -1453,7 +1453,7 @@ pub(crate) fn verify_text_read_only_for_insert_in_state(
     let iro = inhibit_read_only_sym();
     let inhibit = buf
         .get_buffer_local_by_sym_id_gated(iro, obarray.is_localized(iro))
-        .unwrap_or_else(|| obarray.symbol_value_id(iro).copied().unwrap_or(Value::NIL));
+        .unwrap_or_else(|| obarray.symbol_value_id_copied(iro).unwrap_or(Value::NIL));
     // inhibit-read-only non-nil and not a list: every modification is allowed.
     if !inhibit.is_nil() && !inhibit.is_cons() {
         return Ok(());
