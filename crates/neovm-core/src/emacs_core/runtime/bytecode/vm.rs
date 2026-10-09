@@ -1468,7 +1468,7 @@ fn parse_vm_stack_return_knob(value: Option<&str>) -> bool {
 
 /// An immutable process-wide policy, safely published to all mutators by
 /// OnceLock. No Lisp state or Context-owned storage is retained here.
-#[inline]
+#[inline(always)]
 fn vm_stack_return_after_push_enabled() -> bool {
     #[cfg(test)]
     if let Some(enabled) = VM_STACK_RETURN_TEST_OVERRIDE.with(std::cell::Cell::get) {
@@ -1849,7 +1849,7 @@ fn logxor_sym_id() -> SymId {
     *LOGXOR.get_or_init(|| intern("logxor"))
 }
 
-#[inline]
+#[inline(always)]
 fn fillarray_sym_id() -> SymId {
     static FILLARRAY: OnceLock<SymId> = OnceLock::new();
     *FILLARRAY.get_or_init(|| intern("fillarray"))
@@ -2121,6 +2121,7 @@ impl FrameArgumentCopy {
     /// wins for ordinary Lisp arities because a libc `memmove` dispatch costs
     /// more than a handful of already-capacity-checked stores.  Retain the
     /// bulk path for unusually wide generated functions.
+    #[inline(always)]
     const fn for_count(count: usize) -> Self {
         const SCALAR_COPY_MAX: usize = 8;
         match count {
@@ -3176,6 +3177,7 @@ impl<'a> Vm<'a> {
     /// environments and `&rest` construction still use the established
     /// recursive path until their unwind transitions are represented in the
     /// frame state as well.
+    #[inline(never)]
     fn can_enter_interpreter_frame_iteratively(
         &self,
         func: &ByteCodeFunction,
@@ -3364,6 +3366,7 @@ impl<'a> Vm<'a> {
     /// interpreter driver.  A nonlocal exit is offered to each suspended
     /// caller in turn, exactly as recursive Rust returns used to do, but the
     /// unwind is represented as data rather than host-stack control flow.
+    #[inline(never)]
     fn complete_interpreter_frame_chain(
         &mut self,
         callers: &mut InterpreterCallerStack,
@@ -6178,7 +6181,7 @@ impl<'a> Vm<'a> {
         id == fillarray_sym_id()
     }
 
-    #[inline]
+    #[inline(never)]
     fn writeback_mutating_callable_names(
         &self,
         func_val: &Value,
@@ -6243,6 +6246,7 @@ impl<'a> Vm<'a> {
     /// Only `fillarray` remains, and only because it is reached through a
     /// function CELL a user could have redefined; our own `fillarray` mutates
     /// in place and returns its argument too.
+    #[inline(never)]
     fn maybe_writeback_mutating_first_arg(
         &mut self,
         called_name: &str,
@@ -6378,6 +6382,7 @@ impl<'a> Vm<'a> {
     /// Fast path for variable reads matching GNU bytecode.c:626-647
     /// Bvarref: if the symbol is a plain global with a bound value,
     /// read the value cell directly without full symbolic resolution.
+    #[inline(never)]
     fn fast_path_var_ref(&mut self, name_id: SymId) -> EvalResult {
         let ob = &self.ctx.obarray;
         let sym = ob.get_by_id(name_id).ok_or_else(|| {
@@ -6584,6 +6589,7 @@ impl<'a> Vm<'a> {
     ///
     /// Like `Bvarref`, bytecode assignment is dynamic.  Lexical bytecode
     /// locals are stack slots, not `varset` targets.
+    #[inline(never)]
     fn assign_var_id(&mut self, name_id: SymId, value: Value) -> Result<(), Flow> {
         // The general `Bvarset`. Both callers (the `Op::VarSet` arm and the JIT
         // `varset` shim) have already offered the write to
@@ -7050,6 +7056,7 @@ impl<'a> Vm<'a> {
             .pop_bytecode_backtrace_frame_with_result(bt_count, result)
     }
 
+    #[inline(never)]
     fn call_function(&mut self, func_val: Value, args: impl Into<LispArgVec>) -> EvalResult {
         let args = args.into();
         let bt_count = self.ctx.specpdl.len();
@@ -7972,6 +7979,7 @@ impl<'a> Vm<'a> {
         })
     }
 
+    #[inline(never)]
     fn call_function_from_stack_args(
         &mut self,
         func_val: Value,
@@ -8033,6 +8041,7 @@ impl<'a> Vm<'a> {
     /// one `LispArgVec` and takes the generic owned path — those calls
     /// either already went through `call_resolved_builtin_from_stack_args`
     /// or are cold.
+    #[inline(never)]
     fn call_function_untraced_from_stack(
         &mut self,
         func_val: Value,
@@ -8174,6 +8183,7 @@ impl<'a> Vm<'a> {
         Some(result)
     }
 
+    #[inline(never)]
     fn call_resolved_builtin_from_stack_args(
         ctx: &mut crate::emacs_core::eval::Context,
         func_val: Value,
@@ -8234,7 +8244,7 @@ impl<'a> Vm<'a> {
     /// Everything else matches the traced twin: the same resolved callee, the
     /// same arity signal, the same `ManySlice` fixnum fast values, the same
     /// signal dispatch on the way out.
-    #[inline]
+    #[inline(never)]
     fn call_arith_builtin_from_stack_args(
         &mut self,
         func: &ByteCodeFunction,
@@ -8763,6 +8773,7 @@ impl<'a> Vm<'a> {
     /// The corollary is the useful part: the way to close the 2.43x gap against
     /// GNU's `exec_byte_code` is not to inline more into this loop. Measure
     /// cycles, not just instructions, for anything that changes its size.
+    #[inline(never)]
     fn resolve_stack_call_target(&mut self, func_val: Value) -> ResolvedStackCallTarget {
         match func_val.kind() {
             ValueKind::Veclike(VecLikeType::ByteCode) => ResolvedStackCallTarget::ByteCode {
@@ -9697,6 +9708,7 @@ fn vm_switch_target(ht: &LispHashTable, dispatch: Value, swp: bool) -> Option<Va
     ht.switch_target(dispatch, swp)
 }
 
+#[inline(never)]
 fn resolve_switch_target(func: &ByteCodeFunction, raw_addr: i64) -> Result<usize, Flow> {
     let raw_addr = usize::try_from(raw_addr).map_err(|_| {
         signal(

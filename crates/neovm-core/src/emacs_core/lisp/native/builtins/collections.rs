@@ -26,6 +26,7 @@ pub(crate) fn builtin_aref(args: Vec<Value>) -> EvalResult {
     builtin_aref_values(args[0], args[1])
 }
 
+#[inline(always)]
 pub(crate) fn builtin_aref_2(
     _eval: &mut super::eval::Context,
     array: Value,
@@ -34,6 +35,7 @@ pub(crate) fn builtin_aref_2(
     builtin_aref_values(array, index)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_aref_values(array: Value, index: Value) -> EvalResult {
     let idx_fixnum = expect_fixnum(&index)?;
     match array.kind() {
@@ -172,6 +174,7 @@ pub(crate) fn builtin_aset(args: Vec<Value>) -> EvalResult {
 }
 
 /// `aset` reading its arguments in place.
+#[inline(never)]
 pub(crate) fn builtin_aset_args(args: &[Value]) -> EvalResult {
     expect_args("aset", args, 3)?;
     // GNU src/data.c:Faset starts with CHECK_FIXNUM (idx) before checking

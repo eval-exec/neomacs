@@ -14,6 +14,7 @@ impl Context {
         self.condition_stack.pop()
     }
 
+    #[inline(always)]
     pub(crate) fn truncate_condition_stack(&mut self, len: usize) {
         self.condition_stack.truncate(len);
     }
@@ -91,10 +92,12 @@ impl Context {
         index
     }
 
+    #[inline(always)]
     pub(crate) fn condition_stack_len(&self) -> usize {
         self.condition_stack.len()
     }
 
+    #[inline(always)]
     pub(crate) fn allocate_resume_id(&mut self) -> u64 {
         let resume_id = self.next_resume_id;
         self.next_resume_id += 1;

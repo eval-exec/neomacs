@@ -243,6 +243,7 @@ pub(crate) static CBSYM_SPEC_GENERIC_COUNT: AtomicU64 = AtomicU64::new(0);
 /// longer complete the yield protocol its shim had begun, so the blocked
 /// thread's re-dispatch is abandoned along with the rest of that extent and
 /// the panic error is what propagates. Accepted, documented trade-off.
+#[inline(never)]
 pub fn take_pending_flow() -> Option<Flow> {
     let flow = PENDING_FLOW.with(|p| p.borrow_mut().take());
     match PENDING_SHIM_PANIC.with(|p| p.borrow_mut().take()) {

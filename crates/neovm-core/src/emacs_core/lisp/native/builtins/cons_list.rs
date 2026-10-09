@@ -16,7 +16,7 @@ static ASSOC_RESOLVED: LazyLock<bool> =
 /// A scan can keep this choice for its whole duration only when it runs no
 /// Lisp callbacks. Captures are thread scoped: another mutator's scope does
 /// not change which reads belong to the current thread.
-#[inline]
+#[inline(always)]
 fn unobserved_list_scan() -> bool {
     !crate::tagged::collection_reads::reads_need_observation()
 }
@@ -532,6 +532,7 @@ fn cdr_safe_value(val: &Value) -> Value {
     }
 }
 
+#[inline(always)]
 pub(crate) fn builtin_setcar_2(
     _eval: &mut super::eval::Context,
     cons: Value,
@@ -540,6 +541,7 @@ pub(crate) fn builtin_setcar_2(
     builtin_setcar_values(cons, new_car)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_setcar_values(cons: Value, new_car: Value) -> EvalResult {
     match cons.kind() {
         ValueKind::Cons => {
@@ -553,6 +555,7 @@ pub(crate) fn builtin_setcar_values(cons: Value, new_car: Value) -> EvalResult {
     }
 }
 
+#[inline(always)]
 pub(crate) fn builtin_setcdr_2(
     _eval: &mut super::eval::Context,
     cons: Value,
@@ -561,6 +564,7 @@ pub(crate) fn builtin_setcdr_2(
     builtin_setcdr_values(cons, new_cdr)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_setcdr_values(cons: Value, new_cdr: Value) -> EvalResult {
     match cons.kind() {
         ValueKind::Cons => {
@@ -584,10 +588,12 @@ pub(crate) fn builtin_length(args: Vec<Value>) -> EvalResult {
     builtin_length_value(args[0])
 }
 
+#[inline(always)]
 pub(crate) fn builtin_length_1(_eval: &mut super::eval::Context, sequence: Value) -> EvalResult {
     builtin_length_value(sequence)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_length_value(sequence: Value) -> EvalResult {
     match sequence.kind() {
         ValueKind::Nil => Ok(Value::fixnum(0)),
@@ -820,6 +826,7 @@ fn builtin_nth_values_scan<const OBSERVED: bool>(n_value: Value, list: Value) ->
 /// (a funcall or interpreted `nth`, [`builtin_nth_values`]) signals with the
 /// whole list. Byte-compiled `(nth 2 '(a . b))` is `(wrong-type-argument
 /// listp b)` in GNU. Any other count is `Fnth`'s.
+#[inline(never)]
 pub(crate) fn bytecode_nth_values(n_value: Value, list: Value) -> EvalResult {
     if unobserved_list_scan() {
         bytecode_nth_values_scan::<false>(n_value, list)
@@ -875,6 +882,7 @@ fn expect_nthcdr_count(value: Value) -> Result<NthcdrCount, Flow> {
     }
 }
 
+#[inline(always)]
 fn nthcdr_impl(n_value: Value, list: Value) -> EvalResult {
     if unobserved_list_scan() {
         nthcdr_impl_scan::<false>(n_value, list)
@@ -883,7 +891,7 @@ fn nthcdr_impl(n_value: Value, list: Value) -> EvalResult {
     }
 }
 
-#[inline]
+#[inline(never)]
 fn nthcdr_impl_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalResult {
     let count = expect_nthcdr_count(n_value)?;
 
@@ -992,6 +1000,7 @@ pub(crate) fn builtin_nthcdr(args: Vec<Value>) -> EvalResult {
     builtin_nthcdr_values(args[0], args[1])
 }
 
+#[inline(always)]
 pub(crate) fn builtin_nthcdr_2(
     _eval: &mut super::eval::Context,
     n_value: Value,
@@ -1000,6 +1009,7 @@ pub(crate) fn builtin_nthcdr_2(
     builtin_nthcdr_values(n_value, list)
 }
 
+#[inline(always)]
 pub(crate) fn builtin_nthcdr_values(n_value: Value, list: Value) -> EvalResult {
     nthcdr_impl(n_value, list)
 }
@@ -1186,10 +1196,12 @@ pub(crate) fn builtin_nreverse(args: Vec<Value>) -> EvalResult {
     nreverse_value(args[0])
 }
 
+#[inline(always)]
 pub(crate) fn builtin_nreverse_1(_eval: &mut super::eval::Context, arg: Value) -> EvalResult {
     nreverse_value(arg)
 }
 
+#[inline(never)]
 pub(crate) fn nreverse_value(arg: Value) -> EvalResult {
     match arg.kind() {
         ValueKind::Nil => Ok(Value::NIL),
@@ -1249,6 +1261,7 @@ fn builtin_member_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
     builtin_member_values(args[0], args[1], symbols_with_pos_enabled)
 }
 
+#[inline(always)]
 pub(crate) fn builtin_member_2(
     eval: &mut super::eval::Context,
     target: Value,
@@ -1257,6 +1270,7 @@ pub(crate) fn builtin_member_2(
     builtin_member_values(target, list, eval.symbols_with_pos_enabled)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_member_values(
     target: Value,
     list: Value,
@@ -1297,6 +1311,7 @@ fn builtin_member_values_scan<const OBSERVED: bool>(
     })
 }
 
+#[inline(always)]
 pub(crate) fn builtin_memq_2(
     eval: &mut super::eval::Context,
     target: Value,
@@ -1318,6 +1333,7 @@ pub(crate) const LIST_SCAN_BUDGET: usize = 1 << 16;
 /// of each cell's instructions, and its state and an inlined error path made
 /// the function save five registers on every call (208,797 calls per
 /// compile of elb-smie.el).
+#[inline(never)]
 pub(crate) fn builtin_memq_values(
     target: Value,
     list: Value,
@@ -1653,6 +1669,7 @@ pub(crate) fn builtin_assoc_slice(eval: &mut super::eval::Context, args: &[Value
     })
 }
 
+#[inline(always)]
 pub(crate) fn builtin_assq_2(
     eval: &mut super::eval::Context,
     key: Value,
@@ -1663,6 +1680,7 @@ pub(crate) fn builtin_assq_2(
 
 /// `assq`, scanned like [`builtin_memq_values`]: no cycle bookkeeping until
 /// the budget runs out, then the exact algorithm from the head.
+#[inline(never)]
 pub(crate) fn builtin_assq_values(
     key: Value,
     list: Value,
@@ -2132,6 +2150,7 @@ pub(crate) fn builtin_elt(args: Vec<Value>) -> EvalResult {
 
 /// The byte-code `elt` (`Op::Elt`): [`bytecode_elt_values`]. (The Lisp
 /// function `elt` is [`builtin_elt`], `Felt`.)
+#[inline(always)]
 pub(crate) fn builtin_elt_2(
     _eval: &mut super::eval::Context,
     sequence: Value,
@@ -2145,6 +2164,7 @@ pub(crate) fn builtin_elt_2(
 /// signals with that TAIL -- where `Felt` ([`builtin_elt_values`]) signals
 /// with the whole list: byte-compiled `(elt '(1 . 2) 3)` is
 /// `(wrong-type-argument listp 2)` in GNU. Everything else is `Felt`'s.
+#[inline(never)]
 pub(crate) fn bytecode_elt_values(sequence: Value, n: Value) -> EvalResult {
     if sequence.is_cons()
         && let Some(count) = n.as_fixnum()
@@ -2179,6 +2199,7 @@ pub(crate) fn builtin_nconc_slice(_eval: &mut super::eval::Context, args: &[Valu
     builtin_nconc_slice_values(args)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_nconc_slice_values(args: &[Value]) -> EvalResult {
     if unobserved_list_scan() {
         builtin_nconc_slice_values_scan::<false>(args)

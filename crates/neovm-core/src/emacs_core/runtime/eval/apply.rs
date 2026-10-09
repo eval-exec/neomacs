@@ -542,7 +542,7 @@ impl Context {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn release_backtrace_args(&mut self, args: &BacktraceArgs) {
         let Some(index) = args.owned_index() else {
             return;
@@ -1193,6 +1193,7 @@ impl Context {
         self.eval_call_roots.extend(values.iter().copied());
     }
 
+    #[inline(never)]
     pub(crate) fn record_save_excursion(&mut self) -> Option<usize> {
         let buffer_id = self.buffers.current_buffer_id()?;
         let (marker, marker_id) =
@@ -1648,6 +1649,7 @@ impl Context {
     /// Each failed cleanup has already popped its own entry. Keep unwinding so
     /// lower bindings cannot leak; if another cleanup exits nonlocally, that
     /// later/lower flow supersedes the earlier one just as it does in GNU.
+    #[inline(never)]
     pub(super) fn drain_unwind_to(&mut self, count: usize, result: EvalResult) -> EvalResult {
         // GNU eval.c `unbind_to(count, value)` carries VALUE through cleanup.
         // In Rust the value is not on the C stack/register root set, so keep
@@ -2762,6 +2764,7 @@ impl Context {
     /// This is the typed seam used by the bytecode interpreter's iterative
     /// `Bcall` transition.  `Interpret` means the caller must install a Tier-0
     /// frame; `Complete` means native code either returned or raised a flow.
+    #[inline(never)]
     pub(crate) fn dispatch_bytecode_call_from_stack(
         &mut self,
         bc_data: &super::super::bytecode::ByteCodeFunction,

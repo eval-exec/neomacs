@@ -884,6 +884,7 @@ pub(crate) trait IntoConditionSym {
 }
 
 impl IntoConditionSym for LispCondition {
+    #[inline(always)]
     fn condition_sym(self) -> SymId {
         intern(self.name())
     }
@@ -911,6 +912,7 @@ pub(crate) fn signal_suppressed(symbol: impl IntoConditionSym, data: Vec<Value>)
 /// `define-error') keeps its identity all the way to condition matching.
 /// Re-interning by name would resolve to a different symbol with no
 /// `error-conditions' and wrongly canonicalize to "Invalid error symbol".
+#[inline(never)]
 pub(crate) fn signal_internal_id(
     symbol: SymId,
     data: Vec<Value>,

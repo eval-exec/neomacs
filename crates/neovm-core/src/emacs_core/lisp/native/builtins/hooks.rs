@@ -1456,6 +1456,7 @@ pub(crate) fn builtin_window_configuration_equal_p(args: Vec<Value>) -> EvalResu
     }
 }
 
+#[inline(never)]
 pub(crate) fn builtin_current_window_configuration(
     eval: &mut super::eval::Context,
     args: Vec<Value>,

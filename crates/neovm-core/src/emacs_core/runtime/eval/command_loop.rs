@@ -2952,6 +2952,7 @@ impl Context {
     }
 
     #[cold]
+    #[inline(never)]
     pub(super) fn maybe_quit_slow(&mut self) -> Result<(), Flow> {
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a quit poll");
         // GNU fatal_error_signal calls Fkill_emacs(signal-number, nil), even
@@ -3283,6 +3284,7 @@ impl Context {
 
     /// Match GNU `bytecode.c:op_branch`: after the bytecode loop's unsigned
     /// quit counter wraps, run `maybe_gc (); maybe_quit ();`.
+    #[inline(never)]
     pub(crate) fn bytecode_branch_maybe_gc_and_quit(&mut self) -> Result<(), Flow> {
         #[cfg(test)]
         BYTECODE_BRANCH_POLL_COUNT.with(|count| count.set(count.get() + 1));

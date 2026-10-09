@@ -7149,6 +7149,7 @@ impl BufferManager {
         Some(())
     }
 
+    #[inline(never)]
     pub fn save_current_restriction_state(&mut self) -> Option<SavedRestrictionState> {
         let buffer_id = self.current_buffer_id()?;
         let (begv, zv, len) = {

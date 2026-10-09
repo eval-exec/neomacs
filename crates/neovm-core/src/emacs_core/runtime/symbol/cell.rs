@@ -519,7 +519,7 @@ impl LispSymbol {
     /// (get/get_mut/iter/from_dump/trace/clone). `Relaxed`: the concurrent GC
     /// scan is the only reader that needs `Acquire`, and it loads the atom
     /// directly at its presence gate.
-    #[inline]
+    #[inline(always)]
     pub(super) fn is_present(&self) -> bool {
         self.name.load(Ordering::Relaxed) != SYMBOL_NAME_SENTINEL.0
     }

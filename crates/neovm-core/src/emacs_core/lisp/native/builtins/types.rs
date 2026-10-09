@@ -383,6 +383,7 @@ pub(crate) fn builtin_equal(args: Vec<Value>) -> EvalResult {
     )?))
 }
 
+#[inline(never)]
 pub(crate) fn builtin_equal_2(eval: &mut super::eval::Context, a: Value, b: Value) -> EvalResult {
     Ok(Value::bool_val(try_equal_value_swp(
         &a,

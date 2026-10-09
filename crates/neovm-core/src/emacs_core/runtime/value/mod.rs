@@ -300,7 +300,7 @@ pub(crate) fn bytecode_data_access_count() -> usize {
     BYTECODE_DATA_ACCESS_COUNT.with(Cell::get)
 }
 
-#[inline]
+#[inline(always)]
 fn add_wrapping(counter: MemoryUseCountSlot, delta: u64) {
     THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| {
         let mut values = counts.get();
@@ -2539,7 +2539,7 @@ impl TaggedValue {
     }
 
     /// Allocate a cons cell.
-    #[inline]
+    #[inline(always)]
     pub fn make_cons(car: Value, cdr: Value) -> Self {
         // Keep the expensive corruption diagnostic out of release allocation hot paths.
         #[cfg(debug_assertions)]
@@ -5400,6 +5400,7 @@ pub fn list_iter(value: Value) -> ListIter {
     }
 }
 
+#[inline(never)]
 pub fn list_to_vec(value: &Value) -> Option<Vec<Value>> {
     // Answer the two non-list cases BEFORE reserving anything. The capacity
     // below is deliberate but it is not free, and callers in hot loops ask

@@ -29,6 +29,7 @@ fn string_char_range(start: usize, end: usize) -> CharRange {
 }
 
 typed_subr! {
+    #[inline(never)]
     pub(crate) fn builtin_string_equal_2(_eval, a: StringDesignator, b: StringDesignator) -> EvalResult {
         string_equal_designators(a.text(), b.text())
     }
@@ -173,6 +174,7 @@ pub(crate) fn string_equal_designators(
 }
 
 typed_subr! {
+    #[inline(never)]
     pub(crate) fn builtin_string_lessp_2(_eval, a: StringDesignator, b: StringDesignator) -> EvalResult {
         Ok(Value::bool_val(string_ordering(a.text(), b.text()).is_lt()))
     }
@@ -378,6 +380,7 @@ pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
     builtin_substring_slice(&args)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_substring_slice(args: &[Value]) -> EvalResult {
     crate::emacs_core::perf_trace::time_op(
         crate::emacs_core::perf_trace::HotpathOp::Substring,
@@ -411,6 +414,7 @@ fn concatenated_string_text_properties(
     })
 }
 
+#[inline(never)]
 pub(crate) fn builtin_concat_slice(args: &[Value]) -> EvalResult {
     crate::emacs_core::perf_trace::time_op(crate::emacs_core::perf_trace::HotpathOp::Concat, || {
         use crate::emacs_core::emacs_char;

@@ -300,6 +300,7 @@ pub(crate) fn bytecode_function_clone_count_for_test() -> usize {
 // `TaggedHeap::alloc_bytecode_instance` (`make-closure`) copies the same
 // fields in place; its exhaustive destructure keeps the two in step.
 impl Clone for ByteCodeFunction {
+    #[inline(never)]
     fn clone(&self) -> Self {
         #[cfg(test)]
         BYTECODE_FUNCTION_CLONE_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -419,7 +420,7 @@ impl ByteCodeFunction {
     ///
     /// This is the release-safety gate for the unchecked-fetch dispatch
     /// driver; see the field documentation on [`Self::ops_sealed`].
-    #[inline]
+    #[inline(always)]
     pub(crate) fn executes_sealed_ops(&self) -> bool {
         self.lazy_gnu_code.is_some() || self.ops_sealed
     }
@@ -447,7 +448,7 @@ impl ByteCodeFunction {
     /// (`runtime` is `None`), so the dump writes those exact bytes into the
     /// image and the loader writes NOTHING into bytecode struct spans.
     /// `source_id` 0 is a debug second-witness (real ids start at 1).
-    #[inline]
+    #[inline(always)]
     pub(crate) fn is_pdump_stub(&self) -> bool {
         self.ops_sealed && self.ops.is_empty()
     }

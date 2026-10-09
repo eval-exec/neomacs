@@ -1282,7 +1282,7 @@ impl RuntimeState {
     }
 
     /// True once this function has crossed the tier-up threshold.
-    #[inline]
+    #[inline(always)]
     pub fn is_hot(&self) -> bool {
         // A forced-cold function must never read as hot — the OSR gate
         // consults is_hot() directly, and OSR ignoring force_interpret is

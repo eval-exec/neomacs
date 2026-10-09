@@ -97,7 +97,7 @@ impl Context {
         self.macro_expansion_mutation_epoch
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn note_macro_expansion_mutation(&mut self) {
         if self.macro_expansion_scope_depth > 0 {
             self.macro_expansion_mutation_epoch =

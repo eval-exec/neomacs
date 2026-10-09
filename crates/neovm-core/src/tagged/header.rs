@@ -94,7 +94,7 @@ impl ConsCell {
     ///
     /// `self` must be a live cons cell and the supplied tagged value must obey
     /// the GC publication contract described above.
-    #[inline]
+    #[inline(always)]
     pub unsafe fn set_car(&mut self, value: TaggedValue) {
         let p = &self.car as *const TaggedValue as *const AtomicUsize;
         unsafe { (*p).store(value.0, Ordering::Release) };
@@ -106,7 +106,7 @@ impl ConsCell {
     ///
     /// `self` must be a live cons cell and `value` must be a valid tagged value
     /// whose pointee, if any, has been fully initialized before publication.
-    #[inline]
+    #[inline(always)]
     pub unsafe fn set_cdr(&mut self, value: TaggedValue) {
         let p = &self.cdr_or_next as *const ConsCdrOrNext as *const AtomicUsize;
         unsafe { (*p).store(value.0, Ordering::Release) };

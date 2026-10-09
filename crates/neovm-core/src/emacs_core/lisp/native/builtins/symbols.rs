@@ -48,6 +48,7 @@ pub(crate) fn symbol_id_checked(value: &Value, symbols_with_pos_enabled: bool) -
     }
 }
 
+#[inline(never)]
 pub(crate) fn expect_symbol_id_checked(
     value: &Value,
     symbols_with_pos_enabled: bool,
@@ -578,6 +579,7 @@ pub(crate) fn builtin_symbol_value(
     builtin_symbol_value_1(eval, args[0])
 }
 
+#[inline(never)]
 pub(crate) fn builtin_symbol_value_1(
     eval: &mut super::eval::Context,
     symbol_value: Value,
@@ -628,6 +630,7 @@ pub(crate) fn symbol_function_impl_1_checked(
 }
 
 /// `symbol-function` after symbol extraction: the function cell by identity.
+#[inline(never)]
 pub(crate) fn symbol_function_by_id(obarray: &Obarray, symbol: SymId) -> EvalResult {
     if obarray.is_function_unbound_id(symbol) {
         return Ok(Value::NIL);
@@ -704,6 +707,7 @@ pub(crate) fn builtin_set(eval: &mut super::eval::Context, args: Vec<Value>) -> 
     builtin_set_2(eval, args[0], args[1])
 }
 
+#[inline(never)]
 pub(crate) fn builtin_set_2(
     eval: &mut super::eval::Context,
     symbol_value: Value,
@@ -733,6 +737,7 @@ pub(crate) fn builtin_fset(eval: &mut super::eval::Context, args: Vec<Value>) ->
     builtin_fset_2(eval, args[0], args[1])
 }
 
+#[inline(never)]
 pub(crate) fn builtin_fset_2(
     eval: &mut super::eval::Context,
     symbol_value: Value,
@@ -903,6 +908,7 @@ pub(crate) fn builtin_get_2(
         .unwrap_or(Value::NIL))
 }
 
+#[inline(never)]
 pub(crate) fn symbol_property_get(
     eval: &super::eval::Context,
     symbol_value: Value,
@@ -949,6 +955,7 @@ pub(crate) fn builtin_put(
     put_in_obarray(&mut ctx.obarray, args, ctx.symbols_with_pos_enabled)
 }
 
+#[inline(always)]
 pub(crate) fn builtin_put_3(
     ctx: &mut crate::emacs_core::eval::Context,
     symbol_value: Value,
@@ -974,6 +981,7 @@ pub(crate) fn put_in_obarray(
     put_in_obarray_values(obarray, args[0], args[1], args[2], symbols_with_pos_enabled)
 }
 
+#[inline(never)]
 pub(crate) fn put_in_obarray_values(
     obarray: &mut Obarray,
     symbol_value: Value,

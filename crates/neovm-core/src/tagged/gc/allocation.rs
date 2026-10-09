@@ -16,7 +16,7 @@ impl TaggedHeap {
     /// collect or run Lisp: the list builders below and the JIT shims
     /// (`neovm_jit_cons`, `neovm_jit_list`) hold an unrooted accumulator
     /// across it, exactly as GNU's C locals do.
-    #[inline]
+    #[inline(always)]
     pub fn alloc_cons(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
         let cell = self.take_cons_cell();
         // SAFETY: `cell` is a live, cell-aligned slot of a block this heap
@@ -628,6 +628,7 @@ impl TaggedHeap {
     /// (mid-cycle pages, mapped/dump residue) still defer to the STW
     /// termination drain, where `mark_value`'s owned veclike arm traces
     /// them exactly as before.
+    #[inline(never)]
     pub fn alloc_bytecode(
         &mut self,
         data: crate::emacs_core::bytecode::ByteCodeFunction,

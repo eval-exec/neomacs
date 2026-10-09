@@ -1276,7 +1276,7 @@ impl BytecodeBacktraceSpan {
     const START_BITS: u32 = BacktraceArgs::PAYLOAD_BITS - Self::LEN_BITS;
     const START_MAX: usize = (1usize << Self::START_BITS) - 1;
 
-    #[inline]
+    #[inline(always)]
     fn try_new(start: usize, len: usize) -> Option<Self> {
         (start <= Self::START_MAX && len <= Self::LEN_MASK)
             .then_some(Self((start << Self::LEN_BITS) | len))
@@ -1369,12 +1369,12 @@ impl BacktraceArgs {
         Self::descriptor(Self::EVALUATED_KIND, index)
     }
 
-    #[inline]
+    #[inline(always)]
     fn evaluated_bc_stack(span: BytecodeBacktraceSpan) -> Self {
         Self::descriptor(Self::BYTECODE_STACK_KIND, span.0)
     }
 
-    #[inline]
+    #[inline(always)]
     fn descriptor(kind: usize, payload: usize) -> Self {
         debug_assert!(kind <= Self::KIND_MASK);
         debug_assert!(payload <= Self::PAYLOAD_MAX);
@@ -1398,7 +1398,7 @@ impl BacktraceArgs {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn owned_index(self) -> Option<usize> {
         let is_descriptor = self.0 & Self::TAG_MASK == Self::DESCRIPTOR_TAG;
         let kind = (self.0 >> Self::KIND_SHIFT) & Self::KIND_MASK;
@@ -1460,7 +1460,7 @@ impl BytecodeBacktraceFrame {
     const OWNED_ARGS_FLAG: usize = 1usize << (usize::BITS - 1);
     const BASE_MASK: usize = !Self::OWNED_ARGS_FLAG;
 
-    #[inline]
+    #[inline(always)]
     fn new(base: usize, owns_args: bool) -> Self {
         debug_assert_eq!(
             base & Self::OWNED_ARGS_FLAG,
@@ -1569,7 +1569,7 @@ enum TrivialSpecBindingPop {
     BacktraceArgs(BacktraceArgs),
 }
 
-#[inline]
+#[inline(always)]
 fn trivial_spec_binding_pop(binding: &SpecBinding) -> Option<TrivialSpecBindingPop> {
     match binding {
         SpecBinding::GcRoot { .. }
@@ -5052,6 +5052,7 @@ impl Context {
     }
 
     /// Access the obarray (for builtins that need it).
+    #[inline(always)]
     pub fn obarray(&self) -> &Obarray {
         &self.obarray
     }
