@@ -17,7 +17,13 @@ impl crate::emacs_core::Context {
         let pending = self.command_loop.keyboard.has_pending_low_level_input()
             || self.has_pending_command_input_for_query()
             || self.input_rx.as_ref().is_some_and(|rx| !rx.is_empty());
-        if self.display_idle_maintenance_fn.is_none() || !pending {
+        // A keyboard macro's commands are not input arriving faster than
+        // display: GNU's `read_char' returns the next macro event before it
+        // reaches redisplay, so it never paints in the middle of a macro.
+        if self.display_idle_maintenance_fn.is_none()
+            || !pending
+            || self.command_loop.is_executing_kbd_macro()
+        {
             self.command_loop.gui_display_deadline = None;
             return Ok(());
         }
