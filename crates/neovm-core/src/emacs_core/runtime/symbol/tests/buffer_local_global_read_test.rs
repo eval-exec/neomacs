@@ -481,6 +481,7 @@ fn no_production_rust_reads_a_per_buffer_name_from_the_bare_obarray() {
         for name in &denied {
             for call in [
                 format!(".symbol_value(\"{name}\")"),
+                format!(".symbol_value_copied(\"{name}\")"),
                 format!(".find_symbol_value(\"{name}\")"),
             ] {
                 if source.contains(&call) && !allowed.iter().any(|(f, n)| rel == *f && n == name) {

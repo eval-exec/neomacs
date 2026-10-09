@@ -1,0 +1,17 @@
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<ForwardSlot<'static>>`, but its trait bounds were not satisfied
+ --> tests/thread_safety_ui/forward_slot_send.rs:8:45
+  |
+3 | struct ThreadTransfer<T>(PhantomData<T>);
+  | ------------------------ associated function or constant `transfer` not found for this struct
+...
+8 |     ThreadTransfer::<ForwardSlot<'static>>::transfer();
+  |                                             ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<ForwardSlot<'static>>` due to unsatisfied trait bounds
+  |
+ ::: src/emacs_core/runtime/forward/mod.rs
+  |
+  | pub enum ForwardSlot<'a> {
+  | ------------------------ doesn't satisfy `ForwardSlot<'static>: Send`
+  |
+  = note: the following trait bounds were not satisfied:
+          `*const (): Sync`
+          which is required by `ForwardSlot<'static>: Send`

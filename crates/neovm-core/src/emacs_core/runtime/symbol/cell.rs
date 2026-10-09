@@ -702,7 +702,10 @@ impl LispSymbol {
 /// ```compile_fail,E0451
 /// use neovm_core::emacs_core::forward::{LispFwd, LispFwdType};
 ///
-/// let _forged = LispFwd { ty: LispFwdType::Int };
+/// let _forged = LispFwd {
+///     ty: LispFwdType::Int,
+///     _thread_confined: Default::default(),
+/// };
 /// ```
 ///
 /// nor copied out of the storage it describes:
@@ -717,7 +720,7 @@ impl LispSymbol {
 ///
 /// and its slot is not lent out as a reference:
 ///
-/// ```compile_fail,E0624
+/// ```compile_fail,E0599
 /// use neovm_core::emacs_core::forward::LispFwd;
 ///
 /// fn peek(fwd: &'static LispFwd) {

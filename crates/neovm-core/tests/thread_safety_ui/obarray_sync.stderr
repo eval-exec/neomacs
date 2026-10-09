@@ -1,0 +1,81 @@
+error[E0277]: `NonNull<LispBufferLocalValue>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/obarray_sync.rs:7:20
+  |
+7 |     require_sync::<Obarray>();
+  |                    ^^^^^^^ `NonNull<LispBufferLocalValue>` cannot be shared between threads safely
+  |
+  = help: within `neovm_core::emacs_core::Obarray`, the trait `Sync` is not implemented for `NonNull<LispBufferLocalValue>`
+note: required because it appears within the type `symbol::cell::BlvPtr`
+ --> src/emacs_core/runtime/symbol/cell.rs
+  |
+  | pub(crate) struct BlvPtr(NonNull<LispBufferLocalValue>);
+  |                   ^^^^^^
+note: required because it appears within the type `PhantomData<symbol::cell::BlvPtr>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<symbol::cell::BlvPtr>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<symbol::cell::BlvPtr>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `neovm_core::emacs_core::Obarray`
+ --> src/emacs_core/runtime/symbol/mod.rs
+  |
+  | pub struct Obarray {
+  |            ^^^^^^^
+note: required by a bound in `require_sync`
+ --> tests/thread_safety_ui/obarray_sync.rs:3:20
+  |
+3 | fn require_sync<T: Sync>() {}
+  |                    ^^^^ required by this bound in `require_sync`
+
+error[E0277]: `*const ()` cannot be shared between threads safely
+ --> tests/thread_safety_ui/obarray_sync.rs:7:20
+  |
+7 |     require_sync::<Obarray>();
+  |                    ^^^^^^^ `*const ()` cannot be shared between threads safely
+  |
+  = help: within `neovm_core::emacs_core::Obarray`, the trait `Sync` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `LispFwd`
+ --> src/emacs_core/runtime/forward/mod.rs
+  |
+  | pub struct LispFwd {
+  |            ^^^^^^^
+  = note: required because it appears within the type `&'static LispFwd`
+note: required because it appears within the type `PhantomData<&'static LispFwd>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<&'static LispFwd>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<&'static LispFwd>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `neovm_core::emacs_core::Obarray`
+ --> src/emacs_core/runtime/symbol/mod.rs
+  |
+  | pub struct Obarray {
+  |            ^^^^^^^
+note: required by a bound in `require_sync`
+ --> tests/thread_safety_ui/obarray_sync.rs:3:20
+  |
+3 | fn require_sync<T: Sync>() {}
+  |                    ^^^^ required by this bound in `require_sync`

@@ -1919,7 +1919,7 @@ impl Obarray {
     /// symbol no buffer has ever localised can have no alist entry (every
     /// insertion path marks it `Localized` first), so the walk would only ever
     /// answer `None`. That keeps this reader roughly the cost of
-    /// [`Self::symbol_value`] on the overwhelmingly common global path, which
+    /// [`Self::symbol_value_copied`] on the overwhelmingly common global path, which
     /// matters where a caller reads a dozen names at once -- the `print-*`
     /// family, for one.
     pub fn value_in_buffer_id(

@@ -28,7 +28,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
   ::: $RUST/core/src/ptr/non_null.rs
    |
    |   pub struct NonNull<T: PointeeSized> {
-   |   ----------------------------------- doesn't satisfy `NonNull<()>: Send`, `NonNull<ByteCodeFunction>: Send` or `NonNull<[Op]>: Send`
+   |   ----------------------------------- doesn't satisfy `NonNull<()>: Send`, `NonNull<ByteCodeFunction>: Send`, `NonNull<LispBufferLocalValue>: Send` or `NonNull<[Op]>: Send`
    |
   ::: src/emacs_core/display/display_host/mod.rs
    |
@@ -119,6 +119,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `std::rc::Weak<[TaggedValue]>: Send`
            which is required by `neovm_core::Context: Send`
+           `NonNull<LispBufferLocalValue>: Send`
+           which is required by `neovm_core::Context: Send`
            `*mut HashTableObj: Send`
            which is required by `neovm_core::Context: Send`
            `*mut FinalizerObj: Send`
@@ -138,6 +140,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*mut VecLikeHeader: Send`
            which is required by `neovm_core::Context: Send`
            `*mut StringObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*const (): Sync`
            which is required by `neovm_core::Context: Send`
            `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
            which is required by `neovm_core::Context: Send`
@@ -172,6 +176,4 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `NonNull<ByteCodeFunction>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<[Op]>: Send`
-           which is required by `neovm_core::Context: Send`
-           `*const (): Sync`
            which is required by `neovm_core::Context: Send`
