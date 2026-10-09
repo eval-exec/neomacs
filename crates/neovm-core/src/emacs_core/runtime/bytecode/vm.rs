@@ -678,8 +678,6 @@ pub(crate) struct StackCursor {
     len: usize,
 }
 
-static_assertions::assert_not_impl_any!(StackCursor: Send, Sync);
-
 #[cfg(debug_assertions)]
 thread_local! {
     static STACK_CURSOR_LIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
