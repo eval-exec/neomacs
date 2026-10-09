@@ -1813,3 +1813,117 @@ fn compat_expanded_casing_after_change_extents_match_gnu() {
     let actual = run_neovm_eval(form).expect("NeoVM expanded casing extent result");
     assert_eq!(actual, gnu, "expanded casing after-change extent mismatch");
 }
+
+/// Compare live edit preparation at the interval-hook and file-lock Lisp
+/// boundaries. Record both buffers and the callback-selected current buffer;
+/// the GNU oracle supplies the expected result instead of a guessed snapshot.
+fn assert_delete_preparation_matches_gnu(seam: &str, effect: &str) {
+    if !oracle_enabled() {
+        return;
+    }
+    let form = format!(
+        r#"(let ((seam '{seam}) (effect '{effect}))
+  (let* ((origin (current-buffer))
+         (source (generate-new-buffer " *tse2-snapshot-source*"))
+         (target (generate-new-buffer " *tse2-snapshot-target*"))
+         (log nil) (once nil) (result nil)
+         (callback
+          (lambda ()
+            (unless once
+              (setq once t)
+              (push (list seam (buffer-name)) log)
+              (if (eq effect 'switch)
+                  (set-buffer target)
+                (let ((inhibit-modification-hooks t))
+                  (save-excursion (goto-char 1) (insert "é"))))))))
+    (unwind-protect
+        (progn
+          (with-current-buffer target
+            (set-buffer-multibyte t)
+            (setq buffer-undo-list t)
+            (insert "uvwxyz")
+            (setq-local before-change-functions
+                        (list (lambda (b e)
+                                (push (list 'before-target (buffer-name) b e) log))))
+            (setq-local after-change-functions
+                        (list (lambda (b e old)
+                                (push (list 'after-target (buffer-name) b e old) log)))))
+          (set-buffer source)
+          (set-buffer-multibyte t)
+          (setq buffer-undo-list t)
+          (insert "aé€𝄞def")
+          (when (eq seam 'interval)
+            (put-text-property
+             2 6 'modification-hooks
+             (list (lambda (_b _e) (funcall callback)))))
+          (setq-local before-change-functions
+                      (list (lambda (b e)
+                              (push (list 'before-source (buffer-name) b e) log))))
+          (setq-local after-change-functions
+                      (list (lambda (b e old)
+                              (push (list 'after-source (buffer-name) b e old) log))))
+          (set-buffer-modified-p nil)
+          (when (eq seam 'lock)
+            ;; Set these only after seeding/marking clean. A matching handler
+            ;; handles lock-file without creating or querying a native lock.
+            (setq buffer-file-name "/tse2-snapshot/source"
+                  buffer-file-truename "/tse2-snapshot/source"))
+          (let ((create-lockfiles t)
+                (file-name-handler-alist
+                 (if (eq seam 'lock)
+                     (list (cons "\\`/tse2-snapshot/"
+                                 (lambda (operation &rest _args)
+                                   (if (eq operation 'lock-file)
+                                       (funcall callback)
+                                     (error "unexpected proposal handler %S" operation)))))
+                   file-name-handler-alist)))
+            (setq result
+                  (condition-case err (delete-region 3 5)
+                    (error (list 'error (car err) (cdr err))))))
+          (list result (list (eq (current-buffer) source)
+                             (eq (current-buffer) target))
+                (with-current-buffer source
+                  (list (append (buffer-string) nil) (point)
+                        (string-bytes (buffer-string))))
+                (with-current-buffer target
+                  (list (append (buffer-string) nil) (point)
+                        (string-bytes (buffer-string))))
+                (nreverse log)))
+      (when (buffer-live-p source)
+        (with-current-buffer source
+          (setq buffer-file-name nil buffer-file-truename nil
+                before-change-functions nil after-change-functions nil)))
+      (when (buffer-live-p target)
+        (with-current-buffer target
+          (setq before-change-functions nil after-change-functions nil)))
+      (when (buffer-live-p origin) (set-buffer origin))
+      (when (buffer-live-p source) (kill-buffer source))
+      (when (buffer-live-p target) (kill-buffer target))))
+)"#
+    );
+    let gnu = run_oracle_eval(&form).expect("GNU delete preparation oracle");
+    assert!(
+        gnu.starts_with("OK "),
+        "GNU delete preparation fixture failed for {seam}/{effect}: {gnu}"
+    );
+    let actual = run_neovm_eval(&form).expect("NeoVM delete preparation probe");
+    assert_eq!(
+        actual, gnu,
+        "delete preparation mismatch at {seam}/{effect}:\n{form}"
+    );
+}
+
+#[test]
+fn delete_region_remeasures_after_interval_hook_switches_current_buffer() {
+    assert_delete_preparation_matches_gnu("interval", "switch");
+}
+
+#[test]
+fn delete_region_remeasures_after_lock_handler_switches_current_buffer() {
+    assert_delete_preparation_matches_gnu("lock", "switch");
+}
+
+#[test]
+fn delete_region_remeasures_after_lock_handler_rewrites_multibyte_text() {
+    assert_delete_preparation_matches_gnu("lock", "rewrite");
+}

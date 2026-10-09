@@ -1685,6 +1685,7 @@ pub(crate) fn prepare_interval_modification_for_change(
     buf_id: BufferId,
     byte_start: EmacsBytePos,
     byte_end: EmacsBytePos,
+    before_hooks: impl FnOnce(&super::eval::Context),
 ) -> Result<(), Flow> {
     eval.interval_insert_behind_hooks = Value::NIL;
     eval.interval_insert_in_front_hooks = Value::NIL;
@@ -1736,6 +1737,11 @@ pub(crate) fn prepare_interval_modification_for_change(
         (lisp_start, lisp_end, hooks)
     };
 
+    if !hook_lists.is_empty() {
+        // Snapshot before the runner's watched specbind as well as hook Lisp.
+        // Reuse the collected lists: a face-only interval requires no snapshot.
+        before_hooks(eval);
+    }
     call_text_property_hook_lists(eval, hook_lists, lisp_start, lisp_end)
 }
 

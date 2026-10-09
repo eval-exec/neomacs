@@ -379,42 +379,52 @@ enum ChangeStartPolicy {
     Preserved,
 }
 
-/// The range a change is being prepared for, kept usable across the Lisp the
-/// preparation runs.
+/// The range a change is being prepared for, kept usable across Lisp.
 ///
-/// The measured bytes stay authoritative while the text is untouched. Once a
-/// callback has changed the current buffer's text, or selected another
-/// buffer, the bytes are re-derived from the character positions, which are
-/// what GNU passes to every callback and which cannot split a multibyte
-/// sequence. When nothing changed, the whole cost is one tick comparison per
-/// callback. Owned by one preparation on one mutator; nothing is shared.
+/// Native preparation leaves measured bytes authoritative. Capture the text
+/// only immediately before a boundary that can run Lisp; consume that snapshot
+/// on return so subsequent native stages require no buffer/tick probes.
 #[derive(Clone, Copy, Debug)]
 struct LiveChangeRange {
     range: TextEditRange,
+    before_callbacks: Option<ChangeTextSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ChangeTextSnapshot {
     buffer: Option<crate::buffer::BufferId>,
     chars_tick: i64,
 }
 
 impl LiveChangeRange {
-    fn new(ctx: &crate::emacs_core::eval::Context, range: TextEditRange) -> Self {
-        let buffer = ctx.buffers.current_buffer_id();
+    #[inline]
+    fn new(range: TextEditRange) -> Self {
         Self {
             range,
-            buffer,
-            chars_tick: current_chars_tick(ctx, buffer),
+            before_callbacks: None,
         }
     }
 
-    /// The range in the current buffer as that buffer is now.
-    fn refresh(&mut self, ctx: &crate::emacs_core::eval::Context) -> TextEditRange {
+    #[inline]
+    fn capture_for_callbacks(&mut self, ctx: &crate::emacs_core::eval::Context) {
         let buffer = ctx.buffers.current_buffer_id();
-        let chars_tick = current_chars_tick(ctx, buffer);
-        if buffer != self.buffer || chars_tick != self.chars_tick {
-            if let Some(buf) = buffer.and_then(|id| ctx.buffers.get(id)) {
-                self.range = live_edit_range_for_chars(buf, self.range.char_range());
+        self.before_callbacks = Some(ChangeTextSnapshot {
+            buffer,
+            chars_tick: current_chars_tick(ctx, buffer),
+        });
+    }
+
+    /// Re-measure only when callback Lisp could have invalidated the bytes.
+    #[inline]
+    fn refresh(&mut self, ctx: &crate::emacs_core::eval::Context) -> TextEditRange {
+        if let Some(before) = self.before_callbacks.take() {
+            let buffer = ctx.buffers.current_buffer_id();
+            let chars_tick = current_chars_tick(ctx, buffer);
+            if buffer != before.buffer || chars_tick != before.chars_tick {
+                if let Some(buf) = buffer.and_then(|id| ctx.buffers.get(id)) {
+                    self.range = live_edit_range_for_chars(buf, self.range.char_range());
+                }
             }
-            self.buffer = buffer;
-            self.chars_tick = chars_tick;
         }
         self.range
     }
@@ -530,7 +540,7 @@ fn prepare_buffer_change(
     // hook.
     ensure_current_buffer_writable_in_state(&ctx.obarray, &[], &ctx.buffers)?;
     let mut start = range.char_start();
-    let mut live = LiveChangeRange::new(ctx, range);
+    let mut live = LiveChangeRange::new(range);
 
     let gnu_hooks = crate::emacs_core::eval::gnu_redisplay_hooks_enabled();
     if !gnu_hooks {
@@ -545,6 +555,7 @@ fn prepare_buffer_change(
             .is_some_and(|buf| !buf.get_undo_list().is_t());
         let undoable_change = undo_auto_undoable_change_symbol();
         if undo_enabled && ctx.obarray.fboundp_id(undoable_change) {
+            live.capture_for_callbacks(ctx);
             ctx.apply(Value::from_sym_id(undoable_change), vec![])?;
             range = live.refresh(ctx);
         }
@@ -576,38 +587,49 @@ fn prepare_buffer_change(
     // at this exact chokepoint, before first-change-hook and
     // before-change-functions.  Text edits already converge here, so the lock
     // transition remains complete without being duplicated across producers.
-    super::filelock::lock_current_buffer_before_change(ctx)?;
+    super::filelock::lock_current_buffer_before_change(ctx, |ctx| {
+        live.capture_for_callbacks(ctx);
+    })?;
+    let range = live.refresh(ctx);
+    let Some(current_id) = ctx.buffers.current_buffer_id() else {
+        return Ok(start);
+    };
 
     // GNU preserves FROM around `verify_interval_modification` only when the
     // buffer has intervals; a range with no properties runs no hook Lisp.
-    let range = live.refresh(ctx);
-    let interval_hooks_possible = !range.is_empty()
+    let preserve_interval_start = start_policy == ChangeStartPolicy::Preserved
+        && !range.is_empty()
         && ctx
             .buffers
             .get(current_id)
             .is_some_and(|buf| !buf.text_props_is_empty());
     let bytes = range.byte_range();
-    let prepare_intervals = |ctx: &mut crate::emacs_core::eval::Context| {
+    let mut prepare_intervals = |ctx: &mut crate::emacs_core::eval::Context| {
         crate::emacs_core::textprop::prepare_interval_modification_for_change(
             ctx,
             current_id,
             bytes.start(),
             bytes.end(),
+            |ctx| live.capture_for_callbacks(ctx),
         )
     };
-    let range = if interval_hooks_possible {
+    if preserve_interval_start {
         start = run_preserving_change_start(ctx, start_policy, start, prepare_intervals)?;
-        live.refresh(ctx)
     } else {
         prepare_intervals(ctx)?;
-        range
+    }
+    let range = live.refresh(ctx);
+    let Some(current_id) = ctx.buffers.current_buffer_id() else {
+        return Ok(start);
     };
     if before_change_hooks_quiet(ctx, current_id) {
         ctx.last_overlay_modification_hooks = Vec::new();
-    } else {
+    } else if start_policy == ChangeStartPolicy::Preserved {
         start = run_preserving_change_start(ctx, start_policy, start, |ctx| {
             run_before_change_hooks(ctx, current_id, range)
         })?;
+    } else {
+        run_before_change_hooks(ctx, current_id, range)?;
     }
     deactivate_mark_after_preparing_change(ctx)?;
     Ok(start)
