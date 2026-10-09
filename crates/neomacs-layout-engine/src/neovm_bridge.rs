@@ -458,7 +458,7 @@ pub(crate) fn buffer_local_value<B: LayoutBufferView + ?Sized>(
 fn effective_buffer_value(buffer: &Buffer, obarray: &Obarray, var: LayoutVar) -> Option<Value> {
     buffer
         .buffer_local_value_id(var.sym_id())
-        .or_else(|| obarray.symbol_value_id(var.sym_id()).copied())
+        .or_else(|| obarray.symbol_value_id_copied(var.sym_id()))
 }
 
 fn frame_parameter_int(frame: &Frame, name: &str, default: i64) -> i64 {
@@ -588,7 +588,7 @@ pub(crate) fn window_parameter_by_name(window: &Window, name: &str) -> Option<Va
 
 fn global_bool(obarray: &Obarray, name: &str) -> bool {
     obarray
-        .symbol_value(name)
+        .symbol_value_copied(name)
         .is_some_and(|value| !value.is_nil())
 }
 
@@ -1219,8 +1219,8 @@ fn frame_cursor_foreground_pixel(frame: &Frame, face_table: &FaceTable, obarray:
     // GNU's Vx_cursor_fore_pixel is a color-name string when explicitly set;
     // otherwise x_set_cursor_color uses FRAME_BACKGROUND_PIXEL.
     obarray
-        .symbol_value("x-cursor-fore-pixel")
-        .and_then(parse_color_pixel)
+        .symbol_value_copied("x-cursor-fore-pixel")
+        .and_then(|value| parse_color_pixel(&value))
         .unwrap_or_else(|| frame_background_color_pixel(frame, face_table))
 }
 
@@ -1595,7 +1595,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         effective_buffer_int(buffer, obarray, LayoutVar::ScrollConservatively, 0);
     let scroll_step = effective_buffer_int(buffer, obarray, LayoutVar::ScrollStep, 0);
     let scroll_minibuffer_conservatively = obarray
-        .symbol_value("scroll-minibuffer-conservatively")
+        .symbol_value_copied("scroll-minibuffer-conservatively")
         .is_none_or(|value| !value.is_nil());
     let scroll_margin = effective_buffer_int(buffer, obarray, LayoutVar::ScrollMargin, 0);
 

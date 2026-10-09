@@ -42,8 +42,7 @@ impl PreparedViewports {
             .or_else(|| {
                 evaluator
                     .obarray()
-                    .symbol_value("fontification-functions")
-                    .copied()
+                    .symbol_value_copied("fontification-functions")
             });
         if fontification.is_some_and(|value| !value.is_nil()) {
             return None;

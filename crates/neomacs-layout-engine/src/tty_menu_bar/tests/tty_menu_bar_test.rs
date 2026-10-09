@@ -153,8 +153,7 @@ fn final_menu_items_follow_the_declared_order() {
         .expect("set final menu order through the forwarded Lisp variable");
     assert_eq!(
         eval.obarray()
-            .symbol_value("menu-bar-final-items")
-            .copied()
+            .symbol_value_copied("menu-bar-final-items")
             .expect("menu-bar-final-items is bound")
             .cons_car()
             .as_symbol_name(),

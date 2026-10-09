@@ -132,8 +132,7 @@ pub(crate) fn draw_overlay_arrows<B: LayoutBufferView>(
 fn arrow_variables(evaluator: &Context) -> Vec<Value> {
     let Some(list) = evaluator
         .obarray()
-        .symbol_value("overlay-arrow-variable-list")
-        .copied()
+        .symbol_value_copied("overlay-arrow-variable-list")
     else {
         return Vec::new();
     };
@@ -153,7 +152,7 @@ fn arrow_variables(evaluator: &Context) -> Vec<Value> {
 /// into `buffer_id` (GNU additionally requires `current_buffer`).
 fn arrow_marker_charpos(evaluator: &Context, var: Value, buffer_id: BufferId) -> Option<usize> {
     let sym = var.as_symbol_id()?;
-    let value = evaluator.obarray().symbol_value_id(sym).copied()?;
+    let value = evaluator.obarray().symbol_value_id_copied(sym)?;
     let marker = value.as_marker_data()?;
     (marker.buffer == Some(buffer_id)).then_some(marker.charpos)
 }
@@ -181,7 +180,7 @@ fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
     }
     evaluator
         .obarray()
-        .symbol_value("overlay-arrow-string")
+        .symbol_value_copied("overlay-arrow-string")
         .and_then(|value| value.as_str_owned())
 }
 
