@@ -827,6 +827,37 @@ fn test_file_attributes_directory() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// GNU `filemodestring' (lib/filemode.c `ftypelet') names every POSIX file
+/// type, so callers such as `server-start' can tell a socket node apart.
+#[cfg(unix)]
+#[test]
+fn test_file_attributes_mode_names_special_file_types() {
+    crate::test_utils::init_test_tracing();
+    let (dir, _dir_str) = make_test_dir("fa_special");
+    let mode_letter = |path: &std::path::Path| {
+        let result =
+            call_file_attributes(vec![Value::string(path.to_string_lossy().as_ref())]).unwrap();
+        let items = list_to_vec(&result).unwrap();
+        items[8].as_utf8_str().unwrap().chars().next().unwrap()
+    };
+
+    let socket = dir.join("socket");
+    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+    assert_eq!(mode_letter(&socket), 's');
+
+    let fifo = dir.join("fifo");
+    let fifo_c = std::ffi::CString::new(fifo.to_string_lossy().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+    assert_eq!(mode_letter(&fifo), 'p');
+
+    assert_eq!(mode_letter(std::path::Path::new("/dev/null")), 'c');
+    create_file(&dir, "plain", "x");
+    assert_eq!(mode_letter(&dir.join("plain")), '-');
+    assert_eq!(mode_letter(&dir), 'd');
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn test_file_attributes_nonexistent() {
     crate::test_utils::init_test_tracing();

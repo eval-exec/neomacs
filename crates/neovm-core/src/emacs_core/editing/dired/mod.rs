@@ -427,16 +427,29 @@ fn build_file_attributes_with_metadata(
 /// Format a Unix file mode string like "drwxr-xr-x" or "-rw-r--r--".
 #[cfg(unix)]
 fn format_mode_string(mode: u32, meta: &fs::Metadata) -> String {
+    use std::os::unix::fs::FileTypeExt;
+
     let mut s = String::with_capacity(10);
 
-    // File type character.
-    if meta.file_type().is_symlink() {
-        s.push('l');
-    } else if meta.is_dir() {
-        s.push('d');
+    // File type character: GNU `ftypelet' (lib/filemode.c).
+    let file_type = meta.file_type();
+    s.push(if file_type.is_file() {
+        '-'
+    } else if file_type.is_dir() {
+        'd'
+    } else if file_type.is_block_device() {
+        'b'
+    } else if file_type.is_char_device() {
+        'c'
+    } else if file_type.is_symlink() {
+        'l'
+    } else if file_type.is_fifo() {
+        'p'
+    } else if file_type.is_socket() {
+        's'
     } else {
-        s.push('-');
-    }
+        '?'
+    });
 
     // Owner permissions.
     s.push(if mode & 0o400 != 0 { 'r' } else { '-' });
