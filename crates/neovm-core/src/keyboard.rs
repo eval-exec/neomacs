@@ -3305,7 +3305,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     pub(crate) fn special_event_binding(&self, event: &Value) -> Option<Value> {
-        let special_event_map = self.obarray.symbol_value("special-event-map").copied()?;
+        let special_event_map = self.obarray.symbol_value_copied("special-event-map")?;
         // GNU `read_char` calls `access_keymap` on the event head, so a
         // full lispy event like `(focus-in FRAME)` must match a keymap entry
         // stored under just `focus-in`.
@@ -6383,8 +6383,7 @@ impl crate::emacs_core::eval::Context {
 
         let show_help_function = self
             .obarray
-            .symbol_value("show-help-function")
-            .copied()
+            .symbol_value_copied("show-help-function")
             .unwrap_or(Value::NIL);
         if self.function_value_is_callable(&show_help_function) {
             let _ = self.funcall_general(show_help_function, vec![help])?;
@@ -6880,8 +6879,7 @@ impl crate::emacs_core::eval::Context {
 
     fn default_tool_bar_map(&self) -> Value {
         self.obarray()
-            .default_value_id(intern("tool-bar-map"))
-            .copied()
+            .default_value_id_copied(intern("tool-bar-map"))
             .unwrap_or(Value::NIL)
     }
 
