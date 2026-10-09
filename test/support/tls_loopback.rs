@@ -88,7 +88,9 @@ impl Drop for TlsPeer {
     fn drop(&mut self) {
         let _ = self.stop.send(());
         if let Some(worker) = self.worker.take() {
-            worker.join().unwrap();
+            // Cleanup must not replace an assertion failure or panic again
+            // while the test is already unwinding.
+            let _ = worker.join();
         }
     }
 }
@@ -108,6 +110,9 @@ impl StalledPeer {
         let worker = thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
+                if stopped.try_recv().is_ok() {
+                    return;
+                }
                 match listener.accept() {
                     Ok((socket, _)) => {
                         // Bound the defective blocking path without adding a
@@ -138,7 +143,9 @@ impl Drop for StalledPeer {
     fn drop(&mut self) {
         let _ = self.stop.send(());
         if let Some(worker) = self.worker.take() {
-            worker.join().unwrap();
+            // Cleanup must not replace an assertion failure or panic again
+            // while the test is already unwinding.
+            let _ = worker.join();
         }
     }
 }
