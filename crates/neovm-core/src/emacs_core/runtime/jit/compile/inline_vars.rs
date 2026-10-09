@@ -882,8 +882,8 @@ fn blv_rule(
 fn fwd_load(fb: &mut FunctionBuilder, desc: ClifValue, kind: FwdKind) -> ClifValue {
     match kind {
         FwdKind::Bool => {
-            let flag = super::atomic_forward::load_bool(fb, desc, LISP_BOOL_FWD_VALUE_OFFSET);
-            let set = ne_imm(fb, flag, 0);
+            let flag = super::atomic_forward::load_bool_byte(fb, desc);
+            let set = flag.is_set(fb);
             let t = imm64(fb, Value::T.bits() as i64);
             let nil = imm64(fb, Value::NIL.bits() as i64);
             fb.ins().select(set, t, nil)

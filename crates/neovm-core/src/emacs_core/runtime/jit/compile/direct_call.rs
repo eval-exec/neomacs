@@ -504,12 +504,8 @@ pub(crate) fn emit_direct_bytecode_call(
         vmctx,
         (CONTEXT_OBARRAY_OFFSET + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let debug = super::atomic_forward::load_bool(
-        fb,
-        cell,
-        crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET,
-    );
-    let armed_debugger = icmp_imm_p(fb, IntCC::NotEqual, debug, 0);
+    let debug = super::atomic_forward::load_bool_byte(fb, cell);
+    let armed_debugger = debug.is_set(fb);
     next(fb, armed_debugger);
     // 5. Depth.
     let depth = fb

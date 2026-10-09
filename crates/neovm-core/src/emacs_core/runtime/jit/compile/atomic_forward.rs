@@ -10,7 +10,7 @@
 //! The sequence points also clear Cranelift's store knowledge, preventing an
 //! idempotent publication store from being removed. They emit no machine bytes.
 
-use cranelift_codegen::ir::{InstBuilder, MemFlagsData, Value, types};
+use cranelift_codegen::ir::{InstBuilder, MemFlagsData, Value, condcodes::IntCC, types};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::FunctionBuilder;
 
@@ -102,6 +102,40 @@ pub(super) fn load_word(fb: &mut FunctionBuilder, descriptor: Value, offset: usi
     let address = fb.ins().iadd_imm_s(descriptor, offset as i64);
     fb.ins()
         .atomic_load(types::I64, MemFlagsData::trusted(), address)
+}
+
+/// A compiler-only AtomicBool observation that has not been widened.
+///
+/// Only the byte load below constructs this type. Its zero test keeps the
+/// comparison at I8, so x64 can test the already zero-extended load register
+/// without extending that register a second time. The original effectful
+/// atomic read and its ordering remain intact on every target.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AtomicBoolByte {
+    byte: Value,
+}
+
+static_assertions::assert_impl_all!(AtomicBoolByte: Copy, Clone, std::fmt::Debug, Send, Sync);
+
+impl AtomicBoolByte {
+    /// Test this observation without exposing it to a wider OR expression.
+    pub(super) fn is_set(self, fb: &mut FunctionBuilder) -> Value {
+        let zero = fb.ins().iconst(types::I8, 0);
+        fb.ins().icmp(IntCC::NotEqual, self.byte, zero)
+    }
+}
+
+/// Observe a known Bool descriptor's fixed AtomicBool slot. This returns an
+/// I8 compiler handle, never a borrowed Rust byte or a heap-backed Value.
+pub(super) fn load_bool_byte(fb: &mut FunctionBuilder, descriptor: Value) -> AtomicBoolByte {
+    let address = fb.ins().iadd_imm_s(
+        descriptor,
+        crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET as i64,
+    );
+    let byte = fb
+        .ins()
+        .atomic_load(types::I8, MemFlagsData::trusted(), address);
+    AtomicBoolByte { byte }
 }
 
 /// Read an AtomicBool byte and widen it as existing guards expect. The
