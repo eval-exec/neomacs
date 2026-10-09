@@ -225,7 +225,6 @@ fn check_mapped_blv_binding() {
             .remember_mapped_cons_ahead_of_writes(owner)
     );
     assert!(!is_observed(owner.bits()));
-    let inline_bindings = super::super::inline_vars::blv_bind_layout_available_for_test();
     super::super::inline_vars::reset_inline_var_sites();
     let leaf = compile_blv(
         &context,
@@ -241,11 +240,11 @@ fn check_mapped_blv_binding() {
     );
     assert_eq!(
         super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Bind),
-        u32::from(inline_bindings)
+        1
     );
     assert_eq!(
         super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Unbind),
-        u32::from(inline_bindings)
+        1
     );
     for _ in 0..3 {
         assert_eq!(native(&mut context, &leaf, &[Value::T]), Value::T);
@@ -255,12 +254,12 @@ fn check_mapped_blv_binding() {
     assert_eq!(native(&mut context, &leaf, &[Value::T]), Value::T);
     assert_eq!(
         super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get()) - binds,
-        usize::from(!inline_bindings),
-        "an admitted binding stays inline; a missing layout uses the compiled shim",
+        0,
+        "the remembered binding stays inline",
     );
     assert_eq!(
         super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get()) - unbinds,
-        usize::from(!inline_bindings)
+        0
     );
     assert!(
         !is_observed(owner.bits()),
@@ -283,14 +282,6 @@ fn check_mapped_blv_binding() {
 #[test]
 fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
     check_mapped_blv_binding();
-}
-
-#[test]
-fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed_without_let_layout() {
-    super::super::jit_layout::with_unavailable_let_layout_for_test(|| {
-        assert!(!super::super::inline_vars::blv_bind_layout_available_for_test());
-        check_mapped_blv_binding();
-    });
 }
 
 fn blv_context(local: bool) -> Context {

@@ -1018,9 +1018,18 @@ impl SavedBufferId {
     }
 }
 
+mod specbinding_layout;
+
+specbinding_layout::define! {
 /// A single entry on the specpdl (special binding stack).
 /// Matches GNU Emacs's `union specbinding` SPECPDL_LET / SPECPDL_LET_LOCAL.
-#[derive(Clone, Debug)]
+///
+/// `repr(u8)` fixes each variant as a C-layout record beginning with its tag.
+/// Small fields precede word fields, sharing the first word with the tag;
+/// this keeps every entry at four words on the JIT's 64-bit hosts. The macro
+/// emits the matching record types from this same field list for `offset_of!`.
+/// Entries belong to their owning, thread-confined Context; a JIT push writes
+/// all live fields before publishing the new specpdl length.
 pub(crate) enum SpecBinding {
     /// Plain dynamic let-binding: saves old obarray (global/default) value.
     Let {
@@ -1061,16 +1070,16 @@ pub(crate) enum SpecBinding {
     /// `(nil FUNC FORMS FLAGS)` for these (`backtrace_frame_apply`,
     /// eval.c:3993-3994).
     Backtrace {
+        debug_on_exit: bool,
         function: Value,
         args: BacktraceArgs,
-        debug_on_exit: bool,
     },
     /// Common evaluated one-argument call, stored directly in the specpdl
     /// entry so callback-heavy paths do not clone into the owned side stack.
     Backtrace1 {
+        debug_on_exit: bool,
         function: Value,
         arg: Value,
-        debug_on_exit: bool,
     },
     /// Common evaluated two-argument call. Omitting `debug_on_exit` is a type-
     /// level statement that this compact form is the ordinary non-debug frame;
@@ -1096,9 +1105,9 @@ pub(crate) enum SpecBinding {
     /// (`Context::detach_native_frames_into`). So the stop-the-world root
     /// snapshot and backtrace walks may always read through the pointer.
     BacktraceNative {
+        nargs: u32,
         function: Value,
         args_ptr: *const i64,
-        nargs: u32,
     },
     /// unwind-protect cleanup. Matches GNU SPECPDL_UNWIND.
     /// For interpreter: forms is a cons list, unbind_to calls sf_progn_value.
@@ -1137,6 +1146,8 @@ pub(crate) enum SpecBinding {
     NativeUnwind { action: NativeUnwindAction },
     /// Placeholder. Matches GNU SPECPDL_NOP.
     Nop,
+}
+
 }
 
 /// Cold, owned payload for a `save-restriction` unwind entry.

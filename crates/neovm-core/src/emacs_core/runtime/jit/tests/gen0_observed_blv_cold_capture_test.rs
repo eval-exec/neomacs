@@ -192,7 +192,6 @@ fn check_binding(local: bool) {
         "fx1-cold-blv-inspect-bound",
         Value::subr_from_sym_id(observer),
     );
-    let expected_sites = u32::from(super::super::inline_vars::blv_bind_layout_available_for_test());
     super::super::inline_vars::reset_inline_var_sites();
     let leaf = compile_blv(
         &context,
@@ -213,13 +212,13 @@ fn check_binding(local: bool) {
     );
     assert_eq!(
         super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Bind),
-        expected_sites,
-        "the layout admits inline binds or leaves the compiled shim"
+        1,
+        "the binding site is inline"
     );
     assert_eq!(
         super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Unbind),
-        expected_sites,
-        "the layout admits inline unbinds or leaves the compiled shim"
+        1,
+        "the unbinding site is inline"
     );
     let old = raw_cdr(target);
     let depths = (context.specpdl.len(), context.jit_bind_stack.len());
@@ -298,21 +297,4 @@ fn gen0_unobserved_local_blv_cold_bind_and_restore_do_not_capture_saved_owner() 
 #[test]
 fn gen0_unobserved_default_blv_cold_bind_and_restore_do_not_capture_saved_owner() {
     check_binding(false);
-}
-
-#[test]
-fn gen0_unobserved_local_blv_cold_bind_and_restore_do_not_capture_saved_owner_without_let_layout() {
-    super::super::jit_layout::with_unavailable_let_layout_for_test(|| {
-        assert!(!super::super::inline_vars::blv_bind_layout_available_for_test());
-        check_binding(true);
-    });
-}
-
-#[test]
-fn gen0_unobserved_default_blv_cold_bind_and_restore_do_not_capture_saved_owner_without_let_layout()
-{
-    super::super::jit_layout::with_unavailable_let_layout_for_test(|| {
-        assert!(!super::super::inline_vars::blv_bind_layout_available_for_test());
-        check_binding(false);
-    });
 }

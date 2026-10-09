@@ -34,9 +34,10 @@ fn trace_minibuffer_unwind_layout() {
         let lets = jit_layout::let_layout();
         let backtraces = jit_layout::backtrace_layout();
         tracing::info!(target: "d5::mini_unwind_layout",
-            let_available = lets.is_some(), backtrace_available = backtraces.is_some(),
+            let_available = true, backtrace_available = backtraces.is_some(),
             "mini unwind template probes");
-        if let Some(layout) = lets {
+        {
+            let layout = lets;
             for (name, template) in [
                 ("let", layout.let_),
                 ("let_local", layout.let_local),

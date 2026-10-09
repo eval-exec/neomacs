@@ -109,7 +109,6 @@ fn check_multi_blv_unbind() {
     // Bind lower first, so the suffix checks the unobserved higher cell
     // first. The callback observes lower and the retained upper anchor only
     // after both bindings; that makes higher a genuine window hit.
-    let inline_bindings = super::super::inline_vars::blv_bind_layout_available_for_test();
     super::super::inline_vars::reset_inline_var_sites();
     let leaf = compile_blv(
         &context,
@@ -134,11 +133,11 @@ fn check_multi_blv_unbind() {
     );
     assert_eq!(
         super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Bind),
-        2 * u32::from(inline_bindings)
+        2
     );
     assert_eq!(
         super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Unbind),
-        u32::from(inline_bindings)
+        1
     );
     let binds = super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get());
     let unbinds = super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get());
@@ -149,15 +148,14 @@ fn check_multi_blv_unbind() {
     assert_eq!(result, Value::make_int(31));
     assert_eq!(
         super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get()) - binds,
-        if inline_bindings { 0 } else { 2 }
+        0
     );
     assert_eq!(
         super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get()) - unbinds,
         1
     );
-    // With an admitted layout, the observed refusal falls back before either
-    // restore is written. The compiled suffix restores both owners in either
-    // case, journaling the observed one only.
+    // The observed refusal falls back before either restore is written.
+    // The compiled suffix restores both owners, journaling the observed one only.
     assert_eq!(
         LispCollectionRevision::current().steps_since_for_test(revision),
         1
@@ -180,12 +178,4 @@ fn check_multi_blv_unbind() {
 #[test]
 fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
     check_multi_blv_unbind();
-}
-
-#[test]
-fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement_without_let_layout() {
-    super::super::jit_layout::with_unavailable_let_layout_for_test(|| {
-        assert!(!super::super::inline_vars::blv_bind_layout_available_for_test());
-        check_multi_blv_unbind();
-    });
 }

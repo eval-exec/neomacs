@@ -42,7 +42,7 @@
 //! BLV cons is inline only outside the window (P0.7c's owner test), or into
 //! a dumped default cell the compile entered into the dump remembered set
 //! ahead of time (`TaggedHeap::remember_mapped_cons_ahead_of_writes`) while
-//! the window is not ALL. Specpdl entries are written from the probed
+//! the window is not ALL. Specpdl entries are written from the fixed
 //! templates (`jit_layout::let_layout`), and the bind stack is kept exactly
 //! as the shims keep it, so deopt, OSR, handler unwinding and the backtrace
 //! walkers see the entries the shims would have pushed.
@@ -294,7 +294,7 @@ pub(crate) struct SpecLayout {
 }
 
 fn spec_layout() -> Option<SpecLayout> {
-    let lets = let_layout()?;
+    let lets = let_layout();
     Some(SpecLayout {
         spdl: specpdl_vec_offsets()?,
         jbs: jit_bind_stack_vec_offsets()?,
@@ -302,13 +302,6 @@ fn spec_layout() -> Option<SpecLayout> {
         local_default_share: lets.let_local.header_offset == lets.let_default.header_offset
             && lets.let_local.fields[..2] == lets.let_default.fields[..2],
     })
-}
-
-/// Whether the host layouts admit inline buffer-local binds and restores.
-/// Tests derive work counts from admission capability, never emitted counters.
-#[cfg(test)]
-pub(crate) fn blv_bind_layout_available_for_test() -> bool {
-    spec_layout().is_some_and(|layout| layout.local_default_share)
 }
 
 /// The site a `varref` of SYM gets, if the knob inlines reads.
