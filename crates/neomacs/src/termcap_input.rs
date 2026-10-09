@@ -123,7 +123,7 @@ pub(crate) fn seed_input_decode_map_from_terminal(eval: &mut Context) {
         tracing::debug!("term_get_fkeys: no termcap/terminfo database for TERM={term:?}");
         return;
     };
-    let Some(input_decode_map) = eval.obarray().symbol_value("input-decode-map").copied() else {
+    let Some(input_decode_map) = eval.obarray().symbol_value_copied("input-decode-map") else {
         return;
     };
 

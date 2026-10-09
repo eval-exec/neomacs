@@ -4193,9 +4193,9 @@ fn configure_gnu_startup_state_marks_bootstrap_gui_frame_as_initial_frame() {
         .expect("cached bootstrap evaluator");
     let frame_id = bootstrap_runtime_gui_startup(&mut eval);
 
-    let terminal_frame = *eval
+    let terminal_frame = eval
         .obarray()
-        .symbol_value("terminal-frame")
+        .symbol_value_copied("terminal-frame")
         .expect("terminal-frame");
     let Some(terminal_frame_id) = terminal_frame.as_frame_id() else {
         panic!("GUI startup should seed a hidden terminal frame, got {terminal_frame:?}");
@@ -4227,20 +4227,21 @@ fn configure_gnu_startup_state_marks_bootstrap_gui_frame_as_initial_frame() {
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("frame-initial-frame")
+            .symbol_value_copied("frame-initial-frame")
             .and_then(|value| value.as_frame_id()),
         Some(frame_id.0)
     );
     assert_eq!(
-        eval.obarray().symbol_value("frame-initial-frame-alist"),
-        Some(&Value::list(vec![Value::cons(
+        eval.obarray()
+            .symbol_value_copied("frame-initial-frame-alist"),
+        Some(Value::list(vec![Value::cons(
             Value::symbol("window-system"),
             Value::symbol("neo"),
         )]))
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("default-minibuffer-frame")
+            .symbol_value_copied("default-minibuffer-frame")
             .and_then(|value| value.as_frame_id()),
         Some(frame_id.0)
     );
@@ -4252,12 +4253,12 @@ fn configure_gnu_startup_state_reports_neo_window_system_for_gui_boots() {
     configure_gnu_startup_state(&mut eval, FrameId(42), &gui_startup());
 
     assert_eq!(
-        eval.obarray().symbol_value("window-system"),
-        Some(&Value::symbol("neo"))
+        eval.obarray().symbol_value_copied("window-system"),
+        Some(Value::symbol("neo"))
     );
     assert_eq!(
-        eval.obarray().symbol_value("initial-window-system"),
-        Some(&Value::symbol("neo"))
+        eval.obarray().symbol_value_copied("initial-window-system"),
+        Some(Value::symbol("neo"))
     );
 }
 
@@ -4627,23 +4628,23 @@ fn configure_gnu_startup_state_clears_window_system_for_tty_boots() {
     configure_gnu_startup_state(&mut eval, frame_id, &startup);
 
     assert_eq!(
-        eval.obarray().symbol_value("window-system"),
-        Some(&Value::NIL)
+        eval.obarray().symbol_value_copied("window-system"),
+        Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray().symbol_value("initial-window-system"),
-        Some(&Value::NIL)
+        eval.obarray().symbol_value_copied("initial-window-system"),
+        Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-args"),
-        Some(&Value::list(vec![
+        eval.obarray().symbol_value_copied("command-line-args"),
+        Some(Value::list(vec![
             Value::string("neomacs"),
             Value::string("-q")
         ]))
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-args-left"),
-        Some(&Value::list(vec![Value::string("-q")]))
+        eval.obarray().symbol_value_copied("command-line-args-left"),
+        Some(Value::list(vec![Value::string("-q")]))
     );
     let frame = eval
         .frame_manager()
@@ -4814,24 +4815,24 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
     configure_gnu_startup_state(&mut eval, FrameId(9), &startup);
 
     assert_eq!(
-        eval.obarray().symbol_value("noninteractive"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("noninteractive"),
+        Some(Value::T)
     );
     assert_eq!(
-        eval.obarray().symbol_value("gc-cons-percentage"),
-        Some(&Value::make_float(1.0))
+        eval.obarray().symbol_value_copied("gc-cons-percentage"),
+        Some(Value::make_float(1.0))
     );
     // A noninteractive startup never activates the startup GC ceiling: the
     // batch script runs inside `normal-top-level` and the settling timer that
     // releases the ceiling cannot fire, so GNU semantics (no ceiling) apply.
     assert_eq!(
         eval.obarray()
-            .symbol_value("neomacs--startup-gc-ceiling-active"),
-        Some(&Value::NIL)
+            .symbol_value_copied("neomacs--startup-gc-ceiling-active"),
+        Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-args"),
-        Some(&Value::list(vec![
+        eval.obarray().symbol_value_copied("command-line-args"),
+        Some(Value::list(vec![
             Value::string("neomacs"),
             Value::string("-Q"),
             Value::string("--eval"),
@@ -4847,8 +4848,8 @@ fn configure_gnu_startup_state_seeds_command_line_args_left_for_gnu_startup() {
     configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
 
     assert_eq!(
-        eval.obarray().symbol_value("command-line-args-left"),
-        Some(&Value::list(vec![
+        eval.obarray().symbol_value_copied("command-line-args-left"),
+        Some(Value::list(vec![
             Value::string("-Q"),
             Value::string("-l"),
             Value::string("/tmp/demo.el")
@@ -5341,8 +5342,8 @@ fn bootstrap_gui_state_allows_gnu_frame_initialize_to_delete_terminal_frame() {
     let frame_ids: Vec<_> = eval.frame_manager().frame_list().into_iter().collect();
     assert_eq!(frame_ids, vec![frame_id]);
     assert_eq!(
-        eval.obarray().symbol_value("terminal-frame"),
-        Some(&Value::NIL)
+        eval.obarray().symbol_value_copied("terminal-frame"),
+        Some(Value::NIL)
     );
 }
 
@@ -5649,8 +5650,7 @@ fn sync_selected_gui_chrome_state_defers_lisp_setup_during_throw_on_input() {
     sync_selected_gui_chrome_state(&mut eval);
     assert_eq!(
         eval.obarray()
-            .symbol_value("neo-tool-bar-setup-count")
-            .copied()
+            .symbol_value_copied("neo-tool-bar-setup-count")
             .expect("setup count while throw-on-input is active"),
         Value::fixnum(0)
     );
@@ -5659,8 +5659,7 @@ fn sync_selected_gui_chrome_state_defers_lisp_setup_during_throw_on_input() {
     sync_selected_gui_chrome_state(&mut eval);
     assert_eq!(
         eval.obarray()
-            .symbol_value("neo-tool-bar-setup-count")
-            .copied()
+            .symbol_value_copied("neo-tool-bar-setup-count")
             .expect("setup count after throw-on-input"),
         Value::fixnum(1)
     );
@@ -6138,12 +6137,12 @@ fn bootstrap_batch_eval_exits_outer_command_loop_like_gnu() {
         })
     );
     assert_eq!(
-        eval.obarray().symbol_value("neomacs--batch-probe"),
-        Some(&Value::fixnum(42))
+        eval.obarray().symbol_value_copied("neomacs--batch-probe"),
+        Some(Value::fixnum(42))
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-processed"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("command-line-processed"),
+        Some(Value::T)
     );
 }
 
@@ -6679,8 +6678,8 @@ fn gnu_startup_clears_terminal_frame_without_deselecting_opening_gui_frame() {
         "GUI startup should keep the opening frame selected through the first recursive edit"
     );
     assert_eq!(
-        eval.obarray().symbol_value("terminal-frame"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("terminal-frame"),
+        Some(Value::NIL),
         "GUI startup should clear terminal-frame after the first recursive edit enters the command loop"
     );
 }
