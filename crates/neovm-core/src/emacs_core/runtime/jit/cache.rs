@@ -3183,7 +3183,19 @@ pub(crate) fn direct_call_cold(
         if shim_panic_pending() {
             return NativeCallOutcome::FlowStashed;
         }
-        return dispatch_raw_signal(ctx);
+        let flow =
+            take_pending_flow().expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
+        // Cleanup can replace the flow, so inspect the actual incoming carrier
+        // at each boundary. A completed search needs only the same take/stash
+        // pair as an ordinary native signal return; first dispatch still runs
+        // with this activation's roots and arguments live.
+        if let Some(sig) = flow.as_signal()
+            && sig.search_complete
+        {
+            stash_pending_flow(flow);
+            return NativeCallOutcome::FlowStashed;
+        }
+        return dispatch_raw_signal(ctx, flow);
     }
     if status == STATUS_DEOPT_AT {
         // Precise deopt: no bind/cond frames exist on the direct path (the
@@ -3193,7 +3205,11 @@ pub(crate) fn direct_call_cold(
                 deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
             }
             // deopt_at_outcome only degrades to plain Deopt with a null vmctx.
-            NativeRun::Signal => dispatch_raw_signal(ctx),
+            NativeRun::Signal => {
+                let flow = take_pending_flow()
+                    .expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
+                dispatch_raw_signal(ctx, flow)
+            }
             _ => NativeCallOutcome::Fallback,
         };
     }
@@ -3213,9 +3229,7 @@ pub(crate) fn direct_call_cold(
 /// no Lisp state is shared or cached here.
 #[cold]
 #[inline(never)]
-fn dispatch_raw_signal(ctx: *mut Context) -> NativeCallOutcome {
-    let flow =
-        take_pending_flow().expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
+fn dispatch_raw_signal(ctx: *mut Context, flow: Flow) -> NativeCallOutcome {
     // SAFETY: the native call's dormant seam Context, as in the runner.
     let ctx = unsafe { &mut *ctx };
     NativeCallOutcome::from_result(ctx.dispatch_signal_flow_cold(flow))

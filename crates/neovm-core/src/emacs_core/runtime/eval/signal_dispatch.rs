@@ -168,14 +168,6 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn dispatch_signal_flow_cold(&mut self, flow: Flow) -> EvalResult {
-        // Native exits can forward the same completed search through many
-        // callers. Preserve its exact carrier without reentering the dispatch
-        // wrappers; first dispatch still runs with the signalling roots live.
-        if let Some(sig) = flow.as_signal()
-            && sig.search_complete
-        {
-            return Err(flow);
-        }
         self.dispatch_signal_result_if_needed(Err(flow))
     }
 
