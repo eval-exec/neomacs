@@ -429,6 +429,25 @@ fn composition_register_prop(
     id
 }
 
+/// The `composition` property symbol, interned once.
+///
+/// GNU keeps this as the staticpro'd `Qcomposition`. `composition_width_at`
+/// runs once per display stop of every column/screen-line scan (via
+/// `indent::composition_run_at`), so `Value::symbol("composition")` re-hashed
+/// the name on each probe -- one of the two ~2M-per-ELB-`scroll` intern
+/// sources. Caches the `SymId` rather than the `Value`, matching
+/// `cached_symbol_id!` in `runtime/eval` and the `syntax-table` symbol in
+/// `text/syntax`: an id is a plain index, so it cannot be invalidated by GC
+/// the way a cached pointer could. Threading: the id resolves once from the
+/// process-global symbol registry via `OnceLock` and reads lock-free; no
+/// Lisp state is cached.
+#[inline(always)]
+fn composition_prop_symbol() -> Value {
+    static SYMBOL: std::sync::OnceLock<crate::emacs_core::intern::SymId> =
+        std::sync::OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("composition")))
+}
+
 /// Display width and character length of the composition whose `composition`
 /// text property begins at 1-based buffer position `charpos1`, or None if there
 /// is no valid composition there. This is GNU's `get_composition_id` as called
@@ -442,7 +461,7 @@ pub(crate) fn composition_width_at(
     let prop = super::textprop::builtin_get_text_property_in_state(
         &ctx.obarray,
         &ctx.buffers,
-        &[Value::fixnum(charpos1), Value::symbol("composition")],
+        &[Value::fixnum(charpos1), composition_prop_symbol()],
     )
     .ok()?;
     let (length, components, mod_func, registered) = composition_parts_any(prop)?;
@@ -1285,7 +1304,7 @@ pub(crate) fn find_composition_internal(
     } else {
         integer_value(&args[1])
     };
-    let comp = Value::symbol("composition");
+    let comp = composition_prop_symbol();
 
     let found = if let Some(text) = ctx.lisp_string(args[2]) {
         let len = text.schars() as i64;

@@ -5281,6 +5281,33 @@ fn display_single_spec_replacing_p(spec: Value, frame_window_p: bool) -> bool {
     }
 }
 
+// Well-known symbol ids for the invisible-property probe, interned once.
+//
+// GNU holds these as the staticpro'd `Qinvisible` and the DEFVAR_PER_BUFFER
+// `buffer-invisibility-spec`. `invisible_status_for_value` runs once per
+// display stop of every column/screen-line scan (`indent::display_advance_at`
+// and `scan_for_column` both probe through
+// `invisible_source_run_end_byte`), so the by-name spellings re-interned both
+// names on every probe. Each accessor interns once and caches the `SymId` (a
+// plain index GC cannot invalidate), the same pattern as `cached_symbol_id!`
+// in `runtime/eval`. Threading: the id resolves once from the process-global
+// symbol registry via `OnceLock` and reads lock-free; no Lisp state is cached.
+
+/// GNU's staticpro'd `Qinvisible`.
+#[inline(always)]
+fn invisible_prop_symbol() -> Value {
+    static SYMBOL: std::sync::OnceLock<super::intern::SymId> = std::sync::OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| intern("invisible")))
+}
+
+/// `buffer-invisibility-spec` (DEFVAR_PER_BUFFER, src/buffer.c), read through
+/// `eval_symbol_by_id` so buffer-local bindings still apply.
+#[inline(always)]
+fn buffer_invisibility_spec_sym_id() -> super::intern::SymId {
+    static SYMBOL: std::sync::OnceLock<super::intern::SymId> = std::sync::OnceLock::new();
+    *SYMBOL.get_or_init(|| intern("buffer-invisibility-spec"))
+}
+
 pub(crate) fn invisible_status_for_value(
     eval: &mut super::eval::Context,
     pos_or_prop: Value,
@@ -5288,15 +5315,15 @@ pub(crate) fn invisible_status_for_value(
     let prop = match pos_or_prop.kind() {
         ValueKind::Fixnum(v) if v >= 0 => super::textprop::builtin_get_char_property(
             eval,
-            vec![pos_or_prop, Value::symbol("invisible"), Value::NIL],
+            vec![pos_or_prop, invisible_prop_symbol(), Value::NIL],
         )?,
         _ if super::marker::is_marker(&pos_or_prop) => super::textprop::builtin_get_char_property(
             eval,
-            vec![pos_or_prop, Value::symbol("invisible"), Value::NIL],
+            vec![pos_or_prop, invisible_prop_symbol(), Value::NIL],
         )?,
         _ => pos_or_prop,
     };
-    let invisibility_spec = eval.eval_symbol_by_id(intern("buffer-invisibility-spec"))?;
+    let invisibility_spec = eval.eval_symbol_by_id(buffer_invisibility_spec_sym_id())?;
     Ok(text_prop_means_invisible(prop, invisibility_spec))
 }
 

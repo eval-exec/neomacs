@@ -1157,3 +1157,67 @@ fn only_word_wrap_backs_a_goal_off_the_row_edge() {
     assert!(LineWrap::WindowWrap.goal_stops_at_row_edge());
     assert!(!LineWrap::WordWrap.goal_stops_at_row_edge());
 }
+
+/// A per-character display scan must resolve its well-known symbol names once,
+/// not on every advance. `display_advance_at` and the property probes it runs
+/// per display stop (`display_run_at`, `composition_run_at` ->
+/// `composition_width_at`, `invisible_source_run_end_byte`) used to spell
+/// their names out (`Value::symbol("composition")`,
+/// `Obarray::symbol_value("standard-display-table")`, ...), re-interning the
+/// same handful of literals per character/probe -- ~4M `intern()` calls in a
+/// single ELB `scroll` run, whose short-string memcmp cost also swung with
+/// unrelated .rodata layout shifts. After one warm-up advance resolves the
+/// cached `SymId`s, scanning a plain buffer must not intern at all.
+#[test]
+fn display_advance_interns_no_symbols_per_character() {
+    crate::test_utils::init_test_tracing();
+
+    let mut ev = Context::new();
+    let buffer_id = ev.buffers.current_buffer_id().expect("current buffer");
+    // 40 lines of 80 chars: the scan crosses DISPLAY_STOP_CHAR_CAP (100) many
+    // times, so the stop branch -- and every property probe in it -- re-runs
+    // during the scan, not only on the first character.
+    let line = format!("{}\n", "x".repeat(80));
+    ev.buffers
+        .insert_into_buffer(buffer_id, &line.repeat(40))
+        .expect("insert text");
+    ev.buffers
+        .goto_buffer_emacs_byte_pos(buffer_id, crate::buffer::EmacsBytePos::new(0));
+
+    // Warm-up: the first advance resolves and caches every well-known id and
+    // runs one full stop-probe pass.
+    let stop = DisplayStopCache::new();
+    display_advance_at(&mut ev, buffer_id, 0, 0, &stop).expect("warm-up advance");
+
+    crate::emacs_core::intern::reset_intern_calls();
+    let mut byte = 0usize;
+    let mut column = 0usize;
+    let end = ev
+        .buffers
+        .get(buffer_id)
+        .expect("buffer")
+        .accessible_emacs_byte_region()
+        .end()
+        .get();
+    while byte < end {
+        let Some(advance) =
+            display_advance_at(&mut ev, buffer_id, byte, column, &stop).expect("advance")
+        else {
+            break;
+        };
+        assert!(
+            advance.next_byte > byte,
+            "advance must progress at byte {byte}"
+        );
+        byte = advance.next_byte;
+        column = column.saturating_add(advance.width);
+    }
+    assert_eq!(byte, end, "scan must reach the buffer end");
+    let calls = crate::emacs_core::intern::intern_calls();
+    assert_eq!(
+        calls,
+        0,
+        "per-character display scan interned symbol name(s): {:?}",
+        crate::emacs_core::intern::intern_call_names(),
+    );
+}
