@@ -320,7 +320,7 @@ pub(crate) fn default_value_in_state(
         }
     }
 
-    obarray.default_value_id(resolved).copied()
+    obarray.default_value_id_copied(resolved)
 }
 
 #[cfg(test)]

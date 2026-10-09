@@ -76,10 +76,10 @@ fn uninterned_value_cells_ignore_buffer_local_namesakes() {
         .expect("set should bind uninterned symbol");
 
     assert_eq!(
-        ctx.obarray().symbol_value_id(uninterned).copied(),
+        ctx.obarray().symbol_value_id_copied(uninterned),
         Some(Value::NIL)
     );
-    assert_eq!(ctx.obarray().symbol_value_id(canonical).copied(), None);
+    assert_eq!(ctx.obarray().symbol_value_id_copied(canonical), None);
     assert_eq!(
         ctx.buffers
             .current_buffer()
