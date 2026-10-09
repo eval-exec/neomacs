@@ -1,5 +1,6 @@
 //! Opt-in compositor test. Run with WAYLAND_DEBUG=1 to inspect xdg_popup roles.
 
+use super::session::MenuDirection;
 use super::{MenuPresentation, MenuRequest, MenuSession};
 use crate::presentation::PopupCommit;
 use std::collections::HashSet;
@@ -342,7 +343,7 @@ impl ApplicationHandler for Smoke {
                 &gpu.queue,
             );
             let mut session = MenuSession::new(0.0, 0.0, menu, 14.0, 18.0);
-            session.move_hover(1);
+            session.move_hover(MenuDirection::Next);
             assert!(session.open_submenu());
             self.menus.open(MenuRequest {
                 tooltips: self.with_tooltips.then(|| {

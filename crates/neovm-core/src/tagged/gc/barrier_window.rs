@@ -243,6 +243,13 @@ impl TaggedHeap {
         self.close_alloc_regions();
         self.concurrent_mark_running = on;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(on));
+        if tagged_heap_is_current(self) {
+            TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| {
+                active.set(
+                    on && self.concurrent_claims() && self.concurrent_hash_snapshot().is_some(),
+                );
+            });
+        }
         self.publish_barrier_window();
     }
 }
@@ -320,6 +327,9 @@ impl TaggedHeap {
     /// Test hook: drain the SATB buffer the barrier logs pre-images into.
     pub(crate) fn take_satb_shared_for_test(&mut self) -> Vec<TaggedValue> {
         std::mem::take(&mut *self.satb_shared.lock().unwrap())
+            .into_iter()
+            .map(MarkWord::value)
+            .collect()
     }
 
     /// Test hook: is this owner queued for remembered-child tracing?

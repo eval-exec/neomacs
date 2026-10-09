@@ -85,6 +85,17 @@ impl HashIndex {
         }
     }
 
+    pub(super) fn try_with_capacity(
+        capacity: usize,
+    ) -> Result<Self, crate::emacs_core::error::Flow> {
+        let mut index = Self::default();
+        index
+            .table
+            .try_reserve(capacity, |entry| entry.hash)
+            .map_err(|_| crate::emacs_core::alloc::memory_exhausted())?;
+        Ok(index)
+    }
+
     #[inline]
     pub(super) fn len(&self) -> usize {
         self.table.len()

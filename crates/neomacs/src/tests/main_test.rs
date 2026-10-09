@@ -58,10 +58,10 @@ use neovm_core::emacs_core::eval::{
 };
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
 use neovm_core::emacs_core::image_catalog::{
-    EncodedBytes, ImageAnimationInvalidation, ImageCatalog, ImageColorContext, ImageDataSource,
-    ImageFrameIndex, ImageId, ImageLoadAttempt, ImageLoadIdentity, ImageLoadToken, ImageLookup,
-    ImageResolveRequest, ImageResolveSource, ImageSizeLimit, ImageSpecIdentity,
-    ResolvedImageMetadata,
+    EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageCatalog,
+    ImageColorContext, ImageDataSource, ImageFileName, ImageFrameIndex, ImageId, ImageLoadAttempt,
+    ImageLoadIdentity, ImageLoadToken, ImageLookup, ImageResolveRequest, ImageResolveSource,
+    ImageSizeLimit, ImageSpecIdentity, ResolvedImageMetadata,
 };
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::load::{
@@ -89,7 +89,7 @@ use std::time::{Duration, Instant};
 mod platform_fonts;
 
 #[cfg(test)]
-#[path = "frame_snapshot_policy.rs"]
+#[path = "frame_snapshot_policy_test.rs"]
 mod frame_snapshot_policy;
 
 fn gui_display() -> BootstrapDisplayConfig {
@@ -2319,8 +2319,10 @@ fn assert_selected_frame_matches_materialized_default_metrics(eval: &Context) {
 fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2397,8 +2399,10 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
 fn opening_gui_frame_adoption_applies_fullscreen_mode() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2453,8 +2457,10 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
 fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2506,8 +2512,10 @@ fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows()
 fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2590,8 +2598,10 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let image_metadata = Arc::new(ImageRenderState::default());
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2615,7 +2625,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
     let image_path = repo_root.join("test/data/image/blank-100x200.png");
     let request = ImageResolveRequest {
         spec: test_image_spec_identity(image_path.to_str().expect("utf8 path")),
-        source: ImageResolveSource::File(LispString::from_utf8(
+        source: ImageResolveSource::File(ImageFileName::from_utf8(
             image_path.to_str().expect("utf8 path"),
         )),
         identity: test_file_image_identity(image_path.to_str().expect("utf8 path")),
@@ -2624,6 +2634,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         colors: ImageColorContext::default(),
         mask: Default::default(),
         frame: ImageFrameIndex::new(3),
+        animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
     };
 
@@ -2702,6 +2713,7 @@ fn animation_frames_share_sequence_identity_and_retirement_advances_generation()
         colors: ImageColorContext::default(),
         mask: Default::default(),
         frame: ImageFrameIndex::new(0),
+        animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
     };
 
@@ -2751,6 +2763,7 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     };
@@ -2758,8 +2771,10 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
     let worker_cmd_tx = cmd_tx.clone();
     let worker = std::thread::spawn(move || {
         let host = PrimaryWindowDisplayHost {
+            frame_opacity: Default::default(),
             resources: Default::default(),
             system_fonts: Default::default(),
+            font_entities: Default::default(),
             tooltip_client: Default::default(),
             cmd_tx: worker_cmd_tx.clone(),
             render_waker: None,
@@ -2820,8 +2835,10 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let image_metadata = Arc::new(ImageRenderState::default());
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2851,6 +2868,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     };
@@ -2886,8 +2904,10 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
 fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2909,12 +2929,13 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
     };
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("~/Pictures/Pik.png"),
-        source: ImageResolveSource::File(LispString::from_utf8("~/Pictures/Pik.png")),
+        source: ImageResolveSource::File(ImageFileName::from_utf8("~/Pictures/Pik.png")),
         identity: test_file_image_identity("~/Pictures/Pik.png"),
         size: ImageSizeSpec::new(AxisSize::AtMost(0), AxisSize::AtMost(24)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     };
@@ -2976,8 +2997,10 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
     let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
     let image_metadata: SharedImageRenderState = Arc::new(ImageRenderState::default());
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3007,6 +3030,7 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     };
@@ -3068,8 +3092,10 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
 fn primary_display_host_request_video_queues_create_once_with_stable_id() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3154,8 +3180,10 @@ fn resolved_video_registry_never_evicts_a_still_referenceable_identity() {
 fn primary_display_host_request_video_preserves_uri_source() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3203,8 +3231,10 @@ fn primary_display_host_request_video_preserves_uri_source() {
 fn primary_display_host_routes_one_typed_video_session_lifecycle() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3262,8 +3292,10 @@ fn primary_display_host_routes_one_typed_video_session_lifecycle() {
 fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_id() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3316,8 +3348,10 @@ fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_i
 fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3360,8 +3394,10 @@ fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
 fn primary_display_host_xwidget_lifecycle_uses_explicit_xwidget_id() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3434,8 +3470,10 @@ fn bootstrap_gui_frame_adoption_routes_future_resizes_to_primary_window() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
 
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3502,8 +3540,10 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let shared = shared_primary_window_size(843, 489);
     let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3569,8 +3609,10 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
 fn primary_window_display_host_forwards_visual_config_to_renderer() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3643,8 +3685,10 @@ fn primary_window_display_host_round_trips_clipboard_requests_through_renderer()
         reply.send(Ok(SelectionOwner::OtherProcess)).unwrap();
     });
     let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3715,8 +3759,10 @@ fn redisplay_title_sync_formats_frame_title_format_for_primary_window() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
 
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3764,8 +3810,10 @@ fn frame_host_title_formats_the_restored_runtime_system_name() {
     let _bootstrap = bootstrap_buffers(&mut eval, 843, 489, gui_display());
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -4145,9 +4193,9 @@ fn configure_gnu_startup_state_marks_bootstrap_gui_frame_as_initial_frame() {
         .expect("cached bootstrap evaluator");
     let frame_id = bootstrap_runtime_gui_startup(&mut eval);
 
-    let terminal_frame = *eval
+    let terminal_frame = eval
         .obarray()
-        .symbol_value("terminal-frame")
+        .symbol_value_copied("terminal-frame")
         .expect("terminal-frame");
     let Some(terminal_frame_id) = terminal_frame.as_frame_id() else {
         panic!("GUI startup should seed a hidden terminal frame, got {terminal_frame:?}");
@@ -4179,20 +4227,21 @@ fn configure_gnu_startup_state_marks_bootstrap_gui_frame_as_initial_frame() {
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("frame-initial-frame")
+            .symbol_value_copied("frame-initial-frame")
             .and_then(|value| value.as_frame_id()),
         Some(frame_id.0)
     );
     assert_eq!(
-        eval.obarray().symbol_value("frame-initial-frame-alist"),
-        Some(&Value::list(vec![Value::cons(
+        eval.obarray()
+            .symbol_value_copied("frame-initial-frame-alist"),
+        Some(Value::list(vec![Value::cons(
             Value::symbol("window-system"),
             Value::symbol("neo"),
         )]))
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("default-minibuffer-frame")
+            .symbol_value_copied("default-minibuffer-frame")
             .and_then(|value| value.as_frame_id()),
         Some(frame_id.0)
     );
@@ -4204,12 +4253,12 @@ fn configure_gnu_startup_state_reports_neo_window_system_for_gui_boots() {
     configure_gnu_startup_state(&mut eval, FrameId(42), &gui_startup());
 
     assert_eq!(
-        eval.obarray().symbol_value("window-system"),
-        Some(&Value::symbol("neo"))
+        eval.obarray().symbol_value_copied("window-system"),
+        Some(Value::symbol("neo"))
     );
     assert_eq!(
-        eval.obarray().symbol_value("initial-window-system"),
-        Some(&Value::symbol("neo"))
+        eval.obarray().symbol_value_copied("initial-window-system"),
+        Some(Value::symbol("neo"))
     );
 }
 
@@ -4579,23 +4628,23 @@ fn configure_gnu_startup_state_clears_window_system_for_tty_boots() {
     configure_gnu_startup_state(&mut eval, frame_id, &startup);
 
     assert_eq!(
-        eval.obarray().symbol_value("window-system"),
-        Some(&Value::NIL)
+        eval.obarray().symbol_value_copied("window-system"),
+        Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray().symbol_value("initial-window-system"),
-        Some(&Value::NIL)
+        eval.obarray().symbol_value_copied("initial-window-system"),
+        Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-args"),
-        Some(&Value::list(vec![
+        eval.obarray().symbol_value_copied("command-line-args"),
+        Some(Value::list(vec![
             Value::string("neomacs"),
             Value::string("-q")
         ]))
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-args-left"),
-        Some(&Value::list(vec![Value::string("-q")]))
+        eval.obarray().symbol_value_copied("command-line-args-left"),
+        Some(Value::list(vec![Value::string("-q")]))
     );
     let frame = eval
         .frame_manager()
@@ -4766,24 +4815,24 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
     configure_gnu_startup_state(&mut eval, FrameId(9), &startup);
 
     assert_eq!(
-        eval.obarray().symbol_value("noninteractive"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("noninteractive"),
+        Some(Value::T)
     );
     assert_eq!(
-        eval.obarray().symbol_value("gc-cons-percentage"),
-        Some(&Value::make_float(1.0))
+        eval.obarray().symbol_value_copied("gc-cons-percentage"),
+        Some(Value::make_float(1.0))
     );
     // A noninteractive startup never activates the startup GC ceiling: the
     // batch script runs inside `normal-top-level` and the settling timer that
     // releases the ceiling cannot fire, so GNU semantics (no ceiling) apply.
     assert_eq!(
         eval.obarray()
-            .symbol_value("neomacs--startup-gc-ceiling-active"),
-        Some(&Value::NIL)
+            .symbol_value_copied("neomacs--startup-gc-ceiling-active"),
+        Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-args"),
-        Some(&Value::list(vec![
+        eval.obarray().symbol_value_copied("command-line-args"),
+        Some(Value::list(vec![
             Value::string("neomacs"),
             Value::string("-Q"),
             Value::string("--eval"),
@@ -4799,8 +4848,8 @@ fn configure_gnu_startup_state_seeds_command_line_args_left_for_gnu_startup() {
     configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
 
     assert_eq!(
-        eval.obarray().symbol_value("command-line-args-left"),
-        Some(&Value::list(vec![
+        eval.obarray().symbol_value_copied("command-line-args-left"),
+        Some(Value::list(vec![
             Value::string("-Q"),
             Value::string("-l"),
             Value::string("/tmp/demo.el")
@@ -5293,8 +5342,8 @@ fn bootstrap_gui_state_allows_gnu_frame_initialize_to_delete_terminal_frame() {
     let frame_ids: Vec<_> = eval.frame_manager().frame_list().into_iter().collect();
     assert_eq!(frame_ids, vec![frame_id]);
     assert_eq!(
-        eval.obarray().symbol_value("terminal-frame"),
-        Some(&Value::NIL)
+        eval.obarray().symbol_value_copied("terminal-frame"),
+        Some(Value::NIL)
     );
 }
 
@@ -5391,6 +5440,150 @@ fn gnu_startup_keeps_single_row_minibuffer() {
 }
 
 #[test]
+fn gui_created_frame_seeds_bar_defaults_before_redisplay() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"]).unwrap();
+    bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    for (modes, defaults, explicit, expected) in [
+        ("t", "nil", "nil", "(1 1)"),
+        ("nil", "nil", "nil", "(0 0)"),
+        (
+            "t",
+            "'((menu-bar-lines . 0) (tool-bar-lines . 2))",
+            "nil",
+            "(0 2)",
+        ),
+        (
+            "t",
+            "'((menu-bar-lines . 0) (tool-bar-lines . 2))",
+            "'((menu-bar-lines . 1) (tool-bar-lines . 0))",
+            "(1 0)",
+        ),
+    ] {
+        let result = eval
+            .eval_str(&format!(
+                "(let ((menu-bar-mode {modes}) (tool-bar-mode {modes})
+            (default-frame-alist {defaults}))
+            (let ((frame (x-create-frame {explicit})))
+              (list (frame-parameter frame 'menu-bar-lines)
+                    (frame-parameter frame 'tool-bar-lines))))"
+            ))
+            .unwrap();
+        assert_eq!(print_value_with_eval(&eval, &result), expected);
+    }
+}
+
+#[test]
+fn gui_redisplay_preserves_explicit_frame_bar_parameters() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+    let frame_id = bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    eval.eval_str("(set-frame-parameter nil 'menu-bar-lines 0)")
+        .expect("hide this frame's menu without changing the global mode");
+    for _ in 0..3 {
+        sync_selected_gui_chrome_state(&mut eval);
+        let result = eval
+            .eval_str("(list (frame-parameter nil 'menu-bar-lines) menu-bar-mode)")
+            .unwrap();
+        assert_eq!(print_value_with_eval(&eval, &result), "(0 t)");
+        assert_eq!(
+            eval.frame_manager().get(frame_id).unwrap().menu_bar_height,
+            0
+        );
+    }
+}
+
+#[test]
+fn gui_redisplay_keeps_local_bar_requests_independent_of_global_modes() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"]).unwrap();
+    let frame_id = bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    eval.eval_str(
+        "(progn (menu-bar-mode -1) (tool-bar-mode -1)
+                         (set-frame-parameter nil 'menu-bar-lines 1)
+                         (set-frame-parameter nil 'tool-bar-lines 2))",
+    )
+    .unwrap();
+    sync_selected_gui_chrome_state(&mut eval);
+    let result = eval
+        .eval_str(
+            "(list (frame-parameter nil 'menu-bar-lines)
+        (frame-parameter nil 'tool-bar-lines) menu-bar-mode tool-bar-mode)",
+        )
+        .unwrap();
+    assert_eq!(print_value_with_eval(&eval, &result), "(1 2 nil nil)");
+    let frame = eval.frame_manager().get(frame_id).unwrap();
+    assert_eq!(frame.menu_bar_height, frame.char_height.round() as u32);
+    assert_eq!(
+        frame.tool_bar_height,
+        2 * default_gui_tool_bar_line_height(frame.font_pixel_size)
+    );
+}
+
+#[test]
+fn gui_compact_bar_round_trip_preserves_frame_bar_requests() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"]).unwrap();
+    let frame_id = bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    eval.eval_str("(modify-frame-parameters nil '((menu-bar-lines . 0) (tool-bar-lines . 2)))")
+        .unwrap();
+    for compact in [true, false, true, false] {
+        eval.set_variable(
+            "compact-bar-mode",
+            if compact { Value::T } else { Value::NIL },
+        );
+        sync_selected_gui_chrome_state(&mut eval);
+        let result = eval
+            .eval_str(
+                "(list (frame-parameter nil 'menu-bar-lines)
+            (frame-parameter nil 'tool-bar-lines))",
+            )
+            .unwrap();
+        assert_eq!(print_value_with_eval(&eval, &result), "(0 2)");
+        let frame = eval.frame_manager().get(frame_id).unwrap();
+        let line_height = default_gui_tool_bar_line_height(frame.font_pixel_size);
+        assert_eq!(frame.menu_bar_height, 0);
+        assert_eq!(
+            frame.tool_bar_height,
+            if compact { 0 } else { 2 * line_height }
+        );
+        assert_eq!(
+            frame.compact_bar_height,
+            if compact { line_height } else { 0 }
+        );
+    }
+}
+
+#[test]
+fn unselected_compact_frame_keeps_geometry_when_parameters_change() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"]).unwrap();
+    let frame_id = bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    eval.eval_str("(setq compact-test-frame (selected-frame))")
+        .unwrap();
+    eval.set_variable("compact-bar-mode", Value::T);
+    sync_selected_gui_chrome_state(&mut eval);
+    let top = eval
+        .frame_manager()
+        .get(frame_id)
+        .unwrap()
+        .root_window()
+        .bounds()
+        .y;
+    assert!(top > 0.0);
+    eval.eval_str("(select-frame (make-frame '((name . \"other\"))))")
+        .unwrap();
+    eval.eval_str("(set-frame-parameter compact-test-frame 'name \"renamed\")")
+        .unwrap();
+    let frame = eval.frame_manager().get(frame_id).unwrap();
+    assert_eq!(frame.root_window().bounds().y, top);
+    assert_eq!(frame.menu_bar_height, 0);
+    assert_eq!(frame.tool_bar_height, 0);
+    assert_eq!(frame.compact_bar_height as f32, top);
+}
+
+#[test]
 fn bootstrap_gui_frame_seeds_live_menu_and_tool_bar_rows() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
@@ -5457,8 +5650,7 @@ fn sync_selected_gui_chrome_state_defers_lisp_setup_during_throw_on_input() {
     sync_selected_gui_chrome_state(&mut eval);
     assert_eq!(
         eval.obarray()
-            .symbol_value("neo-tool-bar-setup-count")
-            .copied()
+            .symbol_value_copied("neo-tool-bar-setup-count")
             .expect("setup count while throw-on-input is active"),
         Value::fixnum(0)
     );
@@ -5467,8 +5659,7 @@ fn sync_selected_gui_chrome_state_defers_lisp_setup_during_throw_on_input() {
     sync_selected_gui_chrome_state(&mut eval);
     assert_eq!(
         eval.obarray()
-            .symbol_value("neo-tool-bar-setup-count")
-            .copied()
+            .symbol_value_copied("neo-tool-bar-setup-count")
             .expect("setup count after throw-on-input"),
         Value::fixnum(1)
     );
@@ -5493,8 +5684,8 @@ fn sync_selected_gui_chrome_state_uses_compact_bar_as_separate_gui_chrome() {
         .frame_manager()
         .selected_frame()
         .expect("selected frame after compact chrome sync");
-    assert_eq!(frame.frame_parameter_int("menu-bar-lines"), Some(0));
-    assert_eq!(frame.frame_parameter_int("tool-bar-lines"), Some(0));
+    assert_eq!(frame.frame_parameter_int("menu-bar-lines"), Some(1));
+    assert_eq!(frame.frame_parameter_int("tool-bar-lines"), Some(1));
     assert_eq!(frame.frame_parameter_int("compact-bar-lines"), Some(1));
     assert_eq!(frame.menu_bar_height, 0);
     assert_eq!(frame.tool_bar_height, 0);
@@ -5946,12 +6137,12 @@ fn bootstrap_batch_eval_exits_outer_command_loop_like_gnu() {
         })
     );
     assert_eq!(
-        eval.obarray().symbol_value("neomacs--batch-probe"),
-        Some(&Value::fixnum(42))
+        eval.obarray().symbol_value_copied("neomacs--batch-probe"),
+        Some(Value::fixnum(42))
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-processed"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("command-line-processed"),
+        Some(Value::T)
     );
 }
 
@@ -6487,8 +6678,8 @@ fn gnu_startup_clears_terminal_frame_without_deselecting_opening_gui_frame() {
         "GUI startup should keep the opening frame selected through the first recursive edit"
     );
     assert_eq!(
-        eval.obarray().symbol_value("terminal-frame"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("terminal-frame"),
+        Some(Value::NIL),
         "GUI startup should clear terminal-frame after the first recursive edit enters the command loop"
     );
 }
@@ -6717,8 +6908,10 @@ fn frame_snapshot_subr_end_to_end_json_and_text() {
 fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -6798,8 +6991,10 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let shared_terminals = new_shared_terminals();
     let host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
         resources: Default::default(),
         system_fonts: Default::default(),
+        font_entities: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,

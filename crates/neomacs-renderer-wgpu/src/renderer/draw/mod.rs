@@ -20,7 +20,26 @@ impl WgpuRenderer {
         placement: super::NativeContentPlacement<'_>,
         background: neomacs_display_protocol::Color,
     ) {
-        let draw = self.begin_draw(placement.target);
+        self.place_native_content_with_opacity(placement, background, 1.0);
+    }
+
+    /// Whole-frame opacity is applied once, after composition and postprocessing.
+    pub fn place_native_content_with_opacity(
+        &mut self,
+        placement: super::NativeContentPlacement<'_>,
+        mut background: neomacs_display_protocol::Color,
+        opacity: f32,
+    ) {
+        background.a *= opacity;
+        let mut draw = self.begin_draw(placement.target);
+        let size = draw.target.surface.logical_size();
+        draw.parameters = draw.renderer.parameters_for(
+            [size.width(), size.height()],
+            0.0,
+            opacity,
+            1.0,
+            [0.0; 2],
+        );
         draw.renderer.paint_blit(
             draw.target,
             &draw.parameters,

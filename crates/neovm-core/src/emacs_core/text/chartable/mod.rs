@@ -711,9 +711,8 @@ pub(crate) fn builtin_make_char_table(eval: &mut Context, args: Vec<Value>) -> E
     } else {
         0
     };
-    Ok(make_char_table_with_extra_slots(
-        sub_type, default, n_extras,
-    ))
+    let n_extras = crate::emacs_core::alloc::CharTableExtras::try_from(Value::fixnum(n_extras))?;
+    Value::try_char_table(sub_type, default, n_extras)
 }
 
 pub(crate) fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Result<(), Flow> {
@@ -1850,8 +1849,7 @@ fn assq_cell_eq(key: Value, list: Value) -> Result<Value, Flow> {
 fn char_code_property_cell(eval: &Context, prop: Value) -> Result<Value, Flow> {
     let alist = eval
         .obarray
-        .symbol_value("char-code-property-alist")
-        .copied()
+        .symbol_value_copied("char-code-property-alist")
         .unwrap_or(Value::NIL);
     assq_cell_eq(prop, alist)
 }
@@ -2078,9 +2076,9 @@ pub(crate) use super::boolvec::{
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/chartable_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/collection_lookup_capture.rs"]
+#[path = "tests/collection_lookup_capture_test.rs"]
 mod collection_lookup_capture;

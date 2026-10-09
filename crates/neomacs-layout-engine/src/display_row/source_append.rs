@@ -782,4 +782,5 @@ pub(crate) fn display_item_append_kind(
 }
 
 #[cfg(test)]
+#[path = "source_append/tests/source_append_test.rs"]
 mod tests;

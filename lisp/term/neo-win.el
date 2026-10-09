@@ -596,8 +596,6 @@ This sets the `alpha-background' frame parameter, which makes the
 background transparent while keeping text fully opaque."
   (interactive "nOpacity (0.0-1.0 or 0-100): ")
   (let ((f (or frame (selected-frame))))
-    (when (and (integerp opacity) (> opacity 1))
-      (setq opacity (/ (float opacity) 100.0)))
     (set-frame-parameter f 'alpha-background opacity)))
 
 ;; Menu bar keyboard access (F10)

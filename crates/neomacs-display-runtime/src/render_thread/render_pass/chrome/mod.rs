@@ -52,7 +52,7 @@ pub(super) fn render_frame_window_overlays_with_toolbar_resources(
     child_frame_style: &ChildFrameStyle,
     scroll_indicators_enabled: bool,
     toolbar: &ToolbarResources,
-) {
+) -> Result<(), super::surface::FrameRenderFailure> {
     // Content overlays are the *editor's* picture — child frames, breadcrumbs,
     // scroll indicators, watermarks — and belong to `scene`, which is where
     // they are drawn. They open this pass rather than closing `scene` because
@@ -60,7 +60,7 @@ pub(super) fn render_frame_window_overlays_with_toolbar_resources(
     // this one; moving the call up to them is a change to those two files.
     super::scene::render_frame_content_overlays(
         renderer,
-        native,
+        native.content_size(),
         render,
         surface_view,
         frame,
@@ -68,7 +68,7 @@ pub(super) fn render_frame_window_overlays_with_toolbar_resources(
         animated_cursor,
         child_frame_style,
         scroll_indicators_enabled,
-    );
+    )?;
 
     frame_bands::draw(renderer, native, render, surface_view, frame, toolbar);
     transient_overlays::draw_panels(
@@ -101,4 +101,5 @@ pub(super) fn render_frame_window_overlays_with_toolbar_resources(
         native.content_size().1,
     );
     transient_overlays::draw_typing_speed(renderer, render, surface_view, frame);
+    Ok(())
 }

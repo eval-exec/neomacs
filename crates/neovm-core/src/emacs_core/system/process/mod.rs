@@ -43,8 +43,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use strum::{EnumString, IntoStaticStr};
 
 use super::tls::{
-    RustlsBackend, TlsBackendError, TlsClientBackend, TlsClientParameters, TlsStream,
-    gnutls_close_notify_result_value, gnutls_peer_status_to_value, parse_gnutls_boot_parameters,
+    RustlsBackend, TlsBackendError, TlsClientBackend, TlsClientParameters, TlsHandshakeInterest,
+    TlsHandshakeProgress, TlsStream, gnutls_close_notify_result_value, gnutls_peer_status_to_value,
+    parse_gnutls_boot_parameters,
 };
 use super::wait::ProcessOutputWaitOutcome;
 
@@ -514,7 +515,7 @@ use crate::heap_types::LispString;
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/raw_bytes.rs"]
+#[path = "tests/raw_bytes_test.rs"]
 mod raw_bytes_tests;
 
 mod builtins;
@@ -529,5 +530,13 @@ pub(crate) use helpers::*;
 mod types;
 pub use types::*;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/process_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/signal_number.rs"]
+mod signal_number_tests;
+
+#[cfg(test)]
+#[path = "tests/timeout.rs"]
+mod timeout_tests;

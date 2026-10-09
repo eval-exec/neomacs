@@ -305,4 +305,5 @@ pub(crate) fn valid_bounded_search_measurements(
 }
 
 #[cfg(test)]
+#[path = "bounded_search/tests/bounded_search_test.rs"]
 mod tests;

@@ -517,5 +517,5 @@ pub(crate) fn string_lessp(ctx: &Context, a: Value, b: Value) -> LeafResult {
 }
 
 #[cfg(test)]
-#[path = "tests/equivalence.rs"]
+#[path = "tests/equivalence_test.rs"]
 mod equivalence_tests;

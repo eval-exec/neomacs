@@ -10,8 +10,12 @@
 //! Skips (passes) cleanly where no GPU adapter is available.
 
 use neomacs_display_protocol::face::BoxVerticalEdges;
+#[path = "offscreen_frame/fade_edges_test.rs"]
+mod fade_edges_test;
 #[path = "offscreen_frame/menu_test.rs"]
 mod menu_test;
+#[path = "offscreen_frame/opacity_test.rs"]
+mod opacity_test;
 #[path = "offscreen_frame/scroll_texture_test.rs"]
 mod scroll_texture_test;
 use neomacs_display_protocol::frame_chrome::PresentationId;
@@ -2120,6 +2124,7 @@ fn drive_banded_load(
         realization,
         ImageColorContext::default(),
         ImageMaskPolicy::Preserve,
+        neomacs_display_protocol::ImageAnimationPolicy::disabled(),
         ImageFrameIndex::default(),
         ImageSequenceId::new(u64::from(image)).expect("non-zero test sequence"),
         neomacs_renderer_wgpu::SvgResourceContext::Isolated,
@@ -2559,6 +2564,7 @@ fn a_failed_banded_decode_leaves_no_partial_texture() {
         ImageRealization::with_device_scale(1.0, 1.0),
         ImageColorContext::default(),
         ImageMaskPolicy::Preserve,
+        neomacs_display_protocol::ImageAnimationPolicy::disabled(),
         ImageFrameIndex::default(),
         ImageSequenceId::new(909).expect("non-zero test sequence"),
         neomacs_renderer_wgpu::SvgResourceContext::Isolated,

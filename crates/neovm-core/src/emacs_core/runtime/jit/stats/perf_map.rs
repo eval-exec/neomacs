@@ -47,7 +47,14 @@ thread_local! {
 
 /// Publishes the label of one compile and restores the outer one on drop
 /// (compiles can nest on a thread only through the cache-miss paths).
-pub(crate) struct LeafLabelScope(Option<ActiveLabel>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct LeafLabelScope {
+    _scope:
+        crate::tls_scope::TlsScope<Option<ActiveLabel>, std::cell::RefCell<Option<ActiveLabel>>>,
+}
+
+static_assertions::assert_not_impl_any!(LeafLabelScope: Send, Sync);
 
 impl LeafLabelScope {
     /// Only called when naming is enabled. `name` is the callee's symbol
@@ -58,14 +65,9 @@ impl LeafLabelScope {
             Some(sym) => sanitize(symbol_name(sym)),
             None => anon_name(func),
         };
-        LeafLabelScope(ACTIVE_LABEL.with(|l| l.replace(Some(ActiveLabel { id, name }))))
-    }
-}
-
-impl Drop for LeafLabelScope {
-    fn drop(&mut self) {
-        let outer = self.0.take();
-        ACTIVE_LABEL.with(|l| *l.borrow_mut() = outer);
+        LeafLabelScope {
+            _scope: crate::tls_scope::TlsScope::new(&ACTIVE_LABEL, Some(ActiveLabel { id, name })),
+        }
     }
 }
 

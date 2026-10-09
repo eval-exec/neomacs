@@ -196,13 +196,7 @@ pub(crate) fn with_text_line_index_config<R>(
     config: TextLineIndexConfig,
     f: impl FnOnce() -> R,
 ) -> R {
-    struct Guard(Option<TextLineIndexConfig>);
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            CONFIG_OVERRIDE.with(|slot| slot.set(self.0));
-        }
-    }
-    let _guard = Guard(CONFIG_OVERRIDE.with(|slot| slot.replace(Some(config))));
+    let _guard = crate::tls_scope::TlsScope::new(&CONFIG_OVERRIDE, Some(config));
     f()
 }
 
@@ -966,5 +960,5 @@ fn cut_chunks(
 }
 
 #[cfg(test)]
-#[path = "text_index/tests/mod.rs"]
+#[path = "text_index/tests/text_index_test.rs"]
 pub(crate) mod tests;

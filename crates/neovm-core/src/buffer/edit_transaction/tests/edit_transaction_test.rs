@@ -77,6 +77,7 @@ fn shared_edit_metadata_derives_sibling_state_policy() {
         state_policy_for_shared_sibling(SharedTextEditMetadata::Transposition {
             edit: same_len_edit(),
             transposition: TextTransposition::from_usize(2, 5, 1, 3, 8, 10, 5, 7),
+            anchor_policy: TranspositionAnchorPolicy::FollowText,
             modified_state: SameLenModifiedStatePolicy::PreserveUnmodifiedIfClean,
         }),
         SharedTextEditStatePolicy::StateFields(SharedBufferStateUpdate::RefreshFromStateMarkers)

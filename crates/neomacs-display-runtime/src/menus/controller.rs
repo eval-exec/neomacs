@@ -602,4 +602,5 @@ impl Drop for MenuPresentation {
 }
 
 #[cfg(test)]
+#[path = "controller/tests/controller_test.rs"]
 mod tests;

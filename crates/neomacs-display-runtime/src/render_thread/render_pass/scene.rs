@@ -17,7 +17,11 @@
 
 use crate::core::types::DisplayFrameId;
 use crate::render_thread::frame_stats;
-use crate::render_thread::frame_windows::{GuiFrameNativeWindowState, GuiFrameRenderState};
+use crate::render_thread::frame_windows::GuiFrameRenderState;
+
+#[cfg(test)]
+#[path = "scene/tests/scene_test.rs"]
+mod tests;
 use crate::render_thread::state::ChildFrameStyle;
 use neomacs_renderer_wgpu::{WgpuGlyphAtlas, WgpuRenderer};
 
@@ -87,7 +91,7 @@ pub(super) fn render_frame_root_glyphs(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_frame_content_overlays(
     renderer: &mut WgpuRenderer,
-    native: &GuiFrameNativeWindowState,
+    content_size: (u32, u32),
     render: &mut GuiFrameRenderState,
     surface_view: &wgpu::TextureView,
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
@@ -95,7 +99,7 @@ pub(super) fn render_frame_content_overlays(
     animated_cursor: Option<crate::core::types::AnimatedCursor>,
     child_frame_style: &ChildFrameStyle,
     scroll_indicators_enabled: bool,
-) {
+) -> Result<(), super::surface::FrameRenderFailure> {
     let pointer_appearance = render.pointer_appearance;
     // One sample drives every child-frame lifecycle animation on this
     // surface. Sampling -- not stepping -- is what makes a frame redrawn at
@@ -118,7 +122,7 @@ pub(super) fn render_frame_content_overlays(
     // Whether the corpse-clearing (or crossfade-closing) repaint was
     // requested this pass.
     let mut crossfade_finished = false;
-    renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
+    let result = renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
         // One merged draw order: living frames and dying corpses
         // interleaved in z-path order, a corpse drawing before a living
         // frame at equal z -- a dismissed popup is normally being replaced
@@ -175,7 +179,7 @@ pub(super) fn render_frame_content_overlays(
                     dying_entry.entry.abs_x,
                     dying_entry.entry.abs_y,
                     clip_in_root,
-                    alpha,
+                    alpha * dying_entry.entry.applied_frame_alpha,
                     offset_y,
                     None,
                     scale,
@@ -241,11 +245,9 @@ pub(super) fn render_frame_content_overlays(
                 if finished && child_entry.animation.is_some() {
                     finished_animations.push(child_id);
                 }
-                // A resize content crossfade layers the previous
-                // presentation's picture beneath the new frame: the old
-                // picture fades out as the new one fades in. When the mix
-                // finishes, the crossfade drops and the next frame draws the
-                // new payload alone.
+                // Resize mixes complete unscaled old/new pictures in reserved
+                // scratch before applying accepted/lifecycle opacity once. At
+                // completion the next frame uses the new payload alone.
                 let mut crossfade_layer: Option<(
                     &neomacs_renderer_wgpu::SnapshotLease,
                     f32,
@@ -285,10 +287,9 @@ pub(super) fn render_frame_content_overlays(
                         drift_drawn.push((child_id, drawn_x, drawn_y, progress.rate));
                     }
                 }
-                // The new frame's alpha rides the crossfade's mix when one
-                // is running, so the old picture genuinely shows through.
-                let effective_alpha =
-                    alpha * crossfade_layer.as_ref().map_or(1.0, |(_, _, _, mix)| *mix);
+                // Accepted/lifecycle opacity belongs to the completed resize
+                // picture, not the independently weighted new content.
+                let effective_alpha = alpha * child_entry.applied_frame_alpha;
                 if effective_alpha <= 0.0 {
                     continue;
                 }
@@ -308,6 +309,32 @@ pub(super) fn render_frame_content_overlays(
                     scale,
                 )
             };
+            let resize = crossfade_layer.map(|(old, old_width, old_height, mix)| {
+                neomacs_renderer_wgpu::renderer::ChildResizePicture {
+                    old,
+                    old_width,
+                    old_height,
+                    mix,
+                }
+            });
+            let size = neomacs_renderer_wgpu::SnapshotSize::new(content_size.0, content_size.1)
+                .ok_or(super::surface::FrameRenderFailure::WindowNotReady)?;
+            let prepared = neomacs_renderer_wgpu::renderer::PreparedChildFrame::new(
+                child_frame,
+                alpha,
+                size,
+                render.child_opacity_src.as_ref(),
+                resize,
+                render.child_resize_src.as_ref(),
+            )
+            .map_err(|error| {
+                tracing::error!(
+                    ?error,
+                    child_id,
+                    "child preparation rejected; retrying without present"
+                );
+                super::surface::FrameRenderFailure::WindowNotReady
+            })?;
             let pointer_selection = pointer_appearance.selection_for(child_frame);
             if let Some(atlas) = render.compositor.glyph_atlas.as_mut() {
                 atlas.set_current_frame_fonts(child_frame.font_bindings());
@@ -321,28 +348,6 @@ pub(super) fn render_frame_content_overlays(
                     "child_frame_lifecycle: render_dying_child_frame"
                 );
             } else {
-                // A resize content crossfade layers the previous
-                // presentation's picture beneath the new frame; the quad
-                // only draws while the mix is still running.
-                if let Some((old, old_width, old_height, mix)) = crossfade_layer {
-                    renderer.draw_child_crossfade_quad(
-                        surface_view,
-                        old.bind_group(),
-                        base_x,
-                        base_y,
-                        old_width,
-                        old_height,
-                        native.content_size().0,
-                        native.content_size().1,
-                        1.0 - mix,
-                        renderer.child_frame_scissor(
-                            clip_in_root,
-                            native.content_size().0,
-                            native.content_size().1,
-                        ),
-                    );
-                    frame_stats::count(&frame_stats::CHILD_FRAME_CROSSFADE_QUADS);
-                }
                 tracing::debug!(
                     parent_frame_id = render.emacs_frame_id,
                     frame_id = child_id,
@@ -356,15 +361,16 @@ pub(super) fn render_frame_content_overlays(
                     "child_frame_lifecycle: render_child_frame_start"
                 );
             }
-            renderer.render_child_frame(
+            if crossfade_layer.is_some() {
+                frame_stats::count(&frame_stats::CHILD_FRAME_CROSSFADE_QUADS);
+            }
+            renderer.render_child_frame_prepared(
                 surface_view,
-                child_frame,
+                prepared,
                 base_x,
                 base_y + offset_y,
                 clip_in_root,
                 render.compositor.glyph_atlas.as_mut().unwrap(),
-                native.content_size().0,
-                native.content_size().1,
                 cursor_visible,
                 animated_cursor.filter(|ac| ac.frame_id == DisplayFrameId::new(child_id)),
                 child_frame_style.corner_radius,
@@ -373,7 +379,6 @@ pub(super) fn render_frame_content_overlays(
                 child_frame_style.shadow_offset,
                 child_frame_style.shadow_opacity,
                 pointer_selection,
-                alpha,
                 scale,
                 // The scale anchors at the frame's drawn top-left, so the
                 // picture grows outward from the point that anchored it.
@@ -387,7 +392,13 @@ pub(super) fn render_frame_content_overlays(
                 );
             }
         }
+        Ok(())
     });
+    // Restore the root font bindings even when a later child fails preparation.
+    if let Some(atlas) = render.compositor.glyph_atlas.as_mut() {
+        atlas.set_current_frame_fonts(frame.font_bindings());
+    }
+    result?;
     // The pass reports continued animation the only way it may: by marking
     // the frame dirty, so the scheduler asks for another one. Finished dying
     // frames are pruned afterwards, on the same sample they were drawn with.
@@ -429,24 +440,21 @@ pub(super) fn render_frame_content_overlays(
         render.mark_dirty();
     }
 
-    if let Some(atlas) = render.compositor.glyph_atlas.as_mut() {
-        atlas.set_current_frame_fonts(frame.font_bindings());
-    }
-
     renderer.with_frame_effects(&mut render.compositor.renderer_effects, |renderer| {
         render_frame_common_overlays(
             renderer,
             surface_view,
             frame,
             render.compositor.glyph_atlas.as_mut().unwrap(),
-            native.content_size().0,
-            native.content_size().1,
+            content_size.0,
+            content_size.1,
             scroll_indicators_enabled,
         );
     });
     if render.compositor.renderer_effects.needs_redraw() {
         render.mark_dirty();
     }
+    Ok(())
 }
 
 fn render_frame_common_overlays(

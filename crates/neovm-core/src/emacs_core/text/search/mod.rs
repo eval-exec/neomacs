@@ -599,7 +599,7 @@ fn replace_match_lisp_string_with_syntax_and_properties(
             crate::emacs_core::casefiddle::apply_replace_match_case_lisp(&replacement, &matched)
         };
         if cased.schars() == replacement.schars() {
-            *cased.intervals_mut() = replacement.intervals().clone();
+            *cased.intervals_mut() = replacement.intervals().to_owned_table();
         }
         replacement = cased;
     }
@@ -901,5 +901,5 @@ pub(crate) fn builtin_replace_regexp_in_string(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/search_test.rs"]
 mod tests;

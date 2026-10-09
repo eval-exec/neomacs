@@ -106,7 +106,7 @@ fn select_frame_window_for_hook_context(
     eval: &mut super::eval::Context,
     frame_id: crate::window::FrameId,
     window_id: crate::window::WindowId,
-) {
+) -> EvalResult {
     let _ = eval.frames.select_frame(frame_id);
     eval.sync_keyboard_terminal_owner();
     if let Some(frame) = eval.frames.get_mut(frame_id) {
@@ -115,9 +115,13 @@ fn select_frame_window_for_hook_context(
     if let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, window_id) {
         let _ = eval.switch_current_buffer(buffer_id);
     }
+    crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)
 }
 
-fn restore_hook_caller_context(eval: &mut super::eval::Context, saved: HookCallerContextState) {
+fn restore_hook_caller_context(
+    eval: &mut super::eval::Context,
+    saved: HookCallerContextState,
+) -> EvalResult {
     if let Some(frame_id) = saved
         .selected_frame_id
         .filter(|frame_id| eval.frames.get(*frame_id).is_some())
@@ -133,6 +137,7 @@ fn restore_hook_caller_context(eval: &mut super::eval::Context, saved: HookCalle
     if let Some(buffer_id) = saved.current_buffer_id {
         eval.restore_current_buffer_if_live(buffer_id);
     }
+    crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)
 }
 
 #[derive(Clone, Copy)]
@@ -245,7 +250,7 @@ fn run_window_local_hook_values(
             if !has_local_hook {
                 continue;
             }
-            select_frame_window_for_hook_context(eval, frame_id, *window_id);
+            select_frame_window_for_hook_context(eval, frame_id, *window_id)?;
             let Some(local_hook_value) = eval
                 .buffers
                 .current_buffer()
@@ -263,8 +268,9 @@ fn run_window_local_hook_values(
         }
         Ok(Value::NIL)
     })();
-    restore_hook_caller_context(eval, saved);
-    result
+    let restore_result = restore_hook_caller_context(eval, saved);
+    result?;
+    restore_result
 }
 
 fn run_window_default_hook_value(
@@ -278,8 +284,7 @@ fn run_window_default_hook_value(
     }
     let global_hook_value = eval
         .obarray
-        .default_value_id(hook_sym)
-        .copied()
+        .default_value_id_copied(hook_sym)
         .unwrap_or(Value::NIL);
     if global_hook_value.is_nil() {
         return Ok(Value::NIL);
@@ -289,10 +294,11 @@ fn run_window_default_hook_value(
     let result = (|| -> EvalResult {
         let selected_window = eval.frames.get(frame_id).map(|frame| frame.selected_window);
         if let Some(selected_window) = selected_window {
-            select_frame_window_for_hook_context(eval, frame_id, selected_window);
+            select_frame_window_for_hook_context(eval, frame_id, selected_window)?;
         } else {
             let _ = eval.frames.select_frame(frame_id);
             eval.sync_keyboard_terminal_owner();
+            crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)?;
         }
         let _ = hook_runtime::safe_run_hook_value(
             eval,
@@ -303,8 +309,9 @@ fn run_window_default_hook_value(
         )?;
         Ok(Value::NIL)
     })();
-    restore_hook_caller_context(eval, saved);
-    result
+    let restore_result = restore_hook_caller_context(eval, saved);
+    result?;
+    restore_result
 }
 
 pub(crate) fn run_redisplay_window_change_hooks(eval: &mut super::eval::Context) -> EvalResult {
@@ -1448,6 +1455,7 @@ pub(crate) fn builtin_window_configuration_equal_p(args: Vec<Value>) -> EvalResu
     }
 }
 
+#[inline(never)]
 pub(crate) fn builtin_current_window_configuration(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -1503,8 +1511,7 @@ pub(crate) fn builtin_current_window_configuration(
         save_snapshot_persistent_window_parameters(
             &mut snapshot,
             eval.obarray
-                .symbol_value("window-persistent-parameters")
-                .copied()
+                .symbol_value_copied("window-persistent-parameters")
                 .unwrap_or(Value::NIL),
         );
         let roots = window_configuration_snapshot_roots(&snapshot);
@@ -1695,6 +1702,7 @@ pub(crate) fn set_window_configuration_with_options(
         ));
     };
 
+    let mut focus_redirect_result = Ok(Value::NIL);
     let snapshot = WINDOW_CONFIGURATION_SNAPSHOTS.with(|slot| {
         slot.borrow()
             .get(&serial)
@@ -1867,6 +1875,9 @@ pub(crate) fn set_window_configuration_with_options(
         if let Some(frame_id) = frame_to_select {
             let _ = eval.frames.select_frame(frame_id);
         }
+        // The restored configuration is accepted; a host that cannot apply
+        // its focus redirects must not cancel the redisplay request below.
+        focus_redirect_result = crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval);
     }
 
     // GNU `Fset_window_configuration` marks the frame for redisplay with
@@ -1880,6 +1891,7 @@ pub(crate) fn set_window_configuration_with_options(
     // owned by `redisplay_with_force`, where the live-vs-recorded frame state
     // is compared exactly once per natural redisplay cycle.
     eval.request_menu_bar_rebuild(super::eval::MenuBarRebuildReason::WindowsOrBuffersChanged);
+    focus_redirect_result?;
     Ok(Value::T)
 }
 
@@ -1920,8 +1932,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     let hook_sym = hook_runtime::hook_symbol_by_name(eval, "window-configuration-change-hook");
     let global_hook_value = eval
         .obarray
-        .default_value_id(hook_sym)
-        .copied()
+        .default_value_id_copied(hook_sym)
         .unwrap_or(Value::NIL);
     let selected_window = frame_state.selected_window;
     let window_ids = frame_state.window_list();
@@ -1938,7 +1949,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     eval.push_specpdl_root(global_hook_value);
 
     let result = (|| -> EvalResult {
-        select_frame_window_for_hook_context(eval, frame_id, selected_window);
+        select_frame_window_for_hook_context(eval, frame_id, selected_window)?;
         for window_id in &window_ids {
             let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, *window_id) else {
                 continue;
@@ -1951,7 +1962,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
             if !has_local_hook {
                 continue;
             }
-            select_frame_window_for_hook_context(eval, frame_id, *window_id);
+            select_frame_window_for_hook_context(eval, frame_id, *window_id)?;
             let Some(local_hook_value) = eval
                 .buffers
                 .current_buffer()
@@ -1960,15 +1971,16 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
                 continue;
             };
             let _ = hook_runtime::run_hook_value(eval, hook_sym, local_hook_value, &[], false)?;
-            select_frame_window_for_hook_context(eval, frame_id, selected_window);
+            select_frame_window_for_hook_context(eval, frame_id, selected_window)?;
         }
         let _ = hook_runtime::run_hook_value(eval, hook_sym, global_hook_value, &[], false)?;
         Ok(Value::NIL)
     })();
 
     eval.restore_specpdl_roots(root_scope);
-    restore_hook_caller_context(eval, saved);
-    result
+    let restore_result = restore_hook_caller_context(eval, saved);
+    result?;
+    restore_result
 }
 
 pub(crate) fn run_gnu_committed_scroll_functions(
@@ -2052,8 +2064,7 @@ pub(crate) fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>
     // never reaches here.)
     let features = eval
         .obarray
-        .symbol_value_id(features_symbol_id())
-        .copied()
+        .symbol_value_id_copied(features_symbol_id())
         .unwrap_or(Value::NIL);
     if super::cons_list::builtin_memq_values(feature, features, eval.symbols_with_pos_enabled)?
         .is_nil()
@@ -2082,5 +2093,5 @@ pub(crate) fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>
 }
 
 #[cfg(test)]
-#[path = "tests/gc_tls_window_configuration.rs"]
+#[path = "tests/gc_tls_window_configuration_test.rs"]
 mod gc_tls_ownership_tests;

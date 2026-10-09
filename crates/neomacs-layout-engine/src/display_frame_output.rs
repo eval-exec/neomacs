@@ -62,6 +62,7 @@ pub(crate) struct FrameOutputIdentity {
     pub(crate) outer_border_width: f32,
     pub(crate) outer_border_color: Color,
     pub(crate) background_alpha: f32,
+    pub(crate) frame_alpha: [f32; 2],
     pub(crate) no_accept_focus: bool,
 }
 
@@ -278,6 +279,7 @@ impl<'a> FrameOutputTarget<'a> {
             identity.outer_border_width,
             identity.outer_border_color,
             identity.background_alpha,
+            identity.frame_alpha,
             identity.no_accept_focus,
         );
     }
@@ -1089,4 +1091,5 @@ impl WindowScrollBarMetrics {
 }
 
 #[cfg(test)]
+#[path = "display_frame_output/tests/display_frame_output_test.rs"]
 mod tests;

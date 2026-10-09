@@ -2,26 +2,23 @@ use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
 use crate::emacs_core::eval::{CheckedNativeCallback, LispArgVec, native_callback_cache_enabled};
 use smallvec::SmallVec;
-use std::sync::LazyLock;
 
-// Sort knobs, read once per process:
-// | Knob | Values | Default | Effect |
-// | NEOVM_SORT_CAPTURE | off, on | on | Capture GNU's resolved predicate before key callbacks, including builtin aliases. |
-
-/// Immutable process configuration contains no Lisp state and may be read by
-/// concurrent mutators; captured predicates themselves belong to each sort.
-static SORT_CAPTURE: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("NEOVM_SORT_CAPTURE").map_or(true, |value| value == "on"));
-
-#[inline]
-fn sort_capture_enabled() -> bool {
-    *SORT_CAPTURE
-}
+mod sort;
+mod sort_buffered;
+use sort::{SortStorage, VectorSortStorage, gnu_style_sort_items};
 
 type MapResultVec = SmallVec<[Value; 8]>;
 
 #[cfg(test)]
-#[path = "tests/higher_order_capture.rs"]
+#[path = "tests/gd_e_sort.rs"]
+mod gd_e_sort;
+
+#[cfg(test)]
+#[path = "tests/gd_e_sort_native_storage.rs"]
+mod gd_e_sort_native_storage;
+
+#[cfg(test)]
+#[path = "tests/higher_order_capture_test.rs"]
 mod higher_order_capture;
 
 pub(crate) fn gnu_mapconcat_unfilled_slot_value() -> Value {
@@ -31,6 +28,7 @@ pub(crate) fn gnu_mapconcat_unfilled_slot_value() -> Value {
     Value::fixnum(35_184_318_513_152)
 }
 
+#[inline(never)]
 pub(crate) fn map_sequence_length(sequence: Value) -> Result<usize, Flow> {
     if super::chartable::is_char_table(&sequence) {
         return Err(signal(
@@ -66,6 +64,7 @@ pub(crate) fn map_sequence_length(sequence: Value) -> Result<usize, Flow> {
     }
 }
 
+#[inline(never)]
 pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Value, Flow> {
     match sequence.kind() {
         ValueKind::Veclike(VecLikeType::BoolVector) => {
@@ -153,7 +152,7 @@ impl MapCallee {
         }
     }
 
-    #[inline]
+    #[inline(never)]
     pub(crate) fn call(&self, eval: &mut super::eval::Context, item: Value) -> EvalResult {
         match *self {
             MapCallee::Generic(func) => apply1(eval, func, item),
@@ -173,7 +172,7 @@ impl MapCallee {
 /// immutable proof contains no Lisp references and stays with this mutator.
 /// The epoch must be captured before resolving the callee, so publication
 /// cannot pair an older body with a newer function-cell epoch.
-#[inline]
+#[inline(never)]
 fn mapcar1_with_callee(
     eval: &mut super::eval::Context,
     len: usize,
@@ -222,7 +221,7 @@ pub(crate) enum MapSink<'a> {
 }
 
 impl MapSink<'_> {
-    #[inline]
+    #[inline(never)]
     pub(crate) fn store(&mut self, eval: &mut super::eval::Context, index: usize, value: Value) {
         match self {
             MapSink::Discard => {}
@@ -363,11 +362,11 @@ where
 }
 
 #[cfg(test)]
-#[path = "tests/map_resume.rs"]
+#[path = "tests/map_resume_test.rs"]
 mod map_resume;
 
 #[cfg(test)]
-#[path = "tests/map_resume_capture.rs"]
+#[path = "tests/map_resume_capture_test.rs"]
 mod map_resume_capture;
 
 #[inline]
@@ -375,7 +374,7 @@ fn apply0(eval: &mut super::eval::Context, func: Value) -> EvalResult {
     eval.apply(func, crate::emacs_core::eval::LispArgVec::new())
 }
 
-#[inline]
+#[inline(always)]
 fn apply1(eval: &mut super::eval::Context, func: Value, arg: Value) -> EvalResult {
     eval.apply1(func, arg)
 }
@@ -391,15 +390,23 @@ pub(crate) fn builtin_apply_slice(eval: &mut super::eval::Context, args: &[Value
     }
 
     let last = args[args.len() - 1];
+    // GNU Fapply measures the spread list with `list_length` before copying
+    // it (eval.c:2818-2828).  No Lisp runs between that pass and the copy, so
+    // copying while taking the same FOR_EACH_TAIL steps signals the same
+    // `circular-list` or `listp` condition, with the same data, before the
+    // function is called -- in one walk instead of two.
+    let mut cycle = super::cons_list::GnuTailCycle::new(last);
     let mut call_args = LispArgVec::new();
-
-    if args.len() == 1 {
-        let mut cursor = last;
-        let func = match cursor.kind() {
+    let mut cursor = last;
+    let func = if args.len() == 1 {
+        match cursor.kind() {
             ValueKind::Nil => args[0],
             ValueKind::Cons => {
                 let func = cursor.cons_car();
                 cursor = cursor.cons_cdr();
+                if cursor.is_cons() {
+                    cycle.check(cursor)?;
+                }
                 func
             }
             _ => {
@@ -408,38 +415,25 @@ pub(crate) fn builtin_apply_slice(eval: &mut super::eval::Context, args: &[Value
                     vec![Value::symbol("listp"), last],
                 ));
             }
-        };
-        while cursor.is_cons() {
-            call_args.push(cursor.cons_car());
-            cursor = cursor.cons_cdr();
         }
-        if !cursor.is_nil() {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("listp"), cursor],
-            ));
-        }
-        eval.apply_from_lisp_funcall(func, call_args)
     } else {
         call_args.extend_from_slice(&args[1..args.len() - 1]);
-        let mut cursor = last;
-        loop {
-            match cursor.kind() {
-                ValueKind::Nil => break,
-                ValueKind::Cons => {
-                    call_args.push(cursor.cons_car());
-                    cursor = cursor.cons_cdr();
-                }
-                _ => {
-                    return Err(signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("listp"), cursor],
-                    ));
-                }
-            }
+        args[0]
+    };
+    while cursor.is_cons() {
+        call_args.push(cursor.cons_car());
+        cursor = cursor.cons_cdr();
+        if cursor.is_cons() {
+            cycle.check(cursor)?;
         }
-        eval.apply_from_lisp_funcall(args[0], call_args)
     }
+    if !cursor.is_nil() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), cursor],
+        ));
+    }
+    eval.apply_from_lisp_funcall(func, call_args)
 }
 
 pub(crate) fn builtin_funcall_slice(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
@@ -478,6 +472,7 @@ pub(crate) fn builtin_funcall_with_delayed_message(
 // Higher-order
 // ===========================================================================
 
+#[inline(never)]
 pub(crate) fn builtin_mapcar_2(
     eval: &mut super::eval::Context,
     func: Value,
@@ -516,6 +511,7 @@ pub(crate) fn builtin_mapcar_2(
     result_list
 }
 
+#[inline(never)]
 pub(crate) fn builtin_mapc_2(
     eval: &mut super::eval::Context,
     func: Value,
@@ -696,7 +692,7 @@ pub(crate) struct SortOptions {
 
 /// A sort's `lessp' predicate, resolved once for the whole sort.
 ///
-/// With `NEOVM_SORT_CAPTURE`, GNU `sort.c:resolve_fun` captures the current
+/// GNU `sort.c:resolve_fun` captures the current
 /// callable before computing keys. A captured subr is also its own designator:
 /// an epoch change falls back to calling that object, rather than reading a
 /// symbol that a key, predicate, debugger or GC hook may have redefined.
@@ -716,6 +712,10 @@ pub(crate) enum SortPredicate {
         proof: Option<CheckedNativeCallback>,
     },
     /// Identified from the captured implementation, never the symbol's name.
+    NumericLessp {
+        subr: Value,
+        epoch: u64,
+    },
     StringLessp {
         subr: Value,
         epoch: u64,
@@ -727,13 +727,15 @@ impl SortPredicate {
         match self {
             Self::ValueLt => None,
             Self::Generic(function) => Some(function),
-            Self::Subr { subr, .. } | Self::StringLessp { subr, .. } => Some(subr),
+            Self::Subr { subr, .. }
+            | Self::NumericLessp { subr, .. }
+            | Self::StringLessp { subr, .. } => Some(subr),
         }
     }
 }
 
 /// GNU `sort.c:resolve_fun`: follow aliases, but keep the original symbol for
-/// void and autoload cells. Compiler overrides keep their existing call path.
+/// void and autoload cells. Resolution follows the function cells directly.
 /// The caller roots the returned callable before any Lisp callback can run.
 pub(super) fn capture_sort_predicate(
     eval: &mut super::eval::Context,
@@ -742,27 +744,10 @@ pub(super) fn capture_sort_predicate(
     use crate::emacs_core::eval::subr_entry_from_value;
     use crate::tagged::header::{SubrDispatchKind, SubrFn, SubrFn2};
 
-    if eval.compiler_function_overrides_active() {
-        return None;
-    }
     if predicate.is_nil() {
         return Some(SortPredicate::ValueLt);
     }
-    let function = eval
-        .unwrap_symbol(predicate)
-        .as_symbol_id()
-        .and_then(|symbol| {
-            super::symbols::resolve_indirect_symbol_by_id_in_obarray_checked(
-                eval.obarray(),
-                symbol,
-                eval.symbols_with_pos_enabled,
-            )
-        })
-        .map(|(_, function)| function)
-        .filter(|function| {
-            !function.is_nil() && !crate::emacs_core::autoload::is_autoload_value(function)
-        })
-        .unwrap_or(predicate);
+    let function = resolve_sort_function(eval, predicate);
 
     if let Some((_, entry)) = subr_entry_from_value(function)
         && entry.dispatch_kind == SubrDispatchKind::Builtin
@@ -772,6 +757,17 @@ pub(super) fn capture_sort_predicate(
             && std::ptr::fn_addr_eq(body, super::strings::builtin_string_lessp_2 as SubrFn2)
         {
             return Some(SortPredicate::StringLessp {
+                subr: function,
+                epoch,
+            });
+        }
+        if let Some(SubrFn::ManySlice(body)) = entry.function
+            && std::ptr::fn_addr_eq(
+                body,
+                super::arithmetic::builtin_num_lt_slice as crate::tagged::header::SubrFnManySlice,
+            )
+        {
+            return Some(SortPredicate::NumericLessp {
                 subr: function,
                 epoch,
             });
@@ -788,7 +784,58 @@ pub(super) fn capture_sort_predicate(
     Some(SortPredicate::Generic(function))
 }
 
+/// GNU sort.c:1061-1077 resolves symbols and aliases once, retaining void
+/// and autoload symbols for the ordinary call path. Callers root this value.
+fn resolve_sort_function(eval: &super::eval::Context, function: Value) -> Value {
+    eval.unwrap_symbol(function)
+        .as_symbol_id()
+        .and_then(|symbol| {
+            super::symbols::resolve_indirect_symbol_by_id_in_obarray_checked(
+                eval.obarray(),
+                symbol,
+                eval.symbols_with_pos_enabled,
+            )
+        })
+        .map(|(_, function)| function)
+        .filter(|function| {
+            !function.is_nil() && !crate::emacs_core::autoload::is_autoload_value(function)
+        })
+        .unwrap_or(function)
+}
+
+/// Root handles are owned by one sorting activation. Buffered native sorts
+/// defer publishing their local values until an actual Lisp/GC boundary.
+#[derive(Clone, Copy)]
+pub(crate) enum SortRootScope {
+    Runtime(crate::emacs_core::eval::SpecpdlRootScopeState),
+    Buffered(usize),
+}
+#[derive(Clone, Copy)]
+pub(crate) enum SortRootSlot {
+    Runtime(crate::emacs_core::eval::SpecpdlRootSlot),
+    Buffered(usize),
+}
+
+/// Roots for one merge's remaining temporary values. The range variant
+/// indexes a mutator-owned buffered arena; it never borrows heap backing or
+/// shares a root cache between sort activations or mutators.
+pub(crate) enum SortRootBatch {
+    Slots(Vec<SortRootSlot>),
+    Buffered(std::ops::Range<usize>),
+}
+
+/// A predicate frame remains live until the owning storage publishes its
+/// permutation and roots before an error can enter Lisp. Activation-local;
+/// no heap backing borrow or shared callback state is retained.
+pub(crate) struct NativeSortCall {
+    pub(crate) frame_base: usize,
+    pub(crate) result: EvalResult,
+}
+
 pub(crate) trait SortRuntime {
+    fn resolve_sort_key(&mut self, key: Value) -> Value {
+        key
+    }
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow>;
     fn call_sort_function2(
         &mut self,
@@ -797,6 +844,31 @@ pub(crate) trait SortRuntime {
         arg1: Value,
     ) -> Result<Value, Flow>;
     fn root_sort_value(&mut self, value: Value);
+    fn save_sort_roots(&self) -> SortRootScope;
+    fn restore_sort_roots(&mut self, scope: SortRootScope);
+    fn root_sort_slot(&mut self, value: Value) -> SortRootSlot;
+    fn clear_sort_slot(&mut self, slot: &SortRootSlot);
+    fn set_sort_slot(&mut self, slot: &SortRootSlot, value: Value);
+    /// Root the merge's temporary values before any comparison can collect.
+    #[inline]
+    fn root_sort_batch(&mut self, items: &[SortItem]) -> SortRootBatch {
+        SortRootBatch::Slots(
+            items
+                .iter()
+                .map(|item| self.root_sort_slot(item.value))
+                .collect(),
+        )
+    }
+    /// Clear only consumed temporaries, retaining GNU's remaining-value roots.
+    #[inline]
+    fn clear_sort_batch(&mut self, batch: &SortRootBatch, range: std::ops::Range<usize>) {
+        let SortRootBatch::Slots(slots) = batch else {
+            unreachable!("ordinary sort roots use individual runtime slots")
+        };
+        for slot in &slots[range] {
+            self.clear_sort_slot(slot);
+        }
+    }
     /// Resolve the predicate once, before the first comparison.
     fn resolve_sort_predicate(&mut self, predicate: Value) -> SortPredicate {
         if predicate.is_nil() {
@@ -817,8 +889,21 @@ pub(crate) trait SortRuntime {
             SortPredicate::Subr { designator, .. } => {
                 self.call_sort_function2(designator, arg0, arg1)
             }
-            SortPredicate::StringLessp { subr, .. } => self.call_sort_function2(subr, arg0, arg1),
+            SortPredicate::NumericLessp { subr, .. } | SortPredicate::StringLessp { subr, .. } => {
+                self.call_sort_function2(subr, arg0, arg1)
+            }
         }
+    }
+    fn begin_native_sort_call(
+        &mut self,
+        _: SortPredicate,
+        _: Value,
+        _: Value,
+    ) -> Option<NativeSortCall> {
+        None
+    }
+    fn finish_native_sort_call(&mut self, call: NativeSortCall) -> EvalResult {
+        call.result
     }
     fn compare_sort_keys(
         &mut self,
@@ -828,6 +913,33 @@ pub(crate) trait SortRuntime {
 }
 
 impl SortRuntime for super::eval::Context {
+    fn save_sort_roots(&self) -> SortRootScope {
+        SortRootScope::Runtime(self.save_specpdl_roots())
+    }
+    fn restore_sort_roots(&mut self, scope: SortRootScope) {
+        let SortRootScope::Runtime(scope) = scope else {
+            unreachable!()
+        };
+        self.restore_specpdl_roots(scope);
+    }
+    fn root_sort_slot(&mut self, value: Value) -> SortRootSlot {
+        SortRootSlot::Runtime(self.push_specpdl_root_slot(value))
+    }
+    fn clear_sort_slot(&mut self, slot: &SortRootSlot) {
+        let SortRootSlot::Runtime(slot) = slot else {
+            unreachable!()
+        };
+        self.set_specpdl_root_slot(slot, Value::NIL);
+    }
+    fn set_sort_slot(&mut self, slot: &SortRootSlot, value: Value) {
+        let SortRootSlot::Runtime(slot) = slot else {
+            unreachable!()
+        };
+        self.set_specpdl_root_slot(slot, value);
+    }
+    fn resolve_sort_key(&mut self, key: Value) -> Value {
+        resolve_sort_function(self, key)
+    }
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow> {
         let mut args = LispArgVec::new();
         args.push(arg);
@@ -854,9 +966,7 @@ impl SortRuntime for super::eval::Context {
         if predicate.is_nil() {
             return SortPredicate::ValueLt;
         }
-        if sort_capture_enabled()
-            && let Some(captured) = capture_sort_predicate(self, predicate)
-        {
+        if let Some(captured) = capture_sort_predicate(self, predicate) {
             return captured;
         }
         let callback_epoch = self.obarray().function_epoch();
@@ -897,10 +1007,25 @@ impl SortRuntime for super::eval::Context {
                 Some(proof) => self.apply2_checked_subr(designator, subr, epoch, proof, arg0, arg1),
                 None => self.apply2_resolved_subr(designator, subr, epoch, arg0, arg1),
             },
+            SortPredicate::NumericLessp { subr, epoch } => {
+                self.apply2_resolved_subr(subr, subr, epoch, arg0, arg1)
+            }
             SortPredicate::StringLessp { subr, epoch } => {
                 self.apply2_sort_string_lessp(subr, epoch, arg0, arg1)
             }
         }
+    }
+
+    fn begin_native_sort_call(
+        &mut self,
+        predicate: SortPredicate,
+        left: Value,
+        right: Value,
+    ) -> Option<NativeSortCall> {
+        self.begin_buffered_native_sort_call(predicate, left, right)
+    }
+    fn finish_native_sort_call(&mut self, call: NativeSortCall) -> EvalResult {
+        self.finish_buffered_native_sort_call(call)
     }
 
     fn compare_sort_keys(
@@ -1017,30 +1142,79 @@ pub(crate) fn builtin_sort_slice(eval: &mut super::eval::Context, args: &[Value]
             }
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            let values = args[0].as_vector_data().unwrap().clone();
+            // GNU fns.c:2432-2439 sorts the vector's actual contents.
+            // Retain a handle, never a Rust borrow, across Lisp callbacks.
+            let vector = if in_place {
+                args[0]
+            } else {
+                Value::vector(args[0].as_vector_data().unwrap().clone())
+            };
             let roots = eval.save_specpdl_roots();
-            eval.push_specpdl_root(args[0]);
+            eval.push_specpdl_root(vector);
             eval.push_specpdl_root(lessp_fn);
             eval.push_specpdl_root(key_fn);
-            for value in &values {
-                eval.push_specpdl_root(*value);
-            }
-            let sorted_result = stable_sort_values_with(eval, &values, key_fn, lessp_fn, reverse);
+            let result = sort_vector_values(eval, vector, key_fn, lessp_fn, reverse);
             eval.restore_specpdl_roots(roots);
-            let sorted_values = sorted_result?;
-
-            if in_place {
-                assert!(args[0].replace_vectorlike_sequence_data(sorted_values));
-                Ok(args[0])
-            } else {
-                Ok(Value::vector(sorted_values))
-            }
+            result.map(|()| vector)
         }
         _other => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("list-or-vector-p"), args[0]],
         )),
     }
+}
+
+fn sort_vector_values(
+    runtime: &mut impl SortRuntime,
+    vector: Value,
+    key_fn: Value,
+    lessp_fn: Value,
+    reverse: bool,
+) -> Result<(), Flow> {
+    let len = vector.as_vector_data().unwrap().len();
+    if len < 2 {
+        return Ok(());
+    }
+    // GNU sort.c:1089 resolves the predicate before reversing or calling keys.
+    let predicate = runtime.resolve_sort_predicate(lessp_fn);
+    if let Some(callable) = predicate.callable() {
+        runtime.root_sort_value(callable);
+    }
+    if key_fn.is_nil() {
+        match predicate {
+            SortPredicate::ValueLt => return sort::sort_value_lt_vector(runtime, vector, reverse),
+            SortPredicate::NumericLessp { .. } | SortPredicate::StringLessp { .. } => {
+                return sort_buffered::sort_native_vector(runtime, vector, predicate, reverse);
+            }
+            _ => {}
+        }
+    }
+    let mut storage = VectorSortStorage::new(vector);
+    if reverse {
+        storage.reverse(0..len);
+    }
+    // GNU sort.c:1109 resolves the key only after the initial reversal.
+    let key_fn = if key_fn.is_nil() {
+        key_fn
+    } else {
+        runtime.resolve_sort_key(key_fn)
+    };
+    if !key_fn.is_nil() {
+        runtime.root_sort_value(key_fn);
+        let mut keys = Vec::with_capacity(len);
+        for index in 0..len {
+            let value = vector.as_vector_data().unwrap()[index];
+            let key = runtime.call_sort_function1(key_fn, value)?;
+            runtime.root_sort_value(key);
+            keys.push(key);
+        }
+        storage.keys = Some(keys);
+    }
+    gnu_style_sort_items(runtime, &mut storage, predicate)?;
+    if reverse {
+        storage.reverse(0..len);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -1062,15 +1236,10 @@ pub(crate) fn stable_sort_values_with(
 
     // GNU captures the predicate before key callbacks, which may redefine it
     // and collect the old callable after removing its function-cell root.
-    let captured_predicate = if sort_capture_enabled() {
-        let predicate = runtime.resolve_sort_predicate(lessp_fn);
-        if let Some(callable) = predicate.callable() {
-            runtime.root_sort_value(callable);
-        }
-        Some(predicate)
-    } else {
-        None
-    };
+    let lessp_fn = runtime.resolve_sort_predicate(lessp_fn);
+    if let Some(callable) = lessp_fn.callable() {
+        runtime.root_sort_value(callable);
+    }
 
     let mut items: Vec<SortItem> = values
         .iter()
@@ -1080,6 +1249,19 @@ pub(crate) fn stable_sort_values_with(
             key: Value::NIL,
         })
         .collect();
+
+    if reverse {
+        items.reverse();
+    }
+
+    let key_fn = if key_fn.is_nil() {
+        key_fn
+    } else {
+        runtime.resolve_sort_key(key_fn)
+    };
+    if !key_fn.is_nil() {
+        runtime.root_sort_value(key_fn);
+    }
 
     if !key_fn.is_nil() {
         for item in &mut items {
@@ -1093,12 +1275,7 @@ pub(crate) fn stable_sort_values_with(
         }
     }
 
-    if reverse {
-        items.reverse();
-    }
-
-    let lessp_fn = captured_predicate.unwrap_or_else(|| runtime.resolve_sort_predicate(lessp_fn));
-    gnu_style_sort_items(runtime, &mut items, lessp_fn)?;
+    gnu_style_sort_items(runtime, items.as_mut_slice(), lessp_fn)?;
 
     if reverse {
         items.reverse();
@@ -1107,774 +1284,11 @@ pub(crate) fn stable_sort_values_with(
     Ok(items.into_iter().map(|item| item.value).collect())
 }
 
-#[derive(Clone, Copy)]
-struct PendingRun {
-    base: usize,
-    len: usize,
-    power: i32,
-}
-
-const GALLOP_WIN_MIN: usize = 7;
-
-fn gnu_style_sort_items(
-    runtime: &mut impl SortRuntime,
-    items: &mut [SortItem],
-    lessp_fn: SortPredicate,
-) -> Result<(), Flow> {
-    let len = items.len();
-    if len < 2 {
-        return Ok(());
-    }
-
-    let minrun = merge_compute_minrun(len);
-    let mut pending: Vec<PendingRun> = Vec::new();
-    let mut min_gallop = GALLOP_WIN_MIN;
-    let mut base = 0;
-    let mut remaining = len;
-
-    while remaining > 0 {
-        let (mut run_len, descending) = count_run(runtime, items, base, len, lessp_fn)?;
-        if descending {
-            items[base..base + run_len].reverse();
-        }
-        if run_len < minrun {
-            let force = remaining.min(minrun);
-            binarysort(runtime, items, base, base + force, base + run_len, lessp_fn)?;
-            run_len = force;
-        }
-
-        found_new_run(
-            runtime,
-            items,
-            &mut pending,
-            run_len,
-            len,
-            lessp_fn,
-            &mut min_gallop,
-        )?;
-        pending.push(PendingRun {
-            base,
-            len: run_len,
-            power: 0,
-        });
-
-        base += run_len;
-        remaining -= run_len;
-    }
-
-    merge_force_collapse(runtime, items, &mut pending, lessp_fn, &mut min_gallop)
-}
-
-fn sort_item_less(
-    runtime: &mut impl SortRuntime,
-    left: SortItem,
-    right: SortItem,
-    lessp_fn: SortPredicate,
-) -> Result<bool, Flow> {
-    if matches!(lessp_fn, SortPredicate::ValueLt) {
-        return Ok(matches!(
-            runtime.compare_sort_keys(&left.key, &right.key)?,
-            std::cmp::Ordering::Less
-        ));
-    }
-
-    Ok(runtime
-        .call_sort_predicate(lessp_fn, left.key, right.key)?
-        .is_truthy())
-}
-
-fn binarysort(
-    runtime: &mut impl SortRuntime,
-    items: &mut [SortItem],
-    lo: usize,
-    hi: usize,
-    mut start: usize,
-    lessp_fn: SortPredicate,
-) -> Result<(), Flow> {
-    if lo == start {
-        start += 1;
-    }
-    while start < hi {
-        let pivot = items[start];
-        let mut left = lo;
-        let mut right = start;
-        while left < right {
-            let mid = left + ((right - left) >> 1);
-            if sort_item_less(runtime, pivot, items[mid], lessp_fn)? {
-                right = mid;
-            } else {
-                left = mid + 1;
-            }
-        }
-        items.copy_within(left..start, left + 1);
-        items[left] = pivot;
-        start += 1;
-    }
-    Ok(())
-}
-
-fn count_run(
-    runtime: &mut impl SortRuntime,
-    items: &[SortItem],
-    lo: usize,
-    hi: usize,
-    lessp_fn: SortPredicate,
-) -> Result<(usize, bool), Flow> {
-    debug_assert!(lo < hi);
-    if lo + 1 == hi {
-        return Ok((1, false));
-    }
-
-    let mut run_len = 2;
-    if sort_item_less(runtime, items[lo + 1], items[lo], lessp_fn)? {
-        while lo + run_len < hi
-            && sort_item_less(
-                runtime,
-                items[lo + run_len],
-                items[lo + run_len - 1],
-                lessp_fn,
-            )?
-        {
-            run_len += 1;
-        }
-        Ok((run_len, true))
-    } else {
-        while lo + run_len < hi
-            && !sort_item_less(
-                runtime,
-                items[lo + run_len],
-                items[lo + run_len - 1],
-                lessp_fn,
-            )?
-        {
-            run_len += 1;
-        }
-        Ok((run_len, false))
-    }
-}
-
-fn merge_compute_minrun(mut n: usize) -> usize {
-    let mut r = 0;
-    while n >= 64 {
-        r |= n & 1;
-        n >>= 1;
-    }
-    n + r
-}
-
-fn powerloop(s1: usize, n1: usize, n2: usize, n: usize) -> i32 {
-    debug_assert!(n1 > 0 && n2 > 0);
-    debug_assert!(s1 + n1 + n2 <= n);
-
-    let mut a = 2 * s1 + n1;
-    let mut b = a + n1 + n2;
-    let mut result = 0;
-    loop {
-        result += 1;
-        if a >= n {
-            a -= n;
-            b -= n;
-        } else if b >= n {
-            break;
-        }
-        a <<= 1;
-        b <<= 1;
-    }
-    result
-}
-
-fn found_new_run(
-    runtime: &mut impl SortRuntime,
-    items: &mut [SortItem],
-    pending: &mut Vec<PendingRun>,
-    new_len: usize,
-    total_len: usize,
-    lessp_fn: SortPredicate,
-    min_gallop: &mut usize,
-) -> Result<(), Flow> {
-    if pending.is_empty() {
-        return Ok(());
-    }
-
-    let prev = *pending.last().expect("pending run");
-    let power = powerloop(prev.base, prev.len, new_len, total_len);
-    while pending.len() > 1 && pending[pending.len() - 2].power > power {
-        let index = pending.len() - 2;
-        merge_at(runtime, items, pending, index, lessp_fn, min_gallop)?;
-    }
-    let last = pending.len() - 1;
-    pending[last].power = power;
-    Ok(())
-}
-
-fn merge_force_collapse(
-    runtime: &mut impl SortRuntime,
-    items: &mut [SortItem],
-    pending: &mut Vec<PendingRun>,
-    lessp_fn: SortPredicate,
-    min_gallop: &mut usize,
-) -> Result<(), Flow> {
-    while pending.len() > 1 {
-        let mut index = pending.len() - 2;
-        if index > 0 && pending[index - 1].len < pending[index + 1].len {
-            index -= 1;
-        }
-        merge_at(runtime, items, pending, index, lessp_fn, min_gallop)?;
-    }
-    Ok(())
-}
-
-fn merge_at(
-    runtime: &mut impl SortRuntime,
-    items: &mut [SortItem],
-    pending: &mut Vec<PendingRun>,
-    index: usize,
-    lessp_fn: SortPredicate,
-    min_gallop: &mut usize,
-) -> Result<(), Flow> {
-    let left = pending[index];
-    let right = pending[index + 1];
-    debug_assert_eq!(left.base + left.len, right.base);
-
-    merge_runs(
-        runtime, items, left.base, left.len, right.len, lessp_fn, min_gallop,
-    )?;
-    pending[index].len = left.len + right.len;
-    pending.remove(index + 1);
-    Ok(())
-}
-
-fn gallop_left(
-    runtime: &mut impl SortRuntime,
-    key: SortItem,
-    items: &[SortItem],
-    hint: usize,
-    lessp_fn: SortPredicate,
-) -> Result<usize, Flow> {
-    debug_assert!(!items.is_empty());
-    debug_assert!(hint < items.len());
-
-    let n = items.len() as isize;
-    let hint = hint as isize;
-    let mut last_offset = 0isize;
-    let mut offset = 1isize;
-
-    if sort_item_less(runtime, items[hint as usize], key, lessp_fn)? {
-        let max_offset = n - hint;
-        while offset < max_offset {
-            if sort_item_less(runtime, items[(hint + offset) as usize], key, lessp_fn)? {
-                last_offset = offset;
-                offset = (offset << 1) + 1;
-            } else {
-                break;
-            }
-        }
-        if offset > max_offset {
-            offset = max_offset;
-        }
-        last_offset += hint;
-        offset += hint;
-    } else {
-        let max_offset = hint + 1;
-        while offset < max_offset {
-            if sort_item_less(runtime, items[(hint - offset) as usize], key, lessp_fn)? {
-                break;
-            }
-            last_offset = offset;
-            offset = (offset << 1) + 1;
-        }
-        if offset > max_offset {
-            offset = max_offset;
-        }
-        let k = last_offset;
-        last_offset = hint - offset;
-        offset = hint - k;
-    }
-
-    last_offset += 1;
-    while last_offset < offset {
-        let mid = last_offset + ((offset - last_offset) >> 1);
-        if sort_item_less(runtime, items[mid as usize], key, lessp_fn)? {
-            last_offset = mid + 1;
-        } else {
-            offset = mid;
-        }
-    }
-    Ok(offset as usize)
-}
-
-fn gallop_right(
-    runtime: &mut impl SortRuntime,
-    key: SortItem,
-    items: &[SortItem],
-    hint: usize,
-    lessp_fn: SortPredicate,
-) -> Result<usize, Flow> {
-    debug_assert!(!items.is_empty());
-    debug_assert!(hint < items.len());
-
-    let n = items.len() as isize;
-    let hint = hint as isize;
-    let mut last_offset = 0isize;
-    let mut offset = 1isize;
-
-    if sort_item_less(runtime, key, items[hint as usize], lessp_fn)? {
-        let max_offset = hint + 1;
-        while offset < max_offset {
-            if sort_item_less(runtime, key, items[(hint - offset) as usize], lessp_fn)? {
-                last_offset = offset;
-                offset = (offset << 1) + 1;
-            } else {
-                break;
-            }
-        }
-        if offset > max_offset {
-            offset = max_offset;
-        }
-        let k = last_offset;
-        last_offset = hint - offset;
-        offset = hint - k;
-    } else {
-        let max_offset = n - hint;
-        while offset < max_offset {
-            if sort_item_less(runtime, key, items[(hint + offset) as usize], lessp_fn)? {
-                break;
-            }
-            last_offset = offset;
-            offset = (offset << 1) + 1;
-        }
-        if offset > max_offset {
-            offset = max_offset;
-        }
-        last_offset += hint;
-        offset += hint;
-    }
-
-    last_offset += 1;
-    while last_offset < offset {
-        let mid = last_offset + ((offset - last_offset) >> 1);
-        if sort_item_less(runtime, key, items[mid as usize], lessp_fn)? {
-            offset = mid;
-        } else {
-            last_offset = mid + 1;
-        }
-    }
-    Ok(offset as usize)
-}
-
-fn merge_runs(
-    runtime: &mut impl SortRuntime,
-    items: &mut [SortItem],
-    base: usize,
-    left_len: usize,
-    right_len: usize,
-    lessp_fn: SortPredicate,
-    min_gallop: &mut usize,
-) -> Result<(), Flow> {
-    let mut left_base = base;
-    let mut left_len = left_len;
-    let right_base = base + left_len;
-    let mut right_len = right_len;
-
-    let skipped = gallop_right(
-        runtime,
-        items[right_base],
-        &items[left_base..left_base + left_len],
-        0,
-        lessp_fn,
-    )?;
-    left_base += skipped;
-    left_len -= skipped;
-    if left_len == 0 {
-        return Ok(());
-    }
-
-    right_len = gallop_left(
-        runtime,
-        items[left_base + left_len - 1],
-        &items[right_base..right_base + right_len],
-        right_len - 1,
-        lessp_fn,
-    )?;
-    if right_len == 0 {
-        return Ok(());
-    }
-
-    if left_len <= right_len {
-        merge_lo(
-            runtime, items, left_base, left_len, right_base, right_len, lessp_fn, min_gallop,
-        )
-    } else {
-        merge_hi(
-            runtime, items, left_base, left_len, right_base, right_len, lessp_fn, min_gallop,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)] // TimSort merge state follows the reference algorithm directly
-fn merge_lo(
-    runtime: &mut impl SortRuntime,
-    items: &mut [SortItem],
-    left_base: usize,
-    mut left_len: usize,
-    right_base: usize,
-    mut right_len: usize,
-    lessp_fn: SortPredicate,
-    min_gallop: &mut usize,
-) -> Result<(), Flow> {
-    let left = items[left_base..left_base + left_len].to_vec();
-    let mut left_index = 0;
-    let mut right_index = right_base;
-    let mut dest = left_base;
-
-    items[dest] = items[right_index];
-    dest += 1;
-    right_index += 1;
-    right_len -= 1;
-    if right_len == 0 {
-        items[dest..dest + left_len].copy_from_slice(&left[left_index..left_index + left_len]);
-        return Ok(());
-    }
-    if left_len == 1 {
-        if right_len > 0 {
-            items.copy_within(right_index..right_index + right_len, dest);
-            dest += right_len;
-        }
-        items[dest] = left[left_index];
-        return Ok(());
-    }
-
-    let mut threshold = *min_gallop;
-    loop {
-        let mut acount = 0;
-        let mut bcount = 0;
-
-        loop {
-            if sort_item_less(runtime, items[right_index], left[left_index], lessp_fn)? {
-                items[dest] = items[right_index];
-                dest += 1;
-                right_index += 1;
-                right_len -= 1;
-                bcount += 1;
-                acount = 0;
-                if right_len == 0 {
-                    if left_len > 0 {
-                        items[dest..dest + left_len]
-                            .copy_from_slice(&left[left_index..left_index + left_len]);
-                    }
-                    return Ok(());
-                }
-                if bcount >= threshold {
-                    break;
-                }
-            } else {
-                items[dest] = left[left_index];
-                dest += 1;
-                left_index += 1;
-                left_len -= 1;
-                acount += 1;
-                bcount = 0;
-                if left_len == 1 {
-                    if right_len > 0 {
-                        items.copy_within(right_index..right_index + right_len, dest);
-                        dest += right_len;
-                    }
-                    items[dest] = left[left_index];
-                    return Ok(());
-                }
-                if acount >= threshold {
-                    break;
-                }
-            }
-        }
-
-        threshold += 1;
-        loop {
-            if threshold > 1 {
-                threshold -= 1;
-            }
-            *min_gallop = threshold;
-
-            let k = gallop_right(
-                runtime,
-                items[right_index],
-                &left[left_index..left_index + left_len],
-                0,
-                lessp_fn,
-            )?;
-            acount = k;
-            if k != 0 {
-                items[dest..dest + k].copy_from_slice(&left[left_index..left_index + k]);
-                dest += k;
-                left_index += k;
-                left_len -= k;
-                if left_len == 1 {
-                    if right_len > 0 {
-                        items.copy_within(right_index..right_index + right_len, dest);
-                        dest += right_len;
-                    }
-                    items[dest] = left[left_index];
-                    return Ok(());
-                }
-                if left_len == 0 {
-                    return Ok(());
-                }
-            }
-
-            items[dest] = items[right_index];
-            dest += 1;
-            right_index += 1;
-            right_len -= 1;
-            if right_len == 0 {
-                if left_len > 0 {
-                    items[dest..dest + left_len]
-                        .copy_from_slice(&left[left_index..left_index + left_len]);
-                }
-                return Ok(());
-            }
-
-            let k = gallop_left(
-                runtime,
-                left[left_index],
-                &items[right_index..right_index + right_len],
-                0,
-                lessp_fn,
-            )?;
-            bcount = k;
-            if k != 0 {
-                items.copy_within(right_index..right_index + k, dest);
-                dest += k;
-                right_index += k;
-                right_len -= k;
-                if right_len == 0 {
-                    if left_len > 0 {
-                        items[dest..dest + left_len]
-                            .copy_from_slice(&left[left_index..left_index + left_len]);
-                    }
-                    return Ok(());
-                }
-            }
-
-            items[dest] = left[left_index];
-            dest += 1;
-            left_index += 1;
-            left_len -= 1;
-            if left_len == 1 {
-                if right_len > 0 {
-                    items.copy_within(right_index..right_index + right_len, dest);
-                    dest += right_len;
-                }
-                items[dest] = left[left_index];
-                return Ok(());
-            }
-
-            if acount < GALLOP_WIN_MIN && bcount < GALLOP_WIN_MIN {
-                break;
-            }
-        }
-
-        threshold += 1;
-        *min_gallop = threshold;
-    }
-}
-
-#[allow(clippy::too_many_arguments)] // TimSort merge state follows the reference algorithm directly
-fn merge_hi(
-    runtime: &mut impl SortRuntime,
-    items: &mut [SortItem],
-    left_base: usize,
-    mut left_len: usize,
-    right_base: usize,
-    mut right_len: usize,
-    lessp_fn: SortPredicate,
-    min_gallop: &mut usize,
-) -> Result<(), Flow> {
-    let right = items[right_base..right_base + right_len].to_vec();
-    let mut dest = (right_base + right_len - 1) as isize;
-    let mut left_index = (left_base + left_len - 1) as isize;
-    let mut right_index = (right_len - 1) as isize;
-
-    items[dest as usize] = items[left_index as usize];
-    dest -= 1;
-    left_index -= 1;
-    left_len -= 1;
-    if left_len == 0 {
-        items[left_base..left_base + right_len].copy_from_slice(&right[..right_len]);
-        return Ok(());
-    }
-    if right_len == 1 {
-        let dest_end = dest as usize;
-        let dest_start = dest_end + 1 - left_len;
-        let src_end = left_index as usize;
-        let src_start = src_end + 1 - left_len;
-        items.copy_within(src_start..src_start + left_len, dest_start);
-        items[dest_start - 1] = right[right_index as usize];
-        return Ok(());
-    }
-
-    let mut threshold = *min_gallop;
-    loop {
-        let mut acount = 0;
-        let mut bcount = 0;
-
-        loop {
-            if sort_item_less(
-                runtime,
-                right[right_index as usize],
-                items[left_index as usize],
-                lessp_fn,
-            )? {
-                items[dest as usize] = items[left_index as usize];
-                dest -= 1;
-                left_index -= 1;
-                left_len -= 1;
-                acount += 1;
-                bcount = 0;
-                if left_len == 0 {
-                    if right_len > 0 {
-                        let dest_end = dest as usize;
-                        let dest_start = dest_end + 1 - right_len;
-                        let right_start = right_index as usize + 1 - right_len;
-                        items[dest_start..dest_start + right_len]
-                            .copy_from_slice(&right[right_start..right_start + right_len]);
-                    }
-                    return Ok(());
-                }
-                if acount >= threshold {
-                    break;
-                }
-            } else {
-                items[dest as usize] = right[right_index as usize];
-                dest -= 1;
-                right_index -= 1;
-                right_len -= 1;
-                bcount += 1;
-                acount = 0;
-                if right_len == 1 {
-                    let dest_end = dest as usize;
-                    let dest_start = dest_end + 1 - left_len;
-                    let src_end = left_index as usize;
-                    let src_start = src_end + 1 - left_len;
-                    items.copy_within(src_start..src_start + left_len, dest_start);
-                    items[dest_start - 1] = right[right_index as usize];
-                    return Ok(());
-                }
-                if bcount >= threshold {
-                    break;
-                }
-            }
-        }
-
-        threshold += 1;
-        loop {
-            if threshold > 1 {
-                threshold -= 1;
-            }
-            *min_gallop = threshold;
-
-            let k = left_len
-                - gallop_right(
-                    runtime,
-                    right[right_index as usize],
-                    &items[left_base..left_base + left_len],
-                    left_len - 1,
-                    lessp_fn,
-                )?;
-            acount = k;
-            if k != 0 {
-                let dest_start = dest as usize + 1 - k;
-                let src_start = left_index as usize + 1 - k;
-                items.copy_within(src_start..src_start + k, dest_start);
-                dest -= k as isize;
-                left_index -= k as isize;
-                left_len -= k;
-                if left_len == 0 {
-                    if right_len > 0 {
-                        let dest_end = dest as usize;
-                        let dest_start = dest_end + 1 - right_len;
-                        let right_start = right_index as usize + 1 - right_len;
-                        items[dest_start..dest_start + right_len]
-                            .copy_from_slice(&right[right_start..right_start + right_len]);
-                    }
-                    return Ok(());
-                }
-            }
-
-            items[dest as usize] = right[right_index as usize];
-            dest -= 1;
-            right_index -= 1;
-            right_len -= 1;
-            if right_len == 1 {
-                let dest_end = dest as usize;
-                let dest_start = dest_end + 1 - left_len;
-                let src_end = left_index as usize;
-                let src_start = src_end + 1 - left_len;
-                items.copy_within(src_start..src_start + left_len, dest_start);
-                items[dest_start - 1] = right[right_index as usize];
-                return Ok(());
-            }
-
-            let k = right_len
-                - gallop_left(
-                    runtime,
-                    items[left_index as usize],
-                    &right[..right_len],
-                    right_len - 1,
-                    lessp_fn,
-                )?;
-            bcount = k;
-            if k != 0 {
-                let dest_start = dest as usize + 1 - k;
-                let right_start = right_index as usize + 1 - k;
-                items[dest_start..dest_start + k]
-                    .copy_from_slice(&right[right_start..right_start + k]);
-                dest -= k as isize;
-                right_index -= k as isize;
-                right_len -= k;
-                if right_len == 1 {
-                    let dest_end = dest as usize;
-                    let dest_start = dest_end + 1 - left_len;
-                    let src_end = left_index as usize;
-                    let src_start = src_end + 1 - left_len;
-                    items.copy_within(src_start..src_start + left_len, dest_start);
-                    items[dest_start - 1] = right[right_index as usize];
-                    return Ok(());
-                }
-                if right_len == 0 {
-                    return Ok(());
-                }
-            }
-
-            items[dest as usize] = items[left_index as usize];
-            dest -= 1;
-            left_index -= 1;
-            left_len -= 1;
-            if left_len == 0 {
-                if right_len > 0 {
-                    let dest_end = dest as usize;
-                    let dest_start = dest_end + 1 - right_len;
-                    let right_start = right_index as usize + 1 - right_len;
-                    items[dest_start..dest_start + right_len]
-                        .copy_from_slice(&right[right_start..right_start + right_len]);
-                }
-                return Ok(());
-            }
-
-            if acount < GALLOP_WIN_MIN && bcount < GALLOP_WIN_MIN {
-                break;
-            }
-        }
-
-        threshold += 1;
-        *min_gallop = threshold;
-    }
-}
-
 #[cfg(test)]
 #[cfg(feature = "jit")]
-#[path = "tests/higher_order_callback_policy.rs"]
+#[path = "tests/higher_order_callback_policy_test.rs"]
 mod higher_order_callback_policy;
 
 #[cfg(all(test, feature = "jit"))]
-#[path = "tests/mapcar_activation.rs"]
+#[path = "tests/mapcar_activation_test.rs"]
 mod mapcar_activation;

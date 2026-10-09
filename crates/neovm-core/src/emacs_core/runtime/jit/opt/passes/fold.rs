@@ -862,5 +862,5 @@ fn thread_edges(
 }
 
 #[cfg(test)]
-#[path = "tests/fold.rs"]
+#[path = "tests/fold_test.rs"]
 mod tests;

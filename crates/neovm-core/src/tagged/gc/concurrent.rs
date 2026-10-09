@@ -5,6 +5,20 @@
 
 use super::*;
 
+/// An explicit marker finish could not establish its completion handoff.
+/// The heap remains in its active mark state and must not be swept or reused.
+#[derive(Debug, thiserror::Error)]
+pub enum MarkFinishError {
+    #[error("active GC marker has no completion receiver")]
+    MissingCompletion,
+    #[error("GC marker disconnected before its completion handoff")]
+    Disconnected(#[source] std::sync::mpsc::RecvError),
+    #[error("GC collector queues are poisoned; collection cannot resume")]
+    PoisonedCollectorState,
+}
+
+static_assertions::assert_impl_all!(MarkFinishError: Send, Sync);
+
 impl TaggedHeap {
     /// True if a concurrent mark should drive THIS collection.
     ///
@@ -98,6 +112,10 @@ impl TaggedHeap {
     /// tenure the objects it allocated black during its mark, dead or not, so
     /// the explicit collection could never free them.
     pub(crate) fn begin_stw_collection(&mut self) {
+        assert!(
+            !self.concurrent_mark_running,
+            "collection requires an explicit successful marker finish"
+        );
         // Collector code never sees an open allocation region
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();
@@ -137,6 +155,9 @@ impl TaggedHeap {
     /// `launch_concurrent_mark`. No Steele owner-tracking: the concurrent SATB
     /// barrier (keyed on `concurrent_mark_running`) preserves the snapshot.
     pub(crate) fn concurrent_begin(&mut self) {
+        if tagged_heap_is_current(self) {
+            TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
+        }
         // Zero the seeding scratch so a skipped `seed_mapped_remembered`
         // (non-partitioned heap) does not leave a stale previous value in the
         // start slots filled below.
@@ -170,6 +191,11 @@ impl TaggedHeap {
         &mut self,
         snap: crate::emacs_core::symbol::ObarrayScanSnapshot,
     ) {
+        assert_eq!(
+            snap.heap_identity(),
+            self.identity(),
+            "snapshot belongs to another heap"
+        );
         // Retain the start slot count for the termination residual re-seed before
         // the snapshot is moved into the GC job at `launch_concurrent_mark`.
         self.concurrent_obarray_start_slots = Some(snap.n_slots());
@@ -184,13 +210,21 @@ impl TaggedHeap {
     }
 
     pub(crate) fn launch_concurrent_mark(&mut self) {
+        assert!(
+            !self.concurrent_mark_running,
+            "an unfinished or failed marker cannot be replaced"
+        );
+        debug_assert!(self.concurrent_hash_snapshot().is_none());
         // The GC thread's ownership snapshot of this world-stopped instant:
         // the cons blocks and the string, float, vector and bytecode pages
         // that exist now (retired pages included — their tenured objects are
         // claim-benign). Blocks and pages created during the mark are absent,
         // which is fail-safe: their objects allocate black and whatever the
         // marker meets there defers to the termination.
-        let pages = self.page_snapshot_for_mark();
+        let mut pages = self.page_snapshot_for_mark();
+        let leaves = self
+            .concurrent_claims()
+            .then(|| self.leaf_page_snapshot_for_mark(&mut pages));
         let vecsnap_t0 = std::time::Instant::now();
         // Stage 2 Tier B CONCURRENT VECTOR SCAN: snapshot every
         // OWNED/Mapped vector backing AT THIS world-stopped point (same instant the
@@ -265,22 +299,90 @@ impl TaggedHeap {
             // vector pages either, so every page vector defers.
             None
         } else {
+            // SAFETY: this exclusive owner captures without Lisp callbacks at
+            // the legacy single-writer start handshake. The cycle's barriers,
+            // retirement and explicit finish/abandonment retain its storage.
+            let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(self) };
+            let heap = world.heap();
             let mut snap = crate::tagged::header::VectorScanSnapshot::with_capacity(
-                self.vector_object_addrs.len(),
+                heap.vector_object_addrs.len(),
+                &world,
             );
-            for &addr in &self.vector_object_addrs {
-                // Safety: `addr` is a live owned Vector's `GcHeader` addr (the
+            for &addr in &heap.vector_object_addrs {
+                // SAFETY: `addr` is a live owned Vector's `GcHeader` addr (the
                 // registry invariant above); a VecLike header begins with its
                 // `GcHeader`, so casting to `*const VectorObj` and reading its
                 // backing is valid.
                 let obj = unsafe { &*(addr as *const VectorObj) };
-                snap.push(obj.data.scan_entry());
+                // SAFETY: the registry proves this backing belongs to the
+                // admitted heap; retirement/abandonment retain it until the
+                // marker finishes, and slots follow atomic publication.
+                unsafe { snap.push(obj.data.scan_entry()) };
             }
+            debug_assert_eq!(snap.heap_identity(), heap.identity());
             Some(snap)
         };
         self.handshake.last_start_vecsnap_us = vecsnap_t0.elapsed().as_micros() as u64;
         self.handshake.probe_vector_snapshot_len =
             vectors.as_ref().map(|snap| snap.len()).unwrap_or(0);
+        // Tier-H capture is admitted like the vector snapshot: exact owned Box
+        // membership is its ownership proof; weak, pending and
+        // generation-black owners refuse.
+        let hashes = if self.concurrent_claims() {
+            let t0 = std::time::Instant::now();
+            let policy = self
+                .concurrent_claims_state()
+                .expect("claims enabled")
+                .scan_policy;
+            let scope = self.collection_scope();
+            for entry in self.concurrent_hash_mutators() {
+                let mutator = entry.lock().unwrap();
+                debug_assert!(mutator.retired_hash_buffers.is_empty());
+                debug_assert!(mutator.written_hash_owners.is_empty());
+            }
+            // SAFETY: this exclusive owner captures without Lisp callbacks at
+            // the legacy single-writer start handshake. Writers lock each
+            // captured entry before borrowing its table, and the cycle's
+            // retirement and explicit finish/abandonment retain originals.
+            let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(self) };
+            let heap = world.heap();
+            // The coordinator's existing exact Box inventory includes every
+            // mutator's allocations, including ordinary-old major owners.
+            // SAFETY: inventory addresses are live owned non-cons headers.
+            let is_hash = |addr: usize| unsafe {
+                (*(addr as *const GcHeader)).kind == HeapObjectKind::VecLike
+                    && (*(addr as *const VecLikeHeader)).type_tag == VecLikeType::HashTable
+            };
+            let tables = heap
+                .non_cons_object_addrs
+                .iter()
+                .filter(|&&addr| is_hash(addr))
+                .count();
+            let mut snapshot =
+                concurrent_hash::HashTableScanSnapshot::with_policy(tables, policy, &world);
+            for &addr in &heap.non_cons_object_addrs {
+                if is_hash(addr) {
+                    // SAFETY: the authoritative live-Box inventory of the
+                    // admitted heap, not a borrowed or mapped header address.
+                    unsafe { snapshot.capture_owned(addr, scope) };
+                }
+            }
+            debug_assert_eq!(snapshot.heap_identity(), heap.identity());
+            if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+                eprintln!(
+                    "NEOVM_GC hash_snapshot capture={}us tables={} slots={} entries={} descriptor_bytes={}",
+                    t0.elapsed().as_micros(),
+                    snapshot.len(),
+                    snapshot.slot_count(),
+                    snapshot.initialized_entry_count(),
+                    snapshot.descriptor_bytes()
+                );
+            }
+            Some(std::sync::Arc::new(snapshot))
+        } else {
+            None
+        };
+        self.set_concurrent_hash_snapshot(hashes.clone());
         let jobasm_t0 = std::time::Instant::now();
         let gray = std::mem::take(&mut self.gray_queue);
         let (exited_tx, exited_rx) = std::sync::mpsc::channel();
@@ -292,6 +394,12 @@ impl TaggedHeap {
         self.concurrent_subr_dropped.store(0, Ordering::Relaxed);
         self.concurrent_vec_claimed.store(0, Ordering::Relaxed);
         self.concurrent_bc_claimed.store(0, Ordering::Relaxed);
+        if let Some(claimed) = self.concurrent_leaf_claimed() {
+            claimed.store(0, Ordering::Relaxed);
+        }
+        if let Some(claimed) = self.concurrent_hash_claimed() {
+            claimed.store(0, Ordering::Relaxed);
+        }
         self.gc_stop
             .store(false, std::sync::atomic::Ordering::Release);
         self.gc_exited = Some(exited_rx);
@@ -303,9 +411,14 @@ impl TaggedHeap {
         // SATB log fires even with owner-tracking Disabled / no partition:
         // the window becomes ALL.
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(true));
+        if tagged_heap_is_current(self) {
+            TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| {
+                active.set(self.concurrent_claims() && self.concurrent_hash_snapshot().is_some());
+            });
+        }
         self.publish_barrier_window();
         let job = ConcurrentMarkJob {
-            gray,
+            gray: MarkStack::from_values(gray),
             claims: ConcurrentClaimJob {
                 // Mandated carry: the GC thread claims at THIS cycle's parity.
                 parity: self.mark_parity,
@@ -335,9 +448,20 @@ impl TaggedHeap {
             mapped_cons_ranges: self.staged_mapped_cons_scan.take(),
             mapped_veclikes: self.staged_mapped_veclikes.take(),
         };
-        gc_thread()
-            .send(GcRequest::ConcurrentMark(job))
-            .expect("neovm-gc thread is gone");
+        let request = if let Some(leaves) = leaves {
+            GcRequest::ConcurrentMarkEnabled(Box::new(EnabledConcurrentMarkJob {
+                job,
+                claims: EnabledClaims {
+                    leaves,
+                    leaf_claimed: self.concurrent_leaf_claimed().cloned(),
+                    hashes,
+                    hash_claimed: self.concurrent_hash_claimed().cloned(),
+                },
+            }))
+        } else {
+            GcRequest::ConcurrentMark(job)
+        };
+        gc_thread().send(request).expect("neovm-gc thread is gone");
         self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
         self.pace_mark_start = Some(std::time::Instant::now());
@@ -408,10 +532,57 @@ impl TaggedHeap {
         }
     }
 
+    /// Add enabled leaf ownership to a start-captured legacy snapshot.
+    /// Only the stopped-world launcher calls this; live allocator registries
+    /// never cross to the worker.
+    pub(super) fn leaf_page_snapshot_for_mark(
+        &self,
+        pages: &mut PageSnapshot,
+    ) -> chunk_map::LeafPageSnapshot {
+        if let PageSnapshot::ChunkMap { start_count, .. } = pages {
+            start_count[ChunkClass::Marker as usize] = self.marker_arena.pages.len();
+            start_count[ChunkClass::Bignum as usize] = self.bignum_arena.pages.len();
+            start_count[ChunkClass::SymbolWithPos as usize] =
+                self.symbol_with_pos_arena.pages.len();
+            return chunk_map::LeafPageSnapshot::default();
+        }
+        fn bases<T: PagedObject>(arena: &ObjectArena<T>) -> FxHashSet<usize> {
+            let mut set =
+                FxHashSet::with_capacity_and_hasher(arena.pages.len(), Default::default());
+            for page in &arena.pages {
+                set.insert(page.base_addr());
+            }
+            set
+        }
+        chunk_map::LeafPageSnapshot::new(
+            bases(&self.marker_arena),
+            bases(&self.bignum_arena),
+            bases(&self.symbol_with_pos_arena),
+        )
+    }
+
     /// Stop the GC thread and fold its residual work back into the gray queue so
     /// the caller can finish marking stop-the-world. After this, the heap is
     /// owned exclusively by the mutator again (the GC thread has exited its loop).
     pub(crate) fn join_concurrent_mark(&mut self) {
+        // Collector callers require a completed handoff before tracing or
+        // sweeping. Failure is a terminal collector invariant failure, never
+        // an empty result that would discard live promotion records.
+        if let Err(error) = self.finish_concurrent_mark() {
+            panic!("cannot resume collection after marker failure: {error}");
+        }
+    }
+
+    /// Stop and wait for the background marker, then fold its residual work.
+    ///
+    /// This is the explicit blocking alternative to Drop. It is idempotent
+    /// when no mark is active. On error, the heap remains active: no completion
+    /// was proved, so subsequent collection cannot sweep it, and Drop retains
+    /// the allocations instead of reclaiming marker-readable storage.
+    pub fn finish_concurrent_mark(&mut self) -> Result<(), MarkFinishError> {
+        if !self.concurrent_mark_running {
+            return Ok(());
+        }
         let join_t0 = std::time::Instant::now();
         self.gc_stop
             .store(true, std::sync::atomic::Ordering::Release);
@@ -421,36 +592,56 @@ impl TaggedHeap {
         // its flag check and its wait (no lost wakeup, no full-nap latency).
         {
             let (lock, cvar) = &*self.gc_wake;
-            let _guard = lock.lock().unwrap();
+            let _guard = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             cvar.notify_all();
         }
-        assert!(
-            !self.generational.enabled || !self.concurrent_mark_running || self.gc_exited.is_some(),
-            "active generational marker lost its result receiver"
-        );
-        let result = if let Some(rx) = self.gc_exited.take() {
-            match rx.recv() {
-                Ok(result) => result,
-                Err(error) if self.generational.enabled => {
-                    panic!("GC worker lost promotion handoff: {error}")
-                }
-                Err(_) => ConcurrentMarkResult::default(),
-            }
+        let rx = self
+            .gc_exited
+            .take()
+            .ok_or(MarkFinishError::MissingCompletion)?;
+        let result = rx.recv().map_err(MarkFinishError::Disconnected)?;
+        // Poison in either correctness-critical queue invalidates its GC
+        // invariants. Prove both queues before changing active state or
+        // removing logs; only the payload-free wake latch can be recovered.
+        let (satb, deferred) = {
+            let mut satb = self
+                .satb_shared
+                .lock()
+                .map_err(|_| MarkFinishError::PoisonedCollectorState)?;
+            let mut deferred = self
+                .deferred_veclikes
+                .lock()
+                .map_err(|_| MarkFinishError::PoisonedCollectorState)?;
+            (std::mem::take(&mut *satb), std::mem::take(&mut *deferred))
+        };
+        // Tier-H's mutation protocol and dirty-owner logs are correctness
+        // state too: prove them before changing active state. Poison means a
+        // mutation escaped mid-protocol; do not terminate or sweep it.
+        let hash_owners = if self.concurrent_claims() {
+            self.take_concurrent_hash_finish_logs()?
         } else {
-            ConcurrentMarkResult::default()
+            Vec::new()
         };
         // The GC thread has exited, so nothing reads the bitmaps while the
         // black regions granted during the mark give their tails back (I1).
         self.close_alloc_regions();
         self.concurrent_mark_running = false;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
+        if tagged_heap_is_current(self) {
+            TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
+        }
         self.publish_barrier_window();
         #[cfg(feature = "gc-memory-telemetry")]
         memory_telemetry::observe(self, memory_telemetry::Phase::ConcurrentJoined);
+        // New snapshot kinds hand bare symbols back in legacy full cycles
+        // too: weak-symbol liveness still consults mutator-side mark_symbol.
+        // Existing knob-off legacy scans produce no symbol result.
+        for id in result.symbols {
+            self.mark_symbol(id);
+        }
         if self.generational.enabled {
-            for id in result.symbols {
-                self.mark_symbol(id);
-            }
             let mut symbols = Vec::new();
             for mutator in self.mutators_mut() {
                 symbols.append(&mut mutator.major_symbol_preimages);
@@ -484,10 +675,9 @@ impl TaggedHeap {
         // The fold is timed (`last_termination_fold_us`) so the termination's
         // cheap push half is attributable separately from the mark fixpoint.
         let fold_t0 = std::time::Instant::now();
-        let satb = std::mem::take(&mut *self.satb_shared.lock().unwrap());
         self.last_termination_satb = satb.len();
-        self.gray_queue.extend(satb);
-        let deferred = std::mem::take(&mut *self.deferred_veclikes.lock().unwrap());
+        self.gray_queue
+            .extend(satb.into_iter().map(MarkWord::value));
         self.last_termination_deferred = deferred.len();
         self.max_termination_deferred = self.max_termination_deferred.max(deferred.len());
         // Strings/floats the GC thread claimed concurrently and subrs it
@@ -499,6 +689,39 @@ impl TaggedHeap {
         self.last_concurrent_subr_dropped = self.concurrent_subr_dropped.load(Ordering::Relaxed);
         self.last_concurrent_vec_claimed = self.concurrent_vec_claimed.load(Ordering::Relaxed);
         self.last_concurrent_bc_claimed = self.concurrent_bc_claimed.load(Ordering::Relaxed);
+        if let Some(state) = self.concurrent_claims_state_mut() {
+            state.last_leaf_claimed = state.leaf_claimed.load(Ordering::Relaxed);
+            state.last_hash_claimed = state.hash_claimed.load(Ordering::Relaxed);
+        }
+        // Insertion coverage cannot rely on the snapshot's old children or
+        // mark_value of an already claimed header. Merge every mutator's dirty
+        // log and enumerate current children directly, including weak registry
+        // handling if a captured strong table was replaced with a weak one.
+        for owner in hash_owners {
+            self.push_value_children_to_gray(owner, "hash-written-retrace");
+        }
+        if self.concurrent_claims() && std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+            let (mut buffers, mut slots, mut bytes) = (0, 0, 0);
+            for entry in self.concurrent_hash_mutators() {
+                let mutator = entry.lock().unwrap();
+                buffers += mutator.retired_hash_buffers.len();
+                slots += mutator
+                    .retired_hash_buffers
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>();
+                bytes += mutator
+                    .retired_hash_buffers
+                    .iter()
+                    .map(|v| {
+                        v.capacity()
+                            * std::mem::size_of::<Option<crate::emacs_core::value::HashTableEntry>>(
+                            )
+                    })
+                    .sum::<usize>();
+            }
+            eprintln!("NEOVM_GC hash_retired buffers={buffers} slots={slots} bytes={bytes}");
+        }
         // Task 01 INSERTION-COVERAGE RE-TRACE (the load-bearing companion of
         // the vector-header claims): re-gray the CURRENT children of every
         // multi-child owner mutated this cycle (`satb_snapshotted_owners` —
@@ -517,7 +740,7 @@ impl TaggedHeap {
         let written = std::mem::take(&mut self.satb_snapshotted_owners);
         clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
         for bits in written {
-            self.push_value_children_to_gray(TaggedValue(bits), "satb-written-retrace");
+            self.push_value_children_to_gray(TaggedValue::from_bits(bits), "satb-written-retrace");
         }
         // Classify what the drain is about to trace, per kind — the measurement
         // that decides which kinds a concurrent-tracing extension should take
@@ -527,16 +750,17 @@ impl TaggedHeap {
         // on; the kind buckets stay zero otherwise.
         if cfg!(test) || std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
             let mut kinds = DrainKinds::default();
-            for &val in &deferred {
-                // Safety: parked entries are live heap values; nothing has been
+            for &word in &deferred {
+                // SAFETY: parked entries are live heap values; nothing has been
                 // swept since they were parked (see `DrainKinds::note`).
-                unsafe { kinds.note(val) };
+                unsafe { kinds.note(word.value()) };
             }
             self.last_termination_kinds = kinds;
             self.max_termination_kinds.merge_max(&kinds);
         }
         self.termination_count += 1;
-        self.gray_queue.extend(deferred);
+        self.gray_queue
+            .extend(deferred.into_iter().map(MarkWord::value));
         self.last_termination_fold_us = fold_t0.elapsed().as_micros() as u64;
         // Stage 2 Tier B CONCURRENT VECTOR SCAN: the GC thread has provably exited its
         // mark loop (the `rx.recv()` above), so its snapshot pointers into the retired
@@ -549,6 +773,57 @@ impl TaggedHeap {
         // Whole join cost (stop signal + GC-thread exit wait + the fold above);
         // the fold alone stays separately visible as `last_termination_fold_us`.
         self.handshake.last_term_join_us = join_t0.elapsed().as_micros() as u64;
+        Ok(())
+    }
+
+    /// Finish the marker and explicitly reclaim native resources before
+    /// releasing this heap's ownership. Module finalizers and SQLite teardown
+    /// may block or fail; automatic Drop never invokes those operations.
+    /// On marker error, Drop abandons the marker-readable allocations.
+    pub fn shutdown(mut self) -> Result<(), MarkFinishError> {
+        // SAFETY: shutdown consumes this heap, and its only remaining access
+        // is automatic destruction after the explicit resource teardown.
+        unsafe { self.shutdown_owned_resources() }
+    }
+
+    /// Explicit preparation for an enclosing stationary owner's destruction.
+    ///
+    /// # Safety
+    /// The enclosing owner is consumed and may perform no further object or
+    /// Lisp Value access, including through legacy TLS aliases. Its only
+    /// remaining operation is automatic destruction after this returns.
+    pub(crate) unsafe fn shutdown_owned_resources(&mut self) -> Result<(), MarkFinishError> {
+        self.finish_concurrent_mark()?;
+        crate::tagged::gc::clear_tagged_heap_if_installed(&self);
+        self.reclaim_intrusive_objects(ReclamationMode::Explicit);
+        Ok(())
+    }
+
+    /// Request stop without waiting, then retain every allocation the marker
+    /// can reach. The global worker may still be scanning its start snapshots.
+    pub(super) fn abandon_concurrent_mark(&mut self) {
+        self.gc_stop.store(true, Ordering::Release);
+        // Drop cannot acquire the wake mutex. A notify missed before the
+        // worker waits is bounded by its existing 100us timeout; stop remains
+        // visible until it exits. No storage is reclaimed during that delay.
+        self.gc_wake.1.notify_all();
+        std::mem::forget(std::mem::take(&mut self.cons_blocks));
+        std::mem::forget(std::mem::take(&mut self.float_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.string_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.vector_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.bytecode_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.lambda_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.macro_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.record_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.symbol_with_pos_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.marker_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.bignum_arena.pages));
+        std::mem::forget(std::mem::take(&mut self.retired_vector_buffers));
+        if self.concurrent_claims() {
+            self.retain_concurrent_hash_storage_for_abandonment();
+        }
+        // Intrusive lists own raw allocations; the Drop body skips their free
+        // walks. Job-owned Arcs retain mark queues, counters and page metadata.
     }
 
     /// SATB barrier path for concurrent marking: append the owner's current
@@ -581,11 +856,17 @@ impl TaggedHeap {
     /// cycle ends floats one cycle, the standard SATB trade.
     pub(crate) fn feed_satb_roots(&self, values: &[TaggedValue]) {
         let mut shared = self.satb_shared.lock().unwrap();
-        shared.extend(values.iter().copied().filter(|v| {
-            v.is_heap_object()
-                || (self.generational.major_in_progress
-                    && matches!(v.kind(), crate::tagged::value::ValueKind::Symbol(_)))
-        }));
+        shared.extend(
+            values
+                .iter()
+                .copied()
+                .filter(|v| {
+                    v.is_heap_object()
+                        || (self.generational.major_in_progress
+                            && matches!(v.kind(), crate::tagged::value::ValueKind::Symbol(_)))
+                })
+                .map(MarkWord::of),
+        );
     }
 
     pub(super) fn push_value_children_to_satb_shared(&mut self, owner: TaggedValue) {
@@ -602,7 +883,7 @@ impl TaggedHeap {
         self.push_value_children_to_gray(owner, "satb-concurrent");
         if !self.gray_queue.is_empty() {
             let mut shared = self.satb_shared.lock().unwrap();
-            shared.extend(self.gray_queue.drain(..));
+            shared.extend(self.gray_queue.drain(..).map(MarkWord::of));
         }
     }
 
@@ -625,7 +906,10 @@ impl TaggedHeap {
             return;
         }
         if pre_image.is_heap_object() {
-            self.satb_shared.lock().unwrap().push(pre_image);
+            self.satb_shared
+                .lock()
+                .unwrap()
+                .push(MarkWord::of(pre_image));
         }
     }
 
@@ -670,4 +954,69 @@ impl TaggedHeap {
         let original = obj.data.clone_owned_backing();
         self.retired_vector_buffers.push(original);
     }
+
+    /// Called only after reader join, at the end of termination or teardown.
+    pub(super) fn release_concurrent_hash_storage(&mut self) {
+        debug_assert!(
+            !self.concurrent_mark_running,
+            "Tier-H storage released before reader join"
+        );
+        self.set_concurrent_hash_snapshot(None);
+        for entry in self.concurrent_hash_mutators() {
+            // The reader has joined; clearing inert logs is valid even after
+            // a poisoning panic, which finish has already reported.
+            let mut mutator = entry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            mutator.retired_hash_buffers.clear();
+            mutator.written_hash_owners.clear();
+        }
+    }
+}
+
+/// Retain the snapshot without retaining a mutable heap borrow across the
+/// same-table lock or caller closure. The caller has already tested the
+/// installed mutator's Tier-H TLS gate; this activation does not reload it.
+#[cold]
+#[inline(never)]
+pub(crate) fn concurrent_hash_snapshot(
+    owner: TaggedValue,
+) -> Option<std::sync::Arc<concurrent_hash::HashTableScanSnapshot>> {
+    with_tagged_heap(|heap| {
+        debug_assert!(heap.concurrent_mark_running && heap.concurrent_claims());
+        let snapshot = heap.concurrent_hash_snapshot()?;
+        // Most P5 writes initialize post-start tables. A map miss needs no
+        // shared lifetime guard, avoiding two Arc RMWs on that common path.
+        snapshot.get(owner.as_veclike_ptr()? as usize)?;
+        Some(snapshot.clone())
+    })
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn prepare_concurrent_hash_write(
+    owner: TaggedValue,
+    guard: &mut concurrent_hash::HashTableMutationGuard<'_>,
+) {
+    // The descriptor lease serializes this election with first-write COW and
+    // the caller's mutation. Only its winner needs a per-mutator log lease;
+    // the existing owner retrace covers every later inserted child. A panic
+    // before retirement/log handoff poisons the descriptor and fails closed.
+    if !guard.claim_dirty() {
+        return;
+    }
+    with_tagged_heap(|heap| {
+        debug_assert!(heap.concurrent_mark_running);
+        let entry = heap.current_concurrent_hash_mutator();
+        let mut state = entry.lock().unwrap();
+        // The entry guard covers this payload access, barrier enumeration and
+        // the caller's subsequent &mut. It either preserves unread storage,
+        // defers admission, or waits until the admitted reader has completed.
+        let object = owner.as_veclike_ptr().unwrap() as *mut HashTableObj;
+        guard.clone_on_first_write(
+            unsafe { &mut (*object).table.data },
+            &mut state.retired_hash_buffers,
+        );
+        state.written_hash_owners.push(owner);
+    });
 }

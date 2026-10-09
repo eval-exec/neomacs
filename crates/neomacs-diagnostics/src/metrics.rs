@@ -114,4 +114,5 @@ pub struct GcMetrics {
 }
 
 #[cfg(test)]
+#[path = "metrics/tests/metrics_test.rs"]
 mod tests;

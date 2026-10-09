@@ -153,6 +153,197 @@ fn custom_executor_failure_propagates_to_await() {
 }
 
 #[test]
+fn custom_executor_retains_configured_worker_concurrency() {
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let worker_release = Arc::clone(&release);
+    let (entered, entries) = std::sync::mpsc::channel();
+    let rt = WorkerRuntime::with_executor(
+        WorkerConfig {
+            threads: 3,
+            queue_capacity: 16,
+        },
+        move |form, _opts, _ctx| {
+            entered.send(thread::current().id()).expect("report entry");
+            let (released, ready) = &*worker_release;
+            let mut released = released.lock().expect("release lock");
+            while !*released {
+                released = ready.wait(released).expect("release wait");
+            }
+            Ok(form.clone())
+        },
+    );
+    let workers = rt.try_start_workers().expect("custom workers ready");
+    let tasks: Vec<_> = (0..3)
+        .map(|_| {
+            rt.spawn(LispValue::default(), TaskOptions::default())
+                .expect("task enqueued")
+        })
+        .collect();
+    let mut owner_threads = std::collections::HashSet::new();
+    for _ in 0..3 {
+        match entries.recv_timeout(Duration::from_secs(2)) {
+            Ok(owner) => {
+                owner_threads.insert(owner);
+            }
+            Err(_) => break,
+        }
+    }
+
+    // Release even on a failed concurrency check so all owned workers can join.
+    let (released, ready) = &*release;
+    *released.lock().expect("release lock") = true;
+    ready.notify_all();
+    rt.close();
+    for worker in workers {
+        worker.join().expect("worker joined");
+    }
+    for task in tasks {
+        TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1)))
+            .expect("custom task completed");
+    }
+    assert_eq!(owner_threads.len(), 3, "all configured workers overlap");
+}
+
+#[test]
+fn elisp_factory_constructs_context_only_on_its_owner() {
+    use neovm_core::tagged::gc::tagged_heap_is_installed;
+
+    assert!(!tagged_heap_is_installed(), "caller has no Lisp heap");
+    let caller = thread::current().id();
+    let constructed_on = Arc::new(Mutex::new(Vec::new()));
+    let owner_records = Arc::clone(&constructed_on);
+    let rt = WorkerRuntime::with_executor_factory(
+        WorkerConfig {
+            threads: 4,
+            queue_capacity: 16,
+        },
+        Executor::Elisp(Arc::new(move || {
+            assert!(!tagged_heap_is_installed(), "fresh owner has no heap");
+            owner_records
+                .lock()
+                .expect("owner records")
+                .push(thread::current().id());
+            Ok(Box::new(Context::new()))
+        })),
+    );
+    assert!(constructed_on.lock().expect("owner records").is_empty());
+    assert!(
+        !tagged_heap_is_installed(),
+        "factory leaves caller TLS alone"
+    );
+
+    let workers = rt.try_start_workers().expect("owner ready");
+    assert_eq!(workers.len(), 1, "one shared Lisp state has one owner");
+    let owners = constructed_on.lock().expect("owner records");
+    assert_eq!(owners.len(), 1);
+    assert_ne!(owners[0], caller);
+    drop(owners);
+    assert!(
+        !tagged_heap_is_installed(),
+        "readiness leaves caller TLS alone"
+    );
+
+    let task = rt
+        .spawn(
+            LispValue {
+                bytes: b"(+ 20 22)".to_vec(),
+            },
+            TaskOptions::default(),
+        )
+        .expect("task enqueued");
+    let result = TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1)))
+        .expect("owner reader and evaluator have installed TLS");
+    rt.close();
+    for worker in workers {
+        worker.join().expect("owner joined");
+    }
+    assert_eq!(result.bytes.as_slice(), b"42");
+    assert!(
+        !tagged_heap_is_installed(),
+        "owner teardown leaves caller TLS alone"
+    );
+}
+
+#[test]
+fn elisp_startup_failure_finishes_pending_tasks() {
+    let rt = WorkerRuntime::with_executor_factory(
+        WorkerConfig {
+            threads: 4,
+            queue_capacity: 16,
+        },
+        Executor::Elisp(Arc::new(|| {
+            Err(WorkerStartError::Initialization(
+                "test factory failure".to_string(),
+            ))
+        })),
+    );
+    let task = rt
+        .spawn(LispValue::default(), TaskOptions::default())
+        .expect("task enqueued before startup");
+    let err = rt.try_start_workers().expect_err("failure reaches caller");
+    assert!(matches!(err, WorkerStartError::Initialization(_)));
+    let result = TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1)))
+        .expect_err("pending task gets a startup failure");
+    match result {
+        TaskError::Failed(signal) => {
+            assert_eq!(signal.symbol, "worker-startup-failed");
+            assert!(
+                signal
+                    .data
+                    .expect("failure detail")
+                    .contains("test factory failure")
+            );
+        }
+        other => panic!("expected startup failure, got {other:?}"),
+    }
+    assert_eq!(rt.task_status(task), Some(TaskStatus::Completed));
+    assert_eq!(rt.stats().completed, 1);
+    assert_eq!(rt.reap_finished(1), 1);
+    assert_eq!(
+        rt.spawn(LispValue::default(), TaskOptions::default()),
+        Err(EnqueueError::Closed)
+    );
+}
+
+#[test]
+fn elisp_startup_panic_reaches_caller_and_pending_awaiter() {
+    let rt = WorkerRuntime::with_executor_factory(
+        WorkerConfig::default(),
+        Executor::Elisp(Arc::new(|| panic!("test factory panic"))),
+    );
+    let task = rt
+        .spawn(LispValue::default(), TaskOptions::default())
+        .expect("task enqueued before startup");
+    assert!(matches!(
+        rt.try_start_workers(),
+        Err(WorkerStartError::InitializationPanicked)
+    ));
+    assert!(matches!(
+        TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1))),
+        Err(TaskError::Failed(Signal { symbol, .. })) if symbol == "worker-startup-failed"
+    ));
+}
+
+#[test]
+fn elisp_zero_workers_finishes_pending_tasks() {
+    let rt = WorkerRuntime::with_elisp_executor(WorkerConfig {
+        threads: 0,
+        queue_capacity: 16,
+    });
+    let task = rt
+        .spawn(LispValue::default(), TaskOptions::default())
+        .expect("task enqueued before startup");
+    assert!(matches!(
+        rt.try_start_workers(),
+        Err(WorkerStartError::NoWorkers)
+    ));
+    assert!(matches!(
+        TaskScheduler::task_await(&rt, task, Some(Duration::from_secs(1))),
+        Err(TaskError::Failed(Signal { symbol, .. })) if symbol == "worker-startup-failed"
+    ));
+}
+
+#[test]
 fn channel_send_recv_round_trip() {
     let rt = WorkerRuntime::new(WorkerConfig::default());
     let channel = rt.make_channel(2);
@@ -303,12 +494,14 @@ fn reap_finished_removes_completed_task_entries() {
         .expect("task should complete");
     assert_eq!(rt.task_status(task), Some(TaskStatus::Completed));
 
-    let reaped = rt.reap_finished(8);
     rt.close();
     for worker in workers {
         worker.join().expect("worker thread should join");
     }
 
+    // Await publishes the task result before the worker queues its finished
+    // handle. Join establishes that this separate bookkeeping is complete.
+    let reaped = rt.reap_finished(8);
     assert_eq!(reaped, 1);
     assert_eq!(rt.task_status(task), None);
 }
@@ -389,11 +582,23 @@ fn elisp_executor_maps_signal_errors() {
 
 #[test]
 fn elisp_executor_persists_defun_state() {
+    use neovm_core::tagged::gc::tagged_heap_is_installed;
+
+    assert!(!tagged_heap_is_installed(), "caller starts without a heap");
     let rt = WorkerRuntime::with_elisp_executor(WorkerConfig {
-        threads: 1,
+        threads: 4,
         queue_capacity: 16,
     });
+    assert!(
+        !tagged_heap_is_installed(),
+        "public factory leaves caller TLS alone"
+    );
     let workers = rt.start_dummy_workers();
+    assert_eq!(workers.len(), 1, "shared Lisp state stays on one owner");
+    assert!(
+        !tagged_heap_is_installed(),
+        "worker readiness leaves caller TLS alone"
+    );
 
     let define = rt
         .spawn(
@@ -417,6 +622,21 @@ fn elisp_executor_persists_defun_state() {
     let call_out = TaskScheduler::task_await(&rt, call, Some(Duration::from_millis(50)))
         .expect("function call should succeed");
 
+    assert!(matches!(
+        rt.try_start_workers(),
+        Err(WorkerStartError::AlreadyStarted)
+    ));
+    let later_call = rt
+        .spawn(
+            LispValue {
+                bytes: b"(plus1 99)".to_vec(),
+            },
+            TaskOptions::default(),
+        )
+        .expect("second start rejection preserves the live queue");
+    let later_out = TaskScheduler::task_await(&rt, later_call, Some(Duration::from_secs(1)))
+        .expect("original owner preserves its definitions");
+
     rt.close();
     for worker in workers {
         worker.join().expect("worker thread should join");
@@ -430,6 +650,7 @@ fn elisp_executor_persists_defun_state() {
         String::from_utf8(call_out.bytes).expect("utf8 output"),
         "42"
     );
+    assert_eq!(later_out.bytes.as_slice(), b"100");
 }
 
 #[test]

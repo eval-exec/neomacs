@@ -69,7 +69,7 @@ use super::*;
 use crate::emacs_core::eval::SpecBinding;
 use crate::emacs_core::forward::{LispFwd, LispFwdType};
 use crate::emacs_core::symbol::{
-    SYMCELL_INLINE_WRITE_MASK, SymbolRedirect, symcell_inline_write_value,
+    SYMCELL_INLINE_WRITE_MASK, SymbolRedirect, ValueCell, symcell_inline_write_value,
 };
 use std::cell::{Cell, RefCell};
 
@@ -112,16 +112,17 @@ thread_local! {
 /// projection mask (the JIT cache's compile entries hold one while they
 /// compile). Without one, nothing is inlined.
 #[must_use = "the environment lasts as long as the scope"]
+#[derive(Debug)]
 pub(crate) struct CompileEnvScope {
-    prev: Option<CompileEnv>,
+    _scope: crate::tls_scope::TlsScope<Option<CompileEnv>, Cell<Option<CompileEnv>>>,
 }
+static_assertions::assert_not_impl_any!(CompileEnvScope: Send, Sync);
 
 impl CompileEnvScope {
     /// Enter CTX's environment (nothing when CTX is null or the knob is off).
     /// CTX must stay alive and its obarray and mask unmoved while the scope
     /// lives: the dormant seam-provided context of a compile.
     pub(crate) fn enter(ctx: *const Context) -> Self {
-        let prev = ENV.with(Cell::get);
         let env = (!ctx.is_null() && jit_inline_vars().any()).then(|| {
             // SAFETY: the caller's contract above.
             let ctx = unsafe { &*ctx };
@@ -130,14 +131,9 @@ impl CompileEnvScope {
                 projection: std::ptr::from_ref(ctx.runtime_projection_mask()),
             }
         });
-        ENV.with(|e| e.set(env));
-        Self { prev }
-    }
-}
-
-impl Drop for CompileEnvScope {
-    fn drop(&mut self) {
-        ENV.with(|e| e.set(self.prev));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&ENV, env),
+        }
     }
 }
 
@@ -224,33 +220,30 @@ fn classify(sym: u32) -> Option<VarSite> {
         let id = SymId(sym);
         let cell = obarray.jit_symbol_cell_addr(id)?;
         let shape = match obarray.get_by_id(id) {
-            Some(symbol) => match symbol.redirect() {
-                SymbolRedirect::Localized => {
-                    // SAFETY: `Localized` selects the BLV arm, a record the
-                    // obarray owns for its life.
-                    let blv_ptr = unsafe { symbol.val.blv };
+            Some(symbol) => match symbol.value_cell() {
+                ValueCell::Localized(blv) => {
+                    let blv_ptr = blv.as_ptr();
+                    // SAFETY: a `Localized` cell names a record the obarray
+                    // owns for its life.
                     let blv = unsafe { &*blv_ptr };
                     match blv.fwd {
-                        Some(fwd) if FwdKind::of(fwd.ty).is_none() => VarShape::Plain,
+                        Some(fwd) if FwdKind::of(fwd.ty()).is_none() => VarShape::Plain,
                         fwd => VarShape::Localized {
                             blv: blv_ptr as usize,
                             fwd: fwd.map_or(0, |f| std::ptr::from_ref::<LispFwd>(f) as usize),
-                            rule: fwd.and_then(|f| FwdKind::of(f.ty)),
+                            rule: fwd.and_then(|f| FwdKind::of(f.ty())),
                             remembered_defcell: None,
                         },
                     }
                 }
-                SymbolRedirect::Forwarded => match symbol.forwarded_descriptor() {
-                    Some(fwd) => match FwdKind::of(fwd.ty) {
-                        Some(kind) => VarShape::Forwarded {
-                            desc: std::ptr::from_ref::<LispFwd>(fwd) as usize,
-                            kind,
-                        },
-                        None => VarShape::Plain,
+                ValueCell::Forwarded(fwd) => match FwdKind::of(fwd.ty()) {
+                    Some(kind) => VarShape::Forwarded {
+                        desc: std::ptr::from_ref::<LispFwd>(fwd) as usize,
+                        kind,
                     },
                     None => VarShape::Plain,
                 },
-                SymbolRedirect::Plainval | SymbolRedirect::Varalias => VarShape::Plain,
+                ValueCell::Plain(_) | ValueCell::Alias(_) => VarShape::Plain,
             },
             None => VarShape::Plain,
         };
@@ -309,6 +302,13 @@ fn spec_layout() -> Option<SpecLayout> {
         local_default_share: lets.let_local.header_offset == lets.let_default.header_offset
             && lets.let_local.fields[..2] == lets.let_default.fields[..2],
     })
+}
+
+/// Whether the host layouts admit inline buffer-local binds and restores.
+/// Tests derive work counts from admission capability, never emitted counters.
+#[cfg(test)]
+pub(crate) fn blv_bind_layout_available_for_test() -> bool {
+    spec_layout().is_some_and(|layout| layout.local_default_share)
 }
 
 /// The site a `varref` of SYM gets, if the knob inlines reads.
@@ -699,6 +699,67 @@ fn not_marking(fb: &mut FunctionBuilder, window: Window) -> ClifValue {
     ne_imm(fb, window.len, -1)
 }
 
+/// Compiler fact for a successful mark-idle guard in a no-safepoint region.
+/// Only PendingForwardStoreGate::guard constructs it. It cannot cross a
+/// compiler thread or be copied into an unrelated emission path. Callers
+/// finish stores before any poll, Lisp allocation, callback or collecting
+/// runtime call. Mixed unbinds may use the audited non-collecting collection
+/// journal helper; it cannot invalidate the inactive-mark fact.
+#[derive(Debug)]
+pub(super) struct MarkIdleStorePermit {
+    _compiler_thread: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_impl_all!(MarkIdleStorePermit: std::fmt::Debug);
+static_assertions::assert_not_impl_any!(MarkIdleStorePermit: Copy, Clone, Send, Sync);
+const _: () = assert!(std::mem::size_of::<MarkIdleStorePermit>() == 0);
+
+#[derive(Debug)]
+struct PendingForwardStoreGate {
+    condition: ClifValue,
+    _compiler_thread: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_impl_all!(PendingForwardStoreGate: std::fmt::Debug);
+static_assertions::assert_not_impl_any!(PendingForwardStoreGate: Copy, Clone, Send, Sync);
+
+impl PendingForwardStoreGate {
+    fn check(fb: &mut FunctionBuilder, window: Window) -> Self {
+        Self {
+            condition: not_marking(fb, window),
+            _compiler_thread: std::marker::PhantomData,
+        }
+    }
+
+    fn guard(
+        self,
+        fb: &mut FunctionBuilder,
+        conditions: &[ClifValue],
+        slow: Block,
+    ) -> MarkIdleStorePermit {
+        // Preserve existing conjunction order when it already contains the
+        // predicate; never issue a permit for a guard that omitted it.
+        let mut guarded: SmallVec<[ClifValue; 16]> = SmallVec::from_slice(conditions);
+        if !guarded.contains(&self.condition) {
+            guarded.push(self.condition);
+        }
+        let ok = all(fb, &guarded);
+        guard(fb, ok, slow);
+        MarkIdleStorePermit {
+            _compiler_thread: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Codegen probes contain no live heap. A constant open window still runs
+/// the production guard constructor; tests cannot fabricate the permit.
+#[cfg(test)]
+pub(super) fn guard_probe_mark_idle(fb: &mut FunctionBuilder, slow: Block) -> MarkIdleStorePermit {
+    let len = imm64(fb, 0);
+    let gate = PendingForwardStoreGate::check(fb, Window { heap: len, len });
+    gate.guard(fb, &[], slow)
+}
+
 /// A plain store into the tagged cons CONS needs no barrier: its owner lies
 /// outside the window, or it is REMEMBERED (a dumped cell already in the
 /// remembered set) and the window is not ALL.
@@ -828,31 +889,39 @@ fn blv_rule(
 fn fwd_load(fb: &mut FunctionBuilder, desc: ClifValue, kind: FwdKind) -> ClifValue {
     match kind {
         FwdKind::Bool => {
-            let flag = fb.ins().uload8(
-                types::I64,
-                trusted(),
-                desc,
-                LISP_BOOL_FWD_VALUE_OFFSET as i32,
-            );
-            let set = ne_imm(fb, flag, 0);
+            let flag = super::atomic_forward::load_bool_byte(fb, desc);
+            let set = flag.is_set(fb);
             let t = imm64(fb, Value::T.bits() as i64);
             let nil = imm64(fb, Value::NIL.bits() as i64);
             fb.ins().select(set, t, nil)
         }
-        _ => load_word(fb, desc, kind.value_offset()),
+        _ => super::atomic_forward::load_word(fb, desc, kind.value_offset()),
     }
 }
 
 /// `LispFwd::commit (store (v))` into the descriptor at DESC, for a V its
 /// rule accepts inline (an integer slot's caller checked for a fixnum).
-fn fwd_store(fb: &mut FunctionBuilder, desc: ClifValue, kind: FwdKind, v: ClifValue) {
+/// All three callers are dominated by the mark-idle guard; when marking is
+/// active they take the shim and its SATB preimage barrier before publication.
+/// There is no poll, allocation or Lisp callback between that guard and this
+/// store. Atomic publication does not itself replace that GC protocol.
+fn fwd_store(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    permit: &MarkIdleStorePermit,
+    desc: ClifValue,
+    kind: FwdKind,
+    v: ClifValue,
+) {
     match kind {
         FwdKind::Bool => {
             let flag = ne_imm(fb, v, Value::NIL.bits() as i64);
-            fb.ins()
-                .store(trusted(), flag, desc, LISP_BOOL_FWD_VALUE_OFFSET as i32);
+            rt.forward_atomics
+                .store_bool(fb, permit, desc, LISP_BOOL_FWD_VALUE_OFFSET, flag);
         }
-        _ => store_word(fb, v, desc, kind.value_offset()),
+        _ => rt
+            .forward_atomics
+            .store_word(fb, permit, desc, kind.value_offset(), v),
     }
 }
 
@@ -1015,14 +1084,14 @@ fn emit_varset_fast(
             let desc = baked(fb, desc);
             let same = eq(fb, word, desc);
             let window = barrier_window(fb, rt);
-            let open = not_marking(fb, window);
+            let gate = PendingForwardStoreGate::check(fb, window);
+            let open = gate.condition;
             let mut conds: SmallVec<[ClifValue; 4]> = smallvec::smallvec![writable, same, open];
             if kind == FwdKind::Int {
                 conds.push(fixnum_p(fb, val));
             }
-            let ok = all(fb, &conds);
-            guard(fb, ok, slow);
-            fwd_store(fb, desc, kind, val);
+            let permit = gate.guard(fb, &conds, slow);
+            fwd_store(fb, rt, &permit, desc, kind, val);
         }
     }
     fb.ins().jump(cont, &[]);
@@ -1199,7 +1268,8 @@ fn emit_varbind_fast(
             let desc = baked(fb, desc);
             let same = eq(fb, word, desc);
             let window = barrier_window(fb, rt);
-            let open = not_marking(fb, window);
+            let gate = PendingForwardStoreGate::check(fb, window);
+            let open = gate.condition;
             let old = fwd_load(fb, desc, kind);
             let mut conds: SmallVec<[ClifValue; 6]> =
                 smallvec::smallvec![room, writable, same, open];
@@ -1210,11 +1280,10 @@ fn emit_varbind_fast(
                 FwdKind::Int => conds.push(fixnum_p(fb, val)),
                 FwdKind::Bool => {}
             }
-            let ok = all(fb, &conds);
-            guard(fb, ok, slow);
+            let permit = gate.guard(fb, &conds, slow);
             let header = imm64(fb, lets.let_.header_with(sym) as i64);
             push_binding(fb, rt, layout, &s, &lets.let_, header, &[old]);
-            fwd_store(fb, desc, kind, val);
+            fwd_store(fb, rt, &permit, desc, kind, val);
         }
         VarShape::Localized {
             blv,
@@ -1494,12 +1563,16 @@ fn emit_unbind_fast(
     // must not consult a possibly inactive allocation view during lowering.
     let generational = cur.is_some() && rt.generational_enabled();
     let mut conds: SmallVec<[ClifValue; 16]> = SmallVec::new();
-    if sites
+    let gate = if sites
         .iter()
         .any(|site| !matches!(site.shape, VarShape::Localized { .. }))
     {
-        conds.push(not_marking(fb, window));
-    }
+        let gate = PendingForwardStoreGate::check(fb, window);
+        conds.push(gate.condition);
+        Some(gate)
+    } else {
+        None
+    };
     let mut restores: SmallVec<[Restore; MAX_UNBIND]> = SmallVec::new();
     for (site, &depth) in sites.iter().zip(&depths) {
         let entry = entry_at(fb, rt, layout, depth);
@@ -1518,8 +1591,14 @@ fn emit_unbind_fast(
     // Every shape and raw owner predicate is checked before any restore or
     // truncation. A refusal reaches the unchanged unbind call, whose compiled
     // cached arms select and refine each actual owner without native live-through.
-    let ok = all(fb, &conds);
-    guard(fb, ok, slow);
+    let permit = match gate {
+        Some(gate) => Some(gate.guard(fb, &conds, slow)),
+        None => {
+            let ok = all(fb, &conds);
+            guard(fb, ok, slow);
+            None
+        }
+    };
     if generational {
         // All shapes are valid before touching a trailer, and every selected
         // restore is checked before any write. A later refusal cannot leave
@@ -1534,7 +1613,12 @@ fn emit_unbind_fast(
     for restore in restores {
         match restore {
             Restore::Cell { cell, value } => store_word(fb, value, cell, LISP_SYMBOL_VAL_OFFSET),
-            Restore::Fwd { desc, kind, value } => fwd_store(fb, desc, kind, value),
+            Restore::Fwd { desc, kind, value } => {
+                let permit = permit
+                    .as_ref()
+                    .expect("a forwarded restore issued a mark-idle permit");
+                fwd_store(fb, rt, permit, desc, kind, value);
+            }
             Restore::Cons { cons, value } => {
                 if !generational && super::jit_gen0_collection_journal_eager() {
                     let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));

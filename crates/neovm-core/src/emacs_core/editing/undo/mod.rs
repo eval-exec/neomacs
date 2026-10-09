@@ -73,7 +73,12 @@ thread_local! {
     static COMPACTION_IN_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-struct CompactionLatch;
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+struct CompactionLatch {
+    _scope: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
+}
+static_assertions::assert_not_impl_any!(CompactionLatch: Send, Sync);
 
 impl CompactionLatch {
     /// `None` when a compaction pass is already running on this thread.
@@ -83,15 +88,11 @@ impl CompactionLatch {
                 None
             } else {
                 flag.set(true);
-                Some(Self)
+                Some(Self {
+                    _scope: crate::tls_scope::TlsScope::restore(&COMPACTION_IN_PROGRESS, false),
+                })
             }
         })
-    }
-}
-
-impl Drop for CompactionLatch {
-    fn drop(&mut self) {
-        COMPACTION_IN_PROGRESS.with(|flag| flag.set(false));
     }
 }
 
@@ -247,5 +248,5 @@ pub(crate) fn set_last_boundary_cause_explicit(ctx: &mut super::eval::Context) -
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/undo_test.rs"]
 mod tests;

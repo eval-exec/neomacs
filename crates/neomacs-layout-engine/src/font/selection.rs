@@ -41,9 +41,32 @@ pub(crate) fn candidate_selection_score(
     candidate_width: Option<FontWidth>,
     candidate_size: PlatformFontSize,
 ) -> Option<CandidateSelectionScore> {
-    let size = size_distance(requested_size_26_6, candidate_size)?;
-    Some(CandidateSelectionScore {
-        compatibility,
+    let mut score = candidate_style_selection_score(
+        requested_weight,
+        requested_slant,
+        requested_width,
+        candidate_weight,
+        candidate_slant,
+        candidate_width,
+    );
+    score.compatibility = compatibility;
+    score.style.size = size_distance(requested_size_26_6, candidate_size)?;
+    Some(score)
+}
+
+/// Rank styles when an entity query has no requested pixel size. Size is
+/// unscored here, rather than inventing a size or classifying fixed faces as
+/// scalable; opening the selected entity supplies its actual size later.
+pub(crate) fn candidate_style_selection_score(
+    requested_weight: FontWeight,
+    requested_slant: FontSlant,
+    requested_width: Option<FontWidth>,
+    candidate_weight: FontWeight,
+    candidate_slant: FontSlant,
+    candidate_width: Option<FontWidth>,
+) -> CandidateSelectionScore {
+    CandidateSelectionScore {
+        compatibility: 0,
         style: GnuStyleScore {
             width: PropertyDistance(requested_width.map_or(0, |requested| {
                 u32::from(
@@ -53,13 +76,8 @@ pub(crate) fn candidate_selection_score(
                         .abs_diff(requested.gnu_numeric()),
                 )
             })),
-            // Scalable entities match every requested size. Fixed bitmap
-            // entities carry Fontconfig's concrete pixel size and are scored
-            // before the materializer opens anything, as GNU does.
-            size,
-            // GNU font.c:font_score compares the numeric weight-table values
-            // and caps each style distance at seven bits. CSS weight spacing
-            // is different (semi-light is not halfway from light to regular).
+            size: PropertyDistance(0),
+            // GNU compares weight-table values, rather than CSS spacing.
             weight: PropertyDistance(u32::from(
                 candidate_weight
                     .gnu_numeric()
@@ -68,7 +86,7 @@ pub(crate) fn candidate_selection_score(
             )),
             slant: PropertyDistance(slant_distance(requested_slant, candidate_slant)),
         },
-    })
+    }
 }
 
 /// GNU converts Fontconfig's pixel sizes to integer Lisp fixnums, rejects a

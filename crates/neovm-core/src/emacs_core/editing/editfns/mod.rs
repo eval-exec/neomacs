@@ -29,17 +29,6 @@ use strum::IntoStaticStr;
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-/// Extract an integer (or char-as-integer) from a Value, signalling
-/// `wrong-type-argument` on type mismatch.
-fn expect_integer(_name: &str, val: &Value) -> Result<i64, Flow> {
-    val.as_int().ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("integer-or-marker-p"), *val],
-        )
-    })
-}
-
 /// Convert a Lisp 1-based character position to a 0-based byte position,
 /// clamping to the accessible region `[begv, zv]`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -251,22 +240,19 @@ pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context)
     if let Some(s) = ctx.obarray.get_by_id(sym) {
         match s.redirect() {
             SymbolRedirect::Forwarded => {
-                // SAFETY: `redirect() == Forwarded` means `val.fwd` is the live
-                // field, and every forwarder is leaked at registration.
-                let fwd: &'static crate::emacs_core::forward::LispFwd = unsafe { &*s.val.fwd };
                 // Whichever forwarder this runtime installed for it -- the
                 // `DEFVAR_BOOL` flag, or an object cell when the symbol was
-                // adopted as a global object variable -- `load_ref` is the
+                // adopted as a global object variable -- `load` is the
                 // one-load read of `do_symval_forwarding`; only a buffer
                 // object forwarder (never this symbol) answers `None`.
-                if let Some(value) = fwd.load_ref() {
+                if let Some(value) = s.forwarded_descriptor().and_then(|fwd| fwd.load()) {
                     return value.is_truthy();
                 }
             }
             SymbolRedirect::Plainval => {
                 return ctx
                     .obarray
-                    .symbol_value_id(sym)
+                    .symbol_value_id_copied(sym)
                     .is_some_and(|v| !v.is_unbound() && v.is_truthy());
             }
             // The arm a booted session takes: the code-conversion work buffer
@@ -294,7 +280,7 @@ pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context)
                 }
                 return ctx
                     .obarray
-                    .symbol_value_id(sym)
+                    .symbol_value_id_copied(sym)
                     .is_some_and(|v| !v.is_unbound() && v.is_truthy());
             }
             SymbolRedirect::Varalias => {}
@@ -604,11 +590,11 @@ fn deactivate_mark_set_is_noop(
     let Some(symbol) = ctx.obarray.get_by_id(sym) else {
         return false;
     };
-    if symbol.flags.trapped_write() != SymbolTrappedWrite::Untrapped {
+    if symbol.trapped_write() != SymbolTrappedWrite::Untrapped {
         return false;
     }
     match symbol.redirect() {
-        SymbolRedirect::Plainval => ctx.obarray.symbol_value_id(sym).copied() == Some(Value::T),
+        SymbolRedirect::Plainval => ctx.obarray.symbol_value_id_copied(sym) == Some(Value::T),
         SymbolRedirect::Localized => {
             ctx.buffers
                 .current_buffer()
@@ -979,8 +965,7 @@ fn combine_after_change_calls_active(ctx: &crate::emacs_core::eval::Context) -> 
             {
                 let default_val = ctx
                     .obarray
-                    .default_value_id(before_sym)
-                    .copied()
+                    .default_value_id_copied(before_sym)
                     .unwrap_or(Value::NIL);
                 return default_val.is_nil();
             }
@@ -1453,9 +1438,9 @@ pub(crate) fn builtin_delete_char(
 ) -> EvalResult {
     expect_min_args("delete-char", &args, 1)?;
     expect_max_args("delete-char", &args, 2)?;
-    let n = expect_integer("delete-char", &args[0])?;
+    // GNU cmds.c:233 uses CHECK_FIXNUM, including for bignums.
+    let n = crate::emacs_core::error::expect_fixnum(&args[0])?;
     let killflag = args.get(1).is_some_and(|v| v.is_truthy());
-    ensure_current_buffer_writable_in_state(&ctx.obarray, &[], &ctx.buffers)?;
     if n.unsigned_abs() < 2 {
         // GNU `Fdelete_char' calls this too, but does not intern its name
         // on the way: every single-character deletion runs this line.
@@ -2388,5 +2373,5 @@ pub(crate) fn builtin_translate_region_internal(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/editfns_test.rs"]
 mod tests;

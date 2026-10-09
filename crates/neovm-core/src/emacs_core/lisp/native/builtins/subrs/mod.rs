@@ -134,8 +134,7 @@ fn push_onto_charset_list(
     use crate::emacs_core::value::Value;
     let current = ctx
         .obarray
-        .symbol_value("charset-list")
-        .copied()
+        .symbol_value_copied("charset-list")
         .unwrap_or(Value::NIL);
     // Unconditionally, as GNU does: defining the same alias twice leaves two
     // entries in its list, and nothing in a normal session defines a charset
@@ -4602,7 +4601,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
 
             for constant in &mut constants {
                 *constant =
-                    crate::emacs_core::builtins::try_convert_nested_compiled_literal(*constant);
+                    crate::emacs_core::builtins::try_convert_nested_compiled_literal(*constant)?;
             }
 
             let (ops, gnu_byte_offset_map) =

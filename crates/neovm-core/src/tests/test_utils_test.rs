@@ -1,0 +1,648 @@
+//! Common test utilities for neovm-core.
+//!
+//! Provides shared helpers used across all test modules.
+
+use crate::emacs_core::error::map_flow;
+fn test_ob() -> crate::emacs_core::symbol::Obarray {
+    crate::emacs_core::symbol::Obarray::new()
+}
+use crate::emacs_core::load::{
+    apply_ldefs_boot_autoloads_for_names, bootstrap_load_path_entries,
+    create_runtime_startup_evaluator_cached, find_file_in_load_path, get_load_path, load_file,
+};
+use crate::emacs_core::value::Value;
+use crate::emacs_core::{Context, format_eval_result};
+use crate::heap_types::LispString;
+use std::path::PathBuf;
+
+/// Initialize the tracing subscriber for test output.
+///
+/// Thin wrapper around [`crate::logging::init_for_tests`] kept for the
+/// many existing call sites in this crate's test files. Tests never
+/// write to a log file regardless of `NEOMACS_LOG_TO_FILE` — output is
+/// always routed through the test harness's writer.
+pub fn init_test_tracing() {
+    crate::logging::init_for_tests();
+}
+
+/// The workspace root baked in at compile time — the **build** machine's
+/// path, wrong for archive-shipped binaries on every other runner.  Only
+/// [`workspace_root`] reads it.
+pub fn cargo_workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+}
+
+/// The workspace root nextest exports at runtime: the live workspace on
+/// the running machine.  `None` outside nextest.
+pub fn nextest_workspace_root() -> Option<PathBuf> {
+    std::env::var_os("NEXTEST_WORKSPACE_ROOT").map(PathBuf::from)
+}
+
+/// The workspace root of the machine *running* the test: nextest's runtime
+/// value when present, the compile-time constant otherwise.  The fallback
+/// order lives here once, so no call site can get it wrong.
+pub fn workspace_root() -> PathBuf {
+    nextest_workspace_root().unwrap_or_else(cargo_workspace_root)
+}
+
+/// Find a GNU Lisp file on `load_path`, naming the workspace root and which
+/// variable chose it when the file is missing.  The bare "cannot find
+/// emacs-lisp/debug-early" this replaces cost a full triage: the archived
+/// shard's baked root was a path that did not exist on its runner.
+fn find_required_lisp_file(name: &str, load_path: &[LispString]) -> PathBuf {
+    find_file_in_load_path(name, load_path).unwrap_or_else(|| {
+        let origin = if nextest_workspace_root().is_some() {
+            "NEXTEST_WORKSPACE_ROOT"
+        } else {
+            "compile-time CARGO_WORKSPACE_DIR"
+        };
+        panic!(
+            "cannot find {name}: workspace root {} ({origin}) has no such file",
+            workspace_root().display()
+        )
+    })
+}
+
+/// Load a small GNU Lisp runtime that is sufficient for tests that need
+/// `byte-run`, backquote expansion, and the basic `subr.el` support layer,
+/// without paying for full `loadup.el` startup.
+pub fn load_minimal_gnu_backquote_runtime(eval: &mut Context) {
+    eval.set_lexical_binding(true);
+    let project_root = workspace_root();
+    let lisp_dir = project_root.join("lisp");
+    eval.set_variable(
+        "load-path",
+        Value::list(bootstrap_load_path_entries(&lisp_dir)),
+    );
+    let load_path = get_load_path(eval.obarray(), eval.buffers.current_buffer());
+    for name in &[
+        "emacs-lisp/debug-early",
+        "emacs-lisp/byte-run",
+        "emacs-lisp/backquote",
+        "subr",
+    ] {
+        let path = find_required_lisp_file(name, &load_path);
+        load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
+    }
+}
+
+/// Load GNU `macroexp.el` after the early `subr.el` layer, mirroring the
+/// loadup phase before later Lisp files such as `simple.el` are evaluated.
+pub fn load_gnu_macroexp_runtime(eval: &mut Context) {
+    if eval.obarray().symbol_function("macroexp-progn").is_some() {
+        return;
+    }
+    let load_path = get_load_path(eval.obarray(), eval.buffers.current_buffer());
+    for name in &["emacs-lisp/macroexp", "emacs-lisp/pcase"] {
+        let path = find_required_lisp_file(name, &load_path);
+        load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
+    }
+}
+
+/// Load the GNU `simple.el` undo auto-amalgamation surface needed by
+/// primitives such as `delete-char` and `self-insert-command`.
+///
+/// GNU cmds.c calls `undo-auto-amalgamate` unconditionally; that function is
+/// Lisp-defined by `simple.el` during loadup. Some focused unit tests do not
+/// run loadup, so this evaluates only the real source forms that provide that
+/// function and its helper variables instead of guarding the primitive. It does
+/// not install `undo-auto--undoable-change`, which also requires `timer.el`.
+pub fn load_gnu_undo_auto_runtime(eval: &mut Context) {
+    if eval
+        .obarray()
+        .symbol_function("undo-auto-amalgamate")
+        .is_some()
+    {
+        return;
+    }
+    if eval.obarray().symbol_function("defvar-local").is_none() {
+        load_minimal_gnu_backquote_runtime(eval);
+    }
+    load_gnu_macroexp_runtime(eval);
+
+    let project_root = workspace_root();
+    let simple_path = project_root.join("lisp/simple.el");
+    let simple_source =
+        std::fs::read_to_string(&simple_path).unwrap_or_else(|err| panic!("read simple.el: {err}"));
+    let limit_start = simple_source
+        .find("(defvar amalgamating-undo-limit ")
+        .expect("simple.el amalgamating-undo-limit form");
+    let limit_form =
+        crate::emacs_core::value_reader::read_one(&simple_source, limit_start, &test_ob())
+            .expect("parse simple.el amalgamating-undo-limit")
+            .map(|(form, _)| form)
+            .expect("read simple.el amalgamating-undo-limit");
+
+    let start = simple_source
+        .find("(defvar-local undo-auto--last-boundary-cause ")
+        .expect("simple.el undo auto section start");
+    let end = simple_source[start..]
+        .find("(defun undo-auto--undoable-change ")
+        .map(|offset| start + offset)
+        .expect("simple.el undo auto section end");
+    let mut forms = vec![limit_form];
+    forms.extend(
+        crate::emacs_core::value_reader::read_all(&simple_source[start..end], &test_ob())
+            .expect("parse simple.el undo auto section"),
+    );
+
+    let roots = eval.save_specpdl_roots();
+    for form in &forms {
+        eval.push_specpdl_root(*form);
+    }
+    for (index, form) in forms.into_iter().enumerate() {
+        eval.eval_sub(form).map_err(map_flow).unwrap_or_else(|err| {
+            panic!(
+                "eval simple.el undo auto section form #{index} {}: {err}",
+                crate::emacs_core::print::print_value(&form)
+            )
+        });
+    }
+    eval.restore_specpdl_roots(roots);
+}
+
+/// Load the real GNU `simple.el` special-mode surface required by help buffers.
+pub fn load_gnu_special_mode_runtime(eval: &mut Context) {
+    if eval
+        .obarray()
+        .symbol_value_copied("special-mode-map")
+        .is_some()
+        && eval.obarray().symbol_function("special-mode").is_some()
+    {
+        return;
+    }
+
+    let project_root = workspace_root();
+    let simple_path = project_root.join("lisp/simple.el");
+    let simple_source =
+        std::fs::read_to_string(&simple_path).unwrap_or_else(|err| panic!("read simple.el: {err}"));
+    let start = simple_source
+        .find("(defun fundamental-mode ()")
+        .expect("simple.el fundamental-mode form");
+    let end = simple_source[start..]
+        .find(";; Making and deleting lines.")
+        .map(|offset| start + offset)
+        .expect("simple.el special-mode section end");
+    let forms = crate::emacs_core::value_reader::read_all(&simple_source[start..end], &test_ob())
+        .expect("parse simple.el special-mode section");
+
+    let roots = eval.save_specpdl_roots();
+    for form in &forms {
+        eval.push_specpdl_root(*form);
+    }
+    for (index, form) in forms.into_iter().enumerate() {
+        eval.eval_sub(form).map_err(map_flow).unwrap_or_else(|err| {
+            panic!(
+                "eval simple.el special-mode section form #{index} {}: {err}",
+                crate::emacs_core::print::print_value(&form)
+            )
+        });
+    }
+    eval.restore_specpdl_roots(roots);
+}
+
+/// Load the real GNU display predicate used by help separators.
+pub fn load_gnu_display_graphic_runtime(eval: &mut Context) {
+    if eval
+        .obarray()
+        .symbol_function("display-graphic-p")
+        .is_some()
+    {
+        return;
+    }
+
+    let project_root = workspace_root();
+    let frame_path = project_root.join("lisp/frame.el");
+    let frame_source =
+        std::fs::read_to_string(&frame_path).unwrap_or_else(|err| panic!("read frame.el: {err}"));
+    let framep_start = frame_source
+        .find("(defun framep-on-display ")
+        .expect("frame.el framep-on-display form");
+    let framep_form =
+        crate::emacs_core::value_reader::read_one(&frame_source, framep_start, &test_ob())
+            .expect("parse frame.el framep-on-display")
+            .map(|(form, _)| form)
+            .expect("read frame.el framep-on-display");
+    let display_start = frame_source
+        .find("(defun display-graphic-p ")
+        .expect("frame.el display-graphic-p form");
+    let display_form =
+        crate::emacs_core::value_reader::read_one(&frame_source, display_start, &test_ob())
+            .expect("parse frame.el display-graphic-p")
+            .map(|(form, _)| form)
+            .expect("read frame.el display-graphic-p");
+    let forms = vec![framep_form, display_form];
+
+    let roots = eval.save_specpdl_roots();
+    for form in &forms {
+        eval.push_specpdl_root(*form);
+    }
+    for (index, form) in forms.into_iter().enumerate() {
+        eval.eval_sub(form).map_err(map_flow).unwrap_or_else(|err| {
+            panic!(
+                "eval frame.el display predicate form #{index} {}: {err}",
+                crate::emacs_core::print::print_value(&form)
+            )
+        });
+    }
+    eval.restore_specpdl_roots(roots);
+}
+
+/// Load GNU aliases from `window.el` for C-defined window primitives.
+pub fn load_gnu_window_alias_runtime(eval: &mut Context) {
+    if eval.obarray().symbol_function("window-width").is_some() {
+        return;
+    }
+
+    let project_root = workspace_root();
+    let window_path = project_root.join("lisp/window.el");
+    let window_source =
+        std::fs::read_to_string(&window_path).unwrap_or_else(|err| panic!("read window.el: {err}"));
+    let start = window_source
+        .find("(defalias 'window-height ")
+        .expect("window.el window primitive alias block");
+    let end = window_source[start..]
+        .find("(defun window-full-height-p ")
+        .map(|offset| start + offset)
+        .expect("window.el window primitive alias block end");
+    let forms = crate::emacs_core::value_reader::read_all(&window_source[start..end], &test_ob())
+        .expect("parse window.el window primitive alias block");
+
+    let roots = eval.save_specpdl_roots();
+    for form in &forms {
+        eval.push_specpdl_root(*form);
+    }
+    for (index, form) in forms.into_iter().enumerate() {
+        eval.eval_sub(form).map_err(map_flow).unwrap_or_else(|err| {
+            panic!(
+                "eval window.el primitive alias form #{index} {}: {err}",
+                crate::emacs_core::print::print_value(&form)
+            )
+        });
+    }
+    eval.restore_specpdl_roots(roots);
+}
+
+/// Load the real GNU separator-line helper used by help buffers.
+pub fn load_gnu_separator_line_runtime(eval: &mut Context) {
+    if eval
+        .obarray()
+        .symbol_function("make-separator-line")
+        .is_some()
+    {
+        return;
+    }
+
+    let project_root = workspace_root();
+    let simple_path = project_root.join("lisp/simple.el");
+    let simple_source =
+        std::fs::read_to_string(&simple_path).unwrap_or_else(|err| panic!("read simple.el: {err}"));
+    let start = simple_source
+        .find("(defface separator-line")
+        .expect("simple.el separator-line face form");
+    let end = simple_source[start..]
+        .find("(defun delete-indentation ")
+        .map(|offset| start + offset)
+        .expect("simple.el make-separator-line section end");
+    let forms = crate::emacs_core::value_reader::read_all(&simple_source[start..end], &test_ob())
+        .expect("parse simple.el make-separator-line section");
+
+    let roots = eval.save_specpdl_roots();
+    for form in &forms {
+        eval.push_specpdl_root(*form);
+    }
+    for (index, form) in forms.into_iter().enumerate() {
+        eval.eval_sub(form).map_err(map_flow).unwrap_or_else(|err| {
+            panic!(
+                "eval simple.el make-separator-line section form #{index} {}: {err}",
+                crate::emacs_core::print::print_value(&form)
+            )
+        });
+    }
+    eval.restore_specpdl_roots(roots);
+}
+
+/// Load the real GNU Emacs Lisp syntax table used by help-mode.
+pub fn load_gnu_elisp_syntax_table_runtime(eval: &mut Context) {
+    if eval
+        .obarray()
+        .symbol_value_copied("emacs-lisp-mode-syntax-table")
+        .is_some()
+    {
+        return;
+    }
+
+    let project_root = workspace_root();
+    let elisp_mode_path = project_root.join("lisp/progmodes/elisp-mode.el");
+    let elisp_mode_source = std::fs::read_to_string(&elisp_mode_path)
+        .unwrap_or_else(|err| panic!("read elisp-mode.el: {err}"));
+    let start = elisp_mode_source
+        .find("(defvar emacs-lisp-mode-syntax-table")
+        .expect("elisp-mode.el emacs-lisp-mode-syntax-table form");
+    let form = crate::emacs_core::value_reader::read_one(&elisp_mode_source, start, &test_ob())
+        .expect("parse elisp-mode.el emacs-lisp-mode-syntax-table")
+        .map(|(form, _)| form)
+        .expect("read elisp-mode.el emacs-lisp-mode-syntax-table");
+
+    let roots = eval.save_specpdl_roots();
+    eval.push_specpdl_root(form);
+    eval.eval_sub(form).map_err(map_flow).unwrap_or_else(|err| {
+        panic!(
+            "eval elisp-mode.el emacs-lisp-mode-syntax-table {}: {err}",
+            crate::emacs_core::print::print_value(&form)
+        )
+    });
+    eval.restore_specpdl_roots(roots);
+}
+
+/// Load a small GNU Lisp runtime that is sufficient for `help.el`
+/// semantics such as `substitute-command-keys`, without paying for
+/// full `loadup.el` startup.
+pub fn load_minimal_gnu_help_runtime(eval: &mut Context) {
+    load_minimal_gnu_backquote_runtime(eval);
+    let load_path = get_load_path(eval.obarray(), eval.buffers.current_buffer());
+    for name in &[
+        "keymap",
+        "widget",
+        "custom",
+        "cus-face",
+        "faces",
+        "bindings",
+        "emacs-lisp/macroexp",
+        "emacs-lisp/pcase",
+        "emacs-lisp/gv",
+    ] {
+        let path = find_required_lisp_file(name, &load_path);
+        load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
+    }
+    apply_ldefs_boot_autoloads_for_names(
+        eval,
+        &[
+            "define-derived-mode",
+            "define-inline",
+            "define-minor-mode",
+            "help-fns-function-name",
+            "regexp-opt",
+            "rx",
+        ],
+    )
+    .expect("ldefs-boot help runtime autoloads");
+    for name in &[
+        "emacs-lisp/cl-preloaded",
+        "emacs-lisp/oclosure",
+        "obarray",
+        "abbrev",
+        "emacs-lisp/cl-generic",
+        "emacs-lisp/seq",
+        "emacs-lisp/easy-mmode",
+        "emacs-lisp/derived",
+        "emacs-lisp/easymenu",
+        "button",
+        "help-macro",
+    ] {
+        let path = find_required_lisp_file(name, &load_path);
+        load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
+    }
+    load_gnu_special_mode_runtime(eval);
+    load_gnu_display_graphic_runtime(eval);
+    load_gnu_window_alias_runtime(eval);
+    load_gnu_separator_line_runtime(eval);
+    for name in &["progmodes/prog-mode", "emacs-lisp/lisp-mode", "tool-bar"] {
+        let path = find_required_lisp_file(name, &load_path);
+        load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
+    }
+    load_gnu_elisp_syntax_table_runtime(eval);
+    // Force the .el source — `find_file_in_load_path("help", ...)`
+    // returns help.elc when both exist, but `read_to_string` then
+    // mis-parses .elc binary data and emits `(nil . OFFSET)` doc
+    // refs that downstream `defface` rejects. Passing "help.el"
+    // explicitly bypasses the suffix preference loop.
+    let help_path = find_required_lisp_file("help.el", &load_path);
+    let help_source =
+        std::fs::read_to_string(&help_path).unwrap_or_else(|err| panic!("read help.el: {err}"));
+    let help_forms =
+        crate::emacs_core::value_reader::read_all(&help_source, &test_ob()).expect("parse help.el");
+    // Root every parsed form upfront. Without this, forms still
+    // sitting in the `help_forms` Vec aren't visible to the GC and
+    // can be reclaimed when an `eval_sub` of an earlier form
+    // triggers a collection. Mirrors the rooting pattern in
+    // `Context::eval_str_each` (eval.rs:6170-6183).
+    let roots = eval.save_specpdl_roots();
+    for form in &help_forms {
+        eval.push_specpdl_root(*form);
+    }
+    let mut found_substitute_command_keys = false;
+    let mut found_describe_map_fill_columns = false;
+    for form in &help_forms {
+        let is_substitute_command_keys = is_named_defun_value(form, "substitute-command-keys");
+        let is_describe_map_fill_columns = is_named_defun_value(form, "describe-map--fill-columns");
+        eval.eval_sub(*form)
+            .map_err(map_flow)
+            .unwrap_or_else(|err| panic!("eval help.el prefix: {err:?}"));
+        if is_substitute_command_keys {
+            found_substitute_command_keys = true;
+        }
+        if is_describe_map_fill_columns {
+            found_describe_map_fill_columns = true;
+            break;
+        }
+    }
+    eval.restore_specpdl_roots(roots);
+    assert!(
+        found_substitute_command_keys,
+        "help.el should define substitute-command-keys"
+    );
+    assert!(
+        found_describe_map_fill_columns,
+        "help.el should define describe-map--fill-columns"
+    );
+    load_gnu_undo_auto_runtime(eval);
+}
+
+fn is_named_defun_value(form: &Value, name: &str) -> bool {
+    if !form.is_cons() {
+        return false;
+    }
+    let car = form.cons_car();
+    if !car.is_symbol_named("defun") {
+        return false;
+    }
+    let cdr = form.cons_cdr();
+    if !cdr.is_cons() {
+        return false;
+    }
+    cdr.cons_car().is_symbol_named(name)
+}
+
+/// Create a bare evaluator with GNU `ldefs-boot.el` autoload cells restored
+/// for the named symbols and a bootstrap-compatible `load-path`.
+pub fn eval_with_ldefs_boot_autoloads(names: &[&str]) -> Context {
+    let mut eval = Context::new();
+    let project_root = workspace_root();
+    let lisp_dir = project_root.join("lisp");
+    eval.set_variable(
+        "load-path",
+        Value::list(bootstrap_load_path_entries(&lisp_dir)),
+    );
+    for name in names {
+        eval.obarray_mut().fmakunbound(name);
+    }
+    apply_ldefs_boot_autoloads_for_names(&mut eval, names).expect("ldefs-boot autoload restore");
+    eval
+}
+
+/// Construct a legacy-GC fixture with the knob selected before heap creation.
+/// Nextest gives each test its own process. Restore the caller's environment
+/// on return or unwind; an existing heap's generation mode is never changed.
+pub(crate) fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
+    struct RestoreGenerationalKnob(Option<std::ffi::OsString>);
+
+    impl Drop for RestoreGenerationalKnob {
+        fn drop(&mut self) {
+            unsafe {
+                match self.0.take() {
+                    Some(previous) => std::env::set_var("NEOVM_GC_GENERATIONAL", previous),
+                    None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
+                }
+            }
+        }
+    }
+
+    let _restore = RestoreGenerationalKnob(std::env::var_os("NEOVM_GC_GENERATIONAL"));
+    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
+    create()
+}
+
+/// Create a cached runtime-startup evaluator for tests that need the full
+/// GNU bootstrap surface.
+pub fn runtime_startup_context() -> Context {
+    create_runtime_startup_evaluator_cached().expect("bootstrap")
+}
+
+/// Evaluate FORMS in a cached runtime-startup evaluator and return formatted
+/// results, matching the common bootstrap test pattern.
+pub fn runtime_startup_eval_all(src: &str) -> Vec<String> {
+    let mut eval = runtime_startup_context();
+    let forms = crate::emacs_core::value_reader::read_all(src, &test_ob()).expect("parse");
+    // Root parsed forms across the eval loop. Heap literals like bignums,
+    // strings, and cons cells are otherwise invisible to the GC until the
+    // evaluator reaches them, which can corrupt bootstrap tests that call
+    // into bytecode and trigger collection mid-eval.
+    let roots = eval.save_specpdl_roots();
+    for form in &forms {
+        eval.push_specpdl_root(*form);
+    }
+    let results = forms
+        .into_iter()
+        .map(|form| {
+            let result = eval.eval_form(form);
+            format_eval_result(&result)
+        })
+        .collect();
+    eval.restore_specpdl_roots(roots);
+    results
+}
+
+/// The transcript an oracle test's inline expectation holds.
+///
+/// `neovm-oracle-tests` stores GNU's answer as the Rust-debug rendering of
+/// its transcript (`inline_expect_payload`); this undoes that rendering so an
+/// in-process twin of an oracle test can compare [`format_eval_result`]
+/// output with the answer GNU gave.
+pub fn oracle_expect_transcript(debug_rendered: &str) -> String {
+    let inner = debug_rendered
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .expect("a debug-rendered string");
+    let mut out = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('0') => out.push('\0'),
+                Some(other) => out.push(other),
+                None => {}
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Evaluate the first form from SRC in a cached runtime-startup evaluator and
+/// return the formatted result.
+pub fn runtime_startup_eval_one(src: &str) -> String {
+    let mut eval = runtime_startup_context();
+    let result = eval.eval_str(src);
+    format_eval_result(&result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The GNU-source helpers must resolve the workspace of the machine
+    /// *running* the test, not the one that compiled it.
+    ///
+    /// `cargo nextest archive` bakes the build runner's absolute
+    /// `CARGO_WORKSPACE_DIR` into every binary, but an archived suite runs on
+    /// a different job -- and a different runner pool -- so the compile-time
+    /// path is gone and the helpers panicked with "cannot find
+    /// emacs-lisp/debug-early" on every shard.  Nextest exports the live root
+    /// as `NEXTEST_WORKSPACE_ROOT` (its `--workspace-remap`); the probe tree
+    /// here carries a marker the real checkout does not, so loading from the
+    /// baked constant instead of the live root is visible.
+    #[test]
+    fn early_runtime_helpers_follow_the_nextest_workspace_root() {
+        crate::test_utils::init_test_tracing();
+        let probe = tempfile::tempdir().expect("probe workspace");
+        let lisp = probe.path().join("lisp");
+        std::fs::create_dir_all(lisp.join("emacs-lisp")).expect("probe lisp tree");
+        for file in [
+            "emacs-lisp/debug-early.el",
+            "emacs-lisp/byte-run.el",
+            "emacs-lisp/backquote.el",
+            "subr.el",
+        ] {
+            std::fs::write(
+                lisp.join(file),
+                "(setq neomacs-test-workspace-probe 'from-nextest-remap)\n",
+            )
+            .expect("probe lisp file");
+        }
+
+        let previous = nextest_workspace_root();
+        // SAFETY: nextest runs each test in its own process, so this
+        // process-global mutation cannot race another test.  Restored below
+        // before the assertions so a failure cannot leak the probe into the
+        // rest of the run.
+        unsafe { std::env::set_var("NEXTEST_WORKSPACE_ROOT", probe.path()) };
+
+        let mut eval = Context::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_minimal_gnu_backquote_runtime(&mut eval);
+        }));
+        match previous {
+            Some(value) => unsafe { std::env::set_var("NEXTEST_WORKSPACE_ROOT", value) },
+            None => unsafe { std::env::remove_var("NEXTEST_WORKSPACE_ROOT") },
+        }
+
+        result.expect("the probe tree should load as an early runtime");
+        assert_eq!(
+            eval.obarray()
+                .symbol_value_copied("neomacs-test-workspace-probe"),
+            Some(Value::symbol("from-nextest-remap")),
+            "load_minimal_gnu_backquote_runtime must load from NEXTEST_WORKSPACE_ROOT, \
+             not the compile-time CARGO_WORKSPACE_DIR"
+        );
+    }
+}
+
+/// Accepted viewport publication for counter-only frontend fixtures.
+#[cfg(test)]
+#[path = "test_utils/mock_redisplay.rs"]
+pub mod mock_redisplay;

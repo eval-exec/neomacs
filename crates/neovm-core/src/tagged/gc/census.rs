@@ -117,7 +117,8 @@ struct ConsBlockCensus {
     young_last: [usize; CONS_MARK_WORDS],
 }
 
-/// A heap's census state (`TaggedHeap::census`, present only when on).
+/// The original census carrier, also owning optional concurrent cold state.
+/// Pointer presence alone does not enable census measurement.
 pub(super) struct GenCensus {
     remset_probe: bool,
     /// Per cons block base. An entry leaves when its block is released
@@ -130,6 +131,22 @@ pub(super) struct GenCensus {
     young_last_objects: FxHashSet<usize>,
     /// Old owners written with a heap value since the previous termination,
     /// deduplicated by bits, in first-write order.
+    remset_seen: FxHashSet<usize>,
+    remset: Vec<TaggedValue>,
+    last: Option<CensusRecord>,
+    /// A claims-only carrier retains no census history and performs no walk.
+    /// Also true while measurement history is temporarily moved out below.
+    census_disabled: bool,
+    pub(super) concurrent: Option<Box<super::cold_gc::ConcurrentClaimsState>>,
+}
+
+/// Only measurement history leaves the carrier during a census. Concurrent
+/// snapshots, counters and registered mutator logs remain installed.
+struct CensusHistory {
+    remset_probe: bool,
+    cons: FxHashMap<usize, Box<ConsBlockCensus>>,
+    prev_objects: FxHashSet<usize>,
+    young_last_objects: FxHashSet<usize>,
     remset_seen: FxHashSet<usize>,
     remset: Vec<TaggedValue>,
     last: Option<CensusRecord>,
@@ -151,7 +168,57 @@ impl GenCensus {
             remset_seen: FxHashSet::default(),
             remset: Vec::new(),
             last: None,
+            census_disabled: false,
+            concurrent: None,
         }))
+    }
+
+    /// Empty backing collections allocate nothing until measurement is on.
+    pub(super) fn disabled() -> Self {
+        Self {
+            remset_probe: false,
+            cons: FxHashMap::default(),
+            prev_objects: FxHashSet::default(),
+            young_last_objects: FxHashSet::default(),
+            remset_seen: FxHashSet::default(),
+            remset: Vec::new(),
+            last: None,
+            census_disabled: true,
+            concurrent: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn measurement_enabled(&self) -> bool {
+        !self.census_disabled
+    }
+
+    fn take_history(&mut self) -> Option<CensusHistory> {
+        if self.census_disabled {
+            return None;
+        }
+        self.census_disabled = true;
+        Some(CensusHistory {
+            remset_probe: std::mem::replace(&mut self.remset_probe, false),
+            cons: std::mem::take(&mut self.cons),
+            prev_objects: std::mem::take(&mut self.prev_objects),
+            young_last_objects: std::mem::take(&mut self.young_last_objects),
+            remset_seen: std::mem::take(&mut self.remset_seen),
+            remset: std::mem::take(&mut self.remset),
+            last: self.last.take(),
+        })
+    }
+
+    fn restore_history(&mut self, history: CensusHistory) {
+        debug_assert!(self.census_disabled);
+        self.remset_probe = history.remset_probe;
+        self.cons = history.cons;
+        self.prev_objects = history.prev_objects;
+        self.young_last_objects = history.young_last_objects;
+        self.remset_seen = history.remset_seen;
+        self.remset = history.remset;
+        self.last = history.last;
+        self.census_disabled = false;
     }
 
     /// Whether the remembered-set probe is on (the barrier window then
@@ -162,7 +229,9 @@ impl GenCensus {
 
     /// Drop a released cons block's history (see the `cons` field).
     pub(super) fn forget_cons_block(&mut self, base: usize) {
-        self.cons.remove(&base);
+        if !self.census_disabled {
+            self.cons.remove(&base);
+        }
     }
 
     /// Test hook: does the census hold history for the block at `base`?
@@ -183,7 +252,7 @@ impl TaggedHeap {
         kind: CensusCycleKind,
         mark_window_alloc_bytes: usize,
     ) {
-        let Some(mut census) = self.census.take() else {
+        let Some(mut census) = self.census.as_deref_mut().and_then(GenCensus::take_history) else {
             return;
         };
         debug_assert!(!self.alloc_regions_open(), "census with an open region");
@@ -329,7 +398,10 @@ impl TaggedHeap {
             }
         }
         census.last = Some(record);
-        self.census = Some(census);
+        self.census
+            .as_deref_mut()
+            .expect("census carrier retained during measurement")
+            .restore_history(census);
     }
 
     /// Heap children of `owner` (immediates create no edge a minor traces).

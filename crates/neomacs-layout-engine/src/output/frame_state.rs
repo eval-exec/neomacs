@@ -55,6 +55,7 @@ pub(crate) struct OutputFrameBuildState {
     outer_border_width: f32,
     outer_border_color: Color,
     background_alpha: f32,
+    frame_alpha: [f32; 2],
     no_accept_focus: bool,
 }
 
@@ -99,6 +100,7 @@ impl OutputFrameBuildState {
                 a: 1.0,
             },
             background_alpha: 1.0,
+            frame_alpha: [-1.0; 2],
             no_accept_focus: false,
         }
     }
@@ -200,6 +202,7 @@ impl OutputFrameBuildState {
             a: 1.0,
         };
         self.background_alpha = 1.0;
+        self.frame_alpha = [-1.0; 2];
         self.no_accept_focus = false;
     }
 
@@ -311,6 +314,7 @@ impl OutputFrameBuildState {
                 self.outer_border_width = identity.outer_border_width;
                 self.outer_border_color = identity.outer_border_color;
                 self.background_alpha = identity.background_alpha;
+                self.frame_alpha = identity.frame_alpha;
                 self.no_accept_focus = identity.no_accept_focus;
             }
             OutputFrameStateInstallRequest::BackgroundColor(color) => self.background_color = color,
@@ -383,6 +387,7 @@ impl OutputFrameBuildState {
         state.outer_border_width = self.outer_border_width;
         state.outer_border_color = self.outer_border_color;
         state.background_alpha = self.background_alpha;
+        state.frame_alpha = self.frame_alpha;
         state.no_accept_focus = self.no_accept_focus;
     }
 }

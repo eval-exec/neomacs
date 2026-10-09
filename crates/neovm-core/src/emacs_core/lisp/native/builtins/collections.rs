@@ -26,6 +26,7 @@ pub(crate) fn builtin_aref(args: Vec<Value>) -> EvalResult {
     builtin_aref_values(args[0], args[1])
 }
 
+#[inline(always)]
 pub(crate) fn builtin_aref_2(
     _eval: &mut super::eval::Context,
     array: Value,
@@ -34,6 +35,7 @@ pub(crate) fn builtin_aref_2(
     builtin_aref_values(array, index)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_aref_values(array: Value, index: Value) -> EvalResult {
     let idx_fixnum = expect_fixnum(&index)?;
     match array.kind() {
@@ -172,6 +174,7 @@ pub(crate) fn builtin_aset(args: Vec<Value>) -> EvalResult {
 }
 
 /// `aset` reading its arguments in place.
+#[inline(never)]
 pub(crate) fn builtin_aset_args(args: &[Value]) -> EvalResult {
     expect_args("aset", args, 3)?;
     // GNU src/data.c:Faset starts with CHECK_FIXNUM (idx) before checking
@@ -506,16 +509,7 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
         }
     };
 
-    let size = match size_arg.kind() {
-        ValueKind::Nil => 0,
-        ValueKind::Fixnum(n) if n >= 0 => n,
-        _ => {
-            return Err(signal(
-                "error",
-                vec![Value::string("Invalid hash table size"), size_arg],
-            ));
-        }
-    };
+    let size_hint = crate::emacs_core::alloc::HashTableHint::try_from(size_arg)?;
 
     let weakness = match weakness_arg.kind() {
         ValueKind::Nil => None,
@@ -539,7 +533,8 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
         }
     };
 
-    let table = Value::hash_table_with_options(test, size, weakness, 1.5, 0.8125);
+    let size = crate::emacs_core::alloc::HashTableSize::try_from(size_hint)?;
+    let table = Value::try_hash_table_with_options(test, size, weakness)?;
     if table.is_hash_table() {
         let _ = table.with_hash_table_mut(|ht| {
             ht.test_name = test_name;
@@ -962,12 +957,63 @@ fn builtin_puthash_values(
     table: Value,
     symbols_with_pos_enabled: bool,
 ) -> EvalResult {
+    if crate::tagged::gc::concurrent_hash_mutation_active() {
+        return builtin_puthash_values_concurrent(
+            key_value,
+            value,
+            table,
+            symbols_with_pos_enabled,
+        );
+    }
+    match table.kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(table)?;
+            let test = table.as_hash_table().unwrap().test;
+            // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
+            unsafe {
+                table.with_hash_table_mut_inactive(|ht| -> Result<(), Flow> {
+                    match ht
+                        .data
+                        .try_probe_for_insert(key_value, test, symbols_with_pos_enabled)?
+                    {
+                        HashProbe::Found(slot) => {
+                            if let Some(stored) = ht.data.slot_value_mut(slot) {
+                                *stored = value;
+                            }
+                        }
+                        HashProbe::Absent(hash) => {
+                            maybe_resize_hash_table_for_insert(ht, true);
+                            let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
+                            ht.data.insert_absent(hash, key, key_value, value);
+                        }
+                    }
+                    Ok(())
+                })
+            }
+            .unwrap_or(Ok(()))?;
+            Ok(value)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), table],
+        )),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_puthash_values_concurrent(
+    key_value: Value,
+    value: Value,
+    table: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     match table.kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
             let test = table.as_hash_table().unwrap().test;
             table
-                .with_hash_table_mut(|ht| -> Result<(), Flow> {
+                .with_hash_table_mut_concurrent(|ht| -> Result<(), Flow> {
                     match ht
                         .data
                         .try_probe_for_insert(key_value, test, symbols_with_pos_enabled)?
@@ -1108,12 +1154,44 @@ pub(crate) fn builtin_remhash_values(
     table: Value,
     symbols_with_pos_enabled: bool,
 ) -> EvalResult {
+    if crate::tagged::gc::concurrent_hash_mutation_active() {
+        return builtin_remhash_values_concurrent(key_value, table, symbols_with_pos_enabled);
+    }
+    match table.kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(table)?;
+            let test = table.as_hash_table().unwrap().test;
+            // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
+            unsafe {
+                table.with_hash_table_mut_inactive(|ht| {
+                    ht.data
+                        .try_remove_by_value(key_value, test, symbols_with_pos_enabled)
+                        .map(|_| ())
+                })
+            }
+            .unwrap_or(Ok(()))?;
+            Ok(Value::NIL)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), table],
+        )),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_remhash_values_concurrent(
+    key_value: Value,
+    table: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     match table.kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
             let test = table.as_hash_table().unwrap().test;
             table
-                .with_hash_table_mut(|ht| {
+                .with_hash_table_mut_concurrent(|ht| {
                     ht.data
                         .try_remove_by_value(key_value, test, symbols_with_pos_enabled)
                         .map(|_| ())
@@ -1129,11 +1207,37 @@ pub(crate) fn builtin_remhash_values(
 }
 
 pub(crate) fn builtin_clrhash(args: Vec<Value>) -> EvalResult {
+    if crate::tagged::gc::concurrent_hash_mutation_active() {
+        return builtin_clrhash_concurrent(args);
+    }
     expect_args("clrhash", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(args[0])?;
-            let _ = args[0].with_hash_table_mut(|ht| {
+            // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
+            let _ = unsafe {
+                args[0].with_hash_table_mut_inactive(|ht| {
+                    ht.data.clear();
+                })
+            };
+            // Be compatible with GNU Emacs (and XEmacs): return the table.
+            Ok(args[0])
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), args[0]],
+        )),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_clrhash_concurrent(args: Vec<Value>) -> EvalResult {
+    expect_args("clrhash", &args, 1)?;
+    match args[0].kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(args[0])?;
+            let _ = args[0].with_hash_table_mut_concurrent(|ht| {
                 ht.data.clear();
             });
             // Be compatible with GNU Emacs (and XEmacs): return the table.
@@ -1639,9 +1743,9 @@ pub(crate) fn plist_member_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bo
 }
 
 #[cfg(test)]
-#[path = "tests/aset_string_in_place.rs"]
+#[path = "tests/aset_string_in_place_test.rs"]
 mod aset_string_in_place_test;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_collections.rs"]
+#[path = "tests/gc_tls_collections_test.rs"]
 mod gc_tls_ownership_tests;

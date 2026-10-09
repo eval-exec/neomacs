@@ -15,6 +15,8 @@
 //! read, takes the selection the compositor sends on creation, transfers it
 //! and destroys every object it was given.
 
+use super::text_policy::{TextMime, TextRead};
+
 use std::ffi::c_void;
 use std::io::{ErrorKind, Read};
 use std::os::fd::AsFd;
@@ -36,49 +38,6 @@ use wayland_protocols::ext::data_control::v1::client::{
 /// Upper bound for one transfer.  It stays below the GUI host's reply wait so
 /// a stalled selection owner fails this read instead of the next request.
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// Text MIME types in smithay-clipboard's preference order, so both read
-/// paths choose the same representation of a selection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TextMime {
-    TextPlainUtf8,
-    Utf8String,
-    TextPlain,
-}
-
-impl TextMime {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::TextPlainUtf8 => "text/plain;charset=utf-8",
-            Self::Utf8String => "UTF8_STRING",
-            Self::TextPlain => "text/plain",
-        }
-    }
-
-    /// The first UTF-8 type offered, else plain text as a fallback.
-    pub(super) fn choose(offered: &[String]) -> Option<Self> {
-        let mut fallback = None;
-        for mime in offered {
-            match mime.as_str() {
-                "text/plain;charset=utf-8" => return Some(Self::TextPlainUtf8),
-                "UTF8_STRING" => return Some(Self::Utf8String),
-                "text/plain" => fallback = Some(Self::TextPlain),
-                _ => {}
-            }
-        }
-        fallback
-    }
-
-    /// Decode transferred bytes the way smithay-clipboard does: lossy UTF-8,
-    /// and CR/CRLF line ends normalized to LF for the `text/plain` types.
-    pub(super) fn decode(self, bytes: &[u8]) -> String {
-        let text = String::from_utf8_lossy(bytes).into_owned();
-        match self {
-            Self::TextPlainUtf8 | Self::TextPlain => text.replace("\r\n", "\n").replace('\r', "\n"),
-            Self::Utf8String => text,
-        }
-    }
-}
 
 #[derive(Default)]
 struct ReaderState {
@@ -199,9 +158,9 @@ impl DataControlReader {
         }))
     }
 
-    /// The current CLIPBOARD selection as text: `Ok(None)` when there is no
-    /// selection or it offers no text type.
-    pub(super) fn read_text(&mut self) -> Result<Option<String>, String> {
+    /// The current CLIPBOARD selection as text, keeping "no owner" distinct
+    /// from "an owner with no readable text type".
+    pub(super) fn read_text(&mut self) -> Result<TextRead, String> {
         let mut state = ReaderState::default();
         let device = self
             .manager
@@ -226,9 +185,9 @@ impl DataControlReader {
     fn transfer(
         &self,
         selection: Option<&ext_data_control_offer_v1::ExtDataControlOfferV1>,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<TextRead, String> {
         let Some(offer) = selection else {
-            return Ok(None);
+            return Ok(TextRead::NoSelection);
         };
         let mime = {
             let mimes = offer
@@ -238,7 +197,7 @@ impl DataControlReader {
             TextMime::choose(&mimes)
         };
         let Some(mime) = mime else {
-            return Ok(None);
+            return Ok(TextRead::TargetUnavailable);
         };
         let (mut reader, writer) =
             std::io::pipe().map_err(|err| format!("data-control pipe: {err}"))?;
@@ -252,7 +211,7 @@ impl DataControlReader {
             Err(err) => return Err(format!("data-control flush: {err}")),
         }
         let bytes = read_to_end_before(&mut reader, Instant::now() + TRANSFER_TIMEOUT)?;
-        Ok(Some(mime.decode(&bytes)))
+        Ok(TextRead::Text(mime.decode(&bytes)))
     }
 }
 

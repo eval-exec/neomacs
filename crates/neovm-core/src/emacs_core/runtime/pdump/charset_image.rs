@@ -555,5 +555,5 @@ pub(crate) fn empty_charset_registry() -> DumpCharsetRegistry {
 mod tests;
 
 #[cfg(test)]
-#[path = "charset_image/tests/mule_order.rs"]
+#[path = "charset_image/tests/mule_order_test.rs"]
 mod mule_order_tests;

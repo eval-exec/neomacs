@@ -1,0 +1,87 @@
+;;; thin-only-font-vertico.el --- Thin-only font metrics with real Vertico -*- lexical-binding: t; -*-
+(require 'json)
+(require 'face-remap)
+(require 'vertico)
+(vertico-mode 1)
+(setq vertico-count 5
+      vertico-sort-function #'identity)
+(defvar neomacs-thin-control (getenv "NEOMACS_THIN_CONTROL"))
+(defvar neomacs-thin-candidates nil)
+(defvar neomacs-thin-initial-canonical nil)
+
+(defun neomacs-thin-accept-completion ()
+  (setq neomacs-thin-candidates (copy-sequence vertico--candidates))
+  (vertico-exit))
+
+(defun neomacs-thin-paint-ack ()
+  (if (file-exists-p (expand-file-name "painted" neomacs-thin-control))
+      (kill-emacs 0)
+    (run-at-time 0.05 nil #'neomacs-thin-paint-ack)))
+
+(defun neomacs-thin-run ()
+  (condition-case err
+      (progn
+        (setq neomacs-thin-initial-canonical
+              (string= (frame-parameter nil 'font) (face-font 'default)))
+        (set-face-attribute 'default nil :family "M PLUS 1 Code" :weight 'normal :height 140)
+        ;; Height remapping makes GNU's default-font-height consult font-info,
+        ;; rather than return the initial frame's already cached character height.
+        (face-remap-add-relative 'default :family "M PLUS 1 Code" :weight 'normal :height 1.5)
+        (let* ((regular-name (font-xlfd-name (font-spec :family "M PLUS 1 Code" :weight 'normal :size 18)))
+               (thin-name (font-xlfd-name (font-spec :family "M PLUS 1 Code" :weight 'thin :size 18)))
+               (regular (font-info regular-name))
+               (thin (font-info thin-name))
+               (height (default-font-height))
+               (minibuffer-setup-hook
+                (cons (lambda ()
+                        (face-remap-add-relative 'default :family "M PLUS 1 Code" :weight 'normal :height 1.5)
+                        (run-at-time 0.5 nil #'neomacs-thin-accept-completion))
+                      minibuffer-setup-hook)))
+          (unless (and (vectorp regular) (numberp (aref regular 3)) (> (aref regular 3) 0)
+                       (vectorp thin) (numberp (aref thin 3)) (> (aref thin 3) 0)
+                       (numberp height) (> height 0)
+                       (stringp (aref regular 12))
+                       (equal (file-name-nondirectory (aref regular 12)) "MPLUS1Code-Thin.ttf")
+                       (stringp (aref thin 12))
+                       (equal (file-name-nondirectory (aref thin 12)) "MPLUS1Code-Thin.ttf"))
+            (error "Thin-only font metrics unavailable: %S %S %S" regular thin height))
+          (let* ((updated-canonical
+                  (let ((face-remapping-alist nil))
+                    (set-frame-font "M PLUS 1 Code-14")
+                    (string= (frame-parameter nil 'font) (face-font 'default))))
+                 (selection (completing-read "Thin-only completion: " '("alpha" "beta" "gamma") nil t))
+                 (passed (and neomacs-thin-initial-canonical updated-canonical
+                              (equal selection "alpha")
+                              (equal neomacs-thin-candidates '("alpha" "beta" "gamma"))))
+                 (state `((passed . ,(if passed t :json-false))
+                          (initial-canonical . ,(if neomacs-thin-initial-canonical t :json-false))
+                          (updated-canonical . ,(if updated-canonical t :json-false))
+                          (regular-info . ,(vectorp regular))
+                          (thin-info . ,(vectorp thin))
+                          (positive-default-height . ,(> height 0))
+                          (regular-thin-file . t)
+                          (thin-thin-file . t)
+                          (selection . ,selection)
+                          (candidates . ,(vconcat neomacs-thin-candidates)))))
+            (with-temp-file (expand-file-name "result.json" neomacs-thin-control)
+              (insert (json-encode state)))
+            (switch-to-buffer (get-buffer-create "*thin-only-font-vertico*"))
+            (erase-buffer)
+            (insert (if passed "THIN-ONLY-FONT-PASSED\n" "THIN-ONLY-FONT-FAILED\n") selection "\n")
+            (if (fboundp 'neomacs--write-frame-snapshot)
+                (progn
+                  (set-face-attribute 'default nil :background (if passed "#00ff00" "#ff0000"))
+                  (neomacs--write-frame-snapshot (expand-file-name "final.json" neomacs-thin-control) nil 'json)
+                  (neomacs-thin-paint-ack))
+              (kill-emacs (if passed 0 1))))))
+    (error
+     (with-temp-file (expand-file-name "error.el" neomacs-thin-control)
+       (prin1 err (current-buffer)))
+     (kill-emacs 1))))
+
+(setq inhibit-startup-screen t)
+(blink-cursor-mode -1)
+(menu-bar-mode -1)
+(tool-bar-mode -1)
+(run-at-time 0.5 nil #'neomacs-thin-run)
+(run-at-time 30 nil (lambda () (kill-emacs 2)))

@@ -95,8 +95,10 @@ impl ClockState {
     /// Charge the time since the last switch to the current phase and make
     /// `next` current.
     fn switch(&mut self, now: Instant, next: CompilePhase) -> CompilePhase {
-        self.acc_ns[self.current as usize] +=
-            now.saturating_duration_since(self.since).as_nanos() as u64;
+        let elapsed =
+            u64::try_from(now.saturating_duration_since(self.since).as_nanos()).unwrap_or(u64::MAX);
+        self.acc_ns[self.current as usize] =
+            self.acc_ns[self.current as usize].saturating_add(elapsed);
         self.since = now;
         std::mem::replace(&mut self.current, next)
     }
@@ -111,12 +113,18 @@ thread_local! {
 /// Charges the time until it drops to one phase, then resumes the phase it
 /// interrupted. Inert when no split is running.
 #[must_use = "a phase lasts until its guard drops"]
+#[derive(Debug)]
 pub(crate) struct PhaseGuard {
     prev: Option<CompilePhase>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
+static_assertions::assert_not_impl_any!(PhaseGuard: Send, Sync);
 
 impl PhaseGuard {
-    const INERT: PhaseGuard = PhaseGuard { prev: None };
+    const INERT: PhaseGuard = PhaseGuard {
+        prev: None,
+        _thread: std::marker::PhantomData,
+    };
 }
 
 /// Attribute the time until the returned guard drops to `phase`.
@@ -134,7 +142,10 @@ fn enter_phase_tracked(phase: CompilePhase) -> PhaseGuard {
         Some(mut state) => {
             let prev = state.switch(Instant::now(), phase);
             c.set(Some(state));
-            PhaseGuard { prev: Some(prev) }
+            PhaseGuard {
+                prev: Some(prev),
+                _thread: std::marker::PhantomData,
+            }
         }
         None => PhaseGuard::INERT,
     })
@@ -145,7 +156,7 @@ impl Drop for PhaseGuard {
         let Some(prev) = self.prev else {
             return;
         };
-        PHASE_CLOCK.with(|c| {
+        let _ = PHASE_CLOCK.try_with(|c| {
             if let Some(mut state) = c.get() {
                 state.switch(Instant::now(), prev);
                 c.set(Some(state));
@@ -158,36 +169,34 @@ impl Drop for PhaseGuard {
 /// phase split when the split is on. A compile nested inside another (not
 /// expected: compiles run under the cache borrow) saves and restores the
 /// outer split.
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
 pub(crate) struct CompileClock {
     origin: CompileOrigin,
     started: Instant,
-    tracking: bool,
-    outer: Option<ClockState>,
-    finished: bool,
+    scope: Option<crate::tls_scope::TlsScope<Option<ClockState>, Cell<Option<ClockState>>>>,
 }
+static_assertions::assert_not_impl_any!(CompileClock: Send, Sync);
 
 impl CompileClock {
     /// Start timing a compile of `origin`.
     pub(crate) fn start(origin: CompileOrigin) -> CompileClock {
         let started = Instant::now();
         let tracking = super::summary_enabled();
-        let outer = if tracking {
-            PHASE_CLOCK.with(|c| {
-                c.replace(Some(ClockState {
+        let scope = tracking.then(|| {
+            crate::tls_scope::TlsScope::new(
+                &PHASE_CLOCK,
+                Some(ClockState {
                     current: CompilePhase::Other,
                     since: started,
                     acc_ns: [0; CompilePhase::COUNT],
-                }))
-            })
-        } else {
-            None
-        };
+                }),
+            )
+        });
         CompileClock {
             origin,
             started,
-            tracking,
-            outer,
-            finished: false,
+            scope,
         }
     }
 
@@ -196,30 +205,17 @@ impl CompileClock {
     pub(crate) fn finish(mut self, ok: bool) -> Duration {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.started);
-        let split = if self.tracking {
-            PHASE_CLOCK.with(|c| {
-                let state = c.replace(self.outer.take());
-                state.map(|mut state| {
-                    state.switch(now, CompilePhase::Other);
-                    state.acc_ns
-                })
-            })
-        } else {
-            None
-        };
-        self.finished = true;
+        let split = self
+            .scope
+            .take()
+            .and_then(crate::tls_scope::TlsScope::finish)
+            .flatten()
+            .map(|mut state| {
+                state.switch(now, CompilePhase::Other);
+                state.acc_ns
+            });
         super::record_origin_and_phases(self.origin, ok, elapsed, split.as_ref());
         elapsed
-    }
-}
-
-impl Drop for CompileClock {
-    fn drop(&mut self) {
-        // An unwinding compile (a contained panic) must not leave its split
-        // installed for the next compile to fold in.
-        if !self.finished && self.tracking {
-            PHASE_CLOCK.with(|c| c.set(self.outer.take()));
-        }
     }
 }
 
@@ -250,5 +246,27 @@ pub(crate) fn render_origins(origins: &[OriginStats; CompileOrigin::COUNT]) -> S
         "-".to_string()
     } else {
         rows.join(",")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tls_scope_phase_drop_saturates_accounting_without_panicking() {
+        let _clock = crate::tls_scope::TlsScope::new(
+            &PHASE_CLOCK,
+            Some(ClockState {
+                current: CompilePhase::Other,
+                since: Instant::now(),
+                acc_ns: [u64::MAX; CompilePhase::COUNT],
+            }),
+        );
+        let phase = enter_phase_tracked(CompilePhase::Codegen);
+        drop(phase);
+        let state = PHASE_CLOCK.with(Cell::get).expect("running clock");
+        assert_eq!(state.current, CompilePhase::Other);
+        assert_eq!(state.acc_ns, [u64::MAX; CompilePhase::COUNT]);
     }
 }

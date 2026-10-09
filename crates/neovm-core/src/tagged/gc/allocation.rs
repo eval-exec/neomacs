@@ -16,7 +16,7 @@ impl TaggedHeap {
     /// collect or run Lisp: the list builders below and the JIT shims
     /// (`neovm_jit_cons`, `neovm_jit_list`) hold an unrooted accumulator
     /// across it, exactly as GNU's C locals do.
-    #[inline]
+    #[inline(always)]
     pub fn alloc_cons(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
         let cell = self.take_cons_cell();
         // SAFETY: `cell` is a live, cell-aligned slot of a block this heap
@@ -214,8 +214,18 @@ impl TaggedHeap {
         init: TaggedValue,
         n_extras: usize,
     ) -> TaggedValue {
+        self.alloc_char_table_with_extras(purpose, init, vec![init; n_extras])
+    }
+
+    /// Use already-reserved extra slots from the validated Lisp boundary.
+    pub(crate) fn alloc_char_table_with_extras(
+        &mut self,
+        purpose: TaggedValue,
+        init: TaggedValue,
+        extras: Vec<TaggedValue>,
+    ) -> TaggedValue {
+        let n_extras = extras.len();
         let contents = [init; CHAR_TABLE_TOP_SLOTS];
-        let extras = vec![init; n_extras];
         self.add_memory_use_count(
             MemoryUseCountSlot::VectorCells,
             (4 + CHAR_TABLE_TOP_SLOTS + n_extras) as u64,
@@ -628,6 +638,7 @@ impl TaggedHeap {
     /// (mid-cycle pages, mapped/dump residue) still defer to the STW
     /// termination drain, where `mark_value`'s owned veclike arm traces
     /// them exactly as before.
+    #[inline(never)]
     pub fn alloc_bytecode(
         &mut self,
         data: crate::emacs_core::bytecode::ByteCodeFunction,
@@ -844,10 +855,20 @@ impl TaggedHeap {
             data,
         });
         let ptr = Box::into_raw(obj);
+        let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
+        // GNU compare_overlays uses raw object identity, which need not follow
+        // allocation order. Initialize before linking/publishing the new
+        // object; explicit identities are retained for snapshot observers.
+        // This write is local to the owning mutator's fresh allocation.
+        unsafe {
+            if (*ptr).data.serial == 0 {
+                (*ptr).data.serial = value.bits() as u64;
+            }
+        }
         self.link_veclike(ptr as *mut VecLikeHeader);
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<OverlayObj>());
-        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+        value
     }
 
     /// Allocate a marker.

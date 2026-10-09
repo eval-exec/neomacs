@@ -185,7 +185,8 @@ use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::builtins::set_neomacs_monitor_info;
 use neovm_core::emacs_core::display::gui_window_system_symbol;
 use neovm_core::emacs_core::display_host::{
-    AvailableFontFamilyName, FontResolveRequest, FrameFontRequest, XwidgetScriptRequestId,
+    AvailableFontFamilyName, FontCoverage, FontCoverageRequest, FontCoverageTarget,
+    FontEntityHandle, FontResolveRequest, FrameFontRequest, XwidgetScriptRequestId,
 };
 #[cfg(feature = "neo-term")]
 use neovm_core::emacs_core::display_host::{
@@ -222,7 +223,8 @@ use neovm_core::emacs_core::{
 use neovm_core::face::{FaceHeight, FontWeight, LFaceAttr};
 use neovm_core::heap_types::LispString;
 use neovm_core::window::{
-    FrameDisplayIdentity, FrameFullscreen, FrameId, FrameParam, FrameVisibility, Window,
+    FrameDisplayIdentity, FrameFullscreen, FrameId, FrameParam, FrameVisibility,
+    GuiBarPresentation, Window,
 };
 
 use image_catalog::{AsyncImageCatalog, RedisplayWaker};
@@ -1168,6 +1170,38 @@ impl ResolvedSurfaceMemo {
     }
 }
 
+/// Entity selections survive ordinary cache invalidation. Repeated selections
+/// share a handle; retained assets keep native-memory faces alive. Indices are
+/// never reused, so an old Lisp entity cannot silently become a different face.
+#[derive(Default)]
+struct FontEntityCatalog {
+    handles: HashMap<neomacs_display_protocol::font::ResolvedFontIdentity, FontEntityHandle>,
+    entries: Vec<neomacs_layout_engine::font_backend::PlatformFontMatch>,
+}
+
+impl FontEntityCatalog {
+    fn intern(
+        &mut self,
+        font: neomacs_layout_engine::font_backend::PlatformFontMatch,
+    ) -> Option<FontEntityHandle> {
+        if let Some(handle) = self.handles.get(&font.identity) {
+            return Some(*handle);
+        }
+        let handle =
+            FontEntityHandle::new(u32::try_from(self.entries.len()).ok()?.checked_add(1)?)?;
+        self.handles.insert(font.identity.clone(), handle);
+        self.entries.push(font);
+        Some(handle)
+    }
+
+    fn get(
+        &self,
+        handle: FontEntityHandle,
+    ) -> Option<&neomacs_layout_engine::font_backend::PlatformFontMatch> {
+        self.entries.get((handle.get() - 1) as usize)
+    }
+}
+
 struct PrimaryWindowDisplayHost {
     resources: neomacs_display_runtime::gui_resources::GuiResources,
     system_fonts: neovm_core::emacs_core::display_host::SystemFonts,
@@ -1179,6 +1213,7 @@ struct PrimaryWindowDisplayHost {
     primary_frame_id: Option<neovm_core::window::FrameId>,
     last_window_titles: Mutex<HashMap<neovm_core::window::FrameId, LispString>>,
     font_metrics: Option<FontMetricsService>,
+    font_entities: FontEntityCatalog,
     primary_window_size: SharedPrimaryWindowSize,
     image_catalog: Rc<AsyncImageCatalog>,
     #[cfg(feature = "video")]
@@ -1188,6 +1223,7 @@ struct PrimaryWindowDisplayHost {
     /// Renderer-published effective availability. Requested shader state is
     /// retained separately so hardware recovery can restore it.
     render_capabilities: Arc<SharedRenderCapabilities>,
+    frame_opacity: Arc<Mutex<neomacs_display_runtime::thread_comm::FrameOpacityState>>,
     /// The exact shader requested by Lisp. This is one transactionally
     /// updated value so installation state, source, and live uniforms cannot
     /// drift. It survives temporary quality-policy suppression and device
@@ -1873,6 +1909,59 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn set_gui_frame_alpha_lower_limit(&mut self, limit: f32) {
+        self.frame_opacity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_lower_limit(limit);
+    }
+
+    fn set_gui_frame_alpha(
+        &mut self,
+        frame: FrameId,
+        alpha: [f32; 2],
+        limit: f32,
+    ) -> Result<(), String> {
+        self.frame_opacity
+            .lock()
+            .map_err(|err| err.to_string())?
+            .accept(frame.0, alpha, limit);
+        self.send_render_command(
+            RenderCommand::Window(WindowCommand::RefreshFrameOpacity),
+            "failed to refresh frame opacity",
+        )
+    }
+
+    fn set_gui_frame_focus_redirects(
+        &mut self,
+        redirects: Vec<(FrameId, Option<FrameId>)>,
+    ) -> Result<(), String> {
+        self.frame_opacity
+            .lock()
+            .map_err(|err| err.to_string())?
+            .set_redirects(
+                redirects
+                    .into_iter()
+                    .map(|(frame, target)| (frame.0, target.map(|target| target.0)))
+                    .collect(),
+            );
+        self.send_render_command(
+            RenderCommand::Window(WindowCommand::RefreshFrameOpacity),
+            "failed to refresh frame highlight",
+        )
+    }
+
+    fn retire_gui_frame_alpha(&mut self, frame: FrameId) -> Result<(), String> {
+        self.frame_opacity
+            .lock()
+            .map_err(|err| err.to_string())?
+            .retire(frame.0);
+        self.send_render_command(
+            RenderCommand::Window(WindowCommand::RefreshFrameOpacity),
+            "failed to retire frame opacity",
+        )
+    }
+
     fn set_gui_frame_undecorated(
         &mut self,
         _frame_id: neovm_core::window::FrameId,
@@ -2077,6 +2166,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         }
         let entity = self.synchronized_font_metrics().resolve_font_entity(&query);
         Ok(entity.map(|entity| ResolvedFontSpecMatch {
+            coverage_handle: self.font_entities.intern(entity.matched.clone()),
             family: LispString::from_utf8(entity.matched.family()),
             foundry: entity
                 .matched
@@ -2105,6 +2195,32 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                 .as_ref()
                 .map(|name| LispString::from_utf8(name)),
         }))
+    }
+
+    fn font_character_coverage(
+        &mut self,
+        request: FontCoverageRequest,
+    ) -> Result<FontCoverage, String> {
+        let Some(ch) = request.character.as_rust_char() else {
+            return Ok(FontCoverage::Absent);
+        };
+        let coverage = match request.target {
+            FontCoverageTarget::Entity(handle) => {
+                let Some(font) = self.font_entities.get(handle).cloned() else {
+                    return Ok(FontCoverage::NeedsOpening);
+                };
+                self.synchronized_font_metrics()
+                    .font_has_char_in_match(&font, ch)
+            }
+            FontCoverageTarget::Opened(identity) => self
+                .synchronized_font_metrics()
+                .font_has_char_in_identity(&identity, ch),
+        };
+        Ok(match coverage {
+            Some(true) => FontCoverage::Present,
+            Some(false) => FontCoverage::Absent,
+            None => FontCoverage::NeedsOpening,
+        })
     }
 
     fn probe_font_px_metrics(
@@ -2906,8 +3022,7 @@ fn frame_host_title(eval: &mut Context, frame_id: FrameId) -> LispString {
 
     let format = eval
         .obarray()
-        .symbol_value("frame-title-format")
-        .copied()
+        .symbol_value_copied("frame-title-format")
         .unwrap_or(Value::NIL);
     if format.is_nil() {
         return fallback_title;
@@ -2955,9 +3070,20 @@ fn adopt_existing_primary_gui_frame(eval: &mut Context) -> Result<(), String> {
         .get(frame_id)
         .map(|frame| frame.gui_geometry_hints())
         .ok_or_else(|| "selected GUI frame disappeared before adoption".to_string())?;
+    let alpha = eval
+        .frame_manager()
+        .get(frame_id)
+        .map(|frame| frame.frame_alpha)
+        .unwrap_or([-1.0; 2]);
+    let limit = neovm_core::window::frame_alpha::lower_limit(
+        eval.obarray()
+            .symbol_value_copied("frame-alpha-lower-limit")
+            .unwrap_or(Value::fixnum(20)),
+    );
     let Some(host) = eval.display_host.as_mut() else {
         return Ok(());
     };
+    host.set_gui_frame_alpha(frame_id, alpha, limit)?;
     host.realize_gui_frame(GuiFrameHostRequest {
         frame_id,
         width,
@@ -2997,8 +3123,7 @@ fn run_reused_gui_startup_frame_lisp(eval: &mut Context, frame_id: FrameId, body
     let frame_value = Value::make_frame(frame_id.0);
     let previous = eval
         .obarray()
-        .symbol_value("neomacs--reused-gui-startup-frame")
-        .copied();
+        .symbol_value_copied("neomacs--reused-gui-startup-frame");
     eval.set_variable("neomacs--reused-gui-startup-frame", frame_value);
     let result = eval.eval_str(body);
     match previous {
@@ -3012,6 +3137,13 @@ fn run_reused_gui_startup_frame_lisp(eval: &mut Context, frame_id: FrameId, body
 
 fn initialize_reused_gui_startup_frame(eval: &mut Context, frame_id: FrameId) {
     seed_gnu_default_gui_chrome_modes(eval);
+    // GNU gui_default_parameter seeds chrome at frame creation, before
+    // early-init/frame-initialize applies user settings. Redisplay must never
+    // replace those subsequent, authoritative frame-local requests.
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_known_parameter(FrameParam::MenuBarLines, Value::fixnum(1));
+        frame.set_known_parameter(FrameParam::ToolBarLines, Value::fixnum(1));
+    }
 
     // GNU startup calls `window-system-initialization`, then
     // `frame-initialize`; the opening GUI frame is created through
@@ -3059,12 +3191,12 @@ fn ensure_gnu_tool_bar_setup(eval: &mut Context) {
     let needs_setup = eval.obarray().fboundp("tool-bar-setup")
         && eval
             .obarray()
-            .symbol_value("tool-bar-mode")
+            .symbol_value_copied("tool-bar-mode")
             .is_some_and(|value| value.is_truthy())
         && eval
             .obarray()
-            .default_value_id(intern("tool-bar-map"))
-            .is_some_and(|map| list_length(map) == Some(1));
+            .default_value_id_copied(intern("tool-bar-map"))
+            .is_some_and(|map| list_length(&map) == Some(1));
     if !needs_setup {
         return;
     }
@@ -3075,7 +3207,7 @@ fn ensure_gnu_tool_bar_setup(eval: &mut Context) {
 
 fn throw_on_input_active(eval: &Context) -> bool {
     eval.obarray()
-        .symbol_value("throw-on-input")
+        .symbol_value_copied("throw-on-input")
         .is_some_and(|value| value.is_truthy())
 }
 
@@ -3087,18 +3219,20 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
         return;
     }
 
-    let menu_enabled = !eval
-        .obarray()
-        .symbol_value("menu-bar-mode")
-        .copied()
-        .unwrap_or(Value::NIL)
-        .is_nil();
-    let tool_enabled = !eval
-        .obarray()
-        .symbol_value("tool-bar-mode")
-        .copied()
-        .unwrap_or(Value::NIL)
-        .is_nil();
+    let selected_gui_frame = eval
+        .frame_manager()
+        .selected_frame()
+        .filter(|frame| frame.effective_window_system().is_some());
+    let menu_enabled = selected_gui_frame.is_some_and(|frame| {
+        frame
+            .known_frame_parameter_int(FrameParam::MenuBarLines)
+            .is_some_and(|lines| lines > 0)
+    });
+    let tool_enabled = selected_gui_frame.is_some_and(|frame| {
+        frame
+            .known_frame_parameter_int(FrameParam::ToolBarLines)
+            .is_some_and(|lines| lines > 0)
+    });
     if tool_enabled {
         ensure_gnu_tool_bar_setup(eval);
     }
@@ -3143,28 +3277,14 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
         // `sync_window_area_bounds`, so the reflow reserves the chrome rows.
         frame.displays_chrome = true;
         frame.set_parameter(
-            FrameParam::MenuBarLines.symbol(),
-            Value::fixnum(if menu_items.is_empty() || compact_bar_enabled {
-                0
-            } else {
-                1
-            }),
-        );
-        frame.set_parameter(
-            FrameParam::ToolBarLines.symbol(),
-            Value::fixnum(if tool_items.is_empty() || compact_bar_enabled {
-                0
-            } else {
-                1
-            }),
-        );
-        frame.set_parameter(
             Value::symbol("compact-bar-lines"),
             Value::fixnum(if compact_bar_enabled { 1 } else { 0 }),
         );
-        frame.sync_menu_bar_height_from_parameters();
-        frame.sync_tool_bar_height_from_parameters();
-        frame.sync_compact_bar_height_from_parameters();
+        frame.sync_gui_bar_heights_from_parameters(if compact_bar_enabled {
+            GuiBarPresentation::Compact
+        } else {
+            GuiBarPresentation::Separate
+        });
         geometry_hints = Some((frame.id, frame.gui_geometry_hints()));
     }
 
@@ -3750,6 +3870,7 @@ fn run_gui_evaluator_worker(
         primary_frame_id: None,
         last_window_titles: Mutex::new(HashMap::new()),
         font_metrics: None,
+        font_entities: FontEntityCatalog::default(),
         primary_window_size: Arc::clone(&primary_window_size),
         image_catalog: Rc::new(AsyncImageCatalog::new(
             emacs_comms.cmd_tx.clone(),
@@ -3762,6 +3883,7 @@ fn run_gui_evaluator_worker(
         resolved_webkits: Mutex::new(HashMap::new()),
         resolved_surfaces: Mutex::new(ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::clone(&emacs_comms.capabilities),
+        frame_opacity: Arc::clone(&emacs_comms.frame_opacity),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
         terminal_state: TerminalHostState::new(shared_terminals),
@@ -4743,17 +4865,6 @@ impl BootstrapFrameMetrics {
     };
 }
 
-fn font_weight_symbol(weight: FontWeight) -> &'static str {
-    weight.symbol_name()
-}
-
-fn startup_font_weight_symbol(weight: FontWeight) -> &'static str {
-    match weight {
-        FontWeight::Normal => "regular",
-        _ => font_weight_symbol(weight),
-    }
-}
-
 fn font_otf_capability_for_file(
     file: &str,
     face_index: u32,
@@ -5009,13 +5120,6 @@ fn bootstrap_buffers_with_font(
         startup_font::BootstrapFont::Tty => (Value::NIL, Value::string("fixed")),
         startup_font::BootstrapFont::Gui(font) => {
             let selected = (*font).into_selected();
-            let name = Value::string(format!(
-                "-*-{}-{}-{}-*-*-{}-*-*-*-*-*-*-*",
-                selected.resolved.family,
-                startup_font_weight_symbol(FontWeight::from_css_weight(selected.resolved.weight)),
-                selected.slant.symbol_name(),
-                selected.metrics.pixel_size,
-            ));
             let mut face = neovm_core::face::Face::new("default");
             face.height = Some(FaceHeight::Absolute(
                 display
@@ -5026,10 +5130,10 @@ fn bootstrap_buffers_with_font(
                 glyph_code: None,
                 font: core_opened_font_from_selection(selected, font_otf_capability_for_file),
             };
-            (
-                neovm_core::emacs_core::font::opened_font_from_resolved_match(&face, &matched),
-                name,
-            )
+            let opened =
+                neovm_core::emacs_core::font::opened_font_from_resolved_match(&face, &matched);
+            let name = neovm_core::emacs_core::font::public_frame_font_parameter_value(opened);
+            (opened, name)
         }
     };
     let bootstrap_font_snapshot = bootstrap_font
@@ -5545,8 +5649,8 @@ fn ensure_gnu_startup_terminal_frame(eval: &mut Context, opening_frame_id: Frame
 fn opening_frame_initial_alist(eval: &Context, window_system: Value) -> Value {
     let mut params = vec![Value::cons(Value::symbol("window-system"), window_system)];
     for symbol_name in ["initial-frame-alist", "default-frame-alist"] {
-        if let Some(value) = eval.obarray().symbol_value(symbol_name)
-            && let Some(items) = neovm_core::emacs_core::value::list_to_vec(value)
+        if let Some(value) = eval.obarray().symbol_value_copied(symbol_name)
+            && let Some(items) = neovm_core::emacs_core::value::list_to_vec(&value)
         {
             params.extend(items);
         }
@@ -5576,7 +5680,7 @@ fn run_gnu_startup_inner(eval: &mut Context) {
         "#,
     )
     .expect("startup exit helper should install");
-    let top_level = eval.obarray().symbol_value("top-level").cloned();
+    let top_level = eval.obarray().symbol_value_copied("top-level");
     tracing::info!("top-level variable before startup: {:?}", top_level);
 
     let (_tx, rx) = crossbeam_channel::unbounded();
@@ -5588,13 +5692,11 @@ fn run_gnu_startup_inner(eval: &mut Context) {
     if let Err(other) = result {
         let last_phase = eval
             .obarray()
-            .symbol_value("neomacs--startup-last-phase")
-            .cloned()
+            .symbol_value_copied("neomacs--startup-last-phase")
             .map(|value| print_value_with_eval(eval, &value));
         let last_call = eval
             .obarray()
-            .symbol_value("neomacs--startup-last-call")
-            .cloned()
+            .symbol_value_copied("neomacs--startup-last-call")
             .map(|value| print_value_with_eval(eval, &value));
         panic!(
             "GNU startup via recursive_edit failed: {other} last-phase={last_phase:?} last-call={last_call:?}"

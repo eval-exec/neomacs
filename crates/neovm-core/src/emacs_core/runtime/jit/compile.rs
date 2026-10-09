@@ -867,19 +867,10 @@ pub fn compile_bytecode_function_requested(
     // The self policy scopes only an immutable compiler-source token; its
     // selected site maps below provide the actual self-call proof.
     let _self_source = direct_call::SelfSourceScope::enter_for(f, self_recursive, call_heavy);
-    let outer = (
-        BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
-        ACTIVE_CALL_HEAVY.with(|b| b.replace(call_heavy)),
-    );
+    let _profit_gate =
+        crate::tls_scope::TlsScope::new(&BYPASS_PROFIT_GATE, request.bypass_profit_gate);
+    let _call_heavy = crate::tls_scope::TlsScope::new(&ACTIVE_CALL_HEAVY, call_heavy);
     drop(gate_phase);
-    struct Restore((bool, bool));
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            BYPASS_PROFIT_GATE.with(|b| b.set(self.0.0));
-            ACTIVE_CALL_HEAVY.with(|b| b.set(self.0.1));
-        }
-    }
-    let _restore = Restore(outer);
     let _t2 = super::tier2::BuildScope::enter_for(
         request.tier,
         f.jit_runtime(),
@@ -4097,167 +4088,169 @@ pub(crate) mod stack_guard;
 pub(crate) mod cold_exits;
 
 #[cfg(test)]
-#[path = "tests/arith_generic_integer.rs"]
+#[path = "tests/arith_generic_integer_test.rs"]
 mod arith_generic_integer_tests;
 #[cfg(test)]
-#[path = "tests/array_shims.rs"]
+#[path = "tests/array_shims_test.rs"]
 mod array_shim_tests;
 #[cfg(test)]
-#[path = "tests/call_feedback.rs"]
+#[path = "tests/call_feedback_test.rs"]
 mod call_feedback_tests;
 mod collection_journal;
 #[cfg(test)]
-#[path = "tests/compile_pipeline.rs"]
+#[path = "tests/compile_pipeline_test.rs"]
 pub(crate) mod compile_pipeline_tests;
 pub(crate) mod heap_inline;
 #[cfg(test)]
-#[path = "tests/inline_heap_ops.rs"]
+#[path = "tests/inline_heap_ops_test.rs"]
 mod inline_heap_ops_tests;
 
+mod atomic_forward;
+pub(crate) use atomic_forward::ForwardAtomics;
 #[cfg(test)]
-#[path = "tests/gen0_tracked_collection_revision.rs"]
+#[path = "tests/gen0_tracked_collection_revision_test.rs"]
 mod gen0_tracked_collection_revision_tests;
 #[cfg(test)]
-#[path = "tests/inline_heap_generational.rs"]
+#[path = "tests/inline_heap_generational_test.rs"]
 mod inline_heap_generational_tests;
 #[cfg(test)]
-#[path = "tests/inline.rs"]
+#[path = "tests/inline_test.rs"]
 mod inline_tests;
 pub(crate) mod inline_vars;
 #[cfg(test)]
-#[path = "tests/leaf_calls.rs"]
+#[path = "tests/leaf_calls_test.rs"]
 mod leaf_call_tests;
 #[cfg(test)]
-#[path = "tests/mir_calls.rs"]
+#[path = "tests/mir_calls_test.rs"]
 mod mir_calls;
 #[cfg(test)]
-#[path = "tests/mir_cons_deopt.rs"]
+#[path = "tests/mir_cons_deopt_test.rs"]
 mod mir_cons_deopt_tests;
 #[cfg(test)]
-#[path = "tests/mir_inline_guards.rs"]
+#[path = "tests/mir_inline_guards_test.rs"]
 mod mir_inline_guards;
 #[cfg(test)]
-#[path = "tests/mir_named_calls.rs"]
+#[path = "tests/mir_named_calls_test.rs"]
 mod mir_named_calls_tests;
 #[cfg(test)]
-#[path = "tests/mir_reach_dead.rs"]
+#[path = "tests/mir_reach_dead_test.rs"]
 mod mir_reach_dead_tests;
 #[cfg(test)]
-#[path = "tests/observability.rs"]
+#[path = "tests/observability_test.rs"]
 mod observability_tests;
 #[cfg(test)]
-#[path = "tests/osr_bindings.rs"]
+#[path = "tests/osr_bindings_test.rs"]
 mod osr_binding_tests;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-#[path = "tests/shared_module.rs"]
+#[path = "tests/shared_module_test.rs"]
 mod shared_module_tests;
 pub(crate) mod switch_dispatch;
 
 #[cfg(test)]
-#[path = "tests/direct_call.rs"]
+#[path = "tests/direct_call_test.rs"]
 mod direct_call_tests;
 #[cfg(test)]
-#[path = "tests/direct_self.rs"]
+#[path = "tests/direct_self_test.rs"]
 mod direct_self_tests;
 #[cfg(test)]
-#[path = "tests/eq_swp_prefilter.rs"]
+#[path = "tests/eq_swp_prefilter_test.rs"]
 mod eq_swp_prefilter_tests;
 #[cfg(test)]
-#[path = "tests/fixnum_comparisons.rs"]
+#[path = "tests/fixnum_comparisons_test.rs"]
 mod fixnum_comparison_tests;
 #[cfg(test)]
-#[path = "tests/fixnum_ranges.rs"]
+#[path = "tests/fixnum_ranges_test.rs"]
 mod fixnum_range_tests;
 #[cfg(test)]
-#[path = "tests/flonum_slots.rs"]
+#[path = "tests/flonum_slots_test.rs"]
 mod flonum_slot_tests;
 #[cfg(test)]
-#[path = "tests/osr_entry_guards.rs"]
+#[path = "tests/osr_entry_guards_test.rs"]
 mod osr_entry_guard_tests;
 #[cfg(test)]
-#[path = "tests/osr_raw.rs"]
+#[path = "tests/osr_raw_test.rs"]
 mod osr_raw_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_vars.rs"]
+#[path = "tests/inline_vars_test.rs"]
 mod inline_vars_tests;
 #[cfg(test)]
-#[path = "tests/native_frame_detach.rs"]
+#[path = "tests/native_frame_detach_test.rs"]
 mod native_frame_detach_tests;
 #[cfg(test)]
-#[path = "tests/osr_poll.rs"]
+#[path = "tests/osr_poll_test.rs"]
 mod osr_poll_tests;
 #[cfg(test)]
-#[path = "tests/predicate_branches.rs"]
+#[path = "tests/predicate_branches_test.rs"]
 mod predicate_branch_tests;
 #[cfg(test)]
-#[path = "compile/tests/regalloc_small.rs"]
+#[path = "compile/tests/regalloc_small_test.rs"]
 mod regalloc_small_tests;
 #[cfg(test)]
-#[path = "tests/source_slots.rs"]
+#[path = "tests/source_slots_test.rs"]
 mod source_slot_tests;
 #[cfg(test)]
-#[path = "tests/spec_frames.rs"]
+#[path = "tests/spec_frames_test.rs"]
 mod spec_frame_tests;
 #[cfg(test)]
-#[path = "tests/spec_gate.rs"]
+#[path = "tests/spec_gate_test.rs"]
 mod spec_gate_tests;
 #[cfg(test)]
-#[path = "tests/spec_rest_calls.rs"]
+#[path = "tests/spec_rest_calls_test.rs"]
 mod spec_rest_call_tests;
 #[cfg(test)]
-#[path = "tests/stack_guard.rs"]
+#[path = "tests/stack_guard_test.rs"]
 mod stack_guard_tests;
 #[cfg(test)]
-#[path = "tests/switch_dispatch.rs"]
+#[path = "tests/switch_dispatch_test.rs"]
 mod switch_dispatch_tests;
 #[cfg(test)]
-#[path = "tests/switch_inline.rs"]
+#[path = "tests/switch_inline_test.rs"]
 mod switch_inline_tests;
 #[cfg(test)]
-#[path = "tests/tail_calls.rs"]
+#[path = "tests/tail_calls_test.rs"]
 mod tail_call_tests;
 #[cfg(test)]
-#[path = "tests/compile.rs"]
+#[path = "tests/compile_test.rs"]
 mod tests;
 #[cfg(test)]
-#[path = "tests/varref_inline.rs"]
+#[path = "tests/varref_inline_test.rs"]
 mod varref_inline_tests;
 
 #[cfg(test)]
-#[path = "tests/opt_lower.rs"]
+#[path = "tests/opt_lower_test.rs"]
 mod opt_lower_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_admission.rs"]
+#[path = "compile/tests/opt_admission_test.rs"]
 mod opt_admission_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_ir_lower.rs"]
+#[path = "compile/tests/opt_ir_lower_test.rs"]
 mod opt_ir_lower_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_fold_select.rs"]
+#[path = "compile/tests/opt_fold_select_test.rs"]
 mod opt_fold_select_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_passes.rs"]
+#[path = "compile/tests/opt_passes_test.rs"]
 mod opt_passes_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_regalloc.rs"]
+#[path = "compile/tests/opt_regalloc_test.rs"]
 mod opt_regalloc_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_bool.rs"]
+#[path = "compile/tests/opt_bool_test.rs"]
 mod opt_bool_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_bool_numeric.rs"]
+#[path = "compile/tests/opt_bool_numeric_test.rs"]
 mod opt_bool_numeric_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_reps.rs"]
+#[path = "compile/tests/opt_reps_test.rs"]
 mod opt_reps_tests;
 
 #[cfg(test)]
@@ -4265,65 +4258,65 @@ mod opt_reps_tests;
 mod opt_gvn_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_array_profile.rs"]
+#[path = "compile/tests/opt_array_profile_test.rs"]
 mod opt_array_profile_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_arrays.rs"]
+#[path = "compile/tests/opt_arrays_test.rs"]
 mod opt_array_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_alloc_probe.rs"]
+#[path = "compile/tests/opt_sink_alloc_probe_test.rs"]
 mod opt_sink_alloc_probe_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_identity.rs"]
+#[path = "compile/tests/opt_sink_identity_test.rs"]
 mod opt_sink_identity_tests;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_sqrt.rs"]
+#[path = "compile/tests/opt_sink_sqrt_test.rs"]
 mod opt_sink_sqrt;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_numeric_ready.rs"]
+#[path = "compile/tests/opt_sink_numeric_ready_test.rs"]
 mod opt_sink_numeric_ready;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_numeric_sqrt_contagion.rs"]
+#[path = "compile/tests/opt_sink_numeric_sqrt_contagion_test.rs"]
 mod opt_sink_numeric_sqrt_contagion;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_numeric_static_contagion.rs"]
+#[path = "compile/tests/opt_sink_numeric_static_contagion_test.rs"]
 mod opt_sink_numeric_static_contagion;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_numeric_cold.rs"]
+#[path = "compile/tests/opt_sink_numeric_cold_test.rs"]
 mod opt_sink_numeric_cold;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_numeric_infallible.rs"]
+#[path = "compile/tests/opt_sink_numeric_infallible_test.rs"]
 mod opt_sink_numeric_infallible;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_cold_demand.rs"]
+#[path = "compile/tests/opt_sink_cold_demand_test.rs"]
 mod opt_sink_cold_demand;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sqrt_binding.rs"]
+#[path = "compile/tests/opt_sqrt_binding_test.rs"]
 mod opt_sqrt_binding;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sqrt_snapshot.rs"]
+#[path = "compile/tests/opt_sqrt_snapshot_test.rs"]
 mod opt_sqrt_snapshot;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_numeric_resolved.rs"]
+#[path = "compile/tests/opt_sink_numeric_resolved_test.rs"]
 mod opt_sink_numeric_resolved;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_sink_native_verification.rs"]
+#[path = "compile/tests/opt_sink_native_verification_test.rs"]
 mod opt_sink_native_verification;
 
 #[cfg(test)]
-#[path = "compile/tests/opt_rootwin_counts.rs"]
+#[path = "compile/tests/opt_rootwin_counts_test.rs"]
 mod opt_rootwin_count_tests;

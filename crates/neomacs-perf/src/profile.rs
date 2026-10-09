@@ -392,4 +392,5 @@ pub struct ProfileReport {
 }
 
 #[cfg(test)]
+#[path = "profile/tests/profile_test.rs"]
 mod tests;

@@ -745,7 +745,7 @@ impl RenderApp {
             };
 
             for (active, reason, rate) in [
-                (webkit_active, DemandReason::WebKit, max_rate),
+                (webkit_active, DemandReason::Webkit, max_rate),
                 (surfaces_active, DemandReason::ShaderSurface, surface_rate),
             ] {
                 if active {

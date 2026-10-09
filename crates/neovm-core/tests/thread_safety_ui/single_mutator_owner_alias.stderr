@@ -1,0 +1,9 @@
+error[E0502]: cannot borrow `heap` as immutable because it is also borrowed as mutable
+  --> tests/thread_safety_ui/single_mutator_owner_alias.rs:11:21
+   |
+10 |     let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
+   |                                                                       --------- mutable borrow occurs here
+11 |     let _identity = heap.identity();
+   |                     ^^^^ immutable borrow occurs here
+12 |     let _captured_identity = world.heap_identity();
+   |                              ----- mutable borrow later used here

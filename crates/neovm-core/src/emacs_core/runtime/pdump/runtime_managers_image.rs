@@ -11,17 +11,19 @@ use super::DumpError;
 use super::object_value_codec::{Cursor, write_bool, write_u8, write_u32, write_u64, write_value};
 use super::types::{
     DumpAbbrev, DumpAbbrevManager, DumpAbbrevTable, DumpBookmark, DumpBookmarkManager,
-    DumpContextState, DumpCustomManager, DumpFontLockDefaults, DumpFontLockKeyword,
-    DumpFontRepertory, DumpFontSlant, DumpFontSpecEntry, DumpFontWidth, DumpFontsetData,
-    DumpFontsetRangeEntry, DumpFontsetRegistry, DumpInteractiveRegistry, DumpInteractiveSpec,
-    DumpKmacroManager, DumpLispString, DumpMajorMode, DumpMinorMode, DumpModeCustomGroup,
-    DumpModeCustomType, DumpModeCustomVariable, DumpModeRegistry, DumpRectangleState,
-    DumpRegisterContent, DumpRegisterManager, DumpStoredFontSpec, DumpSymId, DumpValue,
-    DumpVariableWatcherList,
+    DumpContextState, DumpCustomManager, DumpFontDefinitionMetadata, DumpFontLockDefaults,
+    DumpFontLockKeyword, DumpFontRepertory, DumpFontSlant, DumpFontSpecEntry, DumpFontWidth,
+    DumpFontsetData, DumpFontsetRangeEntry, DumpFontsetRegistry, DumpInteractiveRegistry,
+    DumpInteractiveSpec, DumpKmacroManager, DumpLispString, DumpMajorMode, DumpMinorMode,
+    DumpModeCustomGroup, DumpModeCustomType, DumpModeCustomVariable, DumpModeRegistry,
+    DumpRectangleState, DumpRegisterContent, DumpRegisterManager, DumpStoredFontSpec, DumpSymId,
+    DumpValue, DumpVariableWatcherList,
 };
 
 const RUNTIME_MANAGERS_MAGIC: [u8; 16] = *b"NEORUNTIME\0\0\0\0\0\0";
-const RUNTIME_MANAGERS_FORMAT_VERSION: u32 = 1;
+// Version 2 preserves font definition encoding independently of repertory.
+// Version 1 discarded encoding and cannot be reconstructed losslessly.
+const RUNTIME_MANAGERS_FORMAT_VERSION: u32 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -673,7 +675,14 @@ fn write_stored_font_spec(out: &mut Vec<u8>, spec: &DumpStoredFontSpec) -> Resul
     write_opt_u16(out, spec.weight);
     write_opt_font_slant(out, spec.slant);
     write_opt_font_width(out, spec.width);
-    write_opt_font_repertory(out, spec.repertory.as_ref())?;
+    match &spec.definition {
+        Some(definition) => {
+            write_bool(out, true);
+            write_sym(out, definition.encoding);
+            write_opt_font_repertory(out, definition.repertory.as_ref())?;
+        }
+        None => write_bool(out, false),
+    }
     Ok(())
 }
 
@@ -688,7 +697,14 @@ fn read_stored_font_spec(cursor: &mut Cursor<'_>) -> Result<DumpStoredFontSpec, 
         weight: read_opt_u16(cursor)?,
         slant: read_opt_font_slant(cursor)?,
         width: read_opt_font_width(cursor)?,
-        repertory: read_opt_font_repertory(cursor)?,
+        definition: if cursor.read_bool("font definition metadata present")? {
+            Some(DumpFontDefinitionMetadata {
+                encoding: read_sym(cursor)?,
+                repertory: read_opt_font_repertory(cursor)?,
+            })
+        } else {
+            None
+        },
     })
 }
 
@@ -789,8 +805,7 @@ fn write_font_width(out: &mut Vec<u8>, width: DumpFontWidth) {
 
 fn read_font_width(cursor: &mut Cursor<'_>) -> Result<DumpFontWidth, DumpError> {
     let tag = cursor.read_u8("font width tag")?;
-    DumpFontWidth::try_from(tag)
-        .map_err(|_| DumpError::ImageFormatError(format!("unknown font width tag {tag}")))
+    DumpFontWidth::try_from(tag).map_err(DumpError::from)
 }
 
 fn write_opt_font_slant(out: &mut Vec<u8>, slant: Option<DumpFontSlant>) {
@@ -817,8 +832,7 @@ fn write_font_slant(out: &mut Vec<u8>, slant: DumpFontSlant) {
 
 fn read_font_slant(cursor: &mut Cursor<'_>) -> Result<DumpFontSlant, DumpError> {
     let tag = cursor.read_u8("font slant tag")?;
-    DumpFontSlant::try_from(tag)
-        .map_err(|_| DumpError::ImageFormatError(format!("unknown font slant tag {tag}")))
+    DumpFontSlant::try_from(tag).map_err(DumpError::from)
 }
 
 fn write_abbrev_manager(out: &mut Vec<u8>, manager: &DumpAbbrevManager) -> Result<(), DumpError> {
@@ -1436,3 +1450,7 @@ fn write_i64(out: &mut Vec<u8>, value: i64) {
 #[cfg(test)]
 #[path = "runtime_managers_image/tests/runtime_managers_image_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_managers_image/tests/enum_decode_test.rs"]
+mod enum_decode_tests;

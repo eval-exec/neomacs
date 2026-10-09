@@ -198,42 +198,77 @@ fn hex_string(bytes: &[u8]) -> String {
 }
 
 /// Errors from dump/load operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum DumpError {
-    Io(std::io::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("not a valid pdump file (bad magic)")]
     BadMagic,
+    #[error("unsupported pdump version {0}")]
     UnsupportedVersion(u32),
+    #[error("pdump fingerprint mismatch (expected {expected}, found {found})")]
     FingerprintMismatch { expected: String, found: String },
+    #[error("pdump checksum mismatch (corrupted file)")]
     ChecksumMismatch,
+    #[error("pdump image format error: {0}")]
     ImageFormatError(String),
+    #[error("serialization error: {0}")]
     SerializationError(String),
+    #[error("deserialization error: {0}")]
     DeserializationError(String),
-}
-
-impl std::fmt::Display for DumpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DumpError::Io(e) => write!(f, "I/O error: {e}"),
-            DumpError::BadMagic => write!(f, "not a valid pdump file (bad magic)"),
-            DumpError::UnsupportedVersion(v) => write!(f, "unsupported pdump version {v}"),
-            DumpError::FingerprintMismatch { expected, found } => write!(
-                f,
-                "pdump fingerprint mismatch (expected {expected}, found {found})"
-            ),
-            DumpError::ChecksumMismatch => write!(f, "pdump checksum mismatch (corrupted file)"),
-            DumpError::ImageFormatError(s) => write!(f, "pdump image format error: {s}"),
-            DumpError::SerializationError(s) => write!(f, "serialization error: {s}"),
-            DumpError::DeserializationError(s) => write!(f, "deserialization error: {s}"),
-        }
-    }
-}
-
-impl std::error::Error for DumpError {}
-
-impl From<std::io::Error> for DumpError {
-    fn from(e: std::io::Error) -> Self {
-        DumpError::Io(e)
-    }
+    #[error("invalid symbol trapped-write code: {0}")]
+    InvalidSymbolTrappedWrite(
+        #[from] num_enum::TryFromPrimitiveError<crate::emacs_core::symbol::SymbolTrappedWrite>,
+    ),
+    #[error("invalid symbol interned code: {0}")]
+    InvalidSymbolInterned(
+        #[from] num_enum::TryFromPrimitiveError<crate::emacs_core::symbol::SymbolInterned>,
+    ),
+    #[error("obarray row range overflows: offset {offset}, count {count}")]
+    InvalidObarrayRowRange { offset: u64, count: u64 },
+    #[error("mapped heap section is shorter than one value word")]
+    MappedHeapTooShort,
+    #[error("invalid symbol redirect code: {0}")]
+    InvalidSymbolRedirect(
+        #[from] num_enum::TryFromPrimitiveError<crate::emacs_core::symbol::SymbolRedirect>,
+    ),
+    #[error("symbol redirect {found:?} does not match its value descriptor {expected:?}")]
+    SymbolRedirectMismatch {
+        expected: crate::emacs_core::symbol::SymbolRedirect,
+        found: crate::emacs_core::symbol::SymbolRedirect,
+    },
+    #[error("invalid obarray row redirect {0:?}: only plain and alias rows are permitted")]
+    InvalidObarrayRowRedirect(crate::emacs_core::symbol::SymbolRedirect),
+    #[error("invalid obarray declared-special byte {0}: expected 0 or 1")]
+    InvalidObarrayDeclaredSpecial(u8),
+    #[error("invalid dump section kind: {0}")]
+    InvalidSectionKind(#[from] num_enum::TryFromPrimitiveError<DumpSectionKind>),
+    #[error("invalid mapped vectorlike type: {0}")]
+    InvalidVecLikeType(#[from] num_enum::TryFromPrimitiveError<crate::tagged::header::VecLikeType>),
+    #[error("invalid hash table test: {0}")]
+    InvalidHashTableTest(#[from] num_enum::TryFromPrimitiveError<types::DumpHashTableTest>),
+    #[error("invalid hash table weakness: {0}")]
+    InvalidHashTableWeakness(#[from] num_enum::TryFromPrimitiveError<types::DumpHashTableWeakness>),
+    #[error("invalid buffer text backend kind: {0}")]
+    InvalidBufferTextBackendKind(
+        #[from] num_enum::TryFromPrimitiveError<types::DumpBufferTextBackendKind>,
+    ),
+    #[error("invalid autoload type: {0}")]
+    InvalidAutoloadType(#[from] num_enum::TryFromPrimitiveError<types::DumpAutoloadType>),
+    #[error("invalid coding eol type: {0}")]
+    InvalidEolType(#[from] num_enum::TryFromPrimitiveError<types::DumpEolType>),
+    #[error("invalid underline style: {0}")]
+    InvalidUnderlineStyle(#[from] num_enum::TryFromPrimitiveError<types::DumpUnderlineStyle>),
+    #[error("invalid box style: {0}")]
+    InvalidBoxStyle(#[from] num_enum::TryFromPrimitiveError<types::DumpBoxStyle>),
+    #[error("invalid localized forwarder: {0}")]
+    InvalidLocalizedForwarder(
+        #[from] num_enum::TryFromPrimitiveError<types::DumpLocalizedForwarder>,
+    ),
+    #[error("invalid font width: {0}")]
+    InvalidFontWidth(#[from] num_enum::TryFromPrimitiveError<types::DumpFontWidth>),
+    #[error("invalid font slant: {0}")]
+    InvalidFontSlant(#[from] num_enum::TryFromPrimitiveError<types::DumpFontSlant>),
 }
 
 fn empty_lisp_string() -> types::DumpLispString {
@@ -819,5 +854,5 @@ pub(crate) fn take_after_pdump_load_hook_pending(eval: &mut Context) -> bool {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/pdump_test.rs"]
 mod tests;

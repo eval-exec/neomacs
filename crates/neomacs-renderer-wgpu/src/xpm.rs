@@ -419,4 +419,5 @@ fn hex_byte(s: &str) -> u8 {
 }
 
 #[cfg(test)]
+#[path = "xpm/tests/xpm_test.rs"]
 mod tests;

@@ -22,6 +22,7 @@ mod resize;
 mod selection;
 mod short_terminal;
 mod sort_function;
+mod thin_font_metrics;
 mod truncation;
 
 use harness::candidate_rows;

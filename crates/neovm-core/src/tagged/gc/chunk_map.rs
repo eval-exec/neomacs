@@ -91,8 +91,15 @@ impl ChunkEntry {
     /// The granule's class.
     #[inline(always)]
     pub(crate) fn class(self) -> ChunkClass {
-        // Every stored entry was built from a `ChunkClass`.
-        ChunkClass::try_from((self.0 & Self::CLASS_MASK) as u8).unwrap_or(ChunkClass::None)
+        // INVARIANT: leaves start zeroed (ChunkClass::None), and set only
+        // publishes NONE or entries built by new from a ChunkClass. Whole-word
+        // Release/Acquire stores and loads preserve the code. An invalid code
+        // is an internal map inconsistency and must not look like empty space.
+        let code = (self.0 & Self::CLASS_MASK) as u8;
+        match ChunkClass::try_from(code) {
+            Ok(class) => class,
+            Err(_) => invalid_chunk_class(code),
+        }
     }
 
     /// The block's index in `cons_blocks`, or the page's in its arena.
@@ -100,6 +107,12 @@ impl ChunkEntry {
     pub(crate) fn index(self) -> usize {
         (self.0 >> Self::CLASS_BITS) as usize
     }
+}
+
+#[cold]
+#[inline(never)]
+fn invalid_chunk_class(code: u8) -> ! {
+    panic!("invalid chunk class code {code} in sealed map");
 }
 
 const GRANULE_SHIFT: usize = 16;
@@ -325,3 +338,62 @@ impl PageSnapshot {
         }
     }
 }
+
+/// Enabled-only fallback leaf sets. Chunk-map jobs use the original snapshot's
+/// class counts instead, so OFF jobs retain the five-set snapshot layout.
+#[derive(Default)]
+pub(super) struct LeafPageSnapshot {
+    marker: FxHashSet<usize>,
+    bignum: FxHashSet<usize>,
+    symbol_with_pos: FxHashSet<usize>,
+}
+
+impl LeafPageSnapshot {
+    pub(super) fn new(
+        marker: FxHashSet<usize>,
+        bignum: FxHashSet<usize>,
+        symbol_with_pos: FxHashSet<usize>,
+    ) -> Self {
+        Self {
+            marker,
+            bignum,
+            symbol_with_pos,
+        }
+    }
+
+    /// One chunk-map hit proves ownership and subtype before any header read.
+    #[inline(always)]
+    pub(super) fn leaf_class(&self, pages: &PageSnapshot, addr: usize) -> Option<ChunkClass> {
+        match pages {
+            PageSnapshot::ChunkMap { map, start_count } => {
+                let entry = map.get(addr);
+                let class = entry.class();
+                if matches!(
+                    class,
+                    ChunkClass::Marker | ChunkClass::Bignum | ChunkClass::SymbolWithPos
+                ) && entry.index() < start_count[class as usize]
+                {
+                    Some(class)
+                } else {
+                    None
+                }
+            }
+            PageSnapshot::BaseSets { .. } => {
+                let base = addr & !(OBJECT_PAGE_ALIGN - 1);
+                if self.marker.contains(&base) {
+                    Some(ChunkClass::Marker)
+                } else if self.bignum.contains(&base) {
+                    Some(ChunkClass::Bignum)
+                } else if self.symbol_with_pos.contains(&base) {
+                    Some(ChunkClass::SymbolWithPos)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/chunk_entry_decode_test.rs"]
+mod decode_tests;

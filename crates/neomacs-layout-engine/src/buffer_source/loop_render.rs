@@ -165,7 +165,7 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
         // the next display element on a new row (xdisp.c:11096). A completed
         // hard newline at ZV therefore stops before its empty-row prefix or
         // EOB overlay strings. Presentation keeps both tails.
-        if params.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd
+        if params.source_extent == crate::types::WindowSourceExtent::AccessibleEnd
             && self.progress.byte_idx() == text.len()
             && self.progress.charpos() == loop_context.accessible_end()
             && text.last() == Some(&b'\n')

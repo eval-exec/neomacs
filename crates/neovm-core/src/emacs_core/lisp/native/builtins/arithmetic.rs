@@ -1,13 +1,19 @@
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
-use malachite::base::num::arithmetic::traits::{Abs, DivRound, Pow};
+use crate::emacs_core::forward::LispIntFwd;
+use crate::emacs_core::intern::{SymId, intern};
+use crate::emacs_core::symbol::Obarray;
+use malachite::base::num::arithmetic::traits::{Abs, DivRound};
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::num::logic::traits::SignificantBits;
 use malachite::base::rounding_modes::RoundingMode;
 use malachite::integer::Integer;
 use malachite::natural::Natural;
+use std::cell::RefCell;
 use std::mem::MaybeUninit;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
+
+mod bounded_power;
 
 // ===========================================================================
 // Arithmetic
@@ -354,12 +360,142 @@ fn integer_is_negative(x: &Integer) -> bool {
     x.sign() == std::cmp::Ordering::Less
 }
 
+/// Owns the lifetime of a Context's arithmetic policy. Only the Context owns
+/// the strong token; thread-local activations cannot keep a retired policy
+/// alive, even when the Context moves to and is dropped on another thread.
+#[derive(Default)]
+pub(crate) struct IntegerWidthContext {
+    lifetime: Arc<()>,
+}
+
+struct IntegerWidthBinding {
+    forwarder: &'static LispIntFwd,
+    owner: Weak<()>,
+}
+
+thread_local! {
+    /// The slot remains live through `setq`, `let`, and `set-default`. Its
+    /// descriptor is static, but its policy belongs to a particular Context.
+    static INTEGER_WIDTH: RefCell<Option<IntegerWidthBinding>> = const { RefCell::new(None) };
+}
+
+impl IntegerWidthContext {
+    pub(crate) fn activate(&self, obarray: &Obarray) {
+        static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+        let symbol = *SYMBOL.get_or_init(|| intern("integer-width"));
+        let binding = obarray
+            .int_forwarder(symbol)
+            .map(|forwarder| IntegerWidthBinding {
+                forwarder,
+                owner: Arc::downgrade(&self.lifetime),
+            });
+        INTEGER_WIDTH.with(|slot| *slot.borrow_mut() = binding);
+    }
+
+    /// Clear this thread's activation without clearing a newer Context's.
+    /// Other threads observe retirement through their weak ownership token.
+    pub(crate) fn retire(&self) {
+        let _ = INTEGER_WIDTH.try_with(|slot| {
+            let mut binding = slot.borrow_mut();
+            if binding
+                .as_ref()
+                .is_some_and(|installed| installed.owner.ptr_eq(&Arc::downgrade(&self.lifetime)))
+            {
+                *binding = None;
+            }
+        });
+    }
+}
+
+/// Separate a finite result limit from GNU's effectively unlimited widths.
+/// Negative intmax_t values compare as huge unsigned widths; bignum widths
+/// exceed every bit count permitted by the limb capacity guard. Neither
+/// requires dereferencing a Lisp bignum, even during cross-thread teardown.
+enum IntegerWidthLimit {
+    Bounded(u64),
+    Unlimited,
+}
+
+impl IntegerWidthLimit {
+    const DEFAULT: Self = Self::Bounded(1 << 16);
+
+    fn from_forwarder(forwarder: &LispIntFwd) -> Self {
+        match forwarder.get().as_fixnum() {
+            Some(width) if width >= 0 => Self::Bounded(width as u64),
+            Some(_) | None => Self::Unlimited,
+        }
+    }
+
+    fn below(self, bits: u64) -> bool {
+        match self {
+            Self::Bounded(width) => width < bits,
+            Self::Unlimited => false,
+        }
+    }
+}
+
+/// The bits a bignum may always have: GNU treats `integer-width` as at least
+/// twice the machine integer width, so that `timefns.c` can use bignums for
+/// double-precision timestamps (`src/bignum.c:94-99`).
+const BIGNUM_BITS_FLOOR: u64 = 2 * 64;
+
+/// GNU `make_bignum_bits`'s test (`src/bignum.c:99`): a bignum of `bits`
+/// bits is too wide to return.
+#[inline]
+fn bignum_bits_overflow(bits: u64) -> bool {
+    bits > BIGNUM_BITS_FLOOR && integer_width_below(bits)
+}
+
+#[inline(never)]
+fn integer_width_below(bits: u64) -> bool {
+    INTEGER_WIDTH.with(|slot| {
+        let binding = slot.borrow();
+        let limit = match binding.as_ref() {
+            Some(installed) if installed.owner.upgrade().is_some() => {
+                IntegerWidthLimit::from_forwarder(installed.forwarder)
+            }
+            // No active Context, or its owner was dropped on another thread.
+            _ => IntegerWidthLimit::DEFAULT,
+        };
+        limit.below(bits)
+    })
+}
+
+#[cold]
+fn overflow_error() -> Flow {
+    signal(LispCondition::OverflowError, vec![])
+}
+
+/// GNU `make_integer_mpz` (`src/bignum.c:146`): a fixnum when `value` fits,
+/// otherwise a bignum, unless it is wider than `integer-width`, which
+/// signals `overflow-error`. The constructor for every arithmetic result
+/// that is not a kernel's (those use [`integer_value`]).
+fn make_integer_checked(value: Integer) -> EvalResult {
+    if bignum_bits_overflow(value.significant_bits()) {
+        return Err(overflow_error());
+    }
+    Ok(Value::make_integer(value))
+}
+
 /// GNU `make_integer_mpz` (`src/bignum.c:146`) for a kernel result: a
 /// fixnum when it fits, otherwise a bignum written straight into its arena
-/// slot. THE constructor for kernel results (the integer-width check of GNU
-/// `make_bignum_bits` would live here).
+/// slot. THE constructor for kernel results. `None` when the result is
+/// wider than `integer-width` (GNU's `make_bignum_bits` signals
+/// `overflow-error`; the caller signals it, or falls back to the subr that
+/// does).
 #[inline(always)]
-fn integer_value(negative: bool, magnitude: Natural) -> Value {
+fn integer_value(negative: bool, magnitude: Natural) -> Option<Value> {
+    // Two limbs are at most the 128-bit floor.
+    if magnitude.as_limbs_asc().len() > 2 && bignum_bits_overflow(magnitude.significant_bits()) {
+        return None;
+    }
+    Some(integer_value_within_floor(negative, magnitude))
+}
+
+/// [`integer_value`] for a result of at most 128 bits, which no
+/// `integer-width` refuses.
+#[inline(always)]
+fn integer_value_within_floor(negative: bool, magnitude: Natural) -> Value {
     let limbs = magnitude.as_limbs_asc();
     if limbs.len() <= 1 {
         let m = limbs.first().copied().unwrap_or(0);
@@ -383,7 +519,7 @@ fn integer_value_i128(r: i128) -> Value {
     } else {
         Natural::from_owned_limbs_asc(vec![m as u64, (m >> 64) as u64])
     };
-    integer_value(negative, magnitude)
+    integer_value_within_floor(negative, magnitude)
 }
 
 /// `|a| <=> |b|` for significant (normalized) limb slices.
@@ -399,12 +535,17 @@ fn limbs_cmp(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
 /// a one-limb slice (empty for 0), so no `Integer` temporary is built.
 /// Inline into [`int_add_value`], the out-of-line unit for `+` and `-`.
 #[inline(always)]
-fn signed_add_limbs_value(a_negative: bool, a: &[u64], b_negative: bool, b: &[u64]) -> Value {
+fn signed_add_limbs_value(
+    a_negative: bool,
+    a: &[u64],
+    b_negative: bool,
+    b: &[u64],
+) -> Option<Value> {
     if a_negative == b_negative {
         return integer_value(a_negative, natural_add_limbs(a, b));
     }
     match limbs_cmp(a, b) {
-        std::cmp::Ordering::Equal => Value::fixnum(0),
+        std::cmp::Ordering::Equal => Some(Value::fixnum(0)),
         std::cmp::Ordering::Greater => integer_value(a_negative, natural_sub_limbs(a, b)),
         std::cmp::Ordering::Less => integer_value(b_negative, natural_sub_limbs(b, a)),
     }
@@ -413,10 +554,10 @@ fn signed_add_limbs_value(a_negative: bool, a: &[u64], b_negative: bool, b: &[u6
 /// `x * n` for a bignum `x` and a fixnum-range `n`: one kernel pass into
 /// one limb vector, then the slot (GNU `mpz_mul_si` into `mpz[0]`).
 #[inline(always)]
-fn bignum_mul_i64_value_inline(x: &Integer, n: i64) -> Value {
+fn bignum_mul_i64_value_inline(x: &Integer, n: i64) -> Option<Value> {
     let xs = x.unsigned_abs_ref().as_limbs_asc();
     if n == 0 || xs.is_empty() {
-        return Value::fixnum(0);
+        return Some(Value::fixnum(0));
     }
     let negative = integer_is_negative(x) != (n < 0);
     let m = n.unsigned_abs();
@@ -463,12 +604,13 @@ impl IntOperand<'_> {
 /// `x + y`, or `x - y` when `negate_y`, for two integer operands: GNU
 /// `arith_driver`'s fixnum step, then `bignum_arith_driver`'s `mpz_add` /
 /// `mpz_sub` into a fresh result. Never returns an operand object (a
-/// bignum result is always fresh, as in GNU). One out-of-line unit.
+/// bignum result is always fresh, as in GNU). `None` when the result is
+/// wider than `integer-width`. One out-of-line unit.
 #[inline(never)]
-pub(crate) fn int_add_value(x: IntOperand<'_>, y: IntOperand<'_>, negate_y: bool) -> Value {
+pub(crate) fn int_add_value(x: IntOperand<'_>, y: IntOperand<'_>, negate_y: bool) -> Option<Value> {
     if let (IntOperand::Fixnum(a), IntOperand::Fixnum(b)) = (x, y) {
         // Fixnums are 62-bit, so this cannot overflow an i64.
-        return Value::make_int(if negate_y { a - b } else { a + b });
+        return Some(Value::make_int(if negate_y { a - b } else { a + b }));
     }
     let (mut xs, mut ys) = ([0u64; 1], [0u64; 1]);
     let (x_negative, x_limbs) = x.sign_limbs(&mut xs);
@@ -479,12 +621,13 @@ pub(crate) fn int_add_value(x: IntOperand<'_>, y: IntOperand<'_>, negate_y: bool
 /// `x * y` for two integer operands: the fixnum product in `i128` (exact),
 /// a bignum by a fixnum through the one-limb kernel, and two bignums
 /// through malachite (Karatsuba/Toom and up). Never returns an operand
-/// object. One out-of-line unit.
+/// object. `None` when the result is wider than `integer-width`. One
+/// out-of-line unit.
 #[inline(never)]
-pub(crate) fn int_mul_value(x: IntOperand<'_>, y: IntOperand<'_>) -> Value {
+pub(crate) fn int_mul_value(x: IntOperand<'_>, y: IntOperand<'_>) -> Option<Value> {
     match (x, y) {
         (IntOperand::Fixnum(a), IntOperand::Fixnum(b)) => {
-            integer_value_i128(i128::from(a) * i128::from(b))
+            Some(integer_value_i128(i128::from(a) * i128::from(b)))
         }
         (IntOperand::Bignum(p), IntOperand::Fixnum(n))
         | (IntOperand::Fixnum(n), IntOperand::Bignum(p)) => bignum_mul_i64_value_inline(p, n),
@@ -541,20 +684,21 @@ pub(crate) enum IntegerUnaryOp {
 /// Both operands integers (fixnum or bignum): GNU `arith_driver` /
 /// `bignum_arith_driver` (data.c:3251/3200) and `arithcompare`
 /// (data.c:2718) answered directly, the way GNU's arithmetic opcodes call
-/// `Fplus (2, &TOP)` without a funcall. `None` for a marker, a float or a
-/// non-number: the caller takes the full builtin, which coerces or signals
-/// exactly as GNU. Never signals, never runs Lisp, never reaches a safe
-/// point (allocation does not collect), and never returns an operand
-/// object (results are fresh, as in GNU).
+/// `Fplus (2, &TOP)` without a funcall. `None` for a marker, a float, a
+/// non-number or a result wider than `integer-width`: the caller takes the
+/// full builtin, which coerces or signals exactly as GNU. Never signals,
+/// never runs Lisp, never reaches a safe point (allocation does not
+/// collect), and never returns an operand object (results are fresh, as in
+/// GNU).
 #[inline]
 pub(crate) fn integer_binary_fast(op: IntegerBinaryOp, a: Value, b: Value) -> Option<Value> {
     let (x, y) = (IntOperand::of(&a)?, IntOperand::of(&b)?);
-    Some(match op {
-        IntegerBinaryOp::Compare(c) => Value::bool_val(cmp_passes(Some(int_cmp(x, y)), c)),
+    match op {
+        IntegerBinaryOp::Compare(c) => Some(Value::bool_val(cmp_passes(Some(int_cmp(x, y)), c))),
         IntegerBinaryOp::Add => int_add_value(x, y, false),
         IntegerBinaryOp::Sub => int_add_value(x, y, true),
         IntegerBinaryOp::Mul => int_mul_value(x, y),
-    })
+    }
 }
 
 /// [`integer_binary_fast`] for `1+` and `1-` (GNU `Fadd1`/`Fsub1` on an
@@ -562,17 +706,14 @@ pub(crate) fn integer_binary_fast(op: IntegerBinaryOp, a: Value, b: Value) -> Op
 #[inline]
 pub(crate) fn integer_unary_fast(op: IntegerUnaryOp, a: Value) -> Option<Value> {
     let x = IntOperand::of(&a)?;
-    Some(int_add_value(
-        x,
-        IntOperand::Fixnum(1),
-        op == IntegerUnaryOp::Sub1,
-    ))
+    int_add_value(x, IntOperand::Fixnum(1), op == IntegerUnaryOp::Sub1)
 }
 
 /// `-x` for a bignum: GNU `mpz_neg` into a fresh result, which demotes when
-/// `x` is `-most-negative-fixnum`.
+/// `x` is `-most-negative-fixnum`. `None` when `x` is wider than
+/// `integer-width`.
 #[inline(never)]
-fn bignum_negate_value(x: &Integer) -> Value {
+fn bignum_negate_value(x: &Integer) -> Option<Value> {
     integer_value(!integer_is_negative(x), x.unsigned_abs_ref().clone())
 }
 
@@ -683,7 +824,7 @@ pub(crate) fn builtin_add_slice(
             if let [a, b] = args
                 && let (Some(x), Some(y)) = (IntOperand::of(a), IntOperand::of(b))
             {
-                return Ok(int_add_value(x, y, false));
+                return int_add_value(x, y, false).ok_or_else(overflow_error);
             }
         }
     }
@@ -803,7 +944,7 @@ fn continue_bignum_add(
             _ => acc += integer_from_value(eval, a)?,
         }
     }
-    Ok(Value::make_integer(acc))
+    make_integer_checked(acc)
 }
 
 /// Eval-aware `-` that reads live marker positions from buffers.
@@ -828,7 +969,7 @@ pub(crate) fn builtin_sub_slice(
         && !(a.is_fixnum() && b.is_fixnum())
         && let (Some(x), Some(y)) = (IntOperand::of(a), IntOperand::of(b))
     {
-        return Ok(int_add_value(x, y, true));
+        return int_add_value(x, y, true).ok_or_else(overflow_error);
     }
 
     let first = &args[0];
@@ -932,7 +1073,7 @@ fn continue_bignum_sub(
             _ => acc -= integer_from_value(eval, a)?,
         }
     }
-    Ok(Value::make_integer(acc))
+    make_integer_checked(acc)
 }
 
 /// Negate a single value, mirroring GNU `Fminus` 1-arg branch
@@ -943,7 +1084,7 @@ fn negate_value(eval: &super::super::eval::Context, value: &Value) -> EvalResult
         return Ok(Value::make_float(-value.xfloat()));
     }
     if let Some(big) = value.as_bignum() {
-        return Ok(bignum_negate_value(big));
+        return bignum_negate_value(big).ok_or_else(overflow_error);
     }
     let n = match try_i64_from_value(eval, value)? {
         Some(n) => n,
@@ -963,13 +1104,24 @@ fn negate_value(eval: &super::super::eval::Context, value: &Value) -> EvalResult
 /// stack dispatcher has to materialize an owned vector for a `Many` subr. On
 /// `nbody` that was a malloc and a free for a million multiplications.
 pub(crate) fn builtin_mul(args: &[Value]) -> EvalResult {
+    // GNU returns a sole argument itself (data.c:3347-3348), as `+` does: no
+    // new number, so no `integer-width` check.
+    if let [arg] = args {
+        if arg.is_fixnum() || arg.is_float() || arg.is_bignum() {
+            return Ok(*arg);
+        }
+        if super::marker::is_marker(arg) {
+            return Ok(Value::make_int(super::marker::marker_position_as_int(arg)?));
+        }
+        return Err(wrong_number_or_marker(arg));
+    }
     // Two integers, not both fixnums (the loop below inlines those): the
     // result goes straight into its slot.
     if let [a, b] = args
         && !(a.is_fixnum() && b.is_fixnum())
         && let (Some(x), Some(y)) = (IntOperand::of(a), IntOperand::of(b))
     {
-        return Ok(int_mul_value(x, y));
+        return int_mul_value(x, y).ok_or_else(overflow_error);
     }
     let mut prod: i64 = 1;
     for (i, a) in args.iter().enumerate() {
@@ -1053,7 +1205,7 @@ fn continue_bignum_mul(rest: &[Value], mut acc: Integer) -> EvalResult {
             _ => return Err(wrong_number_or_marker(a)),
         }
     }
-    Ok(Value::make_integer(acc))
+    make_integer_checked(acc)
 }
 /// `/` with bignum support. Mirrors GNU `Fquo` (`src/data.c:3315`).
 ///
@@ -1155,7 +1307,7 @@ fn continue_bignum_div(rest: &[Value], mut acc: Integer) -> EvalResult {
         }
         acc /= Integer::from(d);
     }
-    Ok(Value::make_integer(acc))
+    make_integer_checked(acc)
 }
 
 /// `(% X Y)` — integer remainder, mirrors GNU `Frem` (`src/data.c:3402`).
@@ -1249,7 +1401,7 @@ fn integer_remainder(num: &Value, den: &Value, modulo: bool) -> EvalResult {
                 r += &den_big;
             }
         }
-        return Ok(Value::make_integer(r));
+        return make_integer_checked(r);
     }
     // GNU `Fmod` (data.c:3412) does CHECK_NUMBER_COERCE_MARKER on both
     // operands first, so non-numeric values must signal
@@ -1299,11 +1451,12 @@ fn add1_value(arg: Value) -> EvalResult {
             None => Ok(Value::make_integer(Integer::from(n) + Integer::from(1))),
         },
         ValueKind::Float => Ok(Value::make_float(arg.xfloat() + 1.0)),
-        ValueKind::Veclike(VecLikeType::Bignum) => Ok(int_add_value(
+        ValueKind::Veclike(VecLikeType::Bignum) => int_add_value(
             IntOperand::Bignum(arg.as_bignum().unwrap()),
             IntOperand::Fixnum(1),
             false,
-        )),
+        )
+        .ok_or_else(overflow_error),
         _ if arg.is_marker() => {
             let n = super::marker::marker_position_as_int(&arg)?;
             match n.checked_add(1) {
@@ -1331,11 +1484,12 @@ fn sub1_value(arg: Value) -> EvalResult {
             None => Ok(Value::make_integer(Integer::from(n) - Integer::from(1))),
         },
         ValueKind::Float => Ok(Value::make_float(arg.xfloat() - 1.0)),
-        ValueKind::Veclike(VecLikeType::Bignum) => Ok(int_add_value(
+        ValueKind::Veclike(VecLikeType::Bignum) => int_add_value(
             IntOperand::Bignum(arg.as_bignum().unwrap()),
             IntOperand::Fixnum(1),
             true,
-        )),
+        )
+        .ok_or_else(overflow_error),
         _ if arg.is_marker() => {
             let n = super::marker::marker_position_as_int(&arg)?;
             match n.checked_sub(1) {
@@ -1406,9 +1560,12 @@ pub(crate) fn builtin_abs(args: Vec<Value>) -> EvalResult {
             None => Ok(Value::make_integer(Integer::from(n).abs())),
         },
         ValueKind::Float => Ok(Value::make_float(args[0].xfloat().abs())),
-        ValueKind::Veclike(VecLikeType::Bignum) => Ok(Value::make_integer(
-            args[0].as_bignum().unwrap().clone().abs(),
-        )),
+        // GNU returns a non-negative bignum itself, and negates a negative
+        // one into a new, width-checked bignum.
+        ValueKind::Veclike(VecLikeType::Bignum) => match args[0].as_bignum() {
+            Some(big) if *big < 0 => make_integer_checked(-big.clone()),
+            _ => Ok(args[0]),
+        },
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("numberp"), args[0]],
@@ -1555,14 +1712,14 @@ fn continue_bignum_logop(rest: &[Value], mut acc: Integer, op: BignumLogop) -> E
         }
         return Err(wrong_number_or_marker(a));
     }
-    Ok(Value::make_integer(acc))
+    make_integer_checked(acc)
 }
 
 /// `(lognot NUMBER)` — mirrors GNU `Flognot` (`src/data.c:3648`).
 pub(crate) fn builtin_lognot(args: Vec<Value>) -> EvalResult {
     expect_args("lognot", &args, 1)?;
     if let Some(big) = args[0].as_bignum() {
-        return Ok(Value::make_integer(!big.clone()));
+        return make_integer_checked(!big.clone());
     }
     let n = expect_int(&args[0])?;
     Ok(Value::fixnum(!n))
@@ -1579,6 +1736,8 @@ const GMP_NLIMBS_MAX: u64 = i32::MAX as u64;
 
 /// GNU `mul_2exp_extra_limbs` fudge factor (`src/bignum.c:371`).
 const MUL_2EXP_EXTRA_LIMBS: u64 = 1;
+
+/// GNU `pow_ui_extra_limbs` fudge factor (`src/bignum.c:385`).
 
 /// Number of 64-bit GMP limbs needed to represent |value|, matching
 /// GNU's `emacs_mpz_size` / `mpz_size` (0 for a zero magnitude).
@@ -1674,8 +1833,9 @@ pub(crate) fn builtin_ash_slice(args: &[Value]) -> EvalResult {
         }
     };
 
+    // GNU returns VALUE itself (data.c:3587-3588): no new number to check.
     if count_i64 == 0 {
-        return Ok(Value::make_integer(value_big));
+        return Ok(*value);
     }
     let result = if count_i64 > 0 {
         // Left shift. Mirror GNU `emacs_mpz_mul_2exp` (src/bignum.c:367):
@@ -1687,6 +1847,12 @@ pub(crate) fn builtin_ash_slice(args: &[Value]) -> EvalResult {
         // `overflow-error`, not return 0.
         if mul_2exp_would_overflow(&value_big, count_i64) {
             return Err(signal(LispCondition::OverflowError, vec![]));
+        }
+        // A nonzero VALUE shifted left by COUNT is exactly COUNT bits wider,
+        // so GNU's `make_bignum_bits` check on the result is decided before
+        // the shift allocates it.
+        if value_big != 0 && bignum_bits_overflow(value_big.significant_bits() + count_i64 as u64) {
+            return Err(overflow_error());
         }
         // The overflow check guarantees `count_i64` fits the bignum size
         // limit, hence well within `u32`, so this conversion is exact.
@@ -1701,7 +1867,7 @@ pub(crate) fn builtin_ash_slice(args: &[Value]) -> EvalResult {
         // Integer >> u32 does mpz_fdiv_q_2exp (floor division).
         value_big >> bits
     };
-    Ok(Value::make_integer(result))
+    make_integer_checked(result)
 }
 
 // ===========================================================================
@@ -2095,9 +2261,9 @@ fn rounding_driver(n: Value, d: Value, rounding: LispRounding) -> EvalResult {
             d.unsigned_abs_ref().as_limbs_asc(),
         )
     {
-        return Ok(integer_value(negative, Natural::from(q)));
+        return Ok(integer_value_within_floor(negative, Natural::from(q)));
     }
-    Ok(Value::make_integer(a.div_round(d, mode).0))
+    make_integer_checked(a.div_round(d, mode).0)
 }
 
 /// GNU `double_integer_scale` (`src/floatfns.c`) for IEEE doubles: the
@@ -2175,7 +2341,7 @@ fn rounding_float_exact(n: &Value, d: &Value, mode: RoundingMode) -> EvalResult 
     let scale = nscale.max(dscale);
     let n_int = rescale(n, nscale)? << ((scale - nscale) as u64);
     let d_int = rescale(d, dscale)? << ((scale - dscale) as u64);
-    Ok(Value::make_integer(n_int.div_round(d_int, mode).0))
+    make_integer_checked(n_int.div_round(d_int, mode).0)
 }
 
 /// Convert a finite f64 into a Lisp integer (fixnum or bignum). NaN
@@ -2189,7 +2355,7 @@ fn float_to_lisp_integer(value: f64) -> EvalResult {
     // need a bignum. But fixnum range is even tighter (62-bit), so always
     // funnel through make_integer. Truncate toward zero (Down).
     let big = Integer::rounding_from(value, RoundingMode::Down).0;
-    Ok(Value::make_integer(big))
+    make_integer_checked(big)
 }
 
 /// `(truncate NUMBER &optional DIVISOR)` — GNU `Ftruncate`
@@ -2371,8 +2537,25 @@ pub(crate) fn builtin_expt(args: Vec<Value>) -> EvalResult {
         _ => unreachable!("non-int exponent handled above"),
     };
 
+    // GNU expt_integer always computes through mpz; a power that fits i64 is
+    // the same exact integer without a bignum or the limb-limit check.
+    if let Some(base) = base_val.as_fixnum()
+        && let Ok(exp) = u32::try_from(exp_u64)
+        && let Some(power) = base.checked_pow(exp)
+    {
+        return Ok(Value::make_int(power));
+    }
+
     let base_big = bignum_or_int_to_integer(base_val)?;
-    Ok(Value::make_integer(base_big.pow(exp_u64)))
+    let power = bounded_power::BoundedPower::try_from((base_big, exp_u64)).map_err(
+        |bounded_power::PowerError::Overflow| signal(LispCondition::OverflowError, vec![]),
+    )?;
+    // The limb witness also bounds this lower-width calculation. Keep GNU's
+    // integer-width admission before computing a potentially enormous result.
+    if bignum_bits_overflow(power.minimum_bits()) {
+        return Err(overflow_error());
+    }
+    make_integer_checked(Integer::from(power))
 }
 
 pub(crate) fn builtin_random(args: Vec<Value>) -> EvalResult {
@@ -2395,7 +2578,9 @@ pub(crate) fn builtin_random(args: Vec<Value>) -> EvalResult {
         }
     }
 
-    Ok(Value::fixnum(emacs_get_random()))
+    Ok(Value::from_fixnum(
+        crate::tagged::value::Fixnum::from_payload_bits(emacs_get_random() as u64),
+    ))
 }
 
 fn emacs_random_lock() -> &'static Mutex<()> {
@@ -2525,33 +2710,37 @@ pub(crate) fn builtin_isnan(args: Vec<Value>) -> EvalResult {
 }
 
 #[cfg(test)]
-#[path = "tests/arithmetic_minmax_compare.rs"]
+#[path = "tests/arithmetic_minmax_compare_test.rs"]
 mod arithmetic_minmax_compare_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_rounding_nil_divisor.rs"]
+#[path = "tests/arithmetic_rounding_nil_divisor_test.rs"]
 mod arithmetic_rounding_nil_divisor_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_ash_overflow.rs"]
+#[path = "tests/arithmetic_ash_overflow_test.rs"]
 mod arithmetic_ash_overflow_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_bignum_borrowed.rs"]
+#[path = "tests/arithmetic_bignum_borrowed_test.rs"]
 mod arithmetic_bignum_borrowed_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_rounding_float_exact.rs"]
+#[path = "tests/arithmetic_rounding_float_exact_test.rs"]
 mod arithmetic_rounding_float_exact_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_limb_kernels.rs"]
+#[path = "tests/arithmetic_limb_kernels_test.rs"]
 mod arithmetic_limb_kernels_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_integer_value.rs"]
+#[path = "tests/arithmetic_integer_value_test.rs"]
 mod arithmetic_integer_value_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_rounding_capture.rs"]
+#[path = "tests/arithmetic_rounding_capture_test.rs"]
 mod arithmetic_rounding_capture_test;
+
+#[cfg(test)]
+#[path = "tests/arithmetic_integer_width_test.rs"]
+mod arithmetic_integer_width_test;

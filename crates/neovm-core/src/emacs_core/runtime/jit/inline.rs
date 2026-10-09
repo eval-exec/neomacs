@@ -57,11 +57,11 @@ pub(crate) use v2::{
 };
 
 #[cfg(test)]
-#[path = "tests/inline_named_front.rs"]
+#[path = "tests/inline_named_front_test.rs"]
 mod named_front_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_named_runtime.rs"]
+#[path = "tests/inline_named_runtime_test.rs"]
 mod named_runtime_tests;
 
 /// Ops of a callee body, at most, for one splice.
@@ -680,19 +680,27 @@ pub(crate) fn active_fused() -> Option<std::rc::Rc<FusedBody>> {
 }
 
 /// RAII scope publishing `fused` for the compile inside it.
-pub(crate) struct FusedScope(Option<std::rc::Rc<FusedBody>>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct FusedScope {
+    _scope: crate::tls_scope::TlsScope<
+        Option<std::rc::Rc<FusedBody>>,
+        std::cell::RefCell<Option<std::rc::Rc<FusedBody>>>,
+    >,
+}
+static_assertions::assert_not_impl_any!(FusedScope: Send, Sync);
 
 impl FusedScope {
     pub(crate) fn enter(fused: std::rc::Rc<FusedBody>) -> Self {
-        Self(ACTIVE_FUSED.with(|f| f.borrow_mut().replace(fused)))
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&ACTIVE_FUSED, Some(fused)),
+        }
     }
 }
 
 impl Drop for FusedScope {
     fn drop(&mut self) {
-        let prev = self.0.take();
-        ACTIVE_FUSED.with(|f| *f.borrow_mut() = prev);
-        super::compile::lowering::set_active_region(None);
+        super::compile::lowering::clear_active_region_on_scope_drop();
     }
 }
 
@@ -726,21 +734,21 @@ pub(crate) fn force_inline_for_test(on: Option<bool>) {
 }
 
 #[cfg(test)]
-#[path = "tests/inline_v2.rs"]
+#[path = "tests/inline_v2_test.rs"]
 mod v2_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_v2_closure.rs"]
+#[path = "tests/inline_v2_closure_test.rs"]
 mod v2_closure_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_v2_hof.rs"]
+#[path = "tests/inline_v2_hof_test.rs"]
 mod v2_hof_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_closure.rs"]
+#[path = "tests/inline_closure_test.rs"]
 mod closure_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_entry_cache.rs"]
+#[path = "tests/inline_entry_cache_test.rs"]
 mod entry_cache_tests;

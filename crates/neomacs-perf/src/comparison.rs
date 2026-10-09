@@ -994,4 +994,5 @@ fn median_absolute_deviation(values: &[f64], center: f64) -> f64 {
 }
 
 #[cfg(test)]
+#[path = "comparison/tests/comparison_test.rs"]
 mod tests;

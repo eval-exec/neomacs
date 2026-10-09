@@ -22,3 +22,7 @@ tracing.workspace = true
 unused_imports = "allow"
 unused_variables = "allow"
 dead_code = "allow"
+
+[dev-dependencies]
+rustls.workspace = true
+rustls-pki-types.workspace = true

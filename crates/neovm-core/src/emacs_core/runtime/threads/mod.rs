@@ -67,12 +67,11 @@ fn sleep_duration_from_blocker(value: Value) -> Option<Duration> {
     if items.len() != 2 || !items[0].is_symbol_named(SLEEP_BLOCKER_MARKER) {
         return None;
     }
-    let seconds = items[1].xfloat();
-    seconds
-        .is_finite()
-        .then_some(seconds)
-        .filter(|seconds| *seconds > 0.0)
-        .map(Duration::from_secs_f64)
+    match crate::emacs_core::timer::WaitTimeout::from(items[1].xfloat()) {
+        crate::emacs_core::timer::WaitTimeout::Poll => None,
+        crate::emacs_core::timer::WaitTimeout::For(duration) => Some(duration),
+        crate::emacs_core::timer::WaitTimeout::Forever => Some(Duration::MAX),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -677,6 +676,9 @@ impl Default for ThreadManager {
 impl GcTrace for ThreadManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
         for thread in self.threads.values() {
+            if let Some(name) = &thread.name {
+                name.trace_roots(roots);
+            }
             roots.push(thread.function);
             roots.push(thread.result);
             roots.push(thread.buffer_disposition);
@@ -693,6 +695,20 @@ impl GcTrace for ThreadManager {
         }
         for value in self.thread_handles.values() {
             roots.push(*value);
+        }
+        // These Rust-owned names preserve Lisp text-property plists, just as
+        // GNU's scanned mutex/condition pseudovector name fields do.
+        for name in self
+            .mutexes
+            .values()
+            .filter_map(|mutex| mutex.name.as_ref())
+            .chain(
+                self.condition_vars
+                    .values()
+                    .filter_map(|condition| condition.name.as_ref()),
+            )
+        {
+            name.trace_roots(roots);
         }
         for value in self.mutex_handles.values() {
             roots.push(*value);
@@ -1573,5 +1589,5 @@ pub(crate) fn sf_with_mutex(eval: &mut super::eval::Context, tail: &[Value]) -> 
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/threads_test.rs"]
 mod tests;

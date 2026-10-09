@@ -768,9 +768,9 @@ fn source_budget_retry_restores_remapped_background_frame_artifacts() {
 }
 
 #[cfg(test)]
-#[path = "edit_sync_source_budget_consumers.rs"]
+#[path = "edit_sync_source_budget_consumers_test.rs"]
 mod source_budget_consumers;
 
 #[cfg(test)]
-#[path = "edit_sync_source_budget_replay_retry.rs"]
+#[path = "edit_sync_source_budget_replay_retry_test.rs"]
 mod source_budget_replay_retry;

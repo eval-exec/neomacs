@@ -140,6 +140,9 @@ mod float_nan_misc_edge_semantics;
 mod float_operations_comprehensive;
 mod following_char_operations;
 mod font_otf_availability_semantics;
+#[cfg(test)]
+#[path = "fontset_repertory_test.rs"]
+mod fontset_repertory;
 mod format;
 mod forward;
 mod frame;
@@ -423,3 +426,11 @@ mod wrapper_hook_semantics;
 mod xml_semantics;
 mod yank_properties_semantics;
 mod zlib_decompress_region_semantics;
+
+#[cfg(test)]
+#[path = "tests/gd_e_overlay_seams.rs"]
+mod gd_e_overlay_seams;
+
+#[cfg(test)]
+#[path = "tests/gd_e_sort.rs"]
+mod gd_e_sort;

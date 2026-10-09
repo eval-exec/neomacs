@@ -1,0 +1,177 @@
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<neovm_core::Context>`, but its trait bounds were not satisfied
+  --> tests/thread_safety_ui/plain_flow/context_send.rs:11:32
+   |
+ 4 |   struct ThreadTransfer<T>(PhantomData<T>);
+   |   ------------------------ associated function or constant `transfer` not found for this struct
+...
+11 |       ThreadTransfer::<Context>::transfer();
+   |                                  ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<neovm_core::Context>` due to unsatisfied trait bounds
+   |
+  ::: $RUST/core/src/ops/function.rs
+   |
+   |   pub const trait Fn<Args: Tuple>: [const] FnMut<Args> {
+   |   ---------------------------------------------------- doesn't satisfy `_: Send`
+...
+   |   pub const trait FnMut<Args: Tuple>: FnOnce<Args> {
+   |   ------------------------------------------------ doesn't satisfy `_: Send`
+   |
+  ::: src/emacs_core/runtime/eval/mod.rs
+   |
+   |   pub struct Context {
+   |   ------------------ doesn't satisfy `neovm_core::Context: Send`
+   |
+  ::: $RUST/core/src/cell.rs
+   |
+   |   pub struct RefCell<T: ?Sized> {
+   |   ----------------------------- doesn't satisfy `RefCell<ccl::CclRegistry>: Sync`, `RefCell<charset::CharsetRegistry>: Sync`, `RefCell<xfaces::FaceAttrState>: Sync` or `_: Sync`
+   |
+  ::: $RUST/core/src/ptr/non_null.rs
+   |
+   |   pub struct NonNull<T: PointeeSized> {
+   |   ----------------------------------- doesn't satisfy `NonNull<ByteCodeFunction>: Send`, `NonNull<LispBufferLocalValue>: Send` or `NonNull<[Op]>: Send`
+   |
+  ::: src/emacs_core/display/display_host/mod.rs
+   |
+   |   pub trait DisplayHost {
+   |   --------------------- doesn't satisfy `(dyn DisplayHost + 'static): Send`
+   |
+  ::: src/emacs_core/display/terminal/pure.rs
+   |
+   |   pub trait TtyFrameHostFactory {
+   |   ----------------------------- doesn't satisfy `(dyn TtyFrameHostFactory + 'static): Send`
+   |
+  ::: $RUST/alloc/src/rc.rs
+   |
+   | / pub struct Rc<
+   | |     T: ?Sized,
+   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+   | | > {
+   | |_- doesn't satisfy 8 bounds
+...
+   | / pub struct Weak<
+   | |     T: ?Sized,
+   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+   | | > {
+   | |_- doesn't satisfy `std::rc::Weak<[TaggedValue]>: Send`
+   |
+   = note: the following trait bounds were not satisfied:
+           `*mut TaggedValue: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<HashMap<TaggedValue, neovm_core::face::Face>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<HashMap<LispFaceId, TaggedValue>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<RefCell<neomacs_display_protocol::input_progress::InputStaging>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `*const (): Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `*const u8: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut builtins::collections::HashTestGcInhibitAccounting: Send`
+           which is required by `neovm_core::Context: Send`
+           `RefCell<ccl::CclRegistry>: Sync`
+           which is required by `neovm_core::Context: Send`
+           `RefCell<charset::CharsetRegistry>: Sync`
+           which is required by `neovm_core::Context: Send`
+           `RefCell<xfaces::FaceAttrState>: Sync`
+           which is required by `neovm_core::Context: Send`
+           `RefCell<neovm_core::emacs_core::terminal::pure::TerminalLispRegistry>: Sync`
+           which is required by `neovm_core::Context: Send`
+           `RefCell<builtins::collections::HashTableTestRegistry>: Sync`
+           which is required by `neovm_core::Context: Send`
+           `RefCell<builtins::file_notify::FileNotifyState>: Sync`
+           which is required by `neovm_core::Context: Send`
+           `RefCell<HashMap<i64, builtins::hooks::WindowConfigurationSnapshot>>: Sync`
+           which is required by `neovm_core::Context: Send`
+           `RefCell<Vec<Option<dynamic_module::GlobalRefEntry>>>: Sync`
+           which is required by `neovm_core::Context: Send`
+           `*mut GcHeader: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut ConsCell: Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn for<'a> FnMut(&'a mut neovm_core::Context) + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, RedisplayMiniGeometryRequest) -> Result<TaggedValue, FlowKind> + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, TaggedValue, TaggedValue) -> GstringShapeOutcome + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn for<'a> FnMut(&'a neovm_core::Context, FrameId, WindowId, Vec<neomacs_display_protocol::input_progress::InputReceipt>) + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn for<'a> FnMut(&'a neovm_core::Context) -> (Option<Duration>, bool) + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn for<'a, 'b> FnMut(&'a mut neovm_core::Context, &'b SnapshotRequest) -> Result<std::string::String, std::string::String> + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, FrameId, WindowId, WindowLayoutQueryScope) -> WindowLayoutQueryOutcome + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn DisplayHost + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn TtyFrameHostFactory + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut u8: Sync`
+           which is required by `neovm_core::Context: Send`
+           `*const i64: Send`
+           which is required by `neovm_core::Context: Send`
+           `std::rc::Weak<[TaggedValue]>: Send`
+           which is required by `neovm_core::Context: Send`
+           `NonNull<LispBufferLocalValue>: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut HashTableObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut FinalizerObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut *mut MarkerObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut MarkerObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*const c_void: Send`
+           which is required by `neovm_core::Context: Send`
+           `*const tree_sitter::ffi::TSTree: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut u8: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut FloatObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut VecLikeHeader: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut StringObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*const (): Sync`
+           which is required by `neovm_core::Context: Send`
+           `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<Cell<VisitedFileModtime>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<eval::tier_i::compile::TierCode>: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut emacs_value_tag: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut VectorObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut ByteCodeObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut LambdaObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut MacroObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut RecordObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut SymbolWithPosObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut BignumObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<Vec<AutomaticCompositionSpan>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<OverlayList>: Send`
+           which is required by `neovm_core::Context: Send`
+           `NonNull<ByteCodeFunction>: Send`
+           which is required by `neovm_core::Context: Send`
+           `NonNull<[Op]>: Send`
+           which is required by `neovm_core::Context: Send`

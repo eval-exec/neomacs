@@ -367,5 +367,5 @@ impl DisplayPropertySpecs {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/display_spec_test.rs"]
 mod tests;

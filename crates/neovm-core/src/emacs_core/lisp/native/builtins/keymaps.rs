@@ -780,8 +780,7 @@ pub(super) fn builtin_help_describe_vector(
         // GNU truncates it at the first member that is not (bug#9293).
         let check_ranges = eval
             .obarray
-            .symbol_value("describe-bindings-check-shadowing-in-ranges")
-            .copied()
+            .symbol_value_copied("describe-bindings-check-shadowing-in-ranges")
             .unwrap_or(Value::NIL);
         let skip_self_insert = check_ranges.as_symbol_name() == Some("ignore-self-insert")
             && definition.as_symbol_name() == Some("self-insert-command");
@@ -924,8 +923,7 @@ fn describe_buffer_binding_sections(
     let mut sections = Vec::new();
     let named_map = |name: &str| -> Option<Value> {
         eval.obarray
-            .symbol_value(name)
-            .copied()
+            .symbol_value_copied(name)
             .filter(|map| !map.is_nil())
     };
 
@@ -1478,5 +1476,5 @@ pub(crate) fn builtin_recent_keys_impl(
 }
 
 #[cfg(test)]
-#[path = "tests/keymaps.rs"]
+#[path = "tests/keymaps_test.rs"]
 mod tests;

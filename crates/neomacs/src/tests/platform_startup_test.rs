@@ -163,6 +163,12 @@ fn isolated_startup_font_probe() {
         };
     }
     bootstrap_buffers(&mut eval, 960, 640, display);
+    assert!(
+        eval.eval_str("(string= (frame-parameter nil 'font) (font-xlfd-name (frame-parameter nil 'font-parameter)))")
+            .unwrap()
+            .is_truthy(),
+        "startup must publish the canonical name of its opened font"
+    );
     let actual_family = eval.eval_str("(face-attribute 'default :family)").unwrap();
     assert_eq!(actual_family.as_utf8_str(), Some(family));
     assert_eq!(

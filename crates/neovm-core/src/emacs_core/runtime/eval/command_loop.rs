@@ -341,8 +341,7 @@ impl Context {
     pub(super) fn command_loop_top_level_1(&mut self) -> EvalResult {
         let top_level = self
             .obarray
-            .symbol_value("top-level")
-            .copied()
+            .symbol_value_copied("top-level")
             .unwrap_or(Value::NIL);
 
         tracing::debug!("command_loop_top_level_1: top-level={}", top_level);
@@ -386,14 +385,12 @@ impl Context {
                 if cfg!(test) {
                     let last_phase = self
                         .obarray
-                        .symbol_value("neomacs--startup-last-phase")
-                        .copied()
+                        .symbol_value_copied("neomacs--startup-last-phase")
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     let last_call = self
                         .obarray
-                        .symbol_value("neomacs--startup-last-call")
-                        .copied()
+                        .symbol_value_copied("neomacs--startup-last-call")
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     eprintln!(
@@ -460,11 +457,27 @@ impl Context {
         tracing::info!(
             "startup-state phase={} command-line-args={} command-line-args-left={} command-line-processed={} window-system={} initial-window-system={} current-buffer={} selected-frame={:?} frames={:?}",
             phase,
-            format_startup_value(self.obarray.symbol_value("command-line-args")),
-            format_startup_value(self.obarray.symbol_value("command-line-args-left")),
-            format_startup_value(self.obarray.symbol_value("command-line-processed")),
-            format_startup_value(self.obarray.symbol_value("window-system")),
-            format_startup_value(self.obarray.symbol_value("initial-window-system")),
+            format_startup_value(
+                self.obarray
+                    .symbol_value_copied("command-line-args")
+                    .as_ref()
+            ),
+            format_startup_value(
+                self.obarray
+                    .symbol_value_copied("command-line-args-left")
+                    .as_ref()
+            ),
+            format_startup_value(
+                self.obarray
+                    .symbol_value_copied("command-line-processed")
+                    .as_ref()
+            ),
+            format_startup_value(self.obarray.symbol_value_copied("window-system").as_ref()),
+            format_startup_value(
+                self.obarray
+                    .symbol_value_copied("initial-window-system")
+                    .as_ref()
+            ),
             current_buffer,
             selected_frame,
             frames
@@ -1724,7 +1737,7 @@ impl Context {
         // (window.c:4116) specbinds this to t so any nested redisplay
         // triggered by a window-change hook is a no-op. Without this check
         // a hook that indirectly calls `redisplay` infinitely recurses.
-        let inhibit_redisplay = self.obarray.symbol_value("inhibit-redisplay");
+        let inhibit_redisplay = self.obarray.symbol_value_copied("inhibit-redisplay");
         if (!force || crate::emacs_core::xdisp::mode_line_flow_enabled())
             && inhibit_redisplay.as_ref().is_some_and(|v| v.is_truthy())
         {
@@ -1874,7 +1887,7 @@ impl Context {
     /// hook is demoted (GNU calls via `dsafe_calln`, and the lisp driver wraps
     /// each hook in `with-demoted-errors`).
     pub(super) fn run_pre_redisplay_function(&mut self, windows: Value) {
-        let Some(function) = self.obarray.symbol_value("pre-redisplay-function").copied() else {
+        let Some(function) = self.obarray.symbol_value_copied("pre-redisplay-function") else {
             return;
         };
         if function.is_nil() {
@@ -1902,7 +1915,7 @@ impl Context {
     pub(super) fn resize_minibuffer_only_frames(&mut self) {
         if !self
             .obarray
-            .symbol_value("resize-mini-frames")
+            .symbol_value_copied("resize-mini-frames")
             .is_some_and(|value| value.is_truthy())
         {
             return;
@@ -2146,6 +2159,7 @@ impl Context {
         self.gc_driver_active = prev;
     }
 
+    #[inline(never)]
     pub(super) fn gc_collect_from_current_roots_body(&mut self, force_complete: bool) {
         // GNU `garbage_collect' shortens every live buffer's undo list before
         // it marks anything: "Don't keep undo information around forever. Do
@@ -2484,6 +2498,9 @@ impl Context {
     ) {
         let start_t0 = std::time::Instant::now();
         let (obsnap_us, roots_breakdown, ob_slots, ob_chunks);
+        // SAFETY: heap_ptr is this Context's owned heap, exclusively admitted
+        // to the start handshake. No Lisp callback or allocation safepoint
+        // runs during capture, seeding or publication of the marker job.
         unsafe {
             (*heap_ptr).concurrent_begin();
             // CONCURRENT OBARRAY SCAN (Stage 1b). Capture the obarray chunk snapshot
@@ -2496,7 +2513,12 @@ impl Context {
             // symbol cells the GC thread now owns (the BLV pool + non-obarray roots
             // still seed normally).
             let obsnap_t0 = std::time::Instant::now();
-            let snap = self.obarray.scan_snapshot();
+            // SAFETY: start runs on the sole heap/obarray writer without Lisp
+            // callbacks. SATB, retirement and seqlock writes govern the cycle;
+            // explicit finish or abandonment retains the reader's storage.
+            let world =
+                crate::tagged::gc::scan_contract::SingleMutatorWorld::from_heap(&mut *heap_ptr);
+            let snap = self.obarray.scan_snapshot(&world);
             obsnap_us = obsnap_t0.elapsed().as_micros() as u64;
             ob_slots = snap.n_slots();
             ob_chunks = snap.n_chunks();
@@ -2660,11 +2682,12 @@ impl Context {
             .unwrap_or(0);
         if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
             let stats = self.tagged_heap.sweep_stats();
+            let (leaf_claimed, hash_claimed) = self.tagged_heap.last_concurrent_claim_counts();
             let hs = self.tagged_heap.handshake_stats();
             eprintln!(
                 "NEOVM_GC concurrent_termination {}us [roots={roots_us}us drain={drain_us}us \
                  fold={}us deferred={} satb={} str_claimed={} f_claimed={} sub_dropped={} \
-                 v_claimed={} bc_claimed={} kinds[{}] join={}us \
+                 v_claimed={} bc_claimed={} leaf_claimed={} ht_claimed={} kinds[{}] join={}us \
                  runtime={}us({}) remembered={}us({}) ctxroots={}us newsyms={newsyms_us}us({}) \
                  finalizer={}us weak={}us unchain={}us groups[{}] probes[{}]]",
                 term_t0.elapsed().as_micros(),
@@ -2676,6 +2699,8 @@ impl Context {
                 stats.last_concurrent_subr_dropped,
                 stats.last_concurrent_vec_claimed,
                 stats.last_concurrent_bc_claimed,
+                leaf_claimed,
+                hash_claimed,
                 stats.last_termination_kinds,
                 hs.last_term_join_us,
                 hs.last_term_runtime_us,
@@ -2996,6 +3021,7 @@ impl Context {
     }
 
     #[cold]
+    #[inline(never)]
     pub(super) fn maybe_quit_slow(&mut self) -> Result<(), Flow> {
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a quit poll");
         // GNU fatal_error_signal calls Fkill_emacs(signal-number, nil), even
@@ -3062,7 +3088,7 @@ impl Context {
     /// against the signal's `add_user_signal` NAME, so the comparison really is
     /// on the printed name and a non-symbol really does select no arm.
     pub(crate) fn debug_on_event_signal_name(&self) -> Option<String> {
-        let value = self.obarray.symbol_value("debug-on-event").copied()?;
+        let value = self.obarray.symbol_value_copied("debug-on-event")?;
         let name = value.as_symbol_lisp_string()?;
         Some(crate::emacs_core::emacs_char::to_utf8_lossy(
             name.as_bytes(),
@@ -3171,8 +3197,7 @@ impl Context {
     pub(super) fn input_pending_filter(&self) -> crate::keyboard::InputPendingFilter {
         let configured = self
             .obarray
-            .symbol_value("input-pending-p-filter-events")
-            .copied()
+            .symbol_value_copied("input-pending-p-filter-events")
             .unwrap_or(Value::T)
             .is_truthy();
         crate::keyboard::InputPendingFilter::from_filter_events_variable(configured)
@@ -3195,8 +3220,7 @@ impl Context {
     pub(super) fn should_ignore_while_no_input_symbol(&self, ignore_symbol: &str) -> bool {
         let ignore_list = self
             .obarray
-            .symbol_value("while-no-input-ignore-events")
-            .copied()
+            .symbol_value_copied("while-no-input-ignore-events")
             .unwrap_or(Value::NIL);
         super::super::value::list_to_vec(&ignore_list)
             .into_iter()
@@ -3327,6 +3351,7 @@ impl Context {
 
     /// Match GNU `bytecode.c:op_branch`: after the bytecode loop's unsigned
     /// quit counter wraps, run `maybe_gc (); maybe_quit ();`.
+    #[inline(never)]
     pub(crate) fn bytecode_branch_maybe_gc_and_quit(&mut self) -> Result<(), Flow> {
         #[cfg(test)]
         BYTECODE_BRANCH_POLL_COUNT.with(|count| count.set(count.get() + 1));
@@ -3352,9 +3377,9 @@ impl Context {
 
 #[cfg(test)]
 #[cfg(debug_assertions)]
-#[path = "tests/gc_heap_mut_closure.rs"]
+#[path = "tests/gc_heap_mut_closure_test.rs"]
 mod gc_heap_mut_closure_tests;
 
 #[cfg(test)]
-#[path = "tests/chrome_transitions.rs"]
+#[path = "tests/chrome_transitions_test.rs"]
 mod chrome_transition_tests;

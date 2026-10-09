@@ -67,6 +67,7 @@ impl Context {
     /// 1. Symbol → lexenv lookup or symbol-value
     /// 2. Non-cons → self-evaluating (return as-is)
     /// 3. Cons → special form / macro / function call
+    #[inline(never)]
     pub fn eval_sub(&mut self, form: Value) -> EvalResult {
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("eval");
         // 1. Symbol → variable lookup (GNU eval.c:2554-2562)
@@ -171,7 +172,9 @@ impl Context {
         // passes the cached limit -- which is every entry once Lisp raises
         // `max-lisp-eval-depth`, not the rare event the shape suggests.
         if self.depth > self.max_depth
-            && let Some(v) = self.obarray.symbol_value_id(max_lisp_eval_depth_symbol())
+            && let Some(v) = self
+                .obarray
+                .symbol_value_id_copied(max_lisp_eval_depth_symbol())
             && let Some(n) = v.as_fixnum()
         {
             let new_max = n.max(100) as usize;

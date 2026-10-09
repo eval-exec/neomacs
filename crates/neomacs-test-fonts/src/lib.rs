@@ -38,6 +38,18 @@ const NOTO_COLOR_EMOJI_NAME: &str = "noto-color-emoji-2.051.ttf";
 const NOTO_COLOR_EMOJI_URL: &str = "https://raw.githubusercontent.com/googlefonts/noto-emoji/8998f5dd683424a73e2314a8c1f1e359c19e8742/fonts/NotoColorEmoji.ttf";
 const NOTO_COLOR_EMOJI_SHA256: &str =
     "72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b";
+const MPLUS_1_CODE_THIN_NAME: &str = "MPLUS1Code-Thin.ttf";
+const MPLUS_1_CODE_THIN_URL: &str = "https://raw.githubusercontent.com/coz-m/MPLUS_FONTS/9e2b62ba986047127eb0a73b3ca70d75a50114bd/fonts/MPLUS1Code/ttf/MPLUS1Code-Thin.ttf";
+const MPLUS_1_CODE_THIN_SHA256: &str =
+    "730c24ad92d46ef913d92dd2ffcd41a535609604b8213d8326292d2664ffd107";
+const LXGW_NERD_RELEASE: &str = "lxgw-wenkai-nerd-1.522";
+const LXGW_NERD_ARCHIVE_URL: &str = "https://github.com/Yikai-Liao/LxgwWenKaiNerdFont/releases/download/v1.522/lxgw-wenkai-nerd-1.522.tar.gz";
+const LXGW_NERD_ARCHIVE_SHA256: &str =
+    "a09a5f9b31ba87f7da06fef1b8174934c9db57c3c50e0c830f0572f19ef9972f";
+const LXGW_NERD_REGULAR: &str = "LXGWWenKaiNerdFont-Regular.ttf";
+const LXGW_NERD_REGULAR_SHA256: &str =
+    "5d07bc2b306b8fb8da5eb47dc9394e93ab63cd945bba305b9605e3c442408b1a";
+const MAX_LXGW_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_PINNED_FIXTURE_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
@@ -71,7 +83,87 @@ const ARCHIVED_FONTS: [ArchivedFont; 5] = [
 
 static SPLEEN_FIXTURES: OnceLock<SpleenFixtures> = OnceLock::new();
 static WOFF2_COLLECTION_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static LXGW_NERD_REGULAR_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static MPLUS_1_CODE_THIN_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+
+/// The reported dual-width fixed-pitch font from issue #516, pinned to v3.1.0.
+#[must_use]
+pub fn plemol_jp_console_nf_regular() -> &'static Path {
+    static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+    FIXTURE
+        .get_or_init(|| {
+            prepare_plemol_jp().unwrap_or_else(|error| panic!("PlemolJP fixture: {error}"))
+        })
+        .as_path()
+}
+
+fn prepare_plemol_jp() -> Result<PathBuf, FixtureError> {
+    const FONT_SHA: &str = "0dadabb6766f13e31787d26d73467dd613a777e509a8214bc898333299dd4be4";
+    const ZIP_SHA: &str = "015142b7ce4fb497ea6eb14567c435b69450eb5028fb7d29c032d1ffb3854abb";
+    const ENTRY: &str = "PlemolJP_NF_v3.1.0/PlemolJPConsole_NF/PlemolJPConsoleNF-Regular.ttf";
+    let root = workspace_root().join("tmp/font-fixtures");
+    create_dir_all(&root)?;
+    let lock_path = root.join(".plemol-jp-v3.1.0.lock");
+    let lock = open_lock(&lock_path)?;
+    lock.lock().map_err(|source| FixtureError::Io {
+        path: lock_path.clone(),
+        source,
+    })?;
+    let result = (|| {
+        let destination = root.join("PlemolJPConsoleNF-Regular-v3.1.0.ttf");
+        if destination.exists() && verify_sha256(&destination, FONT_SHA).is_ok() {
+            return Ok(destination);
+        }
+        let archive = root.join("PlemolJP_NF_v3.1.0.zip");
+        ensure_download_with_limit(
+            &archive,
+            "https://github.com/yuru7/PlemolJP/releases/download/v3.1.0/PlemolJP_NF_v3.1.0.zip",
+            ZIP_SHA,
+            192 * 1024 * 1024,
+        )?;
+        let file = File::open(&archive).map_err(|source| FixtureError::Io {
+            path: archive.clone(),
+            source,
+        })?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|source| FixtureError::Zip {
+            path: archive.clone(),
+            source,
+        })?;
+        let entry = zip.by_name(ENTRY).map_err(|source| FixtureError::Zip {
+            path: archive.clone(),
+            source,
+        })?;
+        let mut bytes = Vec::new();
+        entry
+            .take(MAX_PINNED_FIXTURE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|source| FixtureError::Io {
+                path: archive.clone(),
+                source,
+            })?;
+        let actual = sha256_bytes(&bytes);
+        if actual != FONT_SHA {
+            return Err(FixtureError::Checksum {
+                path: destination,
+                expected: FONT_SHA,
+                actual,
+            });
+        }
+        let partial = destination.with_extension("partial");
+        write_all(&partial, &bytes)?;
+        fs::rename(&partial, &destination).map_err(|source| FixtureError::Io {
+            path: destination.clone(),
+            source,
+        })?;
+        Ok(destination)
+    })();
+    FileExt::unlock(&lock).map_err(|source| FixtureError::Io {
+        path: lock_path,
+        source,
+    })?;
+    result
+}
 
 /// Paths to the pinned Spleen faces used by the font boundary tests.
 #[derive(Clone, Debug)]
@@ -162,8 +254,127 @@ pub fn noto_color_emoji_2_051() -> &'static Path {
         .as_path()
 }
 
+/// The author's static Thin face. A process-local catalog containing only this
+/// file checks nearest-weight matching without any installed Regular sibling.
+#[must_use]
+pub fn mplus_1_code_thin() -> &'static Path {
+    MPLUS_1_CODE_THIN_FIXTURE
+        .get_or_init(|| {
+            prepare_pinned_file(
+                MPLUS_1_CODE_THIN_NAME,
+                MPLUS_1_CODE_THIN_URL,
+                MPLUS_1_CODE_THIN_SHA256,
+            )
+            .unwrap_or_else(|error| {
+                panic!("failed to prepare pinned M PLUS Thin test font: {error}")
+            })
+        })
+        .as_path()
+}
+
+/// Exact reporter family, published by the Nerd Font patch maintainer. The
+/// release archive and its extracted Regular face are independently verified.
+#[must_use]
+pub fn lxgw_wenkai_nerd_regular_1_522() -> &'static Path {
+    LXGW_NERD_REGULAR_FIXTURE
+        .get_or_init(|| {
+            prepare_lxgw_nerd_regular().unwrap_or_else(|error| {
+                panic!("failed to prepare pinned LXGW WenKai Nerd test font: {error}")
+            })
+        })
+        .as_path()
+}
+
+fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
+    let cache = workspace_root().join("tmp/font-fixtures");
+    create_dir_all(&cache)?;
+    let lock_path = cache.join(format!(".{LXGW_NERD_RELEASE}.lock"));
+    let lock = open_lock(&lock_path)?;
+    lock.lock().map_err(|source| FixtureError::Io {
+        path: lock_path.clone(),
+        source,
+    })?;
+    let result = (|| {
+        let archive_path = cache.join(format!("{LXGW_NERD_RELEASE}.tar.gz"));
+        ensure_download_with_limit(
+            &archive_path,
+            LXGW_NERD_ARCHIVE_URL,
+            LXGW_NERD_ARCHIVE_SHA256,
+            MAX_LXGW_ARCHIVE_BYTES,
+        )?;
+        let directory = cache.join(LXGW_NERD_RELEASE);
+        create_dir_all(&directory)?;
+        let destination = directory.join(LXGW_NERD_REGULAR);
+        if destination.is_file() && verify_sha256(&destination, LXGW_NERD_REGULAR_SHA256).is_ok() {
+            return Ok(destination);
+        }
+        let file = File::open(&archive_path).map_err(|source| FixtureError::Io {
+            path: archive_path.clone(),
+            source,
+        })?;
+        let mut archive = tar::Archive::new(GzDecoder::new(file));
+        let entries = archive.entries().map_err(|source| FixtureError::Io {
+            path: archive_path.clone(),
+            source,
+        })?;
+        let expected = Path::new(LXGW_NERD_RELEASE).join(LXGW_NERD_REGULAR);
+        for entry in entries {
+            let mut entry = entry.map_err(|source| FixtureError::Io {
+                path: archive_path.clone(),
+                source,
+            })?;
+            let path = entry.path().map_err(|source| FixtureError::Io {
+                path: archive_path.clone(),
+                source,
+            })?;
+            if path.as_ref() != expected {
+                continue;
+            }
+            if entry.size() > MAX_PINNED_FIXTURE_BYTES {
+                return Err(FixtureError::InvalidArchiveEntry(path.into_owned()));
+            }
+            let partial = directory.join(format!(".{LXGW_NERD_REGULAR}.partial"));
+            let mut output = File::create(&partial).map_err(|source| FixtureError::Io {
+                path: partial.clone(),
+                source,
+            })?;
+            io::copy(&mut entry, &mut output).map_err(|source| FixtureError::Io {
+                path: partial.clone(),
+                source,
+            })?;
+            verify_sha256(&partial, LXGW_NERD_REGULAR_SHA256)?;
+            if destination.exists() {
+                fs::remove_file(&destination).map_err(|source| FixtureError::Io {
+                    path: destination.clone(),
+                    source,
+                })?;
+            }
+            fs::rename(&partial, &destination).map_err(|source| FixtureError::Io {
+                path: destination.clone(),
+                source,
+            })?;
+            return Ok(destination);
+        }
+        Err(FixtureError::MissingArchiveEntry {
+            archive: archive_path,
+            entry: expected.display().to_string(),
+        })
+    })();
+    FileExt::unlock(&lock).map_err(|source| FixtureError::Io {
+        path: lock_path,
+        source,
+    })?;
+    result
+}
+
 #[derive(Debug, Error)]
 enum FixtureError {
+    #[error("ZIP failure at {path}: {source}")]
+    Zip {
+        path: PathBuf,
+        #[source]
+        source: zip::result::ZipError,
+    },
     #[error("I/O failure at {path}: {source}")]
     Io {
         path: PathBuf,
@@ -267,6 +478,15 @@ fn ensure_download(
     url: &'static str,
     expected_sha256: &'static str,
 ) -> Result<(), FixtureError> {
+    ensure_download_with_limit(path, url, expected_sha256, MAX_PINNED_FIXTURE_BYTES)
+}
+
+fn ensure_download_with_limit(
+    path: &Path,
+    url: &'static str,
+    expected_sha256: &'static str,
+    max_bytes: u64,
+) -> Result<(), FixtureError> {
     if path.exists() && verify_sha256(path, expected_sha256).is_ok() {
         return Ok(());
     }
@@ -287,7 +507,7 @@ fn ensure_download(
     let bytes = response
         .body_mut()
         .with_config()
-        .limit(MAX_PINNED_FIXTURE_BYTES)
+        .limit(max_bytes)
         .read_to_vec()
         .map_err(|error| FixtureError::Download {
             url,

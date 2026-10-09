@@ -430,8 +430,7 @@ fn install_system_name(eval: &mut Context, name: String) {
     // unchanged refreshes; only the refresh permission check below uses `eq`.
     let value = eval
         .obarray()
-        .symbol_value("system-name")
-        .copied()
+        .symbol_value_copied("system-name")
         .filter(|value| value.as_utf8_str() == Some(name.as_str()))
         .unwrap_or_else(|| Value::string(name));
     eval.set_variable("system-name", value);
@@ -442,8 +441,7 @@ fn install_system_name(eval: &mut Context, name: String) {
 fn refresh_system_name_from(eval: &mut Context, name: String) {
     let visible = eval
         .obarray()
-        .symbol_value("system-name")
-        .copied()
+        .symbol_value_copied("system-name")
         .unwrap_or(Value::NIL);
     if eq_value(&visible, &eval.cached_system_name) {
         install_system_name(eval, name);
@@ -459,5 +457,5 @@ pub(crate) fn install(eval: &mut Context) {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/runtime_identity_test.rs"]
 mod tests;

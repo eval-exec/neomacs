@@ -528,9 +528,9 @@ impl<'a> Vm<'a> {
 }
 
 #[cfg(test)]
-#[path = "tests/resumed_chain.rs"]
+#[path = "tests/resumed_chain_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/osr_chain.rs"]
+#[path = "tests/osr_chain_test.rs"]
 mod osr_tests;

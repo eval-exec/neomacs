@@ -909,7 +909,13 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             .and_then(composition_display_text_for_property)
         {
             let end = start.add_len(CharLen::new(composition.char_len()));
-            if end <= property_end && end <= self.end {
+            if end
+                <= self
+                    .buffer
+                    .layout_measurement_context_end()
+                    .unwrap_or(self.end)
+                && (end <= property_end || property_end == self.end)
+            {
                 self.char_pos = end;
                 return Some(
                     self.bind_box_run_topology(
@@ -942,11 +948,15 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             // span's start position and emitted an EMPTY run — the walk
             // aborted and the row was committed blank (issue #445: ibuffer
             // group headers like "🛠\u{FE0F}\u{FE0F} …" with an underline face
-            // starting on the selector blanked every row below). The
-            // `end <= self.end` bound still refuses spans crossing the
-            // accessible end (a bounded fragment's last cell is plain text,
-            // and the next fragment re-derives the composition).
-            if end <= self.end {
+            // starting on the selector blanked every row below).
+            // Actual narrowing bounds the complete element. A measurement
+            // stop inside it bounds ordinary runs, but must not decompose it.
+            if end
+                <= self
+                    .buffer
+                    .layout_measurement_context_end()
+                    .unwrap_or(self.end)
+            {
                 self.char_pos = end;
                 return Some(
                     self.bind_box_run_topology(

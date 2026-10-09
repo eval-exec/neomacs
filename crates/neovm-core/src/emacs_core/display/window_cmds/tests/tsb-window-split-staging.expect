@@ -1,0 +1,1 @@
+((error "Resizing old window failed") (error "Sum of sizes of old and new window don’t fit") t t 2)

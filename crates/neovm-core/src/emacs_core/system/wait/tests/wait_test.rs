@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(test)]
+#[path = "numeric_boundaries.rs"]
+mod numeric_boundaries;
+
 #[test]
 fn target_process_activity_implies_any_process_activity() {
     let mut process = ProcessOutputServiceOutcome::default();
@@ -60,20 +64,7 @@ fn timer_activity_is_recorded_explicitly() {
 }
 
 fn gnu_timer_vector_at(deadline: GnuTimerTimestamp) -> crate::emacs_core::value::Value {
-    use crate::emacs_core::value::Value;
-
-    Value::vector(vec![
-        Value::NIL,
-        Value::fixnum(deadline.high_seconds),
-        Value::fixnum(deadline.low_seconds),
-        Value::fixnum(deadline.usecs),
-        Value::NIL,
-        Value::symbol("ignore"),
-        Value::NIL,
-        Value::NIL,
-        Value::fixnum(deadline.psecs),
-        Value::NIL,
-    ])
+    deadline.into()
 }
 
 #[test]

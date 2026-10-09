@@ -19,7 +19,8 @@ use super::{JobCell, JobClass};
 use crate::emacs_core::jit::compile::shared::split::JobPayload;
 
 /// One job for a backend thread: the payload and where its result goes.
-/// Plain data (see `JobPayload`): nothing here reaches the Lisp heap.
+/// Plain data (see `JobPayload`): nothing here reaches the Lisp heap. With
+/// raw values `!Send`, the pin below also proves the job carries none.
 pub(crate) struct BackendJob {
     pub(crate) payload: JobPayload,
     pub(crate) class: JobClass,
@@ -30,10 +31,7 @@ pub(crate) struct BackendJob {
     pub(crate) insts: u64,
 }
 
-const _: () = {
-    const fn assert_send<T: Send>() {}
-    assert_send::<BackendJob>();
-};
+static_assertions::assert_impl_all!(BackendJob: Send);
 
 /// Heap order: the lowest class first, then the oldest.
 struct Queued(BackendJob);

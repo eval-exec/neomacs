@@ -227,6 +227,78 @@ where
         let Some(node) = self.by_identity.remove(&identity) else {
             return false;
         };
+        self.detach_node(node);
+
+        let removed = self.nodes[node.index()]
+            .take()
+            .expect("GNU order identity map referenced a vacant node");
+        debug_assert_eq!(removed.identity, identity);
+        self.free.push(node);
+        true
+    }
+
+    /// Reinsert an existing node with GNU's remove/fixup/insert/fixup order.
+    ///
+    /// `itree_node_set_region` (itree.c:750-755) retains the node itself while
+    /// changing its numeric begin. Keep this mirror's identity entry and arena
+    /// slot too: the ordinary remove/insert pair would free and immediately
+    /// reacquire this same slot. No identity lookup or arena mutation is needed
+    /// during the detached interval. The owner holds exclusive access; only
+    /// the internal comparison runs before this method restores a valid tree.
+    pub(super) fn reinsert_by(
+        &mut self,
+        identity: I,
+        mut compare_with_existing: impl FnMut(I) -> Ordering,
+    ) -> bool {
+        let Some(node) = self.by_identity.get(&identity).copied() else {
+            return false;
+        };
+        self.detach_node(node);
+
+        let mut parent = None;
+        let mut child = self.root;
+        let mut descent = Descent::Left;
+        while let Some(id) = child {
+            parent = Some(id);
+            descent = if compare_with_existing(self.node(id).identity) != Ordering::Greater {
+                Descent::Left
+            } else {
+                Descent::Right
+            };
+            child = match descent {
+                Descent::Left => self.node(id).left,
+                Descent::Right => self.node(id).right,
+            };
+        }
+
+        self.nodes[node.index()] = Some(OrderNode {
+            identity,
+            color: if parent.is_some() {
+                Color::Red
+            } else {
+                Color::Black
+            },
+            parent,
+            left: None,
+            right: None,
+        });
+        match parent {
+            None => self.root = Some(node),
+            Some(parent) => match descent {
+                Descent::Left => self.node_mut(parent).left = Some(node),
+                Descent::Right => self.node_mut(parent).right = Some(node),
+            },
+        }
+        if parent.is_some() {
+            self.insert_fix(node);
+        }
+        true
+    }
+
+    /// Detach a node using GNU's successor splice and deletion fixup.
+    /// The caller retains responsibility for its identity entry and slot.
+    #[inline]
+    fn detach_node(&mut self, node: OrderNodeId) {
         let splice = if self.node(node).left.is_none() || self.node(node).right.is_none() {
             node
         } else {
@@ -252,13 +324,39 @@ where
         if removed_black {
             self.remove_fix(subtree, subtree_parent);
         }
+    }
 
-        let removed = self.nodes[node.index()]
-            .take()
-            .expect("GNU order identity map referenced a vacant node");
-        debug_assert_eq!(removed.identity, identity);
-        self.free.push(node);
-        true
+    /// Visit structural in-order without allocating a root path per node.
+    /// Parent/child links belong to the exclusively borrowed owning buffer;
+    /// the cursor is call-local and stores no shared Lisp state.
+    pub(super) fn for_each_inorder(&self, mut visit: impl FnMut(I)) {
+        let mut current = self.root;
+        while let Some(id) = current {
+            if let Some(left) = self.node(id).left {
+                current = Some(left);
+            } else {
+                break;
+            }
+        }
+        while let Some(id) = current {
+            visit(self.node(id).identity);
+            if let Some(mut next) = self.node(id).right {
+                while let Some(left) = self.node(next).left {
+                    next = left;
+                }
+                current = Some(next);
+            } else {
+                let mut child = id;
+                current = None;
+                while let Some(parent) = self.node(child).parent {
+                    if self.node(parent).left == Some(child) {
+                        current = Some(parent);
+                        break;
+                    }
+                    child = parent;
+                }
+            }
+        }
     }
 
     /// Return `identities` in the current GNU tree's pre-order.
@@ -601,4 +699,5 @@ where
 }
 
 #[cfg(test)]
+#[path = "overlay_order/tests/overlay_order_test.rs"]
 mod tests;

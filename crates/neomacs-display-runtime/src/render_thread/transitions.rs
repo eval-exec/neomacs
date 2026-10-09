@@ -147,6 +147,57 @@ impl TransitionState {
         !self.active.is_empty()
     }
 
+    /// Read-only preflight for transitions that can introduce fractional pixels.
+    /// Opaque controls do not certify the retained old picture or transformed
+    /// coverage. Reuse the real planners without draining hints/continuity or
+    /// advancing the ring. A current picture becomes previous on advancement.
+    pub(super) fn needs_native_conversion(
+        &self,
+        frame: &FrameGlyphBuffer,
+        sample: neomacs_display_protocol::frame_time::FrameSample,
+        pending: &crate::render_thread::frame_compositor::PendingContinuity,
+        effects: &neomacs_display_protocol::EffectsConfig,
+        accept_hints: bool,
+        accept_derived_effects: bool,
+    ) -> bool {
+        if self.active.values().any(|transition| {
+            sample
+                .presentation_time()
+                .saturating_since(transition.started)
+                < transition.plan.duration
+        }) {
+            return true;
+        }
+        if self.compositions.is_none() {
+            return false;
+        }
+        (accept_hints
+            && frame
+                .transition_hints
+                .iter()
+                .any(|hint| plan_transition_hint(&self.policy, hint).is_some()))
+            || pending
+                .scrolls
+                .iter()
+                .any(|scroll| plan_scroll(&self.policy, scroll).is_some())
+            || (accept_derived_effects
+                && pending.theme.is_some()
+                && effects.theme_transition.enabled)
+    }
+
+    /// Release finished pictures without consuming observations or publishing placement.
+    pub(super) fn reclaim_finished(
+        &mut self,
+        sample: neomacs_display_protocol::frame_time::FrameSample,
+    ) {
+        self.active.retain(|_, transition| {
+            sample
+                .presentation_time()
+                .saturating_since(transition.started)
+                < transition.plan.duration
+        });
+    }
+
     pub(super) fn active_count(&self) -> usize {
         self.active.len()
     }
@@ -470,6 +521,7 @@ pub(super) fn render_frame_transitions(
     surface_view: &wgpu::TextureView,
     width: u32,
     height: u32,
+    frame: &FrameGlyphBuffer,
 ) {
     let now = renderer.frame_sample().presentation_time();
     let Some(compositions) = transitions.compositions.as_ref() else {
@@ -495,6 +547,8 @@ pub(super) fn render_frame_transitions(
                 transition.plan.easing,
                 width,
                 height,
+                frame.background,
+                frame.background_alpha,
             );
         }
 
@@ -512,4 +566,5 @@ pub(super) fn render_frame_transitions(
 // ==========================================================================
 
 #[cfg(test)]
+#[path = "transitions/tests/transitions_test.rs"]
 mod tests;

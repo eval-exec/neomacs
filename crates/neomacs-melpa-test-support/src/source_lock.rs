@@ -10,9 +10,10 @@
 //! lives in `neomacs-infra`, which never depends on a concrete runtime).
 
 pub use neomacs_infra::packages::source_lock::{
-    LockedPackageSource, SHALLOW_GIT_FETCH_ARGS, SourceBuild, locked_melpa_install_plan,
-    locked_melpa_source, locked_melpa_sources, preflight_locked_melpa_packages,
-    prepare_cached_locked_melpa_package, prepare_cached_locked_package_plan,
+    CLATTER_PIN, LockedPackageSource, SHALLOW_GIT_FETCH_ARGS, SourceBuild,
+    locked_melpa_install_plan, locked_melpa_source, locked_melpa_sources,
+    preflight_locked_melpa_packages, prepare_cached_locked_melpa_package,
+    prepare_cached_locked_package_plan,
 };
 
 use crate::{CommandError, EmacsRuntime, output_with_timeout};

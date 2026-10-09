@@ -140,30 +140,36 @@ pub(crate) fn builtin_rassoc_with_ctx(
 
 fn builtin_rassoc_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool) -> EvalResult {
     expect_args("rassoc", &args, 2)?;
-    let key = &args[0];
-    let alist = &args[1];
-    let mut cursor = *alist;
-    loop {
-        match cursor.kind() {
-            ValueKind::Nil => return Ok(Value::NIL),
-            ValueKind::Cons => {
-                let pair_car = cursor.cons_car();
-                let pair_cdr = cursor.cons_cdr();
-                if pair_car.is_cons() {
-                    let inner_pair_cdr = pair_car.cons_cdr();
-                    if equal_value_swp(&inner_pair_cdr, key, 0, symbols_with_pos_enabled) {
-                        return Ok(pair_car);
-                    }
-                }
-                cursor = pair_cdr;
-            }
-            _ => {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), *alist],
-                ));
-            }
+    let key = args[0];
+    let alist = args[1];
+    // GNU fns.c:2062: symbols and fixnums can use the eq scan.
+    if key.is_nil() || key.is_symbol() || key.is_symbol_with_pos() || key.is_fixnum() {
+        return builtin_rassq_values(key, alist, symbols_with_pos_enabled);
+    }
+    let mut cursor = alist;
+    let mut cycle = crate::emacs_core::builtins::GnuTailCycle::new(alist);
+    while cursor.is_cons() {
+        let pair = cursor.cons_car();
+        if pair.is_cons()
+            && crate::emacs_core::value::try_equal_value_swp(
+                &pair.cons_cdr(),
+                &key,
+                0,
+                symbols_with_pos_enabled,
+            )?
+        {
+            return Ok(pair);
         }
+        cursor = cursor.cons_cdr();
+        cycle.check(cursor)?;
+    }
+    if cursor.is_nil() {
+        Ok(Value::NIL)
+    } else {
+        Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), alist],
+        ))
     }
 }
 
@@ -273,9 +279,7 @@ fn builtin_rassq_values_scan<const OBSERVED: bool>(
 fn rassq_exact(key: Value, alist: Value) -> EvalResult {
     let key_bits = key.bits();
     let mut tail = alist;
-    let mut tortoise = alist;
-    let mut power = 1usize;
-    let mut distance = 0usize;
+    let mut cycle = crate::emacs_core::builtins::GnuTailCycle::new(alist);
 
     while tail.is_cons() {
         let pair_car = tail.cons_car();
@@ -284,17 +288,7 @@ fn rassq_exact(key: Value, alist: Value) -> EvalResult {
         }
 
         tail = tail.cons_cdr();
-        if tail.is_cons() {
-            distance = distance.saturating_add(1);
-            if tail.bits() == tortoise.bits() {
-                return Err(signal(LispCondition::CircularList, vec![tail]));
-            }
-            if distance == power {
-                tortoise = tail;
-                power = power.saturating_mul(2).max(1);
-                distance = 0;
-            }
-        }
+        cycle.check(tail)?;
     }
 
     if tail.is_nil() {
@@ -341,9 +335,7 @@ fn builtin_rassq_values_swp_scan<const OBSERVED: bool>(key: Value, alist: Value)
 #[inline(never)]
 fn rassq_swp_exact(bare: Value, alist: Value) -> EvalResult {
     let mut tail = alist;
-    let mut tortoise = alist;
-    let mut power = 1usize;
-    let mut distance = 0usize;
+    let mut cycle = crate::emacs_core::builtins::GnuTailCycle::new(alist);
 
     while tail.is_cons() {
         let pair_car = tail.cons_car();
@@ -354,17 +346,7 @@ fn rassq_swp_exact(bare: Value, alist: Value) -> EvalResult {
         }
 
         tail = tail.cons_cdr();
-        if tail.is_cons() {
-            distance = distance.saturating_add(1);
-            if tail.bits() == tortoise.bits() {
-                return Err(signal(LispCondition::CircularList, vec![tail]));
-            }
-            if distance == power {
-                tortoise = tail;
-                power = power.saturating_mul(2).max(1);
-                distance = 0;
-            }
-        }
+        cycle.check(tail)?;
     }
 
     if tail.is_nil() {
@@ -1068,5 +1050,5 @@ pub(crate) fn builtin_recursion_depth(
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/misc_test.rs"]
 mod tests;

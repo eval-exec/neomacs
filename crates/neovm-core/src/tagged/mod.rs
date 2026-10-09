@@ -11,7 +11,9 @@ pub mod gc;
 pub mod header;
 pub mod mutate;
 pub mod symbol_marks;
+pub mod transport;
 pub mod value;
 
 #[cfg(test)]
+#[path = "tests/tagged_test.rs"]
 mod tests;

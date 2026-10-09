@@ -36,6 +36,8 @@ md-5.workspace = true
 getrandom.workspace = true
 base64.workspace = true
 num_enum.workspace = true
+thiserror.workspace = true
+static_assertions.workspace = true
 strum.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -169,6 +171,8 @@ vm-profile = []
 fuzzing = []
 
 [dev-dependencies]
+static_assertions.workspace = true
+trybuild = "1.0"
 neomacs-infra.workspace = true
 criterion = { version = "0.8", default-features = false, features = ["plotters", "cargo_bench_support"] }
 proptest.workspace = true
@@ -177,8 +181,13 @@ tree-sitter-json = "0.24"
 syn = { version = "3.0.3", features = ["full", "visit"] }
 
 [build-dependencies]
+flate2.workspace = true
 pkg-config.workspace = true
 sha2.workspace = true
+
+[[test]]
+name = "thread_safety_contracts"
+path = "tests/thread_safety_contracts.rs"
 
 [[test]]
 name = "compat_all"
@@ -225,3 +234,23 @@ harness = false
 unused_imports = "warn"
 unused_variables = "warn"
 dead_code = "warn"
+
+[[test]]
+name = "gnu_overlay_deletion_allocations"
+path = "tests/gnu_overlay_deletion_allocations.rs"
+
+[[test]]
+name = "pixel_measurement"
+path = "tests/pixel_measurement.rs"
+
+[[test]]
+name = "coding_safety"
+path = "tests/coding_safety.rs"
+
+[[test]]
+name = "coding_detection"
+path = "tests/coding_detection.rs"
+
+[[test]]
+name = "font_coverage"
+path = "tests/font_coverage.rs"

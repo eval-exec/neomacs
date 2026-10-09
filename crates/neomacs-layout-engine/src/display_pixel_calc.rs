@@ -868,4 +868,5 @@ fn as_f64(v: &Value) -> Option<f64> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[path = "display_pixel_calc/tests/display_pixel_calc_test.rs"]
 mod tests;

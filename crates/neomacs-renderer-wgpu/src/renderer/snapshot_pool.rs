@@ -345,4 +345,5 @@ impl<R> SnapshotPool<R> {
 }
 
 #[cfg(test)]
+#[path = "snapshot_pool/tests/snapshot_pool_test.rs"]
 mod tests;

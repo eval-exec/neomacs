@@ -77,16 +77,16 @@ pub(crate) fn builtin_internal_default_signal_process_impl(
                 }
                 return Ok(Value::fixnum(signal_process_or_unbacked_success(
                     proc,
-                    signal_num,
+                    signal_num.into(),
                     ProcessSignalRecipient::ImmediateProcess,
                 ) as i64));
             }
             Ok(Value::fixnum(-1))
         }
         SignalProcessTarget::MissingNamedProcess => Ok(Value::NIL),
-        SignalProcessTarget::Pid(pid) => {
-            Ok(Value::fixnum(sys::send_signal(pid, signal_num) as i64))
-        }
+        SignalProcessTarget::Pid(pid) => Ok(Value::fixnum(
+            sys::send_signal(pid, signal_num.into()) as i64,
+        )),
     }
 }
 
@@ -329,7 +329,7 @@ pub(crate) fn builtin_gnutls_boot(
     let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes, &args[0])?;
     let parameters = parse_gnutls_boot_parameters(args[1], args[2])?;
     upgrade_process_to_tls::<RustlsBackend>(
-        &mut eval.processes,
+        eval,
         id,
         &parameters.client,
         "gnutls-boot",
@@ -453,7 +453,7 @@ pub(crate) fn builtin_neomacs_open_tls_stream(
     let id = resolve_process_or_wrong_type_any_in_manager(&eval.processes, &process)?;
     let parameters = TlsClientParameters::default_roots(host);
     upgrade_process_to_tls::<RustlsBackend>(
-        &mut eval.processes,
+        eval,
         id,
         &parameters,
         "neomacs-open-tls-stream",
@@ -463,6 +463,17 @@ pub(crate) fn builtin_neomacs_open_tls_stream(
 }
 
 pub(super) fn upgrade_process_to_tls<B: TlsClientBackend>(
+    eval: &mut super::super::eval::Context,
+    id: ProcessId,
+    parameters: &TlsClientParameters,
+    operation: &str,
+    map_error: fn(TlsBackendError) -> Flow,
+) -> Result<(), Flow> {
+    begin_process_tls::<B>(&mut eval.processes, id, parameters, operation, map_error)?;
+    eval.finish_process_tls_handshake(id, map_error)
+}
+
+pub(super) fn begin_process_tls<B: TlsClientBackend>(
     processes: &mut ProcessManager,
     id: ProcessId,
     parameters: &TlsClientParameters,
@@ -503,14 +514,19 @@ pub(super) fn upgrade_process_to_tls<B: TlsClientBackend>(
     };
 
     proc.gnutls_initstage = GnutlsInitStage::HandshakeTried;
-    let tls_stream = B::connect_client(tcp_stream, parameters).map_err(map_error)?;
+    let tls_stream = match B::start_client(tcp_stream, parameters) {
+        Ok(stream) => stream,
+        Err(error) => {
+            // TCP ownership has transferred; a failed configuration cannot
+            // leave an apparently live process without any transport.
+            processes.delete_process(id);
+            return Err(map_error(error));
+        }
+    };
 
     // Store the TLS stream. The poller still watches the underlying fd
     // (which is the same fd that was registered for the plain socket).
     proc.live_io.tls_stream = Some(tls_stream);
-    proc.gnutls_initstage = GnutlsInitStage::Ready;
-    proc.gnutls_boot_parameters = Value::NIL;
-
     Ok(())
 }
 
@@ -557,7 +573,7 @@ pub(crate) fn builtin_print_preprocess(
     // GNU: does nothing if `print-circle' is nil.
     let print_circle = eval
         .obarray
-        .symbol_value("print-circle")
+        .symbol_value_copied("print-circle")
         .is_some_and(|v| v.is_truthy());
     if !print_circle {
         return Ok(Value::NIL);
@@ -565,16 +581,16 @@ pub(crate) fn builtin_print_preprocess(
 
     let print_gensym = eval
         .obarray
-        .symbol_value("print-gensym")
+        .symbol_value_copied("print-gensym")
         .is_some_and(|v| v.is_truthy());
     let print_continuous_numbering = eval
         .obarray
-        .symbol_value("print-continuous-numbering")
+        .symbol_value_copied("print-continuous-numbering")
         .is_some_and(|v| v.is_truthy());
 
     // GNU: `if (!HASH_TABLE_P (Vprint_number_table)) Vprint_number_table = make-hash-table :test eq`.
-    let table_value = match eval.obarray.symbol_value("print-number-table") {
-        Some(v) if v.is_hash_table() => *v,
+    let table_value = match eval.obarray.symbol_value_copied("print-number-table") {
+        Some(v) if v.is_hash_table() => v,
         _ => {
             let table = Value::hash_table(super::super::value::HashTableTest::Eq);
             eval.set_variable("print-number-table", table);
@@ -1362,7 +1378,7 @@ pub(super) fn connect_network_process_at_explicit_address(
             }
             if let Some(parameters) = tls_parameters.clone() {
                 upgrade_process_to_tls::<RustlsBackend>(
-                    &mut eval.processes,
+                    eval,
                     id,
                     &parameters.client,
                     "make-network-process",
@@ -2354,7 +2370,7 @@ pub(super) fn connect_local_socket_process(
             }
             if let Some(parameters) = tls_parameters.clone() {
                 upgrade_process_to_tls::<RustlsBackend>(
-                    &mut eval.processes,
+                    eval,
                     id,
                     &parameters.client,
                     "make-network-process",
@@ -2860,7 +2876,7 @@ pub(crate) fn builtin_make_network_process(
 
     if let Some(parameters) = tls_parameters {
         upgrade_process_to_tls::<RustlsBackend>(
-            &mut eval.processes,
+            eval,
             id,
             &parameters.client,
             "make-network-process",
@@ -2875,6 +2891,32 @@ pub(crate) fn builtin_make_network_process(
     Ok(Value::make_process(id))
 }
 
+/// Install the output descriptor before a newly created process is exposed.
+fn initialize_created_process_output(
+    eval: &mut super::super::eval::Context,
+    result: EvalResult,
+) -> EvalResult {
+    let value = result?;
+    if let Some(id) = value.as_process_id() {
+        eval.setup_process_output_descriptor(id)?;
+        // :stderr BUFFER constructs a separate pipe through the manager seam.
+        // An existing :stderr PROCESS already owns a descriptor and is reused.
+        let stderr = eval
+            .processes
+            .get_any(id)
+            .and_then(|proc| proc.stderrproc.as_process_id());
+        if let Some(stderr) = stderr
+            && eval
+                .processes
+                .get_any(stderr)
+                .is_some_and(|proc| proc.encoding_state.coding().is_none())
+        {
+            eval.setup_process_output_descriptor(stderr)?;
+        }
+    }
+    Ok(value)
+}
+
 /// (make-pipe-process &rest ARGS) -> process-or-nil
 pub(crate) fn builtin_make_pipe_process(
     eval: &mut super::super::eval::Context,
@@ -2882,14 +2924,15 @@ pub(crate) fn builtin_make_pipe_process(
 ) -> EvalResult {
     eval.sync_process_read_config_from_visible_variables();
     let coding_variables = read_connection_process_coding_variables(eval);
-    builtin_make_pipe_process_impl(
+    let result = builtin_make_pipe_process_impl(
         &mut eval.processes,
         &mut eval.buffers,
         &eval.threads,
         Some(&eval.coding_systems),
         coding_variables,
         args,
-    )
+    );
+    initialize_created_process_output(eval, result)
 }
 
 /// Capture the dynamic coding variables the way GNU reads them: at the moment
@@ -3043,14 +3086,15 @@ pub(crate) fn builtin_make_serial_process(
 ) -> EvalResult {
     eval.sync_process_read_config_from_visible_variables();
     let coding_variables = read_connection_process_coding_variables(eval);
-    builtin_make_serial_process_impl(
+    let result = builtin_make_serial_process_impl(
         &mut eval.processes,
         &mut eval.buffers,
         &eval.threads,
         Some(&eval.coding_systems),
         coding_variables,
         args,
-    )
+    );
+    initialize_created_process_output(eval, result)
 }
 
 pub(crate) fn builtin_make_serial_process_impl(
@@ -3692,16 +3736,16 @@ pub(crate) fn builtin_signal_process_impl(
                 }
                 return Ok(Value::fixnum(signal_process_or_unbacked_success(
                     proc,
-                    signal_num,
+                    signal_num.into(),
                     ProcessSignalRecipient::ImmediateProcess,
                 ) as i64));
             }
             Ok(Value::fixnum(-1))
         }
         SignalProcessTarget::MissingNamedProcess => Ok(Value::NIL),
-        SignalProcessTarget::Pid(pid) => {
-            Ok(Value::fixnum(sys::send_signal(pid, signal_num) as i64))
-        }
+        SignalProcessTarget::Pid(pid) => Ok(Value::fixnum(
+            sys::send_signal(pid, signal_num.into()) as i64,
+        )),
     }
 }
 
@@ -4054,7 +4098,7 @@ pub(crate) fn builtin_make_process(
         coding_environment,
     );
     eval.restore_specpdl_roots(roots);
-    process
+    initialize_created_process_output(eval, process)
 }
 
 /// Read the ambient half of GNU's `Fmake_process` coding chain, including the
@@ -4549,7 +4593,47 @@ pub(super) fn accept_process_output_positive_timeout(args: &[Value]) -> Option<D
         return None;
     };
 
-    (total_seconds > 0.0).then(|| Duration::from_secs_f64(total_seconds))
+    match crate::emacs_core::timer::WaitTimeout::from(total_seconds) {
+        crate::emacs_core::timer::WaitTimeout::For(timeout) => Some(timeout),
+        crate::emacs_core::timer::WaitTimeout::Poll
+        | crate::emacs_core::timer::WaitTimeout::Forever => None,
+    }
+}
+
+/// Encode a subprocess write with the current evaluator's coding definitions.
+fn encode_process_send_input_in_context(
+    eval: &mut super::super::eval::Context,
+    id: ProcessId,
+    input: LispString,
+) -> Result<LispString, Flow> {
+    let configured = eval
+        .processes
+        .get_any(id)
+        .ok_or_else(|| signal_process_not_running_in_manager(&eval.processes, id))?
+        .coding_encode;
+    let configured = configured
+        .as_symbol_id()
+        .filter(|&symbol| symbol != super::super::intern::intern("nil"))
+        .unwrap_or_else(|| super::super::intern::intern("utf-8-unix"));
+    let configured = crate::encoding::RuntimeCodingSystem::from_symbol(configured);
+    let eol_conversion = eval.eol_conversion();
+    let state = &mut eval
+        .processes
+        .get_any_mut(id)
+        .expect("process was resolved above")
+        .encoding_state;
+    let reported = state.select_input(
+        &eval.coding_systems,
+        configured,
+        input.is_multibyte(),
+        eol_conversion,
+    )?;
+    let coding = state
+        .coding()
+        .expect("input selection requires a descriptor");
+    eval.set_variable("last-coding-system-used", Value::symbol(reported.symbol()));
+    let encoded = crate::encoding::encode_process_text_in_context(eval, input, coding, id)?;
+    Ok(LispString::from_unibyte(encoded))
 }
 
 /// (process-send-string PROCESS STRING) -> nil
@@ -4579,7 +4663,7 @@ pub(crate) fn builtin_process_send_string(
     {
         return Err(signal_process_not_running_in_manager(&eval.processes, id));
     }
-    let encoded = encode_process_send_input(&eval.processes, id, &input, eval.eol_conversion());
+    let encoded = encode_process_send_input_in_context(eval, id, input)?;
     eval.send_process_input_reentrant(id, &encoded)?;
     Ok(Value::NIL)
 }
@@ -4889,7 +4973,15 @@ pub(crate) fn builtin_set_process_coding_system(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_set_process_coding_system_impl(&mut eval.processes, &eval.coding_systems, args)
+    let process = args.first().copied();
+    let result =
+        builtin_set_process_coding_system_impl(&mut eval.processes, &eval.coding_systems, args)?;
+    let id = resolve_process_object_or_wrong_type_any_in_manager(
+        &eval.processes,
+        &process.expect("validated arguments"),
+    )?;
+    eval.setup_process_output_descriptor(id)?;
+    Ok(result)
 }
 
 pub(crate) fn builtin_set_process_coding_system_impl(
@@ -4931,6 +5023,7 @@ pub(crate) fn builtin_set_process_coding_system_impl(
     // zeroes both `coding->mode` (:5683, so the `CODING_MODE_LAST_BLOCK` latch
     // goes down) and `coding->carryover_bytes` (:5703).
     proc.coding_state.reset();
+    proc.encoding_state = ProcessEncodingState::default();
     proc.coding_encode = encoding;
     proc.coding_explicitly_set = true;
     Ok(Value::NIL)
@@ -5266,8 +5359,7 @@ pub(crate) fn builtin_process_send_region(
         buf.buffer_substring_lisp_string_range(region)
     };
 
-    let encoded =
-        encode_process_send_input(&eval.processes, id, &region_text, eval.eol_conversion());
+    let encoded = encode_process_send_input_in_context(eval, id, region_text)?;
     eval.send_process_input_reentrant(id, &encoded)?;
     Ok(Value::NIL)
 }

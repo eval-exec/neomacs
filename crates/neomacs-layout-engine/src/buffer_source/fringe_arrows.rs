@@ -335,4 +335,5 @@ impl DisplayWindowRowMutation for ResolvedFringeArrowRowMutation {
 }
 
 #[cfg(test)]
+#[path = "fringe_arrows/tests/fringe_arrows_test.rs"]
 mod tests;

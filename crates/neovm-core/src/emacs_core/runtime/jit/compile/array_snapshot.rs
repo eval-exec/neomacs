@@ -16,18 +16,16 @@ thread_local! {
     static ACTIVE_ARRAY_KINDS: RefCell<Vec<ArrayKindMask>> = const { RefCell::new(Vec::new()) };
 }
 
-pub(super) struct ArrayFeedbackScope(Option<Vec<ArrayKindMask>>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(super) struct ArrayFeedbackScope {
+    _scope: crate::tls_scope::TlsScope<Vec<ArrayKindMask>, RefCell<Vec<ArrayKindMask>>>,
+}
+static_assertions::assert_not_impl_any!(ArrayFeedbackScope: Send, Sync);
 impl ArrayFeedbackScope {
     pub(super) fn enter(kinds: Vec<ArrayKindMask>) -> Self {
-        Self(Some(
-            ACTIVE_ARRAY_KINDS.with(|v| std::mem::replace(&mut *v.borrow_mut(), kinds)),
-        ))
-    }
-}
-impl Drop for ArrayFeedbackScope {
-    fn drop(&mut self) {
-        if let Some(prev) = self.0.take() {
-            ACTIVE_ARRAY_KINDS.with(|v| *v.borrow_mut() = prev);
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&ACTIVE_ARRAY_KINDS, kinds),
         }
     }
 }

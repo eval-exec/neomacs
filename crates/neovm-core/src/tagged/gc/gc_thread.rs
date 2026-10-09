@@ -5,6 +5,30 @@
 
 use super::*;
 
+// Rendezvous installed only on dedicated test worker threads. Production jobs
+// carry no hook state.
+#[cfg(test)]
+thread_local! {
+    static CONCURRENT_HASH_BEFORE_CLAIM_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static CONCURRENT_HASH_SCAN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn concurrent_hash_before_claim_hook_for_test() {
+    let hook = CONCURRENT_HASH_BEFORE_CLAIM_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+fn concurrent_hash_scan_hook_for_test() {
+    let hook = CONCURRENT_HASH_SCAN_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 /// A raw `*mut TaggedHeap` that can cross to the GC thread. The heap is `!Send`
 /// (raw pointers), but during a handshake the mutator is BLOCKED waiting for the
 /// GC thread, so the two threads never touch the heap at the same time — the GC
@@ -15,13 +39,13 @@ unsafe impl Send for HeapPtr {}
 
 /// A non-blocking concurrent-mark job (Phase 5). Carries everything the GC
 /// thread needs WITHOUT a `&mut TaggedHeap` — two threads holding `&mut` to the
-/// same heap is UB in Rust's model even with atomic fields. The GC thread marks
-/// only conses (fixed 16B; car/cdr + mark bits are atomic) and DEFERS every
-/// non-cons (and any non-owned cons) to `deferred`, traced at the stop-the-world
-/// termination. So it touches no growable/reallocatable heap structure.
+/// same heap is UB in Rust's model even with atomic fields. The GC thread reads
+/// cons slots and claimable non-cons payloads through immutable ownership and
+/// backing snapshots. Unsupported kinds go to `deferred` for termination.
+/// It never reads a growable live registry or a mutable hash backing.
 pub(super) struct ConcurrentMarkJob {
     /// Root snapshot, moved out of the heap's gray queue at the start handshake.
-    pub(super) gray: Vec<TaggedValue>,
+    pub(super) gray: MarkStack,
     /// CONCURRENT CLAIM DISPATCHER state (the start handshake's page
     /// snapshot, cycle parity, dump span, claim counters) for
     /// `concurrent_try_mark_owned`. Grouped in a sub-struct so the scan
@@ -31,9 +55,9 @@ pub(super) struct ConcurrentMarkJob {
     /// block arithmetic; others (mapped/dump, or new blocks) are deferred.
     pub(super) claims: ConcurrentClaimJob,
     /// Overwritten children appended by the mutator's SATB barrier; drained here.
-    pub(super) satb: std::sync::Arc<std::sync::Mutex<Vec<TaggedValue>>>,
+    pub(super) satb: SharedMarkQueue,
     /// Non-cons / non-owned-cons values to trace at the STW termination.
-    pub(super) deferred: std::sync::Arc<std::sync::Mutex<Vec<TaggedValue>>>,
+    pub(super) deferred: SharedMarkQueue,
     /// Set when gray + SATB are drained (tentatively done); polled by the mutator.
     pub(super) done: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Set by the mutator to ask this loop to exit.
@@ -97,8 +121,8 @@ pub(super) struct ConcurrentClaimJob {
     /// are discarded by the coordinator before legacy permanent promotion.
     pub(super) major: bool,
     /// OWNERSHIP SNAPSHOT (`chunk_map::PageSnapshot`): the cons blocks and
-    /// the STRING, FLOAT, VECTOR and BYTECODE arena pages that existed at the
-    /// world-stopped start handshake (retired pages included — their tenured
+    /// claimable STRING, FLOAT, VECTOR and BYTECODE arena pages that existed
+    /// at the world-stopped start handshake (retired pages included — their tenured
     /// objects short-circuit to drop at the arms). A HIT both proves
     /// ownership and classifies the value (a block or page owns its whole
     /// 64 KiB granule and is homogeneous), without reading any header. MISS ⇒
@@ -177,27 +201,72 @@ pub(super) struct ConcurrentMarkResult {
     pub(super) symbols: Vec<SymId>,
 }
 
-/// Job-local logs. No worker writes to collector or mutator symbol state.
-#[derive(Default)]
-struct WorkerMarkLogs {
-    result: ConcurrentMarkResult,
-    seen_symbols: FxHashSet<SymId>,
+/// Enabled-only claim state, boxed together with the original job at launch.
+/// The snapshot remains owned until the worker's last read and result handoff.
+pub(super) struct EnabledClaims {
+    pub(super) leaves: chunk_map::LeafPageSnapshot,
+    pub(super) leaf_claimed: Option<std::sync::Arc<AtomicUsize>>,
+    pub(super) hashes: Option<std::sync::Arc<concurrent_hash::HashTableScanSnapshot>>,
+    pub(super) hash_claimed: Option<std::sync::Arc<AtomicUsize>>,
 }
 
-impl WorkerMarkLogs {
+pub(super) struct EnabledConcurrentMarkJob {
+    pub(super) job: ConcurrentMarkJob,
+    pub(super) claims: EnabledClaims,
+}
+
+/// This static policy isolates the original OFF logs and child classifier.
+trait WorkerSymbolMarks: Default {
+    const ENABLED: bool;
+    fn note(&mut self, value: TaggedValue, symbols: &mut Vec<SymId>) -> bool;
+}
+
+impl WorkerSymbolMarks for FxHashSet<SymId> {
+    const ENABLED: bool = false;
     #[inline]
-    fn note_symbol(&mut self, value: TaggedValue) -> bool {
+    fn note(&mut self, value: TaggedValue, symbols: &mut Vec<SymId>) -> bool {
         let crate::tagged::value::ValueKind::Symbol(id) = value.kind() else {
             return false;
         };
-        if self.seen_symbols.insert(id) {
-            self.result.symbols.push(id);
+        if self.insert(id) {
+            symbols.push(id);
         }
         true
     }
+}
 
-    /// The caller has successfully claimed this snapshot-owned header.
-    /// Generation bytes do not change until the worker has exited.
+impl WorkerSymbolMarks for SymbolMarkBits {
+    const ENABLED: bool = true;
+    #[inline(always)]
+    fn note(&mut self, value: TaggedValue, symbols: &mut Vec<SymId>) -> bool {
+        // Exclude identities, never mutable intern membership or namesakes.
+        if !value.is_symbol() || value.bits() <= TaggedValue::UNBOUND.bits() {
+            return false;
+        }
+        let id = value.xsymbol_id();
+        if self.insert_if_absent(id) {
+            symbols.push(id);
+        }
+        true
+    }
+}
+
+/// Job-local logs. No worker writes to collector or mutator symbol state.
+#[derive(Default)]
+struct WorkerMarkLogs<S: WorkerSymbolMarks = FxHashSet<SymId>> {
+    result: ConcurrentMarkResult,
+    seen_symbols: S,
+}
+
+type EnabledWorkerMarkLogs = WorkerMarkLogs<SymbolMarkBits>;
+
+impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
+    #[inline]
+    fn note_symbol(&mut self, value: TaggedValue) -> bool {
+        self.seen_symbols.note(value, &mut self.result.symbols)
+    }
+
+    /// Generation bytes do not change until this worker has exited.
     #[inline]
     fn note_promotion<const MAJOR: bool>(&mut self, header: *const GcHeader) {
         if MAJOR && !unsafe { (*header).tenured } {
@@ -205,15 +274,55 @@ impl WorkerMarkLogs {
         }
     }
 
-    /// Cons and bytecode children stay queued rather than recursively claimed.
     #[inline(always)]
-    fn queue_child<const MAJOR: bool>(&mut self, value: TaggedValue, gray: &mut Vec<TaggedValue>) {
-        if MAJOR && self.note_symbol(value) {
-            return;
+    fn queue_child<const SYMBOLS: bool>(&mut self, value: TaggedValue, gray: &mut MarkStack) {
+        if S::ENABLED {
+            if value.is_heap_object() {
+                gray.push(value);
+            } else if SYMBOLS {
+                self.note_symbol(value);
+            }
+        } else {
+            // The original OFF major classifier and queue order.
+            if SYMBOLS && self.note_symbol(value) {
+                return;
+            }
+            if value.is_heap_object() {
+                gray.push(value);
+            }
         }
-        if value.is_heap_object() {
-            gray.push(value);
-        }
+    }
+
+    #[inline]
+    fn queue_snapshot_child(&mut self, value: TaggedValue, gray: &mut MarkStack) {
+        self.queue_child::<true>(value, gray);
+    }
+}
+
+trait ClaimExtension {
+    type Symbols: WorkerSymbolMarks;
+    fn try_mark<const MAJOR: bool>(
+        &self,
+        ptr: *const VecLikeHeader,
+        job: &ConcurrentClaimJob,
+        gray: &mut MarkStack,
+        logs: &mut WorkerMarkLogs<Self::Symbols>,
+    ) -> Option<bool>;
+}
+
+struct LegacyClaims;
+
+impl ClaimExtension for LegacyClaims {
+    type Symbols = FxHashSet<SymId>;
+    #[inline(always)]
+    fn try_mark<const MAJOR: bool>(
+        &self,
+        _ptr: *const VecLikeHeader,
+        _job: &ConcurrentClaimJob,
+        _gray: &mut MarkStack,
+        _logs: &mut WorkerMarkLogs<Self::Symbols>,
+    ) -> Option<bool> {
+        None
     }
 }
 
@@ -221,8 +330,8 @@ impl WorkerMarkLogs {
 /// thread signals when finished so the mutator can resume.
 ///
 /// The variant sizes differ (the mark job carries the per-cycle claim
-/// snapshots), but exactly one request is in flight per GC cycle, so boxing
-/// the large variant would buy nothing.
+/// snapshots). The original concurrent job stays inline and unchanged; the
+/// enabled extension is boxed so it cannot widen the OFF channel payload.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum GcRequest {
     /// Drain the gray queue (mark to a fixpoint) on the GC thread.
@@ -230,7 +339,21 @@ pub(super) enum GcRequest {
     /// Non-blocking concurrent mark (Phase 5): mark conses while the mutator
     /// runs; defer everything else to the termination handshake.
     ConcurrentMark(ConcurrentMarkJob),
+    /// Extended ownership and symbol tracing are allocated only when enabled.
+    ConcurrentMarkEnabled(Box<EnabledConcurrentMarkJob>),
 }
+
+// The base's ordinary-build sizes (b40: ts7's VectorScanSnapshot carries its
+// heap identity, 8 bytes more than the original 416-byte job). The ON box must
+// preserve these layouts, including the actual channel enum's niche choice.
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+const _: () = {
+    assert!(size_of::<PageSnapshot>() == 160);
+    assert!(size_of::<ConcurrentClaimJob>() == 224);
+    assert!(size_of::<ConcurrentMarkJob>() == 424);
+    assert!(size_of::<GcRequest>() == 424);
+    assert!(size_of::<WorkerMarkLogs>() == 80);
+};
 
 pub(super) static GC_THREAD: std::sync::OnceLock<
     std::sync::Mutex<std::sync::mpsc::Sender<GcRequest>>,
@@ -255,6 +378,9 @@ pub(super) fn gc_thread() -> std::sync::MutexGuard<'static, std::sync::mpsc::Sen
                             }
                             GcRequest::ConcurrentMark(job) => {
                                 run_concurrent_mark(job);
+                            }
+                            GcRequest::ConcurrentMarkEnabled(job) => {
+                                run_concurrent_mark_enabled(*job);
                             }
                         }
                     }
@@ -369,10 +495,10 @@ pub(super) fn concurrent_try_mark_string(
 /// Enabled-major string claim: permanent generation first, interval refusal
 /// before the claim, and P-all logging only after a successful young claim.
 #[inline]
-fn concurrent_try_mark_string_major(
+fn concurrent_try_mark_string_major<S: WorkerSymbolMarks>(
     val: TaggedValue,
     job: &ConcurrentClaimJob,
-    logs: &mut WorkerMarkLogs,
+    logs: &mut WorkerMarkLogs<S>,
 ) -> bool {
     debug_assert!(val.is_string());
     let Some(ptr) = val.as_string_ptr() else {
@@ -447,15 +573,62 @@ pub(super) fn concurrent_try_mark_owned(
     gray: &mut Vec<TaggedValue>,
 ) -> bool {
     debug_assert!(!job.major);
-    concurrent_try_mark_owned_logged::<false>(val, job, gray, &mut WorkerMarkLogs::default())
+    let mut stack = MarkStack::default();
+    let handled = concurrent_try_mark_owned_logged::<false>(
+        val,
+        job,
+        &mut stack,
+        &mut WorkerMarkLogs::default(),
+    );
+    gray.extend(stack.into_values());
+    handled
 }
 
+#[cfg(test)]
 #[inline]
 fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
     val: TaggedValue,
     job: &ConcurrentClaimJob,
-    gray: &mut Vec<TaggedValue>,
+    gray: &mut MarkStack,
     logs: &mut WorkerMarkLogs,
+) -> bool {
+    concurrent_try_mark_owned_with_symbols::<MAJOR, MAJOR, LegacyClaims>(
+        val,
+        job,
+        &LegacyClaims,
+        gray,
+        logs,
+    )
+}
+
+#[cfg(test)]
+#[inline]
+fn concurrent_try_mark_owned_enabled<const MAJOR: bool>(
+    val: TaggedValue,
+    job: &ConcurrentClaimJob,
+    claims: &EnabledClaims,
+    gray: &mut Vec<TaggedValue>,
+    logs: &mut EnabledWorkerMarkLogs,
+) -> bool {
+    let mut stack = MarkStack::default();
+    let handled = concurrent_try_mark_owned_with_symbols::<MAJOR, true, EnabledClaims>(
+        val, job, claims, &mut stack, logs,
+    );
+    gray.extend(stack.into_values());
+    handled
+}
+
+#[inline]
+fn concurrent_try_mark_owned_with_symbols<
+    const MAJOR: bool,
+    const SYMBOLS: bool,
+    E: ClaimExtension,
+>(
+    val: TaggedValue,
+    job: &ConcurrentClaimJob,
+    extension: &E,
+    gray: &mut MarkStack,
+    logs: &mut WorkerMarkLogs<E::Symbols>,
 ) -> bool {
     // FIRST PARTITION CYCLE: a child inside the dump span is fully handled
     // (see `ConcurrentClaimJob::drop_dump_children`) — nothing owed.
@@ -677,7 +850,7 @@ fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
                 // prototype's code string reachable through the prototype;
                 // pushing it is harmless either way.
                 for child in unsafe { (*(ptr as *const ByteCodeObj)).slot_objects.children() } {
-                    logs.queue_child::<MAJOR>(child, gray);
+                    logs.queue_child::<SYMBOLS>(child, gray);
                 }
                 let data = unsafe { &(*(ptr as *const ByteCodeObj)).data };
                 // Lazy pdump stubs are confined to the MAPPED image (the
@@ -688,26 +861,29 @@ fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
                     !data.is_pdump_stub(),
                     "arena bytecode must never be a lazy pdump stub"
                 );
-                logs.queue_child::<MAJOR>(data.arglist, gray);
+                logs.queue_child::<SYMBOLS>(data.arglist, gray);
                 for &c in &data.constants {
-                    logs.queue_child::<MAJOR>(c, gray);
+                    logs.queue_child::<SYMBOLS>(c, gray);
                 }
                 if let Some(env) = data.env {
-                    logs.queue_child::<MAJOR>(env, gray);
+                    logs.queue_child::<SYMBOLS>(env, gray);
                 }
                 if let Some(doc_form) = data.doc_form {
-                    logs.queue_child::<MAJOR>(doc_form, gray);
+                    logs.queue_child::<SYMBOLS>(doc_form, gray);
                 }
                 if let Some(interactive) = data.interactive {
-                    logs.queue_child::<MAJOR>(interactive, gray);
+                    logs.queue_child::<SYMBOLS>(interactive, gray);
                 }
                 for &s in &data.extra_slots {
-                    logs.queue_child::<MAJOR>(s, gray);
+                    logs.queue_child::<SYMBOLS>(s, gray);
                 }
             }
             // Already marked (lost race, earlier edge, or born-at-parity —
             // coverage leg (c)): equally handled, nothing further owed.
             return true;
+        }
+        if let Some(handled) = extension.try_mark::<MAJOR>(ptr, job, gray, logs) {
+            return handled;
         }
         // MAPPED (pdump) veclikes mark via the heap's side table
         // (`mapped_veclike_objects[..].marked`), which only the mutator may
@@ -748,6 +924,99 @@ fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
     false
 }
 
+impl ClaimExtension for EnabledClaims {
+    type Symbols = SymbolMarkBits;
+
+    #[inline]
+    fn try_mark<const MAJOR: bool>(
+        &self,
+        ptr: *const VecLikeHeader,
+        job: &ConcurrentClaimJob,
+        gray: &mut MarkStack,
+        logs: &mut EnabledWorkerMarkLogs,
+    ) -> Option<bool> {
+        let addr = ptr as usize;
+        let base = addr & !(OBJECT_PAGE_ALIGN - 1);
+        if let Some(hashes) = &self.hashes {
+            // Exact snapshot-map ownership before any Box header read.
+            // Ineligible weak/pending, mapped and post-start owners miss this
+            // map and remain on the ordinary mutator-side defer path.
+            if let Some(entry) = hashes.get(addr) {
+                if unsafe { (*ptr).gc.black_by_generation(job.scope()) } {
+                    return Some(true);
+                }
+                #[cfg(test)]
+                concurrent_hash_before_claim_hook_for_test();
+                // Reader admission precedes the header claim. A first writer
+                // may defer an unread table, but never an already claimed one.
+                let Some(mut reader) = hashes.lock_reader(entry) else {
+                    return Some(!entry.is_deferred());
+                };
+                if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
+                    self.hash_claimed
+                        .as_ref()
+                        .expect("Tier-H snapshot requires a cycle counter")
+                        .fetch_add(1, Ordering::Relaxed);
+                    logs.note_promotion::<MAJOR>(ptr.cast());
+                    // Complete this snapshot scan even if stop arrives now:
+                    // a claimed header cannot be sent back for retracing.
+                    #[cfg(test)]
+                    let mut first_word = true;
+                    unsafe {
+                        reader.scan(|child| {
+                            logs.queue_snapshot_child(child, gray);
+                            #[cfg(test)]
+                            if first_word {
+                                first_word = false;
+                                concurrent_hash_scan_hook_for_test();
+                            }
+                        });
+                    }
+                }
+                reader.finish();
+                return Some(true);
+            }
+        }
+        {
+            // A class page hit is both the ownership and subtype proof.
+            // Never inspect a live allocator bitmap or a payload on a miss.
+            if let Some(class) = self.leaves.leaf_class(&job.pages, addr) {
+                let stride = match class {
+                    ChunkClass::Marker => <MarkerObj as PagedObject>::SLOT_BYTES,
+                    ChunkClass::Bignum => <BignumObj as PagedObject>::SLOT_BYTES,
+                    ChunkClass::SymbolWithPos => <SymbolWithPosObj as PagedObject>::SLOT_BYTES,
+                    _ => unreachable!("leaf snapshot returned a non-leaf class"),
+                };
+                debug_assert_eq!((addr - base) % stride, 0, "misaligned leaf page value");
+                if unsafe { (*ptr).gc.black_by_generation(job.scope()) } {
+                    return Some(true);
+                }
+                if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
+                    self.leaf_claimed
+                        .as_ref()
+                        .expect("enabled leaf claims require a cycle counter")
+                        .fetch_add(1, Ordering::Relaxed);
+                    logs.note_promotion::<MAJOR>(ptr.cast());
+                    if class == ChunkClass::SymbolWithPos {
+                        // These fields have no post-publication setter. A
+                        // fresh claim excludes births at this cycle parity:
+                        // construction happened before the start handshake
+                        // and channel publication. Failed claims never read
+                        // payloads, including reused slots born black.
+                        let object = ptr as *const SymbolWithPosObj;
+                        logs.queue_snapshot_child(unsafe { (*object).sym }, gray);
+                        logs.queue_snapshot_child(unsafe { (*object).pos }, gray);
+                    }
+                    // Marker chains and bignum limb buffers are mutable host
+                    // state, with no Lisp children: do not read either here.
+                }
+                return Some(true);
+            }
+        }
+        None
+    }
+}
+
 /// The background concurrent-mark loop (Phase 5). Runs on the "neovm-gc" thread
 /// with no `&mut TaggedHeap`: it marks conses via atomic block-bitmap ops +
 /// atomic car/cdr loads, claims the kinds the claim dispatcher recognizes
@@ -762,31 +1031,38 @@ fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
 /// mapped object), symbols dedup into `deferred`, young heap values go
 /// through the claim dispatcher. Kinds with mutator-only side effects
 /// (hash tables) defer the whole OBJECT to the termination.
-fn concurrent_trace_mapped_veclike<const MAJOR: bool>(
+fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtension>(
     ptr: *mut VecLikeHeader,
     job: &mut ConcurrentMarkJob,
+    extension: &E,
     seen_symbols: &mut FxHashSet<usize>,
-    logs: &mut WorkerMarkLogs,
+    logs: &mut WorkerMarkLogs<E::Symbols>,
 ) {
     let route = |child: TaggedValue,
                  job: &mut ConcurrentMarkJob,
                  seen_symbols: &mut FxHashSet<usize>,
-                 logs: &mut WorkerMarkLogs| {
+                 logs: &mut WorkerMarkLogs<E::Symbols>| {
         if child.is_cons() {
             let addr = child.xcons_ptr() as usize;
             if addr < job.claims.dump_lo || addr >= job.claims.dump_hi {
                 job.gray.push(child);
             }
         } else if child.is_symbol() {
-            if MAJOR {
+            if SYMBOLS {
                 logs.note_symbol(child);
             } else if seen_symbols.insert(child.bits()) {
-                job.deferred.lock().unwrap().push(child);
+                job.deferred.lock().unwrap().push(MarkWord::of(child));
             }
         } else if child.is_heap_object()
-            && !concurrent_try_mark_owned_logged::<MAJOR>(child, &job.claims, &mut job.gray, logs)
+            && !concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
+                child,
+                &job.claims,
+                extension,
+                &mut job.gray,
+                logs,
+            )
         {
-            job.deferred.lock().unwrap().push(child);
+            job.deferred.lock().unwrap().push(MarkWord::of(child));
         }
     };
     match unsafe { (*ptr).type_tag } {
@@ -836,43 +1112,82 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool>(
             // publication — the mutator materializes a stub with a plain
             // whole-data write, safe today only because this arm defers all
             // mapped bytecode to the mutator side.
+            // SAFETY: the start-handshake mapped-veclike registry supplies a
+            // live, aligned header retained through this cycle. This only tags
+            // its address; payload tracing remains on the termination mutator.
             job.deferred
                 .lock()
                 .unwrap()
-                .push(unsafe { TaggedValue::from_veclike_ptr(ptr) });
+                .push(MarkWord::of(unsafe { TaggedValue::from_veclike_ptr(ptr) }));
         }
     }
 }
 
 pub(super) fn run_concurrent_mark(job: ConcurrentMarkJob) {
-    // Select once: no new mode branch in the legacy cons/child claim loops.
     if job.claims.major {
-        run_concurrent_mark_impl::<true>(job);
+        run_concurrent_mark_impl::<true, true, LegacyClaims>(job, LegacyClaims);
     } else {
-        run_concurrent_mark_impl::<false>(job);
+        run_concurrent_mark_impl::<false, false, LegacyClaims>(job, LegacyClaims);
+    }
+}
+
+pub(super) fn run_concurrent_mark_enabled(job: EnabledConcurrentMarkJob) {
+    // ON requires transitive bare-symbol handoff even in GEN0. This election
+    // happens once, outside every classification and child-routing loop.
+    if job.job.claims.major {
+        run_concurrent_mark_impl::<true, true, EnabledClaims>(job.job, job.claims);
+    } else {
+        run_concurrent_mark_impl::<false, true, EnabledClaims>(job.job, job.claims);
     }
 }
 
 #[inline(always)]
-fn route_snapshot_child<const MAJOR: bool>(
+fn route_snapshot_child<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtension>(
     child: TaggedValue,
     job: &mut ConcurrentMarkJob,
-    logs: &mut WorkerMarkLogs,
+    extension: &E,
+    logs: &mut WorkerMarkLogs<E::Symbols>,
 ) {
-    // Symbols have side-table liveness and no dereferenceable header. Handle
-    // them before dump-span dropping or the heap claim dispatcher.
-    if MAJOR && logs.note_symbol(child) {
-        return;
-    }
-    if child.is_cons() {
-        job.gray.push(child);
-    } else if !concurrent_try_mark_owned_logged::<MAJOR>(child, &job.claims, &mut job.gray, logs) {
-        job.deferred.lock().unwrap().push(child);
+    if <E::Symbols as WorkerSymbolMarks>::ENABLED {
+        if child.is_cons() {
+            job.gray.push(child);
+        } else if child.is_heap_object() {
+            if !concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
+                child,
+                &job.claims,
+                extension,
+                &mut job.gray,
+                logs,
+            ) {
+                job.deferred.lock().unwrap().push(MarkWord::of(child));
+            }
+        } else if SYMBOLS {
+            logs.note_symbol(child);
+        }
+    } else {
+        // The original OFF snapshot route, including its immediate deferral.
+        if SYMBOLS && logs.note_symbol(child) {
+            return;
+        }
+        if child.is_cons() {
+            job.gray.push(child);
+        } else if !concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
+            child,
+            &job.claims,
+            extension,
+            &mut job.gray,
+            logs,
+        ) {
+            job.deferred.lock().unwrap().push(MarkWord::of(child));
+        }
     }
 }
 
-fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
-    let mut logs = WorkerMarkLogs::default();
+fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtension>(
+    mut job: ConcurrentMarkJob,
+    extension: E,
+) {
+    let mut logs = WorkerMarkLogs::<E::Symbols>::default();
     use std::sync::atomic::Ordering;
     // LOAD-BEARING ORDER (task 01, vector-header claims): both start-snapshot
     // scans run TO COMPLETION *before* the stop-interruptible gray drain.
@@ -902,12 +1217,20 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
         // handshake; its chunk + seq pointers address the live, non-moving
         // obarray storage, and we are on the GC thread.
         unsafe {
-            if MAJOR {
+            if SYMBOLS {
+                // This API only widens the child filter to include Symbols;
+                // promotion still uses the independent MAJOR policy.
                 snap.scan_for_major(|child| {
-                    route_snapshot_child::<MAJOR>(child, &mut job, &mut logs)
+                    route_snapshot_child::<MAJOR, SYMBOLS, E>(
+                        child, &mut job, &extension, &mut logs,
+                    )
                 });
             } else {
-                snap.scan(|child| route_snapshot_child::<MAJOR>(child, &mut job, &mut logs));
+                snap.scan(|child| {
+                    route_snapshot_child::<MAJOR, SYMBOLS, E>(
+                        child, &mut job, &extension, &mut logs,
+                    )
+                });
             }
         }
     }
@@ -919,12 +1242,18 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
         // (Mapped dump or retired-on-write Owned buffer), and we are on the GC
         // thread.
         unsafe {
-            if MAJOR {
+            if SYMBOLS {
                 snap.scan_for_major(|child| {
-                    route_snapshot_child::<MAJOR>(child, &mut job, &mut logs)
+                    route_snapshot_child::<MAJOR, SYMBOLS, E>(
+                        child, &mut job, &extension, &mut logs,
+                    )
                 });
             } else {
-                snap.scan(|child| route_snapshot_child::<MAJOR>(child, &mut job, &mut logs));
+                snap.scan(|child| {
+                    route_snapshot_child::<MAJOR, SYMBOLS, E>(
+                        child, &mut job, &extension, &mut logs,
+                    )
+                });
             }
         }
     }
@@ -933,9 +1262,10 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
     if let Some(addrs) = job.mapped_veclikes.take() {
         let mut seen_symbols: FxHashSet<usize> = FxHashSet::default();
         for addr in addrs {
-            concurrent_trace_mapped_veclike::<MAJOR>(
+            concurrent_trace_mapped_veclike::<MAJOR, SYMBOLS, E>(
                 addr as *mut VecLikeHeader,
                 &mut job,
+                &extension,
                 &mut seen_symbols,
                 &mut logs,
             );
@@ -974,23 +1304,24 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
                         // mutator-only, and an uninterned dumped symbol is
                         // reachable only through image data, so each UNIQUE
                         // symbol must reach the termination exactly once.
-                        if MAJOR {
+                        if SYMBOLS {
                             logs.note_symbol(child);
                         } else if seen_symbols.insert(child.bits()) {
-                            job.deferred.lock().unwrap().push(child);
+                            job.deferred.lock().unwrap().push(MarkWord::of(child));
                         }
                     } else if child.is_heap_object() {
                         // Same filter as `mark_or_push_child`: immediates
                         // (fixnums, chars) carry nothing to mark — routing
                         // them into `deferred` flooded the first termination
                         // with ~118K no-op entries.
-                        if !concurrent_try_mark_owned_logged::<MAJOR>(
+                        if !concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
                             child,
                             &job.claims,
+                            &extension,
                             &mut job.gray,
                             &mut logs,
                         ) {
-                            job.deferred.lock().unwrap().push(child);
+                            job.deferred.lock().unwrap().push(MarkWord::of(child));
                         }
                     }
                 }
@@ -1021,7 +1352,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
                     break 'mark;
                 }
             }
-            if MAJOR && logs.note_symbol(val) {
+            if !<E::Symbols as WorkerSymbolMarks>::ENABLED && SYMBOLS && logs.note_symbol(val) {
                 continue;
             }
             if val.is_cons() {
@@ -1033,7 +1364,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
                 if !job.claims.pages.contains(ChunkClass::Cons, addr) {
                     // Mapped (non-dump) or new-block cons — let the mutator's
                     // termination mark it through the full `mark_value` path.
-                    job.deferred.lock().unwrap().push(val);
+                    job.deferred.lock().unwrap().push(MarkWord::of(val));
                     continue;
                 }
                 if unsafe { atomic_mark_owned_cons_ptr(ptr) } {
@@ -1046,9 +1377,9 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
                     loop {
                         let car = unsafe { (*ptr).load_car() };
                         let cdr = unsafe { (*ptr).load_cdr() };
-                        logs.queue_child::<MAJOR>(car, &mut job.gray);
+                        logs.queue_child::<SYMBOLS>(car, &mut job.gray);
                         if !cdr.is_cons() {
-                            logs.queue_child::<MAJOR>(cdr, &mut job.gray);
+                            logs.queue_child::<SYMBOLS>(cdr, &mut job.gray);
                             break;
                         }
                         since_stop_check += 1;
@@ -1062,7 +1393,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
                             break; // dump cons: permanent black
                         }
                         if !job.claims.pages.contains(ChunkClass::Cons, caddr) {
-                            job.deferred.lock().unwrap().push(cdr);
+                            job.deferred.lock().unwrap().push(MarkWord::of(cdr));
                             break;
                         }
                         if !unsafe { atomic_mark_owned_cons_ptr(cptr) } {
@@ -1080,15 +1411,18 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
                 // mutator may reallocate, and interval-bearing or mapped
                 // strings, which need the mutator's `mark_value` — is
                 // deferred to the STW termination.
-                if concurrent_try_mark_owned_logged::<MAJOR>(
+                if concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
                     val,
                     &job.claims,
+                    &extension,
                     &mut job.gray,
                     &mut logs,
                 ) {
                     continue;
                 }
-                job.deferred.lock().unwrap().push(val);
+                job.deferred.lock().unwrap().push(MarkWord::of(val));
+            } else if <E::Symbols as WorkerSymbolMarks>::ENABLED && SYMBOLS {
+                logs.note_symbol(val);
             }
         }
         // Fold the mutator's SATB log (overwritten children) into gray.
@@ -1116,14 +1450,14 @@ fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
             }
         } else {
             job.done.store(false, Ordering::Release);
-            job.gray.extend(batch);
+            job.gray.extend_words(batch);
         }
     }
     // Fix B: residual local gray (a mid-drain stop) joins the deferred
     // handoff; the termination fold routes both through the STW `mark_value`
     // drain. Empty on the normal (idle-stop) path.
     if !job.gray.is_empty() {
-        job.deferred.lock().unwrap().extend(job.gray.drain(..));
+        job.deferred.lock().unwrap().extend(job.gray.drain_words());
     }
     // Every exit, including either stop quantum, retains the owned logs.
     // No heap/snapshot access follows this handoff.
@@ -1137,6 +1471,13 @@ pub fn set_tagged_heap(heap: &mut TaggedHeap) {
     TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(heap.write_tracking_mode()));
     TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(heap.partition_dump));
     TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(heap.concurrent_mark_running));
+    TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| {
+        active.set(
+            heap.concurrent_mark_running
+                && heap.concurrent_claims()
+                && heap.concurrent_hash_snapshot().is_some(),
+        );
+    });
     TAGGED_HEAP_DUMP_SPAN.with(|s| s.set((heap.dump_addr_lo, heap.dump_addr_hi)));
     // The barrier window is re-derived, not restored: this is its
     // panic-recovery point, as for the concurrent flag above.
@@ -1169,17 +1510,23 @@ pub fn set_tagged_heap(heap: &mut TaggedHeap) {
 /// `set_tagged_heap` leaves the newer installation alone.
 pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
     let owned = heap as *const TaggedHeap as *mut TaggedHeap;
-    TAGGED_HEAP.with(|h| {
+    let _ = TAGGED_HEAP.try_with(|h| {
         if h.get() == owned {
             h.set(std::ptr::null_mut());
-            TAGGED_HEAP_ID.with(|identity| identity.set(None));
-            TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(WriteTrackingMode::Disabled));
-            TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(false));
-            TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
-            TAGGED_HEAP_DUMP_SPAN.with(|s| s.set((usize::MAX, 0)));
-            TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::NONE));
-            TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::NONE));
-            clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
+            let _ = TAGGED_HEAP_ID.try_with(|identity| identity.set(None));
+            let _ = TAGGED_HEAP_WRITE_TRACKING_MODE
+                .try_with(|mode| mode.set(WriteTrackingMode::Disabled));
+            let _ = TAGGED_HEAP_PARTITION_ACTIVE.try_with(|p| p.set(false));
+            let _ = TAGGED_HEAP_CONCURRENT_ACTIVE.try_with(|c| c.set(false));
+            let _ = TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.try_with(|active| active.set(false));
+            let _ = TAGGED_HEAP_DUMP_SPAN.try_with(|s| s.set((usize::MAX, 0)));
+            let _ = TAGGED_HEAP_BARRIER_WINDOW.try_with(|w| w.set(BarrierWindow::NONE));
+            let _ = TAGGED_HEAP_CONS_BARRIER_WINDOW.try_with(|w| w.set(BarrierWindow::NONE));
+            let _ = TAGGED_HEAP_SATB_CACHE.try_with(|slots| {
+                for slot in slots {
+                    slot.set(0);
+                }
+            });
         }
     });
 }
@@ -1191,6 +1538,7 @@ pub fn tagged_heap_is_installed() -> bool {
 
 /// Check the allocation view without reading the installed heap. A Context
 /// moved to another thread may have left an inactive raw pointer here.
+#[inline(always)]
 pub(crate) fn tagged_heap_is_current(heap: &TaggedHeap) -> bool {
     TAGGED_HEAP.with(|h| std::ptr::eq(h.get(), heap))
         && TAGGED_HEAP_ID.with(|identity| identity.get() == Some(heap.identity()))
@@ -1537,6 +1885,13 @@ pub(crate) fn concurrent_mark_active() -> bool {
     TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get())
 }
 
+/// The installed mutator has an active Tier-H snapshot. Claims-OFF and
+/// stopped-world mutations reject with one TLS load, without touching a heap.
+#[inline(always)]
+pub(crate) fn concurrent_hash_mutation_active() -> bool {
+    TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.get())
+}
+
 /// SATB pre-image sink for STRING interval-table mutations, called from inside
 /// the `LispString` interval mutators themselves (`ensure_intervals` /
 /// `clear_intervals` in heap_types.rs) so the barrier is enforced at the only
@@ -1562,12 +1917,117 @@ pub(crate) fn note_string_interval_preimage(
             if value.is_heap_object()
                 || (major && matches!(value.kind(), crate::tagged::value::ValueKind::Symbol(_)))
             {
-                shared.push(value);
+                shared.push(MarkWord::of(value));
             }
         });
     });
 }
 
 #[cfg(test)]
-#[path = "tests/concurrent_major_worker_tests.rs"]
+#[path = "tests/concurrent_major_worker_test.rs"]
 mod concurrent_major_worker_tests;
+
+#[cfg(test)]
+#[path = "tests/concurrent_leaf_claim_tests.rs"]
+mod concurrent_leaf_claim_tests;
+
+#[cfg(test)]
+#[path = "tests/concurrent_hash_worker_tests.rs"]
+mod concurrent_hash_worker_tests;
+
+#[cfg(test)]
+mod worker_symbol_classification_tests {
+    use super::*;
+    use crate::emacs_core::intern::{intern, intern_uninterned};
+    use crate::heap_types::LispString;
+
+    #[test]
+    fn worker_symbol_classification_preserves_namesakes_and_deduplicates_ids() {
+        let mut heap = TaggedHeap::new();
+        let heap_values = [
+            heap.alloc_cons(TaggedValue::NIL, TaggedValue::T),
+            heap.alloc_vector(vec![TaggedValue::fixnum(7)]),
+            heap.alloc_string(LispString::from_utf8("worker symbol classifier")),
+            heap.alloc_float(4.25),
+        ];
+        let ignored = [
+            TaggedValue::NIL,
+            TaggedValue::T,
+            TaggedValue::UNBOUND,
+            TaggedValue::fixnum(0),
+            TaggedValue::fixnum(-1),
+            heap_values[0],
+            heap_values[1],
+            heap_values[2],
+            heap_values[3],
+        ];
+        let mut logs = EnabledWorkerMarkLogs::default();
+        for value in ignored {
+            assert!(!logs.note_symbol(value), "unexpected side mark: {value:?}");
+        }
+        assert!(logs.result.symbols.is_empty());
+
+        let ids = [
+            intern("u35-worker-symbol-classification"),
+            intern_uninterned("u35-worker-symbol-classification"),
+            intern_uninterned("nil"),
+            intern_uninterned("t"),
+            intern_uninterned("unbound"),
+        ];
+        assert_ne!(ids[0], ids[1], "same name does not imply same identity");
+        for _ in 0..2 {
+            for id in ids {
+                let value = TaggedValue::from_sym_id(id);
+                assert!(matches!(
+                    value.kind(),
+                    crate::tagged::value::ValueKind::Symbol(_)
+                ));
+                assert!(logs.note_symbol(value));
+            }
+        }
+        assert_eq!(logs.result.symbols, ids);
+        assert_eq!(logs.seen_symbols.count(), ids.len());
+
+        let mut gray = MarkStack::default();
+        for value in ignored {
+            logs.queue_child::<true>(value, &mut gray);
+        }
+        assert_eq!(
+            gray.into_values(),
+            heap_values,
+            "only real heap objects join gray"
+        );
+        assert_eq!(logs.result.symbols, ids);
+
+        let mut legacy: WorkerMarkLogs = WorkerMarkLogs::default();
+        let mut legacy_gray = MarkStack::default();
+        for value in ignored {
+            legacy.queue_child::<false>(value, &mut legacy_gray);
+        }
+        for id in ids {
+            legacy.queue_child::<false>(TaggedValue::from_sym_id(id), &mut legacy_gray);
+        }
+        assert_eq!(legacy_gray.into_values(), heap_values);
+        assert!(legacy.result.symbols.is_empty());
+        assert_eq!(legacy.seen_symbols.len(), 0);
+
+        // A fresh worker/cycle has its own bits. Snapshot routing preserves
+        // first-encounter order and deduplication even after repeated symbols.
+        let mut next_cycle = EnabledWorkerMarkLogs::default();
+        let mut snapshot_gray = MarkStack::default();
+        for value in ignored {
+            next_cycle.queue_snapshot_child(value, &mut snapshot_gray);
+        }
+        for _ in 0..3 {
+            for id in ids.into_iter().rev() {
+                next_cycle.queue_snapshot_child(TaggedValue::from_sym_id(id), &mut snapshot_gray);
+            }
+        }
+        assert_eq!(snapshot_gray.into_values(), heap_values);
+        assert_eq!(
+            next_cycle.result.symbols,
+            ids.into_iter().rev().collect::<Vec<_>>()
+        );
+        assert_eq!(next_cycle.seen_symbols.count(), ids.len());
+    }
+}

@@ -1973,6 +1973,13 @@ enum CodingEntry {
     /// the whole read, which are different bytes -- is exactly the class of
     /// second-copy bug this chain keeps finding.
     ProcessRun,
+    ProcessSend(ProcessPreWriteStage),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessPreWriteStage {
+    Pending,
+    Prepared,
 }
 
 /// Where `detect_coding` runs for a call, and with which
@@ -2027,8 +2034,12 @@ impl CodingEntry {
                 EntryDetection::Here(crate::emacs_core::coding::SourceBlock::Last)
             }
             Self::FileGap => EntryDetection::Here(crate::emacs_core::coding::SourceBlock::More),
-            Self::ProcessRun => EntryDetection::AlreadyRun,
+            Self::ProcessRun | Self::ProcessSend(_) => EntryDetection::AlreadyRun,
         }
+    }
+
+    fn reports_coding_result(self) -> bool {
+        !matches!(self, Self::ProcessSend(_))
     }
 }
 
@@ -2042,6 +2053,10 @@ impl CodingEntry {
 enum EncodingBoundary {
     CompleteText,
     FileRegion,
+    /// GNU `send_process` does not finish its coding stream after a write.
+    ProcessChunk {
+        process: crate::emacs_core::process::ProcessId,
+    },
 }
 
 impl EncodingBoundary {
@@ -2371,6 +2386,42 @@ impl Iso2022DecodeState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CodingDecoderState {
     iso_2022: Iso2022DecodeState,
+}
+
+/// The encoder continuation retained between subprocess writes. A fresh
+/// conversion has no designation or signature; each codec starts its stream once.
+#[derive(Clone, Debug, Default)]
+pub(crate) enum CodingEncoderState {
+    #[default]
+    Initial,
+    Iso2022(Iso2022EncodeState),
+    Utf8SignatureStarted,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Iso2022EncodeState {
+    designation: [Option<SymId>; 4],
+    gl: usize,
+}
+
+impl CodingEncoderState {
+    fn iso_2022_mut(
+        &mut self,
+        spec: &crate::emacs_core::coding::Iso2022Spec,
+    ) -> &mut Iso2022EncodeState {
+        if !matches!(self, Self::Iso2022(_)) {
+            *self = Self::Iso2022(Iso2022EncodeState {
+                designation: spec.initial,
+                gl: 0,
+            });
+        }
+        match self {
+            Self::Iso2022(state) => state,
+            Self::Initial | Self::Utf8SignatureStarted => {
+                unreachable!("ISO-2022 state was initialized above")
+            }
+        }
+    }
 }
 
 impl CodingDecoderState {
@@ -3779,6 +3830,12 @@ fn coding_ascii_identity_fast_path(
     }
 }
 
+#[derive(Clone, Copy)]
+enum PreWriteFailurePolicy {
+    Propagate,
+    IgnoreSignals,
+}
+
 /// Build (and evaluate) the elisp form that mirrors GNU's
 /// `encode_coding_object` pre-write protocol: insert `src` into a fresh
 /// conversion work buffer, call `(FN (point-min) (point-max))`, and return the
@@ -3789,6 +3846,7 @@ fn run_pre_write_conversion(
     ctx: &mut crate::emacs_core::eval::Context,
     hook: SymId,
     src: Value,
+    failure_policy: PreWriteFailurePolicy,
 ) -> EvalResult {
     // `src` is a heap Value that must survive the allocations performed while
     // building the form below (exact GC does not scan Rust locals).  Root it on
@@ -3796,12 +3854,12 @@ fn run_pre_write_conversion(
     // finished form itself.
     let root_scope = ctx.save_specpdl_roots();
     ctx.push_specpdl_root(src);
-    let form = build_pre_write_form(hook, src);
+    let form = build_pre_write_form(hook, src, failure_policy);
     ctx.restore_specpdl_roots(root_scope);
     ctx.eval_sub(form)
 }
 
-fn build_pre_write_form(hook: SymId, src: Value) -> Value {
+fn build_pre_write_form(hook: SymId, src: Value, failure_policy: PreWriteFailurePolicy) -> Value {
     // (save-current-buffer
     //   (let ((src-buf (generate-new-buffer " *code-conversion-work*")))
     //     (unwind-protect
@@ -3833,6 +3891,18 @@ fn build_pre_write_form(hook: SymId, src: Value) -> Value {
         Value::list(vec![Value::symbol("point-min")]),
         Value::list(vec![Value::symbol("point-max")]),
     ]);
+    // GNU safe_calln catches signals while the conversion buffer is live,
+    // so even a failed hook contributes edits it made before signaling.
+    // A matched throw remains a nonlocal exit and skips byte publication.
+    let call = match failure_policy {
+        PreWriteFailurePolicy::Propagate => call,
+        PreWriteFailurePolicy::IgnoreSignals => Value::list(vec![
+            Value::symbol("condition-case"),
+            Value::NIL,
+            call,
+            Value::list(vec![Value::T, Value::NIL]),
+        ]),
+    };
     let kill_current = Value::list(vec![
         Value::symbol("unless"),
         Value::list(vec![
@@ -3955,7 +4025,8 @@ fn run_coding_with_conversion_hook(
     // chain below.
     let base_coding = &apply_explicit_eol_suffix(base_coding, eol);
     if encode {
-        let transformed = run_pre_write_conversion(ctx, hook, args[0])?;
+        let transformed =
+            run_pre_write_conversion(ctx, hook, args[0], PreWriteFailurePolicy::Propagate)?;
         let transformed_str = ctx.lisp_string(transformed).ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,
@@ -4403,6 +4474,7 @@ fn encode_via_iso2022(
     spec: &crate::emacs_core::coding::Iso2022Spec,
     charset_list: &[SymId],
     boundary: EncodingBoundary,
+    state: &mut CodingEncoderState,
 ) -> Vec<u8> {
     use crate::emacs_core::charset::{charset_encode_char, charset_iso2022_designation};
     use crate::emacs_core::coding::IsoFlag;
@@ -4423,8 +4495,9 @@ fn encode_via_iso2022(
     };
 
     let initial = spec.initial;
-    let mut desig: [Option<SymId>; 4] = initial;
-    let mut gl: usize = 0; // register currently invoked to the GL plane
+    let state = state.iso_2022_mut(spec);
+    let mut desig = state.designation;
+    let mut gl = state.gl; // register currently invoked to the GL plane
     let gr: i32 = if seven { -1 } else { 1 }; // G1 -> GR plane in 8-bit
 
     let mut out = Vec::with_capacity(s.sbytes());
@@ -4539,6 +4612,8 @@ fn encode_via_iso2022(
     if reset_eol && boundary.owns_end_of_stream() {
         reset(&mut out, &mut desig, &mut gl);
     }
+    state.designation = desig;
+    state.gl = gl;
     out
 }
 
@@ -4930,10 +5005,12 @@ fn builtin_coding_string_in_context(
         run.record(SourceConsumed::all(&lisp_string_coding_source_bytes(
             args[0].as_lisp_string().expect("string validated above"),
         )));
-        ctx.set_variable(
-            "last-coding-system-used",
-            Value::symbol(canonical_context_coding_name(ctx, &reported_coding)),
-        );
+        if entry.reports_coding_result() {
+            ctx.set_variable(
+                "last-coding-system-used",
+                Value::symbol(canonical_context_coding_name(ctx, &reported_coding)),
+            );
+        }
         if coding_string_nocopy(&args) {
             return Ok(args[0]);
         }
@@ -5050,12 +5127,61 @@ fn builtin_coding_string_in_context(
         || euc_coding.is_some()
         || sjis_coding.is_some()
         || charset_coding.is_some();
+    if encode
+        && entry == CodingEntry::ProcessSend(ProcessPreWriteStage::Pending)
+        // These two native codecs already implement their built-in Lisp hook.
+        && utf7_coding.is_none()
+        && hz_coding.is_none()
+        && let Some((hook, _)) = coding_conversion_hook(ctx, &coding, true)
+        && let EncodingBoundary::ProcessChunk { process } = encoding_boundary
+    {
+        let transformed =
+            run_pre_write_conversion(ctx, hook, args[0], PreWriteFailurePolicy::IgnoreSignals)?;
+        // A hook can send recursively or replace this descriptor's coding.
+        // Reacquire both its coding and its continuation after the callback.
+        let latest = ctx
+            .processes
+            .get_any(process)
+            .and_then(|proc| proc.encoding_state.coding())
+            .ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("Process output coding is not initialized")],
+                )
+            })?;
+        args[0] = transformed;
+        args[1] = Value::symbol(latest.symbol());
+        let roots = ctx.save_specpdl_roots();
+        ctx.push_specpdl_root(transformed);
+        let result = builtin_coding_string_in_context(
+            ctx,
+            args,
+            direction,
+            encoding_boundary,
+            CodingEntry::ProcessSend(ProcessPreWriteStage::Prepared),
+            run,
+        );
+        ctx.restore_specpdl_roots(roots);
+        return result;
+    }
+    if encode
+        && entry == CodingEntry::ProcessSend(ProcessPreWriteStage::Prepared)
+        && !dedicated_codec
+        && let Some((_, base_type)) = coding_conversion_hook(ctx, &coding, true)
+    {
+        // The hook already supplied text; select its codec without running
+        // the same callback a second time.
+        let base = apply_explicit_eol_suffix(&base_type, coding_name_eol(&coding));
+        args[1] = Value::symbol(&base);
+        coding = base;
+    }
     // A coding system whose conversion is implemented by an elisp
     // :pre-write-conversion / :post-read-conversion hook (e.g. vietnamese-viqr)
     // is handled entirely here; the generic family encoders below do not know
     // how to encode it (its family is "unknown") and would drop every
     // character.
     if !dedicated_codec
+        && entry != CodingEntry::ProcessSend(ProcessPreWriteStage::Prepared)
         && let Some((hook, base_type)) = coding_conversion_hook(ctx, &coding, encode)
     {
         // GNU's `code_convert_string` takes an identity fast path for an
@@ -5124,10 +5250,12 @@ fn builtin_coding_string_in_context(
                 )
             })?
             .clone();
-        ctx.set_variable(
-            "last-coding-system-used",
-            Value::symbol(canonical_context_coding_name(ctx, &reported_coding)),
-        );
+        if entry.reports_coding_result() {
+            ctx.set_variable(
+                "last-coding-system-used",
+                Value::symbol(canonical_context_coding_name(ctx, &reported_coding)),
+            );
+        }
         let Some(buffer_id) = destination else {
             return Ok(result);
         };
@@ -5142,6 +5270,19 @@ fn builtin_coding_string_in_context(
         return Ok(Value::fixnum(result_text.schars() as i64));
     }
     // The single EOL pass for the codec chain below, mirroring GNU
+    // A bypass descriptor never enters GNU's encoding engine. Eligibility is
+    // captured at setup and includes hooks and codec requirements, not just EOL.
+    let encode_eol_conversion = if let EncodingBoundary::ProcessChunk { process } =
+        encoding_boundary
+        && ctx
+            .processes
+            .get_any(process)
+            .is_some_and(|proc| !proc.encoding_state.requires_encoding())
+    {
+        crate::emacs_core::coding::EolConversion::Inhibited
+    } else {
+        ctx.eol_conversion()
+    };
     // `consume_chars` (src/coding.c:7607, eol block at :7683): the newline is
     // expanded ONCE into the source that every codec then reads, and the coding
     // name handed to the codecs has its EOL leg spent.  None of the arms below
@@ -5151,7 +5292,7 @@ fn builtin_coding_string_in_context(
         let source = args[0]
             .as_lisp_string()
             .expect("string argument validated above");
-        if let Some(expanded) = expand_source_eol(source, &coding, ctx.eol_conversion()) {
+        if let Some(expanded) = expand_source_eol(source, &coding, encode_eol_conversion) {
             args[0] = Value::heap_string(expanded);
             coding = coding_name_with_eol_spent(&coding).into_owned();
             // The fall-through arm re-reads `args[1]`, so the name has to be
@@ -5206,14 +5347,33 @@ fn builtin_coding_string_in_context(
             let bytes = encode_utf8_plain(&source_string());
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if utf8_signature {
-            let mut bytes = vec![0xEF, 0xBB, 0xBF];
-            bytes.extend(encode_utf8_plain(&source_string()));
+            let source = source_string();
+            let mut scratch = CodingEncoderState::default();
+            let state = match encoding_boundary {
+                EncodingBoundary::ProcessChunk { process } => process_encoder_state(ctx, process)?,
+                EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
+            };
+            let mut bytes = if matches!(state, CodingEncoderState::Utf8SignatureStarted) {
+                Vec::new()
+            } else {
+                vec![0xEF, 0xBB, 0xBF]
+            };
+            *state = CodingEncoderState::Utf8SignatureStarted;
+            bytes.extend(encode_utf8_plain(&source));
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some(spec) = ccl_coding {
             let bytes = encode_via_ccl(&source_string(), spec, &coding, encoding_boundary)?;
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some((spec, charsets)) = &full_iso {
-            let bytes = encode_via_iso2022(&source_string(), spec, charsets, encoding_boundary);
+            let source = source_string();
+            let mut scratch = CodingEncoderState::default();
+            // No process borrow spans Lisp callbacks. The conversion hooks ran
+            // above; only this pure codec borrows the latest continuation.
+            let state = match encoding_boundary {
+                EncodingBoundary::ProcessChunk { process } => process_encoder_state(ctx, process)?,
+                EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
+            };
+            let bytes = encode_via_iso2022(&source, spec, charsets, encoding_boundary, state);
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some((spec, charsets)) = &euc_coding {
             let bytes = encode_via_euc(&source_string(), spec, charsets);
@@ -5225,7 +5385,7 @@ fn builtin_coding_string_in_context(
             let bytes = encode_via_charset_list(&source_string(), charset_list);
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else {
-            builtin_encode_coding_string_with_known(args, |_| true, ctx.eol_conversion())?
+            builtin_encode_coding_string_with_known(args, |_| true, encode_eol_conversion)?
         }
     } else {
         // GNU's decoders, each of which reports `coding->consumed` for itself;
@@ -5379,10 +5539,12 @@ fn builtin_coding_string_in_context(
             )
         })?
         .clone();
-    ctx.set_variable(
-        "last-coding-system-used",
-        Value::symbol(canonical_context_coding_name(ctx, &reported_coding)),
-    );
+    if entry.reports_coding_result() {
+        ctx.set_variable(
+            "last-coding-system-used",
+            Value::symbol(canonical_context_coding_name(ctx, &reported_coding)),
+        );
+    }
 
     let Some(buffer_id) = destination else {
         return Ok(result);
@@ -5445,6 +5607,55 @@ impl RuntimeCodingSystem {
     pub(crate) fn from_symbol(symbol: crate::emacs_core::intern::SymId) -> Self {
         Self(symbol)
     }
+
+    pub(crate) fn symbol(self) -> crate::emacs_core::intern::SymId {
+        self.0
+    }
+}
+
+/// Runtime attributes of a coding, including an implicit EOL subsidiary.
+/// The registry stores some subsidiary names through their registered base.
+pub(crate) struct RuntimeCodingMetadata<'a> {
+    pub(crate) info: &'a crate::emacs_core::coding::CodingSystemInfo,
+    pub(crate) eol_type: crate::emacs_core::coding::EolType,
+}
+
+impl RuntimeCodingSystem {
+    pub(crate) fn metadata(
+        self,
+        systems: &crate::emacs_core::coding::CodingSystemManager,
+    ) -> Option<RuntimeCodingMetadata<'_>> {
+        let name = resolve_sym(self.symbol());
+        if let Some(info) = systems.get(name) {
+            return Some(RuntimeCodingMetadata {
+                info,
+                eol_type: info.eol_type,
+            });
+        }
+        let info = systems.get(coding_system_base(name))?;
+        let explicit = coding_name_eol(name);
+        let eol_type = if explicit == crate::emacs_core::coding::EolType::Undecided {
+            info.eol_type
+        } else {
+            explicit
+        };
+        Some(RuntimeCodingMetadata { info, eol_type })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ExternalEncodingBoundary {
+    CompleteText,
+    FileRegion,
+}
+
+impl ExternalEncodingBoundary {
+    fn encoding_boundary(self) -> EncodingBoundary {
+        match self {
+            Self::CompleteText => EncodingBoundary::CompleteText,
+            Self::FileRegion => EncodingBoundary::FileRegion,
+        }
+    }
 }
 
 /// Encode Lisp text through the complete runtime coding engine.
@@ -5460,15 +5671,15 @@ fn encode_external_text_with_boundary(
     ctx: &mut crate::emacs_core::eval::Context,
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
-    boundary: EncodingBoundary,
+    boundary: ExternalEncodingBoundary,
 ) -> Result<EncodedTextBytes, crate::emacs_core::error::Flow> {
     let encoded = builtin_coding_string_in_context(
         ctx,
         vec![Value::heap_string(text), Value::symbol(coding.0)],
         CodingDirection::Encode,
-        boundary,
-        // File I/O is GNU's `encode_coding_object` entry, not
-        // `code_convert_string`: no identity fast path.
+        boundary.encoding_boundary(),
+        // Both external writes reach encode_coding_object without the
+        // code_convert_string identity shortcut.
         CodingEntry::FileGap,
         &mut CodingRun::complete_source(),
     )?;
@@ -5493,7 +5704,30 @@ pub(crate) fn encode_external_text_in_context(
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
 ) -> Result<EncodedTextBytes, crate::emacs_core::error::Flow> {
-    encode_external_text_with_boundary(ctx, text, coding, EncodingBoundary::CompleteText)
+    encode_external_text_with_boundary(ctx, text, coding, ExternalEncodingBoundary::CompleteText)
+}
+
+/// Encode one subprocess write through runtime coding definitions and hooks.
+/// A send is a stream chunk, so it must not append an end-of-stream reset.
+pub(crate) fn encode_process_text_in_context(
+    ctx: &mut crate::emacs_core::eval::Context,
+    text: crate::heap_types::LispString,
+    coding: RuntimeCodingSystem,
+    process: crate::emacs_core::process::ProcessId,
+) -> Result<Vec<u8>, crate::emacs_core::error::Flow> {
+    let encoded = builtin_coding_string_in_context(
+        ctx,
+        vec![Value::heap_string(text), Value::symbol(coding.0)],
+        CodingDirection::Encode,
+        EncodingBoundary::ProcessChunk { process },
+        CodingEntry::ProcessSend(ProcessPreWriteStage::Pending),
+        &mut CodingRun::complete_source(),
+    )?;
+    Ok(encoded
+        .as_lisp_string()
+        .expect("process encoding returns a byte string")
+        .as_bytes()
+        .to_vec())
 }
 
 /// Encode the text passed to GNU's `write-region`/`e_write` path.
@@ -5506,7 +5740,23 @@ pub(crate) fn encode_file_region_in_context(
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
 ) -> Result<EncodedTextBytes, crate::emacs_core::error::Flow> {
-    encode_external_text_with_boundary(ctx, text, coding, EncodingBoundary::FileRegion)
+    encode_external_text_with_boundary(ctx, text, coding, ExternalEncodingBoundary::FileRegion)
+}
+
+/// Borrow a live process continuation only after callback execution ends.
+fn process_encoder_state(
+    ctx: &mut crate::emacs_core::eval::Context,
+    process: crate::emacs_core::process::ProcessId,
+) -> Result<&mut CodingEncoderState, crate::emacs_core::error::Flow> {
+    ctx.processes
+        .get_any_mut(process)
+        .and_then(|proc| proc.encoding_state.encoder_mut())
+        .ok_or_else(|| {
+            signal(
+                "error",
+                vec![Value::string("Process output coding is not initialized")],
+            )
+        })
 }
 
 /// A file decode result whose coding-system selection remains an interned
@@ -5656,7 +5906,7 @@ fn coding_result_for_buffer_multibyte(
     // `decode-coding-region`/`decode-coding-string` path; GNU keeps the charset
     // annotation across `code_convert_region`'s dst multibyteness adjustment.
     if text.has_intervals() {
-        let intervals = text.intervals().clone();
+        let intervals = text.intervals().to_owned_table();
         if !intervals.is_empty() {
             *converted.intervals_mut() = intervals;
         }
@@ -6153,4 +6403,5 @@ pub(crate) fn builtin_max_char(args: Vec<Value>) -> EvalResult {
 // ===========================================================================
 
 #[cfg(test)]
+#[path = "encoding/tests/encoding_test.rs"]
 mod tests;

@@ -7,6 +7,9 @@
 //! handles, while legacy integer designators are still accepted in resolver
 //! paths for compatibility.
 
+mod split_request;
+pub(crate) use split_request::SiblingResize;
+
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{SymId, intern, resolve_sym};
 use super::minibuffer::MinibufferManager;
@@ -561,10 +564,51 @@ pub(crate) fn builtin_set_window_new_pixel(
     expect_min_args("set-window-new-pixel", &args, 2)?;
     expect_max_args("set-window-new-pixel", &args, 3)?;
     let window = decode_valid_window_id(eval, args.first())?;
-    let size = expect_int(&args[1])?;
     let add = args.get(2).is_some_and(|value| value.is_truthy());
-    Ok(Value::fixnum(
-        eval.frames.set_window_new_pixel(window, size, add),
+    let operation = if add {
+        crate::window::WindowPixelOperation::Add(
+            crate::tagged::value::Fixnum::try_from(
+                eval.frames.window_new_pixel(window).unwrap_or(0),
+            )
+            .map_err(|error| match error {
+                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            })?,
+        )
+    } else {
+        crate::window::WindowPixelOperation::Set
+    };
+    let (size_min, size_max) = operation.bounds();
+    if !args[1].is_integer() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), args[1]],
+        ));
+    }
+    let integer = args[1].as_fixnum().or_else(|| {
+        args[1]
+            .as_bignum()
+            .and_then(|integer| i64::try_from(integer).ok())
+    });
+    let out_of_range = || {
+        signal(
+            LispCondition::ArgsOutOfRange,
+            vec![
+                args[1],
+                Value::make_int(size_min),
+                Value::make_int(size_max),
+            ],
+        )
+    };
+    let integer = integer.ok_or_else(out_of_range)?;
+    let size = crate::window::WindowPixelStage::try_from((integer, operation)).map_err(
+        |error| match error {
+            crate::window::WindowSizeError::OutOfRange => out_of_range(),
+        },
+    )?;
+    Ok(Value::from_fixnum(
+        eval.frames.set_window_new_pixel(window, size).into(),
     ))
 }
 
@@ -576,11 +620,28 @@ pub(crate) fn builtin_set_window_new_total(
     expect_min_args("set-window-new-total", &args, 2)?;
     expect_max_args("set-window-new-total", &args, 3)?;
     let window = decode_valid_window_id(eval, args.first())?;
-    let size = expect_fixnum(&args[1])?;
-    let add = args.get(2).is_some_and(|value| value.is_truthy());
-    Ok(Value::fixnum(
-        eval.frames.set_window_new_total(window, size, add),
-    ))
+    let size =
+        crate::window::WindowTotal::try_from(expect_fixnum(&args[1])?).map_err(
+            |error| match error {
+                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            },
+        )?;
+    let update = if args.get(2).is_some_and(|value| value.is_truthy()) {
+        crate::window::NewTotalUpdate::Add
+    } else {
+        crate::window::NewTotalUpdate::Replace
+    };
+    let stored = eval
+        .frames
+        .set_window_new_total(window, size, update)
+        .map_err(|error| match error {
+            crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                signal(LispCondition::OverflowError, vec![])
+            }
+        })?;
+    Ok(Value::from_fixnum(stored.into()))
 }
 
 /// `(set-window-new-normal WINDOW &optional SIZE)` -> SIZE.
@@ -3426,11 +3487,9 @@ pub(crate) fn builtin_scroll_left(eval: &mut super::eval::Context, args: Vec<Val
     } else {
         scroll_prefix_value(args.first().unwrap())
     };
-    let mut next = base as i128 + delta as i128;
-    if next < 0 {
-        next = 0;
-    }
-    let next = next.min(i64::MAX as i128) as i64;
+    let next = crate::window::HorizontalScroll::saturating(i128::from(base) + i128::from(delta));
+    let result = Value::from_fixnum(next.into());
+    let next = i64::from(next);
     // GNU `scroll-left` (src/window.c:7113): the optional second argument
     // SET-MINIMUM (non-nil in an interactive call via the `\np` spec) makes
     // the new scroll amount the lower bound for automatic hscrolling.
@@ -3456,7 +3515,7 @@ pub(crate) fn builtin_scroll_left(eval: &mut super::eval::Context, args: Vec<Val
     if next != base {
         eval.gnu_mark_window_redisplay(wid);
     }
-    Ok(Value::fixnum(next))
+    Ok(result)
 }
 /// `(scroll-right &optional SET-MINIMUM ARG)` -> new horizontal scroll amount.
 pub(crate) fn builtin_scroll_right(
@@ -3480,11 +3539,9 @@ pub(crate) fn builtin_scroll_right(
     } else {
         scroll_prefix_value(args.first().unwrap())
     };
-    let mut next = base as i128 - delta as i128;
-    if next < 0 {
-        next = 0;
-    }
-    let next = next.min(i64::MAX as i128) as i64;
+    let next = crate::window::HorizontalScroll::saturating(i128::from(base) - i128::from(delta));
+    let result = Value::from_fixnum(next.into());
+    let next = i64::from(next);
     // GNU `scroll-right` (src/window.c:7139): mirror of scroll-left.
     let set_minimum = args.get(1).is_some_and(|v| !v.is_nil());
     if let Some(Window::Leaf {
@@ -3506,7 +3563,7 @@ pub(crate) fn builtin_scroll_right(
     if next != base {
         eval.gnu_mark_window_redisplay(wid);
     }
-    Ok(Value::fixnum(next))
+    Ok(result)
 }
 /// `(window-vscroll &optional WINDOW PIXELWISE)` -> number.
 ///
@@ -4589,14 +4646,10 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
     side: Value,
     normal_size: Value,
     combination_limit: CombinationLimit,
+    sibling_resize: SiblingResize,
 ) -> EvalResult {
     let target = decode_valid_window_in_state(frames, buffers, Some(&window))?;
     let (fid, wid) = (target.frame(), target.window());
-
-    // GNU's `window_point` reads the selected window's live buffer point.  Keep
-    // the leaf cache in sync before cloning the window tree so a same-buffer
-    // split inherits that effective point, not a stale marker value.
-    remember_selected_window_point_in_state(frames, buffers, fid);
 
     // GNU `Fsplit_window_internal` treats SIDE t as `right`, and every value
     // it does not recognise -- nil, `below', an unrelated symbol, a fixnum,
@@ -4612,12 +4665,56 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
         SplitWindowSide::Below | SplitWindowSide::Right => SplitPlacement::AfterTarget,
     };
 
-    // Parse SIZE: positive means new window gets SIZE units, negative means
-    // old window keeps |SIZE| units, nil/0 means 50/50.
-    let size_opt: Option<i64> = match size.kind() {
-        ValueKind::Fixnum(n) if n != 0 => Some(n),
-        _ => None,
-    };
+    // Unlike the high-level `split-window` command, GNU's primitive takes
+    // a positive new-window pixel size. Validate before mutating either tree.
+    let size = expect_fixnum(&size)?;
+    if is_minibuffer_window(frames, fid, wid) {
+        return Err(signal(
+            LispCondition::Error,
+            vec![Value::string("Attempt to split minibuffer window")],
+        ));
+    }
+    let frame = frames.get(fid).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("Cannot split window")],
+        )
+    })?;
+    let request = split_request::SplitRequest::try_from(split_request::SplitRequestInput {
+        frame,
+        old: wid,
+        size,
+        direction,
+        limit: combination_limit,
+        sibling_resize,
+    })
+    .map_err(|error| {
+        // GNU temporarily reduces this staging slot while validating siblings.
+        // A rejected plan changes this slot but never changes physical geometry.
+        match error {
+            split_request::SplitRequestError::NewTooSmall => {}
+            split_request::SplitRequestError::OldResizeFailed => {}
+            split_request::SplitRequestError::SumDoesNotFit => {}
+            split_request::SplitRequestError::ParentResizeFailed { parent, pending } => {
+                if let Some(parent) = frames
+                    .get_mut(fid)
+                    .and_then(|frame| frame.find_window_mut(parent))
+                {
+                    parent.set_new_pixel(Some(i64::from(pending)));
+                }
+            }
+        }
+        signal(LispCondition::Error, vec![Value::string(error.to_string())])
+    })?;
+    if let Some(frame) = frames.get_mut(fid) {
+        request.prepare_tree_split(frame);
+    }
+    let size_opt = Some(request.size());
+
+    // GNU's `window_point` reads the selected window's live buffer point.  Keep
+    // the leaf cache in sync before cloning the window tree so a same-buffer
+    // split inherits that effective point, not a stale marker value.
+    remember_selected_window_point_in_state(frames, buffers, fid);
 
     // Use the same buffer as the window being split.
     let buf_id = {
@@ -4658,7 +4755,7 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
     // sibling, not just the split target, and `window.el' has already staged
     // each sibling's share -- so the primitive must apply that plan instead of
     // computing a layout of its own.
-    frames.apply_staged_split_sizes(fid, new_wid, size_opt, normal_size, direction);
+    frames.apply_staged_split_sizes(fid, new_wid, Some(request.size()), normal_size, direction);
 
     // GNU allocates independent start/point/old-point markers for the new
     // live leaf.  `FrameManager::split_window` intentionally clears marker IDs
@@ -5061,6 +5158,7 @@ pub(crate) fn select_window(
         )
     };
     if frame_changed {
+        super::frame::sync_gui_frame_focus_redirects(eval)?;
         eval.sync_keyboard_terminal_owner();
     }
     if selection_changed {
@@ -6027,7 +6125,7 @@ fn scroll_lines_in_state(
                 .and_then(|v| v.as_fixnum())
                 .unwrap_or(24);
             let ctx = obarray
-                .symbol_value("next-screen-context-lines")
+                .symbol_value_copied("next-screen-context-lines")
                 .and_then(|v| v.as_fixnum())
                 .unwrap_or(2);
             return -((wh - ctx).max(1) * direction);
@@ -6045,7 +6143,7 @@ fn scroll_lines_in_state(
         .and_then(|v| v.as_fixnum())
         .unwrap_or(24);
     let ctx = obarray
-        .symbol_value("next-screen-context-lines")
+        .symbol_value_copied("next-screen-context-lines")
         .and_then(|v| v.as_fixnum())
         .unwrap_or(2);
     (wh - ctx).max(1) * direction
@@ -7058,6 +7156,39 @@ pub(crate) fn builtin_x_create_frame(
     }
     // GNU gui_display_get_arg resolves frame alist, default-frame-alist,
     // then the display resource. Keep explicit nil distinct from absence.
+    let explicit = parse_gui_frame_params(args.first());
+    let defaults = eval.eval_symbol_by_id(intern("default-frame-alist")).ok();
+    let defaults = parse_gui_frame_params(defaults.as_ref());
+    // GNU xfns.c supplies mode-derived defaults through gui_default_parameter
+    // at creation, never through redisplay. Preserve explicit nil/zero and
+    // default-frame-alist overrides. Child/minibuffer-only frames have no bars.
+    for (parameter, mode) in [
+        (FrameParam::MenuBarLines, "menu-bar-mode"),
+        (FrameParam::ToolBarLines, "tool-bar-mode"),
+    ] {
+        let symbol = parameter.symbol();
+        let key = symbol.as_symbol_id().expect("known frame parameter symbol");
+        if !explicit.all.contains_key(&key) {
+            let value = defaults.all.get(&key).copied().unwrap_or_else(|| {
+                let enabled = explicit.parent_frame.is_none()
+                    && explicit.minibuffer != Some(Value::symbol("only"))
+                    && eval
+                        .obarray()
+                        .symbol_value_id_copied(intern(mode))
+                        .is_some_and(|value| value.is_truthy());
+                Value::fixnum(i64::from(enabled))
+            });
+            args[0] = Value::cons(Value::cons(symbol, value), args[0]);
+        }
+    }
+    for name in ["alpha", "alpha-background"] {
+        let key = intern(name);
+        if !explicit.all.contains_key(&key)
+            && let Some(value) = defaults.all.get(&key)
+        {
+            args[0] = Value::cons(Value::cons(Value::symbol(name), *value), args[0]);
+        }
+    }
     let font_key = intern("font");
     if !parse_gui_frame_params(args.first())
         .all
@@ -7098,6 +7229,31 @@ pub(crate) fn builtin_x_create_frame(
         args,
     );
     eval.sync_keyboard_terminal_owner();
+    if let Ok(value) = &result
+        && let Some(id) = value.as_frame_id()
+    {
+        // The frame is already live and realized. Like GNU x_set_frame_alpha,
+        // which ignores X errors, a host opacity failure must not turn into a
+        // signal that hides the new frame from its caller.
+        for (what, sync) in [
+            (
+                "alpha",
+                super::frame::sync_gui_frame_alpha(eval, FrameId(id)),
+            ),
+            (
+                "focus redirects",
+                super::frame::sync_gui_frame_focus_redirects(eval),
+            ),
+        ] {
+            if let Err(err) = sync {
+                tracing::warn!(
+                    frame_id = id,
+                    ?err,
+                    "x-create-frame: failed to sync GUI frame {what}"
+                );
+            }
+        }
+    }
     result
 }
 
@@ -7110,6 +7266,17 @@ pub(crate) fn x_create_frame_impl(
     expect_args("x-create-frame", &args, 1)?;
 
     let parsed = parse_gui_frame_params(args.first());
+    for (key, value) in &parsed.all {
+        match FrameParamKey::from_symbol_id(*key) {
+            FrameParamKey::Known(FrameParam::Alpha) => {
+                crate::window::frame_alpha::pair(*value)?;
+            }
+            FrameParamKey::Known(FrameParam::AlphaBackground) => {
+                crate::window::frame_alpha::component(*value, 1.0)?;
+            }
+            _ => {}
+        }
+    }
     tracing::debug!(
         "x_create_frame_impl: display_host_available={} params={:?}",
         display_host.is_some(),
@@ -7551,6 +7718,7 @@ pub(crate) fn delete_frame_owned(
             sync_selected_window_buffer_in_state(&eval.frames, &mut eval.buffers, replacement);
         }
     }
+    super::frame::sync_gui_frame_focus_redirects(eval)?;
     match eval.frames.delete_frame(fid) {
         FrameDeletion::NotFound => {
             return Err(signal("error", vec![Value::string("Cannot delete frame")]));
@@ -7568,6 +7736,8 @@ pub(crate) fn delete_frame_owned(
         } => {}
     }
     if let Some(host) = eval.display_host.as_mut() {
+        host.retire_gui_frame_alpha(fid)
+            .map_err(|message| signal("error", vec![Value::string(message)]))?;
         if was_gui_child_frame {
             tracing::info!(
                 frame_id = fid.0,
@@ -8081,8 +8251,9 @@ pub(crate) fn builtin_force_window_update(
 // Tests
 // ===========================================================================
 #[cfg(test)]
+#[path = "tests/window_cmds_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/selection_chrome.rs"]
+#[path = "tests/selection_chrome_test.rs"]
 mod selection_chrome_tests;

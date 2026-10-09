@@ -284,7 +284,7 @@ impl<'a> StringSyntaxLookup<'a> {
             property_lookup: crate::emacs_core::syntax::StringSyntaxPropByteRun::new(
                 syntax_properties,
                 string,
-                Some(intervals),
+                intervals.as_table(),
             ),
             base,
         })
@@ -4935,21 +4935,21 @@ pub(crate) mod match_stats {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/regex_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_collection_epoch.rs"]
+#[path = "tests/gc_collection_epoch_test.rs"]
 mod gc_collection_epoch_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_collection_epoch_minor.rs"]
+#[path = "tests/gc_collection_epoch_minor_test.rs"]
 mod gc_collection_epoch_minor_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_literal_epoch.rs"]
+#[path = "tests/gc_literal_epoch_test.rs"]
 mod gc_literal_epoch_tests;

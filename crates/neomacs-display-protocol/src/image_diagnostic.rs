@@ -29,7 +29,8 @@ use std::fmt::{self, Display, Formatter};
 /// (`"Not a PNG file: `%s'"`, `"PNG error: %s"`), and the two do not always
 /// agree. The declared type is what matters, not the bytes — an image declared
 /// `png` whose bytes are a JPEG is a PNG the loader refused, and GNU says so.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, strum::EnumString)]
+#[strum(serialize_all = "kebab-case")]
 pub enum ImageFormatName {
     Png,
     Jpeg,
@@ -44,6 +45,7 @@ pub enum ImageFormatName {
     Postscript,
     NativeImage,
     /// A type this build has no table entry for, under the Lisp symbol's name.
+    #[strum(default)]
     Other(String),
 }
 
@@ -51,21 +53,7 @@ impl ImageFormatName {
     /// Map a Lisp image type symbol (`png`, `native-image`) to GNU's spelling.
     #[must_use]
     pub fn from_lisp_type(name: &str) -> Self {
-        match name {
-            "png" => Self::Png,
-            "jpeg" => Self::Jpeg,
-            "gif" => Self::Gif,
-            "tiff" => Self::Tiff,
-            "xpm" => Self::Xpm,
-            "xbm" => Self::Xbm,
-            "pbm" => Self::Pbm,
-            "webp" => Self::Webp,
-            "svg" => Self::Svg,
-            "imagemagick" => Self::Imagemagick,
-            "postscript" => Self::Postscript,
-            "native-image" => Self::NativeImage,
-            other => Self::Other(other.to_owned()),
-        }
+        Self::from(name)
     }
 
     #[must_use]

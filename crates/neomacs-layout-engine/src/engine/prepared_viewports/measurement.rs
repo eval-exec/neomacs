@@ -20,7 +20,9 @@ impl PreparedViewports {
         let start = match scope {
             WindowLayoutQueryScope::Rows { start, .. }
             | WindowLayoutQueryScope::Pixels { start, .. } => start,
-            WindowLayoutQueryScope::Viewport | WindowLayoutQueryScope::Position { .. } => {
+            WindowLayoutQueryScope::Viewport
+            | WindowLayoutQueryScope::Position { .. }
+            | WindowLayoutQueryScope::TextExtent { .. } => {
                 return None;
             }
         };
@@ -40,8 +42,7 @@ impl PreparedViewports {
             .or_else(|| {
                 evaluator
                     .obarray()
-                    .symbol_value("fontification-functions")
-                    .copied()
+                    .symbol_value_copied("fontification-functions")
             });
         if fontification.is_some_and(|value| !value.is_nil()) {
             return None;
@@ -82,7 +83,9 @@ impl PreparedViewports {
                     .iter()
                     .take_while(|row| row.y < pixel_bottom.expect("pixel extent"))
                     .count(),
-                WindowLayoutQueryScope::Viewport | WindowLayoutQueryScope::Position { .. } => {
+                WindowLayoutQueryScope::Viewport
+                | WindowLayoutQueryScope::Position { .. }
+                | WindowLayoutQueryScope::TextExtent { .. } => {
                     return None;
                 }
             };
@@ -154,7 +157,7 @@ impl PreparedViewports {
                 .collect();
             snapshot.logical_cursor = None;
             snapshot.phys_cursor = None;
-            snapshot.chrome_strings.clear();
+            snapshot.chrome_strings = Default::default();
             snapshot.regions_materialized = true;
             snapshot.layout_freshness = Some(current.clone());
             snapshot.window_end_record = None;

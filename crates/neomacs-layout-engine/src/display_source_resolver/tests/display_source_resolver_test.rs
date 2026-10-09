@@ -5,7 +5,7 @@ use neovm_core::emacs_core::Context;
 use neovm_core::face::{Color as NeoColor, Face as NeoFace, FaceTable};
 
 #[cfg(test)]
-#[path = "compiled_collection_mutation.rs"]
+#[path = "compiled_collection_mutation_test.rs"]
 mod compiled_collection_mutation;
 
 fn test_buffer_snapshot() -> LayoutBufferSnapshot {

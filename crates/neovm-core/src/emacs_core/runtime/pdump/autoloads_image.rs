@@ -249,22 +249,11 @@ fn read_header(section: &[u8]) -> Result<AutoloadsHeader, DumpError> {
     Ok(header)
 }
 
-const AUTOLOAD_FUNCTION: u8 = 0;
-const AUTOLOAD_MACRO: u8 = 1;
-const AUTOLOAD_KEYMAP: u8 = 2;
-
 fn write_autoload_entry(out: &mut Vec<u8>, entry: &DumpAutoloadEntry) -> Result<(), DumpError> {
     write_lisp_string(out, &entry.file)?;
     write_opt_lisp_string(out, entry.docstring.as_ref())?;
     write_bool(out, entry.interactive);
-    write_u8(
-        out,
-        match entry.autoload_type {
-            DumpAutoloadType::Function => AUTOLOAD_FUNCTION,
-            DumpAutoloadType::Macro => AUTOLOAD_MACRO,
-            DumpAutoloadType::Keymap => AUTOLOAD_KEYMAP,
-        },
-    );
+    write_u8(out, entry.autoload_type.into());
     Ok(())
 }
 
@@ -273,16 +262,7 @@ fn read_autoload_entry(cursor: &mut Cursor<'_>) -> Result<DumpAutoloadEntry, Dum
         file: read_lisp_string(cursor)?,
         docstring: read_opt_lisp_string(cursor)?,
         interactive: cursor.read_bool("autoload interactive flag")?,
-        autoload_type: match cursor.read_u8("autoload type")? {
-            AUTOLOAD_FUNCTION => DumpAutoloadType::Function,
-            AUTOLOAD_MACRO => DumpAutoloadType::Macro,
-            AUTOLOAD_KEYMAP => DumpAutoloadType::Keymap,
-            other => {
-                return Err(DumpError::ImageFormatError(format!(
-                    "unknown autoload type tag {other}"
-                )));
-            }
-        },
+        autoload_type: DumpAutoloadType::try_from(cursor.read_u8("autoload type")?)?,
     })
 }
 
@@ -413,3 +393,7 @@ pub(crate) fn empty_autoloads() -> DumpAutoloadManager {
 #[cfg(test)]
 #[path = "autoloads_image/tests/autoloads_image_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "autoloads_image/tests/enum_decode_test.rs"]
+mod enum_decode_tests;

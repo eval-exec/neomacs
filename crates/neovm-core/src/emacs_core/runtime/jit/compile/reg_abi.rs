@@ -185,17 +185,19 @@ pub(crate) fn lambda_list() -> LambdaList {
 /// For its lifetime, the lambda-list fact [`LeafAbi::for_build`] reads
 /// ([`lambda_list`]); the previous one is restored on drop.
 /// Threading: owns only the current compiler thread's enum override.
-pub(crate) struct LambdaListScope(LambdaList);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct LambdaListScope {
+    _scope: crate::tls_scope::TlsScope<LambdaList, std::cell::Cell<LambdaList>>,
+}
+
+static_assertions::assert_not_impl_any!(LambdaListScope: Send, Sync);
 
 impl LambdaListScope {
     pub(crate) fn enter(shape: LambdaList) -> Self {
-        Self(LAMBDA_LIST.with(|c| c.replace(shape)))
-    }
-}
-
-impl Drop for LambdaListScope {
-    fn drop(&mut self) {
-        LAMBDA_LIST.with(|c| c.set(self.0));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&LAMBDA_LIST, shape),
+        }
     }
 }
 

@@ -148,6 +148,7 @@ impl PackageOracle {
 
 mod ace_window_test;
 mod beacon_test;
+mod clatter_test;
 mod corfu_test;
 mod gruvbox_theme_test;
 mod helm_css_scss_test;

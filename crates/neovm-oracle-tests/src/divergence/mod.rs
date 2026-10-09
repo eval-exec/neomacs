@@ -129,6 +129,7 @@ mod file_variables_deep;
 mod fileio_deep;
 mod fill_abbrev_comment;
 mod float_format_runtime;
+mod font_matching_semantics;
 mod fontlock_jitlock_highlight;
 mod format_char_pua;
 mod format_char_pua_matrix;
@@ -147,6 +148,7 @@ mod hash_sort_obarray_runtime;
 mod hash_struct_records;
 mod help_apropos_completion;
 mod image_operations;
+mod image_svg_animation;
 mod image_svg_deep;
 mod image_widget_display;
 mod input_validation_runtime;
@@ -323,3 +325,6 @@ mod window_frame_display;
 mod window_frame_real;
 mod window_geometry;
 mod window_redisplay;
+
+#[cfg(target_os = "linux")]
+mod dbus_native_marshalling;

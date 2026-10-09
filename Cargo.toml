@@ -86,6 +86,7 @@ unsafe_op_in_unsafe_fn = "warn"
 # at each site with a justification, rather than being escalated or muted here.
 
 [workspace.dependencies]
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 # Internal crates
 neomacs-terminfo = { path = "crates/neomacs-terminfo" }
 neomacs-allocator = { path = "crates/neomacs-allocator" }
@@ -173,6 +174,9 @@ memchr = "2"
 rustc-hash = "2"
 hashbrown = "0.17"
 num_enum = "0.7.6"
+enum_dispatch = "0.3.13"
+enumset = "1.1.14"
+enum-map = "3.1.0"
 strum = { version = "0.28", features = ["derive"] }
 unicode_names2 = "3.1.0"
 unicode-script = "0.5"
@@ -194,6 +198,7 @@ winapi = { version = "0.3", features = ["dwrite"] }
 wio = "0.2.2"
 sys-locale = "0.3.2"
 serde = { version = "1", features = ["derive", "rc"] }
+nutype = { version = "0.8", features = ["serde"] }
 serde_json = "1"
 toml = "1.1"
 clap = { version = "4.5", features = ["derive"] }
@@ -419,6 +424,10 @@ debug-assertions = false
 overflow-checks = false
 codegen-units = 16
 incremental = false
+
+# Optimize interpreter-heavy tests without changing ordinary editor debug builds.
+[profile.test.package.neovm-core]
+opt-level = 2
 
 # Optimized build driven by a PGO profile. Same codegen settings as release,
 # but cargo gives it its own target/release-pgo directory, so a PGO build never

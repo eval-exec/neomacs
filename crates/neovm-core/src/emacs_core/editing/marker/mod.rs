@@ -174,6 +174,51 @@ pub(crate) fn marker_logical_fields(
     Some((data.buffer, position, data.insertion_type))
 }
 
+/// A live marker's buffer and position are one validated location.
+/// This immutable copied snapshot contains typed positions and no heap pointers.
+/// It is never cached
+/// across Lisp callbacks, which may move the marker or kill its buffer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MarkerLocation {
+    buffer: BufferId,
+    byte_pos: EmacsBytePos,
+}
+
+static_assertions::assert_impl_all!(MarkerLocation: Send, Sync);
+
+impl MarkerLocation {
+    pub(crate) fn buffer(self) -> BufferId {
+        self.buffer
+    }
+    pub(crate) fn byte_pos(self) -> EmacsBytePos {
+        self.byte_pos
+    }
+}
+
+pub(crate) fn marker_location(buffers: &BufferManager, marker: Value) -> Option<MarkerLocation> {
+    let data = marker.as_marker_data()?;
+    let buffer = data.buffer?;
+    let buf = buffers.get(buffer)?;
+    let byte_pos = if data.marker_id == Some(MARK_MARKER_ID) {
+        buf.mark_emacs_byte_pos()?
+    } else {
+        EmacsBytePos::new(data.bytepos)
+    };
+    Some(MarkerLocation { buffer, byte_pos })
+}
+
+pub(crate) fn marker_location_or_signal(
+    buffers: &BufferManager,
+    marker: Value,
+) -> Result<MarkerLocation, Flow> {
+    marker_location(buffers, marker).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("Marker does not point anywhere")],
+        )
+    })
+}
+
 pub(crate) fn marker_equal_logical_fields(v: &Value) -> Option<(Option<BufferId>, EmacsBytePos)> {
     if !v.is_marker() {
         return None;
@@ -917,5 +962,5 @@ pub(crate) fn builtin_mark_marker(eval: &mut super::eval::Context, args: Vec<Val
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/marker_test.rs"]
 mod tests;

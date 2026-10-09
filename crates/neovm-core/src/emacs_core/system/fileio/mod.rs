@@ -5,6 +5,7 @@
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
+use crate::emacs_core::timefns::{TimestampError, UnixTimestamp};
 use std::collections::{HashMap, VecDeque};
 #[cfg(unix)]
 use std::ffi::{CStr, CString};
@@ -30,6 +31,9 @@ use super::symbol::Obarray;
 use super::value::{
     OrderedRuntimeBindingMap, Value, ValueKind, VecLikeType, eq_value, list_to_vec,
 };
+
+#[cfg(unix)]
+pub(crate) mod directory_stream;
 
 // ===========================================================================
 // Path operations (pure, no evaluator needed)
@@ -1462,11 +1466,7 @@ fn write_bytes_to_file_with_mode(
 // Directory operations
 // ===========================================================================
 
-/// Return a list of file names in DIR.
-/// If FULL is true, return absolute paths.
-/// If MATCH_REGEX is Some, only include entries whose names match the regex.
-/// If NOSORT is true, preserve filesystem enumeration order.
-/// COUNT limits the number of accepted entries during enumeration.
+#[cfg(not(unix))]
 fn read_directory_names_lisp(
     dir: &crate::heap_types::LispString,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
@@ -1491,8 +1491,67 @@ fn read_directory_names_lisp(
     Ok(names)
 }
 
+/// A directory scan owns its stream and filename for this invocation only.
+/// Unix keeps native dot positions; other platforms preserve their host reader.
+pub(crate) struct DirectoryNameSource {
+    directory: LispString,
+    #[cfg(unix)]
+    stream: directory_stream::DirectoryStream,
+    #[cfg(not(unix))]
+    names: std::vec::IntoIter<LispString>,
+}
+impl DirectoryNameSource {
+    pub(crate) fn open(directory: &LispString) -> Result<Self, Flow> {
+        #[cfg(unix)]
+        let stream =
+            directory_stream::DirectoryStream::open(&lisp_file_name_to_path_buf(directory))
+                .map_err(|error| {
+                    let (action, err) = error.into_parts();
+                    signal_file_action_error_value(
+                        err,
+                        action,
+                        Value::heap_string(directory.clone()),
+                    )
+                })?;
+        #[cfg(not(unix))]
+        let names = read_directory_names_lisp(directory)
+            .map_err(|err| signal_directory_files_error(err, directory))?
+            .into_iter();
+        Ok(Self {
+            directory: directory.clone(),
+            #[cfg(unix)]
+            stream,
+            #[cfg(not(unix))]
+            names,
+        })
+    }
+    pub(crate) fn next_name(&mut self, ctx: &mut Context) -> Result<Option<LispString>, Flow> {
+        #[cfg(unix)]
+        {
+            self.stream
+                .next_name(|| ctx.maybe_quit())
+                .map_err(|err| match err {
+                    directory_stream::DirectoryNextError::Quit(flow) => flow,
+                    directory_stream::DirectoryNextError::Io(err) => {
+                        signal_file_action_error_value(
+                            err,
+                            "Reading directory",
+                            Value::heap_string(self.directory.clone()),
+                        )
+                    }
+                })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(self.names.next())
+        }
+    }
+}
+
 #[derive(Debug)]
 enum DirectoryFilesError {
+    Flow(Flow),
+    #[cfg(not(unix))]
     Io {
         action: &'static str,
         err: std::io::Error,
@@ -1508,38 +1567,32 @@ fn directory_files(
     nosort: bool,
     count: Option<usize>,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
-    let eval = super::eval::Context::new();
+    let mut eval = super::eval::Context::new();
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(&eval);
     directory_files_with_decoder(
+        &mut eval,
         dir,
         full,
         match_regex,
         nosort,
         count,
         syntax,
-        &eval.obarray,
-        &eval.buffers,
-        |bytes| crate::heap_types::LispString::from_unibyte(bytes.to_vec()),
+        |_, bytes| crate::heap_types::LispString::from_unibyte(bytes.to_vec()),
     )
 }
 
 #[allow(clippy::too_many_arguments)] // match-time state stays explicit at the GNU-regexp boundary
 fn directory_files_with_decoder(
+    ctx: &mut Context,
     dir: &crate::heap_types::LispString,
     full: bool,
     match_regex: Option<&crate::heap_types::LispString>,
     nosort: bool,
     count: Option<usize>,
     syntax: super::builtins::search::FastStringMatchSyntax,
-    obarray: &super::symbol::Obarray,
-    buffers: &crate::buffer::BufferManager,
-    decode_name: impl Fn(&[u8]) -> crate::heap_types::LispString,
+    decode_name: impl Fn(&Context, &[u8]) -> crate::heap_types::LispString,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
-    if count == Some(0) {
-        return Ok(Vec::new());
-    }
-
-    let names = read_directory_names_lisp(dir)?;
+    let mut names = DirectoryNameSource::open(dir).map_err(DirectoryFilesError::Flow)?;
 
     // Emacs builds this list via `cons` while scanning readdir output.
     // That makes NOSORT results reverse the traversal order and applies COUNT
@@ -1548,13 +1601,14 @@ fn directory_files_with_decoder(
     let mut remaining = count.unwrap_or(usize::MAX);
     let dir_with_slash = lisp_file_name_as_directory(dir);
 
-    for raw_name in names {
-        let name = decode_name(raw_name.as_bytes());
+    while let Some(raw_name) = names.next_name(ctx).map_err(DirectoryFilesError::Flow)? {
+        let name = decode_name(ctx, raw_name.as_bytes());
+        ctx.maybe_quit().map_err(DirectoryFilesError::Flow)?;
         if let Some(pattern) = match_regex {
             let matched = syntax
                 .search(
-                    obarray,
-                    buffers,
+                    &ctx.obarray,
+                    &ctx.buffers,
                     pattern,
                     &name,
                     super::regex::SearchedString::Owned(name.clone()),
@@ -1573,6 +1627,10 @@ fn directory_files_with_decoder(
             }
         }
 
+        // GNU dired.c:248 opens first and checks COUNT after matching (351).
+        if remaining == 0 {
+            break;
+        }
         if full {
             result.push_front(concat_file_name_lisp(&dir_with_slash, &name));
         } else {
@@ -1581,9 +1639,6 @@ fn directory_files_with_decoder(
 
         if remaining != usize::MAX {
             remaining -= 1;
-            if remaining == 0 {
-                break;
-            }
         }
     }
 
@@ -2248,65 +2303,14 @@ fn expect_temp_prefix(value: &Value) -> Result<crate::heap_types::LispString, Fl
     }
 }
 
-fn normalize_secs_nanos(mut secs: i64, mut nanos: i64) -> (i64, i64) {
-    if nanos >= 1_000_000_000 {
-        secs += nanos / 1_000_000_000;
-        nanos %= 1_000_000_000;
-    } else if nanos < 0 {
-        let borrow = ((-nanos) + 999_999_999) / 1_000_000_000;
-        secs -= borrow;
-        nanos += borrow * 1_000_000_000;
-    }
-    (secs, nanos)
+fn parse_timestamp_arg(value: &Value) -> Result<UnixTimestamp, Flow> {
+    UnixTimestamp::try_from(value)
 }
 
-fn parse_timestamp_arg(value: &Value) -> Result<(i64, i64), Flow> {
-    match value.kind() {
-        ValueKind::Fixnum(n) => Ok((n, 0)),
-        ValueKind::Float => {
-            let f = value.as_float().unwrap();
-            let secs = f.floor() as i64;
-            let nanos = ((f - f.floor()) * 1_000_000_000.0).round() as i64;
-            Ok(normalize_secs_nanos(secs, nanos))
-        }
-        ValueKind::Cons => {
-            let items = list_to_vec(value).ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), *value],
-                )
-            })?;
-            if items.len() < 2 {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), *value],
-                ));
-            }
-            let high = items[0].as_int().ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("integerp"), items[0]],
-                )
-            })?;
-            let low = items[1].as_int().ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("integerp"), items[1]],
-                )
-            })?;
-            let usec = if items.len() > 2 {
-                items[2].as_int().unwrap_or(0)
-            } else {
-                0
-            };
-            let secs = high * 65_536 + low;
-            let nanos = usec * 1_000;
-            Ok(normalize_secs_nanos(secs, nanos))
-        }
-        _other => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("numberp"), *value],
-        )),
+fn representable_file_timestamp(time: std::time::SystemTime) -> Option<UnixTimestamp> {
+    match UnixTimestamp::try_from(time) {
+        Ok(timestamp) => Some(timestamp),
+        Err(TimestampError::OutOfRange) => None,
     }
 }
 
@@ -2337,7 +2341,9 @@ fn validate_file_truename_counter(counter: &Value) -> Result<(), Flow> {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn temporary_file_directory_for_eval(eval: &Context) -> Option<crate::heap_types::LispString> {
-    let val = eval.obarray.symbol_value("temporary-file-directory")?;
+    let val = eval
+        .obarray
+        .symbol_value_copied("temporary-file-directory")?;
     val.as_lisp_string().cloned()
 }
 
@@ -3026,7 +3032,7 @@ fn raw_default_directory_value_for_eval(eval: &Context) -> Option<Value> {
 }
 
 fn invocation_directory_absolute_value_for_eval(eval: &Context) -> Option<Value> {
-    let value = eval.obarray.symbol_value("invocation-directory").copied()?;
+    let value = eval.obarray.symbol_value_copied("invocation-directory")?;
     let filename = value.as_lisp_string()?;
     if lisp_file_name_absolute_system_p(filename) {
         Some(value)
@@ -3155,11 +3161,11 @@ fn signal_directory_files_error(
     dir: &crate::heap_types::LispString,
 ) -> Flow {
     match err {
-        DirectoryFilesError::Io { action, err } => signal_file_io_path(
-            err,
-            action,
-            &crate::emacs_core::emacs_char::to_utf8_lossy(dir.as_bytes()),
-        ),
+        #[cfg(not(unix))]
+        DirectoryFilesError::Io { action, err } => {
+            signal_file_action_error_value(err, action, Value::heap_string(dir.clone()))
+        }
+        DirectoryFilesError::Flow(flow) => flow,
         DirectoryFilesError::InvalidRegexp(msg) => {
             signal(LispCondition::InvalidRegexp, vec![Value::string(msg)])
         }
@@ -3533,21 +3539,43 @@ fn set_file_modes_path(path: &Path, mode: i64, nofollow: bool) -> std::io::Resul
     }
 }
 
-fn build_file_times(timestamp: Option<(i64, i64)>) -> std::fs::FileTimes {
-    let mut times = std::fs::FileTimes::new();
-    let t = if let Some((secs, nanos)) = timestamp {
-        std::time::UNIX_EPOCH + std::time::Duration::new(secs as u64, nanos as u32)
-    } else {
-        std::time::SystemTime::now()
+#[cfg(not(unix))]
+fn build_file_times(timestamp: Option<UnixTimestamp>) -> std::io::Result<std::fs::FileTimes> {
+    let t = match timestamp {
+        Some(timestamp) => std::time::SystemTime::try_from(timestamp)
+            .map_err(|error| std::io::Error::new(ErrorKind::InvalidInput, error))?,
+        None => std::time::SystemTime::now(),
     };
-    times = times.set_accessed(t).set_modified(t);
-    times
+    Ok(std::fs::FileTimes::new().set_accessed(t).set_modified(t))
+}
+
+/// Whether timestamp updates follow a symbolic link or update the link itself.
+///
+/// This immutable policy contains no Lisp values, handles, or mutator state.
+/// It can be copied between threads and shared by concurrent callers; the
+/// filesystem operation itself retains the platform's existing semantics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileTimeSymlinks {
+    Follow,
+    NoFollow,
+}
+
+static_assertions::assert_impl_all!(FileTimeSymlinks: Send, Sync);
+
+impl From<Value> for FileTimeSymlinks {
+    fn from(flag: Value) -> Self {
+        if flag.is_nil() {
+            Self::Follow
+        } else {
+            Self::NoFollow
+        }
+    }
 }
 
 fn set_file_times_path(
     path: &Path,
-    timestamp: Option<(i64, i64)>,
-    nofollow: bool,
+    timestamp: Option<UnixTimestamp>,
+    symlinks: FileTimeSymlinks,
 ) -> std::io::Result<()> {
     #[cfg(windows)]
     {
@@ -3562,71 +3590,77 @@ fn set_file_times_path(
         // `set-file-times' work on a read-only file without racing another
         // observer by temporarily changing its attributes.  OpenOptionsExt is
         // a safe wrapper around the same CreateFileW contract.
-        let mut flags = FILE_FLAG_BACKUP_SEMANTICS;
-        if nofollow {
-            flags |= FILE_FLAG_OPEN_REPARSE_POINT;
-        }
+        let flags = match symlinks {
+            FileTimeSymlinks::Follow => FILE_FLAG_BACKUP_SEMANTICS,
+            FileTimeSymlinks::NoFollow => FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        };
         let file = fs::OpenOptions::new()
             .access_mode(FILE_WRITE_ATTRIBUTES)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
             .custom_flags(flags)
             .open(path)?;
-        return file.set_times(build_file_times(timestamp));
+        return file.set_times(build_file_times(timestamp)?);
     }
 
-    #[cfg(not(windows))]
-    if nofollow {
-        #[cfg(unix)]
-        {
-            let c_path = path_to_cstring(path).map_err(|_| {
-                std::io::Error::new(ErrorKind::InvalidInput, "embedded NUL in file name")
-            })?;
+    #[cfg(unix)]
+    {
+        let c_path = path_to_cstring(path).map_err(|_| {
+            std::io::Error::new(ErrorKind::InvalidInput, "embedded NUL in file name")
+        })?;
 
-            let mut ts = [
-                libc::timespec {
-                    tv_sec: 0,
-                    tv_nsec: 0,
-                },
-                libc::timespec {
-                    tv_sec: 0,
-                    tv_nsec: 0,
-                },
-            ];
-            if let Some((secs, nanos)) = timestamp {
-                ts[0].tv_sec = secs as libc::time_t;
-                ts[1].tv_sec = secs as libc::time_t;
-                ts[0].tv_nsec = nanos as libc::c_long;
-                ts[1].tv_nsec = nanos as libc::c_long;
-            } else {
-                ts[0].tv_nsec = libc::UTIME_NOW as libc::c_long;
-                ts[1].tv_nsec = libc::UTIME_NOW as libc::c_long;
-            }
-            let result = unsafe {
-                libc::utimensat(
-                    libc::AT_FDCWD,
-                    c_path.as_ptr(),
-                    ts.as_ptr(),
-                    libc::AT_SYMLINK_NOFOLLOW,
-                )
-            };
-            if result == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
+        let mut ts = [
+            libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+        ];
+        if let Some(timestamp) = timestamp {
+            let secs = timestamp.seconds();
+            let nanos = timestamp.nanoseconds();
+            ts[0].tv_sec = libc::time_t::try_from(secs)
+                .map_err(|error| std::io::Error::new(ErrorKind::InvalidInput, error))?;
+            ts[1].tv_sec = ts[0].tv_sec;
+            ts[0].tv_nsec = nanos as libc::c_long;
+            ts[1].tv_nsec = nanos as libc::c_long;
+        } else {
+            ts[0].tv_nsec = libc::UTIME_NOW as libc::c_long;
+            ts[1].tv_nsec = libc::UTIME_NOW as libc::c_long;
         }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = (path, timestamp);
-            Err(std::io::Error::new(
+        // SAFETY: c_path is NUL-terminated, ts has two initialized entries,
+        // and both borrowed arrays remain alive through the syscall.
+        let result = unsafe {
+            libc::utimensat(
+                libc::AT_FDCWD,
+                c_path.as_ptr(),
+                ts.as_ptr(),
+                match symlinks {
+                    FileTimeSymlinks::Follow => 0,
+                    FileTimeSymlinks::NoFollow => libc::AT_SYMLINK_NOFOLLOW,
+                },
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        match symlinks {
+            FileTimeSymlinks::Follow => {
+                let file = fs::OpenOptions::new().write(true).open(path)?;
+                file.set_times(build_file_times(timestamp)?)
+            }
+            FileTimeSymlinks::NoFollow => Err(std::io::Error::new(
                 ErrorKind::Unsupported,
                 "nofollow set-file-times is unsupported on this platform",
-            ))
+            )),
         }
-    } else {
-        let file = fs::OpenOptions::new().write(true).open(path)?;
-        let times = build_file_times(timestamp);
-        file.set_times(times)
     }
 }
 
@@ -4008,7 +4042,7 @@ pub(crate) fn builtin_set_file_times(eval: &mut Context, args: Vec<Value>) -> Ev
             ],
         ));
     }
-    let nofollow = args.get(2).is_some_and(|flag| !flag.is_nil());
+    let symlinks = FileTimeSymlinks::from(args.get(2).copied().unwrap_or(Value::NIL));
     let timestamp_arg = args.get(1).copied().unwrap_or(Value::NIL);
     let flag_arg = args.get(2).copied().unwrap_or(Value::NIL);
     let timestamp = if !timestamp_arg.is_nil() {
@@ -4032,7 +4066,7 @@ pub(crate) fn builtin_set_file_times(eval: &mut Context, args: Vec<Value>) -> Ev
     )? {
         return Ok(result);
     }
-    set_file_times_path(&lisp_file_name_to_path_buf(&filename), timestamp, nofollow).map_err(
+    set_file_times_path(&lisp_file_name_to_path_buf(&filename), timestamp, symlinks).map_err(
         |err| {
             signal_file_action_error_value(err, "Setting file times", Value::heap_string(filename))
         },
@@ -4154,15 +4188,13 @@ pub(crate) fn builtin_verify_visited_file_modtime(
     let (disk_modtime, disk_size) = match std::fs::metadata(&path) {
         Ok(meta) => {
             let modtime = match meta.modified() {
-                Ok(mtime) => {
-                    let dur = mtime
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default();
-                    VisitedFileModtime::Known {
-                        sec: dur.as_secs() as i64,
-                        nsec: dur.subsec_nanos() as i32,
-                    }
-                }
+                Ok(mtime) => match UnixTimestamp::try_from(mtime) {
+                    Ok(timestamp) => VisitedFileModtime::Known {
+                        sec: timestamp.seconds(),
+                        nsec: timestamp.nanoseconds() as i32,
+                    },
+                    Err(TimestampError::OutOfRange) => VisitedFileModtime::Unknown,
+                },
                 Err(_) => VisitedFileModtime::Unknown,
             };
             (modtime, Some(meta.len() as i64))
@@ -4280,13 +4312,12 @@ pub(crate) fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Val
             .buffers
             .current_buffer_mut()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        if let Ok(mtime) = meta.modified() {
-            let dur = mtime
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
+        if let Ok(mtime) = meta.modified()
+            && let Some(timestamp) = representable_file_timestamp(mtime)
+        {
             buf.set_visited_file_modtime(VisitedFileModtime::Known {
-                sec: dur.as_secs() as i64,
-                nsec: dur.subsec_nanos() as i32,
+                sec: timestamp.seconds(),
+                nsec: timestamp.nanoseconds() as i32,
             });
             buf.modtime_size = Some(meta.len() as i64);
         }
@@ -4586,7 +4617,9 @@ impl CopyTimestampPolicy {
                     Self::Preserve => Ok(()),
                     // GNU w32_copy_file explicitly counters CopyFileW's default
                     // when KEEP-TIME is nil (src/w32.c:6982-7029).
-                    Self::Refresh => set_file_times_path(destination, None, false),
+                    Self::Refresh => {
+                        set_file_times_path(destination, None, FileTimeSymlinks::Follow)
+                    }
                 }
             }
             _ => {
@@ -5068,6 +5101,7 @@ pub(crate) fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> E
     let nosort = args.get(3).is_some_and(|v| v.is_truthy());
     let count = if let Some(val) = args.get(4) {
         match val.kind() {
+            ValueKind::Nil => None,
             ValueKind::Fixnum(n) if n >= 0 => Some(n as usize),
             _other => {
                 return Err(signal(
@@ -5082,15 +5116,14 @@ pub(crate) fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> E
 
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     let files = directory_files_with_decoder(
+        eval,
         &dir,
         full,
         match_pattern.as_ref(),
         nosort,
         count,
         syntax,
-        &eval.obarray,
-        &eval.buffers,
-        |bytes| decode_file_name_lisp(eval, bytes),
+        decode_file_name_lisp,
     )
     .map_err(|e| signal_directory_files_error(e, &dir))?;
     Ok(Value::list(
@@ -5919,8 +5952,8 @@ fn prepare_write_region(
                     .buffers
                     .get(buffer_after)
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-                callback_start = Value::fixnum(buf.point_min_lisp_char_pos().as_i64());
-                callback_end = Value::fixnum(buf.point_max_lisp_char_pos().as_i64());
+                callback_start = Value::from_fixnum(buf.point_min_position().into());
+                callback_end = Value::from_fixnum(buf.point_max_position().into());
                 annotations.clear();
             }
             annotations.merge_callback_result(result)?;
@@ -5959,7 +5992,7 @@ impl DecodedFileContents {
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     fn text_properties(&self) -> Option<&TextPropertyTable> {
-        let table = self.text().intervals();
+        let table = self.text().intervals().as_table()?;
         if table.is_empty() { None } else { Some(table) }
     }
 
@@ -6532,14 +6565,12 @@ pub(crate) fn builtin_insert_file_contents(
         // current_buffer->modtime = mtime; current_buffer->modtime_size = st_size).
         if let Ok(meta) = std::fs::metadata(lisp_file_name_to_path_buf(&resolved))
             && let Ok(mtime) = meta.modified()
+            && let Some(timestamp) = representable_file_timestamp(mtime)
         {
-            let dur = mtime
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
             if let Some(buf) = eval.buffers.get_mut(current_id) {
                 buf.set_visited_file_modtime(VisitedFileModtime::Known {
-                    sec: dur.as_secs() as i64,
-                    nsec: dur.subsec_nanos() as i32,
+                    sec: timestamp.seconds(),
+                    nsec: timestamp.nanoseconds() as i32,
                 });
                 buf.modtime_size = Some(meta.len() as i64);
             }
@@ -6906,12 +6937,13 @@ pub(crate) fn builtin_write_region(
                     Value::heap_string(resolved.clone()),
                 )
             })?;
-            let dur = mtime
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
+            let timestamp =
+                UnixTimestamp::try_from(mtime).map_err(|TimestampError::OutOfRange| {
+                    crate::emacs_core::timefns::time_error_overflow()
+                })?;
             Some((
-                dur.as_secs() as i64,
-                dur.subsec_nanos() as i32,
+                timestamp.seconds(),
+                timestamp.nanoseconds() as i32,
                 meta.len() as i64,
             ))
         } else {
@@ -7097,7 +7129,7 @@ pub(crate) fn builtin_do_auto_save(
 
     let auto_save_visited = eval
         .obarray
-        .symbol_value("auto-save-visited-file-name")
+        .symbol_value_copied("auto-save-visited-file-name")
         .is_some_and(|v| v.is_truthy());
 
     // Collect buffer ids to process
@@ -7263,9 +7295,9 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/fileio_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/fix8.rs"]
+#[path = "tests/fix8_test.rs"]
 mod fix8_tests;

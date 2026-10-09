@@ -1,0 +1,11 @@
+error[E0603]: struct `VectorScanEntry` is private
+ --> tests/thread_safety_ui/vector_scan_entry_private.rs:1:33
+  |
+1 | use neovm_core::tagged::header::VectorScanEntry;
+  |                                 ^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `VectorScanEntry` is defined here
+ --> src/tagged/header.rs
+  |
+  | pub(crate) struct VectorScanEntry {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

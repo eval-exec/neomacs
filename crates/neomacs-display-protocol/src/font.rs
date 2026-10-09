@@ -742,10 +742,10 @@ impl<'de> serde::Deserialize<'de> for FontAdvancePx {
 
 /// Horizontal-advance contract for one exact realized font.
 ///
-/// Proportional and dual-width fonts retain each glyph's own advance. GNU's
-/// mono and charcell fonts instead position every covered glyph in the
-/// realized font's maximum-width cell. Publishing that decision prevents
-/// layout and rendering from independently choosing incompatible metrics.
+/// Proportional fonts retain each glyph's own advance. Fixed-cell bitmap
+/// fonts reserve exactly one cell; monospace outline fonts may contain wide
+/// CJK characters, ligatures, and zero-width marks. Their glyph advances must
+/// retain those distinctions. Layout publishes the policy once for rendering.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -753,6 +753,8 @@ pub enum ResolvedFontAdvance {
     #[default]
     PerGlyph,
     FixedCell(FontAdvancePx),
+    /// GNU macfont: preserve glyph widths and align integral multi-cell glyphs.
+    MonospaceCells(FontAdvancePx),
 }
 
 impl ResolvedFontAdvance {
@@ -764,18 +766,38 @@ impl ResolvedFontAdvance {
     }
 
     #[must_use]
+    pub fn monospace_cells(advance_px: f32) -> Self {
+        FontAdvancePx::new(advance_px)
+            .map(Self::MonospaceCells)
+            .unwrap_or(Self::PerGlyph)
+    }
+
+    #[must_use]
     pub fn resolve(self, measured_advance_px: f32) -> f32 {
         match self {
             Self::PerGlyph => measured_advance_px,
             Self::FixedCell(advance_px) => advance_px.get(),
+            Self::MonospaceCells(cell) => {
+                let multiplier = (measured_advance_px / cell.get()).round();
+                // GNU macfont_monospace_width_multiplier checks the rounded
+                // per-cell advance, rather than assuming every glyph is one
+                // cell or inferring a width from its Unicode character.
+                if multiplier > 1.0 && (measured_advance_px / multiplier).round() == cell.get() {
+                    multiplier * cell.get()
+                } else {
+                    measured_advance_px.round()
+                }
+            }
         }
     }
 
     #[must_use]
-    pub fn fixed_cell_advance_px(self) -> Option<f32> {
+    pub fn cell_advance_px(self) -> Option<f32> {
         match self {
             Self::PerGlyph => None,
-            Self::FixedCell(advance_px) => Some(advance_px.get()),
+            Self::FixedCell(advance_px) | Self::MonospaceCells(advance_px) => {
+                Some(advance_px.get())
+            }
         }
     }
 }
@@ -802,8 +824,7 @@ pub struct ResolvedFont {
     /// unavailable in this primary font.
     #[serde(default)]
     pub space_advance_px: f32,
-    /// Whether covered glyphs retain their outline advance or occupy one
-    /// canonical fixed-pitch cell.
+    /// The per-glyph, bitmap cell, or multi-cell outline advance contract.
     #[serde(default)]
     pub glyph_advance: ResolvedFontAdvance,
 }
@@ -913,4 +934,5 @@ pub struct FrameFontBindings<'a> {
 }
 
 #[cfg(test)]
+#[path = "font/tests/font_test.rs"]
 mod tests;

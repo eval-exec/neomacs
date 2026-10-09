@@ -5,8 +5,9 @@ use super::WgpuRenderer;
 #[cfg(feature = "video")]
 use neomacs_display_protocol::VideoId;
 use neomacs_display_protocol::{
-    ImageColorContext, ImageFrameIndex, ImageId, ImageLoadToken, ImageMaskPolicy, ImageRealization,
-    ImageRotation, ImageSequenceId, ImageSequenceRetirement, ImageSizeSpec,
+    ImageAnimationPolicy, ImageColorContext, ImageFrameIndex, ImageId, ImageLoadToken,
+    ImageMaskPolicy, ImageRealization, ImageRotation, ImageSequenceId, ImageSequenceRetirement,
+    ImageSizeSpec,
 };
 #[cfg(feature = "video")]
 use neomacs_video::{PlaybackAction, VideoOpenRequest};
@@ -92,6 +93,7 @@ impl WgpuRenderer {
     }
 
     /// Load image from file path with a pre-allocated ID (for threaded mode)
+    #[allow(clippy::too_many_arguments)]
     pub fn load_image_file_with_id(
         &mut self,
         load: ImageLoadToken,
@@ -101,6 +103,7 @@ impl WgpuRenderer {
         realization: ImageRealization,
         colors: ImageColorContext,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity,
@@ -113,6 +116,7 @@ impl WgpuRenderer {
             realization,
             colors,
             mask,
+            animation,
             frame,
             sequence,
             identity,
@@ -134,6 +138,7 @@ impl WgpuRenderer {
     }
 
     /// Load image from data with pre-allocated ID (for threaded mode)
+    #[allow(clippy::too_many_arguments)]
     pub fn load_image_data_with_id(
         &mut self,
         load: ImageLoadToken,
@@ -143,6 +148,7 @@ impl WgpuRenderer {
         realization: ImageRealization,
         colors: ImageColorContext,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         resources: crate::SvgResourceContext,
@@ -156,6 +162,7 @@ impl WgpuRenderer {
             realization,
             colors,
             mask,
+            animation,
             frame,
             sequence,
             resources,

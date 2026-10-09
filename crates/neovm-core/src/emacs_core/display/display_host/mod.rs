@@ -133,6 +133,43 @@ pub struct FontResolveRequest {
     pub face: RuntimeFace,
 }
 
+/// Host-local reference to an exact selected font entity. Handles are never
+/// reused during a host's lifetime; the host validates every lookup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FontEntityHandle(NonZeroU32);
+
+impl FontEntityHandle {
+    pub fn new(value: u32) -> Option<Self> {
+        NonZeroU32::new(value).map(Self)
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+/// Coverage queries inspect one font, never a fontset or fallback chain.
+#[derive(Clone, Debug)]
+pub enum FontCoverageTarget {
+    Entity(FontEntityHandle),
+    Opened(neomacs_display_protocol::font::ResolvedFontIdentity),
+}
+
+/// GNU font drivers can defer entity coverage until opening the font.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontCoverage {
+    Present,
+    Absent,
+    NeedsOpening,
+}
+
+#[derive(Clone, Debug)]
+pub struct FontCoverageRequest {
+    pub frame_id: crate::window::FrameId,
+    pub target: FontCoverageTarget,
+    pub character: crate::emacs_core::emacs_char::EmacsChar,
+}
+
 /// A finite, positive scalar used by point-size and relative-size requests.
 ///
 /// Lisp numbers are validated once when they cross the display-host seam, so
@@ -385,6 +422,27 @@ pub trait DisplayHost {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Apply each accepted legacy alpha operation synchronously, independently
+    /// of replaceable scene transport. Negative components mean retain.
+    fn set_gui_frame_alpha(
+        &mut self,
+        _frame: crate::window::FrameId,
+        _alpha: [f32; 2],
+        _limit: f32,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_gui_frame_focus_redirects(
+        &mut self,
+        _redirects: Vec<(crate::window::FrameId, Option<crate::window::FrameId>)>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn retire_gui_frame_alpha(&mut self, _frame: crate::window::FrameId) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_gui_frame_alpha_lower_limit(&mut self, _limit: f32) {}
+
     fn opening_gui_frame_pending(&self) -> bool {
         false
     }
@@ -452,6 +510,12 @@ pub trait DisplayHost {
         _request: FontSpecResolveRequest,
     ) -> Result<Option<ResolvedFontSpecMatch>, String> {
         Ok(None)
+    }
+    fn font_character_coverage(
+        &mut self,
+        _request: FontCoverageRequest,
+    ) -> Result<FontCoverage, String> {
+        Ok(FontCoverage::NeedsOpening)
     }
     fn probe_font_px_metrics(
         &mut self,
@@ -694,5 +758,5 @@ pub trait DisplayHost {
 }
 
 #[cfg(test)]
-#[path = "tests/display_host.rs"]
+#[path = "tests/display_host_test.rs"]
 mod tests;

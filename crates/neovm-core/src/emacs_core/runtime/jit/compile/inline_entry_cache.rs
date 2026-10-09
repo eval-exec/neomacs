@@ -465,5 +465,5 @@ fn constant_states(
 }
 
 #[cfg(test)]
-#[path = "inline_entry_cache/tests/admission.rs"]
+#[path = "inline_entry_cache/tests/admission_test.rs"]
 mod tests;

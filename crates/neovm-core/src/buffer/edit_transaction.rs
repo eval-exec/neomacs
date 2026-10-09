@@ -86,7 +86,7 @@ pub(in crate::buffer) fn convert_lisp_string_for_buffer_mode(
     }
     let mut converted = lisp_string_from_buffer_bytes(bytes, target_multibyte);
     if text.has_intervals() {
-        let intervals = text.intervals().clone();
+        let intervals = text.intervals().to_owned_table();
         if !intervals.is_empty() {
             *converted.intervals_mut() = intervals;
         }
@@ -710,7 +710,7 @@ impl Buffer {
     pub(in crate::buffer) fn execute_transposition_storage_plan(
         &mut self,
         plan: TranspositionStoragePlan,
-        leave_markers: bool,
+        anchor_policy: TranspositionAnchorPolicy,
     ) {
         let transposition = plan.transposition();
         let first = transposition.first();
@@ -725,29 +725,35 @@ impl Buffer {
         } else {
             self.set_text_properties_with_undo_range(transposition.byte_span(), Vec::new());
         }
-        let new_point = transposition.transpose_anchor(self.point_anchor());
-
+        let old_point = self.point_anchor();
+        self.text
+            .prepare_transposition_storage(transposition.span_edit_range());
         self.text
             .replace_same_len_measured_range(plan.replacement(), plan.replacement_bytes());
         self.text.text_props_replace(replacement_props);
-        if leave_markers {
-            self.text.remap_marker_anchors(|old_position| {
-                let old_byte = old_position.emacs_byte_pos();
-                if old_byte > first.byte_start() && old_byte <= second.byte_end() {
-                    TextPositionAnchor::new(
-                        old_position.char_pos(),
-                        emacs_byte_for_char_pos(&self.text, old_position.char_pos()),
-                    )
-                } else {
-                    old_position
-                }
-            });
-        } else {
-            self.text
-                .remap_marker_anchors(|old_position| transposition.transpose_anchor(old_position));
+        match anchor_policy {
+            TranspositionAnchorPolicy::PreserveCharacterPositions => {
+                self.text.remap_marker_anchors(|old_position| {
+                    let old_byte = old_position.emacs_byte_pos();
+                    if old_byte > first.byte_start() && old_byte <= second.byte_end() {
+                        self.text
+                            .storage_anchor_for_char_pos(old_position.char_pos())
+                    } else {
+                        old_position
+                    }
+                });
+            }
+            TranspositionAnchorPolicy::FollowText => {
+                self.text.remap_marker_anchors(|old_position| {
+                    transposition.transpose_anchor(old_position)
+                });
+            }
         }
-
-        self.set_point_anchor_unchecked(new_point);
+        self.set_point_anchor_unchecked(anchor_policy.map_point(
+            transposition,
+            &self.text,
+            old_point,
+        ));
         self.apply_same_len_edit_side_effects(
             plan.edit(),
             SameLenModifiedStatePolicy::RecordChange,
@@ -821,10 +827,12 @@ impl Buffer {
             SharedTextEditMetadata::Transposition {
                 edit,
                 transposition,
+                anchor_policy,
                 modified_state,
             } => {
                 if state_policy.structural_state_update().update_state_fields() {
-                    let point = transposition.transpose_anchor(self.point_anchor());
+                    let point =
+                        anchor_policy.map_point(transposition, &self.text, self.point_anchor());
                     self.set_point_anchor_unchecked(point);
                 }
                 self.apply_same_len_edit_side_effects(edit, modified_state);
@@ -1341,7 +1349,7 @@ impl InsertTextPlan {
         marker_adjustment: InsertMarkerAdjustment,
     ) -> Self {
         let text_properties = if text.has_intervals() {
-            text.intervals().clone()
+            text.intervals().to_owned_table()
         } else {
             TextPropertyTable::new()
         };
@@ -1417,7 +1425,7 @@ impl ReplaceTextPlan {
             .then(|| convert_lisp_string_for_buffer_mode(text, multibyte));
         let text = converted.as_ref().unwrap_or(text);
         let text_properties = if text.has_intervals() {
-            text.intervals().clone()
+            text.intervals().to_owned_table()
         } else {
             TextPropertyTable::new()
         };
@@ -1678,6 +1686,40 @@ impl MeasuredSameLenEdit {
     }
 }
 
+/// GNU's LEAVE-MARKERS policy includes point (editfns.c:4467-4479,
+/// 4782-4797). This immutable policy carries no mutator-local Lisp state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TranspositionAnchorPolicy {
+    FollowText,
+    PreserveCharacterPositions,
+}
+
+static_assertions::assert_impl_all!(TranspositionAnchorPolicy: Send, Sync);
+
+impl From<bool> for TranspositionAnchorPolicy {
+    fn from(leave_markers: bool) -> Self {
+        if leave_markers {
+            Self::PreserveCharacterPositions
+        } else {
+            Self::FollowText
+        }
+    }
+}
+
+impl TranspositionAnchorPolicy {
+    fn map_point(
+        self,
+        transposition: TextTransposition,
+        text: &BufferText,
+        point: TextPositionAnchor,
+    ) -> TextPositionAnchor {
+        match self {
+            Self::FollowText => transposition.transpose_anchor(point),
+            Self::PreserveCharacterPositions => text.storage_anchor_for_char_pos(point.char_pos()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::buffer) enum SharedTextEditMetadata {
     Insert(MeasuredInsertEdit),
@@ -1690,6 +1732,7 @@ pub(in crate::buffer) enum SharedTextEditMetadata {
     Transposition {
         edit: MeasuredSameLenEdit,
         transposition: TextTransposition,
+        anchor_policy: TranspositionAnchorPolicy,
         modified_state: SameLenModifiedStatePolicy,
     },
 }
@@ -2153,3 +2196,7 @@ impl ReplaceSideEffectPolicy {
 #[cfg(test)]
 #[path = "edit_transaction/tests/edit_transaction_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "edit_transaction/tests/transpose_gnu_test.rs"]
+mod transpose_gnu;

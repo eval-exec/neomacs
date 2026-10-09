@@ -163,7 +163,7 @@ impl KeymapStateVariable {
     }
 
     fn global_value(self, obarray: &Obarray) -> Option<Value> {
-        obarray.symbol_value_id(self.symbol_id()).copied()
+        obarray.symbol_value_id_copied(self.symbol_id())
     }
 
     fn buffer_or_global_value(
@@ -2046,7 +2046,7 @@ fn dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
     {
         return Some(value);
     }
-    obarray.symbol_value_id(sym_id).copied()
+    obarray.symbol_value_id_copied(sym_id)
 }
 
 pub(crate) fn minor_mode_map_entry(entry: &Value) -> Option<(SymId, Value)> {
@@ -2979,7 +2979,7 @@ fn lookup_minor_mode_binding_in_alist_in_obarray(
         } else if map_value.as_symbol_name().is_some() {
             match map_value
                 .as_symbol_name()
-                .and_then(|name| obarray.symbol_value(name).copied())
+                .and_then(|name| obarray.symbol_value_copied(name))
             {
                 Some(value) if is_list_keymap(&value) => value,
                 _ => match obarray.symbol_function_of_value(&map_value) {
@@ -4304,5 +4304,5 @@ pub fn list_keymap_for_each_binding_recursive<F>(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/keymap_test.rs"]
 mod tests;

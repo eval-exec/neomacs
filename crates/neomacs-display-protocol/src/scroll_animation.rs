@@ -32,7 +32,7 @@ use strum::{EnumString, IntoStaticStr};
 #[strum(serialize_all = "kebab-case")]
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
-#[derive(strum::VariantNames)]
+#[derive(strum::VariantNames, strum::EnumCount, strum::VariantArray)]
 pub enum TransitionEffect {
     // ── Transition effects (2D, vertex position/alpha changes) ──────────
     /// Default: old content slides out, new content slides in.
@@ -168,32 +168,20 @@ pub enum TransitionEffect {
 
 impl TransitionEffect {
     /// Number of defined scroll effects.
-    pub const COUNT: usize = 21;
+    pub const COUNT: usize = <Self as strum::EnumCount>::COUNT;
 
     /// All effects in definition order.
-    pub const ALL: [TransitionEffect; Self::COUNT] = [
-        Self::Slide,
-        Self::Crossfade,
-        Self::ScaleZoom,
-        Self::FadeEdges,
-        Self::Cascade,
-        Self::Parallax,
-        Self::Tilt,
-        Self::PageCurl,
-        Self::CardFlip,
-        Self::CylinderRoll,
-        Self::Wobbly,
-        Self::Wave,
-        Self::PerLineSpring,
-        Self::Liquid,
-        Self::MotionBlur,
-        Self::ChromaticAberration,
-        Self::GhostTrails,
-        Self::ColorTemperature,
-        Self::CRTScanlines,
-        Self::DepthOfField,
-        Self::TypewriterReveal,
-    ];
+    pub const ALL: [TransitionEffect; Self::COUNT] = {
+        // Preserve the public fixed-size array while deriving its contents.
+        let variants = <Self as strum::VariantArray>::VARIANTS;
+        let mut all = [Self::Slide; Self::COUNT];
+        let mut index = 0;
+        while index < Self::COUNT {
+            all[index] = variants[index];
+            index += 1;
+        }
+        all
+    };
 
     /// Parse from string (for Lisp integration).
     // Inherent infallible parser that defaults on an unknown name; deliberately
@@ -368,4 +356,5 @@ impl TransitionEasing {
 // ─── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "scroll_animation/tests/scroll_animation_test.rs"]
 mod tests;

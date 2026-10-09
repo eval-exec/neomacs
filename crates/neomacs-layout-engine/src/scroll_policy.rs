@@ -270,4 +270,5 @@ pub(crate) fn line_start_below(
 }
 
 #[cfg(test)]
+#[path = "scroll_policy/tests/scroll_policy_test.rs"]
 mod tests;

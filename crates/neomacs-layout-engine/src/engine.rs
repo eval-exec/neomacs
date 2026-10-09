@@ -154,20 +154,59 @@ enum EditReplayStructureProperty {
     WrapPrefix,
 }
 
+/// A preencoded symbol identity used only for text-property comparisons.
+///
+/// Symbol IDs are append-only and never reused. This stores their bits without
+/// owning a Lisp object or relying on canonicality to keep a symbol rooted.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+struct SymbolComparisonKey(usize);
+
+static_assertions::assert_impl_all!(SymbolComparisonKey: Send, Sync, Copy, std::fmt::Debug);
+static_assertions::assert_eq_size!(SymbolComparisonKey, usize);
+static_assertions::assert_eq_align!(SymbolComparisonKey, usize);
+static_assertions::assert_eq_size!(Value, usize);
+static_assertions::assert_eq_align!(Value, usize);
+
+impl SymbolComparisonKey {
+    fn new(id: neovm_core::emacs_core::intern::SymId) -> Self {
+        Self(Value::from_sym_id(id).bits())
+    }
+
+    fn local_comparison_key(self) -> Value {
+        // SAFETY: `new` stores only bits of a valid symbol ID, whose append-only
+        // process identity is never reused. Value is transparently one usize
+        // (pinned in neovm-core). This local copy is used by the two callers
+        // below only for identity comparison, never for symbol-cell access or
+        // as a GC root; no unrooted Lisp object crosses threads.
+        unsafe { std::mem::transmute::<usize, Value>(self.0) }
+    }
+}
+
 impl EditReplayStructureProperty {
-    fn symbols() -> &'static [Value; <Self as strum::EnumCount>::COUNT] {
+    /// The property identities, converted to local comparison keys.
+    ///
+    /// The cache holds preencoded append-only SymId identity bits, even after
+    /// uninterning. Both callers use these keys only for the bounded
+    /// text-property scan: its presence index and plist lookup compare identity
+    /// bits without reading a symbol cell. The cache owns no Lisp object or GC
+    /// root; values in live interval plists supply their own roots.
+    fn symbols() -> [Value; <Self as strum::EnumCount>::COUNT] {
+        use neovm_core::emacs_core::intern::intern;
         use std::sync::OnceLock;
         use strum::VariantArray;
 
         const N: usize = <EditReplayStructureProperty as strum::EnumCount>::COUNT;
-        static SYMBOLS: OnceLock<[Value; N]> = OnceLock::new();
-        SYMBOLS.get_or_init(|| {
-            std::array::from_fn(|index| {
-                Value::symbol(neovm_core::emacs_core::intern::intern(
-                    EditReplayStructureProperty::VARIANTS[index].into(),
-                ))
+        static SYMBOLS: OnceLock<[SymbolComparisonKey; N]> = OnceLock::new();
+        SYMBOLS
+            .get_or_init(|| {
+                std::array::from_fn(|index| {
+                    SymbolComparisonKey::new(intern(
+                        EditReplayStructureProperty::VARIANTS[index].into(),
+                    ))
+                })
             })
-        })
+            .map(SymbolComparisonKey::local_comparison_key)
     }
 }
 
@@ -292,8 +331,7 @@ fn resize_mini_windows_mode_for_buffer(
         .or_else(|| {
             evaluator
                 .obarray()
-                .symbol_value("resize-mini-windows")
-                .copied()
+                .symbol_value_copied("resize-mini-windows")
         });
     ResizeMiniWindowsMode::from_lisp_value(value.as_ref())
 }
@@ -311,8 +349,7 @@ fn uses_adhoc_minibuffer_resize_scroll(
         .or_else(|| {
             evaluator
                 .obarray()
-                .symbol_value("redisplay-adhoc-scroll-in-resize-mini-windows")
-                .copied()
+                .symbol_value_copied("redisplay-adhoc-scroll-in-resize-mini-windows")
         })
         .is_none_or(|value| !value.is_nil())
 }
@@ -549,11 +586,31 @@ fn resolve_window_display_source_params(
         params.vscroll = 0;
         params.force_start = true;
         params.previous_visible_end = None;
-        params.mini_measurement = crate::types::MiniWindowMeasurement::ToEnd;
+        params.source_extent = crate::types::WindowSourceExtent::AccessibleEnd;
     }
     if let WindowLayoutWalkPurpose::SynchronousQuery(scope) = purpose {
         use neovm_core::window::WindowLayoutQueryScope;
         let start = match scope {
+            WindowLayoutQueryScope::TextExtent {
+                start,
+                end,
+                width,
+                height,
+                ..
+            } => {
+                params.buffer_size = end
+                    .as_i64()
+                    .saturating_sub(1)
+                    .clamp(params.buffer_begv, params.buffer_size);
+                params.point = params.point.min(params.buffer_size);
+                params.source_extent = crate::types::WindowSourceExtent::AccessibleEnd;
+                params.measurement_width =
+                    Some(width.unwrap_or(i32::MAX as usize).min(i32::MAX as usize));
+                params.measurement_pixels = height;
+                params.hscroll = 0;
+                params.force_start = true;
+                Some(start)
+            }
             WindowLayoutQueryScope::Rows { start, count } => {
                 params.measurement_rows = Some(count);
                 Some(start)
@@ -665,8 +722,7 @@ fn window_source_has_fontification_callbacks(
         .or_else(|| {
             evaluator
                 .obarray()
-                .symbol_value("fontification-functions")
-                .copied()
+                .symbol_value_copied("fontification-functions")
         })
         .is_some_and(|value| !value.is_nil())
 }
@@ -722,7 +778,12 @@ fn collect_live_window_layout_inputs(
         if live_window.id() != window_id {
             return None;
         }
-        let buffer_id = live_window.buffer_id()?;
+        let buffer_id = match purpose {
+            WindowLayoutWalkPurpose::SynchronousQuery(
+                neovm_core::window::WindowLayoutQueryScope::TextExtent { buffer, .. },
+            ) => buffer,
+            _ => live_window.buffer_id()?,
+        };
         let buffer = evaluator.buffer_manager().get(buffer_id)?;
         let frame_is_selected = evaluator
             .frame_manager()
@@ -809,8 +870,7 @@ fn max_mini_window_lines_for_window(
         .or_else(|| {
             evaluator
                 .obarray()
-                .symbol_value("max-mini-window-height")
-                .copied()
+                .symbol_value_copied("max-mini-window-height")
         })
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
@@ -819,8 +879,7 @@ fn max_mini_window_lines_for_window(
 fn tab_bar_button_relief_geometry(evaluator: &neovm_core::emacs_core::Context) -> (f32, f32, f32) {
     let margin = evaluator
         .obarray()
-        .symbol_value("tab-bar-button-margin")
-        .copied()
+        .symbol_value_copied("tab-bar-button-margin")
         .unwrap_or_else(|| Value::fixnum(1));
     let (horizontal_margin, vertical_margin) = if let Some(value) = margin.as_int() {
         let value = value.max(0) as f32;
@@ -835,8 +894,7 @@ fn tab_bar_button_relief_geometry(evaluator: &neovm_core::emacs_core::Context) -
     };
     let configured_thickness = evaluator
         .obarray()
-        .symbol_value("tab-bar-button-relief")
-        .copied()
+        .symbol_value_copied("tab-bar-button-relief")
         .and_then(Value::as_int)
         .unwrap_or(1);
     let thickness = if configured_thickness < 0 {
@@ -1011,7 +1069,13 @@ impl PreparedGuiChromeSemantics {
         let needs_menu_items = evaluator
             .frame_manager()
             .get(frame_id)
-            .is_some_and(|frame| frame.compact_bar_height > 0 || frame.menu_bar_height > 0);
+            .is_some_and(|frame| {
+                frame.menu_bar_height > 0
+                    || (frame.compact_bar_height > 0
+                        && frame
+                            .known_frame_parameter_int(FrameParam::MenuBarLines)
+                            .is_some_and(|lines| lines > 0))
+            });
         let menu_items = if needs_menu_items {
             collect_gui_menu_bar_items_for_frame(evaluator, frame_id)
         } else {
@@ -1031,11 +1095,7 @@ impl PreparedGuiChromeSemantics {
             .frame_manager()
             .get(frame_id)
             .is_some_and(|frame| {
-                frame.compact_bar_height > 0
-                    || frame
-                        .frame_parameter_int("compact-bar-lines")
-                        .is_some_and(|lines| lines > 0)
-                    || frame.tool_bar_height > 0
+                frame.tool_bar_height > 0
                     || frame
                         .known_frame_parameter_int(FrameParam::ToolBarLines)
                         .is_some_and(|lines| lines > 0)
@@ -1814,12 +1874,9 @@ impl LayoutEngine {
             let font_catalog_changed = font_metrics.synchronize_font_catalog().changed();
             let use_primary_font = evaluator
                 .obarray()
-                .symbol_value("use-default-font-for-symbols")
+                .symbol_value_copied("use-default-font-for-symbols")
                 .is_none_or(|value| !value.is_nil());
-            let char_script_table = evaluator
-                .obarray()
-                .symbol_value("char-script-table")
-                .copied();
+            let char_script_table = evaluator.obarray().symbol_value_copied("char-script-table");
             let symbol_policy_changed = font_metrics
                 .synchronize_symbol_font_policy(use_primary_font, char_script_table)
                 .changed();
@@ -2149,7 +2206,22 @@ impl LayoutEngine {
                         .and_then(neovm_core::face::Color::parse)
                         .map(|color| Color::from_pixel(color.to_pixel()))
                         .unwrap_or(Color::BLACK),
-                    background_alpha: 1.0,
+                    background_alpha: frame.background_alpha,
+                    frame_alpha: {
+                        let mut alpha = frame.frame_alpha;
+                        let limit = neovm_core::window::frame_alpha::lower_limit(
+                            evaluator
+                                .obarray()
+                                .symbol_value_copied("frame-alpha-lower-limit")
+                                .unwrap_or(Value::fixnum(20)),
+                        );
+                        for value in &mut alpha {
+                            if *value >= 0.0 && (0.0..=1.0).contains(&limit) {
+                                *value = value.max(limit);
+                            }
+                        }
+                        alpha
+                    },
                     no_accept_focus: frame.no_accept_focus,
                 })
             } else {
@@ -2857,14 +2929,11 @@ impl LayoutEngine {
                 let end = query_snapshot
                     .and_then(|snapshot| snapshot.window_end_record)
                     .and_then(|record| {
-                        let buffer_id = evaluator
-                            .frame_manager()
-                            .get(frame_id)?
-                            .find_window(target)?
-                            .buffer_id()?;
-                        let buffer = evaluator.buffer_manager().get(buffer_id)?;
-                        let buffer_z = neovm_core::buffer::LispCharPos1::from_one_based_usize(
-                            buffer.point_max_char_pos().get().saturating_add(1),
+                        let params = window_params_list
+                            .iter()
+                            .find(|params| params.window_id == target.0 as i64)?;
+                        let buffer_z = crate::coords::layout_i64_char_pos_to_lisp_char_pos(
+                            params.accessible_end_charpos().get(),
                         );
                         Some(record.charpos_from_z(buffer_z))
                     })
@@ -3207,7 +3276,7 @@ impl LayoutEngine {
         };
         frame_display_state.scroll_input_policy.x11_delta_factor = evaluator
             .obarray()
-            .symbol_value("x-scroll-event-delta-factor")
+            .symbol_value_copied("x-scroll-event-delta-factor")
             .and_then(|value| value.as_number_f64())
             .filter(|factor| factor.is_finite())
             .unwrap_or(1.0);
@@ -3814,8 +3883,7 @@ impl LayoutEngine {
             .or_else(|| {
                 evaluator
                     .obarray()
-                    .symbol_value("max-mini-window-height")
-                    .copied()
+                    .symbol_value_copied("max-mini-window-height")
             })
             .unwrap_or_else(|| Value::make_float(0.25));
         let max_lines = max_mini_window_lines_from_value(raw_maximum, frame_rows);
@@ -3944,7 +4012,13 @@ impl LayoutEngine {
         scope: neovm_core::window::WindowLayoutQueryScope,
     ) -> Result<neovm_core::window::WindowLayoutQuery, neovm_core::window::WindowLayoutQueryFailure>
     {
-        if let Some(query) = self.query_cache.get(evaluator, frame_id, window_id, scope) {
+        let text_extent = matches!(
+            scope,
+            neovm_core::window::WindowLayoutQueryScope::TextExtent { .. }
+        );
+        if !text_extent
+            && let Some(query) = self.query_cache.get(evaluator, frame_id, window_id, scope)
+        {
             return Ok(query);
         }
         if let Some(query) = self
@@ -3975,7 +4049,8 @@ impl LayoutEngine {
         tracing::trace!(target: "neomacs_layout_engine::query_cache",
             body_reuse_allowed = self.query_body_reuse_allowed,
             collections_captured = collections.is_some(), "query completed");
-        if self.query_body_reuse_allowed
+        if !text_extent
+            && self.query_body_reuse_allowed
             && let Some(collections) = collections
         {
             self.query_cache.remember(
@@ -4247,7 +4322,7 @@ impl LayoutEngine {
                     crate::incremental_layout::lazy_proof_test_support::note_property_query();
                     !buffer.has_any_non_nil_property_in_char_range(
                         structure_range,
-                        EditReplayStructureProperty::symbols(),
+                        &EditReplayStructureProperty::symbols(),
                     )
                 };
                 observed_newlines = Some(newlines);
@@ -4315,7 +4390,7 @@ impl LayoutEngine {
                 crate::incremental_layout::lazy_proof_test_support::note_property_query();
                 !buffer.has_any_non_nil_property_in_char_range(
                     structure_range,
-                    EditReplayStructureProperty::symbols(),
+                    &EditReplayStructureProperty::symbols(),
                 )
             };
             let damage = EditDamage::new(dirty_start, dirty_end, delta, span_newlines);
@@ -4632,7 +4707,7 @@ impl LayoutEngine {
         let display_target = crate::display_property::DisplayPropertyTarget::for_window_system(
             face_resolver.is_window_system(),
         );
-        let display_when = if params.mini_measurement == MiniWindowMeasurement::ToEnd
+        let display_when = if params.source_extent == WindowSourceExtent::AccessibleEnd
             && evaluator.gnu_redisplay_hooks_policy_enabled()
         {
             let condition_end =
@@ -4707,6 +4782,9 @@ impl LayoutEngine {
                 Some(visible_char_bound(params)),
                 display_target,
             )
+            .with_accessible_end(neovm_core::buffer::CharPos0::new(
+                params.accessible_end_charpos().get().max(0) as usize,
+            ))
             .with_display_when(display_when),
             None => {
                 tracing::debug!("layout_window_rust: buffer {} not found", params.buffer_id);
@@ -5374,6 +5452,7 @@ impl LayoutEngine {
 }
 
 #[cfg(test)]
+#[path = "engine/tests/engine_test.rs"]
 mod tests;
 
 #[cfg(test)]

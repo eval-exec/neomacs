@@ -2,7 +2,7 @@ use neovm_core::emacs_core::intern::resolve_sym;
 use neovm_core::emacs_core::load::{
     apply_runtime_startup_state, create_bootstrap_evaluator_cached,
 };
-use neovm_core::emacs_core::{self, EvalError};
+use neovm_core::emacs_core::{self, Context, EvalError};
 use neovm_core::{TaskHandle, TaskScheduler, TaskStatus};
 use neovm_host_abi::{
     Affinity, ChannelId, LispValue, SelectOp, SelectResult, ShutdownOrder, Signal, TaskError,
@@ -18,9 +18,113 @@ pub const CORE_BACKEND: &str = neovm_core::CORE_BACKEND;
 
 type ExecuteFn =
     dyn Fn(&LispValue, &TaskOptions, &TaskContext) -> Result<LispValue, TaskError> + Send + Sync;
+type ElispFactoryFn = dyn Fn() -> Result<Box<Context>, WorkerStartError> + Send + Sync;
+
+/// Only factories and host executors travel to workers. An Elisp factory
+/// returns its owner-local Context after being invoked on that worker.
+#[derive(Clone)]
+enum Executor {
+    Shared(Arc<ExecuteFn>),
+    Elisp(Arc<ElispFactoryFn>),
+}
+
+impl std::fmt::Debug for Executor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shared(executor) => f
+                .debug_struct("Shared")
+                .field("strong_count", &Arc::strong_count(executor))
+                .finish(),
+            Self::Elisp(factory) => f
+                .debug_struct("Elisp")
+                .field("factory_strong_count", &Arc::strong_count(factory))
+                .finish(),
+        }
+    }
+}
+
+static_assertions::assert_impl_all!(Executor: Send, Sync, std::fmt::Debug);
+
+/// One worker's executor. Lisp state persists across its tasks, and its
+/// Context, registries and installed TLS never leave this owner thread.
+enum LocalExecutor {
+    Shared(Arc<ExecuteFn>),
+    Elisp(Box<Context>),
+}
+
+impl std::fmt::Debug for LocalExecutor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shared(executor) => f
+                .debug_struct("Shared")
+                .field("strong_count", &Arc::strong_count(executor))
+                .finish(),
+            Self::Elisp(_) => f
+                .debug_struct("Elisp")
+                .field("owner_thread", &thread::current().id())
+                .finish(),
+        }
+    }
+}
+
+static_assertions::assert_impl_all!(LocalExecutor: std::fmt::Debug);
+static_assertions::assert_not_impl_any!(LocalExecutor: Send, Sync);
+
+impl LocalExecutor {
+    fn initialize(executor: Executor) -> Result<Self, WorkerStartError> {
+        match executor {
+            Executor::Shared(executor) => Ok(Self::Shared(executor)),
+            Executor::Elisp(factory) => {
+                let mut evaluator = factory()?;
+                evaluator.setup_thread_locals();
+                Ok(Self::Elisp(evaluator))
+            }
+        }
+    }
+
+    fn execute(
+        &mut self,
+        form: &LispValue,
+        opts: &TaskOptions,
+        context: &TaskContext,
+    ) -> Result<LispValue, TaskError> {
+        match self {
+            Self::Shared(executor) => executor(form, opts, context),
+            Self::Elisp(evaluator) => execute_elisp(evaluator, form),
+        }
+    }
+
+    fn finish(self) -> Result<(), neovm_core::tagged::gc::MarkFinishError> {
+        match self {
+            Self::Shared(_) => Ok(()),
+            Self::Elisp(evaluator) => evaluator.shutdown(),
+        }
+    }
+}
+
+/// Failure to establish the worker owners before task execution.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkerStartError {
+    #[error("the Lisp executor requires at least one configured worker")]
+    NoWorkers,
+    #[error("the Lisp executor already has an owner")]
+    AlreadyStarted,
+    #[error("worker thread creation failed: {0}")]
+    ThreadSpawn(#[source] std::io::Error),
+    #[error("Lisp worker initialization failed: {0}")]
+    Initialization(String),
+    #[error("worker initialization panicked")]
+    InitializationPanicked,
+    #[error("worker exited before reporting initialization")]
+    InitializationChannelClosed,
+}
+
+static_assertions::assert_impl_all!(WorkerStartError: Send, Sync, std::fmt::Debug, std::error::Error);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WorkerConfig {
+    /// Pool width for host executors. Lisp requires a positive value and uses
+    /// one permanent owner of its existing shared, serialized evaluator.
     pub threads: usize,
     pub queue_capacity: usize,
 }
@@ -435,58 +539,26 @@ pub struct WorkerRuntime {
     channels: Arc<RwLock<HashMap<u64, Arc<Channel>>>>,
     channel_events: Arc<ChannelEvents>,
     metrics: Arc<RuntimeMetrics>,
-    executor: Arc<ExecuteFn>,
+    executor: Executor,
+    elisp_started: AtomicBool,
     /// The first exit a task ordered, if any. Latched rather than merely
     /// returned to that task's awaiter: a host must be able to obey a
     /// kill-emacs it never awaited.
     shutdown: Arc<Mutex<Option<ShutdownOrder>>>,
 }
 
+static_assertions::assert_impl_all!(WorkerRuntime: Send, Sync);
+
 impl WorkerRuntime {
     pub fn new(config: WorkerConfig) -> Self {
         Self::with_executor(config, |form, _opts, _ctx| Ok(form.clone()))
     }
 
+    /// Configure one shared Lisp state without constructing a Context or
+    /// changing the caller's TLS. Its Context is created by the worker start
+    /// operation on the thread that will own it for its entire lifetime.
     pub fn with_elisp_executor(config: WorkerConfig) -> Self {
-        let mut evaluator =
-            create_bootstrap_evaluator_cached().expect("worker bootstrap evaluator");
-        apply_runtime_startup_state(&mut evaluator).expect("worker runtime startup state");
-        let evaluator = Arc::new(Mutex::new(evaluator));
-        Self::with_executor(config, move |form, _opts, _ctx| {
-            let source = std::str::from_utf8(&form.bytes).map_err(|err| {
-                TaskError::Failed(Signal {
-                    symbol: "invalid-read-syntax".to_string(),
-                    data: Some(err.to_string()),
-                })
-            })?;
-
-            // Lock the evaluator and set up thread-locals BEFORE reading,
-            // since the value reader needs the interner for symbols/keywords.
-            let mut eval = evaluator.lock().expect("elisp evaluator mutex poisoned");
-            eval.setup_thread_locals();
-
-            let forms =
-                emacs_core::value_reader::read_all(source, eval.obarray()).map_err(|err| {
-                    TaskError::Failed(Signal {
-                        symbol: "invalid-read-syntax".to_string(),
-                        data: Some(err.message),
-                    })
-                })?;
-
-            let mut last = LispValue::default();
-            for form in forms {
-                match eval.eval_form(form) {
-                    Ok(value) => {
-                        last = LispValue {
-                            bytes: emacs_core::print_value_bytes_with_eval(&eval, &value),
-                        };
-                    }
-                    Err(err) => return Err(eval_error_to_task_error(err)),
-                }
-            }
-
-            Ok(last)
-        })
+        Self::with_executor_factory(config, Executor::Elisp(Arc::new(create_elisp_context)))
     }
 
     pub fn with_executor<F>(config: WorkerConfig, executor: F) -> Self
@@ -496,6 +568,10 @@ impl WorkerRuntime {
             + Sync
             + 'static,
     {
+        Self::with_executor_factory(config, Executor::Shared(Arc::new(executor)))
+    }
+
+    fn with_executor_factory(config: WorkerConfig, executor: Executor) -> Self {
         Self {
             config,
             next_task: AtomicU64::new(1),
@@ -507,7 +583,8 @@ impl WorkerRuntime {
             channels: Arc::new(RwLock::new(HashMap::new())),
             channel_events: Arc::new(ChannelEvents::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
-            executor: Arc::new(executor),
+            executor,
+            elisp_started: AtomicBool::new(false),
             shutdown: Arc::new(Mutex::new(None)),
         }
     }
@@ -704,15 +781,70 @@ impl WorkerRuntime {
     }
 
     pub fn start_dummy_workers(&self) -> Vec<thread::JoinHandle<()>> {
-        let mut joins = Vec::with_capacity(self.config.threads);
-        for _ in 0..self.config.threads {
+        self.try_start_workers().expect("worker initialization")
+    }
+
+    /// Start workers and wait for each new owner to report readiness.
+    ///
+    /// Custom host executors use the configured pool width. Lisp tasks retain
+    /// their existing serialized, shared-state semantics through one stationary
+    /// Context owner; the former shared evaluator mutex already serialized
+    /// these tasks. A Lisp runtime admits only one owner for its lifetime.
+    /// A future shared-World factory can construct one Context per mutator;
+    /// creating independent heaps here would lose definitions between tasks.
+    ///
+    /// # Errors
+    /// Returns an error if an owner cannot be constructed or a Lisp owner was
+    /// already started. An initialization failure closes the queue and gives
+    /// queued tasks a failure result before returning to the caller.
+    pub fn try_start_workers(&self) -> Result<Vec<thread::JoinHandle<()>>, WorkerStartError> {
+        let is_elisp = matches!(&self.executor, Executor::Elisp(_));
+        let worker_count = if is_elisp {
+            if self.config.threads == 0 {
+                let err = WorkerStartError::NoWorkers;
+                self.fail_startup(&err);
+                return Err(err);
+            }
+            self.elisp_started
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .map_err(|_| WorkerStartError::AlreadyStarted)?;
+            1
+        } else {
+            self.config.threads
+        };
+
+        let mut joins: Vec<thread::JoinHandle<()>> = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
             let queue = Arc::clone(&self.queue);
             let tasks = Arc::clone(&self.tasks);
             let finished = Arc::clone(&self.finished);
             let metrics = Arc::clone(&self.metrics);
-            let executor = Arc::clone(&self.executor);
+            let executor = self.executor.clone();
             let shutdown = Arc::clone(&self.shutdown);
-            joins.push(thread::spawn(move || {
+            let (ready, readiness) = std::sync::mpsc::sync_channel(1);
+            let worker = thread::Builder::new().spawn(move || {
+                // No Context has crossed the spawn boundary. Its construction
+                // and all TLS installation happen in this closure.
+                // An initialization panic publishes no local executor; the
+                // caller closes the queue and completes its pending tasks.
+                let initialization = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    LocalExecutor::initialize(executor)
+                }));
+                let mut executor = match initialization {
+                    Ok(Ok(executor)) => executor,
+                    Ok(Err(err)) => {
+                        let _ = ready.send(Err(err));
+                        return;
+                    }
+                    Err(_) => {
+                        let _ = ready.send(Err(WorkerStartError::InitializationPanicked));
+                        return;
+                    }
+                };
+                if ready.send(Ok(())).is_err() {
+                    executor.finish().expect("worker shutdown");
+                    return;
+                }
                 loop {
                     let handle = {
                         let mut state = queue.state.lock().expect("worker queue mutex poisoned");
@@ -724,7 +856,7 @@ impl WorkerRuntime {
                         }
 
                         if state.closed && state.is_empty() {
-                            return;
+                            break;
                         }
 
                         state.pop()
@@ -757,7 +889,7 @@ impl WorkerRuntime {
                         continue;
                     }
 
-                    let execution = executor(&task.form, &task.opts, &task.context);
+                    let execution = executor.execute(&task.form, &task.opts, &task.context);
                     let was_cancelled = matches!(execution, Err(TaskError::Cancelled));
                     if let Err(TaskError::Shutdown(order)) = &execution {
                         // The process was told to exit. That outranks every
@@ -792,9 +924,73 @@ impl WorkerRuntime {
                         done.push_back(handle.0);
                     }
                 }
-            }));
+                // This explicit lifecycle boundary may wait and reports any
+                // marker failure through the worker's JoinHandle. Drop stays
+                // non-blocking and cannot be the first completion boundary.
+                executor.finish().expect("worker shutdown");
+            });
+            let worker = match worker {
+                Ok(worker) => worker,
+                Err(err) => {
+                    let err = WorkerStartError::ThreadSpawn(err);
+                    self.fail_startup(&err);
+                    for worker in joins {
+                        let _ = worker.join();
+                    }
+                    return Err(err);
+                }
+            };
+            match readiness.recv() {
+                Ok(Ok(())) => joins.push(worker),
+                outcome => {
+                    let err = match outcome {
+                        Ok(Err(err)) => err,
+                        Err(_) => WorkerStartError::InitializationChannelClosed,
+                        Ok(Ok(())) => unreachable!(),
+                    };
+                    self.fail_startup(&err);
+                    let _ = worker.join();
+                    for worker in joins {
+                        let _ = worker.join();
+                    }
+                    return Err(err);
+                }
+            }
         }
-        joins
+        Ok(joins)
+    }
+
+    fn fail_startup(&self, err: &WorkerStartError) {
+        let pending = {
+            let mut state = self
+                .queue
+                .state
+                .lock()
+                .expect("worker queue mutex poisoned");
+            state.closed = true;
+            let mut pending = Vec::with_capacity(state.len());
+            while let Some(handle) = state.pop() {
+                pending.push(handle);
+            }
+            pending
+        };
+        self.queue.ready.notify_all();
+        for handle in pending {
+            let task = {
+                let tasks = self.tasks.read().expect("tasks map rwlock poisoned");
+                tasks.get(&handle.0).cloned()
+            };
+            if let Some(task) = task {
+                let result = Err(TaskError::Failed(Signal {
+                    symbol: "worker-startup-failed".to_string(),
+                    data: Some(err.to_string()),
+                }));
+                if task.mark_completed_with(result) {
+                    self.metrics.completed.fetch_add(1, Ordering::Relaxed);
+                    self.enqueue_finished(handle);
+                }
+            }
+        }
     }
 
     fn task_await_result(
@@ -974,6 +1170,53 @@ impl WorkerRuntime {
             start = (start + 1) % ops.len();
         }
     }
+}
+
+fn create_elisp_context() -> Result<Box<Context>, WorkerStartError> {
+    let mut evaluator = Box::new(create_bootstrap_evaluator_cached().map_err(|err| {
+        WorkerStartError::Initialization(format!("bootstrap evaluator: {err:?}"))
+    })?);
+    evaluator.setup_thread_locals();
+    if let Err(err) = apply_runtime_startup_state(&mut evaluator) {
+        // Render while this owner-local evaluator and its error roots are live.
+        let failure = format!("runtime startup state: {:?}", eval_error_to_task_error(err));
+        let failure = match evaluator.shutdown() {
+            Ok(()) => failure,
+            Err(err) => format!("{failure}; worker shutdown: {err}"),
+        };
+        return Err(WorkerStartError::Initialization(failure));
+    }
+    Ok(evaluator)
+}
+
+fn execute_elisp(evaluator: &mut Context, form: &LispValue) -> Result<LispValue, TaskError> {
+    let source = std::str::from_utf8(&form.bytes).map_err(|err| {
+        TaskError::Failed(Signal {
+            symbol: "invalid-read-syntax".to_string(),
+            data: Some(err.to_string()),
+        })
+    })?;
+
+    // The reader uses the owner's interner for symbols and keywords.
+    evaluator.setup_thread_locals();
+    let forms = emacs_core::value_reader::read_all(source, evaluator.obarray()).map_err(|err| {
+        TaskError::Failed(Signal {
+            symbol: "invalid-read-syntax".to_string(),
+            data: Some(err.message),
+        })
+    })?;
+    let mut last = LispValue::default();
+    for form in forms {
+        match evaluator.eval_form(form) {
+            Ok(value) => {
+                last = LispValue {
+                    bytes: emacs_core::print_value_bytes_with_eval(evaluator, &value),
+                };
+            }
+            Err(err) => return Err(eval_error_to_task_error(err)),
+        }
+    }
+    Ok(last)
 }
 
 fn enqueue_error_to_signal(err: EnqueueError) -> Signal {

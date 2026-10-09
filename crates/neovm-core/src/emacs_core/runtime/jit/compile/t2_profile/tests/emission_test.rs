@@ -42,6 +42,7 @@ fn countdown_clif(site: Site) -> String {
                     refs,
                     vmctx_var,
                     ptr_ty,
+                    forward_atomics: super::super::ForwardAtomics::for_isa(module.isa()),
                     call_args_slot: slot,
                     call_result_slot: slot,
                     rootwin: None,

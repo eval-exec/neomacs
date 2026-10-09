@@ -106,7 +106,7 @@ fn render_frame_window_contents(
     inputs: &FrameDrawInputs<'_>,
     cursor_visible: bool,
     include_overlays: bool,
-) {
+) -> Result<(), FrameRenderFailure> {
     scene::render_frame_root_glyphs(
         renderer,
         render,
@@ -122,7 +122,7 @@ fn render_frame_window_contents(
 
     if !include_overlays {
         render.set_dirty(renderer_effects_still_active);
-        return;
+        return Ok(());
     }
 
     chrome::render_frame_window_overlays_with_toolbar_resources(
@@ -136,10 +136,29 @@ fn render_frame_window_contents(
         inputs.child_frame_style,
         inputs.scroll_indicators_enabled,
         inputs.toolbar,
-    );
+    )?;
     if renderer_effects_still_active {
         render.mark_dirty();
     }
+    Ok(())
+}
+
+fn composition_surface(
+    render: &mut GuiFrameRenderState,
+    surface_state: neomacs_display_protocol::SurfaceState,
+) -> Result<neomacs_display_protocol::DrawableSurface, FrameRenderFailure> {
+    // Native readiness precedes editor-content and scratch-admission checks.
+    render.set_surface_state(surface_state);
+    if matches!(
+        surface_state,
+        neomacs_display_protocol::SurfaceState::Suspended
+    ) {
+        return Err(FrameRenderFailure::WindowNotReady);
+    }
+    render
+        .present_mapping()
+        .map(|mapping| mapping.surface())
+        .ok_or(FrameRenderFailure::AwaitingContent)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -156,6 +175,62 @@ fn render_frame_window_contents_to_surface(
     render_policy: &crate::render_thread::render_quality::RenderQualityPolicy,
     device_lost: &mut crate::render_thread::device_loss::DeviceLossDetector,
 ) -> Result<RenderedFrameSurface, FrameRenderFailure> {
+    // Reserve interactive child composition before acquiring a swapchain,
+    // sampling motion, publishing projections or consuming presentation hints.
+    let FrameLifecycle::Active { native, .. } = &window_state.lifecycle else {
+        return Err(FrameRenderFailure::WindowNotReady);
+    };
+    let surface = composition_surface(&mut window_state.render, native.surface_state())?;
+    let frame_has_theme_transition = window_state
+        .render
+        .pending_theme_change()
+        .ok_or(FrameRenderFailure::AwaitingContent)?;
+    let feature_plan =
+        render_policy.plan_frame(frame_has_theme_transition, renderer.has_frame_post());
+    let targets = composition_targets::prepare_frame_targets_for_scene(
+        renderer,
+        &mut window_state.render,
+        surface,
+        &feature_plan,
+        compositor_only_hint,
+        bg_gradient.is_some() || extra_line_spacing != 0.0 || extra_letter_spacing != 0.0,
+    )?;
+    window_state.render.child_opacity_src = targets.picture;
+    window_state.render.child_resize_src = targets.resize;
+    let result = render_frame_window_contents_reserved(
+        renderer,
+        window_state,
+        bg_gradient,
+        child_frame_style,
+        scroll_indicators_enabled,
+        toolbar,
+        extra_line_spacing,
+        extra_letter_spacing,
+        compositor_only_hint,
+        feature_plan,
+        device_lost,
+        targets.native,
+    );
+    window_state.render.child_opacity_src = None;
+    window_state.render.child_resize_src = None;
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_frame_window_contents_reserved(
+    renderer: &mut WgpuRenderer,
+    window_state: &mut GuiFrameWindowState,
+    bg_gradient: Option<((f32, f32, f32), (f32, f32, f32))>,
+    child_frame_style: &ChildFrameStyle,
+    scroll_indicators_enabled: bool,
+    toolbar: &ToolbarResources,
+    extra_line_spacing: f32,
+    extra_letter_spacing: f32,
+    compositor_only_hint: bool,
+    feature_plan: crate::render_thread::render_quality::RenderFeaturePlan,
+    device_lost: &mut crate::render_thread::device_loss::DeviceLossDetector,
+    native_content: Option<neomacs_renderer_wgpu::SnapshotLease>,
+) -> Result<RenderedFrameSurface, FrameRenderFailure> {
     let render = &mut window_state.render;
     let native = match &mut window_state.lifecycle {
         FrameLifecycle::Active { native, .. } => native,
@@ -171,18 +246,7 @@ fn render_frame_window_contents_to_surface(
     }
     RenderApp::begin_fps_cpu_span(&mut render.overlays.fps);
     RenderApp::update_fps_counter(&mut render.overlays.fps, renderer.frame_sample());
-    // Read the one bit the offscreen decision needs straight out of the
-    // retained frame. Missing content has its own typed outcome: the frame
-    // channel, rather than an expose retry, is responsible for waking it.
-    // Read it here, before `take_current_frame_for_render` below drains
-    // the hints. The frame itself is taken once, after the surface is
-    // acquired — the acquisition has several early-return paths, so
-    // materializing it earlier was work thrown away outright on any
-    // lost/outdated/occluded surface.
-    // Must be read before `take_pending_continuity` below drains it.
-    let frame_has_theme_transition = render
-        .pending_theme_change()
-        .ok_or(FrameRenderFailure::AwaitingContent)?;
+
     let animated_cursor = render.cursor.animated_cursor();
     let root_animated_cursor = animated_cursor.filter(|cursor| {
         cursor.frame_id == DisplayFrameId::new(render.emacs_frame_id)
@@ -193,11 +257,8 @@ fn render_frame_window_contents_to_surface(
     // cursor. The frame's stored cursor geometry is no longer mutated here,
     // so the materialized frame stays a pure function of the layout snapshot.
 
-    let feature_plan =
-        render_policy.plan_frame(frame_has_theme_transition, renderer.has_frame_post());
-
-    // Validate and reserve the content target before acquisition and before
-    // advancing presentation motion. Obscured content is not drawable.
+    // Targets were admitted without draining the retained frame or continuity.
+    // Validate geometry before acquisition; obscured content is not drawable.
     let native_mapping = render
         .present_mapping()
         .ok_or(FrameRenderFailure::AwaitingContent)?;
@@ -205,8 +266,7 @@ fn render_frame_window_contents_to_surface(
         .surface()
         .content_surface()
         .ok_or(FrameRenderFailure::WindowNotReady)?;
-    let native_content =
-        composition_targets::native_content_target(renderer, render, native_mapping.surface())?;
+
     let present_mapping = neomacs_display_protocol::PresentMapping::top_left_clip(
         content_surface,
         neomacs_display_protocol::PresentationExtent::new(
@@ -353,7 +413,7 @@ fn render_frame_window_contents_to_surface(
         .unwrap_or((-1.0, -1.0));
     if retained_static::is_eligible(compositor_only_hint, &pane_blits, render) {
         let hovered_scroll_bar = render.hovered_scroll_bar(&frame);
-        retained_static::draw(
+        let draw_result = retained_static::draw(
             renderer,
             native,
             render,
@@ -363,6 +423,12 @@ fn render_frame_window_contents_to_surface(
             cursor_visible,
             hovered_scroll_bar,
         );
+        if let Err(error) = draw_result {
+            renderer.set_scale_factor(old_scale_factor);
+            renderer.resize(old_width, old_height);
+            render.mark_dirty();
+            return Err(error);
+        }
         if frame_post_active {
             renderer.frame_post_to_view(
                 &composition_view,
@@ -374,7 +440,11 @@ fn render_frame_window_contents_to_surface(
         }
         render.finish_pointer_paint_render();
         if let Some(placement) = native_placement {
-            renderer.place_native_content(placement, frame.background);
+            renderer.place_native_content_with_opacity(
+                placement,
+                frame.background,
+                render.applied_frame_alpha,
+            );
         }
         renderer.set_scale_factor(old_scale_factor);
         renderer.resize(old_width, old_height);
@@ -399,7 +469,7 @@ fn render_frame_window_contents_to_surface(
     let composition = need_offscreen
         .then(|| composition_targets::advance_frame_composition(renderer, render, surface_size))
         .flatten();
-    match composition.as_ref() {
+    let draw_result = match composition.as_ref() {
         Some(composition) => full_render::through_composition_ring(
             &acquired,
             renderer,
@@ -424,6 +494,12 @@ fn render_frame_window_contents_to_surface(
             cursor_visible,
             feature_plan.accept_derived_effects,
         ),
+    };
+    if let Err(error) = draw_result {
+        renderer.set_scale_factor(old_scale_factor);
+        renderer.resize(old_width, old_height);
+        render.mark_dirty();
+        return Err(error);
     }
 
     if frame_post_active {
@@ -437,7 +513,11 @@ fn render_frame_window_contents_to_surface(
     }
     render.finish_pointer_paint_render();
     if let Some(placement) = native_placement {
-        renderer.place_native_content(placement, frame.background);
+        renderer.place_native_content_with_opacity(
+            placement,
+            frame.background,
+            render.applied_frame_alpha,
+        );
     }
     renderer.set_scale_factor(old_scale_factor);
     renderer.resize(old_width, old_height);
@@ -447,3 +527,7 @@ fn render_frame_window_contents_to_surface(
         projection: pane_projection,
     })
 }
+
+#[cfg(test)]
+#[path = "tests/render_pass_test.rs"]
+mod tests;

@@ -251,7 +251,7 @@ fn constant_bits(fb: &FunctionBuilder, v: ClifValue) -> Option<i64> {
     if tag != FIXNUM_CHECK_VALUE as i64 || shift != i64::from(FIXNUM_SHIFT) {
         return None;
     }
-    Some(Value::fixnum(iconst_bits(fb, raw)?).bits() as i64)
+    Some(iconst_bits(fb, raw)?.wrapping_shl(FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE as i64)
 }
 
 fn trusted() -> MemFlagsData {
@@ -851,5 +851,5 @@ pub(crate) fn emit_symbol_cell_read(
 }
 
 #[cfg(test)]
-#[path = "../tests/intrinsics.rs"]
+#[path = "../tests/intrinsics_test.rs"]
 mod intrinsics_tests;

@@ -70,7 +70,13 @@ pub(super) struct ChunkSide {
     /// The chunk's [`StampChunk`], null until a symbol of the chunk first
     /// changes its function binding.
     fn_stamps: AtomicPtr<StampChunk>,
+    /// Snapshot readers keep the owning symbol chunk and this side box alive
+    /// if their owner is abandoned before an explicit marker finish.
+    pub(super) scan_storage: crate::tagged::gc::scan_contract::ScanStorageOwner,
 }
+
+static_assertions::assert_impl_all!(ChunkSide: Send, Sync);
+const _: () = assert!(std::mem::offset_of!(ChunkSide, seq) == 0);
 
 impl ChunkSide {
     /// A new chunk's side: seqlock even, no stamps, the obarray's current
@@ -80,6 +86,7 @@ impl ChunkSide {
             seq: AtomicU32::new(0),
             fn_floor: AtomicU64::new(floor),
             fn_stamps: AtomicPtr::new(core::ptr::null_mut()),
+            scan_storage: crate::tagged::gc::scan_contract::ScanStorageOwner::new(),
         }
     }
 

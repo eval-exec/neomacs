@@ -638,6 +638,67 @@ impl ImageCacheUsage {
     }
 }
 
+/// Whether the renderer may materialize animation a source computes itself.
+///
+/// GNU rasterizes an SVG through librsvg, which renders one static frame and
+/// has no document clock, so GNU reports no animation for SVG at all. A
+/// port that synthesizes frames from an SMIL timeline therefore changes
+/// observable behavior (`image-multi-frame-p`, `:index` walking) and must be
+/// opt-in: the default stays the GNU-compatible static frame, and enabling
+/// the policy is the documented divergence point.
+///
+/// The optional `fps` is a sampling ceiling that doubles as the memory
+/// bound — it caps the distinct frames one loop can produce
+/// ([`crate::animated_visual::SampleGrid`]).
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize,
+)]
+pub struct ImageAnimationPolicy {
+    enabled: bool,
+    fps: Option<u32>,
+}
+
+impl ImageAnimationPolicy {
+    /// The GNU-compatible default: animation is not materialized.
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            enabled: false,
+            fps: None,
+        }
+    }
+
+    /// Enable computed animation, optionally capping the sampling rate.
+    ///
+    /// A zero or negative rate cap is meaningless; it is dropped rather than
+    /// carried, so the renderer's default ceiling applies.
+    #[must_use]
+    pub const fn enabled(fps: Option<u32>) -> Self {
+        match fps {
+            Some(fps) if fps > 0 => Self {
+                enabled: true,
+                fps: Some(fps),
+            },
+            _ => Self {
+                enabled: true,
+                fps: None,
+            },
+        }
+    }
+
+    /// Whether computed animation may run for this source.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// The sampling ceiling, when one was stated.
+    #[must_use]
+    pub const fn fps(&self) -> Option<u32> {
+        self.fps
+    }
+}
+
 /// GNU-compatible delay for the currently decoded animation frame.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ImageFrameDelay {
@@ -688,12 +749,25 @@ impl ImageFrameDelay {
 pub struct ImageEmbeddedMetadata {
     frame_count: Option<std::num::NonZeroU32>,
     frame_delay: Option<ImageFrameDelay>,
+    /// Neomacs computed sources can have a prefix played only once.
+    #[serde(default)]
+    introduction: Option<ImageSequenceIntroduction>,
+}
+
+/// A prefix and its repeating tail have independently quantized delays.
+/// Keeping these fields together prevents partial playback descriptions.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+struct ImageSequenceIntroduction {
+    loop_start: std::num::NonZeroU32,
+    prefix_delay: ImageFrameDelay,
+    loop_delay: ImageFrameDelay,
 }
 
 impl ImageEmbeddedMetadata {
     pub const EMPTY: Self = Self {
         frame_count: None,
         frame_delay: None,
+        introduction: None,
     };
 
     #[must_use]
@@ -701,6 +775,52 @@ impl ImageEmbeddedMetadata {
         Self {
             frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
             frame_delay: Some(frame_delay),
+            introduction: None,
+        }
+    }
+
+    /// Set the first repeatable frame, validating it against this sequence.
+    #[must_use]
+    pub fn with_introduction(
+        mut self,
+        start: ImageFrameIndex,
+        prefix_delay: ImageFrameDelay,
+        loop_delay: ImageFrameDelay,
+    ) -> Option<Self> {
+        let start = u32::try_from(start.get()).ok()?;
+        if start >= self.frame_count()? {
+            return None;
+        }
+        self.introduction =
+            std::num::NonZeroU32::new(start).map(|loop_start| ImageSequenceIntroduction {
+                loop_start,
+                prefix_delay,
+                loop_delay,
+            });
+        Some(self)
+    }
+
+    #[must_use]
+    pub const fn loop_start(&self) -> Option<u32> {
+        match &self.introduction {
+            Some(intro) => Some(intro.loop_start.get()),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn intro_delay(&self) -> Option<ImageFrameDelay> {
+        match &self.introduction {
+            Some(intro) => Some(intro.prefix_delay),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn loop_delay(&self) -> Option<ImageFrameDelay> {
+        match &self.introduction {
+            Some(intro) => Some(intro.loop_delay),
+            None => None,
         }
     }
 

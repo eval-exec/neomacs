@@ -287,13 +287,11 @@ fn current_textprop_variable_value(
     let Some(sym) = obarray.get_by_id(sym_id) else {
         return None;
     };
-    match sym.flags.redirect() {
-        crate::emacs_core::symbol::SymbolRedirect::Plainval => {
-            // SAFETY: redirect=Plainval selects the plain value arm.
-            let value = unsafe { sym.val.plain };
+    match sym.value_cell() {
+        crate::emacs_core::symbol::ValueCell::Plain(value) => {
             return (!value.is_unbound()).then_some(value);
         }
-        crate::emacs_core::symbol::SymbolRedirect::Localized => {
+        crate::emacs_core::symbol::ValueCell::Localized(_) => {
             if let Some(buf) = buffers.current_buffer()
                 && let Some(value) = obarray.read_localized_symbol_for_buffer(
                     sym_id,
@@ -308,13 +306,10 @@ fn current_textprop_variable_value(
         // `default-text-properties` is a C-defined global: its forwarder is
         // the value, read exactly as `symbol_value_id_copied` reads it,
         // without looking the symbol up a second time.
-        crate::emacs_core::symbol::SymbolRedirect::Forwarded => {
-            // SAFETY: redirect=Forwarded selects the forwarder arm, and every
-            // forwarder is leaked at registration.
-            let fwd: &'static crate::emacs_core::forward::LispFwd = unsafe { &*sym.val.fwd };
+        crate::emacs_core::symbol::ValueCell::Forwarded(fwd) => {
             return fwd.load();
         }
-        crate::emacs_core::symbol::SymbolRedirect::Varalias => {}
+        crate::emacs_core::symbol::ValueCell::Alias(_) => {}
     }
     obarray.symbol_value_id_copied(sym_id)
 }
@@ -704,11 +699,29 @@ fn lookup_buffer_text_property_at_char_pos(
     buf: &crate::buffer::buffer::Buffer,
     char_pos: CharPos0,
     prop: Value,
+    domain: BufferPropertyLookupDomain,
 ) -> Value {
+    // GNU textprop.c:161-163 makes an empty accessible region have no
+    // interval plist, even when a real character follows its sole position.
+    // The widened get_local_map lookup (intervals.c:2191-2200) uses FullBuffer.
+    let no_accessible_text = domain == BufferPropertyLookupDomain::Accessible
+        && buf.accessible_emacs_byte_region().range().is_empty();
     lookup_char_property_from_direct(
         obarray,
         buffers,
-        |name| buf.text_props_get_property_at_char_pos(char_pos, name),
+        |name| {
+            // A name no interval carries answers from the presence set
+            // without descending the interval tree, as the byte-position
+            // lookup below does.
+            if no_accessible_text
+                || buf.text_props_property_name_presence(name)
+                    == crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent
+            {
+                None
+            } else {
+                buf.text_props_get_property_at_char_pos(char_pos, name)
+            }
+        },
         prop,
         true,
     )
@@ -1309,7 +1322,7 @@ pub(crate) fn verify_text_read_only_emacs_byte_range_in_state(
     let iro = inhibit_read_only_sym();
     let inhibit = buf
         .get_buffer_local_by_sym_id_gated(iro, obarray.is_localized(iro))
-        .unwrap_or_else(|| obarray.symbol_value_id(iro).copied().unwrap_or(Value::NIL));
+        .unwrap_or_else(|| obarray.symbol_value_id_copied(iro).unwrap_or(Value::NIL));
     // INTERVAL_GENERALLY_WRITABLE_P: when inhibit-read-only is non-nil
     // and not a list, every interval is writable regardless of its
     // read-only property.  GNU intervals.h:210.
@@ -1440,7 +1453,7 @@ pub(crate) fn verify_text_read_only_for_insert_in_state(
     let iro = inhibit_read_only_sym();
     let inhibit = buf
         .get_buffer_local_by_sym_id_gated(iro, obarray.is_localized(iro))
-        .unwrap_or_else(|| obarray.symbol_value_id(iro).copied().unwrap_or(Value::NIL));
+        .unwrap_or_else(|| obarray.symbol_value_id_copied(iro).unwrap_or(Value::NIL));
     // inhibit-read-only non-nil and not a list: every modification is allowed.
     if !inhibit.is_nil() && !inhibit.is_cons() {
         return Ok(());
@@ -1926,14 +1939,14 @@ pub(crate) fn builtin_get_text_property_in_state(
     let pos = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
     let prop = expect_property_key(&args[1])?;
 
+    // GNU textprop.c:604 calls textget on the empty end-position plist;
+    // intervals.c:1741 still supplies default-text-properties there. Route
+    // full-end positions through the same resolver as ordinary characters.
     if let Some(str_val) = is_string_object(args.get(2)) {
         let s = str_val
             .as_lisp_string()
             .expect("string object must carry LispString payload");
         let char_pos = validate_string_char_pos_raw(s, pos, args[0])?;
-        if char_pos.get() == s.schars() {
-            return Ok(Value::NIL);
-        }
         if let Some(table) = borrow_string_text_properties_table_for_value(str_val) {
             return Ok(lookup_string_text_property(
                 obarray,
@@ -1958,11 +1971,13 @@ pub(crate) fn builtin_get_text_property_in_state(
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
 
     let char_pos = validate_buffer_property_point_char_pos_raw(buf, pos, args[0])?;
-    if char_pos >= buf.total_char_end_pos() {
-        return Ok(Value::NIL);
-    }
     Ok(lookup_buffer_text_property_at_char_pos(
-        obarray, buffers, buf, char_pos, prop,
+        obarray,
+        buffers,
+        buf,
+        char_pos,
+        prop,
+        BufferPropertyLookupDomain::Accessible,
     ))
 }
 
@@ -1974,39 +1989,17 @@ pub(crate) fn buffer_overlay_property_at_byte_pos(
     prop: Value,
     window_id: Option<WindowId>,
 ) -> Option<(Value, Value)> {
-    let mut overlays = buf
-        .overlays
-        .overlays_at_emacs_byte_pos(EmacsBytePos::new(byte_pos));
-    // GNU's `sort_overlays' reads `priority' through `Foverlay_get', so an
-    // overlay carrying only a `category' is ordered by that symbol's
-    // `priority'. The overlay layer has no obarray to follow the category
-    // with; this one does.
-    let priority_sym = priority_prop();
+    let value_of = |overlay: Value, property: Value| {
+        Some(lookup_overlay_property(obarray, buffers, overlay, property))
+    };
     buf.overlays
-        .sort_overlay_ids_by_priority_desc_with(&mut overlays, &|overlay| {
-            Some(lookup_overlay_property(
-                obarray,
-                buffers,
-                overlay,
-                priority_sym,
-            ))
-        });
-    for overlay in overlays {
-        if let Some(wid) = window_id {
-            let window_prop = lookup_overlay_property(obarray, buffers, overlay, window_prop());
-            if window_prop
-                .as_window_id()
-                .is_some_and(|overlay_wid| overlay_wid != wid.0)
-            {
-                continue;
-            }
-        }
-        let value = lookup_overlay_property(obarray, buffers, overlay, prop);
-        if !value.is_nil() {
-            return Some((value, overlay));
-        }
-    }
-    None
+        .property_winner_at_emacs_byte_pos_with(
+            EmacsBytePos::new(byte_pos),
+            prop,
+            window_id.map(|wid| wid.0),
+            &value_of,
+        )
+        .map(|winner| (winner.value(), winner.overlay()))
 }
 
 pub(crate) fn buffer_overlay_property_for_inserted_char_at_byte_pos(
@@ -2135,6 +2128,7 @@ fn buffer_pos_property_in_domain(
             buf,
             LispCharPos1::new(pos),
             prop,
+            domain,
         )),
         PropertyStickiness::FromPreceding if pos > domain.beginning(buf).as_i64() => {
             Ok(text_property_value_at_char_pos(
@@ -2143,6 +2137,7 @@ fn buffer_pos_property_in_domain(
                 buf,
                 LispCharPos1::new(pos - 1),
                 prop,
+                domain,
             ))
         }
         PropertyStickiness::FromPreceding | PropertyStickiness::Neither => Ok(Value::NIL),
@@ -2234,7 +2229,7 @@ fn get_text_property_at_validated_char_pos(
         ));
     }
     Ok(text_property_value_at_char_pos(
-        obarray, buffers, buf, pos, prop,
+        obarray, buffers, buf, pos, prop, domain,
     ))
 }
 
@@ -2244,8 +2239,9 @@ fn text_property_value_at_char_pos(
     buf: &Buffer,
     pos: LispCharPos1,
     prop: Value,
+    domain: BufferPropertyLookupDomain,
 ) -> Value {
-    lookup_buffer_text_property_at_char_pos(obarray, buffers, buf, pos.to_char_pos(), prop)
+    lookup_buffer_text_property_at_char_pos(obarray, buffers, buf, pos.to_char_pos(), prop, domain)
 }
 
 fn front_sticky_matches(value: Value, prop: Value) -> bool {
@@ -2332,9 +2328,6 @@ pub(crate) fn buffer_char_property_at_full_lisp_pos(
 ) -> Value {
     debug_assert!(buf.full_lisp_char_region().contains(pos));
     let char_pos = pos.to_char_pos();
-    if char_pos >= buf.total_char_end_pos() {
-        return Value::NIL;
-    }
     if !buf.overlays.is_empty() {
         let byte_pos = buf.lisp_pos_to_emacs_byte_pos(pos);
         if let Some((value, _overlay_id)) =
@@ -2343,7 +2336,14 @@ pub(crate) fn buffer_char_property_at_full_lisp_pos(
             return value;
         }
     }
-    lookup_buffer_text_property_at_char_pos(obarray, buffers, buf, char_pos, prop)
+    lookup_buffer_text_property_at_char_pos(
+        obarray,
+        buffers,
+        buf,
+        char_pos,
+        prop,
+        BufferPropertyLookupDomain::FullBuffer,
+    )
 }
 
 pub(crate) fn builtin_get_char_property_with_frames(
@@ -2370,17 +2370,16 @@ pub(crate) fn builtin_get_char_property_with_frames(
     // `validate_buffer_property_point_char_pos_raw`).
     if buf.overlays.is_empty() {
         let char_pos = validate_buffer_point_char_pos_raw(buf, pos, args[0])?;
-        if char_pos >= buf.total_char_end_pos() {
-            return Ok(Value::NIL);
-        }
         return Ok(lookup_buffer_text_property_at_char_pos(
-            obarray, buffers, buf, char_pos, prop,
+            obarray,
+            buffers,
+            buf,
+            char_pos,
+            prop,
+            BufferPropertyLookupDomain::Accessible,
         ));
     }
     let byte_pos = validate_buffer_point_emacs_byte_pos_raw(buf, pos, args[0])?;
-    if byte_pos == buffer_end_emacs_byte_pos(buf) {
-        return Ok(Value::NIL);
-    }
 
     if let Some((value, _overlay_id)) =
         buffer_overlay_property_at_byte_pos(obarray, buffers, buf, byte_pos.get(), prop, window_id)
@@ -2388,12 +2387,13 @@ pub(crate) fn builtin_get_char_property_with_frames(
         return Ok(value);
     }
 
-    Ok(lookup_buffer_text_property(
+    Ok(lookup_buffer_text_property_at_char_pos(
         obarray,
         buffers,
         buf,
-        byte_pos.get(),
+        validated_lisp_char_pos(pos).to_char_pos(),
         prop,
+        BufferPropertyLookupDomain::Accessible,
     ))
 }
 
@@ -2748,15 +2748,12 @@ pub(crate) fn builtin_remove_text_properties_in_buffers(
         let Some(char_range) = validate_string_range(s, beg, end, args[0], args[1])? else {
             return Ok(Value::NIL);
         };
+        if names.is_empty() || !string_has_text_property_interval_tree(str_val) {
+            return Ok(Value::NIL);
+        }
         let any_removed =
             crate::emacs_core::value::mutate_string_text_properties(str_val, |table| {
-                let mut any_removed = false;
-                for name in names {
-                    if table.remove_property_in_char_range(char_range, name) {
-                        any_removed = true;
-                    }
-                }
-                any_removed
+                table.remove_properties_in_char_range(char_range, &names)
             })
             .unwrap_or(false);
         return Ok(if any_removed { Value::T } else { Value::NIL });
@@ -2774,16 +2771,16 @@ pub(crate) fn builtin_remove_text_properties_in_buffers(
     // that holds one of the names and returns nil, tree untouched, when there
     // is none -- the common case for `syntax-propertize`'s per-chunk
     // `(remove-text-properties start end '(syntax-table nil syntax-multiline
-    // nil))` in a buffer where those properties are rare.  The removal walk
-    // below would otherwise split the intervals at both range edges.
+    // nil))` in a buffer where those properties are rare. Avoid the removal
+    // walk entirely when the range holds none of the requested names.
     let present = buffers.get(buf_id).is_some_and(|buf| {
         buf.text_props_range_has_any_property_named_in_emacs_byte_range(byte_range, &names)
     });
     if !present {
         return Ok(Value::NIL);
     }
-    // One split+collect interval walk (and one undo-run walk) for every
-    // name, like `remove-list-of-text-properties`; GNU's `remove_properties`
+    // One interval walk (and one undo-run walk) for every name together,
+    // like `remove-list-of-text-properties`; GNU's `remove_properties`
     // strips all of PROPERTIES from each interval in a single pass.
     let any_removed = buffers
         .remove_buffer_text_properties_in_emacs_byte_range(buf_id, byte_range, &names)
@@ -2941,14 +2938,11 @@ pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
         let Some(char_range) = validate_string_range(s, beg, end, args[0], args[1])? else {
             return Ok(Value::NIL);
         };
+        if names.is_empty() || !string_has_text_property_interval_tree(str_val) {
+            return Ok(Value::NIL);
+        }
         let changed = crate::emacs_core::value::mutate_string_text_properties(str_val, |table| {
-            let mut changed = false;
-            for name in names {
-                if table.remove_property_in_char_range(char_range, name) {
-                    changed = true;
-                }
-            }
-            changed
+            table.remove_properties_in_char_range(char_range, &names)
         })
         .unwrap_or(false);
         return Ok(if changed { Value::T } else { Value::NIL });
@@ -2976,8 +2970,7 @@ pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
     });
     if !changed {
         // GNU Fremove_list_of_text_properties: no interval in the range holds
-        // any of the names, so return nil without touching the tree (the
-        // removal walk would still split the intervals at both range edges).
+        // any of the names, so return nil without starting the removal walk.
         return Ok(Value::NIL);
     }
     let _ = buffers.remove_buffer_text_properties_in_emacs_byte_range(buf_id, byte_range, &names);
@@ -3035,7 +3028,9 @@ pub(crate) fn builtin_text_properties_at_in_buffers(
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
 
     let byte_pos = validate_buffer_property_point_emacs_byte_pos_raw(buf, pos, args[0])?;
-    if byte_pos == buffer_end_emacs_byte_pos(buf) {
+    if buf.accessible_emacs_byte_region().range().is_empty()
+        || byte_pos == buffer_end_emacs_byte_pos(buf)
+    {
         return Ok(Value::NIL);
     }
     Ok(buf.text_props_get_properties_plist_value_at_emacs_byte_pos(byte_pos))
@@ -3777,9 +3772,6 @@ fn builtin_get_char_property_and_overlay_with_frames(
 
     if let Some(buf) = buffers.get(buf_id) {
         let byte_pos = validate_buffer_point_emacs_byte_pos_raw(buf, pos, args[0])?;
-        if byte_pos == buffer_end_emacs_byte_pos(buf) {
-            return Ok(Value::cons(Value::NIL, Value::NIL));
-        }
         if let Some((value, ov_val)) = buffer_overlay_property_at_byte_pos(
             obarray,
             buffers,
@@ -3903,5 +3895,5 @@ pub(crate) fn builtin_remove_overlays(
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/textprop_test.rs"]
 mod tests;

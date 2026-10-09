@@ -665,39 +665,3 @@ pub(crate) fn emit_bare_leaf_call(
         .fetch_add(1, Ordering::Relaxed);
     fb.inst_results(call)[0]
 }
-
-/// The trampolines' bodies and fast halves are the ones their specs declare
-/// (the trampolines name them as items so they inline).
-#[cfg(test)]
-pub(crate) fn trampoline_bodies_for_test() -> Vec<(LeafId, usize, Option<usize>)> {
-    use crate::emacs_core::subr::leaf::LeafEntry;
-    let two = |f: crate::emacs_core::subr::leaf::Leaf2| f as usize;
-    let one = |f: crate::emacs_core::subr::leaf::Leaf1| f as usize;
-    let _ = LeafEntry::L1;
-    vec![
-        (LeafId::Get, two(leaves::get), None),
-        (LeafId::Length, one(leaves::length), None),
-        (
-            LeafId::Nth,
-            two(leaves::nth),
-            Some(leaves::fast::nth_fast as crate::emacs_core::subr::leaf::LeafFast as usize),
-        ),
-        (LeafId::Nthcdr, two(leaves::nthcdr), None),
-        (LeafId::Elt, two(leaves::elt), None),
-        (LeafId::Member, two(leaves::member), None),
-        (LeafId::Equal, two(leaves::equal), None),
-        (LeafId::StringEqual, two(leaves::string_equal), None),
-        (LeafId::StringLessp, two(leaves::string_lessp), None),
-        (LeafId::SymbolValue, one(leaves::symbol_value), None),
-    ]
-}
-
-/// The containment a spec declares, as the trampoline tests compare it.
-#[cfg(test)]
-pub(crate) fn declared_fast_half(spec: &LeafSpec) -> Option<usize> {
-    use crate::emacs_core::subr::leaf::Containment;
-    match spec.containment {
-        Containment::Catch => None,
-        Containment::FastOutside(f) => Some(f as usize),
-    }
-}

@@ -2086,5 +2086,5 @@ pub(crate) fn builtin_string_collate_equalp(eval: &mut Context, args: Vec<Value>
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/fns_test.rs"]
 mod tests;

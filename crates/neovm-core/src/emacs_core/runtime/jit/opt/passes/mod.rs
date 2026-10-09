@@ -12,5 +12,5 @@ pub(crate) mod sink;
 pub(crate) mod static_fix;
 
 #[cfg(test)]
-#[path = "tests/bools_reference.rs"]
+#[path = "tests/bools_reference_test.rs"]
 mod bools_reference_tests;

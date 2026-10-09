@@ -9,11 +9,11 @@
 use neomacs_display_protocol::image::EncodedBytes;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{
-    ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex, ImageHeuristicMask,
-    ImageId, ImageIntrinsicExtent, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
-    ImageMaskKind, ImageMaskPolicy, ImageNativeExtent, ImageRasterExtent, ImageRealization,
-    ImageReportedExtent, ImageRotation, ImageSequenceId, ImageSequenceRetirement, ImageSizeSpec,
-    ResolvedImageGeometry, RetainedImageSet,
+    ImageAnimationPolicy, ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata,
+    ImageFrameIndex, ImageHeuristicMask, ImageId, ImageIntrinsicExtent, ImageLayoutExtent,
+    ImageLoadAttempt, ImageLoadToken, ImageMaskKind, ImageMaskPolicy, ImageNativeExtent,
+    ImageRasterExtent, ImageRealization, ImageReportedExtent, ImageRotation, ImageSequenceId,
+    ImageSequenceRetirement, ImageSizeSpec, ResolvedImageGeometry, RetainedImageSet,
 };
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -25,8 +25,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use crate::image_bands::{
-    BandFilling, BandSource, BandStep, DecodedBand, RasterBand, RowRange, TextureRows,
-    classify_alpha,
+    BandFilling, BandSource, BandStep, BandedDecoder, DecodedBand, RasterBand, RowRange,
+    TextureRows, classify_alpha,
 };
 use crate::image_sequence::{ImageSequenceCache, ImageSequenceResolution};
 
@@ -299,6 +299,14 @@ struct DecodedPixels {
     rgba: Vec<u8>,
     mask: ImageMaskKind,
     embedded: ImageEmbeddedMetadata,
+}
+
+/// Whether an opt-in computed sequence owns frame selection for this load.
+enum ComputedSequenceDecode {
+    NotAnimated,
+    Frame(DecodedPixels),
+    /// The sequence exists, but its requested frame cannot be realized.
+    Unavailable,
 }
 
 impl NativePixels {
@@ -664,6 +672,7 @@ struct DecodeRequest {
     /// Resolved face colors used by face-sensitive formats and cache identity.
     colors: ImageColorContext,
     mask: ImageMaskPolicy,
+    animation: ImageAnimationPolicy,
     frame: ImageFrameIndex,
     /// What GNU calls this source when the decode fails.  It travels with the
     /// job because the failure is worded by the loader's own rules (`Not a PNG
@@ -932,6 +941,7 @@ impl ImageCache {
                         realization,
                         colors,
                         mask,
+                        animation,
                         frame,
                         identity,
                     } = request;
@@ -963,6 +973,7 @@ impl ImageCache {
                             colors,
                             realization,
                             mask,
+                            animation,
                             frame,
                             &sequence_cache,
                             sequence,
@@ -979,6 +990,7 @@ impl ImageCache {
                             colors,
                             realization,
                             mask,
+                            animation,
                             frame,
                             resources,
                             &sequence_cache,
@@ -1039,6 +1051,7 @@ impl ImageCache {
     }
 
     /// Decode image file with size constraints
+    #[allow(clippy::too_many_arguments)]
     fn decode_file(
         path: &str,
         size: ImageSizeSpec,
@@ -1046,6 +1059,7 @@ impl ImageCache {
         colors: ImageColorContext,
         realization: ImageRealization,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         sequence_cache: &ImageSequenceCache,
         sequence: ImageSequenceId,
@@ -1072,8 +1086,42 @@ impl ImageCache {
         }) {
             return Some(pixels);
         }
+        // Computed animation, file-backed arm: same gate and same sequence
+        // machinery as the data arm, with the file's own resource context
+        // so relative references resolve as the static path does.
+        if animation.is_enabled()
+            && let Some(data) = encoded.as_ref()
+        {
+            match Self::decode_computed_sequence_data(
+                data.clone(),
+                frame,
+                sequence_cache,
+                sequence,
+                size,
+                rotation,
+                realization,
+                colors,
+                mask,
+                &crate::svg::SvgResourceContext::BaseUri(path.to_owned()),
+                animation,
+            ) {
+                ComputedSequenceDecode::Frame(pixels) => return Some(pixels),
+                ComputedSequenceDecode::Unavailable => return None,
+                ComputedSequenceDecode::NotAnimated => {}
+            }
+        }
         if !frame.is_first() {
-            return None;
+            // GNU's static SVG loader ignores :index. Other still formats keep
+            // their existing index validation; only a valid SVG may fall back.
+            return Self::decode_svg_data(
+                encoded.as_ref()?,
+                size,
+                rotation,
+                realization,
+                colors,
+                mask,
+                crate::svg::SvgResourceContext::BaseUri(path.to_owned()),
+            );
         }
         // Fallback: try XPM
         if let Some(result) = crate::xpm::decode_xpm_file(Path::new(path)) {
@@ -1109,6 +1157,7 @@ impl ImageCache {
     }
 
     /// Decode image data with size constraints
+    #[allow(clippy::too_many_arguments)]
     fn decode_data(
         data: EncodedBytes,
         size: ImageSizeSpec,
@@ -1116,6 +1165,7 @@ impl ImageCache {
         colors: ImageColorContext,
         realization: ImageRealization,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         resources: crate::svg::SvgResourceContext,
         sequence_cache: &ImageSequenceCache,
@@ -1135,8 +1185,45 @@ impl ImageCache {
         ) {
             return Some(pixels);
         }
+        // Computed animation: an SVG document under an enabled policy
+        // materializes its frames on the sample grid, and `frame` selects
+        // the slot exactly as `:index` selects a GIF frame.
+        //
+        // The policy gate is load-bearing, not an optimization: sequence
+        // identity follows the resolve source, not the policy, so an entry
+        // a previous `:animation` load warmed serves *animated* pixels on a
+        // cache hit. A disabled request must take the static path below
+        // unconditionally — cold or warm — or the GNU-compatible default
+        // would depend on load order.
+        if animation.is_enabled() {
+            match Self::decode_computed_sequence_data(
+                data.clone(),
+                frame,
+                sequence_cache,
+                sequence,
+                size,
+                rotation,
+                realization,
+                colors,
+                mask,
+                &resources,
+                animation,
+            ) {
+                ComputedSequenceDecode::Frame(pixels) => return Some(pixels),
+                ComputedSequenceDecode::Unavailable => return None,
+                ComputedSequenceDecode::NotAnimated => {}
+            }
+        }
         if !frame.is_first() {
-            return None;
+            return Self::decode_svg_data(
+                &data,
+                size,
+                rotation,
+                realization,
+                colors,
+                mask,
+                resources,
+            );
         }
         // Fallback: try XPM
         if let Some(result) = crate::xpm::decode_xpm_data(&data) {
@@ -1194,6 +1281,43 @@ impl ImageCache {
             ImageSequenceResolution::NotAnimated => {
                 Self::decode_still_image(data, size, rotation, realization, mask_policy, sink)
             }
+        }
+    }
+
+    /// Decode one frame of a computed animation through the sequence cache.
+    ///
+    /// The SVG sampler answers "not animated" for every document the
+    /// policy does not materialize (disabled policy, no plan, no loop), so
+    /// this arm falling through is the ordinary static path, and the
+    /// fallback ladder still ends at GNU's single-frame behavior.
+    fn decode_computed_sequence_data(
+        data: EncodedBytes,
+        frame: ImageFrameIndex,
+        sequence_cache: &ImageSequenceCache,
+        sequence: ImageSequenceId,
+        size: ImageSizeSpec,
+        rotation: ImageRotation,
+        realization: ImageRealization,
+        colors: ImageColorContext,
+        mask: ImageMaskPolicy,
+        resources: &crate::svg::SvgResourceContext,
+        policy: ImageAnimationPolicy,
+    ) -> ComputedSequenceDecode {
+        match sequence_cache.resolve_svg(sequence, &data, frame, colors, resources, policy) {
+            ImageSequenceResolution::Frame(frame) => {
+                let (width, height) = frame.dimensions();
+                let (rgba, embedded) = frame.into_parts();
+                NativePixels {
+                    extent: ImageNativeExtent::new(width, height),
+                    rgba,
+                    embedded,
+                }
+                .realize_bitmap(size, rotation, realization, mask)
+                .map(ComputedSequenceDecode::Frame)
+                .unwrap_or(ComputedSequenceDecode::Unavailable)
+            }
+            ImageSequenceResolution::MissingFrame => ComputedSequenceDecode::Unavailable,
+            ImageSequenceResolution::NotAnimated => ComputedSequenceDecode::NotAnimated,
         }
     }
 
@@ -1329,6 +1453,7 @@ impl ImageCache {
             ImageColorContext::default(),
             ImageRealization::default(),
             ImageMaskPolicy::Preserve,
+            ImageAnimationPolicy::disabled(),
             frame,
             crate::svg::SvgResourceContext::Isolated,
             &ImageSequenceCache::new(),
@@ -1396,6 +1521,7 @@ impl ImageCache {
             ImageColorContext::from_pixels(fg_bg.0, fg_bg.1),
             realization,
             ImageMaskPolicy::Preserve,
+            ImageAnimationPolicy::disabled(),
             ImageFrameIndex::default(),
             crate::svg::SvgResourceContext::Isolated,
             &ImageSequenceCache::new(),
@@ -1682,6 +1808,7 @@ impl ImageCache {
             ImageRealization::with_device_scale(1.0, raster_scale),
             colors,
             ImageMaskPolicy::default(),
+            ImageAnimationPolicy::disabled(),
             ImageFrameIndex::default(),
             ImageSequenceId::new(u64::from(image.get()))
                 .expect("allocated image identity is non-zero"),
@@ -1695,6 +1822,7 @@ impl ImageCache {
     /// The bytes arrive as the handle the request already holds, and are moved
     /// into the decode queue: the caller's buffer is the decode's buffer, which
     /// is what the catalog's own key to the same request points at too.
+    #[allow(clippy::too_many_arguments)]
     pub fn load_data_with_id(
         &mut self,
         load: ImageLoadToken,
@@ -1704,6 +1832,7 @@ impl ImageCache {
         realization: ImageRealization,
         colors: ImageColorContext,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         resources: crate::svg::SvgResourceContext,
@@ -1733,6 +1862,7 @@ impl ImageCache {
             realization,
             colors,
             mask,
+            animation,
             frame,
             identity,
         });
@@ -1740,6 +1870,7 @@ impl ImageCache {
 
     /// Load image from file with a pre-allocated ID (for threaded mode)
     /// This allows the calling code to allocate the ID before sending a command.
+    #[allow(clippy::too_many_arguments)]
     pub fn load_file_with_id(
         &mut self,
         load: ImageLoadToken,
@@ -1749,6 +1880,7 @@ impl ImageCache {
         realization: ImageRealization,
         colors: ImageColorContext,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         identity: ImageLoadIdentity,
@@ -1776,6 +1908,7 @@ impl ImageCache {
             realization,
             colors,
             mask,
+            animation,
             frame,
             identity,
         });
@@ -1837,6 +1970,7 @@ impl ImageCache {
             realization,
             colors,
             mask: ImageMaskPolicy::Preserve,
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });
@@ -1883,6 +2017,7 @@ impl ImageCache {
             realization,
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });
@@ -1929,6 +2064,7 @@ impl ImageCache {
             realization,
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });
@@ -1963,6 +2099,7 @@ impl ImageCache {
             realization: ImageRealization::default(),
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });
@@ -1995,6 +2132,7 @@ impl ImageCache {
             realization: ImageRealization::default(),
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });
@@ -2529,4 +2667,5 @@ impl ImageCache {
 }
 
 #[cfg(test)]
+#[path = "image_cache/tests/image_cache_test.rs"]
 mod tests;

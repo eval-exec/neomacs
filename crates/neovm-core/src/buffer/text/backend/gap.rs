@@ -194,6 +194,12 @@ impl GapTextBackend {
         self.gap.make_emacs_byte_range_contiguous(range);
     }
 
+    /// GNU move_gap_both with the measured byte/character pair kept together.
+    pub(in crate::buffer) fn move_gap_to_anchor(&mut self, anchor: TextPositionAnchor) {
+        self.gap
+            .move_gap_to_emacs_byte_pos_and_char_pos(anchor.emacs_byte_pos(), anchor.char_pos());
+    }
+
     pub(in crate::buffer) fn with_contiguous_emacs_byte_range<R>(
         &self,
         range: EmacsByteRange,

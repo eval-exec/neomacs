@@ -576,7 +576,9 @@ fn buffer_byte_to_char_result_in_manager(
     let buf = buffers
         .get(buffer_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    Ok(Value::fixnum(buffer_byte_to_lisp_char(buf, byte)))
+    Ok(Value::from_fixnum(
+        buf.emacs_byte_pos_to_position(byte).into(),
+    ))
 }
 
 fn search_failure_position(buf: &crate::buffer::Buffer, opts: SearchOptions) -> EmacsBytePos {
@@ -3518,15 +3520,15 @@ pub(crate) fn builtin_replace_match(
 }
 
 #[cfg(test)]
-#[path = "tests/search.rs"]
+#[path = "tests/search_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/search_frontend.rs"]
+#[path = "tests/search_frontend_test.rs"]
 mod search_frontend_tests;
 
 #[cfg(test)]
-#[path = "search/tests/gc_tls_ownership.rs"]
+#[path = "search/tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership;
 
 #[cfg(test)]

@@ -1,0 +1,75 @@
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<CompiledLeaf>`, but its trait bounds were not satisfied
+  --> tests/thread_safety_ui/compiled_leaf_sync.rs:11:37
+   |
+ 4 | struct ThreadTransfer<T>(PhantomData<T>);
+   | ------------------------ associated function or constant `transfer` not found for this struct
+...
+11 |     ThreadTransfer::<CompiledLeaf>::transfer();
+   |                                     ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<CompiledLeaf>` due to unsatisfied trait bounds
+   |
+  ::: src/emacs_core/runtime/jit/compile/leaf.rs
+   |
+   | pub struct CompiledLeaf {
+   | ----------------------- doesn't satisfy `CompiledLeaf: Sync`
+   |
+  ::: $RUST/core/src/ops/function.rs
+   |
+   | pub const trait Fn<Args: Tuple>: [const] FnMut<Args> {
+   | ---------------------------------------------------- doesn't satisfy `_: Sync`
+   |
+  ::: $CARGO/cranelift-jit-$VERSION/src/memory/mod.rs
+   |
+   | pub trait JITMemoryProvider {
+   | --------------------------- doesn't satisfy `_: Sync`
+   |
+  ::: $RUST/core/src/cell.rs
+   |
+   | pub struct Cell<T: ?Sized> {
+   | -------------------------- doesn't satisfy 6 bounds
+...
+   | pub struct RefCell<T: ?Sized> {
+   | ----------------------------- doesn't satisfy 5 bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `Cell<bool>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `RefCell<Option<Rc<CompiledLeaf>>>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `*const u8: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `RefCell<HashMap<std::string::String, cranelift_jit::backend::SendWrapper<*const u8>>>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `Cell<i64>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `Cell<u64>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `RefCell<smallvec::SmallVec<[(u64, u32, u64); 4]>>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `RefCell<smallvec::SmallVec<[(u32, u64); 4]>>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `Cell<u32>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `*const TaggedValue: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `*const Cell<i64>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `*const compile::spec_slot::SpecSlot: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `*const u64: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `Cell<jit::tier2::T2State>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `Cell<(u64, u64)>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `RefCell<Option<Arc<RuntimeState>>>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `RefCell<jit::tier2::policy::PolicyState>: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `(dyn cranelift_jit::memory::JITMemoryProvider + Send + 'static): Sync`
+           which is required by `CompiledLeaf: Sync`
+           `*const (): Sync`
+           which is required by `CompiledLeaf: Sync`
+           `*mut u8: Sync`
+           which is required by `CompiledLeaf: Sync`
+           `(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static): Sync`
+           which is required by `CompiledLeaf: Sync`

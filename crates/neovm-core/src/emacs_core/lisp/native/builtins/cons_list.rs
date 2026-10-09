@@ -16,7 +16,7 @@ static ASSOC_RESOLVED: LazyLock<bool> =
 /// A scan can keep this choice for its whole duration only when it runs no
 /// Lisp callbacks. Captures are thread scoped: another mutator's scope does
 /// not change which reads belong to the current thread.
-#[inline]
+#[inline(always)]
 fn unobserved_list_scan() -> bool {
     !crate::tagged::collection_reads::reads_need_observation()
 }
@@ -90,6 +90,53 @@ fn for_each_tail_cycle_tail(
         Some(tail)
     } else {
         None
+    }
+}
+
+/// Stack-local GNU Brent state, with its counters kept together so callers
+/// cannot mix cycle algorithms or initialization phases. The unsigned-short
+/// countdown matches GNU lisp.h:5875-5892, including its wrapping semantics.
+/// Each traversal belongs to its mutator; this stores no shared or cached
+/// Lisp state. Callers that run Lisp must root `tortoise()` across callbacks.
+#[derive(Debug)]
+pub(crate) struct GnuTailCycle {
+    tortoise: Value,
+    max: i64,
+    n: i64,
+    q: u16,
+    mutator: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_not_impl_any!(GnuTailCycle: Send, Sync);
+
+impl GnuTailCycle {
+    pub(crate) fn new(head: Value) -> Self {
+        Self {
+            tortoise: head,
+            max: 2,
+            n: 0,
+            q: 2,
+            mutator: std::marker::PhantomData,
+        }
+    }
+
+    pub(crate) fn tortoise(&self) -> Value {
+        self.tortoise
+    }
+
+    #[inline]
+    pub(crate) fn check(&mut self, advanced_tail: Value) -> Result<(), Flow> {
+        if let Some(tail) = for_each_tail_cycle_tail(
+            advanced_tail,
+            &mut self.tortoise,
+            &mut self.max,
+            &mut self.n,
+            &mut self.q,
+        ) {
+            Err(circular_list_error(tail))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -485,6 +532,7 @@ fn cdr_safe_value(val: &Value) -> Value {
     }
 }
 
+#[inline(always)]
 pub(crate) fn builtin_setcar_2(
     _eval: &mut super::eval::Context,
     cons: Value,
@@ -493,6 +541,7 @@ pub(crate) fn builtin_setcar_2(
     builtin_setcar_values(cons, new_car)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_setcar_values(cons: Value, new_car: Value) -> EvalResult {
     match cons.kind() {
         ValueKind::Cons => {
@@ -506,6 +555,7 @@ pub(crate) fn builtin_setcar_values(cons: Value, new_car: Value) -> EvalResult {
     }
 }
 
+#[inline(always)]
 pub(crate) fn builtin_setcdr_2(
     _eval: &mut super::eval::Context,
     cons: Value,
@@ -514,6 +564,7 @@ pub(crate) fn builtin_setcdr_2(
     builtin_setcdr_values(cons, new_cdr)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_setcdr_values(cons: Value, new_cdr: Value) -> EvalResult {
     match cons.kind() {
         ValueKind::Cons => {
@@ -537,10 +588,12 @@ pub(crate) fn builtin_length(args: Vec<Value>) -> EvalResult {
     builtin_length_value(args[0])
 }
 
+#[inline(always)]
 pub(crate) fn builtin_length_1(_eval: &mut super::eval::Context, sequence: Value) -> EvalResult {
     builtin_length_value(sequence)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_length_value(sequence: Value) -> EvalResult {
     match sequence.kind() {
         ValueKind::Nil => Ok(Value::fixnum(0)),
@@ -773,6 +826,7 @@ fn builtin_nth_values_scan<const OBSERVED: bool>(n_value: Value, list: Value) ->
 /// (a funcall or interpreted `nth`, [`builtin_nth_values`]) signals with the
 /// whole list. Byte-compiled `(nth 2 '(a . b))` is `(wrong-type-argument
 /// listp b)` in GNU. Any other count is `Fnth`'s.
+#[inline(never)]
 pub(crate) fn bytecode_nth_values(n_value: Value, list: Value) -> EvalResult {
     if unobserved_list_scan() {
         bytecode_nth_values_scan::<false>(n_value, list)
@@ -828,6 +882,7 @@ fn expect_nthcdr_count(value: Value) -> Result<NthcdrCount, Flow> {
     }
 }
 
+#[inline(always)]
 fn nthcdr_impl(n_value: Value, list: Value) -> EvalResult {
     if unobserved_list_scan() {
         nthcdr_impl_scan::<false>(n_value, list)
@@ -836,7 +891,7 @@ fn nthcdr_impl(n_value: Value, list: Value) -> EvalResult {
     }
 }
 
-#[inline]
+#[inline(never)]
 fn nthcdr_impl_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalResult {
     let count = expect_nthcdr_count(n_value)?;
 
@@ -945,6 +1000,7 @@ pub(crate) fn builtin_nthcdr(args: Vec<Value>) -> EvalResult {
     builtin_nthcdr_values(args[0], args[1])
 }
 
+#[inline(always)]
 pub(crate) fn builtin_nthcdr_2(
     _eval: &mut super::eval::Context,
     n_value: Value,
@@ -953,6 +1009,7 @@ pub(crate) fn builtin_nthcdr_2(
     builtin_nthcdr_values(n_value, list)
 }
 
+#[inline(always)]
 pub(crate) fn builtin_nthcdr_values(n_value: Value, list: Value) -> EvalResult {
     nthcdr_impl(n_value, list)
 }
@@ -975,21 +1032,15 @@ fn builtin_append_slice_impl(args: &[Value]) -> EvalResult {
 
     fn append_proper_list(result: &mut Value, last: &mut Value, list: Value) -> Result<(), Flow> {
         let mut tail = list;
-        let mut tortoise = list;
-        let mut max = 2i64;
-        let mut n = 0i64;
-        let mut q = 2u16;
-
+        if tail.is_cons() {
+            append_element(result, last, tail.cons_car());
+            tail = tail.cons_cdr();
+        }
+        let mut cycle = GnuTailCycle::new(tail);
         while tail.is_cons() {
             append_element(result, last, tail.cons_car());
-
             tail = tail.cons_cdr();
-            if tail.is_cons()
-                && let Some(cycle_tail) =
-                    for_each_tail_cycle_tail(tail, &mut tortoise, &mut max, &mut n, &mut q)
-            {
-                return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
-            }
+            cycle.check(tail)?;
         }
 
         if !tail.is_nil() {
@@ -1083,7 +1134,9 @@ pub(crate) fn builtin_reverse(args: Vec<Value>) -> EvalResult {
             )
         })?;
 
-        if !string.is_multibyte() {
+        // GNU Freverse (fns.c:2354): equal character/byte lengths select
+        // unibyte output, including ASCII-only multibyte strings.
+        if string.schars() == string.sbytes() {
             let mut bytes = string.as_bytes().to_vec();
             bytes.reverse();
             return Ok(Value::heap_string(
@@ -1143,10 +1196,12 @@ pub(crate) fn builtin_nreverse(args: Vec<Value>) -> EvalResult {
     nreverse_value(args[0])
 }
 
+#[inline(always)]
 pub(crate) fn builtin_nreverse_1(_eval: &mut super::eval::Context, arg: Value) -> EvalResult {
     nreverse_value(arg)
 }
 
+#[inline(never)]
 pub(crate) fn nreverse_value(arg: Value) -> EvalResult {
     match arg.kind() {
         ValueKind::Nil => Ok(Value::NIL),
@@ -1206,6 +1261,7 @@ fn builtin_member_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
     builtin_member_values(args[0], args[1], symbols_with_pos_enabled)
 }
 
+#[inline(always)]
 pub(crate) fn builtin_member_2(
     eval: &mut super::eval::Context,
     target: Value,
@@ -1214,6 +1270,7 @@ pub(crate) fn builtin_member_2(
     builtin_member_values(target, list, eval.symbols_with_pos_enabled)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_member_values(
     target: Value,
     list: Value,
@@ -1241,7 +1298,12 @@ fn builtin_member_values_scan<const OBSERVED: bool>(
     }
     for_each_proper_list_tail_scan::<OBSERVED, _>(list, list, |tail| {
         let pair_car = scan_car::<OBSERVED>(tail);
-        if equal_value_swp(&target, &pair_car, 0, symbols_with_pos_enabled) {
+        if crate::emacs_core::value::try_equal_value_swp(
+            &target,
+            &pair_car,
+            0,
+            symbols_with_pos_enabled,
+        )? {
             Ok(Some(tail))
         } else {
             Ok(None)
@@ -1249,6 +1311,7 @@ fn builtin_member_values_scan<const OBSERVED: bool>(
     })
 }
 
+#[inline(always)]
 pub(crate) fn builtin_memq_2(
     eval: &mut super::eval::Context,
     target: Value,
@@ -1270,6 +1333,7 @@ pub(crate) const LIST_SCAN_BUDGET: usize = 1 << 16;
 /// of each cell's instructions, and its state and an inlined error path made
 /// the function save five registers on every call (208,797 calls per
 /// compile of elb-smie.el).
+#[inline(never)]
 pub(crate) fn builtin_memq_values(
     target: Value,
     list: Value,
@@ -1512,7 +1576,12 @@ fn assoc_values_scan<const OBSERVED: bool>(
         if pair_car.is_cons() {
             let entry_key = scan_car::<OBSERVED>(pair_car);
             if entry_key.bits() == key.bits()
-                || equal_value_swp(&key, &entry_key, 0, symbols_with_pos_enabled)
+                || crate::emacs_core::value::try_equal_value_swp(
+                    &key,
+                    &entry_key,
+                    0,
+                    symbols_with_pos_enabled,
+                )?
             {
                 return Ok(Some(pair_car));
             }
@@ -1584,7 +1653,12 @@ pub(crate) fn builtin_assoc_slice(eval: &mut super::eval::Context, args: &[Value
             let pair_car = tail.cons_car();
             if let ValueKind::Cons = pair_car.kind() {
                 let entry_key = pair_car.cons_car();
-                if equal_value_swp(key, &entry_key, 0, eval.symbols_with_pos_enabled) {
+                if crate::emacs_core::value::try_equal_value_swp(
+                    key,
+                    &entry_key,
+                    0,
+                    eval.symbols_with_pos_enabled,
+                )? {
                     return Ok(Some(pair_car));
                 }
             }
@@ -1595,6 +1669,7 @@ pub(crate) fn builtin_assoc_slice(eval: &mut super::eval::Context, args: &[Value
     })
 }
 
+#[inline(always)]
 pub(crate) fn builtin_assq_2(
     eval: &mut super::eval::Context,
     key: Value,
@@ -1605,6 +1680,7 @@ pub(crate) fn builtin_assq_2(
 
 /// `assq`, scanned like [`builtin_memq_values`]: no cycle bookkeeping until
 /// the budget runs out, then the exact algorithm from the head.
+#[inline(never)]
 pub(crate) fn builtin_assq_values(
     key: Value,
     list: Value,
@@ -1662,9 +1738,7 @@ fn builtin_assq_values_scan<const OBSERVED: bool>(
 fn assq_exact(key: Value, list: Value) -> EvalResult {
     let key_bits = key.bits();
     let mut tail = list;
-    let mut tortoise = list;
-    let mut power = 1usize;
-    let mut distance = 0usize;
+    let mut cycle = GnuTailCycle::new(list);
 
     while tail.is_cons() {
         let pair_car = tail.cons_car();
@@ -1676,17 +1750,7 @@ fn assq_exact(key: Value, list: Value) -> EvalResult {
         }
 
         tail = tail.cons_cdr();
-        if tail.is_cons() {
-            distance = distance.saturating_add(1);
-            if tail.bits() == tortoise.bits() {
-                return Err(circular_list_error(tail));
-            }
-            if distance == power {
-                tortoise = tail;
-                power = power.saturating_mul(2).max(1);
-                distance = 0;
-            }
-        }
+        cycle.check(tail)?;
     }
 
     if tail.is_nil() {
@@ -1735,9 +1799,7 @@ fn builtin_assq_values_swp_scan<const OBSERVED: bool>(key: Value, list: Value) -
 #[inline(never)]
 fn assq_swp_exact(bare: Value, list: Value) -> EvalResult {
     let mut tail = list;
-    let mut tortoise = list;
-    let mut power = 1usize;
-    let mut distance = 0usize;
+    let mut cycle = GnuTailCycle::new(list);
 
     while tail.is_cons() {
         let pair_car = tail.cons_car();
@@ -1746,17 +1808,7 @@ fn assq_swp_exact(bare: Value, list: Value) -> EvalResult {
         }
 
         tail = tail.cons_cdr();
-        if tail.is_cons() {
-            distance = distance.saturating_add(1);
-            if tail.bits() == tortoise.bits() {
-                return Err(circular_list_error(tail));
-            }
-            if distance == power {
-                tortoise = tail;
-                power = power.saturating_mul(2).max(1);
-                distance = 0;
-            }
-        }
+        cycle.check(tail)?;
     }
 
     if tail.is_nil() {
@@ -1874,7 +1926,7 @@ fn copy_list_sequence_scan<const OBSERVED: bool>(arg: Value) -> EvalResult {
 }
 
 #[cfg(test)]
-#[path = "tests/copy_sequence_capture.rs"]
+#[path = "tests/copy_sequence_capture_test.rs"]
 mod copy_sequence_capture;
 
 // ===========================================================================
@@ -1958,15 +2010,20 @@ fn builtin_delete_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
     let elt = &args[0];
     match args[1].kind() {
         ValueKind::Nil => Ok(Value::NIL),
-        ValueKind::Cons => delete_from_list_in_place(&args[1], |item| {
-            equal_value_swp(elt, item, 0, symbols_with_pos_enabled)
+        ValueKind::Cons => delete_from_list_in_place_result(&args[1], |item| {
+            crate::emacs_core::value::try_equal_value_swp(elt, item, 0, symbols_with_pos_enabled)
         }),
         ValueKind::Veclike(VecLikeType::Vector) => {
             let items = args[1].as_vector_data().unwrap().clone();
             let mut changed = false;
             let mut kept = Vec::with_capacity(items.len());
             for item in items.iter() {
-                if equal_value_swp(elt, item, 0, symbols_with_pos_enabled) {
+                if crate::emacs_core::value::try_equal_value_swp(
+                    elt,
+                    item,
+                    0,
+                    symbols_with_pos_enabled,
+                )? {
                     changed = true;
                 } else {
                     kept.push(*item);
@@ -1979,21 +2036,51 @@ fn builtin_delete_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
             }
         }
         ValueKind::String => {
-            let mut changed = false;
-            let mut kept = Vec::new();
-            let string = args[1].as_lisp_string().expect("string");
-            for cp in super::lisp_string_char_codes(string) {
-                let ch = Value::fixnum(cp as i64);
-                if equal_value_swp(elt, &ch, 0, symbols_with_pos_enabled) {
-                    changed = true;
+            // GNU Fdelete (fns.c:2190-2223) compares character codes, copies
+            // their original bytes, and preserves the input storage kind.
+            let Some(target) = elt.as_fixnum() else {
+                return Ok(args[1]);
+            };
+            let string = args[1].as_lisp_string().ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), args[1]],
+                )
+            })?;
+            let storage = string.storage_kind();
+            let bytes = string.as_bytes();
+            let mut kept = Vec::with_capacity(bytes.len());
+            let mut removed = 0;
+            let mut pos = 0;
+            while pos < bytes.len() {
+                let (code, len) = match storage {
+                    crate::heap_types::LispStringStorageKind::Unibyte => (u32::from(bytes[pos]), 1),
+                    crate::heap_types::LispStringStorageKind::Multibyte => {
+                        crate::emacs_core::emacs_char::string_char_unchecked(&bytes[pos..])
+                    }
+                };
+                if i64::from(code) == target {
+                    removed += 1;
                 } else {
-                    kept.push(ch);
+                    kept.extend_from_slice(&bytes[pos..pos + len]);
                 }
+                pos += len;
             }
-            if !changed {
+            if removed == 0 {
                 return Ok(args[1]);
             }
-            builtin_concat(vec![Value::list(kept)])
+            let rebuilt = match storage {
+                crate::heap_types::LispStringStorageKind::Unibyte => {
+                    crate::heap_types::LispString::from_unibyte(kept)
+                }
+                crate::heap_types::LispStringStorageKind::Multibyte => {
+                    crate::heap_types::LispString::from_emacs_bytes_with_chars(
+                        kept,
+                        string.schars() - removed,
+                    )
+                }
+            };
+            Ok(Value::heap_string(rebuilt))
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -2063,6 +2150,7 @@ pub(crate) fn builtin_elt(args: Vec<Value>) -> EvalResult {
 
 /// The byte-code `elt` (`Op::Elt`): [`bytecode_elt_values`]. (The Lisp
 /// function `elt` is [`builtin_elt`], `Felt`.)
+#[inline(always)]
 pub(crate) fn builtin_elt_2(
     _eval: &mut super::eval::Context,
     sequence: Value,
@@ -2076,6 +2164,7 @@ pub(crate) fn builtin_elt_2(
 /// signals with that TAIL -- where `Felt` ([`builtin_elt_values`]) signals
 /// with the whole list: byte-compiled `(elt '(1 . 2) 3)` is
 /// `(wrong-type-argument listp 2)` in GNU. Everything else is `Felt`'s.
+#[inline(never)]
 pub(crate) fn bytecode_elt_values(sequence: Value, n: Value) -> EvalResult {
     if sequence.is_cons()
         && let Some(count) = n.as_fixnum()
@@ -2110,6 +2199,7 @@ pub(crate) fn builtin_nconc_slice(_eval: &mut super::eval::Context, args: &[Valu
     builtin_nconc_slice_values(args)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_nconc_slice_values(args: &[Value]) -> EvalResult {
     if unobserved_list_scan() {
         builtin_nconc_slice_values_scan::<false>(args)
@@ -2123,24 +2213,12 @@ fn builtin_nconc_slice_values_scan<const OBSERVED: bool>(args: &[Value]) -> Eval
     fn last_cons_for_nconc<const OBSERVED: bool>(list: Value) -> Result<Value, Flow> {
         let mut last = list;
         let mut tail = list;
-        let mut tortoise = list;
-        let mut power = 1usize;
-        let mut distance = 0usize;
+        let mut cycle = GnuTailCycle::new(list);
 
         while tail.is_cons() {
             last = tail;
             tail = scan_cdr::<OBSERVED>(tail);
-            if tail.is_cons() {
-                distance = distance.saturating_add(1);
-                if tail.bits() == tortoise.bits() {
-                    return Err(signal(LispCondition::CircularList, vec![tail]));
-                }
-                if distance == power {
-                    tortoise = tail;
-                    power = power.saturating_mul(2).max(1);
-                    distance = 0;
-                }
-            }
+            cycle.check(tail)?;
         }
 
         Ok(last)
@@ -2191,5 +2269,9 @@ fn builtin_nconc_slice_values_scan<const OBSERVED: bool>(args: &[Value]) -> Eval
 // ===========================================================================
 
 #[cfg(test)]
-#[path = "tests/collection_scan_capture.rs"]
+#[path = "tests/collection_scan_capture_test.rs"]
 mod collection_scan_capture;
+
+#[cfg(test)]
+#[path = "tests/gdn_equality_test.rs"]
+mod gdn_equality;

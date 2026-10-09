@@ -305,27 +305,50 @@ pub struct emacs_env_private {
 // Global module state
 // ============================================================================
 
-pub struct LoadedModule {
-    #[allow(dead_code)]
+/// A module's native code remains mapped for the process lifetime, including
+/// failed initialization, just as GNU never calls dynlib_close on a module.
+/// Only shared references escape `open`; no safe owner can unload the library.
+/// This immutable loader handle is shared across mutators and contains no Lisp
+/// state. The loader supplies synchronization for symbol lookup.
+#[derive(Debug)]
+struct ModuleLibrary {
     library: Library,
-    #[allow(dead_code)]
-    runtime: Box<emacs_runtime>,
-    #[allow(dead_code)]
-    runtime_priv: Box<emacs_runtime_private>,
-    #[allow(dead_code)]
-    env: Box<emacs_env>,
-    #[allow(dead_code)]
-    env_priv: Box<emacs_env_private>,
 }
 
-// SAFETY: neomacs runs single-threaded. Module state is never accessed
-// from threads other than the main Lisp evaluation thread.
-unsafe impl Send for emacs_runtime {}
-unsafe impl Sync for emacs_runtime {}
-unsafe impl Send for emacs_runtime_private {}
-unsafe impl Sync for emacs_runtime_private {}
-unsafe impl Send for LoadedModule {}
-unsafe impl Sync for LoadedModule {}
+static_assertions::assert_impl_all!(ModuleLibrary: Send, Sync);
+
+#[derive(Debug, thiserror::Error)]
+enum ModuleOpenError {
+    #[error(transparent)]
+    Loader(#[from] libloading::Error),
+}
+
+impl ModuleLibrary {
+    #[cold]
+    #[inline(never)]
+    fn open(path: &std::path::Path) -> Result<&'static Self, ModuleOpenError> {
+        // SAFETY: native modules follow GNU's module-load contract: their
+        // constructors and exported entry points implement the Emacs module
+        // ABI. The handle is retained before any exported code is called.
+        let library = unsafe { Library::new(path) }?;
+        Ok(Box::leak(Box::new(Self { library })))
+    }
+}
+
+/// A loaded module's shared library, kept mapped until the process exits or
+/// the same path loads again.
+///
+/// Only the library outlives `module-load`. GNU's `Fmodule_load` keeps the
+/// runtime and its initialization environment on the C stack, valid only while
+/// the module's init function runs, so they are freed when loading returns,
+/// as on the failure paths. The environment holds evaluator-local values; it
+/// never belonged in this process-wide registry.
+pub struct LoadedModule {
+    #[allow(dead_code)]
+    library: &'static ModuleLibrary,
+}
+
+static_assertions::assert_impl_all!(LoadedModule: Send, Sync);
 
 static LOADED_MODULES: Mutex<Option<HashMap<String, LoadedModule>>> = Mutex::new(None);
 
@@ -552,32 +575,25 @@ pub(crate) fn collect_dynamic_module_gc_roots(roots: &mut Vec<Value>, heap_ident
     });
 }
 
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
 struct ActiveModuleEnv {
-    env_priv: *mut emacs_env_private,
+    _scope: crate::tls_scope::TlsStackScope<ActiveModuleEnvEntry>,
 }
+static_assertions::assert_not_impl_any!(ActiveModuleEnv: Send, Sync);
 
 impl ActiveModuleEnv {
     fn push(env_priv: *mut emacs_env_private) -> Self {
         let heap_identity = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
-        ACTIVE_ENVS.with(|envs| {
-            envs.borrow_mut().push(ActiveModuleEnvEntry {
-                env_priv,
-                heap_identity,
-            })
-        });
-        Self { env_priv }
-    }
-}
-
-impl Drop for ActiveModuleEnv {
-    fn drop(&mut self) {
-        ACTIVE_ENVS.with(|envs| {
-            let mut envs = envs.borrow_mut();
-            let last = envs
-                .pop()
-                .expect("active module environment stack underflow");
-            debug_assert_eq!(last.env_priv, self.env_priv);
-        });
+        Self {
+            _scope: crate::tls_scope::TlsStackScope::push(
+                &ACTIVE_ENVS,
+                ActiveModuleEnvEntry {
+                    env_priv,
+                    heap_identity,
+                },
+            ),
+        }
     }
 }
 
@@ -2085,21 +2101,18 @@ thread_local! {
 /// returns, the outer call's context must come back, or the outer module
 /// function's next `env->funcall` finds no evaluator context. `Drop` also
 /// keeps the teardown coherent once panics become catchable.
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
 struct ModuleContextGuard {
-    prev: *mut Context,
+    _scope: crate::tls_scope::TlsScope<*mut Context, std::cell::Cell<*mut Context>>,
 }
+static_assertions::assert_not_impl_any!(ModuleContextGuard: Send, Sync);
 
 impl ModuleContextGuard {
     fn install(ctx: *mut Context) -> Self {
         Self {
-            prev: MODULE_CTX.with(|c| c.replace(ctx)),
+            _scope: crate::tls_scope::TlsScope::new(&MODULE_CTX, ctx),
         }
-    }
-}
-
-impl Drop for ModuleContextGuard {
-    fn drop(&mut self) {
-        MODULE_CTX.with(|c| c.set(self.prev));
     }
 }
 
@@ -2130,29 +2143,33 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
     // Unix); `path_str` is a display form used only for error text and the
     // already-loaded registry key (module paths are ASCII in practice).
     let path_str = path.display().to_string();
-    let lib = unsafe { Library::new(&path) }.map_err(|e| {
+    let lib = ModuleLibrary::open(&path).map_err(|ModuleOpenError::Loader(e)| {
         signal(
-            "module-open-failed",
+            LispCondition::ModuleOpenFailed,
             vec![Value::string(&path_str), Value::string(e.to_string())],
         )
     })?;
 
     {
+        // SAFETY: this presence-only probe never dereferences the symbol;
+        // ModuleLibrary retains its mapping across lookup and all later calls.
         let has_gpl: Result<libloading::Symbol<*const ()>, _> =
-            unsafe { lib.get(b"plugin_is_GPL_compatible") };
+            unsafe { lib.library.get(b"plugin_is_GPL_compatible") };
         if has_gpl.is_err() {
             return Err(signal(
-                "module-not-gpl-compatible",
+                LispCondition::ModuleNotGplCompatible,
                 vec![Value::string(&path_str)],
             ));
         }
     }
 
     type EmacsInitFn = unsafe extern "C" fn(runtime: *mut emacs_runtime) -> std::ffi::c_int;
-    let init_fn: libloading::Symbol<EmacsInitFn> = unsafe { lib.get(b"emacs_module_init") }
+    // SAFETY: GNU-compatible modules export this exact C initialization ABI;
+    // the process-lifetime library keeps its entry point mapped.
+    let init_fn: libloading::Symbol<EmacsInitFn> = unsafe { lib.library.get(b"emacs_module_init") }
         .map_err(|_| {
             signal(
-                "missing-module-init-function",
+                LispCondition::MissingModuleInitFunction,
                 vec![Value::string(&path_str)],
             )
         })?;
@@ -2212,6 +2229,8 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
 
     let env_ptr: *mut emacs_env = &mut *env_box;
     env_box.private_members = env_priv_ptr;
+    // SAFETY: both pointers refer to owned initialized boxes, and the
+    // environment table is completed before any module receives it.
     unsafe {
         initialize_environment(env_ptr, env_priv_ptr);
     }
@@ -2225,33 +2244,36 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
 
     let module_ctx = ModuleContextGuard::install(ctx as *mut Context);
     let active_env = ActiveModuleEnv::push(env_priv_ptr);
+    // SAFETY: the export has the Emacs initialization ABI, its library is
+    // retained, and rt plus its environment remain owned across the call.
     let init_code = unsafe { init_fn_ptr(&mut *rt as *mut emacs_runtime) };
     drop(module_ctx);
 
     ctx.maybe_quit()?;
-    let env_priv_ref = unsafe { &*env_priv_ptr };
-    module_signal_or_throw(env_priv_ref)?;
-    drop(active_env);
-
     if init_code != 0 {
         return Err(signal(
-            "module-init-failed",
+            LispCondition::ModuleInitFailed,
             vec![Value::string(&path_str), Value::fixnum(init_code as i64)],
         ));
     }
 
-    unsafe { finalize_storage(&mut env_priv.storage) };
-    env_priv.non_local_exit_symbol = Value::NIL;
-    env_priv.non_local_exit_data = Value::NIL;
-    let rt_priv_reconstructed = unsafe { Box::from_raw(rt.private_members) };
+    // SAFETY: env_priv still owns this initialized environment, and the
+    // initializer has returned before its pending Lisp exit is inspected.
+    let env_priv_ref = unsafe { &*env_priv_ptr };
+    module_signal_or_throw(env_priv_ref)?;
+    drop(active_env);
 
-    let loaded = LoadedModule {
-        library: lib,
-        runtime: rt,
-        runtime_priv: rt_priv_reconstructed,
-        env: env_box,
-        env_priv,
-    };
+    // SAFETY: the initializer has returned; this environment owns the
+    // initialized handle storage being finalized.
+    unsafe { finalize_storage(&mut env_priv.storage) };
+    // SAFETY: `private_members` came from `Box::into_raw` above and nothing
+    // else frees it. Init has returned, so no module code reads the runtime.
+    drop(unsafe { Box::from_raw(rt.private_members) });
+    drop(rt);
+    drop(env_box);
+    drop(env_priv);
+
+    let loaded = LoadedModule { library: lib };
 
     // Heal poison rather than unwrap: the registry is a plain map with no
     // invariant spanning the lock (an interrupted insert either happened or
@@ -2282,6 +2304,9 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
         return Err(signal(LispCondition::WrongNumberOfArguments, vec![func]));
     }
 
+    // SAFETY: module_make_function stores an emacs_function at this address.
+    // ModuleLibrary::open keeps native code mapped for the process lifetime,
+    // including failed initialization; host-provided callbacks are static.
     let subr_fn: emacs_function = unsafe { std::mem::transmute(mf.subr) };
     let data = mf.data;
 
@@ -2420,5 +2445,9 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/library_lifetime.rs"]
+mod library_lifetime_tests;

@@ -1,7 +1,7 @@
 //! Geometry-bearing display properties in prefix strings. Capturing interval
 //! revisions alone cannot detect mutation inside a property's Lisp value.
 use super::pixel_input::SpaceInput;
-use crate::buffer::{CharPos0, text_props::TextPropertyTable};
+use crate::buffer::{CharPos0, text_props::TextPropertiesRef};
 use crate::emacs_core::{
     display_spec::{DisplayPropertySpecs, display_spec_when_parts},
     image_catalog::ImageSpecIdentity,
@@ -63,7 +63,7 @@ enum SpecPayload {
 }
 
 impl StringDisplayInputs {
-    pub(super) fn capture(properties: &TextPropertyTable) -> Self {
+    pub(super) fn capture(properties: TextPropertiesRef<'_>) -> Self {
         let mut runs = Vec::new();
         let display = Value::symbol("display");
         properties.for_each_interval_from_char_pos(CharPos0::new(0), |start, end, plist| {

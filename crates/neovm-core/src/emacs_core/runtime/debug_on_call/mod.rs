@@ -270,8 +270,7 @@ impl Context {
             .set_symbol_value_id(when_entered_debugger_symbol(), Value::fixnum(events));
         let debugger = self
             .obarray
-            .symbol_value_id(debugger_symbol())
-            .copied()
+            .symbol_value_id_copied(debugger_symbol())
             .unwrap_or(Value::NIL);
         let count = self.specpdl.len();
         // GNU's four `specbind`s, in GNU's order (`src/eval.c:306-314`).
@@ -300,6 +299,7 @@ impl Context {
 
     /// GNU `do_debug_on_call` (`src/eval.c:335-341`) minus its first line,
     /// which the token's constructor already performed.
+    #[inline(never)]
     pub(crate) fn do_debug_on_call(&mut self, arm: DebugOnCallArm) -> Result<(), Flow> {
         let DebugOnCallArm { code, frame } = arm;
         // eval.c:339 -- the same entry also arms the exit debugger.
@@ -338,5 +338,5 @@ impl Context {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/debug_on_call_test.rs"]
 mod tests;

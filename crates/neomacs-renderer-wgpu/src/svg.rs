@@ -246,7 +246,9 @@ fn inject_root_face_color<'a>(
     Cow::Owned(painted)
 }
 
-fn bounded_svg_data(data: &[u8]) -> Option<Cow<'_, [u8]>> {
+/// The document bytes a decode may see: UTF-8-bounded and size-bounded,
+/// gunzipped when the source is compressed.
+pub(crate) fn bounded_svg_data(data: &[u8]) -> Option<Cow<'_, [u8]>> {
     if data.len() > MAX_SVG_INPUT_SIZE {
         return None;
     }

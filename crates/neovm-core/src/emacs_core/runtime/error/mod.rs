@@ -569,13 +569,35 @@ thread_local! {
 #[derive(Default)]
 struct InFlightRootTable {
     /// One entry per live pin; `None` marks a reusable slot.
-    slots: Vec<Option<Vec<Value>>>,
+    slots: Vec<Option<Vec<PinnedWord>>>,
     free: Vec<usize>,
 }
 
-/// Roots retained by flows from one Context, including after it moves threads.
-/// A source thread may keep or drop a public EvalError while a worker collects
-/// its owning Context, so the slot arena uses a mutex rather than RefCell.
+/// The word of one pinned in-flight value.
+///
+/// The registry is shared through a mutex, so it holds words rather than
+/// thread-confined values. Its table roots each word for the registry's heap,
+/// and the word becomes a value again only in that heap's root walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct PinnedWord(usize);
+
+impl PinnedWord {
+    fn of(value: Value) -> Self {
+        Self(value.bits())
+    }
+
+    fn value(self) -> Value {
+        Value::from_bits(self.0)
+    }
+}
+
+static_assertions::assert_impl_all!(InFlightRegistryHandle: Send, Sync);
+
+/// Heap-identified registry storage for one Context's in-flight roots.
+/// The slot arena uses a mutex so root publication and collection may access
+/// registry metadata concurrently. Context and public EvalError stay on their
+/// owner threads; sharing registry storage does not transfer either owner.
 #[derive(Clone)]
 pub(crate) struct InFlightRegistryHandle {
     heap_identity: Option<usize>,
@@ -625,13 +647,13 @@ struct InFlightRootPin {
 
 /// A pin on one in-flight payload's heap values. Owns a slot in its Context's
 /// registry for its whole life; clones take independent slots in that same
-/// registry, and Drop releases the owning slot even after Context activation
-/// changes or the Context moves to another thread.
+/// registry, and Drop releases the owning slot even after local Context
+/// activation changes. The payload and this pin remain on their owner thread.
 pub struct InFlightRoots {
     /// `None` for a payload with no traceable values, avoiding registry traffic.
     pin: Option<InFlightRootPin>,
-    /// Flow payloads remain local to their Rust evaluator call stack. Moving
-    /// the owning Context is allowed; its registry follows it independently.
+    /// Flow payloads and Context remain local to their evaluator call stack.
+    /// Shared registry metadata does not make a payload transferable.
     _not_send: std::marker::PhantomData<*const ()>,
 }
 
@@ -644,7 +666,7 @@ impl InFlightRoots {
     /// and an uninterned symbol's value/function/plist cells survive only
     /// while something marks it. In flight, nothing else does.
     fn pin(payload: impl IntoIterator<Item = Value>) -> Self {
-        let mut values: Vec<Value> = Vec::new();
+        let mut values: Vec<PinnedWord> = Vec::new();
         for value in payload {
             Self::push_if_traceable(&mut values, value);
         }
@@ -662,16 +684,16 @@ impl InFlightRoots {
     /// non-canonical symbol's cells. Fixnums, `nil` and `t` are immediates the
     /// collector never touches.
     #[inline]
-    fn push_if_traceable(values: &mut Vec<Value>, value: Value) {
+    fn push_if_traceable(values: &mut Vec<PinnedWord>, value: Value) {
         if value.is_nil() || value.is_t() {
             return;
         }
         if value.is_heap_object() || value.is_symbol() {
-            values.push(value);
+            values.push(PinnedWord::of(value));
         }
     }
 
-    fn claim(registry: InFlightRegistryHandle, values: Vec<Value>) -> Self {
+    fn claim(registry: InFlightRegistryHandle, values: Vec<PinnedWord>) -> Self {
         let slot = {
             let mut table = registry.lock();
             match table.free.pop() {
@@ -734,7 +756,7 @@ pub(crate) fn collect_in_flight_registry_gc_roots(
     }
     let table = registry.lock();
     for values in table.slots.iter().flatten() {
-        for &value in values {
+        for value in values.iter().map(|word| word.value()) {
             if registry.heap_identity.is_some() || !value.is_heap_object() {
                 out.push(value);
             }
@@ -803,6 +825,14 @@ pub(crate) enum LispCondition {
     InvalidRegexp,
     #[strum(serialize = "malformed-keyword-arg-list")]
     MalformedKeywordArgList,
+    #[strum(serialize = "missing-module-init-function")]
+    MissingModuleInitFunction,
+    #[strum(serialize = "module-init-failed")]
+    ModuleInitFailed,
+    #[strum(serialize = "module-not-gpl-compatible")]
+    ModuleNotGplCompatible,
+    #[strum(serialize = "module-open-failed")]
+    ModuleOpenFailed,
     #[strum(serialize = "no-catch")]
     NoCatch,
     #[strum(serialize = "overflow-error")]
@@ -862,6 +892,7 @@ pub(crate) trait IntoConditionSym {
 }
 
 impl IntoConditionSym for LispCondition {
+    #[inline(always)]
     fn condition_sym(self) -> SymId {
         intern(self.name())
     }
@@ -889,6 +920,7 @@ pub(crate) fn signal_suppressed(symbol: impl IntoConditionSym, data: Vec<Value>)
 /// `define-error') keeps its identity all the way to condition matching.
 /// Re-interning by name would resolve to a different symbol with no
 /// `error-conditions' and wrongly canonicalize to "Invalid error symbol".
+#[inline(never)]
 pub(crate) fn signal_internal_id(
     symbol: SymId,
     data: Vec<Value>,
@@ -2090,10 +2122,10 @@ pub fn format_eval_result_bytes_with_eval(
     out
 }
 #[cfg(test)]
-#[path = "tests/flow_kind.rs"]
+#[path = "tests/flow_kind_test.rs"]
 mod flow_kind_tests;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/error_test.rs"]
 mod tests;
 
 /// Signal wrong-number-of-arguments unless `args` has exactly `n` items.
@@ -2296,13 +2328,13 @@ impl super::eval::Context {
 }
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
-#[path = "tests/flow_word.rs"]
+#[path = "tests/flow_word_test.rs"]
 mod flow_word_tests;
 
 #[cfg(test)]
-#[path = "tests/flow_word_gc.rs"]
+#[path = "tests/flow_word_gc_test.rs"]
 mod flow_word_gc_tests;

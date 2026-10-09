@@ -48,6 +48,11 @@ pub(crate) use posn_object_extent::force_posn_object_extent_for_test;
 pub use posn_object_extent::{PosnObjectExtentMode, posn_object_extent_mode, retained_posn_extent};
 mod scroll_bar;
 mod sibling_layout;
+mod size;
+pub(crate) use size::{
+    HorizontalScroll, NewTotalUpdate, SplitSizeError, SplitSizes, WindowPixelOperation,
+    WindowPixelStage, WindowPixels, WindowSizeError, WindowTotal,
+};
 pub mod split;
 mod string_property_input;
 pub mod window_markers;
@@ -84,6 +89,16 @@ pub struct WindowId(pub u64);
 /// Opaque frame identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FrameId(pub u64);
+
+/// Presentation of the frame's requested menu/tool bars. Compact presentation
+/// replaces their pixel bands without changing their Lisp frame parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuiBarPresentation {
+    Separate,
+    Compact,
+}
+
+pub mod frame_alpha;
 
 /// Whether a logical frame selection may retarget existing focus redirections.
 /// GNU `do_switch_frame` tracks explicit selections, but not input events.
@@ -1005,6 +1020,16 @@ pub struct WindowLayoutQuery {
 pub enum WindowLayoutQueryScope {
     #[default]
     Viewport,
+    /// Inert pixel measurement of a source buffer, including an offscreen one.
+    /// Width is absolute logical pixels; None means unbounded. The source
+    /// projection never changes the live window or publishes a presentation.
+    TextExtent {
+        buffer: BufferId,
+        start: LispCharPos1,
+        end: LispCharPos1,
+        width: Option<usize>,
+        height: Option<std::num::NonZeroUsize>,
+    },
     /// A prefix of the live viewport through the complete target row. If the
     /// target is not reached, walk the viewport. Placement and clipping retain
     /// the live start and vscroll; the returned end describes this prefix or
@@ -2664,40 +2689,149 @@ pub use neomacs_display_protocol::PresentedWindowChromeArea;
 /// Evaluator-owned half of GNU's `(glyph->object, glyph->charpos)` pair.
 ///
 /// The renderer-safe presentation carries the string identity and character
-/// index.  This rooted value remains in the window snapshot so input can join
-/// the two halves without re-evaluating a mode/tab/header-line format.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// index. The string object stays in the window snapshot so input can join the
+/// two halves without re-evaluating a mode/tab/header-line format. Snapshots
+/// are shared with render and input threads and retained by the layout engine
+/// across frames, so the object travels as a [`SharedRoot`]: its own lease
+/// keeps it alive in every copy, and only the evaluator materializes it.
+///
+/// [`SharedRoot`]: crate::tagged::transport::SharedRoot
+#[derive(Clone, Debug)]
 pub struct PresentedWindowChromeString {
     area: PresentedWindowChromeArea,
     string_id: neomacs_display_protocol::glyph_matrix::GlyphStringId,
-    value: Value,
+    object: crate::tagged::transport::SharedRoot,
 }
 
+static_assertions::assert_impl_all!(PresentedWindowChromeString: Send, Sync, Clone, std::fmt::Debug);
+
 impl PresentedWindowChromeString {
-    pub const fn new(
+    pub fn new(
         area: PresentedWindowChromeArea,
         string_id: neomacs_display_protocol::glyph_matrix::GlyphStringId,
-        value: Value,
+        object: crate::tagged::transport::SharedRoot,
     ) -> Self {
         Self {
             area,
             string_id,
-            value,
+            object,
         }
     }
 
-    pub const fn area(self) -> PresentedWindowChromeArea {
+    pub const fn area(&self) -> PresentedWindowChromeArea {
         self.area
     }
 
-    pub const fn string_id(self) -> neomacs_display_protocol::glyph_matrix::GlyphStringId {
+    pub const fn string_id(&self) -> neomacs_display_protocol::glyph_matrix::GlyphStringId {
         self.string_id
     }
 
-    pub const fn value(self) -> Value {
-        self.value
+    /// The rooted string object; the evaluator materializes it.
+    pub fn object(&self) -> &crate::tagged::transport::SharedRoot {
+        &self.object
+    }
+
+    /// Share one private vector lease across all areas of a window snapshot.
+    /// Existing handles keep every child alive during allocation, and are
+    /// replaced only after successful admission. An already shared lease is
+    /// reused, including whole-window chrome reused from a previous frame.
+    ///
+    /// # Errors
+    /// A missing installed heap, or a source belonging to another evaluator.
+    pub fn coalesce_roots(
+        sources: &mut [Self],
+        evaluator: &crate::emacs_core::Context,
+    ) -> Result<(), crate::tagged::transport::SharedRootError> {
+        for source in sources.iter() {
+            let _local = evaluator.materialize(&source.object)?;
+        }
+        let roots: Vec<_> = sources.iter().map(|source| &source.object).collect();
+        let replacement =
+            crate::tagged::transport::SharedRoot::coalesce_on_current_mutator(&roots)?;
+        if let Some(replacement) = replacement {
+            for (source, root) in sources.iter_mut().zip(replacement) {
+                source.object = root;
+            }
+        }
+        Ok(())
     }
 }
+
+/// Snapshot equality keeps GNU `equal` on the string objects, as when the
+/// field held the raw value: an evaluator comparing two snapshots treats a
+/// re-formatted, equal mode line as unchanged. Off the evaluator only object
+/// identity is observable.
+impl PartialEq for PresentedWindowChromeString {
+    fn eq(&self, other: &Self) -> bool {
+        self.area == other.area
+            && self.string_id == other.string_id
+            && (self.object.is_same_object(&other.object)
+                || self
+                    .object
+                    .value_on_current_mutator()
+                    .zip(other.object.value_on_current_mutator())
+                    .is_some_and(|(left, right)| left == right))
+    }
+}
+
+impl Eq for PresentedWindowChromeString {}
+
+/// Immutable rooted chrome sources shared across redisplay snapshots.
+///
+/// Cloning shares one allocation and its existing heap-identified root leases.
+/// The empty collection has no allocation, and no mutable slice is exposed.
+/// Formatting builds an owned vector; publication freezes it after root
+/// coalescing, while unchanged windows retain this collection directly.
+#[repr(transparent)]
+#[derive(Clone, Debug, Default)]
+pub struct PresentedWindowChromeStrings(Option<Arc<[PresentedWindowChromeString]>>);
+
+static_assertions::assert_impl_all!(PresentedWindowChromeStrings: Send, Sync, Clone, std::fmt::Debug, Eq);
+static_assertions::assert_not_impl_any!(PresentedWindowChromeStrings: Copy);
+
+impl PresentedWindowChromeStrings {
+    /// Borrow the immutable sources without copying their rooted handles.
+    #[inline]
+    pub fn as_slice(&self) -> &[PresentedWindowChromeString] {
+        self.0.as_deref().unwrap_or(&[])
+    }
+}
+
+impl From<Vec<PresentedWindowChromeString>> for PresentedWindowChromeStrings {
+    fn from(sources: Vec<PresentedWindowChromeString>) -> Self {
+        if sources.is_empty() {
+            Self::default()
+        } else {
+            Self(Some(sources.into()))
+        }
+    }
+}
+
+impl AsRef<[PresentedWindowChromeString]> for PresentedWindowChromeStrings {
+    fn as_ref(&self) -> &[PresentedWindowChromeString] {
+        self.as_slice()
+    }
+}
+
+impl std::ops::Deref for PresentedWindowChromeStrings {
+    type Target = [PresentedWindowChromeString];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl PartialEq for PresentedWindowChromeStrings {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right) || left == right,
+            (None, Some(_)) | (Some(_), None) => false,
+        }
+    }
+}
+
+impl Eq for PresentedWindowChromeStrings {}
 
 /// Last authoritative redisplay geometry for a live leaf window.
 #[derive(Clone, Debug)]
@@ -2722,7 +2856,7 @@ pub struct WindowDisplaySnapshot {
     /// Last redisplay tab-line height in pixels.
     pub tab_line_height: i64,
     /// Rooted displayed string objects used by window-chrome glyph rows.
-    pub chrome_strings: Vec<PresentedWindowChromeString>,
+    pub chrome_strings: PresentedWindowChromeStrings,
     /// Intended cursor position in the redisplay result, even when no physical
     /// cursor was emitted.
     pub logical_cursor: Option<WindowCursorPos>,
@@ -2766,6 +2900,9 @@ pub struct WindowDisplaySnapshot {
     /// Exact end record produced by the same row walk as this snapshot.
     pub window_end_record: Option<WindowEndRecord>,
 }
+
+static_assertions::assert_impl_all!(WindowDisplaySnapshot: Send, Sync, Clone, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(WindowDisplaySnapshot: Copy);
 
 /// Which window bodies an explicit `force-window-update` invalidated.
 ///
@@ -3504,7 +3641,7 @@ impl Default for WindowDisplaySnapshot {
             mode_line_height: 0,
             header_line_height: 0,
             tab_line_height: 0,
-            chrome_strings: Vec::new(),
+            chrome_strings: PresentedWindowChromeStrings::default(),
             logical_cursor: None,
             phys_cursor: None,
             points: Vec::new(),
@@ -4072,6 +4209,10 @@ pub struct Frame {
     /// active display backend. Wiring the dispatch is tracked as
     /// audit Phase 6.
     pub parameters: HashMap<Value, Value>,
+    /// Accepted GUI opacity, independent of the raw Lisp parameter alist.
+    /// GNU stores a new raw value before its handler can signal an error.
+    pub background_alpha: f32,
+    pub frame_alpha: [f32; 2],
     /// Whether the frame is visible, iconified, or invisible.
     pub visibility: FrameVisibility,
     /// Whether the menu / tab / tool bars are actually displayed and therefore
@@ -4082,6 +4223,8 @@ pub struct Frame {
     pub displays_chrome: bool,
     /// GNU `struct frame.title`: explicit title override, or nil.
     pub title: Value,
+    /// Retained projection policy, including while this frame is unselected.
+    gui_bar_presentation: GuiBarPresentation,
     /// Menu bar height in pixels.
     pub menu_bar_height: u32,
     /// Tool bar height in pixels.
@@ -4279,10 +4422,13 @@ impl Frame {
                 params.insert(Value::symbol("minibuffer"), Value::T);
                 params
             },
+            background_alpha: 1.0,
+            frame_alpha: [-1.0; 2],
             visibility: FrameVisibility::Visible,
             // Set true only once an interactive frontend displays this frame.
             displays_chrome: false,
             title: Value::NIL,
+            gui_bar_presentation: GuiBarPresentation::Separate,
             menu_bar_height: 0,
             tool_bar_height: 0,
             compact_bar_height: 0,
@@ -4603,6 +4749,21 @@ impl Frame {
     }
 
     pub fn set_parameter(&mut self, key: Value, value: Value) -> Option<Value> {
+        // Only successful decoding changes the backend state. The raw value
+        // remains observable even when the GUI parameter handler later errors.
+        match key.as_symbol_id().and_then(FrameParam::from_symbol_id) {
+            Some(FrameParam::Alpha) => {
+                if let Ok(alpha) = frame_alpha::pair(value) {
+                    self.frame_alpha = alpha;
+                }
+            }
+            Some(FrameParam::AlphaBackground) => {
+                if let Ok(alpha) = frame_alpha::component(value, 1.0) {
+                    self.background_alpha = alpha;
+                }
+            }
+            _ => {}
+        }
         self.parameters.insert(key, value)
     }
 
@@ -4939,8 +5100,8 @@ impl Frame {
 
     /// Recompute `menu_bar_height` from the `menu-bar-lines` frame parameter.
     ///
-    /// Mirrors GNU `frame.c` (`x_set_menu_bar_lines` / TTY frame init at
-    /// frame.c:1307-1309): `FRAME_MENU_BAR_LINES (f) = NILP (Vmenu_bar_mode) ? 0 : 1`.
+    /// Mirrors GNU's internal menu-bar geometry. The mode supplies a default
+    /// at frame creation; subsequent geometry follows the frame parameter.
     /// On TTY the menu bar takes one character row, identical to GNU's
     /// behaviour, so the resulting pixel height is `lines * char_height`
     /// where `char_height` is 1 for TTY frames.
@@ -4950,13 +5111,16 @@ impl Frame {
     /// `sync_window_area_bounds()` here is enough to push the root window
     /// (and its mode line / minibuffer) down to make room.
     pub fn sync_menu_bar_height_from_parameters(&mut self) {
+        self.sync_bar_heights_from_parameters();
+    }
+
+    fn menu_bar_pixel_height_from_parameters(&self) -> u32 {
         let lines = self
             .known_frame_parameter_int(FrameParam::MenuBarLines)
             .unwrap_or(0)
             .max(0) as u32;
         let char_height = self.char_height.max(1.0).round() as u32;
-        self.menu_bar_height = lines.saturating_mul(char_height);
-        self.sync_window_area_bounds();
+        lines.saturating_mul(char_height)
     }
 
     /// GNU `FRAME_TOP_MARGIN(f)` (`frame.h:1132`) = `FRAME_MENU_BAR_LINES` +
@@ -4984,30 +5148,57 @@ impl Frame {
     /// GUI frames Neomacs follows that pixel model, scaled to the frame font
     /// pixels because our renderer works in physical frame pixels.
     pub fn sync_tool_bar_height_from_parameters(&mut self) {
-        let lines = self
-            .known_frame_parameter_int(FrameParam::ToolBarLines)
-            .unwrap_or(0)
-            .max(0) as u32;
-        let line_height = if self.effective_window_system().is_some() {
-            default_gui_tool_bar_line_height(self.font_pixel_size)
-        } else {
-            self.char_height.max(1.0).round() as u32
-        };
-        self.tool_bar_height = lines.saturating_mul(line_height);
-        self.sync_window_area_bounds();
+        self.sync_bar_heights_from_parameters();
+    }
+
+    fn tool_bar_pixel_height_from_parameters(&self) -> u32 {
+        self.gui_button_bar_pixel_height(
+            self.known_frame_parameter_int(FrameParam::ToolBarLines)
+                .unwrap_or(0),
+        )
     }
 
     pub fn sync_compact_bar_height_from_parameters(&mut self) {
-        let lines = self
-            .frame_parameter_int("compact-bar-lines")
-            .unwrap_or(0)
-            .max(0) as u32;
+        self.sync_bar_heights_from_parameters();
+    }
+
+    fn compact_bar_pixel_height_from_parameters(&self) -> u32 {
+        self.gui_button_bar_pixel_height(self.frame_parameter_int("compact-bar-lines").unwrap_or(0))
+    }
+
+    fn gui_button_bar_pixel_height(&self, lines: i64) -> u32 {
         let line_height = if self.effective_window_system().is_some() {
             default_gui_tool_bar_line_height(self.font_pixel_size)
         } else {
             self.char_height.max(1.0).round() as u32
         };
-        self.compact_bar_height = lines.saturating_mul(line_height);
+        (lines.max(0) as u32).saturating_mul(line_height)
+    }
+
+    /// Project requested frame-local bars into effective pixel geometry, then
+    /// reflow once. The read-only height helpers cannot overwrite parameters;
+    /// the exhaustive presentation choice cannot reserve both replacement and
+    /// original bands. Global Lisp modes are deliberately absent from this API.
+    pub fn sync_gui_bar_heights_from_parameters(&mut self, presentation: GuiBarPresentation) {
+        self.gui_bar_presentation = presentation;
+        self.sync_bar_heights_from_parameters();
+    }
+
+    /// Reproject bar geometry using this frame's retained presentation.
+    /// Parameter and font mutations must preserve the same exclusive bands.
+    pub fn sync_bar_heights_from_parameters(&mut self) {
+        match self.gui_bar_presentation {
+            GuiBarPresentation::Separate => {
+                self.menu_bar_height = self.menu_bar_pixel_height_from_parameters();
+                self.tool_bar_height = self.tool_bar_pixel_height_from_parameters();
+                self.compact_bar_height = 0;
+            }
+            GuiBarPresentation::Compact => {
+                self.menu_bar_height = 0;
+                self.tool_bar_height = 0;
+                self.compact_bar_height = self.compact_bar_pixel_height_from_parameters();
+            }
+        }
         self.sync_window_area_bounds();
     }
 
@@ -7666,37 +7857,39 @@ impl FrameManager {
             .unwrap_or(Value::NIL)
     }
 
-    /// Write `w->new_pixel`. When `add` is true, accumulates onto
-    /// the existing slot (mirroring GNU
-    /// `Fset_window_new_pixel` ADD argument).
-    pub fn set_window_new_pixel(&mut self, window_id: WindowId, size: i64, add: bool) -> i64 {
+    /// Store a checked GNU staging result before the window is mutated.
+    /// Live geometry separately requires a validated WindowPixels.
+    pub(crate) fn set_window_new_pixel(
+        &mut self,
+        window_id: WindowId,
+        size: WindowPixelStage,
+    ) -> WindowPixelStage {
         if let Some(window) = self.lookup_window_mut(window_id) {
-            let stored = if add {
-                window.new_pixel().unwrap_or(0) + size
-            } else {
-                size
-            };
-            window.set_new_pixel(Some(stored));
-            stored
-        } else {
-            size
+            window.set_new_pixel(Some(i64::from(size)));
         }
+        size
     }
 
-    /// Write `w->new_total`. ADD semantics match GNU
-    /// `Fset_window_new_total`.
-    pub fn set_window_new_total(&mut self, window_id: WindowId, size: i64, add: bool) -> i64 {
-        if let Some(window) = self.lookup_window_mut(window_id) {
-            let stored = if add {
-                window.new_total().unwrap_or(0) + size
-            } else {
-                size
-            };
-            window.set_new_total(Some(stored));
-            stored
-        } else {
-            size
-        }
+    /// Store the canonical GNU fixnum total, replacing the staged value or
+    /// adding to it (`Fset_window_new_total`). Fails only when a staged total
+    /// outside the fixnum range would have to be added to.
+    pub(crate) fn set_window_new_total(
+        &mut self,
+        window_id: WindowId,
+        size: WindowTotal,
+        update: NewTotalUpdate,
+    ) -> Result<WindowTotal, crate::tagged::value::FixnumRangeError> {
+        let Some(window) = self.lookup_window_mut(window_id) else {
+            return Ok(size);
+        };
+        let stored = match update {
+            NewTotalUpdate::Replace => size,
+            NewTotalUpdate::Add => {
+                WindowTotal::try_from(window.new_total().unwrap_or(0))?.gnu_added(size)
+            }
+        };
+        window.set_new_total(Some(i64::from(stored)));
+        Ok(stored)
     }
 
     /// Write `w->new_normal`. Mirrors GNU `Fset_window_new_normal`.
@@ -7861,17 +8054,6 @@ fn split_window_in_tree(
     placement: SplitPlacement,
     attachment: SplitAttachment,
 ) -> Option<()> {
-    fn split_sizes(total: f32, requested_new_size: Option<i64>) -> (f32, f32) {
-        let total_px = total.round().max(0.0) as i64;
-        let new_size_px = match requested_new_size {
-            Some(n) if n > 0 => n.clamp(1, total_px.saturating_sub(1)),
-            Some(n) if n < 0 => (total_px - (-n)).clamp(1, total_px.saturating_sub(1)),
-            _ => total_px / 2,
-        };
-        let old_size_px = total_px - new_size_px;
-        (old_size_px as f32, new_size_px as f32)
-    }
-
     /// The two halves `old` splits into along `direction`, in layout order.
     fn split_rects(
         old: Rect,
@@ -7928,7 +8110,12 @@ fn split_window_in_tree(
     let inherited_normal_cols = old.normal_cols();
 
     let new_before_target = placement.is_before_target();
-    let (old_size_px, new_size_px) = split_sizes(extent(old_bounds, direction), size);
+    let sizes = match SplitSizes::new(extent(old_bounds, direction), size) {
+        Ok(sizes) => sizes,
+        Err(SplitSizeError::NewTooSmall) => return None,
+        Err(SplitSizeError::OldTooSmall) => return None,
+    };
+    let (old_size_px, new_size_px) = (sizes.old(), sizes.new_size());
     let (first_bounds, second_bounds) = if new_before_target {
         split_rects(old_bounds, direction, new_size_px, old_size_px)
     } else {
@@ -8690,21 +8877,8 @@ impl GcTrace for FrameManager {
                 roots.push(*v);
             }
             roots.push(frame.face_hash_table);
-            for snapshot in frame.redisplay_cache.values() {
-                roots.extend(snapshot.chrome_strings.iter().map(|source| source.value()));
-            }
-            for prepared in frame.presentation_state.prepared.values() {
-                for publication in &prepared.publications {
-                    let snapshot = publication.display_snapshot();
-                    roots.extend(snapshot.chrome_strings.iter().map(|source| source.value()));
-                }
-            }
-            if let Some(active) = &frame.presentation_state.active {
-                for publication in &active.publications {
-                    let snapshot = publication.display_snapshot();
-                    roots.extend(snapshot.chrome_strings.iter().map(|source| source.value()));
-                }
-            }
+            // Chrome string objects in published snapshots are rooted by
+            // their own `SharedRoot` leases.
             frame.tree().trace_roots(roots);
             if let Some(mb) = &frame.minibuffer_leaf {
                 mb.trace_roots(roots);
@@ -8783,4 +8957,5 @@ impl GcTrace for WindowTree {
 // ===========================================================================
 
 #[cfg(test)]
+#[path = "tests/window_test.rs"]
 mod tests;

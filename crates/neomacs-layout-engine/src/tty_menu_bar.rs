@@ -278,10 +278,10 @@ fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
         return Some(*value);
     }
     if let Some(name) = value.as_symbol_name()
-        && let Some(symbol_value) = eval.obarray().symbol_value(name)
-        && is_keymap(symbol_value)
+        && let Some(symbol_value) = eval.obarray().symbol_value_copied(name)
+        && is_keymap(&symbol_value)
     {
-        return Some(*symbol_value);
+        return Some(symbol_value);
     }
     None
 }
@@ -291,8 +291,8 @@ fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
 /// the current end.  The declared list therefore defines the final items'
 /// order; this is not a stable partition of their source-keymap order.
 fn move_final_items_to_end(eval: &Context, items: &mut Vec<TtyMenuBarItem>) {
-    let final_items = match eval.obarray().symbol_value("menu-bar-final-items") {
-        Some(value) => *value,
+    let final_items = match eval.obarray().symbol_value_copied("menu-bar-final-items") {
+        Some(value) => value,
         None => return,
     };
     if final_items.is_nil() {
@@ -363,4 +363,5 @@ fn key_symbol_name(key: &Value) -> String {
 }
 
 #[cfg(test)]
+#[path = "tty_menu_bar/tests/tty_menu_bar_test.rs"]
 mod tests;

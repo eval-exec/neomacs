@@ -10,14 +10,14 @@ use neovm_core::emacs_core::image_catalog::{
     ImageCatalog, ImageLookup, ImageResolveRequest, ImageScaleEnvironment, ImageSizeLimit,
 };
 
-/// Numeric extent of a mini-window walk, owned by one exclusive attempt.
-/// Full measurement is only requested before GNU window-change hooks. It
-/// carries no Lisp values, shared cache, renderer or presentation authority.
+/// Source extent of one exclusive row walk, independent of its pixel budget.
+/// Measurements may reach accessible EOB beyond the physical viewport. They
+/// carry no renderer or presentation authority.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MiniWindowMeasurement {
+pub enum WindowSourceExtent {
     #[default]
-    Presentation,
-    ToEnd,
+    Viewport,
+    AccessibleEnd,
 }
 
 /// Parameters for a window that the layout engine needs.
@@ -256,8 +256,10 @@ pub struct WindowParams {
     /// A stack-local measurement is bounded by rows, not viewport pixels.
     /// Redisplay leaves this absent and uses the physical window extent.
     pub measurement_rows: Option<std::num::NonZeroUsize>,
-    /// GNU mini preparation walks all display rows through accessible EOB.
-    pub mini_measurement: MiniWindowMeasurement,
+    /// A text-extent query's row edge, independent of physical matrix capacity.
+    pub measurement_width: Option<usize>,
+    /// An offscreen measurement can walk through accessible EOB.
+    pub source_extent: WindowSourceExtent,
     /// Explicit pixel extent for a synchronous query, independent of the viewport.
     pub measurement_pixels: Option<std::num::NonZeroUsize>,
     /// Complete a live viewport query once its target row has been emitted.
@@ -446,7 +448,7 @@ impl WindowParams {
     /// conditional display and composition must all honor offscreen queries;
     /// the physical viewport is only the default for a presentation walk.
     pub(crate) fn source_interpretation_rows(&self) -> usize {
-        if self.mini_measurement == MiniWindowMeasurement::ToEnd {
+        if self.source_extent == WindowSourceExtent::AccessibleEnd {
             return usize::MAX;
         }
         self.measurement_rows.map_or_else(
@@ -545,4 +547,5 @@ pub struct FrameParams {
 }
 
 #[cfg(test)]
+#[path = "types/tests/types_test.rs"]
 mod tests;

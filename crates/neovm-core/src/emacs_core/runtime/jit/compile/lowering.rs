@@ -1567,9 +1567,7 @@ fn emit_inline_record_type_of(
         vmctx,
         (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let debug = fb
-        .ins()
-        .uload8(types::I64, flags, cell, LISP_BOOL_FWD_VALUE_OFFSET as i32);
+    let debug = super::atomic_forward::load_bool(fb, cell, LISP_BOOL_FWD_VALUE_OFFSET);
     let object = band_imm_p(fb, arg, !(TAG_MASK as i64));
     let type_tag = fb.ins().uload8(types::I64, flags, object, type_off as i32);
     let not_record = fb.ins().bxor_imm_u(type_tag, record_tag);
@@ -2230,9 +2228,7 @@ pub(crate) fn emit_mir_inline_entry_guard(
         vmctx,
         (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let debug = fb
-        .ins()
-        .uload8(types::I64, flags, cell, LISP_BOOL_FWD_VALUE_OFFSET as i32);
+    let debug = super::atomic_forward::load_bool(fb, cell, LISP_BOOL_FWD_VALUE_OFFSET);
     let depth = fb.ins().load(
         rt.ptr_ty,
         flags,
@@ -3077,17 +3073,19 @@ pub(crate) fn active_regalloc_choice() -> RegallocChoice {
 
 /// RAII scope: every ISA built inside it uses `choice`; the previous choice
 /// is restored on drop (a nested compile restores its parent's).
-pub(crate) struct RegallocScope(RegallocChoice);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct RegallocScope {
+    _scope: crate::tls_scope::TlsScope<RegallocChoice, std::cell::Cell<RegallocChoice>>,
+}
+
+static_assertions::assert_not_impl_any!(RegallocScope: Send, Sync);
 
 impl RegallocScope {
     pub(crate) fn enter(choice: RegallocChoice) -> Self {
-        Self(ACTIVE_REGALLOC.with(|c| c.replace(choice)))
-    }
-}
-
-impl Drop for RegallocScope {
-    fn drop(&mut self) {
-        ACTIVE_REGALLOC.with(|c| c.set(self.0));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&ACTIVE_REGALLOC, choice),
+        }
     }
 }
 
@@ -3319,6 +3317,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 refs,
                 vmctx_var,
                 ptr_ty,
+                forward_atomics: super::atomic_forward::ForwardAtomics::for_isa(
+                    sink.module().isa(),
+                ),
                 call_args_slot,
                 call_result_slot,
                 rootwin: None,
@@ -4178,6 +4179,8 @@ pub(crate) struct RtCtx {
     pub(crate) vmctx_var: Variable,
     /// Pointer type of the target (for `stack_addr`).
     pub(crate) ptr_ty: Type,
+    /// Compiler-only target policy for publishing atomic descriptor slots.
+    pub(crate) forward_atomics: super::ForwardAtomics,
     /// Spill buffer for outgoing call arguments (max `Call` nargs in the body).
     pub(crate) call_args_slot: StackSlot,
     /// 8-byte result slot the call shim writes through.
@@ -4877,8 +4880,9 @@ fn lower_bcall_leaf_site(
 /// [`STATUS_DEOPT_AT`]: the failing op's bytecode index, the live operand
 /// stack depth (the values themselves go to the spill buffer), and the number
 /// of condition frames this frame had registered at that point. `Cell` makes
-/// the native interior writes legal; the mutator is single-threaded and the
-/// values are consumed immediately after the native call returns.
+/// the native interior writes legal. The enclosing !Send/!Sync CompiledLeaf
+/// confines its scratch to one mutator, which consumes these values immediately
+/// after the native call returns.
 ///
 /// Two trailing cells carry what a cold block knows beyond the framestate
 /// (P2.0 §3.4; the offsets of the first three never move, so the AOT
@@ -4904,6 +4908,11 @@ pub(crate) struct DeoptCells {
     pub(crate) reason: core::cell::Cell<i64>,
     pub(crate) chain: core::cell::Cell<i64>,
 }
+
+// The unshared allocation may move before publication. Once published to a
+// leaf, generated code writes these cells only on that leaf's owning mutator.
+static_assertions::assert_impl_all!(DeoptCells: Send);
+static_assertions::assert_not_impl_any!(DeoptCells: Sync);
 
 impl DeoptCells {
     /// `reason`'s unset value: the hook classifies the deopt from its op.
@@ -5021,6 +5030,11 @@ thread_local! {
 /// Enter (or leave) an inlined region for the ops lowered next.
 pub(crate) fn set_active_region(region: Option<RegionDeopt>) {
     ACTIVE_REGION.with(|r| *r.borrow_mut() = region);
+}
+
+/// Teardown may run while TLS is borrowed or already being destroyed.
+pub(crate) fn clear_active_region_on_scope_drop() {
+    drop(crate::tls_scope::TlsScope::restore(&ACTIVE_REGION, None));
 }
 
 /// The call site of the region the lowering is inside, if any.

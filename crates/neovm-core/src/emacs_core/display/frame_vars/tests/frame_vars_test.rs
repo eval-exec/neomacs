@@ -25,7 +25,7 @@ fn display_name_is_not_declared_before_lisp_because_gnu_has_no_c_defvar() {
     crate::test_utils::init_test_tracing();
     let eval = Context::new();
 
-    assert_eq!(eval.obarray().symbol_value("x-display-name").copied(), None);
+    assert_eq!(eval.obarray().symbol_value_copied("x-display-name"), None);
     assert!(!eval.obarray().is_special("x-display-name"));
 }
 
@@ -43,7 +43,7 @@ fn resource_name_is_declared_before_lisp_because_gnu_defvars_it_in_c() {
     let eval = Context::new();
 
     assert_eq!(
-        eval.obarray().symbol_value("x-resource-name").copied(),
+        eval.obarray().symbol_value_copied("x-resource-name"),
         Some(Value::NIL)
     );
     assert!(eval.obarray().is_special("x-resource-name"));

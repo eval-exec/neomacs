@@ -1482,9 +1482,9 @@ pub(crate) fn op_effects(op: &Op) -> (Effects, AliasClass) {
 }
 
 #[cfg(test)]
-#[path = "tests/build_ssa.rs"]
+#[path = "tests/build_ssa_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/primitive_effects.rs"]
+#[path = "tests/primitive_effects_test.rs"]
 mod primitive_effects_tests;

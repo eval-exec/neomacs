@@ -89,4 +89,5 @@ pub fn reorder_line(chars: &[char], levels: &[u8]) -> Vec<char> {
 }
 
 #[cfg(test)]
+#[path = "reorder/tests/reorder_test.rs"]
 mod tests;

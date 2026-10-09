@@ -2155,4 +2155,5 @@ impl GcTrace for FaceTable {
 // ===========================================================================
 
 #[cfg(test)]
+#[path = "face/tests/face_test.rs"]
 mod tests;

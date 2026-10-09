@@ -602,7 +602,7 @@ pub(crate) fn builtin_user_login_name(
 
     if ctx
         .obarray()
-        .symbol_value("user-login-name")
+        .symbol_value_copied("user-login-name")
         .is_none_or(|value| value.is_nil())
     {
         super::runtime_identity::install(ctx);
@@ -619,7 +619,7 @@ pub(crate) fn builtin_user_real_login_name(
     expect_args("user-real-login-name", &args, 0)?;
     if ctx
         .obarray()
-        .symbol_value("user-login-name")
+        .symbol_value_copied("user-login-name")
         .is_none_or(|value| value.is_nil())
     {
         super::runtime_identity::install(ctx);
@@ -910,5 +910,5 @@ pub(crate) fn builtin_neomacs_heap_layout_stats(args: Vec<Value>) -> EvalResult 
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/builtins_extra_test.rs"]
 mod tests;

@@ -32,6 +32,7 @@ use crate::heap_types::LispString;
 use crate::window::{Window, WindowId};
 use std::cell::Cell;
 use std::collections::VecDeque;
+use std::sync::OnceLock;
 
 fn next_visible_line_start(
     eval: &mut super::eval::Context,
@@ -1236,6 +1237,99 @@ fn expect_wholenump(val: &Value) -> Result<usize, Flow> {
     }
 }
 
+// Well-known symbol ids for the display/column-scan hot path, interned once.
+//
+// GNU holds these names as staticpro'd statics (`Qinvisible`, `Qdisplay`,
+// `Qcomposition`, `Vstandard_display_table`, ...) and never re-interns them
+// per character. The scans below (`display_advance_at`, `next_display_stop`,
+// their property probes, `scan_for_column`) run once per character or per
+// display stop, so spelling the names out (`Value::symbol("...")`,
+// `Obarray::symbol_value("...")`) re-hashed the same handful of literals on
+// every advance: an ELB `scroll` run made ~4M `intern()` calls this way, and
+// the short-string memcmp inside those lookups then swung with unrelated
+// .rodata layout shifts. Each accessor interns once and caches the `SymId`
+// (a plain index GC cannot invalidate), the same pattern as
+// `cached_symbol_id!` in `runtime/eval` and the `syntax-table` symbol in
+// `text/syntax`.
+//
+// Threading: the id resolves once from the process-global symbol registry
+// through a `OnceLock` and reads lock-free afterwards, so any number of
+// mutator threads share one resolution; no Lisp state is cached.
+
+/// `Vstandard_display_table` (DEFVAR_LISP, src/buffer.c): the global display
+/// table `display_advance_at` and `scan_for_column` fall back to per
+/// character when `buffer-display-table` is nil.
+#[inline(always)]
+fn standard_display_table_sym_id() -> crate::emacs_core::intern::SymId {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("standard-display-table"))
+}
+
+/// `buffer-display-table` (DEFVAR_PER_BUFFER): read through the buffer's slot
+/// by identity each advance.
+#[inline(always)]
+fn buffer_display_table_sym_id() -> crate::emacs_core::intern::SymId {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("buffer-display-table"))
+}
+
+/// `tab-width` (DEFVAR_PER_BUFFER): read through the buffer's slot by
+/// identity on every width computation.
+#[inline(always)]
+fn tab_width_sym_id() -> crate::emacs_core::intern::SymId {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("tab-width"))
+}
+
+/// GNU's staticpro'd `Qinvisible`.
+#[inline(always)]
+fn invisible_prop_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("invisible")))
+}
+
+/// GNU's staticpro'd `Qdisplay`.
+#[inline(always)]
+fn display_prop_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("display")))
+}
+
+/// GNU's staticpro'd `Qcomposition`.
+#[inline(always)]
+fn composition_prop_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("composition")))
+}
+
+/// GNU's staticpro'd `Qspace` (the `(space ...)` display-spec tag).
+#[inline(always)]
+fn space_prop_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("space")))
+}
+
+/// GNU's staticpro'd `QCwidth`.
+#[inline(always)]
+fn width_keyword_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern(":width")))
+}
+
+/// GNU's staticpro'd `QCrelative_width`.
+#[inline(always)]
+fn relative_width_keyword_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern(":relative-width")))
+}
+
+/// GNU's staticpro'd `QCalign_to`.
+#[inline(always)]
+fn align_to_keyword_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern(":align-to")))
+}
+
 pub(crate) fn dynamic_buffer_or_global_symbol_value(
     obarray: &Obarray,
     _dynamic: &[OrderedRuntimeBindingMap],
@@ -1260,15 +1354,17 @@ pub(crate) fn dynamic_buffer_or_global_symbol_value(
     {
         return Some(value);
     }
-    obarray.symbol_value(name).copied()
+    obarray.symbol_value_copied(name)
 }
 
 fn tab_width_in_state(
     obarray: &Obarray,
-    dynamic: &[OrderedRuntimeBindingMap],
+    _dynamic: &[OrderedRuntimeBindingMap],
     buf: Option<&Buffer>,
 ) -> usize {
-    match dynamic_buffer_or_global_symbol_value(obarray, dynamic, buf, "tab-width") {
+    // By identity (tab_width_sym_id): `display_advance_at` calls this once per
+    // character, so the name must not be re-hashed into the slot map each time.
+    match obarray.value_in_buffer_id(buf, tab_width_sym_id()) {
         Some(v) if v.is_fixnum() && v.as_fixnum().unwrap() > 0 => v.as_fixnum().unwrap() as usize,
         Some(v) if v.is_char() && (v.as_char().unwrap() as u32) > 0 => {
             v.as_char().unwrap() as usize
@@ -1449,6 +1545,18 @@ impl DisplayStopProp {
         }
     }
 
+    /// [`Self::key`] as the interned symbol, resolved once (see the cached
+    /// well-known-symbol block above): `next_display_stop` runs per display
+    /// stop and must not re-intern the watched names each time. `key()` stays
+    /// a `&'static str` for diagnostics.
+    fn watched_symbol(self) -> Value {
+        match self {
+            Self::Invisible => invisible_prop_symbol(),
+            Self::Display => display_prop_symbol(),
+            Self::Composition => composition_prop_symbol(),
+        }
+    }
+
     /// Probe this property at `byte`, returning the coalesced run as
     /// `(display_width, run_end_byte)` when it is present and its run ends
     /// strictly after `byte` (run end clamped to `end`); None otherwise.
@@ -1492,7 +1600,7 @@ fn next_display_stop(
     let cap_char = CharPos0::new(char_pos.get().saturating_add(DISPLAY_STOP_CHAR_CAP));
     // Watched keys derive from the SAME source as the probes (DisplayStopProp),
     // so a new probe automatically becomes a watched key here.
-    let watched = DisplayStopProp::ALL.map(|prop| Value::symbol(prop.key()));
+    let watched = DisplayStopProp::ALL.map(|prop| prop.watched_symbol());
     let change_char = buf.next_watched_property_change_at_char_pos(char_pos, cap_char, &watched);
     let mut stop = buf.char_pos_to_emacs_byte_pos_clamped(change_char).get();
     if let Some(overlay_boundary) = buf
@@ -1516,15 +1624,19 @@ pub(crate) fn display_advance_at(
             Some(buf) => buf,
             None => return Ok(None),
         };
-        let display_table = dynamic_buffer_or_global_symbol_value(
-            &ctx.obarray,
-            &[],
-            Some(buf),
-            "buffer-display-table",
-        )
-        .filter(|v| !v.is_nil())
-        .or_else(|| ctx.obarray.symbol_value("standard-display-table").copied())
-        .filter(|v| !v.is_nil());
+        // Read both display tables by cached identity: this runs once per
+        // character advance, and the by-name spellings re-interned
+        // "standard-display-table" on every one of them (the obarray read is
+        // only reached when the buffer-local table is nil -- the common case).
+        let display_table = ctx
+            .obarray
+            .value_in_buffer_id(Some(buf), buffer_display_table_sym_id())
+            .filter(|v| !v.is_nil())
+            .or_else(|| {
+                ctx.obarray
+                    .symbol_value_id_copied(standard_display_table_sym_id())
+            })
+            .filter(|v| !v.is_nil());
         (
             buf.accessible_emacs_byte_region().end().get(),
             tab_width_in_state(&ctx.obarray, &[], Some(buf)),
@@ -1638,9 +1750,9 @@ pub(crate) fn display_advance_at(
 ///   * `:align-to COL` — COL a FIXNUM in [col, col+INT_MAX] -> width COL - col.
 ///   * a FLOAT `:align-to` in [col, ...] -> round(COL) - col.
 fn space_spec_width(plist: Value, col: usize) -> Option<usize> {
-    let qcwidth = Value::symbol(":width");
-    let qcrel = Value::symbol(":relative-width");
-    let qcalign = Value::symbol(":align-to");
+    let qcwidth = width_keyword_symbol();
+    let qcrel = relative_width_keyword_symbol();
+    let qcalign = align_to_keyword_symbol();
 
     // GNU's `align_to_max` upper bound for `:align-to` is `col + INT_MAX`
     // (indent.c:501-504); `:width`/`:relative-width` use plain `INT_MAX`.
@@ -1704,12 +1816,13 @@ fn display_run_at(
 
     // GNU `get_char_property_and_overlay (pos, Qdisplay, ...)`: returns the
     // `display` value and, when it came from an overlay, the overlay itself.
+    let display_sym = display_prop_symbol();
     let (display, overlay) = super::textprop::buffer_overlay_property_at_byte_pos(
         &ctx.obarray,
         &ctx.buffers,
         buf,
         byte,
-        Value::symbol("display"),
+        display_sym,
         None,
     )
     .map(|(v, ov)| (v, Some(ov)))
@@ -1717,13 +1830,13 @@ fn display_run_at(
         let v = super::textprop::builtin_get_text_property_in_state(
             &ctx.obarray,
             &ctx.buffers,
-            &[Value::fixnum(charpos1), Value::symbol("display")],
+            &[Value::fixnum(charpos1), display_sym],
         )
         .ok()?;
         if v.is_nil() { None } else { Some((v, None)) }
     })?;
 
-    let is_space_spec = display.is_cons() && display.cons_car() == Value::symbol("space");
+    let is_space_spec = display.is_cons() && display.cons_car() == space_prop_symbol();
 
     // Compute the spec's column width (GNU `check_display_width`'s `width`).
     let mut width = if let Some(disp_str) = display.as_lisp_string() {
@@ -1747,7 +1860,7 @@ fn display_run_at(
     // `:relative-width` is multiplied by the column width of the covered char
     // (GNU multiplies by `MULTIBYTE_BYTES_WIDTH` of the char at POS).
     if is_space_spec
-        && super::plist::plist_get(display.cons_cdr(), &Value::symbol(":relative-width"))
+        && super::plist::plist_get(display.cons_cdr(), &relative_width_keyword_symbol())
             .is_some_and(|v| !v.is_nil())
     {
         let scan_pos = EmacsBytePos::new(byte);
@@ -1768,7 +1881,7 @@ fn display_run_at(
         let run_end_char1 = super::textprop::builtin_next_single_property_change_in_state(
             &ctx.obarray,
             &ctx.buffers,
-            &[Value::fixnum(charpos1), Value::symbol("display")],
+            &[Value::fixnum(charpos1), display_prop_symbol()],
         )
         .ok()
         .and_then(|v| match v.kind() {
@@ -1957,20 +2070,25 @@ fn scan_for_column(
 
     // The active display table (buffer-display-table, else standard-display-table)
     // remaps individual characters to glyph sequences; consulted per char below.
+    // Read by cached identity -- see the well-known-symbol block above.
     let display_table = {
         let buf = ctx.buffers.get(buffer_id);
-        dynamic_buffer_or_global_symbol_value(&ctx.obarray, &[], buf, "buffer-display-table")
+        ctx.obarray
+            .value_in_buffer_id(buf, buffer_display_table_sym_id())
             .filter(|v| !v.is_nil())
-            .or_else(|| ctx.obarray.symbol_value("standard-display-table").copied())
+            .or_else(|| {
+                ctx.obarray
+                    .symbol_value_id_copied(standard_display_table_sym_id())
+            })
             .filter(|v| !v.is_nil())
     };
 
     // Property probes are re-run only at the next change boundary of their
     // property (GNU `skip_invisible`'s `next_boundary`, extended to all
     // three); between boundaries the answer cannot change.
-    let invisible_sym = Value::symbol("invisible");
-    let display_sym = Value::symbol("display");
-    let composition_sym = Value::symbol("composition");
+    let invisible_sym = invisible_prop_symbol();
+    let display_sym = display_prop_symbol();
+    let composition_sym = composition_prop_symbol();
     // `invisible`, `display` and `composition` reach the column scan only
     // through text properties or overlays (`composition_width_at` reads the
     // text property); a buffer with no overlays and a name never assigned
@@ -2423,7 +2541,11 @@ pub(crate) fn indent_to(
 
     let fromcol = column_for_lisp_string(&line_prefix, tab_width);
 
-    let mincol = column.max(fromcol + minimum);
+    let mincol = column.max(
+        fromcol
+            .checked_add(minimum)
+            .ok_or_else(crate::emacs_core::alloc::buffer_overflow)?,
+    );
     if fromcol >= mincol {
         return Ok(Value::fixnum(mincol as i64));
     }
@@ -2437,25 +2559,38 @@ pub(crate) fn indent_to(
 
     let use_tabs = indent_tabs_mode_in_state(&ctx.obarray, &[], Some(buf));
 
-    let mut indent = String::new();
-    let mut col = fromcol;
-
-    if use_tabs {
-        let tab = tab_width.max(1);
-        while col < mincol {
-            let next_tab = col + (tab - (col % tab));
-            if next_tab <= mincol {
-                indent.push('\t');
-                col = next_tab;
-            } else {
-                break;
-            }
-        }
+    // Compute the run lengths before allocating or entering a repeat loop.
+    let tab = tab_width.max(1);
+    let tabs = if use_tabs {
+        mincol / tab - fromcol / tab
+    } else {
+        0
+    };
+    let after_tabs = if tabs > 0 {
+        (mincol / tab) * tab
+    } else {
+        fromcol
+    };
+    let spaces = mincol - after_tabs;
+    let count = tabs
+        .checked_add(spaces)
+        .and_then(|count| i64::try_from(count).ok())
+        .ok_or_else(crate::emacs_core::alloc::buffer_overflow)?;
+    let length = crate::emacs_core::alloc::BufferByteLen::repeated(
+        1,
+        crate::emacs_core::alloc::RepeatCount::try_from(count).map_err(
+            |crate::emacs_core::alloc::RepeatCountError::OutOfRange| {
+                crate::emacs_core::alloc::buffer_overflow()
+            },
+        )?,
+        buf.total_emacs_byte_len().get(),
+    )?;
+    let mut indent = length.reserved_text()?;
+    for _ in 0..tabs {
+        indent.push('\t');
     }
-
-    while col < mincol {
+    for _ in 0..spaces {
         indent.push(' ');
-        col += 1;
     }
 
     insert_inheriting_indentation(ctx, indent)?;
@@ -2577,7 +2712,7 @@ pub(crate) fn compute_motion(eval: &mut super::eval::Context, args: Vec<Value>) 
     let tab_width = crate::buffer::buffer::lookup_buffer_slot("tab-width")
         .map(|info| buf.slots[info.offset.index()])
         .or_else(|| buf.get_buffer_local("tab-width"))
-        .or_else(|| obarray.symbol_value("tab-width").copied())
+        .or_else(|| obarray.symbol_value_copied("tab-width"))
         .and_then(|value: Value| match value.kind() {
             ValueKind::Fixnum(n) if n > 0 => Some(n as usize),
             _ => None,
@@ -2733,5 +2868,5 @@ pub(crate) fn line_number_display_width(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/indent_test.rs"]
 mod tests;

@@ -210,7 +210,7 @@ for binary in neomacs neomacsclient; do
     install -m 0755 "$release_dir/$binary" "$macos_dir/$binary"
   fi
 done
-for binary in neomacs-temacs bootstrap-neomacs mock-display; do
+for binary in neomacs-temacs bootstrap-neomacs; do
   if [[ -f "$release_dir/$binary" ]]; then
     install -m 0755 "$release_dir/$binary" "$archlib_dir/$binary"
   fi

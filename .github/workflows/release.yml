@@ -81,8 +81,9 @@ jobs:
       # manifest promises (macOS shipped without `webview` that way).  Hence one
       # RELEASE_FEATURES for both steps.  crates/neomacs/build.rs declares
       # rerun-if-env-changed on NEOMACS_BUILD_PROFILE, so the profile has to
-      # agree the same way.  `-p neomacs` covers neomacs, neomacsclient and
-      # mock-display; they are bins of one package.
+      # agree the same way.  `-p neomacs` covers neomacs and neomacsclient;
+      # they are the shipped bins of one package (mock-display is an example
+      # and deliberately not built or shipped here).
       - name: Compile release binaries
         env:
           NEOMACS_BUILD_PROFILE: release
@@ -418,7 +419,7 @@ jobs:
       # these features under this profile, and crates/neomacs/build.rs declares
       # rerun-if-env-changed=NEOMACS_BUILD_PROFILE - or the second step would
       # refingerprint and rebuild instead of reusing this.  `-p neomacs` covers
-      # neomacs, neomacsclient and mock-display; they are bins of one package.
+      # neomacs and neomacsclient, the shipped bins of one package.
       - name: Compile release binaries
         env:
           NEOMACS_BUILD_PROFILE: release

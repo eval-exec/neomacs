@@ -6892,3 +6892,6 @@ pub const RICH_MINORITY_MELPA_PIN: (&str, &str) = ("rich-minority", "20240924.23
 /// built this archive from upstream commit
 /// `73a78e55394c1c70c11f9354ef52e7ffce31547c`.
 pub const ROBE_MELPA_PIN: (&str, &str) = ("robe", "20250219.1910");
+
+#[cfg(all(test, target_os = "linux"))]
+mod clatter_notification_tests;

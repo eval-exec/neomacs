@@ -3980,4 +3980,5 @@ fn is_control_char(ch: char) -> bool {
 }
 
 #[cfg(test)]
+#[path = "display_source/tests/display_source_test.rs"]
 mod tests;

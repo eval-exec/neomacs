@@ -966,7 +966,7 @@ fn obarray_lisp_string_variable(
     name: &str,
     fallback: &str,
 ) -> Result<LispString, Flow> {
-    let value = obarray.symbol_value(name).copied().unwrap_or(Value::NIL);
+    let value = obarray.symbol_value_copied(name).unwrap_or(Value::NIL);
     if value.is_nil() {
         Ok(LispString::from_utf8(fallback))
     } else {
@@ -1668,13 +1668,13 @@ fn parse_output_lines(stdout: &[u8]) -> Value {
 }
 
 #[cfg(test)]
-#[path = "tests/raw_bytes.rs"]
+#[path = "tests/raw_bytes_test.rs"]
 mod raw_bytes_tests;
 
 #[cfg(test)]
-#[path = "tests/read_coding.rs"]
+#[path = "tests/read_coding_test.rs"]
 mod read_coding_tests;
 
 #[cfg(test)]
-#[path = "tests/working_dir_infile.rs"]
+#[path = "tests/working_dir_infile_test.rs"]
 mod working_dir_infile_tests;

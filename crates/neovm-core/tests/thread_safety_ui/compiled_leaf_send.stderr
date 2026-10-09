@@ -1,0 +1,37 @@
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<CompiledLeaf>`, but its trait bounds were not satisfied
+  --> tests/thread_safety_ui/compiled_leaf_send.rs:11:37
+   |
+ 4 |   struct ThreadTransfer<T>(PhantomData<T>);
+   |   ------------------------ associated function or constant `transfer` not found for this struct
+...
+11 |       ThreadTransfer::<CompiledLeaf>::transfer();
+   |                                       ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<CompiledLeaf>` due to unsatisfied trait bounds
+   |
+  ::: src/emacs_core/runtime/jit/compile/leaf.rs
+   |
+   |   pub struct CompiledLeaf {
+   |   ----------------------- doesn't satisfy `CompiledLeaf: Send`
+   |
+  ::: $RUST/alloc/src/rc.rs
+   |
+   | / pub struct Rc<
+   | |     T: ?Sized,
+   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+   | | > {
+   | |_- doesn't satisfy `Rc<CompiledLeaf>: Send`
+   |
+   = note: the following trait bounds were not satisfied:
+           `*const u8: Send`
+           which is required by `CompiledLeaf: Send`
+           `Rc<CompiledLeaf>: Send`
+           which is required by `CompiledLeaf: Send`
+           `*const TaggedValue: Send`
+           which is required by `CompiledLeaf: Send`
+           `*const Cell<i64>: Send`
+           which is required by `CompiledLeaf: Send`
+           `*const compile::spec_slot::SpecSlot: Send`
+           which is required by `CompiledLeaf: Send`
+           `*const u64: Send`
+           which is required by `CompiledLeaf: Send`
+           `*const (): Send`
+           which is required by `CompiledLeaf: Send`

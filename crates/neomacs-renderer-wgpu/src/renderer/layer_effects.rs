@@ -100,16 +100,9 @@ impl WgpuRenderer {
                 self.append_rounded_box_fill_geometry(&mut box_fill_vertices, span, face, 0.0, 0.0);
             }
         }
-        self.draw_rect_vertex_layer(render_pass, &required_box_fill_vertices);
-        if let Some(upload) =
-            self.arenas
-                .rounded
-                .upload(&self.device, &self.queue, &box_fill_vertices)
-        {
-            render_pass.set_pipeline(&self.pipelines.rounded_rect);
-            render_pass.set_vertex_buffer(0, upload.buffer_slice());
-            render_pass.draw(0..box_fill_vertices.len() as u32, 0..1);
-        }
+        let opacity = ctx.frame_glyphs.background_alpha;
+        self.draw_background_rects(render_pass, &required_box_fill_vertices, opacity);
+        self.draw_background_rounded_rects(render_pass, &box_fill_vertices, opacity);
     }
 
     /// Draw the pre-content effect stacks: the core window/cursor effects,

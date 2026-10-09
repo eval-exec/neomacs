@@ -165,6 +165,7 @@ impl RenderApp {
     /// the instant swap GNU Emacs does.
     fn lease_child_resize_crossfade(
         render_policy: &crate::render_thread::render_quality::RenderQualityPolicy,
+        style: &crate::render_thread::state::ChildFrameStyle,
         renderer: Option<&mut neomacs_renderer_wgpu::WgpuRenderer>,
         window_state: &mut crate::render_thread::frame_windows::GuiFrameWindowState,
         frame_id: u64,
@@ -193,33 +194,38 @@ impl RenderApp {
             return None;
         }
         let scale = window_state.scale_factor() as f32;
-        let phys_w = (old_width * scale).ceil() as u32;
-        let phys_h = (old_height * scale).ceil() as u32;
+        let shadow_extent = if style.shadow_enabled {
+            style.shadow_layers as f32 * style.shadow_offset.max(0.0)
+        } else {
+            0.0
+        };
+        let phys_w = ((old_width + shadow_extent) * scale).ceil() as u32;
+        let phys_h = ((old_height + shadow_extent) * scale).ceil() as u32;
         let Some(size) = neomacs_renderer_wgpu::SnapshotSize::new(phys_w, phys_h) else {
             return None;
         };
         let renderer = renderer?;
         let lease = renderer.acquire_snapshot(size).ok()?;
-        let view = lease.view().clone();
         let atlas = window_state.render.compositor.glyph_atlas.as_mut()?;
-        renderer.render_frame_content(
-            &view,
+        let previous_scale = renderer.scale_factor();
+        renderer.set_scale_factor(scale);
+        renderer.capture_child_frame_picture(
+            &lease,
             &old_entry.frame,
             atlas,
-            phys_w,
-            phys_h,
-            0.0,
-            0.0,
-            false,
-            None,
-            0.0,
-            None,
-            None,
-            1.0,
-            1.0,
-            [0.0; 2],
+            style.corner_radius,
+            style.shadow_enabled,
+            style.shadow_layers,
+            style.shadow_offset,
+            style.shadow_opacity,
         );
-        Some((lease, old_width, old_height, resize_spec))
+        renderer.set_scale_factor(previous_scale);
+        Some((
+            lease,
+            phys_w as f32 / scale,
+            phys_h as f32 / scale,
+            resize_spec,
+        ))
     }
 
     #[cfg(feature = "webview")]
@@ -898,6 +904,7 @@ impl RenderApp {
                         let cursor_config = self.cursor_defaults.config_snapshot();
                         let resize_crossfade = Self::lease_child_resize_crossfade(
                             &self.render_policy,
+                            &self.child_frame_style,
                             self.renderer.as_mut(),
                             window_state,
                             frame_id.get(),
@@ -986,6 +993,7 @@ impl RenderApp {
                         let new_presentation = frame.presentation_id;
                         let resize_crossfade = Self::lease_child_resize_crossfade(
                             &self.render_policy,
+                            &self.child_frame_style,
                             self.renderer.as_mut(),
                             ws,
                             frame_id.get(),
@@ -1268,4 +1276,5 @@ fn dump_frame_glyphs_resolved(frame: &crate::core::frame_glyphs::FrameGlyphBuffe
 }
 
 #[cfg(all(test, feature = "webview"))]
+#[path = "frame_ingest/tests/frame_ingest_test.rs"]
 mod tests;

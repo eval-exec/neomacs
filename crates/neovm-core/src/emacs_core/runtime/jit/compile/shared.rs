@@ -815,5 +815,5 @@ impl WorkerBackend {
 // END T35 SELECTED SHIM BACKEND
 
 #[cfg(test)]
-#[path = "shared/tests/collection_journal.rs"]
+#[path = "shared/tests/collection_journal_test.rs"]
 mod collection_journal_tests;

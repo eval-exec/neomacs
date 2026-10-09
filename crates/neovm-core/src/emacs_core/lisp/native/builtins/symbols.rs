@@ -48,6 +48,7 @@ pub(crate) fn symbol_id_checked(value: &Value, symbols_with_pos_enabled: bool) -
     }
 }
 
+#[inline(never)]
 pub(crate) fn expect_symbol_id_checked(
     value: &Value,
     symbols_with_pos_enabled: bool,
@@ -240,8 +241,6 @@ pub(crate) fn would_create_variable_alias_cycle_in_obarray(
     new_symbol: SymId,
     old_symbol: SymId,
 ) -> bool {
-    use crate::emacs_core::symbol::SymbolRedirect;
-
     // Phase 3: walk via the new redirect tag instead of the legacy
     // SymbolValue enum. Mirrors GNU `Fdefvaralias`'s base-chain walk
     // (`src/eval.c:631-726`).
@@ -250,11 +249,12 @@ pub(crate) fn would_create_variable_alias_cycle_in_obarray(
         if current == new_symbol {
             return true;
         }
-        match obarray.get_by_id(current) {
-            Some(sym) if sym.flags.redirect() == SymbolRedirect::Varalias => {
-                current = unsafe { sym.val.alias };
-            }
-            _ => return false,
+        match obarray
+            .get_by_id(current)
+            .and_then(|sym| sym.alias_target())
+        {
+            Some(target) => current = target,
+            None => return false,
         }
     }
 }
@@ -507,8 +507,12 @@ pub(crate) fn install_defvaralias_state(
     state_change: &DefvaraliasStateChange,
 ) {
     ctx.obarray.make_special_id(state_change.alias_id);
-    ctx.obarray
+    // `defvaralias` refused forwarded and buffer-local NEW-ALIAS cells
+    // before this state change was built.
+    let installed = ctx
+        .obarray
         .make_alias(state_change.alias_id, state_change.base_id);
+    debug_assert!(installed.is_ok(), "defvaralias checked the redirect");
     ctx.obarray.make_special_id(state_change.base_id);
     ctx.mark_user_test_gc_settings_volatile_if_gc_symbol(state_change.alias_id);
     ctx.refresh_gc_runtime_settings_after_change_by_id(state_change.alias_id);
@@ -575,6 +579,7 @@ pub(crate) fn builtin_symbol_value(
     builtin_symbol_value_1(eval, args[0])
 }
 
+#[inline(never)]
 pub(crate) fn builtin_symbol_value_1(
     eval: &mut super::eval::Context,
     symbol_value: Value,
@@ -625,6 +630,7 @@ pub(crate) fn symbol_function_impl_1_checked(
 }
 
 /// `symbol-function` after symbol extraction: the function cell by identity.
+#[inline(never)]
 pub(crate) fn symbol_function_by_id(obarray: &Obarray, symbol: SymId) -> EvalResult {
     if obarray.is_function_unbound_id(symbol) {
         return Ok(Value::NIL);
@@ -701,6 +707,7 @@ pub(crate) fn builtin_set(eval: &mut super::eval::Context, args: Vec<Value>) -> 
     builtin_set_2(eval, args[0], args[1])
 }
 
+#[inline(never)]
 pub(crate) fn builtin_set_2(
     eval: &mut super::eval::Context,
     symbol_value: Value,
@@ -730,6 +737,7 @@ pub(crate) fn builtin_fset(eval: &mut super::eval::Context, args: Vec<Value>) ->
     builtin_fset_2(eval, args[0], args[1])
 }
 
+#[inline(never)]
 pub(crate) fn builtin_fset_2(
     eval: &mut super::eval::Context,
     symbol_value: Value,
@@ -809,14 +817,30 @@ pub(crate) fn would_create_function_alias_cycle_in_obarray(
 pub(crate) fn builtin_makunbound(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("makunbound", &args, 1)?;
     let symbol = SymId::from_value(eval, args[0])?;
+    // GNU `Fmakunbound` (`src/data.c:776-789`). An alias inherits its
+    // target's `trapped_write` (`Fdefvaralias`), so an alias of a constant
+    // is a constant too.
     let resolved = resolve_variable_alias_id(eval, symbol)?;
     if eval.obarray().is_constant_id(resolved) {
         return Err(signal(LispCondition::SettingConstant, vec![args[0]]));
     }
-    crate::emacs_core::eval::check_forwarded_unbind(eval.obarray(), resolved, args[0])?;
     eval.note_macro_expansion_mutation();
+    if eval.obarray().is_alias_id(symbol) {
+        // `redirect = SYMBOL_PLAINVAL; SET_SYMBOL_VAL (sym, Qunbound)`: the
+        // alias becomes a void plain cell, its target keeps its value, and no
+        // watcher hears of it.
+        eval.obarray_mut().delete_variable_alias_id(symbol);
+        eval.makunbound_runtime_binding_by_id(symbol);
+        return Ok(args[0]);
+    }
+    // `Fset (symbol, Qunbound)`: the watchers first, then `set_internal`'s
+    // store on the arm they left, which refuses to void a built-in.
     eval.run_variable_watchers_by_id(resolved, &Value::NIL, &Value::NIL, "makunbound")?;
-    eval.makunbound_runtime_binding_by_id(resolved);
+    eval.set_internal_after_watchers(
+        symbol,
+        Value::UNBOUND,
+        crate::emacs_core::symbol::SetInternalBind::Set,
+    )?;
     Ok(args[0])
 }
 
@@ -884,6 +908,7 @@ pub(crate) fn builtin_get_2(
         .unwrap_or(Value::NIL))
 }
 
+#[inline(never)]
 pub(crate) fn symbol_property_get(
     eval: &super::eval::Context,
     symbol_value: Value,
@@ -930,6 +955,7 @@ pub(crate) fn builtin_put(
     put_in_obarray(&mut ctx.obarray, args, ctx.symbols_with_pos_enabled)
 }
 
+#[inline(always)]
 pub(crate) fn builtin_put_3(
     ctx: &mut crate::emacs_core::eval::Context,
     symbol_value: Value,
@@ -955,6 +981,7 @@ pub(crate) fn put_in_obarray(
     put_in_obarray_values(obarray, args[0], args[1], args[2], symbols_with_pos_enabled)
 }
 
+#[inline(never)]
 pub(crate) fn put_in_obarray_values(
     obarray: &mut Obarray,
     symbol_value: Value,
@@ -1673,18 +1700,16 @@ pub(crate) fn is_global_obarray_proxy(eval: &super::eval::Context, value: &Value
         *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("neovm--obarray-object"))
     }
     eval.obarray()
-        .symbol_value_id(neovm_obarray_object_sym())
-        .is_some_and(|proxy| *proxy == *value)
+        .symbol_value_id_copied(neovm_obarray_object_sym())
+        .is_some_and(|proxy| proxy == *value)
 }
 
 fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
     eval.obarray()
-        .symbol_value("obarray")
-        .copied()
+        .symbol_value_copied("obarray")
         .unwrap_or_else(|| {
             eval.obarray()
-                .symbol_value("neovm--obarray-object")
-                .copied()
+                .symbol_value_copied("neovm--obarray-object")
                 .unwrap_or(Value::NIL)
         })
 }
@@ -1875,12 +1900,10 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
 
 pub(crate) fn builtin_obarray_make(args: Vec<Value>) -> EvalResult {
     expect_args_range("obarray-make", &args, 0, 1)?;
-    let size = if args.is_empty() || args[0].is_nil() {
-        1511usize
-    } else {
-        expect_wholenump(&args[0])? as usize
-    };
-    Ok(Value::obarray(size))
+    let size = crate::emacs_core::alloc::ObarrayBits::try_from(
+        args.first().copied().unwrap_or(Value::NIL),
+    )?;
+    Value::try_obarray(size)
 }
 
 fn is_legacy_obarray_vector(value: Value) -> bool {
@@ -2294,12 +2317,11 @@ pub(crate) fn builtin_mapbacktrace(args: Vec<Value>) -> EvalResult {
 
 pub(crate) fn builtin_make_record(args: Vec<Value>) -> EvalResult {
     expect_args("make-record", &args, 3)?;
-    let length = expect_wholenump(&args[1])? as usize;
-    let mut items = Vec::with_capacity(length + 1);
-    items.push(args[0]); // type tag
-    for _ in 0..length {
-        items.push(args[2]); // init value
-    }
+    use crate::emacs_core::alloc::{AllocLen, RecordLen, reserved_values};
+    let length = RecordLen::try_from(args[1])?;
+    let mut items = reserved_values(length)?;
+    items.resize(length.capacity(), args[2]);
+    items[0] = args[0];
     Ok(Value::make_record(items))
 }
 
@@ -2405,8 +2427,7 @@ pub(crate) fn menu_bar_top_level_items_for_frame(
     } else {
         let obey_overriding_local_maps = eval
             .obarray
-            .symbol_value("overriding-local-map-menu-flag")
-            .copied()
+            .symbol_value_copied("overriding-local-map-menu-flag")
             .is_some_and(|value| value.is_truthy());
         let mut maps = crate::emacs_core::keymap::current_active_maps_for_position_read_only(
             eval,
@@ -2425,7 +2446,7 @@ pub(crate) fn menu_bar_top_level_items_for_frame(
 }
 
 fn move_menu_bar_final_items(eval: &super::eval::Context, items: &mut Vec<(Value, String)>) {
-    let Some(mut final_items) = eval.obarray().symbol_value("menu-bar-final-items").copied() else {
+    let Some(mut final_items) = eval.obarray().symbol_value_copied("menu-bar-final-items") else {
         return;
     };
     while final_items.is_cons() {
@@ -2491,8 +2512,7 @@ fn selected_frame_value(eval: &mut super::eval::Context) -> Value {
 fn maybe_transform_mouse_position(eval: &mut super::eval::Context, value: Value) -> EvalResult {
     let transform = eval
         .obarray
-        .symbol_value("mouse-position-function")
-        .copied()
+        .symbol_value_copied("mouse-position-function")
         .unwrap_or(Value::NIL);
     if transform.is_truthy() {
         eval.apply(transform, vec![value])
@@ -2575,7 +2595,7 @@ fn dynamic_or_global_symbol_value_in_state(
     _dynamic: &[OrderedRuntimeBindingMap],
     name: &str,
 ) -> Option<Value> {
-    obarray.symbol_value(name).copied()
+    obarray.symbol_value_copied(name)
 }
 
 pub(crate) fn builtin_new_fontset(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
@@ -3504,7 +3524,7 @@ pub(crate) fn builtin_transpose_regions(
     let leave_markers = args.get(4).is_some_and(|value| !value.is_nil());
     let _ = eval
         .buffers
-        .transpose_buffer_regions(current_id, transposition, leave_markers);
+        .transpose_buffer_regions(current_id, transposition, leave_markers.into());
     crate::emacs_core::editfns::signal_after_text_change(eval, change)?;
     Ok(Value::NIL)
 }
@@ -3857,10 +3877,10 @@ pub(crate) fn builtin_variable_binding_locus(
     let symbol = SymId::from_value(ctx, args[0])?;
     let resolved = resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)?;
 
-    use crate::emacs_core::symbol::SymbolRedirect;
+    use crate::emacs_core::symbol::ValueCell;
     if let Some(sym) = ctx.obarray.get_by_id(resolved) {
-        match sym.redirect() {
-            SymbolRedirect::Localized => {
+        match sym.value_cell() {
+            ValueCell::Localized(_) => {
                 if let Some(buf) = ctx.buffers.current_buffer() {
                     let target_buf = Value::make_buffer(buf.id);
                     if buf.has_buffer_local_by_sym_id(resolved) {
@@ -3874,7 +3894,7 @@ pub(crate) fn builtin_variable_binding_locus(
                     return Ok(blv.where_buf);
                 }
             }
-            SymbolRedirect::Forwarded => {
+            ValueCell::Forwarded(fwd) => {
                 // GNU answers the TERMINAL, not a buffer, for a keyboard
                 // variable: `Fmake_local_variable`'s SYMBOL_FORWARDED arm
                 // returns `Fframe_terminal (selected_frame)`
@@ -3882,8 +3902,7 @@ pub(crate) fn builtin_variable_binding_locus(
                 // buffer, so it is checked before the per-buffer question.
                 {
                     use crate::emacs_core::forward::LispFwdType;
-                    let fwd = unsafe { &*sym.val.fwd };
-                    if matches!(fwd.ty, LispFwdType::KboardObj) {
+                    if matches!(fwd.ty(), LispFwdType::KboardObj) {
                         return crate::emacs_core::terminal::pure::builtin_frame_terminal(
                             ctx,
                             vec![],
@@ -3892,10 +3911,7 @@ pub(crate) fn builtin_variable_binding_locus(
                 }
                 if let Some(buf) = ctx.buffers.current_buffer() {
                     let is_local = {
-                        use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
-                        let fwd = unsafe { &*sym.val.fwd };
-                        if matches!(fwd.ty, LispFwdType::BufferObj) {
-                            let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
+                        if let Some(buf_fwd) = fwd.as_buffer_obj_fwd() {
                             let Some(slot) =
                                 crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)
                             else {
@@ -3912,7 +3928,7 @@ pub(crate) fn builtin_variable_binding_locus(
                     }
                 }
             }
-            SymbolRedirect::Plainval | SymbolRedirect::Varalias => {}
+            ValueCell::Plain(_) | ValueCell::Alias(_) => {}
         }
     }
 
@@ -4359,11 +4375,9 @@ pub(crate) fn builtin_local_variable_if_set_p(
             // symbols because setting them auto-localizes the per-buffer slot
             // (`data.c:2458-2460`). Other forwarder kinds are not
             // buffer-local variables.
-            let is_buffer_objfwd = {
-                use crate::emacs_core::forward::LispFwdType;
-                let fwd = unsafe { &*sym.val.fwd };
-                matches!(fwd.ty, LispFwdType::BufferObj)
-            };
+            let is_buffer_objfwd = sym
+                .forwarded_descriptor()
+                .is_some_and(|fwd| fwd.ty() == crate::emacs_core::forward::LispFwdType::BufferObj);
             Ok(Value::bool_val(is_buffer_objfwd))
         }
         _ => Ok(Value::NIL),
@@ -5307,13 +5321,11 @@ pub(crate) fn builtin_dump_emacs_portable(
     }
     let saved_post_gc_hook = ctx
         .obarray()
-        .symbol_value("post-gc-hook")
-        .copied()
+        .symbol_value_copied("post-gc-hook")
         .unwrap_or(Value::NIL);
     let saved_command_line_processed = ctx
         .obarray()
-        .symbol_value("command-line-processed")
-        .copied()
+        .symbol_value_copied("command-line-processed")
         .unwrap_or(Value::NIL);
     // `process-environment` is a `DEFVAR_LISP` (`src/callproc.c:2144`) that
     // `lisp/eshell/esh-var.el` and `lisp/progmodes/compile.el` localise, so it
@@ -5944,7 +5956,7 @@ fn make_byte_code_from_parts_with_slots(
     // `#s(hash-table ...)` literals. Convert them into real runtime objects
     // before decoding/executing the bytecode.
     for constant in &mut constants {
-        *constant = try_convert_nested_compiled_literal(*constant);
+        *constant = try_convert_nested_compiled_literal(*constant)?;
     }
 
     // 4. Check the GNU bytecode. GNU's `Fmake_byte_code` never inspects
@@ -6154,15 +6166,26 @@ pub(crate) fn make_interpreted_closure_from_parts_unchecked(
 /// reader does.  Hash-table literals still arrive as
 /// `(make-hash-table-from-literal '(...))` forms, so this pass reifies those
 /// without guessing that ordinary vectors are closures.
-pub(crate) fn try_convert_nested_compiled_literal(val: Value) -> Value {
-    if let Some(table) = try_convert_hash_table_literal(val) {
-        return table;
-    }
-
-    val
+pub(crate) fn try_convert_nested_compiled_literal(val: Value) -> EvalResult {
+    Ok(try_convert_hash_table_literal(val)?.unwrap_or(val))
 }
 
-fn try_convert_hash_table_literal(val: Value) -> Option<Value> {
+/// Literal options parsed on the current mutator. Lisp handles remain local
+/// through conversion; this temporary plan cannot cross threads.
+#[derive(Debug)]
+struct CompiledHashLiteral {
+    test: HashTableTest,
+    test_name: Option<SymId>,
+    weakness: Option<HashTableWeakness>,
+    rehash_size: f64,
+    rehash_threshold: f64,
+    data_value: Option<Value>,
+    _mutator: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(CompiledHashLiteral: Send, Sync);
+
+fn parse_compiled_hash_literal(val: Value) -> Option<CompiledHashLiteral> {
     // Every cons constant of every loaded function comes through here; only
     // a `(make-hash-table-from-literal ...)` form can convert, so reject any
     // other head before copying the list out.
@@ -6190,7 +6213,6 @@ fn try_convert_hash_table_literal(val: Value) -> Option<Value> {
 
     let mut test = HashTableTest::Eql;
     let mut test_name: Option<SymId> = None;
-    let mut size = 0_i64;
     let mut weakness: Option<HashTableWeakness> = None;
     let mut rehash_size = 1.5_f64;
     let mut rehash_threshold = 0.8125_f64;
@@ -6205,7 +6227,7 @@ fn try_convert_hash_table_literal(val: Value) -> Option<Value> {
             continue;
         };
         match key {
-            HashTableLiteralKey::Size => size = value.as_int()?,
+            HashTableLiteralKey::Size => {}
             HashTableLiteralKey::Test => {
                 let name = value.as_symbol_name()?;
                 test = HashTableTest::from_symbol_name(name)?;
@@ -6229,29 +6251,48 @@ fn try_convert_hash_table_literal(val: Value) -> Option<Value> {
         i += 2;
     }
 
-    let table_value =
-        Value::hash_table_with_options(test, size, weakness, rehash_size, rehash_threshold);
-    if !table_value.is_hash_table() {
-        return None;
+    Some(CompiledHashLiteral {
+        test,
+        test_name,
+        weakness,
+        rehash_size,
+        rehash_threshold,
+        data_value,
+        _mutator: std::marker::PhantomData,
+    })
+}
+
+fn try_convert_hash_table_literal(val: Value) -> Result<Option<Value>, Flow> {
+    let Some(literal) = parse_compiled_hash_literal(val) else {
+        return Ok(None);
     };
-
-    {
-        let _ = table_value.with_hash_table_mut(|table| {
-            table.test_name = test_name;
-            if let Some(data) = data_value.and_then(|value| list_to_vec(&value)) {
-                let mut idx = 0_usize;
-                while idx + 1 < data.len() {
-                    let key_value = try_convert_nested_compiled_literal(data[idx]);
-                    let val_value = try_convert_nested_compiled_literal(data[idx + 1]);
-                    let key = key_value.to_hash_key(&table.test);
-                    table.insert(key, key_value, val_value);
-                    idx += 2;
-                }
-            }
-        });
+    // GNU lread.c:hash_table_from_plist ignores printed SIZE and requests only
+    // the already collected DATA pair count. Hash allocation is fallible, and
+    // every caller now propagates a failure rather than preserving the wrapper.
+    let mut data = literal
+        .data_value
+        .and_then(|value| list_to_vec(&value))
+        .unwrap_or_default();
+    let pairs =
+        i64::try_from(data.len() / 2).map_err(|_| crate::emacs_core::alloc::memory_exhausted())?;
+    let size = crate::emacs_core::alloc::HashTableSize::try_from(Value::make_int(pairs))?;
+    // Convert nested pairs before borrowing the new table. Recursive allocation
+    // errors propagate, and no conversion runs inside its mutable heap borrow.
+    for pair in data.chunks_exact_mut(2) {
+        pair[0] = try_convert_nested_compiled_literal(pair[0])?;
+        pair[1] = try_convert_nested_compiled_literal(pair[1])?;
     }
-
-    Some(table_value)
+    let table_value = Value::try_hash_table_with_options(literal.test, size, literal.weakness)?;
+    let _ = table_value.with_hash_table_mut(|table| {
+        table.test_name = literal.test_name;
+        table.rehash_size = literal.rehash_size;
+        table.rehash_threshold = literal.rehash_threshold;
+        for pair in data.chunks_exact(2) {
+            let key = pair[0].to_hash_key(&table.test);
+            table.insert(key, pair[0], pair[1]);
+        }
+    });
+    Ok(Some(table_value))
 }
 
 fn quote_payload_value(value: Value) -> Option<Value> {

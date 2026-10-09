@@ -783,4 +783,5 @@ pub fn run_cli(
 }
 
 #[cfg(test)]
+#[path = "cli/tests/cli_test.rs"]
 mod tests;

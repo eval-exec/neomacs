@@ -1,6 +1,7 @@
 //! Sort's captured builtin predicate, with the ordinary funcall protocol.
 use super::*;
-use crate::tagged::header::SubrFn2;
+use crate::emacs_core::builtins::higher_order::{NativeSortCall, SortPredicate};
+use crate::tagged::header::{SubrFn2, SubrFnManySlice};
 
 impl Context {
     /// A captured `string-lessp` implementation, including `string<` aliases.
@@ -66,5 +67,116 @@ impl Context {
         };
         self.depth -= 1;
         self.finish_traced_call(bt_count, result)
+    }
+
+    /// Begin a captured native comparison only when its ordinary funcall
+    /// prologue cannot collect, enter Lisp, grow the stack, or signal.
+    ///
+    /// GNU eval.c:3194-3211 polls quit, increments depth, records the captured
+    /// function, collects, and enters the debugger before calling its body.
+    /// Every failed guard below returns before changing depth or publishing a
+    /// frame. The caller must publish its permutation and roots before taking
+    /// the ordinary callback path. No registry/body proof is shared between
+    /// sort activations or mutators.
+    ///
+    /// A successful begin retains the ordinary frame until finish. A native
+    /// error only constructs Flow here: the caller must publish live vector
+    /// state and roots before finish can dispatch signal hooks or the debugger.
+    #[inline]
+    pub(crate) fn begin_buffered_native_sort_call(
+        &mut self,
+        predicate: SortPredicate,
+        left: Value,
+        right: Value,
+    ) -> Option<NativeSortCall> {
+        // Profiling lookup increments a call counter before validation. Keep
+        // its ordinary dispatch path so a rejected fast begin never counts twice.
+        #[cfg(feature = "vm-profile")]
+        return None;
+        let (subr, epoch) = match predicate {
+            SortPredicate::NumericLessp { subr, epoch }
+            | SortPredicate::StringLessp { subr, epoch } => (subr, epoch),
+            _ => return None,
+        };
+        let entered_depth = self.depth.checked_add(1)?;
+        if !self.attention_clear(super::AttentionMask::QUIT)
+            || self.debug_on_next_call_is_armed()
+            || self.obarray.max_lisp_eval_depth_localized
+            || entered_depth > self.max_depth
+            || (entered_depth >= STACK_GROWTH_PROBE_START_DEPTH
+                && entered_depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL))
+            || self.obarray.function_epoch() != epoch
+            || self.compiler_function_overrides_active()
+        {
+            return None;
+        }
+        // A conservative, read-only subset of the existing GC safe-point
+        // predicate. Its slow tail refreshes settings, so do not call it while
+        // values are still buffered and before deciding whether to publish.
+        // Inhibited GC cannot run a hook; all other unusual GC states defer.
+        if self.gc_inhibit_depth == 0
+            && (self.tagged_heap.sweep_in_progress()
+                || self.tagged_heap.mark_in_progress()
+                || self.gc_pending
+                || self.gc_stress
+                || self.tagged_heap.gc_threshold_is_overridden()
+                || self.tagged_heap.should_collect())
+        {
+            return None;
+        }
+        let (_, entry) = subr_call_entry_from_value(subr)?;
+        if entry.dispatch_kind != SubrDispatchKind::Builtin {
+            return None;
+        }
+        // Read and verify the captured object's current body on each call.
+        // Arity changes and registration rewrites take the published slow path.
+        let numeric_body = match (predicate, entry.function) {
+            (SortPredicate::NumericLessp { .. }, Some(SubrFn::ManySlice(body)))
+                if entry.min_args <= 2
+                    && entry.max_args.is_none_or(|maximum| maximum >= 2)
+                    && std::ptr::fn_addr_eq(
+                        body,
+                        builtins::builtin_num_lt_slice as SubrFnManySlice,
+                    ) =>
+            {
+                true
+            }
+            (SortPredicate::StringLessp { .. }, Some(SubrFn::A2(body)))
+                if entry.min_args == 2
+                    && entry.max_args == Some(2)
+                    && std::ptr::fn_addr_eq(
+                        body,
+                        builtins::strings::builtin_string_lessp_2 as SubrFn2,
+                    ) =>
+            {
+                false
+            }
+            _ => return None,
+        };
+
+        // These guards prove the fast halves of enter_interpreted_eval_depth,
+        // maybe_quit, maybe_gc, debug-on-call, and maybe_grow_eval_stack. The
+        // native body is reached with the same depth and backtrace as funcall.
+        self.depth = entered_depth;
+        let frame_base = self.specpdl.len();
+        self.push_backtrace_frame(subr, &[left, right]);
+        // The per-call pointer proof above identifies these exact bodies.
+        // Invoke them directly instead of rebuilding generic SubrFn dispatch.
+        let result = if numeric_body {
+            builtins::builtin_num_lt_slice(self, &[left, right])
+        } else {
+            builtins::strings::builtin_string_lessp_2(self, left, right)
+        }
+        .map_err(|flow| self.validate_throw(flow));
+        Some(NativeSortCall { frame_base, result })
+    }
+
+    /// Finish exactly one successful begin after any required state/root
+    /// publication. GNU eval.c:3213-3216 decrements depth before exit debugging
+    /// and frame removal; finish_traced_call also preserves signal-hook order.
+    #[inline]
+    pub(crate) fn finish_buffered_native_sort_call(&mut self, call: NativeSortCall) -> EvalResult {
+        self.depth -= 1;
+        self.finish_traced_call(call.frame_base, call.result)
     }
 }

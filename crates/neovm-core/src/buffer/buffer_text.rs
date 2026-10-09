@@ -1687,6 +1687,43 @@ impl BufferText {
         storage.text_props = Rc::new(text_props);
     }
 
+    /// Move the physical or compatibility gap out of a transposition span.
+    /// GNU editfns.c:4631-4641 excludes the gap before permuting byte lengths.
+    /// The measured range carries character-boundary endpoints. No marker or
+    /// position cache is used while byte boundaries inside the span are stale.
+    pub(in crate::buffer) fn prepare_transposition_storage(&self, span: TextEditRange) {
+        let mut storage = self.storage.borrow_mut();
+        let gap = storage.gap_compat_state().pos();
+        if gap <= span.char_start() || gap >= span.char_end() {
+            return;
+        }
+        // GNU compares CHARACTER distances and sends ties to the end.
+        // Byte-distance selection can disagree for multibyte text and is
+        // observable through gap-position, even though either end is safe.
+        let destination = if gap.saturating_offset_from(span.char_start())
+            < span.char_end().saturating_offset_from(gap)
+        {
+            span.start_anchor()
+        } else {
+            span.end_anchor()
+        };
+        if storage.uses_virtual_gap_compat_state() {
+            storage.virtual_gap = storage.virtual_gap.with_pos(destination.char_pos());
+        } else {
+            backend_mut(&mut storage.backend).move_physical_gap_to_anchor(destination);
+        }
+    }
+
+    /// Resolve a character position from storage alone while marker byte
+    /// coordinates are stale (GNU insdel.c:413-455, count_bytes).
+    pub(in crate::buffer) fn storage_anchor_for_char_pos(
+        &self,
+        pos: CharPos0,
+    ) -> TextPositionAnchor {
+        let storage = self.storage.borrow();
+        TextPositionAnchor::new(pos, storage.backend.char_pos_to_emacs_byte_pos(pos))
+    }
+
     /// Walk the intrusive marker chain and remap each marker's cached
     /// `(charpos, bytepos)` pair through the caller-supplied closure. GNU
     /// keeps those two coordinates together on `struct Lisp_Marker`; Neomacs
@@ -3673,6 +3710,7 @@ fn scan_backward_bytes(
 }
 
 #[cfg(test)]
+#[path = "buffer_text/tests/buffer_text_test.rs"]
 mod tests;
 
 #[cfg(test)]

@@ -36,6 +36,10 @@ fn shaped(cluster_start: usize, x_advance: f32) -> ShapedGlyph {
         font_id: fontdb::ID::dummy(),
         glyph_id: 1,
         x: 0.0,
+        position: crate::font::metrics::ShapedGlyphPosition {
+            pen_x: 0.0,
+            offset_x: 0.0,
+        },
         y: 0.0,
         x_advance,
         cluster_start,

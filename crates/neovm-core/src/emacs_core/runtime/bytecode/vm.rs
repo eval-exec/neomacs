@@ -1468,7 +1468,7 @@ fn parse_vm_stack_return_knob(value: Option<&str>) -> bool {
 
 /// An immutable process-wide policy, safely published to all mutators by
 /// OnceLock. No Lisp state or Context-owned storage is retained here.
-#[inline]
+#[inline(always)]
 fn vm_stack_return_after_push_enabled() -> bool {
     #[cfg(test)]
     if let Some(enabled) = VM_STACK_RETURN_TEST_OVERRIDE.with(std::cell::Cell::get) {
@@ -1849,7 +1849,7 @@ fn logxor_sym_id() -> SymId {
     *LOGXOR.get_or_init(|| intern("logxor"))
 }
 
-#[inline]
+#[inline(always)]
 fn fillarray_sym_id() -> SymId {
     static FILLARRAY: OnceLock<SymId> = OnceLock::new();
     *FILLARRAY.get_or_init(|| intern("fillarray"))
@@ -2121,6 +2121,7 @@ impl FrameArgumentCopy {
     /// wins for ordinary Lisp arities because a libc `memmove` dispatch costs
     /// more than a handful of already-capacity-checked stores.  Retain the
     /// bulk path for unusually wide generated functions.
+    #[inline(always)]
     const fn for_count(count: usize) -> Self {
         const SCALAR_COPY_MAX: usize = 8;
         match count {
@@ -2318,7 +2319,7 @@ struct VmProcessKnobs {
 
 #[cfg(feature = "jit")]
 impl VmProcessKnobs {
-    #[inline]
+    #[inline(always)]
     fn get() -> Self {
         static KNOBS: std::sync::OnceLock<VmProcessKnobs> = std::sync::OnceLock::new();
         *KNOBS.get_or_init(|| Self {
@@ -2649,6 +2650,7 @@ impl<'a> Vm<'a> {
     /// call) and truncates back on every exit, preserving the JIT call
     /// shim's push/truncate symmetry. The hot bytecode→bytecode path skips
     /// this wrapper entirely — its args already live on `bc_buf`.
+    #[inline(never)]
     pub(crate) fn execute_with_func_value(
         &mut self,
         func: &ByteCodeFunction,
@@ -3176,6 +3178,7 @@ impl<'a> Vm<'a> {
     /// environments and `&rest` construction still use the established
     /// recursive path until their unwind transitions are represented in the
     /// frame state as well.
+    #[inline(never)]
     fn can_enter_interpreter_frame_iteratively(
         &self,
         func: &ByteCodeFunction,
@@ -3364,6 +3367,7 @@ impl<'a> Vm<'a> {
     /// interpreter driver.  A nonlocal exit is offered to each suspended
     /// caller in turn, exactly as recursive Rust returns used to do, but the
     /// unwind is represented as data rather than host-stack control flow.
+    #[inline(never)]
     fn complete_interpreter_frame_chain(
         &mut self,
         callers: &mut InterpreterCallerStack,
@@ -3881,6 +3885,7 @@ impl<'a> Vm<'a> {
         }
     }
 
+    #[inline(never)]
     fn run_loop(
         &mut self,
         entry_func: &ByteCodeFunction,
@@ -5310,16 +5315,9 @@ impl<'a> Vm<'a> {
                         let len = stk!().len();
                         let b = stk!()[len - 1];
                         let a = stk!()[len - 2];
-                        if a.is_fixnum() && b.is_fixnum() {
-                            let av = a.xfixnum();
-                            let bv = b.xfixnum();
-                            // The range check matters: most-negative-fixnum / -1
-                            // exceeds most-positive-fixnum and must promote to a
-                            // bignum via the builtin, like GNU.
-                            if bv != 0 && !(av == Value::MOST_NEGATIVE_FIXNUM && bv == -1) {
-                                // Emacs truncation division (towards zero), matching C semantics
-                                let res = av / bv;
-                                stk!()[len - 2] = Value::fixnum(res);
+                        if let (Some(av), Some(bv)) = (a.as_fixnum_value(), b.as_fixnum_value()) {
+                            if let Some(res) = av.checked_div(bv) {
+                                stk!()[len - 2] = Value::from_fixnum(res);
                                 stk!().pop();
                             } else {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
@@ -5649,7 +5647,7 @@ impl<'a> Vm<'a> {
                         }
                         if top.is_cons() {
                             *top = if observe_collections {
-                                top.cons_car()
+                                Self::cons_car_observed(*top)
                             } else {
                                 top.cons_car_unobserved()
                             };
@@ -5671,7 +5669,7 @@ impl<'a> Vm<'a> {
                         }
                         if top.is_cons() {
                             *top = if observe_collections {
-                                top.cons_cdr()
+                                Self::cons_cdr_observed(*top)
                             } else {
                                 top.cons_cdr_unobserved()
                             };
@@ -5688,7 +5686,7 @@ impl<'a> Vm<'a> {
                         let top = stk!().last_mut().unwrap();
                         *top = if top.is_cons() {
                             if observe_collections {
-                                top.cons_car()
+                                Self::cons_car_observed(*top)
                             } else {
                                 top.cons_car_unobserved()
                             }
@@ -5700,7 +5698,7 @@ impl<'a> Vm<'a> {
                         let top = stk!().last_mut().unwrap();
                         *top = if top.is_cons() {
                             if observe_collections {
-                                top.cons_cdr()
+                                Self::cons_cdr_observed(*top)
                             } else {
                                 top.cons_cdr_unobserved()
                             }
@@ -6178,7 +6176,7 @@ impl<'a> Vm<'a> {
         id == fillarray_sym_id()
     }
 
-    #[inline]
+    #[inline(never)]
     fn writeback_mutating_callable_names(
         &self,
         func_val: &Value,
@@ -6243,6 +6241,7 @@ impl<'a> Vm<'a> {
     /// Only `fillarray` remains, and only because it is reached through a
     /// function CELL a user could have redefined; our own `fillarray` mutates
     /// in place and returns its argument too.
+    #[inline(never)]
     fn maybe_writeback_mutating_first_arg(
         &mut self,
         called_name: &str,
@@ -6254,21 +6253,29 @@ impl<'a> Vm<'a> {
             return;
         }
 
-        let Some(first_arg) = call_args.first() else {
+        // Copy the argument out of the caller's buffer, as `replacement` is
+        // copied out of `result`. The walks below hand `from` to hash-table
+        // mutation closures, and the concurrent mutation path runs those out
+        // of line: a `from` pointing into `call_args` would make the
+        // interpreter's argument buffer escape at all six run_loop call sites
+        // of this function, which reloads it around each call and reshuffled
+        // the whole dispatch loop's register allocation (+2.5% VM tier).
+        let Some(&first_arg) = call_args.first() else {
             return;
         };
         if !first_arg.is_string() {
             return;
         }
 
-        if !result.is_string() || eq_value(first_arg, result) {
+        if !result.is_string() || eq_value(&first_arg, result) {
             return;
         }
         let replacement = *result;
 
-        if crate::emacs_core::value::equal_value(first_arg, &replacement, 0) {
+        if crate::emacs_core::value::equal_value(&first_arg, &replacement, 0) {
             return;
         }
+        let first_arg = &first_arg;
 
         let mut visited = HashSet::new();
         for value in self.ctx.bc_buf.iter_mut() {
@@ -6370,6 +6377,7 @@ impl<'a> Vm<'a> {
     /// Fast path for variable reads matching GNU bytecode.c:626-647
     /// Bvarref: if the symbol is a plain global with a bound value,
     /// read the value cell directly without full symbolic resolution.
+    #[inline(never)]
     fn fast_path_var_ref(&mut self, name_id: SymId) -> EvalResult {
         let ob = &self.ctx.obarray;
         let sym = ob.get_by_id(name_id).ok_or_else(|| {
@@ -6378,9 +6386,7 @@ impl<'a> Vm<'a> {
                 vec![Value::from_sym_id(name_id)],
             )
         })?;
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval {
-            // SAFETY: redirect() already confirmed Plainval, so val.plain is active
-            let val = unsafe { sym.val.plain };
+        if let Some(val) = sym.plain_value() {
             if !val.is_unbound() {
                 // GNU installs `buffer-undo-list` as a DEFVAR_PER_BUFFER
                 // forwarder. Neomacs keeps its value in SharedUndoState so
@@ -6408,13 +6414,10 @@ impl<'a> Vm<'a> {
         // `None` for exactly the one variant that does need the context
         // (`BufferObj`), and the slow path's own non-`BufferObj` arm ends at
         // the same call, so the two cannot drift.
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Forwarded {
-            // SAFETY: redirect() confirmed Forwarded, so val.fwd is active and
-            // points at a descriptor `install_*fwd` leaked.
-            let fwd = unsafe { &*sym.val.fwd };
-            if let Some(value) = fwd.load() {
-                return Ok(value);
-            }
+        if let Some(fwd) = sym.forwarded_descriptor()
+            && let Some(value) = fwd.load()
+        {
+            return Ok(value);
         }
         self.lookup_var_id(name_id)
     }
@@ -6434,17 +6437,14 @@ impl<'a> Vm<'a> {
                     if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id).is_none()
                         && crate::buffer::buffer::lookup_buffer_slot_by_sym_id(name_id).is_none()
                     {
-                        let target = sym.alias_target();
-                        if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target)
-                            .is_none()
-                            && let Some(target_sym) = ob.get_by_id(target)
-                            && target_sym.redirect() == SymbolRedirect::Plainval
+                        if let Some(target) = sym.alias_target()
+                            && crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target)
+                                .is_none()
+                            && let Some(value) =
+                                ob.get_by_id(target).and_then(|target| target.plain_value())
+                            && !value.is_unbound()
                         {
-                            // SAFETY: the target's redirect selects its plain value cell.
-                            let value = unsafe { target_sym.val.plain };
-                            if !value.is_unbound() {
-                                return Ok(value);
-                            }
+                            return Ok(value);
                         }
                     }
                 }
@@ -6584,6 +6584,7 @@ impl<'a> Vm<'a> {
     ///
     /// Like `Bvarref`, bytecode assignment is dynamic.  Lexical bytecode
     /// locals are stack slots, not `varset` targets.
+    #[inline(never)]
     fn assign_var_id(&mut self, name_id: SymId, value: Value) -> Result<(), Flow> {
         // The general `Bvarset`. Both callers (the `Op::VarSet` arm and the JIT
         // `varset` shim) have already offered the write to
@@ -6649,19 +6650,14 @@ impl<'a> Vm<'a> {
         if matches!(redirect, Some(SymbolRedirect::Forwarded))
             && let Some(buf_id) = self.ctx.buffers.current_buffer_id()
         {
-            use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
-            let fwd_ptr = self
+            let buf_fwd = self
                 .ctx
                 .obarray
                 .get_by_id(resolved)
-                .map(|s| unsafe { s.val.fwd });
-            if let Some(fwd) = fwd_ptr {
-                // Safety: install_buffer_objfwd leaks a 'static
-                // descriptor and the symbol's redirect tag is
-                // immutable once installed.
-                let header = unsafe { &*fwd };
-                if matches!(header.ty, LispFwdType::BufferObj) {
-                    let buf_fwd = unsafe { &*(fwd as *const LispBufferObjFwd) };
+                .and_then(|s| s.forwarded_descriptor())
+                .and_then(|fwd| fwd.as_buffer_obj_fwd());
+            {
+                if let Some(buf_fwd) = buf_fwd {
                     let Some(slot) = crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)
                     else {
                         return Err(signal(
@@ -7013,7 +7009,7 @@ impl<'a> Vm<'a> {
         {
             return binding.as_value().unwrap_or(Value::NIL);
         }
-        if let Some(value) = self.ctx.obarray.symbol_value(name).copied() {
+        if let Some(value) = self.ctx.obarray.symbol_value_copied(name) {
             return value;
         }
         if name == "nil" {
@@ -7055,6 +7051,7 @@ impl<'a> Vm<'a> {
             .pop_bytecode_backtrace_frame_with_result(bt_count, result)
     }
 
+    #[inline(never)]
     fn call_function(&mut self, func_val: Value, args: impl Into<LispArgVec>) -> EvalResult {
         let args = args.into();
         let bt_count = self.ctx.specpdl.len();
@@ -7977,6 +7974,7 @@ impl<'a> Vm<'a> {
         })
     }
 
+    #[inline(never)]
     fn call_function_from_stack_args(
         &mut self,
         func_val: Value,
@@ -8038,6 +8036,7 @@ impl<'a> Vm<'a> {
     /// one `LispArgVec` and takes the generic owned path — those calls
     /// either already went through `call_resolved_builtin_from_stack_args`
     /// or are cold.
+    #[inline(never)]
     fn call_function_untraced_from_stack(
         &mut self,
         func_val: Value,
@@ -8179,6 +8178,7 @@ impl<'a> Vm<'a> {
         Some(result)
     }
 
+    #[inline(never)]
     fn call_resolved_builtin_from_stack_args(
         ctx: &mut crate::emacs_core::eval::Context,
         func_val: Value,
@@ -8239,7 +8239,7 @@ impl<'a> Vm<'a> {
     /// Everything else matches the traced twin: the same resolved callee, the
     /// same arity signal, the same `ManySlice` fixnum fast values, the same
     /// signal dispatch on the way out.
-    #[inline]
+    #[inline(never)]
     fn call_arith_builtin_from_stack_args(
         &mut self,
         func: &ByteCodeFunction,
@@ -8768,6 +8768,7 @@ impl<'a> Vm<'a> {
     /// The corollary is the useful part: the way to close the 2.43x gap against
     /// GNU's `exec_byte_code` is not to inline more into this loop. Measure
     /// cycles, not just instructions, for anything that changes its size.
+    #[inline(never)]
     fn resolve_stack_call_target(&mut self, func_val: Value) -> ResolvedStackCallTarget {
         match func_val.kind() {
             ValueKind::Veclike(VecLikeType::ByteCode) => ResolvedStackCallTarget::ByteCode {
@@ -8898,10 +8899,7 @@ impl<'a> Vm<'a> {
         let Some(sym) = ob.get_by_id(name_id) else {
             return (VR_SLOW_OTHER, false);
         };
-        if sym.redirect() == SymbolRedirect::Plainval {
-            // SAFETY: redirect() confirmed Plainval, so val.plain is active
-            // (same contract as fast_path_var_ref).
-            let val = unsafe { sym.val.plain };
+        if let Some(val) = sym.plain_value() {
             if !val.is_unbound() {
                 if !val.is_nil() {
                     return (VR_PLAIN, false);
@@ -9218,6 +9216,23 @@ impl<'a> Vm<'a> {
         crate::emacs_core::eval::inline_subr_function(sym)
     }
 
+    /// Called only for an admitted cons when this driver's mutator observes
+    /// collection reads. Capture guards finish before a synchronous callback
+    /// returns; another mutator owns its own capture scopes.
+    /// Keep observation work outside the unobserved opcode's direct tail.
+    #[cold]
+    #[inline(never)]
+    fn cons_car_observed(value: Value) -> Value {
+        value.cons_car()
+    }
+
+    /// Same capture and cons-admission contract as [`Self::cons_car_observed`].
+    #[cold]
+    #[inline(never)]
+    fn cons_cdr_observed(value: Value) -> Value {
+        value.cons_cdr()
+    }
+
     /// GNU inline-opcode semantics: call the primitive on the operand-stack
     /// arguments with no backtrace frame, no arity check and no eval-depth
     /// accounting, then route a signal through the condition handlers exactly
@@ -9228,7 +9243,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         match self.ctx.buffers.current_buffer() {
-            Some(buf) => Ok(Value::fixnum(buf.point_lisp_char_pos().as_i64())),
+            Some(buf) => Ok(Value::from_fixnum(buf.point_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
     }
@@ -9238,7 +9253,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         match self.ctx.buffers.current_buffer() {
-            Some(buf) => Ok(Value::fixnum(buf.point_min_lisp_char_pos().as_i64())),
+            Some(buf) => Ok(Value::from_fixnum(buf.point_min_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
     }
@@ -9248,7 +9263,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         match self.ctx.buffers.current_buffer() {
-            Some(buf) => Ok(Value::fixnum(buf.point_max_lisp_char_pos().as_i64())),
+            Some(buf) => Ok(Value::from_fixnum(buf.point_max_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
     }
@@ -9585,6 +9600,49 @@ impl<'a> crate::emacs_core::builtins::symbols::MacroexpandRuntime for Vm<'a> {
 }
 
 impl crate::emacs_core::builtins::higher_order::SortRuntime for Vm<'_> {
+    fn set_sort_slot(
+        &mut self,
+        slot: &crate::emacs_core::builtins::higher_order::SortRootSlot,
+        value: Value,
+    ) {
+        let crate::emacs_core::builtins::higher_order::SortRootSlot::Runtime(slot) = slot else {
+            unreachable!()
+        };
+        self.ctx.set_specpdl_root_slot(slot, value);
+    }
+
+    fn save_sort_roots(&self) -> crate::emacs_core::builtins::higher_order::SortRootScope {
+        crate::emacs_core::builtins::higher_order::SortRootScope::Runtime(
+            self.ctx.save_specpdl_roots(),
+        )
+    }
+
+    fn restore_sort_roots(
+        &mut self,
+        scope: crate::emacs_core::builtins::higher_order::SortRootScope,
+    ) {
+        let crate::emacs_core::builtins::higher_order::SortRootScope::Runtime(scope) = scope else {
+            unreachable!()
+        };
+        self.ctx.restore_specpdl_roots(scope);
+    }
+
+    fn root_sort_slot(
+        &mut self,
+        value: Value,
+    ) -> crate::emacs_core::builtins::higher_order::SortRootSlot {
+        crate::emacs_core::builtins::higher_order::SortRootSlot::Runtime(
+            self.ctx.push_specpdl_root_slot(value),
+        )
+    }
+
+    fn clear_sort_slot(&mut self, slot: &crate::emacs_core::builtins::higher_order::SortRootSlot) {
+        let crate::emacs_core::builtins::higher_order::SortRootSlot::Runtime(slot) = slot else {
+            unreachable!()
+        };
+        self.ctx.set_specpdl_root_slot(slot, Value::NIL);
+    }
+
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow> {
         self.with_vm_root_scope(|vm| {
             vm.push_dynamic_vm_root(arg);
@@ -9662,6 +9720,7 @@ fn vm_switch_target(ht: &LispHashTable, dispatch: Value, swp: bool) -> Option<Va
     ht.switch_target(dispatch, swp)
 }
 
+#[inline(never)]
 fn resolve_switch_target(func: &ByteCodeFunction, raw_addr: i64) -> Result<usize, Flow> {
     let raw_addr = usize::try_from(raw_addr).map_err(|_| {
         signal(
@@ -9733,23 +9792,23 @@ pub(crate) mod resumed_chain_probe;
 pub(crate) use vm_leaf::render_vm_leaf_stats;
 
 #[cfg(test)]
-#[path = "tests/vm.rs"]
+#[path = "tests/vm_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/builtin_result_return.rs"]
+#[path = "tests/builtin_result_return_test.rs"]
 mod builtin_result_return_tests;
 
 #[cfg(test)]
-#[path = "tests/arith_integer_fast_path.rs"]
+#[path = "tests/arith_integer_fast_path_test.rs"]
 mod arith_integer_fast_path_tests;
 
 #[cfg(test)]
-#[path = "tests/collection_capture.rs"]
+#[path = "tests/collection_capture_test.rs"]
 mod collection_capture_tests;
 
 #[cfg(test)]
-#[path = "tests/stack_pool.rs"]
+#[path = "tests/stack_pool_test.rs"]
 mod stack_pool_tests;
 
 impl ArithGenericKind {
