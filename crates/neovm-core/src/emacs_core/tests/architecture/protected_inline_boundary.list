@@ -440,3 +440,6 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::run_loop	root
 exempt	emacs_core/runtime/eval/apply.rs	Context::funcall_general_untraced	root	# protected function, but also inlined at one other site; #[inline(never)] would change that caller
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFunction::new	Vm::run_loop	# called by Vm::run_loop, but leaves no code at the protected site (folded, cfg-gated or debug-only)
 exempt	emacs_core/runtime/bytecode/vm.rs	RunLoopDepthGuard::enter	Vm::run_loop	# called by Vm::run_loop, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::cons_car_observed	run_loop	# intentional collection-capture slow path; retain #[cold] and #[inline(never)]; the new boundary awaits the lead's protected fat-build comparison
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::cons_cdr_observed	run_loop	# intentional collection-capture slow path; retain #[cold] and #[inline(never)]; the new boundary awaits the lead's protected fat-build comparison
+exempt	tagged/value.rs	TaggedValue::from_fixnum	run_loop,inline	# validated-domain constructor introduced after the reference census; retain #[inline]; extending the pinned subset requires protected pre-LTO comparisons
