@@ -483,3 +483,7 @@ mod architecture_transmute_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/inline_boundary_test.rs"]
+mod architecture_inline_boundary_test;
