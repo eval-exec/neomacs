@@ -540,13 +540,6 @@ pub(super) fn process_keyword_already_seen(
     }
 }
 
-/// Operating-system resources owned by a live process connection.
-///
-/// GNU keeps Lisp process identity/status alive after `remove_process`, but
-/// `deactivate_process` closes every descriptor immediately.  Keeping all
-/// native handles in one Rust owner gives Neomacs the same lifetime split:
-/// `Process` is durable Lisp-visible state, while replacing this bundle with
-/// `Default::default()` drops every live handle as one operation.
 #[derive(Default, PartialEq, Eq)]
 enum TlsPolling {
     #[default]
@@ -554,6 +547,13 @@ enum TlsPolling {
     Suspended,
 }
 
+/// Operating-system resources owned by a live process connection.
+///
+/// GNU keeps Lisp process identity/status alive after `remove_process`, but
+/// `deactivate_process` closes every descriptor immediately.  Keeping all
+/// native handles in one Rust owner gives Neomacs the same lifetime split:
+/// `Process` is durable Lisp-visible state, while replacing this bundle with
+/// `Default::default()` drops every live handle as one operation.
 #[derive(Default)]
 pub(super) struct LiveProcessIo {
     /// Pollable child-status wakeup source, where the platform exposes one.
