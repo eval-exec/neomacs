@@ -37,6 +37,7 @@ pub(super) struct WindowRowGeometry {
     /// Production has neither this override nor an extra selector read.
     #[cfg(any(test, feature = "redisplay-test-policy"))]
     pub(super) test_posn_object_extent_mode: Option<neovm_core::window::PosnObjectExtentMode>,
+    pub(super) source_extent: crate::types::WindowSourceExtent,
     pub(super) text_row_base: i64,
     pub(super) text_x: f32,
     pub(super) window_top: f32,
@@ -63,6 +64,7 @@ impl WindowRowGeometry {
         Self {
             #[cfg(any(test, feature = "redisplay-test-policy"))]
             test_posn_object_extent_mode: None,
+            source_extent: crate::types::WindowSourceExtent::Viewport,
             text_row_base: text_row_base as i64,
             text_x,
             window_top,
@@ -489,7 +491,9 @@ impl WindowRowGeometry {
             return;
         }
         self.points.push(DisplayPointSnapshot {
-            role: if self.posn_object_extent_mode().enabled() {
+            role: if self.source_extent == crate::types::WindowSourceExtent::AccessibleEnd
+                || self.posn_object_extent_mode().enabled()
+            {
                 neovm_core::window::DisplayPointRole::InsertionBoundary
             } else {
                 neovm_core::window::DisplayPointRole::Glyph
@@ -590,7 +594,8 @@ impl WindowRowGeometry {
         col: usize,
     ) {
         self.push_text_display_point(buffer_pos, x, y, width, height, row, col);
-        if self.posn_object_extent_mode().enabled()
+        if (self.source_extent == crate::types::WindowSourceExtent::AccessibleEnd
+            || self.posn_object_extent_mode().enabled())
             && let Some(point) = self.points.last_mut()
         {
             point.role = neovm_core::window::DisplayPointRole::InsertionBoundary;

@@ -241,7 +241,7 @@ impl BufferWindowSourceRequest {
             ScrollPolicy::from_window_params(params),
             params.scroll_margin,
         );
-        if params.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd {
+        if params.source_extent == crate::types::WindowSourceExtent::AccessibleEnd {
             request.read_budget = BufferWindowReadBudget::AccessibleEnd;
         }
         request

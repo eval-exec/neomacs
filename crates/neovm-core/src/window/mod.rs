@@ -1015,6 +1015,16 @@ pub struct WindowLayoutQuery {
 pub enum WindowLayoutQueryScope {
     #[default]
     Viewport,
+    /// Inert pixel measurement of a source buffer, including an offscreen one.
+    /// Width is absolute logical pixels; None means unbounded. The source
+    /// projection never changes the live window or publishes a presentation.
+    TextExtent {
+        buffer: BufferId,
+        start: LispCharPos1,
+        end: LispCharPos1,
+        width: Option<usize>,
+        height: Option<std::num::NonZeroUsize>,
+    },
     /// A prefix of the live viewport through the complete target row. If the
     /// target is not reached, walk the viewport. Placement and clipping retain
     /// the live start and vscroll; the returned end describes this prefix or

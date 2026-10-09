@@ -13,6 +13,7 @@ mod dual_width_fixed_pitch;
 mod fontset_family_only;
 mod frame_bar_parameters;
 mod idle_timer_output;
+mod pixel_measurement;
 mod process_plist_isolation;
 mod process_send_encoding;
 

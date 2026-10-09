@@ -35,8 +35,9 @@ pub(crate) struct BufferWindowGeometryRequest {
     /// clips the result to this ceiling, so the walk must be allowed to emit
     /// up to this many rows even when the window is currently one row tall.
     max_mini_window_rows: Option<usize>,
+    matrix_width: f32,
     measurement_rows: Option<std::num::NonZeroUsize>,
-    mini_measurement: crate::types::MiniWindowMeasurement,
+    source_extent: crate::types::WindowSourceExtent,
     measurement_pixels: Option<std::num::NonZeroUsize>,
 }
 
@@ -129,7 +130,9 @@ impl BufferWindowGeometryRequest {
         let chrome = layout_box.chrome();
         let text_x = body.x;
         let text_y = body.y;
-        let text_width = body.width;
+        let text_width = params
+            .measurement_width
+            .map_or(body.width, |width| width as f32);
         let text_height = body.height;
 
         // In Emacs, w->vscroll is negative when content is shifted up.
@@ -161,8 +164,9 @@ impl BufferWindowGeometryRequest {
             char_width,
             char_height,
             max_mini_window_rows: None,
+            matrix_width: body.width,
             measurement_rows: params.measurement_rows,
-            mini_measurement: params.mini_measurement,
+            source_extent: params.source_extent,
             measurement_pixels: params.measurement_pixels,
         }
     }
@@ -204,7 +208,7 @@ impl BufferWindowGeometryRequest {
         let line_number_pixel_width = line_number_field.extent().get();
         let display_text_row_base = self.top_chrome_rows;
         let display_text_rows =
-            if self.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd {
+            if self.source_extent == crate::types::WindowSourceExtent::AccessibleEnd {
                 // Allocate one row initially; the typed growing grid owns rows as
                 // the canonical producer emits them. Never preallocate MAX rows.
                 1
@@ -216,7 +220,7 @@ impl BufferWindowGeometryRequest {
         // before producing buffer text.  The matrix therefore spans the whole
         // text area; only the buffer append surface subtracts the prefix width.
         let matrix_columns =
-            GlyphMatrixColumnCapacity::for_text_area(width_policy, self.text_width);
+            GlyphMatrixColumnCapacity::for_text_area(width_policy, self.matrix_width);
         let content_x = self.text_x + line_number_pixel_width;
 
         // Content-up shift applied to the body row-walk origin. Minibuffers and
@@ -238,22 +242,21 @@ impl BufferWindowGeometryRequest {
         // to the real text area (`text_y .. text_y + text_height`).  Otherwise the
         // physical text-area bottom is the limit.
         let physical_bottom_y = self.text_y + self.text_height;
-        let visibility_bottom_y =
-            if self.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd {
-                f32::INFINITY
-            } else if let Some(height) = self.measurement_pixels {
-                self.text_y + height.get() as f32
-            } else if self.measurement_rows.is_some() {
-                // A tall image is still one row. A pixel-height estimate cannot
-                // bound a row query; the independent row budget bounds this walk.
-                f32::INFINITY
-            } else if self.kind.is_minibuffer() {
-                physical_bottom_y.max(self.text_y + max_rows as f32 * self.char_height)
-            } else if row_shift > 0.0 {
-                (self.text_y - row_shift) + max_rows as f32 * self.char_height
-            } else {
-                physical_bottom_y
-            };
+        let visibility_bottom_y = if let Some(height) = self.measurement_pixels {
+            self.text_y + height.get() as f32
+        } else if self.source_extent == crate::types::WindowSourceExtent::AccessibleEnd {
+            f32::INFINITY
+        } else if self.measurement_rows.is_some() {
+            // A tall image is still one row. A pixel-height estimate cannot
+            // bound a row query; the independent row budget bounds this walk.
+            f32::INFINITY
+        } else if self.kind.is_minibuffer() {
+            physical_bottom_y.max(self.text_y + max_rows as f32 * self.char_height)
+        } else if row_shift > 0.0 {
+            (self.text_y - row_shift) + max_rows as f32 * self.char_height
+        } else {
+            physical_bottom_y
+        };
 
         BufferWindowGeometry {
             text_x: self.text_x,
@@ -280,7 +283,9 @@ impl BufferWindowGeometryRequest {
     }
 
     fn visible_max_rows(self) -> usize {
-        if self.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd {
+        if self.measurement_pixels.is_none()
+            && self.source_extent == crate::types::WindowSourceExtent::AccessibleEnd
+        {
             return usize::MAX;
         }
         if let Some(height) = self.measurement_pixels {

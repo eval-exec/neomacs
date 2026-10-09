@@ -495,13 +495,14 @@ impl BufferSourceOutputSetup {
             max_rows,
             walk_setup,
         );
-        if params.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd {
-            setup.begin_request = setup.begin_request.with_growing_rows();
-        }
+        setup.begin_request = setup.begin_request.with_source_extent(params.source_extent);
         setup.row_visibility_limit.allow_partial = params.window_system
             && !params.kind.is_minibuffer()
             && params.measurement_rows.is_none();
-        if setup.row_visibility_limit.allow_partial && params.measurement_pixels.is_none() {
+        if setup.row_visibility_limit.allow_partial
+            && params.measurement_pixels.is_none()
+            && params.source_extent == crate::types::WindowSourceExtent::Viewport
+        {
             setup.row_visibility_limit.bottom_y = layout_box.body().bottom();
         }
         setup
@@ -1597,7 +1598,7 @@ impl BufferSourceOutputSetup {
         // row) and before mode-line chrome, with row and pixel boundary guards.
         // A BEGV-to-ZV mini measurement ends at the real source row; the
         // display-only EOB decoration tail must not hold its old allocation.
-        if params.mini_measurement != crate::types::MiniWindowMeasurement::ToEnd {
+        if params.source_extent != crate::types::WindowSourceExtent::AccessibleEnd {
             EndOfBufferRowsFillRequest::new(
                 params,
                 geometry.display_text_row_base,

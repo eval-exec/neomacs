@@ -588,11 +588,31 @@ fn resolve_window_display_source_params(
         params.vscroll = 0;
         params.force_start = true;
         params.previous_visible_end = None;
-        params.mini_measurement = crate::types::MiniWindowMeasurement::ToEnd;
+        params.source_extent = crate::types::WindowSourceExtent::AccessibleEnd;
     }
     if let WindowLayoutWalkPurpose::SynchronousQuery(scope) = purpose {
         use neovm_core::window::WindowLayoutQueryScope;
         let start = match scope {
+            WindowLayoutQueryScope::TextExtent {
+                start,
+                end,
+                width,
+                height,
+                ..
+            } => {
+                params.buffer_size = end
+                    .as_i64()
+                    .saturating_sub(1)
+                    .clamp(params.buffer_begv, params.buffer_size);
+                params.point = params.point.min(params.buffer_size);
+                params.source_extent = crate::types::WindowSourceExtent::AccessibleEnd;
+                params.measurement_width =
+                    Some(width.unwrap_or(i32::MAX as usize).min(i32::MAX as usize));
+                params.measurement_pixels = height;
+                params.hscroll = 0;
+                params.force_start = true;
+                Some(start)
+            }
             WindowLayoutQueryScope::Rows { start, count } => {
                 params.measurement_rows = Some(count);
                 Some(start)
@@ -761,7 +781,12 @@ fn collect_live_window_layout_inputs(
         if live_window.id() != window_id {
             return None;
         }
-        let buffer_id = live_window.buffer_id()?;
+        let buffer_id = match purpose {
+            WindowLayoutWalkPurpose::SynchronousQuery(
+                neovm_core::window::WindowLayoutQueryScope::TextExtent { buffer, .. },
+            ) => buffer,
+            _ => live_window.buffer_id()?,
+        };
         let buffer = evaluator.buffer_manager().get(buffer_id)?;
         let frame_is_selected = evaluator
             .frame_manager()
@@ -2914,14 +2939,11 @@ impl LayoutEngine {
                 let end = query_snapshot
                     .and_then(|snapshot| snapshot.window_end_record)
                     .and_then(|record| {
-                        let buffer_id = evaluator
-                            .frame_manager()
-                            .get(frame_id)?
-                            .find_window(target)?
-                            .buffer_id()?;
-                        let buffer = evaluator.buffer_manager().get(buffer_id)?;
-                        let buffer_z = neovm_core::buffer::LispCharPos1::from_one_based_usize(
-                            buffer.point_max_char_pos().get().saturating_add(1),
+                        let params = window_params_list
+                            .iter()
+                            .find(|params| params.window_id == target.0 as i64)?;
+                        let buffer_z = crate::coords::layout_i64_char_pos_to_lisp_char_pos(
+                            params.accessible_end_charpos().get(),
                         );
                         Some(record.charpos_from_z(buffer_z))
                     })
@@ -4001,7 +4023,13 @@ impl LayoutEngine {
         scope: neovm_core::window::WindowLayoutQueryScope,
     ) -> Result<neovm_core::window::WindowLayoutQuery, neovm_core::window::WindowLayoutQueryFailure>
     {
-        if let Some(query) = self.query_cache.get(evaluator, frame_id, window_id, scope) {
+        let text_extent = matches!(
+            scope,
+            neovm_core::window::WindowLayoutQueryScope::TextExtent { .. }
+        );
+        if !text_extent
+            && let Some(query) = self.query_cache.get(evaluator, frame_id, window_id, scope)
+        {
             return Ok(query);
         }
         if let Some(query) = self
@@ -4032,7 +4060,8 @@ impl LayoutEngine {
         tracing::trace!(target: "neomacs_layout_engine::query_cache",
             body_reuse_allowed = self.query_body_reuse_allowed,
             collections_captured = collections.is_some(), "query completed");
-        if self.query_body_reuse_allowed
+        if !text_extent
+            && self.query_body_reuse_allowed
             && let Some(collections) = collections
         {
             self.query_cache.remember(
@@ -4689,7 +4718,7 @@ impl LayoutEngine {
         let display_target = crate::display_property::DisplayPropertyTarget::for_window_system(
             face_resolver.is_window_system(),
         );
-        let display_when = if params.mini_measurement == MiniWindowMeasurement::ToEnd
+        let display_when = if params.source_extent == WindowSourceExtent::AccessibleEnd
             && evaluator.gnu_redisplay_hooks_policy_enabled()
         {
             let condition_end =
@@ -4764,6 +4793,9 @@ impl LayoutEngine {
                 Some(visible_char_bound(params)),
                 display_target,
             )
+            .with_accessible_end(neovm_core::buffer::CharPos0::new(
+                params.accessible_end_charpos().get().max(0) as usize,
+            ))
             .with_display_when(display_when),
             None => {
                 tracing::debug!("layout_window_rust: buffer {} not found", params.buffer_id);

@@ -3,7 +3,7 @@ use crate::buffer_source::window_geometry::BufferWindowGeometryRequest;
 use crate::buffer_source::window_source::BufferWindowSourceRequest;
 use crate::display_row::geometry::{DisplayRowFlagKind, DisplayRowLimit};
 use crate::display_row::walk_state::LineNumberFieldLayout;
-use crate::types::{DisplayLineNumbersMode, MiniWindowMeasurement, WindowKind};
+use crate::types::{DisplayLineNumbersMode, WindowKind, WindowSourceExtent};
 use crate::window_layout::{WindowChromeMetrics, WindowDividerLayout, WindowLayoutBox};
 use neomacs_display_protocol::types::Rect;
 use neovm_core::buffer::{Buffer, BufferId};
@@ -25,7 +25,8 @@ fn window_params() -> WindowParams {
         top_line: 0,
         window_start: 0,
         measurement_rows: None,
-        mini_measurement: crate::types::MiniWindowMeasurement::Presentation,
+        measurement_width: None,
+        source_extent: crate::types::WindowSourceExtent::Viewport,
         measurement_pixels: None,
         query_target: None,
         force_start: false,
@@ -91,10 +92,10 @@ fn window_params() -> WindowParams {
     }
 }
 
-fn mini_setup(measurement: MiniWindowMeasurement) -> (BufferWindowGeometry, BufferSourceWalkSetup) {
+fn mini_setup(measurement: WindowSourceExtent) -> (BufferWindowGeometry, BufferSourceWalkSetup) {
     let _runtime = Context::new();
     let mut params = window_params();
-    params.mini_measurement = measurement;
+    params.source_extent = measurement;
     let layout_box = WindowLayoutBox::resolve(
         &params,
         WindowChromeMetrics {
@@ -131,7 +132,7 @@ fn mini_to_end_setup_grows_row_flags_without_allocating_the_logical_limit() {
     // This is the production mini-geometry -> source -> walk-setup seam. Its
     // logical row limit is unbounded even though the current viewport is one
     // row. The old setup panics before returning, allocating usize::MAX flags.
-    let (geometry, mut setup) = mini_setup(MiniWindowMeasurement::ToEnd);
+    let (geometry, mut setup) = mini_setup(WindowSourceExtent::AccessibleEnd);
     assert_eq!(geometry.max_rows, usize::MAX);
     assert_eq!(geometry.display_text_rows, 1);
     assert_eq!(setup.row_flags.len(), 0);
@@ -184,7 +185,7 @@ fn mini_to_end_setup_grows_row_flags_without_allocating_the_logical_limit() {
 
     // Presentation keeps its existing fixed viewport storage and out-of-range
     // mark behavior. This also rules out interpreting a row limit as the mode.
-    let (normal_geometry, mut normal) = mini_setup(MiniWindowMeasurement::Presentation);
+    let (normal_geometry, mut normal) = mini_setup(WindowSourceExtent::Viewport);
     assert_eq!(normal_geometry.max_rows, 1);
     assert_eq!(normal.row_flags.len(), 1);
     normal.row_flags.mark(0, DisplayRowFlagKind::WideCut);
