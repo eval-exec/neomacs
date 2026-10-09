@@ -2157,8 +2157,7 @@ pub(crate) fn refresh_features_from_variable_in_state(
     features: &mut Vec<SymId>,
 ) {
     let current = obarray
-        .symbol_value("features")
-        .cloned()
+        .symbol_value_copied("features")
         .unwrap_or(Value::NIL);
     let mut parsed = Vec::new();
     if let Some(items) = list_to_vec(&current) {
@@ -2194,8 +2193,7 @@ pub(crate) fn add_feature_id_in_state(obarray: &mut Obarray, features: &mut Vec<
         return;
     }
     let current = obarray
-        .symbol_value("features")
-        .cloned()
+        .symbol_value_copied("features")
         .unwrap_or(Value::NIL);
     // Emacs pushes newly-provided features at the front.
     features.insert(0, id);
@@ -4041,7 +4039,7 @@ pub(crate) fn parse_eval_lexical_arg(arg: Option<Value>) -> Result<(bool, Option
 
 fn lexical_binding_in_obarray(obarray: &Obarray) -> bool {
     obarray
-        .symbol_value_id(lexical_binding_symbol())
+        .symbol_value_id_copied(lexical_binding_symbol())
         .is_some_and(|v| v.is_truthy())
 }
 
@@ -4760,13 +4758,11 @@ impl Context {
     pub(crate) fn sync_keyboard_runtime_from_obarray(&mut self) {
         let input_decode_map = self
             .obarray
-            .symbol_value("input-decode-map")
-            .copied()
+            .symbol_value_copied("input-decode-map")
             .unwrap_or(Value::NIL);
         let local_function_key_map = self
             .obarray
-            .symbol_value("local-function-key-map")
-            .copied()
+            .symbol_value_copied("local-function-key-map")
             .unwrap_or(Value::NIL);
         self.command_loop
             .keyboard
@@ -5098,7 +5094,7 @@ impl Context {
         if let Some(info) = crate::buffer::buffer::lookup_buffer_slot(name) {
             return Some(self.buffers.buffer_defaults[info.offset.index()]);
         }
-        self.obarray.symbol_value(name).copied()
+        self.obarray.symbol_value_copied(name)
     }
 
     /// Seed the 24 GNU standard built-in fringe bitmaps into the registry and
@@ -7460,7 +7456,7 @@ impl Context {
             return binding.as_value();
         }
 
-        if let Some(value) = self.obarray.symbol_value_id(resolved).copied() {
+        if let Some(value) = self.obarray.symbol_value_id_copied(resolved) {
             return Some(value);
         }
 

@@ -25,9 +25,9 @@ fn garbage_collect_during_the_concurrent_first_cycle_keeps_what_only_the_image_h
         // arms the concurrent first cycle.
         return;
     }
-    let vector = *loaded
+    let vector = loaded
         .obarray
-        .symbol_value("forced-first-cycle-probe")
+        .symbol_value_copied("forced-first-cycle-probe")
         .expect("restored vector");
     assert!(
         loaded.tagged_heap.mapped_image_owns_for_test(vector),

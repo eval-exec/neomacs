@@ -1325,7 +1325,7 @@ impl Context {
         let trace_toplevel_bytecode = std::env::var_os("NEOVM_TRACE_TOPLEVEL_BYTECODE").is_some();
         let load_file_name = if trace_toplevel_bytecode {
             self.obarray()
-                .symbol_value("load-file-name")
+                .symbol_value_copied("load-file-name")
                 .and_then(|value| {
                     value
                         .as_lisp_string()
@@ -1652,8 +1652,7 @@ impl Context {
     pub(super) fn run_after_load_hooks_for_feature(&mut self, feature: Value) -> Result<(), Flow> {
         let after_load_alist = self
             .obarray
-            .symbol_value("after-load-alist")
-            .cloned()
+            .symbol_value_copied("after-load-alist")
             .unwrap_or(Value::NIL);
         if after_load_alist.is_nil() {
             return Ok(());

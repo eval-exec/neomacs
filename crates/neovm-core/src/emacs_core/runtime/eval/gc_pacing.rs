@@ -504,8 +504,7 @@ impl Context {
         }
         self.gc_runtime_settings_cache.gc_cons_threshold_bytes = self
             .obarray
-            .symbol_value_id(syms.threshold())
-            .copied()
+            .symbol_value_id_copied(syms.threshold())
             .and_then(|value| {
                 value.as_fixnum().or_else(|| {
                     // GNU's gc-cons-threshold watcher accepts integers fitting
@@ -604,8 +603,7 @@ impl Context {
 
         let old_elapsed = self
             .obarray
-            .symbol_value_id(gc_elapsed_symbol())
-            .copied()
+            .symbol_value_id_copied(gc_elapsed_symbol())
             .and_then(|value| value.as_number_f64())
             .unwrap_or(0.0);
         self.obarray.set_symbol_value_id(

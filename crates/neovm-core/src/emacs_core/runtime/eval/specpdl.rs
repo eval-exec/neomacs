@@ -503,7 +503,7 @@ impl Context {
         // the typed-store probe is pure overhead for it; non-buffer forwarded
         // symbols (Int/Bool/Obj/Kboard) still take it so `(let
         // ((gc-cons-threshold "x")) ...)` keeps signaling before the body.
-        let old_value = self.obarray.symbol_value_id(resolved).copied();
+        let old_value = self.obarray.symbol_value_id_copied(resolved);
         self.push_specpdl_with(|| SpecBinding::Let {
             sym_id: resolved,
             old_value: SavedBindingValue::from_option(old_value),
@@ -664,7 +664,7 @@ impl Context {
         let current_value = if use_default_storage {
             super::super::data::default_value_by_id(self, sym_id)
         } else {
-            self.obarray.symbol_value_id(sym_id).copied()
+            self.obarray.symbol_value_id_copied(sym_id)
         };
         if use_default_storage {
             self.restore_default_binding_by_id(

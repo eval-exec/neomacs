@@ -15,8 +15,7 @@ fn hook_events(eval: &Context) -> Vec<Value> {
     let mut events = Vec::new();
     let mut tail = eval
         .obarray
-        .symbol_value("mini-core-log")
-        .copied()
+        .symbol_value_copied("mini-core-log")
         .expect("event log");
     while tail.is_cons() {
         events.push(tail.cons_car());
@@ -73,8 +72,7 @@ fn selected_mini_only_fallback_observes_dynamic_policy_and_precedes_hooks() {
     eval.redisplay_fn = Some(Box::new(|eval| {
         let tail = eval
             .obarray
-            .symbol_value("mini-core-log")
-            .copied()
+            .symbol_value_copied("mini-core-log")
             .expect("event log");
         eval.obarray
             .set_symbol_value("mini-core-log", Value::cons(Value::symbol("paint"), tail));
@@ -82,19 +80,19 @@ fn selected_mini_only_fallback_observes_dynamic_policy_and_precedes_hooks() {
     eval.eval_str("(let ((resize-mini-frames t)) (redisplay t))")
         .expect("mini-only redisplay");
     assert_eq!(
-        eval.obarray.symbol_value("mini-core-resize-count").copied(),
+        eval.obarray.symbol_value_copied("mini-core-resize-count"),
         Some(Value::fixnum(1))
     );
     assert_eq!(
-        eval.obarray.symbol_value("mini-core-resize-arg").copied(),
+        eval.obarray.symbol_value_copied("mini-core-resize-arg"),
         Some(Value::make_frame(frame.0))
     );
     assert_eq!(
-        eval.obarray.symbol_value("mini-core-dynamic").copied(),
+        eval.obarray.symbol_value_copied("mini-core-dynamic"),
         Some(Value::T)
     );
     assert_eq!(
-        eval.obarray.symbol_value("resize-mini-frames").copied(),
+        eval.obarray.symbol_value_copied("resize-mini-frames"),
         Some(Value::NIL)
     );
     let events = hook_events(&eval);
@@ -160,11 +158,11 @@ fn mini_only_fallback_throw_restores_transaction_without_paint() {
     assert!(eval.redisplay_prepare_fn.is_none());
     assert_eq!(eval.specpdl.len(), bindings);
     assert_eq!(
-        eval.obarray.symbol_value("resize-mini-frames").copied(),
+        eval.obarray.symbol_value_copied("resize-mini-frames"),
         Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray.symbol_value("inhibit-redisplay").copied(),
+        eval.obarray.symbol_value_copied("inhibit-redisplay"),
         Some(Value::NIL)
     );
     eval.restore_specpdl_roots(roots);

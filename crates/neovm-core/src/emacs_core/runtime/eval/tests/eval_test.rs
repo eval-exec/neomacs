@@ -81,9 +81,9 @@ fn c_level_defsym_hook_names_are_in_global_obarray() {
         "mouse-leave-buffer-hook should be globally interned like GNU DEFVAR_LISP"
     );
     assert_eq!(
-        *ev.obarray()
-            .symbol_value("mouse-leave-buffer-hook")
-            .unwrap_or(&Value::UNBOUND),
+        ev.obarray()
+            .symbol_value_copied("mouse-leave-buffer-hook")
+            .unwrap_or(Value::UNBOUND),
         Value::NIL
     );
 }
@@ -985,8 +985,9 @@ fn recursive_edit_without_input_receiver_still_runs_noninteractive_top_level() {
         })
     );
     assert_eq!(
-        ev.obarray().symbol_value("neomacs--batch-no-input-probe"),
-        Some(&Value::fixnum(42))
+        ev.obarray()
+            .symbol_value_copied("neomacs--batch-no-input-probe"),
+        Some(Value::fixnum(42))
     );
 }
 
@@ -1122,8 +1123,7 @@ fn runtime_macro_expansion_repeats_across_equivalent_explicit_environments() {
     assert_eq!(ev.macro_expand_calls - calls0, 2);
     assert_eq!(
         ev.obarray()
-            .symbol_value("runtime-cache-count")
-            .copied()
+            .symbol_value_copied("runtime-cache-count")
             .unwrap_or(Value::NIL),
         Value::fixnum(2)
     );
@@ -1168,8 +1168,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_strings_in_environment() {
     assert_eq!(ev.macro_expand_calls - calls0, 2);
     assert_eq!(
         ev.obarray()
-            .symbol_value("runtime-cache-count")
-            .copied()
+            .symbol_value_copied("runtime-cache-count")
             .unwrap_or(Value::NIL),
         Value::fixnum(2)
     );
@@ -1213,8 +1212,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_string_arguments() {
     assert_eq!(ev.macro_expand_calls - calls0, 2);
     assert_eq!(
         ev.obarray()
-            .symbol_value("runtime-cache-bytes-count")
-            .copied()
+            .symbol_value_copied("runtime-cache-bytes-count")
             .unwrap_or(Value::NIL),
         Value::fixnum(2)
     );
@@ -2093,12 +2091,14 @@ fn redisplay_runs_resize_mini_frame_for_minibuffer_only_frame() {
     ev.redisplay_with_force(true).expect("redisplay");
 
     assert_eq!(
-        ev.obarray().symbol_value("neo-resize-mini-frame-calls"),
-        Some(&Value::fixnum(1))
+        ev.obarray()
+            .symbol_value_copied("neo-resize-mini-frame-calls"),
+        Some(Value::fixnum(1))
     );
     assert_eq!(
-        ev.obarray().symbol_value("neo-resize-mini-frame-arg"),
-        Some(&Value::make_frame(frame_id.0))
+        ev.obarray()
+            .symbol_value_copied("neo-resize-mini-frame-arg"),
+        Some(Value::make_frame(frame_id.0))
     );
 }
 
@@ -7314,7 +7314,7 @@ fn bootstrap_does_not_prebind_lisp_derived_mode_tables() {
         "minibuffer-mode-abbrev-table",
     ] {
         assert_eq!(
-            ev.obarray.symbol_value(name),
+            ev.obarray.symbol_value_copied(name),
             None,
             "{name} must remain void until Lisp define-derived-mode creates it"
         );
@@ -21554,8 +21554,7 @@ fn macro_expansion_scope_uses_lexenv_dynvars() {
 
     let dynvars = ev
         .obarray
-        .symbol_value_id(macroexp_dynvars_symbol())
-        .copied()
+        .symbol_value_id_copied(macroexp_dynvars_symbol())
         .expect("macroexp--dynvars should be bound inside macro expansion scope");
     let dynvars = list_to_vec(&dynvars).expect("macroexp--dynvars should stay a proper list");
     assert!(dynvars.contains(&Value::T), "{dynvars:?}");
@@ -22239,7 +22238,7 @@ fn gc_safe_point_runs_post_gc_hook_when_incremental_collection_finishes() {
         ev.gc_safe_point();
     }
     assert!(ev.gc_count > 0);
-    let hook_log = ev.obarray().symbol_value("gc-hook-log").copied();
+    let hook_log = ev.obarray().symbol_value_copied("gc-hook-log");
     assert!(hook_log.is_some());
     let entries = list_to_vec(&hook_log.unwrap()).expect("gc-hook-log list");
     assert!(!entries.is_empty());
@@ -23141,13 +23140,13 @@ fn bootstrap_window_system_modes_match_gnu_defaults() {
     crate::test_utils::init_test_tracing();
     let eval = Context::new();
     assert_eq!(
-        eval.obarray().symbol_value("menu-bar-mode"),
-        Some(&Value::T),
+        eval.obarray().symbol_value_copied("menu-bar-mode"),
+        Some(Value::T),
         "GNU initializes menu-bar-mode to t in frame.c"
     );
     assert_eq!(
-        eval.obarray().symbol_value("tool-bar-mode"),
-        Some(&Value::T),
+        eval.obarray().symbol_value_copied("tool-bar-mode"),
+        Some(Value::T),
         "GNU initializes tool-bar-mode to t for window-system builds"
     );
 }
@@ -25803,7 +25802,7 @@ fn plain_let_takes_one_obarray_visit_per_bind_and_pop() {
     ev.unbind_to_with_result(base, Ok(Value::NIL)).expect("pop");
     assert_eq!(plain_value_slot_visits(), 1, "one visit for the pop");
     assert_eq!(
-        ev.obarray.symbol_value_id(sym).map(|v| v.bits()),
+        ev.obarray.symbol_value_id_copied(sym).map(|v| v.bits()),
         Some(Value::fixnum(1).bits()),
         "the pop restored the old value"
     );
@@ -26182,8 +26181,8 @@ fn kill_emacs_abandons_unwind_protect_cleanup_forms_like_gnus_noreturn_exit() {
         "kill-emacs must propagate its own shutdown request, got {flow:?}"
     );
     assert_eq!(
-        eval.obarray().symbol_value("l203-cleanup-ran"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("l203-cleanup-ran"),
+        Some(Value::NIL),
         "GNU's Fkill_emacs is `noreturn`: the cleanup form is abandoned, not run"
     );
     assert_eq!(
@@ -27017,8 +27016,7 @@ fn cached_throw_on_input_tracks_every_write_path() {
     let agrees = |ev: &Context, where_: &str| {
         let obarray = ev
             .obarray()
-            .symbol_value("throw-on-input")
-            .copied()
+            .symbol_value_copied("throw-on-input")
             .unwrap_or(Value::NIL);
         assert!(
             crate::emacs_core::value::eq_value(&ev.cached_throw_on_input_for_test(), &obarray),

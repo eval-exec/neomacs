@@ -335,8 +335,7 @@ impl Context {
 
         let hook = self
             .obarray
-            .symbol_value("signal-hook-function")
-            .copied()
+            .symbol_value_copied("signal-hook-function")
             .unwrap_or(Value::NIL);
         if hook.is_nil() {
             return Ok(());
@@ -389,7 +388,7 @@ impl Context {
     ) -> Result<(), Flow> {
         if self
             .obarray
-            .symbol_value("inhibit-debugger")
+            .symbol_value_copied("inhibit-debugger")
             .is_some_and(|value| !value.is_nil())
         {
             return Ok(());
@@ -397,7 +396,7 @@ impl Context {
 
         let debug_on_signal = self
             .obarray
-            .symbol_value("debug-on-signal")
+            .symbol_value_copied("debug-on-signal")
             .is_some_and(|value| !value.is_nil());
         let should_consider_debugger = debug_on_signal
             || matched_clause.is_none()
@@ -413,13 +412,11 @@ impl Context {
             &Value::from_sym_id(quit_symbol()),
         ) {
             self.obarray
-                .symbol_value("debug-on-quit")
-                .copied()
+                .symbol_value_copied("debug-on-quit")
                 .unwrap_or(Value::NIL)
         } else {
             self.obarray
-                .symbol_value("debug-on-error")
-                .copied()
+                .symbol_value_copied("debug-on-error")
                 .unwrap_or(Value::NIL)
         };
         if !wants_debugger(&debug_setting, &conditions) {
@@ -458,8 +455,7 @@ impl Context {
     ) -> Result<bool, Flow> {
         let ignored = self
             .obarray
-            .symbol_value("debug-ignored-errors")
-            .copied()
+            .symbol_value_copied("debug-ignored-errors")
             .unwrap_or(Value::NIL);
         let Some(entries) = list_to_vec(&ignored) else {
             return Ok(false);

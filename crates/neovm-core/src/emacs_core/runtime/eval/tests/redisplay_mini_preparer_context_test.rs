@@ -78,8 +78,7 @@ fn selected_mini_only_frontend_preparer_keeps_caller_buffer_at_lisp_resize() {
     assert_eq!(paints.get(), 1);
     let result = eval
         .obarray
-        .symbol_value("mini-preparer-observation")
-        .copied()
+        .symbol_value_copied("mini-preparer-observation")
         .expect("callback observation");
     let cells = crate::emacs_core::value::list_to_vec(&result).expect("four callback observations");
     assert_eq!(cells.len(), 4);
@@ -101,7 +100,7 @@ fn selected_mini_only_frontend_preparer_keeps_caller_buffer_at_lisp_resize() {
     assert!(eval.redisplay_fn.is_some());
     assert!(!eval.gnu_redisplay_hooks.active.is_active());
     assert_eq!(
-        eval.obarray.symbol_value("resize-mini-frames").copied(),
+        eval.obarray.symbol_value_copied("resize-mini-frames"),
         Some(Value::NIL)
     );
 }
