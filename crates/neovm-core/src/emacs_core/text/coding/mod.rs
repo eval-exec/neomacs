@@ -22,8 +22,10 @@ use super::intern::{SymId, intern, lookup_interned, resolve_sym};
 use super::symbol::Obarray;
 use super::value::*;
 use crate::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
+use crate::emacs_core::emacs_char::EmacsChar;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::heap_types::LispString;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::{HashMap, HashSet};
 use strum::{EnumString, IntoStaticStr};
@@ -1868,9 +1870,8 @@ fn coding_docstring_for_base(base: &str) -> Option<&'static str> {
 
 fn coding_charset_list_for_base(base: &str) -> Option<Vec<Value>> {
     match base {
-        "utf-8" | "utf-8-emacs" | "utf-8-auto" | "utf-8-with-signature" | "emacs-internal" => {
-            Some(vec![Value::symbol("unicode")])
-        }
+        "utf-8" | "utf-8-auto" | "utf-8-with-signature" => Some(vec![Value::symbol("unicode")]),
+        "utf-8-emacs" | "emacs-internal" => Some(vec![Value::symbol("emacs")]),
         "latin-1" | "iso-8859-1" | "iso-latin-1" => Some(vec![Value::symbol("iso-8859-1")]),
         "latin-5" | "iso-8859-9" | "iso-latin-5" => Some(vec![Value::symbol("iso-8859-9")]),
         "latin-0" | "latin-9" | "iso-8859-15" | "iso-latin-9" => {
@@ -2830,10 +2831,10 @@ impl CodingRepertoire {
 
     /// GNU `char_encodable_p`: whether `ch` belongs to any charset in this
     /// coding system's effective charset list.
-    fn encodes(&self, ch: i64) -> bool {
-        self.charsets
-            .iter()
-            .any(|&charset| super::charset::charset_encode_char_bytes(charset, ch).is_some())
+    fn encodes(&self, ch: EmacsChar) -> bool {
+        self.charsets.iter().any(|&charset| {
+            super::charset::charset_encode_char_bytes(charset, i64::from(ch.code())).is_some()
+        })
     }
 }
 
@@ -2855,7 +2856,7 @@ fn scan_unencodable_positions(
     while byte < text.len() {
         let (code, len) = super::emacs_char::string_char(&text[byte..]);
         byte += len;
-        let ch = i64::from(code);
+        let ch = EmacsChar::from_code(code).expect("decoded Emacs character");
         let is_ascii = code < 0x80;
         if !(repertoire.encodes(ch) || is_ascii && repertoire.ascii_compatible) {
             positions.push(base_pos + char_index);
@@ -5509,39 +5510,43 @@ fn raw_coding_candidates(mgr: &CodingSystemManager, exclude: Option<&[Value]>) -
     names
 }
 
+/// Safely represent the original Emacs characters, without a Unicode display
+/// projection. LispString owns both the bytes and their multibyte interpretation.
 fn safe_coding_systems_for_text(
     mgr: &CodingSystemManager,
-    text: &str,
-    multibyte: bool,
+    text: &LispString,
     exclude: Option<Value>,
 ) -> Result<Value, Flow> {
-    if !multibyte || text.is_ascii() {
+    if !text.is_multibyte() || text.as_bytes().is_ascii() {
         return Ok(Value::T);
     }
 
-    if !text.is_ascii() {
-        let exclude = coding_exclude_list(exclude)?;
-        // Each distinct character once, as GNU's `work_table' skips
-        // characters already checked: asking every coding system about every
-        // character made saving a 31KB Cyrillic file cost ~1.1G instructions.
-        let mut chars: Vec<char> = text.chars().filter(|ch| !ch.is_ascii()).collect();
-        chars.sort_unstable();
-        chars.dedup();
-        let mut safe_codings = Vec::new();
-        for coding in raw_coding_candidates(mgr, exclude.as_deref()) {
-            let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, &coding) else {
-                continue;
-            };
-            if chars.iter().all(|&ch| repertoire.encodes(ch as i64)) {
-                safe_codings.push(Value::symbol(coding));
-            }
+    let exclude = coding_exclude_list(exclude)?;
+    // Each distinct character once, as GNU's work_table skips repeated codes.
+    // Preserve charset-only and byte8 identities: neither is a Rust char.
+    let mut chars: Vec<EmacsChar> = Vec::new();
+    let mut byte = 0;
+    while byte < text.sbytes() {
+        let (code, len) = super::emacs_char::string_char(&text.as_bytes()[byte..]);
+        byte += len;
+        if code >= 0x80 {
+            chars.push(EmacsChar::from_code(code).expect("decoded Emacs character"));
         }
-        safe_codings.push(Value::symbol("raw-text"));
-        safe_codings.push(Value::symbol("no-conversion"));
-        return Ok(Value::list(safe_codings));
     }
-
-    Ok(Value::T)
+    chars.sort_unstable();
+    chars.dedup();
+    let mut safe_codings = Vec::new();
+    for coding in raw_coding_candidates(mgr, exclude.as_deref()) {
+        let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, &coding) else {
+            continue;
+        };
+        if chars.iter().all(|&ch| repertoire.encodes(ch)) {
+            safe_codings.push(Value::symbol(coding));
+        }
+    }
+    safe_codings.push(Value::symbol("raw-text"));
+    safe_codings.push(Value::symbol("no-conversion"));
+    Ok(Value::list(safe_codings))
 }
 
 fn marker_or_integer_position(value: &Value) -> Result<i64, Flow> {
@@ -5564,15 +5569,8 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
     expect_min_args("find-coding-systems-region-internal", &args, 2)?;
     expect_max_args("find-coding-systems-region-internal", &args, 3)?;
 
-    if args[0].is_string() {
-        let text = coding_runtime_string(&args[0])?;
-        let multibyte = args[0].string_is_multibyte();
-        return safe_coding_systems_for_text(
-            &eval.coding_systems,
-            &text,
-            multibyte,
-            args.get(2).copied(),
-        );
+    if let Some(text) = args[0].as_lisp_string() {
+        return safe_coding_systems_for_text(&eval.coding_systems, text, args.get(2).copied());
     }
 
     let start = marker_or_integer_position(&args[0])?;
@@ -5599,21 +5597,8 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(start)),
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(end)),
     );
-    // Issue #131: decode the buffer substring with `to_utf8_lossy` so real
-    // Unicode (including genuine Private-Use glyphs) is preserved verbatim;
-    // only true eight-bit raw bytes collapse to U+FFFD, which the per-coding
-    // encode check below rejects anyway (matching GNU's raw-text fallback).
-    // The legacy storage-string form mangled real PUA glyphs into eight-bit.
-    let text = {
-        let string = buffer.buffer_substring_lisp_string_range(byte_range);
-        crate::emacs_core::emacs_char::to_utf8_lossy(string.as_bytes())
-    };
-    safe_coding_systems_for_text(
-        &eval.coding_systems,
-        &text,
-        buffer.get_multibyte(),
-        args.get(2).copied(),
-    )
+    let text = buffer.buffer_substring_lisp_string_range(byte_range);
+    safe_coding_systems_for_text(&eval.coding_systems, &text, args.get(2).copied())
 }
 
 // ===========================================================================
