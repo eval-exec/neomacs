@@ -46,7 +46,7 @@ impl ConsCell {
     ///
     /// `self` must represent an allocated cons cell, so `cdr_or_next.cdr` is
     /// the active union field rather than `next_free`.
-    #[inline]
+    #[inline(always)]
     pub unsafe fn cdr(&self) -> TaggedValue {
         unsafe { self.cdr_or_next.cdr }
     }

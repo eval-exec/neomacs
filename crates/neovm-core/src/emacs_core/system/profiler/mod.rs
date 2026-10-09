@@ -382,6 +382,7 @@ impl Context {
         self.profiler_poll();
     }
 
+    #[inline(never)]
     pub(crate) fn profiler_gc_finish(&mut self) {
         if self.profiler.is_active() {
             let allocated_bytes = self.tagged_heap.total_allocated_bytes();

@@ -1105,6 +1105,7 @@ impl CompiledLeaf {
     /// Whether a call with `n` arguments is valid for this function's lambda
     /// list — the same predicate the interpreter's `run_frame` arity check
     /// applies before signaling `wrong-number-of-arguments`.
+    #[inline(always)]
     pub fn accepts(&self, n: usize) -> bool {
         let nonrest = self.arity - usize::from(self.has_rest);
         self.required <= n && (self.has_rest || n <= nonrest)

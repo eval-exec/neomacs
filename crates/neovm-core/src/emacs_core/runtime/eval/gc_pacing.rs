@@ -641,6 +641,7 @@ impl Context {
     ///
     /// Reactivates this thread's Context after another local Context ran.
     /// Context is thread-confined; worker threads construct their own Context.
+    #[inline(never)]
     pub fn setup_thread_locals(&mut self) {
         crate::tagged::gc::set_tagged_heap(&mut self.tagged_heap);
         super::super::ccl::install_ccl_registry_handle(&self.ccl_registry);

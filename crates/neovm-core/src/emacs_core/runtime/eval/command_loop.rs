@@ -2091,6 +2091,7 @@ impl Context {
         self.gc_driver_active = prev;
     }
 
+    #[inline(never)]
     pub(super) fn gc_collect_from_current_roots_body(&mut self, force_complete: bool) {
         // GNU `garbage_collect' shortens every live buffer's undo list before
         // it marks anything: "Don't keep undo information around forever. Do

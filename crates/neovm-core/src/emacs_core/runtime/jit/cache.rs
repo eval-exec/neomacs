@@ -393,7 +393,7 @@ pub(crate) fn leaf_report_rows() -> (Vec<LeafRow>, LeafTotals) {
 /// leaf slot can be dereferenced only by the mutator owning the live TLS entry.
 static LEAF_SLOT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
-#[inline]
+#[inline(always)]
 pub(crate) fn leaf_slot_epoch() -> u64 {
     LEAF_SLOT_EPOCH.load(Ordering::Relaxed)
 }
@@ -2553,6 +2553,7 @@ fn max_compiled_id() -> u64 {
 // makes the read sound. The lint fires on the `pub` + raw-ptr-deref shape, same
 // as the 35 `neovm_jit_*` shims, which carry the same allow.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[inline(never)]
 pub fn try_run_compiled(
     ctx: *mut Context,
     func: &ByteCodeFunction,
@@ -2873,6 +2874,7 @@ pub(crate) fn armed_leaf_for_native_call(
 /// (its premarshaled `Value` bits, NOT a pointer into the operand stack: a
 /// nested call's shim pushes onto it and may reallocate). Same result shape
 /// as `try_run_compiled`: `Ok(None)` = interpret instead.
+#[inline(never)]
 pub(crate) fn run_armed_leaf(
     ctx: *mut Context,
     func: &ByteCodeFunction,
@@ -2908,6 +2910,7 @@ pub(crate) fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
     }
 }
 
+#[inline(never)]
 pub(crate) fn resolve_compiled_leaf_ptr(
     ctx: *mut Context,
     func: &ByteCodeFunction,

@@ -1538,6 +1538,7 @@ pub fn tagged_heap_is_installed() -> bool {
 
 /// Check the allocation view without reading the installed heap. A Context
 /// moved to another thread may have left an inactive raw pointer here.
+#[inline(always)]
 pub(crate) fn tagged_heap_is_current(heap: &TaggedHeap) -> bool {
     TAGGED_HEAP.with(|h| std::ptr::eq(h.get(), heap))
         && TAGGED_HEAP_ID.with(|identity| identity.get() == Some(heap.identity()))

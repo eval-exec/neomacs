@@ -1300,7 +1300,7 @@ impl RuntimeState {
     /// tier decision) and return the new value — the direct stack entry keeps
     /// the re-tier trigger honest without the rest of the dispatcher.
     #[cfg(feature = "jit")]
-    #[inline]
+    #[inline(always)]
     pub(crate) fn bump_heat(&self) -> u32 {
         let now = self.heat.load(Ordering::Relaxed).saturating_add(1);
         self.heat.store(now, Ordering::Relaxed);
@@ -1336,6 +1336,7 @@ impl RuntimeState {
     /// do not publish a consistent pair to other mutators; the cache owner and
     /// its Cell-based deopt storage remain thread-confined (P7.11).
     #[cfg(feature = "jit")]
+    #[inline(always)]
     pub(crate) fn arm_leaf_slot(&self, leaf: *const compile::CompiledLeaf, epoch: u64) {
         self.leaf_slot_epoch.store(epoch, Ordering::Relaxed);
         self.leaf_slot.store(leaf as u64, Ordering::Relaxed);

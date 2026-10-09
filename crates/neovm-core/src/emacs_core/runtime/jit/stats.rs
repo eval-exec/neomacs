@@ -753,7 +753,7 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
 /// Split gate/body: the gate is called once per JIT call on the direct-entry
 /// seam, so it must inline into the caller as a load and a branch instead of
 /// costing a call frame to discover the counters are off.
-#[inline]
+#[inline(always)]
 pub(crate) fn record_dispatch(said_compiled: bool) {
     if summary_enabled() {
         record_dispatch_enabled(said_compiled);
@@ -805,7 +805,7 @@ pub(crate) fn record_retier() {
 /// Separate from `record_compile` on purpose: a compile is a cost, an entry is
 /// the only thing that can repay it, and the two had no relationship in the
 /// stats until this existed.
-#[inline]
+#[inline(always)]
 pub(crate) fn record_native_entry() {
     if summary_enabled() {
         record_native_entry_enabled();

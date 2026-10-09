@@ -26,7 +26,7 @@ type ObsoleteInfo = (LispString, LispString);
 const UNSET_AUTOLOAD_SYMBOL_ID: u32 = u32::MAX;
 static AUTOLOAD_SYMBOL_ID: AtomicU32 = AtomicU32::new(UNSET_AUTOLOAD_SYMBOL_ID);
 
-#[inline]
+#[inline(always)]
 fn autoload_symbol_id() -> SymId {
     let cached = AUTOLOAD_SYMBOL_ID.load(Ordering::Relaxed);
     if cached != UNSET_AUTOLOAD_SYMBOL_ID {

@@ -2319,7 +2319,7 @@ struct VmProcessKnobs {
 
 #[cfg(feature = "jit")]
 impl VmProcessKnobs {
-    #[inline]
+    #[inline(always)]
     fn get() -> Self {
         static KNOBS: std::sync::OnceLock<VmProcessKnobs> = std::sync::OnceLock::new();
         *KNOBS.get_or_init(|| Self {
@@ -2650,6 +2650,7 @@ impl<'a> Vm<'a> {
     /// call) and truncates back on every exit, preserving the JIT call
     /// shim's push/truncate symmetry. The hot bytecode→bytecode path skips
     /// this wrapper entirely — its args already live on `bc_buf`.
+    #[inline(never)]
     pub(crate) fn execute_with_func_value(
         &mut self,
         func: &ByteCodeFunction,
@@ -3884,6 +3885,7 @@ impl<'a> Vm<'a> {
         }
     }
 
+    #[inline(never)]
     fn run_loop(
         &mut self,
         entry_func: &ByteCodeFunction,

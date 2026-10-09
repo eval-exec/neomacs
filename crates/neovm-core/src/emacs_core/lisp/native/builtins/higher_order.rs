@@ -28,6 +28,7 @@ pub(crate) fn gnu_mapconcat_unfilled_slot_value() -> Value {
     Value::fixnum(35_184_318_513_152)
 }
 
+#[inline(never)]
 pub(crate) fn map_sequence_length(sequence: Value) -> Result<usize, Flow> {
     if super::chartable::is_char_table(&sequence) {
         return Err(signal(
@@ -63,6 +64,7 @@ pub(crate) fn map_sequence_length(sequence: Value) -> Result<usize, Flow> {
     }
 }
 
+#[inline(never)]
 pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Value, Flow> {
     match sequence.kind() {
         ValueKind::Veclike(VecLikeType::BoolVector) => {
@@ -150,7 +152,7 @@ impl MapCallee {
         }
     }
 
-    #[inline]
+    #[inline(never)]
     pub(crate) fn call(&self, eval: &mut super::eval::Context, item: Value) -> EvalResult {
         match *self {
             MapCallee::Generic(func) => apply1(eval, func, item),
@@ -170,7 +172,7 @@ impl MapCallee {
 /// immutable proof contains no Lisp references and stays with this mutator.
 /// The epoch must be captured before resolving the callee, so publication
 /// cannot pair an older body with a newer function-cell epoch.
-#[inline]
+#[inline(never)]
 fn mapcar1_with_callee(
     eval: &mut super::eval::Context,
     len: usize,
@@ -219,7 +221,7 @@ pub(crate) enum MapSink<'a> {
 }
 
 impl MapSink<'_> {
-    #[inline]
+    #[inline(never)]
     pub(crate) fn store(&mut self, eval: &mut super::eval::Context, index: usize, value: Value) {
         match self {
             MapSink::Discard => {}
@@ -372,7 +374,7 @@ fn apply0(eval: &mut super::eval::Context, func: Value) -> EvalResult {
     eval.apply(func, crate::emacs_core::eval::LispArgVec::new())
 }
 
-#[inline]
+#[inline(always)]
 fn apply1(eval: &mut super::eval::Context, func: Value, arg: Value) -> EvalResult {
     eval.apply1(func, arg)
 }
@@ -470,6 +472,7 @@ pub(crate) fn builtin_funcall_with_delayed_message(
 // Higher-order
 // ===========================================================================
 
+#[inline(never)]
 pub(crate) fn builtin_mapcar_2(
     eval: &mut super::eval::Context,
     func: Value,
@@ -508,6 +511,7 @@ pub(crate) fn builtin_mapcar_2(
     result_list
 }
 
+#[inline(never)]
 pub(crate) fn builtin_mapc_2(
     eval: &mut super::eval::Context,
     func: Value,

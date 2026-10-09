@@ -300,6 +300,7 @@ impl Context {
 
     /// GNU `do_debug_on_call` (`src/eval.c:335-341`) minus its first line,
     /// which the token's constructor already performed.
+    #[inline(never)]
     pub(crate) fn do_debug_on_call(&mut self, arm: DebugOnCallArm) -> Result<(), Flow> {
         let DebugOnCallArm { code, frame } = arm;
         // eval.c:339 -- the same entry also arms the exit debugger.

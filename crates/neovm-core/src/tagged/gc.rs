@@ -1168,6 +1168,7 @@ impl TaggedHeap {
         self.write_tracking_mode
     }
 
+    #[inline(always)]
     pub fn should_collect(&self) -> bool {
         self.bytes_since_gc() >= self.gc_threshold
     }
@@ -1333,7 +1334,7 @@ impl TaggedHeap {
     /// region is never granted past the threshold
     /// (`TaggedHeap::region_budget`), so the pacing gates that read this
     /// collect when they did before — at most one region early, never late.
-    #[inline]
+    #[inline(always)]
     pub fn bytes_since_gc(&self) -> usize {
         self.mutators().map(|state| state.bytes_since_gc).sum()
     }

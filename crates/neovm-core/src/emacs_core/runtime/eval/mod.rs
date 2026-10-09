@@ -6326,6 +6326,7 @@ impl Context {
         }
     }
 
+    #[inline(never)]
     fn apply_symbol_callable_untraced(
         &mut self,
         sym_id: SymId,

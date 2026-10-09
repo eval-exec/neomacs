@@ -2869,7 +2869,7 @@ impl TaggedValue {
     }
 
     /// Check if this is a bytecode function.
-    #[inline]
+    #[inline(always)]
     pub fn is_bytecode(self) -> bool {
         self.veclike_type() == Some(VecLikeType::ByteCode)
     }
