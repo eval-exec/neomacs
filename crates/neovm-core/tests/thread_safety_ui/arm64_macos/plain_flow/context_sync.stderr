@@ -31,7 +31,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
   ::: $RUST/core/src/ptr/non_null.rs
    |
    |   pub struct NonNull<T: PointeeSized> {
-   |   ----------------------------------- doesn't satisfy `NonNull<ByteCodeFunction>: Sync` or `NonNull<[Op]>: Sync`
+   |   ----------------------------------- doesn't satisfy `NonNull<ByteCodeFunction>: Sync`, `NonNull<LispBufferLocalValue>: Sync` or `NonNull<[Op]>: Sync`
    |
   ::: src/emacs_core/display/display_host/mod.rs
    |
@@ -145,6 +145,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: Sync`
            which is required by `neovm_core::Context: Sync`
            `*const i64: Sync`
+           which is required by `neovm_core::Context: Sync`
+           `NonNull<LispBufferLocalValue>: Sync`
            which is required by `neovm_core::Context: Sync`
            `(dyn FnMut() -> Result<(), std::string::String> + Send + 'static): Sync`
            which is required by `neovm_core::Context: Sync`
