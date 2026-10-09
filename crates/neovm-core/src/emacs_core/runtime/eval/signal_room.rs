@@ -26,10 +26,15 @@ impl Context {
     #[inline(never)]
     pub(crate) fn ensure_lisp_eval_depth_room(&mut self, room: i64) {
         let limit_id = max_lisp_eval_depth_symbol();
-        let reserve_id = intern("lisp-eval-depth-reserve");
         let old_limit = self.signal_depth_integer_value(limit_id);
-        let old_reserve = self.signal_depth_integer_value(reserve_id);
         let wanted = (self.depth as i64).saturating_add(room);
+        // The visible cell can differ from max_depth's effective floor.
+        // With no shortfall GNU's check neither borrows nor registers cleanup.
+        if wanted <= old_limit {
+            return;
+        }
+        let reserve_id = lisp_eval_depth_reserve_symbol();
+        let old_reserve = self.signal_depth_integer_value(reserve_id);
         let borrowed = wanted.saturating_sub(old_limit).min(old_reserve);
         if borrowed <= 0 {
             return;
@@ -47,7 +52,7 @@ impl Context {
     #[inline(never)]
     pub(super) fn restore_lisp_eval_depth_room(&mut self, old_limit: i64) {
         let limit_id = max_lisp_eval_depth_symbol();
-        let reserve_id = intern("lisp-eval-depth-reserve");
+        let reserve_id = lisp_eval_depth_reserve_symbol();
         let current_limit = self.signal_depth_integer_value(limit_id);
         let current_reserve = self.signal_depth_integer_value(reserve_id);
         self.set_signal_depth_integer(

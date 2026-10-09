@@ -1901,6 +1901,8 @@ cached_symbol_id!(closure_symbol, "closure");
 cached_symbol_id!(declare_symbol, "declare");
 cached_symbol_id!(macro_symbol, "macro");
 cached_symbol_id!(max_lisp_eval_depth_symbol, "max-lisp-eval-depth");
+// Symbol identity is global and immutable; values remain owned by each Context.
+cached_symbol_id!(lisp_eval_depth_reserve_symbol, "lisp-eval-depth-reserve");
 cached_symbol_id!(frame_alpha_lower_limit_symbol, "frame-alpha-lower-limit");
 cached_symbol_id!(byte_code_literal_symbol, "byte-code-literal");
 cached_symbol_id!(input_decode_map_symbol, "input-decode-map");
