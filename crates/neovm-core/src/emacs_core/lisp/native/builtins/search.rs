@@ -576,7 +576,9 @@ fn buffer_byte_to_char_result_in_manager(
     let buf = buffers
         .get(buffer_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    Ok(Value::fixnum(buffer_byte_to_lisp_char(buf, byte)))
+    Ok(Value::from_fixnum(
+        buf.emacs_byte_pos_to_position(byte).into(),
+    ))
 }
 
 fn search_failure_position(buf: &crate::buffer::Buffer, opts: SearchOptions) -> EmacsBytePos {
