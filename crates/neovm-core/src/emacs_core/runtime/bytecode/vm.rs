@@ -5647,7 +5647,7 @@ impl<'a> Vm<'a> {
                         }
                         if top.is_cons() {
                             *top = if observe_collections {
-                                top.cons_car()
+                                Self::cons_car_observed(*top)
                             } else {
                                 top.cons_car_unobserved()
                             };
@@ -5669,7 +5669,7 @@ impl<'a> Vm<'a> {
                         }
                         if top.is_cons() {
                             *top = if observe_collections {
-                                top.cons_cdr()
+                                Self::cons_cdr_observed(*top)
                             } else {
                                 top.cons_cdr_unobserved()
                             };
@@ -5686,7 +5686,7 @@ impl<'a> Vm<'a> {
                         let top = stk!().last_mut().unwrap();
                         *top = if top.is_cons() {
                             if observe_collections {
-                                top.cons_car()
+                                Self::cons_car_observed(*top)
                             } else {
                                 top.cons_car_unobserved()
                             }
@@ -5698,7 +5698,7 @@ impl<'a> Vm<'a> {
                         let top = stk!().last_mut().unwrap();
                         *top = if top.is_cons() {
                             if observe_collections {
-                                top.cons_cdr()
+                                Self::cons_cdr_observed(*top)
                             } else {
                                 top.cons_cdr_unobserved()
                             }
@@ -9214,6 +9214,23 @@ impl<'a> Vm<'a> {
     #[inline]
     pub(crate) fn inline_builtin_function(sym: SymId) -> Option<SubrFn> {
         crate::emacs_core::eval::inline_subr_function(sym)
+    }
+
+    /// Called only for an admitted cons when this driver's mutator observes
+    /// collection reads. Capture guards finish before a synchronous callback
+    /// returns; another mutator owns its own capture scopes.
+    /// Keep observation work outside the unobserved opcode's direct tail.
+    #[cold]
+    #[inline(never)]
+    fn cons_car_observed(value: Value) -> Value {
+        value.cons_car()
+    }
+
+    /// Same capture and cons-admission contract as [`Self::cons_car_observed`].
+    #[cold]
+    #[inline(never)]
+    fn cons_cdr_observed(value: Value) -> Value {
+        value.cons_cdr()
     }
 
     /// GNU inline-opcode semantics: call the primitive on the operand-stack
