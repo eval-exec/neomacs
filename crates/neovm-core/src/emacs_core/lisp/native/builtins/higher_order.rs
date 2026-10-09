@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 mod sort;
 mod sort_buffered;
-use sort::{SortReadStorage, SortStorage, VectorSortStorage, gnu_style_sort_items};
+use sort::{SortStorage, VectorSortStorage, gnu_style_sort_items};
 
 type MapResultVec = SmallVec<[Value; 8]>;
 

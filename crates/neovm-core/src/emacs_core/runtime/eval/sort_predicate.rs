@@ -1,7 +1,12 @@
 //! Sort's captured builtin predicate, with the ordinary funcall protocol.
+#![deny(clippy::wildcard_enum_match_arm)]
 use super::*;
 use crate::emacs_core::builtins::higher_order::{NativeSortCall, SortPredicate};
 use crate::tagged::header::{SubrFn2, SubrFnManySlice};
+
+#[cfg(test)]
+#[path = "tests/sort_stack_boundary_test.rs"]
+mod sort_stack_boundary_tests;
 
 /// Captured native bodies have distinct arity and pointer proofs. Naming the
 /// body keeps validation and invocation exhaustive when a body kind is added.
@@ -10,6 +15,75 @@ enum BufferedSortBody {
     NumericLessp,
     StringLessp,
 }
+
+/// A per-call proof that the selected native body cannot enter Lisp or collect.
+/// Verification and invocation stay in the same mutator's uninterrupted begin;
+/// no proof is cached across a callback, registration rewrite, or activation.
+#[derive(Debug)]
+#[repr(transparent)]
+#[must_use = "consume this proof when invoking the trusted native body"]
+struct VerifiedBufferedSortBody {
+    kind: BufferedSortBody,
+    _owner: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl VerifiedBufferedSortBody {
+    #[inline]
+    fn verify(kind: BufferedSortBody, entry: &SubrEntry) -> Option<Self> {
+        if entry.dispatch_kind != SubrDispatchKind::Builtin {
+            return None;
+        }
+        match kind {
+            BufferedSortBody::NumericLessp => {
+                let Some(SubrFn::ManySlice(actual)) = entry.function else {
+                    return None;
+                };
+                if entry.min_args > 2
+                    || entry.max_args.is_some_and(|maximum| maximum < 2)
+                    || !std::ptr::fn_addr_eq(
+                        actual,
+                        builtins::builtin_num_lt_slice as SubrFnManySlice,
+                    )
+                {
+                    return None;
+                }
+            }
+            BufferedSortBody::StringLessp => {
+                let Some(SubrFn::A2(actual)) = entry.function else {
+                    return None;
+                };
+                if entry.min_args != 2
+                    || entry.max_args != Some(2)
+                    || !std::ptr::fn_addr_eq(
+                        actual,
+                        builtins::strings::builtin_string_lessp_2 as SubrFn2,
+                    )
+                {
+                    return None;
+                }
+            }
+        }
+        Some(Self {
+            kind,
+            _owner: std::marker::PhantomData,
+        })
+    }
+
+    /// The pointer proof identifies these exact bodies. Neither body invokes
+    /// Lisp or collects; a native error constructs Flow for later publication.
+    #[inline]
+    fn apply(self, ctx: &mut Context, left: Value, right: Value) -> EvalResult {
+        match self.kind {
+            BufferedSortBody::NumericLessp => builtins::builtin_num_lt_slice(ctx, &[left, right]),
+            BufferedSortBody::StringLessp => {
+                builtins::strings::builtin_string_lessp_2(ctx, left, right)
+            }
+        }
+    }
+}
+
+static_assertions::assert_not_impl_any!(VerifiedBufferedSortBody: Send, Sync, Clone, Copy);
+const _: () = assert!(std::mem::size_of::<VerifiedBufferedSortBody>() == 1);
 
 impl Context {
     /// A captured `string-lessp` implementation, including `string<` aliases.
@@ -78,7 +152,9 @@ impl Context {
     }
 
     /// Begin a captured native comparison only when its ordinary funcall
-    /// prologue cannot collect, enter Lisp, grow the stack, or signal.
+    /// prologue cannot collect, enter Lisp, or signal. The ordinary Rust
+    /// stack probe still runs before the proven native body; growing that
+    /// stack cannot expose the private permutation to Lisp or collect.
     ///
     /// GNU eval.c:3194-3211 polls quit, increments depth, records the captured
     /// function, collects, and enters the debugger before calling its body.
@@ -117,8 +193,6 @@ impl Context {
             || self.debug_on_next_call_is_armed()
             || self.obarray.max_lisp_eval_depth_localized
             || entered_depth > self.max_depth
-            || (entered_depth >= STACK_GROWTH_PROBE_START_DEPTH
-                && entered_depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL))
             || self.obarray.function_epoch() != epoch
             || self.compiler_function_overrides_active()
         {
@@ -139,57 +213,21 @@ impl Context {
             return None;
         }
         let (_, entry) = subr_call_entry_from_value(subr)?;
-        if entry.dispatch_kind != SubrDispatchKind::Builtin {
-            return None;
-        }
-        // Read and verify the captured object's current body on each call.
-        // Arity changes and registration rewrites take the published slow path.
-        match body {
-            BufferedSortBody::NumericLessp => {
-                let Some(SubrFn::ManySlice(actual)) = entry.function else {
-                    return None;
-                };
-                if entry.min_args > 2
-                    || entry.max_args.is_some_and(|maximum| maximum < 2)
-                    || !std::ptr::fn_addr_eq(
-                        actual,
-                        builtins::builtin_num_lt_slice as SubrFnManySlice,
-                    )
-                {
-                    return None;
-                }
-            }
-            BufferedSortBody::StringLessp => {
-                let Some(SubrFn::A2(actual)) = entry.function else {
-                    return None;
-                };
-                if entry.min_args != 2
-                    || entry.max_args != Some(2)
-                    || !std::ptr::fn_addr_eq(
-                        actual,
-                        builtins::strings::builtin_string_lessp_2 as SubrFn2,
-                    )
-                {
-                    return None;
-                }
-            }
-        }
+        let body = VerifiedBufferedSortBody::verify(body, &entry)?;
 
         // These guards prove the fast halves of enter_interpreted_eval_depth,
-        // maybe_quit, maybe_gc, debug-on-call, and maybe_grow_eval_stack. The
-        // native body is reached with the same depth and backtrace as funcall.
+        // maybe_quit, maybe_gc, and debug-on-call. The native body is reached
+        // with the same depth and backtrace as funcall (GNU sort.c:198-214,
+        // eval.c:3194-3216). The ordinary Rust stack probe below cannot
+        // collect or enter Lisp, so it needs no permutation publication.
         self.depth = entered_depth;
         let frame_base = self.specpdl.len();
         self.push_backtrace_frame(subr, &[left, right]);
-        // The per-call pointer proof above identifies these exact bodies.
-        // Invoke them directly instead of rebuilding generic SubrFn dispatch.
-        let result = match body {
-            BufferedSortBody::NumericLessp => builtins::builtin_num_lt_slice(self, &[left, right]),
-            BufferedSortBody::StringLessp => {
-                builtins::strings::builtin_string_lessp_2(self, left, right)
-            }
-        }
-        .map_err(|flow| self.validate_throw(flow));
+        // Consume the per-call body proof across the ordinary Rust stack
+        // probe; it permits no Lisp callback or collector entry on that stack.
+        let result = self
+            .maybe_grow_eval_stack(move |ctx| body.apply(ctx, left, right))
+            .map_err(|flow| self.validate_throw(flow));
         Some(NativeSortCall { frame_base, result })
     }
 

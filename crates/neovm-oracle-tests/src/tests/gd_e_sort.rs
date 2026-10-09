@@ -37,3 +37,7 @@ mod vector_stack_temporary_root_lifetimes;
 #[cfg(test)]
 #[path = "gd_e_sort/native_storage_boundaries.rs"]
 mod native_storage_boundaries;
+
+#[cfg(test)]
+#[path = "gd_e_sort/sampled_native_boundaries.rs"]
+mod sampled_native_boundaries;
