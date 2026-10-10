@@ -77,6 +77,39 @@ fn image_color_context_keeps_foreground_and_background_roles_distinct() {
     );
 }
 
+/// Issue #556: an absent `frame_foreground` on the wire means the face
+/// foreground, as `from_pixels` documents -- not black, which a plain
+/// `#[serde(default)]` field silently produced.
+#[test]
+fn an_absent_wire_frame_foreground_reads_as_the_face_foreground() {
+    let colors = ImageColorContext::from_pixels(0x00_11_22_33, 0x00_44_55_66);
+    let mut wire = serde_json::to_value(colors).expect("serialize");
+    wire.as_object_mut()
+        .expect("an object")
+        .remove("frame_foreground");
+
+    let decoded: ImageColorContext = serde_json::from_value(wire).expect("deserialize");
+    assert_eq!(decoded.foreground().rgb24(), 0x11_22_33);
+    assert_eq!(
+        decoded.frame_foreground().rgb24(),
+        0x11_22_33,
+        "the absence means the face foreground, not black"
+    );
+    assert_eq!(decoded.background().rgb24(), 0x44_55_66);
+}
+
+/// With the field present, the value survives the round trip.
+#[test]
+fn an_explicit_wire_frame_foreground_survives_the_round_trip() {
+    let colors = ImageColorContext::from_pixels(0x00_11_22_33, 0x00_44_55_66)
+        .with_frame_foreground(0x00_12_34_56);
+
+    let json = serde_json::to_string(&colors).expect("serialize");
+    let decoded: ImageColorContext = serde_json::from_str(&json).expect("deserialize");
+
+    assert_eq!(decoded, colors);
+}
+
 #[test]
 fn unresolved_image_color_context_preserves_the_visible_monochrome_fallback() {
     let colors = ImageColorContext::default();
