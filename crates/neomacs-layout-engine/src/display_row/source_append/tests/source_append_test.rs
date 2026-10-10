@@ -10531,6 +10531,117 @@ fn display_property_replacement_append_item_resolves_string_replacement() {
     assert!(!item.is_empty());
 }
 
+/// Issue #556: a typed display-property replacement whose media is an image
+/// must key the catalog with GNU's frame foreground (`FRAME_FOREGROUND_PIXEL`,
+/// src/image.c:6518), not with the face in effect.
+#[test]
+fn display_property_media_replacement_carries_the_frame_foreground() {
+    let _eval = Context::new();
+    let active_face = test_active_face_state(FaceId::new(7), 8.0);
+    let mut font_metrics = None;
+    let mut params = test_display_space_window_params();
+    params.default_fg = 0x00_aa_00_00;
+    params.frame_foreground = 0x00_12_34_56;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let host = RecordingAppendImageHost {
+        requests: Arc::clone(&requests),
+    };
+
+    let value = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("xpm"),
+        Value::keyword("file"),
+        Value::string("swatch.xpm"),
+    ]);
+    let classification = classify_display_property(
+        value,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
+    );
+
+    let _item = DisplayPropertyReplacementSourceResolveRequest::from_typed_replacement(
+        &classification,
+        CharPos0::new(4),
+        b"x",
+        &active_face,
+        &mut font_metrics,
+        0.0,
+        0.0,
+        &params,
+        Some(&host),
+    )
+    .resolve()
+    .expect("media replacement append item");
+
+    let requests = requests.lock().expect("image requests lock");
+    let request = requests
+        .last()
+        .expect("the replacement reached the catalog");
+    assert_eq!(
+        request.colors.frame_foreground().rgb24(),
+        0x00_12_34_56,
+        "the replacement keys the catalog with the frame foreground"
+    );
+}
+
+/// The margin route to the same resolution (GNU `((margin left-margin) …)`)
+/// reads the same frame foreground (issue #556).
+#[test]
+fn margin_media_replacement_carries_the_frame_foreground() {
+    let _eval = Context::new();
+    let active_face = test_active_face_state(FaceId::new(7), 8.0);
+    let mut font_metrics = None;
+    let mut params = test_display_space_window_params();
+    params.default_fg = 0x00_aa_00_00;
+    params.frame_foreground = 0x00_12_34_56;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let host = RecordingAppendImageHost {
+        requests: Arc::clone(&requests),
+    };
+
+    let image = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("xpm"),
+        Value::keyword("file"),
+        Value::string("swatch.xpm"),
+    ]);
+    let value = Value::list(vec![
+        Value::list(vec![Value::symbol("margin"), Value::symbol("left-margin")]),
+        image,
+    ]);
+    let classification = classify_display_property(
+        value,
+        &crate::display_when::DisplayWhenConditions::structural(),
+        DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
+    );
+
+    let _item = DisplayPropertyReplacementSourceResolveRequest::from_typed_replacement(
+        &classification,
+        CharPos0::new(4),
+        b"x",
+        &active_face,
+        &mut font_metrics,
+        0.0,
+        0.0,
+        &params,
+        Some(&host),
+    )
+    .resolve()
+    .expect("margin media replacement append item");
+
+    let requests = requests.lock().expect("image requests lock");
+    let request = requests.last().expect("the margin reached the catalog");
+    assert_eq!(
+        request.colors.frame_foreground().rgb24(),
+        0x00_12_34_56,
+        "the margin media keys the catalog with the frame foreground"
+    );
+}
+
 #[test]
 fn display_property_replacement_append_item_resolves_stretch_replacement() {
     let _eval = Context::new();
@@ -11153,6 +11264,7 @@ fn test_display_space_window_params() -> WindowParams {
         scroll_margin: 0,
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,
+        frame_foreground: 0xFFFFFF,
         default_bg: 0x000000,
         char_width: 8.0,
         char_height: 16.0,

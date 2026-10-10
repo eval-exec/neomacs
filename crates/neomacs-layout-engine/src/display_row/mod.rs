@@ -1154,6 +1154,9 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                     ),
                     default_fg: base_face.fg,
                     default_bg: base_face.bg,
+                    // The frame's un-remapped `default` face, as in the media
+                    // resolution beside it (issue #556).
+                    frame_foreground: context.face_resolver.default_face().fg,
                 });
         let mut row_layout = geometry.to_layout(
             role,

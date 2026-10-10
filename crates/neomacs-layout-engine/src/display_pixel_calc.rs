@@ -156,6 +156,10 @@ pub struct PixelCalcImageInputs {
     pub dimensions: crate::display_spec::DisplayImageDimensionEnvironment,
     pub default_fg: u32,
     pub default_bg: u32,
+    /// GNU's `FRAME_FOREGROUND_PIXEL`: the frame's `foreground-color`, which
+    /// keys the catalog entry a decoder that must paint an unresolvable color
+    /// key with something would read (src/image.c:6518; issue #556).
+    pub frame_foreground: u32,
 }
 
 fn collect_space_image_operands(
