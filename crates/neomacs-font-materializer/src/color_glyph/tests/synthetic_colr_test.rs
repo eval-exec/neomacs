@@ -840,9 +840,9 @@ fn inkless_clip_hides_its_subgraph() {
 }
 
 /// A bare fill after a `pop_clip` has no shape of its own any more.  Nothing
-/// bounds it — no clip box and no `PaintGlyph` ancestor — so the spec forbids
-/// rendering it, and it must not silently keep painting the previous layer's
-/// outline.
+/// bounds it — no clip box and no `PaintGlyph` ancestor — so the color glyph
+/// definition is unbounded, and the spec requires the whole glyph not to
+/// render, not just the bare fill to be skipped.
 #[test]
 fn a_bare_layer_fill_has_no_inherited_outline() {
     let (base, layer) = (glyph('A'), glyph('H'));
@@ -851,32 +851,14 @@ fn a_bare_layer_fill_has_no_inherited_outline() {
         paint_solid(1, 1.0),
     ];
     let root = paint_colr_layers(0, 2);
-    let with_bare = font_with_color_tables(
+    let unbounded = font_with_color_tables(
         colr_v1_table_with_layers(base, &root, &layers, None),
         cpal_table(&[RED, GREEN]),
     );
-    let layered_only = font_with_color_tables(
-        colr_v1_table_with_layers(base, &paint_colr_layers(0, 1), &layers[..1], None),
-        cpal_table(&[RED, GREEN]),
-    );
-    let with_bare = rasterize(&with_bare, "synthetic:stale-outline", base, [0, 0, 0, 255])
-        .expect("the shaped layer still paints");
-    let layered_only = rasterize(&layered_only, "synthetic:layers-only", base, [0, 0, 0, 255])
-        .expect("the shaped layer still paints");
     assert_eq!(
-        (with_bare.width, with_bare.height),
-        (layered_only.width, layered_only.height)
-    );
-    let worst = with_bare
-        .rgba
-        .iter()
-        .zip(&layered_only.rgba)
-        .map(|(with_bare, layered_only)| with_bare.abs_diff(*layered_only))
-        .max()
-        .expect("rasters have pixels");
-    assert!(
-        worst == 0,
-        "the unbounded bare fill painted into the layer list: worst channel delta {worst}"
+        rasterize(&unbounded, "synthetic:stale-outline", base, [0, 0, 0, 255]),
+        None,
+        "an unbounded color glyph must not render at all"
     );
 
     // The same graph under a clip box is bounded: the bare fill paints the
@@ -894,6 +876,49 @@ fn a_bare_layer_fill_has_no_inherited_outline() {
     let raster = rasterize(&bounded, "synthetic:boxed-layers", base, [0, 0, 0, 255])
         .expect("a boxed layer list paints");
     assert_close_to(mean_color(&raster), GREEN, 8.0);
+}
+
+/// Spec format 32: COMPOSITE_SRC_IN is bounded when *either* operand is, so
+/// an unbounded backdrop must still paint: it fills the surface under the
+/// source, and source-in keeps the artwork.  Skipping the unbounded fill
+/// would leave the destination transparent and erase the composite's result.
+#[test]
+fn composite_src_in_paints_its_unbounded_backdrop() {
+    let base = glyph('A');
+    let composite = paint_composite(
+        &paint_solid(0, 1.0),                     // backdrop: red, unbounded
+        5,                                        // CompositeMode::SourceIn
+        &paint_glyph(base, &paint_solid(1, 1.0)), // source: bounded green A
+    );
+    let font = font_with_color_tables(colr_v1_table(base, &composite), cpal_table(&[RED, GREEN]));
+    let raster = rasterize(&font, "synthetic:composite-src-in", base, [0, 0, 0, 255])
+        .expect("a bounded composite paints");
+    let painted = raster.rgba.chunks_exact(4).filter(|p| p[3] > 0).count();
+    assert!(
+        painted > 100,
+        "source-in of a full-surface backdrop must keep the source's ink, got {painted} painted pixels"
+    );
+    // The backdrop's alpha is one everywhere, so source-in is the source
+    // itself: every covered pixel is the source colour, at its own coverage.
+    assert_close_to(mean_color(&raster), GREEN, 8.0);
+}
+
+/// Spec format 32: COMPOSITE_CLEAR is always bounded, but clearing over
+/// nothing observable leaves nothing to show, and the glyph measures empty.
+#[test]
+fn composite_clear_over_unbounded_fills_measures_empty() {
+    let base = glyph('A');
+    let composite = paint_composite(
+        &paint_solid(0, 1.0),
+        0, // CompositeMode::Clear
+        &paint_solid(1, 1.0),
+    );
+    let font = font_with_color_tables(colr_v1_table(base, &composite), cpal_table(&[RED, GREEN]));
+    assert_eq!(
+        rasterize(&font, "synthetic:composite-clear", base, [0, 0, 0, 255]),
+        None,
+        "a clear with no bounded content shows nothing"
+    );
 }
 
 /// A legal graph can fan out exponentially through the one `LayerList`;

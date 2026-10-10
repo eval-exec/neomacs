@@ -769,6 +769,12 @@ pub(super) fn paint_colr_glyph(
     if recorder.malformed || recorder.steps.is_empty() {
         return None;
     }
+    // Spec: a color glyph definition must be bounded — "applications must
+    // confirm that the color glyph definition is bounded, and must not render
+    // the color glyph if the defining graph is not bounded."
+    if !graph_is_bounded(&recorder.steps) {
+        return None;
+    }
 
     let scale = request.px_size / units_per_em;
     if !scale.is_finite() || scale <= 0.0 {
@@ -1094,6 +1100,60 @@ fn replay_geometry<'a>(
     }
 }
 
+/// Whether the recorded graph paints a bounded region, per the spec's
+/// per-format boundedness rules.
+///
+/// A fill is bounded by a clip in force or by its own shape; a composite is
+/// bounded only per the format-32 table, which can bound a sub-graph whose
+/// own fills are unbounded (or unbind one whose fills are not).  The
+/// composite driver records its two layers as adjacent pushes — backdrop,
+/// source — and pops them adjacently, which is what identifies a composite
+/// here.
+fn graph_is_bounded(steps: &[Step]) -> bool {
+    // (mode of the layer, whether it contains an unbounded fill or composite)
+    let mut scopes: Vec<(CompositeMode, bool)> = vec![(CompositeMode::SourceOver, false)];
+    for (index, step) in steps.iter().enumerate() {
+        match step {
+            Step::Fill { bounded: false, .. } => {
+                if let Some(scope) = scopes.last_mut() {
+                    scope.1 = true;
+                }
+            }
+            Step::PushLayer(mode) => scopes.push((*mode, false)),
+            Step::PopLayer => {
+                let Some((mode, source_unbounded)) = scopes.pop() else {
+                    return false;
+                };
+                if matches!(steps.get(index + 1), Some(Step::PopLayer)) {
+                    // This pops a composite's source layer; the next pops the
+                    // backdrop wrapper it was composed onto.
+                    let Some(backdrop) = scopes.last_mut() else {
+                        return false;
+                    };
+                    backdrop.1 = !composite_is_bounded(mode, !source_unbounded, !backdrop.1);
+                } else if let Some(parent) = scopes.last_mut() {
+                    parent.1 |= source_unbounded;
+                }
+            }
+            _ => {}
+        }
+    }
+    // The root scope's flag: bounded when nothing unbounded escaped to it.
+    scopes.first().is_some_and(|(_, unbounded)| !unbounded)
+}
+
+/// The format-32 boundedness table.
+fn composite_is_bounded(mode: CompositeMode, source: bool, backdrop: bool) -> bool {
+    match mode {
+        // Always bounded.
+        CompositeMode::Clear => true,
+        CompositeMode::Source | CompositeMode::SourceOut => source,
+        CompositeMode::Destination | CompositeMode::DestinationOut => backdrop,
+        CompositeMode::SourceIn | CompositeMode::DestinationIn => source || backdrop,
+        _ => source && backdrop,
+    }
+}
+
 /// Apply a step's graph transform on top of the device transform.
 fn resolve<'p>(
     paths: &'p [Path],
@@ -1126,16 +1186,49 @@ impl<'a> RasterState<'a> {
                     paint,
                     bounded,
                 } => {
-                    if !*bounded {
-                        // The spec forbids rendering an unbounded fill; the
-                        // record pass already drops a glyph containing one.
-                        tracing::trace!(target: "font_boundary", "skipping unbounded color fill");
-                        continue;
-                    }
-                    let Some((path, shape_transform, source)) =
-                        replay_geometry(self.paths, &self.clips, shape)
-                    else {
-                        continue;
+                    let geometry = replay_geometry(self.paths, &self.clips, shape);
+                    // A fill the graph leaves unbounded — which the whole
+                    // graph check only lets through inside a composite whose
+                    // mode bounds it by the other operand — paints the whole
+                    // surface, in the space its paint was recorded in.
+                    let surface_path: Option<Path> = match (&geometry, *bounded) {
+                        (None, false) => {
+                            let matrix = self.transform.pre_concat(*paint_transform);
+                            let Some(inverse) = matrix.invert() else {
+                                continue;
+                            };
+                            let (width, height) = self.size;
+                            let mut corners = [
+                                Point::from_xy(0.0, 0.0),
+                                Point::from_xy(width as f32, 0.0),
+                                Point::from_xy(width as f32, height as f32),
+                                Point::from_xy(0.0, height as f32),
+                            ];
+                            for corner in &mut corners {
+                                inverse.map_point(corner);
+                            }
+                            let x_min = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+                            let x_max = corners
+                                .iter()
+                                .map(|p| p.x)
+                                .fold(f32::NEG_INFINITY, f32::max);
+                            let y_min = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+                            let y_max = corners
+                                .iter()
+                                .map(|p| p.y)
+                                .fold(f32::NEG_INFINITY, f32::max);
+                            let Some(rect) = tiny_skia::Rect::from_ltrb(x_min, y_min, x_max, y_max)
+                            else {
+                                continue;
+                            };
+                            Some(PathBuilder::from_rect(rect))
+                        }
+                        _ => None,
+                    };
+                    let (path, shape_transform, source) = match (&geometry, &surface_path) {
+                        (Some((path, transform, source)), _) => (*path, *transform, Some(*source)),
+                        (None, Some(path)) => (path, *paint_transform, None),
+                        (None, None) => continue,
                     };
                     // The paint is placed relative to the shape: inside a
                     // PaintGlyph a transform moves the child paint, while the
@@ -1155,23 +1248,27 @@ impl<'a> RasterState<'a> {
                     // path already carries its coverage, and multiplying it in
                     // again would square every antialiased edge.
                     let mut folded: Option<Mask> = None;
-                    let clip: Option<&Mask> = if self
-                        .clips
-                        .iter()
-                        .any(|frame| frame.source.same_geometry(&source, self.paths))
-                    {
-                        for frame in &self.clips {
-                            if frame.source.same_geometry(&source, self.paths) {
-                                continue;
+                    let clip: Option<&Mask> = if let Some(source) = &source {
+                        if self
+                            .clips
+                            .iter()
+                            .any(|frame| frame.source.same_geometry(source, self.paths))
+                        {
+                            for frame in &self.clips {
+                                if frame.source.same_geometry(source, self.paths) {
+                                    continue;
+                                }
+                                match &mut folded {
+                                    Some(mask) => intersect_masks(&frame.own, mask),
+                                    None => folded = Some(frame.own.clone()),
+                                }
                             }
-                            match &mut folded {
-                                Some(mask) => intersect_masks(&frame.own, mask),
-                                None => folded = Some(frame.own.clone()),
-                            }
+                            folded.as_ref()
+                        } else {
+                            self.clips.last().map(|frame| &frame.cumulative)
                         }
-                        folded.as_ref()
                     } else {
-                        self.clips.last().map(|frame| &frame.cumulative)
+                        None
                     };
                     let transform = self.transform.pre_concat(shape_transform);
                     let target = match self.layers.last_mut() {
