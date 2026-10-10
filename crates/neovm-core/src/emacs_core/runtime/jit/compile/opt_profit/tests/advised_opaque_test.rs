@@ -348,8 +348,7 @@ fn opt_profit_lists48_osr_aset_ignores_collecting_advice_and_preserves_retained_
     assert_eq!(pair.cons_car(), Value::make_int(3));
     assert_eq!(
         ctx.obarray
-            .symbol_value("opt-profit--aset-advice-calls")
-            .copied(),
+            .symbol_value_copied("opt-profit--aset-advice-calls"),
         Some(Value::make_int(0)),
         "GNU Baset never enters collecting advice"
     );
@@ -361,8 +360,7 @@ fn opt_profit_lists48_osr_aset_ignores_collecting_advice_and_preserves_retained_
     );
     assert_eq!(
         ctx.obarray
-            .symbol_value("opt-profit--aset-advice-calls")
-            .copied(),
+            .symbol_value_copied("opt-profit--aset-advice-calls"),
         Some(Value::make_int(1))
     );
 }

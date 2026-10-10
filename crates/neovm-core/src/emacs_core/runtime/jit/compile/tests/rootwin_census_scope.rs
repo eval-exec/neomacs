@@ -64,7 +64,9 @@ fn lower(f: &ByteCodeFunction, entry: NativeEntry) -> (CompiledLeaf, RootCounts)
             lower_leaf_full_osr(
                 f.executable_ops(),
                 &f.constants,
-                f.params.required.len(),
+                JitParamShape::try_from(f)
+                    .expect("fixture has valid native parameter slots")
+                    .required(),
                 f.executable_gnu_byte_offset_map(),
                 None,
                 entry.osr_pc(),
