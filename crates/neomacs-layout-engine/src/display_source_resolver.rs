@@ -571,7 +571,7 @@ impl<'a, 'source> DisplayPropertyReplacementSourceResolveRequest<'a, 'source> {
                         fallback_metrics,
                         self.params.image_scale_environment,
                         *image_slice,
-                        self.params.default_fg,
+                        self.params.frame_foreground,
                     )?;
                     let kind = match resolution {
                         DisplayReplacementMediaSourceResolution::Media(item) => {
@@ -616,7 +616,7 @@ impl<'a, 'source> DisplayPropertyReplacementSourceResolveRequest<'a, 'source> {
                     fallback_metrics,
                     self.params.image_scale_environment,
                     display_property.image_slice(),
-                    self.params.default_fg,
+                    self.params.frame_foreground,
                 )?;
                 DisplayPropertyReplacementSourceInputs::empty().with_media(media)
             }
