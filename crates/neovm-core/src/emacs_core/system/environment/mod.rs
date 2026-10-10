@@ -21,7 +21,7 @@ pub(crate) enum EnvironmentLookup {
     Missing,
 }
 
-fn host_process_environment() -> Value {
+fn host_environment_entries() -> Vec<(String, String)> {
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut entries: Vec<(String, String)> = std::env::vars().collect();
     // Mirror GNU `w32.c init_environment`: guarantee HOME is set on Windows,
@@ -48,13 +48,93 @@ fn host_process_environment() -> Value {
         entries.retain(|(name, _)| !name.eq_ignore_ascii_case("SHELL"));
         entries.push(("SHELL".to_owned(), shell.lisp_name().to_owned()));
     }
+    entries
+}
 
+fn environment_list(entries: Vec<(String, String)>) -> Value {
     Value::list(
         entries
             .into_iter()
             .map(|(name, value)| Value::string(format!("{name}={value}")))
             .collect::<Vec<_>>(),
     )
+}
+
+/// Names of the variables a launcher wrapper changed, `:`-separated.
+const LAUNCHER_CHANGED_ENV: &str = "NEOMACS_WRAPPER_ENV";
+/// Prefix of the variables holding the values those names had before the
+/// wrapper ran; a name without one was unset.
+const LAUNCHER_ORIGINAL_ENV_PREFIX: &str = "NEOMACS_WRAPPER_ORIGINAL_";
+
+/// Undo a launcher wrapper's changes to the inherited environment.
+///
+/// A packaged Neomacs can start through a wrapper that points the editor at
+/// its private libraries, runtime files, drivers and plugins (the Nix
+/// package prefixes `LD_LIBRARY_PATH`, for one).  Those settings belong to
+/// the editor process; a program started from Neomacs must not run with
+/// them.  GNU's `initial-environment' is the environment inherited from the
+/// parent process, which is the one the user launched with, so rebuild it
+/// from the wrapper's record (see `nix/package.nix').  Unlike GNU, the Lisp
+/// startup environment then differs from this process's own `environ' by
+/// exactly the wrapper's changes.  That native environment is untouched:
+/// the dynamic loader has already fixed the editor's library search path,
+/// and libraries that read their settings later (Vulkan, GStreamer) keep
+/// seeing them.
+fn environment_before_launcher(inherited: Vec<(String, String)>) -> Vec<(String, String)> {
+    let Some(changed) = inherited
+        .iter()
+        .find(|(name, _)| environment_name_eq(name.as_bytes(), LAUNCHER_CHANGED_ENV.as_bytes()))
+        .map(|(_, names)| names.clone())
+    else {
+        return inherited;
+    };
+    let changed: Vec<&str> = changed.split(':').filter(|name| !name.is_empty()).collect();
+    let is_changed = |name: &str| {
+        changed
+            .iter()
+            .any(|changed| environment_name_eq(changed.as_bytes(), name.as_bytes()))
+    };
+    let launcher_record = |name: &str| {
+        environment_name_eq(name.as_bytes(), LAUNCHER_CHANGED_ENV.as_bytes())
+            || name
+                .split_at_checked(LAUNCHER_ORIGINAL_ENV_PREFIX.len())
+                .is_some_and(|(prefix, _)| {
+                    environment_name_eq(prefix.as_bytes(), LAUNCHER_ORIGINAL_ENV_PREFIX.as_bytes())
+                })
+    };
+    let original = |name: &str| {
+        inherited.iter().find_map(|(entry, value)| {
+            let (prefix, suffix) = entry.split_at_checked(LAUNCHER_ORIGINAL_ENV_PREFIX.len())?;
+            (environment_name_eq(prefix.as_bytes(), LAUNCHER_ORIGINAL_ENV_PREFIX.as_bytes())
+                && environment_name_eq(suffix.as_bytes(), name.as_bytes()))
+            .then(|| value.clone())
+        })
+    };
+
+    let mut restored = Vec::with_capacity(inherited.len());
+    for (name, value) in &inherited {
+        if launcher_record(name) {
+            continue;
+        }
+        if is_changed(name) {
+            if let Some(original) = original(name) {
+                restored.push((name.clone(), original));
+            }
+        } else {
+            restored.push((name.clone(), value.clone()));
+        }
+    }
+    // A variable the launcher removed outright comes back too.
+    for name in changed {
+        if !restored
+            .iter()
+            .any(|(entry, _)| environment_name_eq(entry.as_bytes(), name.as_bytes()))
+            && let Some(original) = original(name)
+        {
+            restored.push((name.to_owned(), original));
+        }
+    }
+    restored
 }
 
 /// Install the environment inherited by this Neomacs process as the Lisp
@@ -66,7 +146,11 @@ fn host_process_environment() -> Value {
 /// operation when it is activated, because its dumped environment belongs to
 /// the process that created the cache rather than the current process.
 pub(crate) fn install_host_environment_snapshot(eval: &mut Context) {
-    let process_environment = host_process_environment();
+    install_environment_snapshot(eval, host_environment_entries());
+}
+
+fn install_environment_snapshot(eval: &mut Context, inherited: Vec<(String, String)>) {
+    let process_environment = environment_list(environment_before_launcher(inherited));
     {
         let obarray = eval.obarray_mut();
         obarray.make_special("initial-environment");
@@ -399,3 +483,7 @@ pub(crate) fn getenv_internal(
 
     Ok(Value::NIL)
 }
+
+#[cfg(test)]
+#[path = "tests/mod.rs"]
+mod tests;

@@ -91,6 +91,28 @@ let
           marker = "nix installed-package contract ok";
         }}
 
+        # The wrapper's private library path, runtime root and plugin paths
+        # configure Neomacs itself; a subprocess gets the launching
+        # environment back, unset variables included.
+        cat > child-environment.sh <<'EOF'
+        for v in LD_LIBRARY_PATH NEOMACS_RUNTIME_ROOT RUST_LOG NEOMACS_WRAPPER_ENV; do
+          eval "if [ -n \"\''${$v+x}\" ]; then echo \"$v=\$$v\"; else echo $v!; fi"
+        done
+        EOF
+        child_environment_form="(progn (call-process \"${pkgs.runtimeShell}\" nil t nil \"$PWD/child-environment.sh\") (princ (buffer-string)))"
+        test "$(env -u LD_LIBRARY_PATH -u NEOMACS_RUNTIME_ROOT -u RUST_LOG \
+                  ${checkedPackage}/bin/neomacs --batch --eval "$child_environment_form")" \
+          = "$(printf '%s\n' LD_LIBRARY_PATH! NEOMACS_RUNTIME_ROOT! RUST_LOG! NEOMACS_WRAPPER_ENV!)"
+        test "$(env -u NEOMACS_RUNTIME_ROOT LD_LIBRARY_PATH=/user/lib RUST_LOG=warn \
+                  ${checkedPackage}/bin/neomacs --batch --eval "$child_environment_form")" \
+          = "$(printf '%s\n' LD_LIBRARY_PATH=/user/lib NEOMACS_RUNTIME_ROOT! RUST_LOG=warn NEOMACS_WRAPPER_ENV!)"
+        # A stale saved value without its list does not bring back a
+        # variable the user had unset.
+        test "$(env -u LD_LIBRARY_PATH -u NEOMACS_RUNTIME_ROOT -u RUST_LOG \
+                  NEOMACS_WRAPPER_ORIGINAL_LD_LIBRARY_PATH=/stale/lib \
+                  ${checkedPackage}/bin/neomacs --batch --eval "$child_environment_form")" \
+          = "$(printf '%s\n' LD_LIBRARY_PATH! NEOMACS_RUNTIME_ROOT! RUST_LOG! NEOMACS_WRAPPER_ENV!)"
+
         touch "$out"
       '';
 in
