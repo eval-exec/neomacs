@@ -1684,6 +1684,10 @@ pub fn window_params_from_neovm_with_font_sizing(
     let buffer_default_face = face_resolver.resolve_buffer_default_face(buffer);
     let default_fg = buffer_default_face.fg;
     let default_bg = buffer_default_face.bg;
+    // The frame's own `default` face, un-remapped: GNU's `FRAME_FOREGROUND_PIXEL`
+    // (src/image.c:6518), which a buffer's `face-remapping-alist` does not move
+    // (issue #556).
+    let frame_foreground = face_resolver.default_face().fg;
 
     Some(WindowParams {
         // Filled in by `resolve_window_display_source_params`, the one place
@@ -1763,6 +1767,7 @@ pub fn window_params_from_neovm_with_font_sizing(
             .collect(),
         default_fg,
         default_bg,
+        frame_foreground,
         char_width,
         char_height,
         window_system: is_window_system,

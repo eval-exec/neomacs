@@ -1738,6 +1738,7 @@ fn test_window_params() -> WindowParams {
         scroll_margin: 0,
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,
+        frame_foreground: 0xFFFFFF,
         default_bg: 0x000000,
         char_width: 8.0,
         char_height: 16.0,
@@ -18112,6 +18113,78 @@ impl ImageCatalog for FixedSizeImageCatalog {
                 ),
         })
     }
+}
+
+/// Records the `ImageResolveRequest`s the size path keys the catalog with, so
+/// a test can read the color context a decode would be scheduled under
+/// (issue #556).
+struct RecordingImageCatalog {
+    requests: std::rc::Rc<std::cell::RefCell<Vec<ImageResolveRequest>>>,
+}
+
+impl ImageCatalog for RecordingImageCatalog {
+    fn lookup(&self, request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
+        self.requests.borrow_mut().push(request);
+        ImageLookup::Ready(ReadyImage {
+            load: test_image_load(9),
+            metadata:
+                neovm_core::emacs_core::image_catalog::ResolvedImageMetadata::layout_is_image_pixels(
+                    400, 300, 0, false,
+                    neomacs_display_protocol::ImageMaskKind::None,
+                ),
+        })
+    }
+}
+
+/// Issue #556: an `(image …)` operand inside `(space …)` must key the catalog
+/// with GNU's frame foreground (`FRAME_FOREGROUND_PIXEL`, src/image.c:6518) --
+/// the key decides which decode is scheduled for those pixels.
+#[test]
+fn space_image_operand_keys_the_catalog_with_the_frame_foreground() {
+    let _eval = Context::new();
+    let mut params = test_window_params();
+    params.default_fg = 0x00_aa_00_00;
+    params.frame_foreground = 0x00_12_34_56;
+    let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    params.space_image_catalog = Some(crate::types::SharedImageCatalog(std::rc::Rc::new(
+        RecordingImageCatalog {
+            requests: std::rc::Rc::clone(&requests),
+        },
+    )));
+
+    let image = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("xpm"),
+        Value::keyword("file"),
+        Value::string("swatch.xpm"),
+        Value::keyword("foreground"),
+        Value::string("blue"),
+    ]);
+    let spec = Value::list(vec![
+        Value::symbol("space"),
+        Value::keyword("width"),
+        image,
+    ]);
+
+    let _geometry = DisplaySpaceGeometry::from_display_space_spec(
+        &spec, 0.0, 0.0, 8.0, 8.0, 10.0, 7.0, &params,
+    );
+
+    let requests = requests.borrow();
+    let request = requests
+        .last()
+        .expect("the (image …) operand reached the catalog");
+    assert_eq!(
+        request.colors.foreground().rgb24(),
+        0x00_00_ff,
+        "the specification's :foreground is the face color"
+    );
+    assert_eq!(
+        request.colors.frame_foreground().rgb24(),
+        0x00_12_34_56,
+        "the operand keys the catalog with the frame foreground, as GNU's lookup_image does"
+    );
 }
 
 #[test]
