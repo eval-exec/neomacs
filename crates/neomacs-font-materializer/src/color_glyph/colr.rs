@@ -65,7 +65,13 @@ struct Positioned {
 #[derive(Clone, Debug)]
 enum Step {
     Fill {
+        /// The region the fill paints, with the transform it was outlined
+        /// under: a transform pushed between a `PaintGlyph` and its child
+        /// moves the paint, not the clip outline.
         shape: Positioned,
+        /// The transform in force when the paint table itself was reached.
+        /// Gradients are placed by it, relative to the shape.
+        paint_transform: SkiaTransform,
         paint: PaintRecord,
         /// Whether a bounding ancestor covered this fill.
         bounded: bool,
@@ -198,8 +204,11 @@ struct GraphRecorder<'a> {
     steps: Vec<Step>,
     /// Transform stack; the top is the transform current steps are recorded in.
     transforms: Vec<SkiaTransform>,
-    /// The path most recently produced by `outline_glyph`.
-    outlined: Option<PathId>,
+    /// The path most recently produced by `outline_glyph`, with the transform
+    /// in force when it was outlined.  The transform is part of the record:
+    /// a `PaintTransform` between a `PaintGlyph` and its child moves the
+    /// child's paint, while the outline the clip was taken from stays put.
+    outlined: Option<Positioned>,
     /// Depth of bounding ancestors (`PaintGlyph` clips and clip boxes).
     bounding_depth: usize,
     /// Set when the graph is malformed; the glyph then paints nothing.
@@ -564,9 +573,13 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
         }
         let mut outline = GlyphPath::default();
         self.face.outline_glyph(glyph_id, &mut outline);
+        let transform = self.current_transform();
         // No outline leaves the stored path empty, so a fill paints nothing
         // and a clip clips everything away.
-        self.outlined = outline.finish().map(|path| self.push_path(path));
+        self.outlined = outline.finish().map(|path| Positioned {
+            path: Some(self.push_path(path)),
+            transform,
+        });
     }
 
     fn paint(&mut self, paint: Paint<'a>) {
@@ -577,7 +590,11 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
             return;
         };
         let step = Step::Fill {
-            shape: self.positioned(self.outlined),
+            // A transform between the `PaintGlyph` and this paint moved the
+            // paint, not the outline the clip was taken from: the shape keeps
+            // the transform captured at outline time.
+            shape: self.outlined.unwrap_or_else(|| self.positioned(None)),
+            paint_transform: self.current_transform(),
             paint: record,
             // A fill is bounded by a bounding ancestor or by its own shape.
             // Version 0 layer records produce the second case: they outline a
@@ -593,7 +610,7 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
         if self.malformed {
             return;
         }
-        let step = Step::PushClip(self.positioned(self.outlined));
+        let step = Step::PushClip(self.outlined.unwrap_or_else(|| self.positioned(None)));
         self.record_step(step);
         self.bounding_depth += 1;
     }
@@ -766,10 +783,10 @@ pub(super) fn paint_colr_glyph(
     let place = SkiaTransform::from_translate(-bounds.left_px as f32, -bounds.top_px as f32);
     // Pixel = place(device(font unit)) — the grid translation happens in
     // device space, after the graph transform has been applied.
-    let paint_transform = place.pre_concat(device);
+    let placement = place.pre_concat(device);
 
     let mut surface = Pixmap::new(bounds.width_cells, bounds.height_cells)?;
-    let mut state = RasterState::new(&recorder.paths, paint_transform, &surface);
+    let mut state = RasterState::new(&recorder.paths, placement, &surface);
     if !state.replay(&recorder.steps, &mut surface) {
         return None;
     }
@@ -1042,31 +1059,32 @@ struct RasterState<'a> {
 /// has none — the clip in force, whose own path the spec makes the fill's
 /// shape.
 ///
-/// Returns the source identity alongside so the caller can leave that one clip
-/// out of the mask: it bounds the fill by being its shape, not by narrowing it
-/// a second time.
+/// Returns the region's *graph-space* transform alongside the source identity:
+/// the caller composes it with the device transform for the fill, and inverts
+/// it to place the paint relative to the shape.  The identity lets the caller
+/// leave that one clip out of the mask: it bounds the fill by being its shape,
+/// not by narrowing it a second time.
 fn replay_geometry<'a>(
     paths: &'a [Path],
     clips: &'a [ClipFrame],
-    device: SkiaTransform,
     shape: &Positioned,
 ) -> Option<(&'a Path, SkiaTransform, ClipSource)> {
     if shape.path.is_some() {
-        let (path, transform) = resolve(paths, device, shape)?;
-        return Some((path, transform, ClipSource::Outline(*shape)));
+        let path = paths.get(shape.path?.0 as usize)?;
+        return Some((path, shape.transform, ClipSource::Outline(*shape)));
     }
     let frame = clips.last()?;
     match frame.source {
         ClipSource::Outline(outline) if outline.path.is_some() => {
-            let (path, transform) = resolve(paths, device, &outline)?;
-            Some((path, transform, ClipSource::Outline(outline)))
+            let path = paths.get(outline.path?.0 as usize)?;
+            Some((path, outline.transform, ClipSource::Outline(outline)))
         }
         ClipSource::Box {
             clip_box,
             transform,
         } => Some((
             frame.box_path.as_ref()?,
-            device.pre_concat(transform),
+            transform,
             ClipSource::Box {
                 clip_box,
                 transform,
@@ -1104,6 +1122,7 @@ impl<'a> RasterState<'a> {
             match step {
                 Step::Fill {
                     shape,
+                    paint_transform,
                     paint,
                     bounded,
                 } => {
@@ -1113,12 +1132,23 @@ impl<'a> RasterState<'a> {
                         tracing::trace!(target: "font_boundary", "skipping unbounded color fill");
                         continue;
                     }
-                    let Some(paint) = build_skia_paint(paint) else {
+                    let Some((path, shape_transform, source)) =
+                        replay_geometry(self.paths, &self.clips, shape)
+                    else {
                         continue;
                     };
-                    let Some((path, transform, source)) =
-                        replay_geometry(self.paths, &self.clips, self.transform, shape)
+                    // The paint is placed relative to the shape: inside a
+                    // PaintGlyph a transform moves the child paint, while the
+                    // outline the shape came from stays put.  The shader is
+                    // evaluated in the path's own space, so the shape-to-paint
+                    // transform is what places its geometry.
+                    let Some(shader_transform) = shape_transform
+                        .invert()
+                        .map(|inverse| inverse.pre_concat(*paint_transform))
                     else {
+                        continue;
+                    };
+                    let Some(paint) = build_skia_paint(paint, shader_transform) else {
                         continue;
                     };
                     // The fill's own clip is left out of the mask: the fill's
@@ -1143,6 +1173,7 @@ impl<'a> RasterState<'a> {
                     } else {
                         self.clips.last().map(|frame| &frame.cumulative)
                     };
+                    let transform = self.transform.pre_concat(shape_transform);
                     let target = match self.layers.last_mut() {
                         Some((layer, _)) => layer,
                         None => &mut *surface,
@@ -1262,13 +1293,16 @@ fn intersect_masks(parent: &Mask, child: &mut Mask) {
 
 /// Build the tiny-skia paint for one recorded shader.
 ///
-/// The shader transform is the identity on purpose: tiny-skia evaluates shader
-/// coordinates in the *path's own* coordinate space, which is exactly the
-/// space this module records geometry in (font units, before the graph
-/// transform).  Graph transforms still reach the shader, because the fill's
-/// transform moves the path and the shader's geometry is in the same space as
-/// the path.
-fn build_skia_paint(record: &PaintRecord) -> Option<SkiaPaint<'static>> {
+/// `shader_transform` places the shader's geometry relative to the fill's
+/// path: tiny-skia evaluates shader coordinates in the *path's own* space,
+/// which is the space this module records geometry in (font units, before the
+/// graph transform).  It is the shape-to-paint transform — the identity
+/// whenever the shape and the paint sit under the same graph transform, and
+/// otherwise exactly the transform pushed between them.
+fn build_skia_paint(
+    record: &PaintRecord,
+    shader_transform: SkiaTransform,
+) -> Option<SkiaPaint<'static>> {
     let solid = |color: RgbaColor| SkiaPaint {
         shader: Shader::SolidColor(to_skia_color(color)),
         ..SkiaPaint::default()
@@ -1292,7 +1326,7 @@ fn build_skia_paint(record: &PaintRecord) -> Option<SkiaPaint<'static>> {
                 *end,
                 gradient_stops(stops),
                 *spread,
-                SkiaTransform::identity(),
+                shader_transform,
             )?,
             ..SkiaPaint::default()
         },
@@ -1311,7 +1345,7 @@ fn build_skia_paint(record: &PaintRecord) -> Option<SkiaPaint<'static>> {
                 *end_radius,
                 gradient_stops(stops),
                 *spread,
-                SkiaTransform::identity(),
+                shader_transform,
             )?,
             ..SkiaPaint::default()
         },
@@ -1325,7 +1359,7 @@ fn build_skia_paint(record: &PaintRecord) -> Option<SkiaPaint<'static>> {
                 360.0,
                 gradient_stops(stops),
                 SpreadMode::Pad,
-                SkiaTransform::identity(),
+                shader_transform,
             )?,
             ..SkiaPaint::default()
         },

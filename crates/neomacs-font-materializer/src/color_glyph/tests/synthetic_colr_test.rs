@@ -1230,3 +1230,128 @@ fn sweep_gradient_maps_its_arc_to_degrees() {
         "after the arc the last colour holds: {outside:?}"
     );
 }
+
+/// Spec: a transform inside a `PaintGlyph` applies to the child paint, not to
+/// the clip outline.  Scaling the paint around its own centre must not shrink
+/// the region the paint is shown in.
+#[test]
+fn paint_transform_inside_paint_glyph_does_not_move_the_clip() {
+    let (base, layer) = (glyph('A'), glyph('O'));
+    let bounds = glyph_bounds('O');
+    let scale = 0.6;
+    let (cx, cy) = (
+        f32::from(i16::midpoint(bounds.x_min, bounds.x_max)),
+        f32::from(i16::midpoint(bounds.y_min, bounds.y_max)),
+    );
+    let about_center = [
+        scale,
+        0.0,
+        0.0,
+        scale,
+        cx * (1.0 - scale),
+        cy * (1.0 - scale),
+    ];
+    let plain = font_with_color_tables(
+        colr_v1_table(base, &paint_glyph(layer, &paint_solid(0, 1.0))),
+        cpal_table(&[RED]),
+    );
+    let transformed = font_with_color_tables(
+        colr_v1_table(
+            base,
+            &paint_glyph(layer, &paint_transform(&paint_solid(0, 1.0), about_center)),
+        ),
+        cpal_table(&[RED]),
+    );
+    let plain = rasterize_at(&plain, "synthetic:clip-plain", base, [0, 0, 0, 255], 64.0)
+        .expect("the plain fill paints");
+    let transformed = rasterize_at(
+        &transformed,
+        "synthetic:clip-transformed",
+        base,
+        [0, 0, 0, 255],
+        64.0,
+    )
+    .expect("the transformed fill paints");
+    assert_eq!(
+        (plain.width, plain.height),
+        (transformed.width, transformed.height),
+        "the transform must not resize the clip region"
+    );
+    let worst = plain
+        .rgba
+        .iter()
+        .zip(&transformed.rgba)
+        .map(|(plain, transformed)| plain.abs_diff(*transformed))
+        .max()
+        .expect("rasters have pixels");
+    assert!(
+        worst == 0,
+        "the transform reached the clip outline: worst channel delta {worst}"
+    );
+}
+
+/// A transform inside a `PaintGlyph` must move the gradient with the paint:
+/// translating the paint by `dx` is the same graphic as defining the gradient
+/// `dx` further along.
+#[test]
+fn paint_transform_inside_paint_glyph_moves_the_gradient() {
+    let base = glyph(BLOCK);
+    let bounds = glyph_bounds(BLOCK);
+    let dx = 120i16;
+    let gradient = |shift: i16| {
+        paint_linear_gradient(
+            bounds.x_min + shift,
+            bounds.y_min,
+            bounds.x_max + shift,
+            bounds.y_min,
+            bounds.x_min + shift,
+            bounds.y_max,
+            &[(0.0, 0), (1.0, 1)],
+        )
+    };
+    let shifted = font_with_color_tables(
+        colr_v1_table(base, &paint_glyph(base, &gradient(dx))),
+        cpal_table(&[RED, GREEN]),
+    );
+    let translated = font_with_color_tables(
+        colr_v1_table(
+            base,
+            &paint_glyph(
+                base,
+                &paint_transform(&gradient(0), [1.0, 0.0, 0.0, 1.0, f32::from(dx), 0.0]),
+            ),
+        ),
+        cpal_table(&[RED, GREEN]),
+    );
+    let shifted = rasterize_at(
+        &shifted,
+        "synthetic:gradient-shifted",
+        base,
+        [0, 0, 0, 255],
+        64.0,
+    )
+    .expect("the shifted gradient paints");
+    let translated = rasterize_at(
+        &translated,
+        "synthetic:gradient-translated",
+        base,
+        [0, 0, 0, 255],
+        64.0,
+    )
+    .expect("the translated gradient paints");
+    assert_eq!(
+        (shifted.width, shifted.height),
+        (translated.width, translated.height)
+    );
+    let worst = shifted
+        .rgba
+        .iter()
+        .zip(&translated.rgba)
+        .map(|(shifted, translated)| shifted.abs_diff(*translated))
+        .max()
+        .expect("rasters have pixels");
+    assert!(
+        worst <= 2,
+        "the transform did not reach the gradient: worst channel delta {worst}"
+    );
+}
