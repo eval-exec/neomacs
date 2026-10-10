@@ -386,7 +386,7 @@ mod width_policy_tests;
 mod gdh_format_width_scan_tests;
 
 #[cfg(test)]
-#[path = "tests/format_float_gnu.rs"]
+#[path = "tests/format_float_gnu_test.rs"]
 mod format_float_gnu;
 
 pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
@@ -1533,7 +1533,7 @@ fn allocate_format_bytes(
 }
 
 #[cfg(test)]
-#[path = "tests/format_storage_allocation.rs"]
+#[path = "tests/format_storage_allocation_test.rs"]
 mod format_storage_allocation;
 
 /// Aggregate canonical storage with GNU's actual result encoding. In-capacity
@@ -2409,6 +2409,45 @@ enum FormatStringEncoding {
 
 static_assertions::assert_impl_all!(FormatStringEncoding: Send, Sync);
 
+/// GNU's ASCII %c path emits one byte unless precision is zero, then adds
+/// numeric excess-precision zeros before padding (editfns.c:3947-3953,
+/// 4069-4092). Non-ASCII characters instead retry as strings with the live
+/// width policy. Keep these paths separate so control-character display width
+/// cannot change aggregate byte-budget/error ordering.
+fn format_ascii_char_spec(
+    ascii: u8,
+    spec: &FormatSpec,
+    budget: FormatRemainingOutput<'_>,
+) -> Result<Vec<u8>, crate::emacs_core::alloc::AllocationFailure> {
+    let precision = FloatPrecision::new(spec.precision);
+    let content_bytes = usize::from(precision.native != 0);
+    let numeric_bytes = content_bytes
+        .checked_add(precision.excess)
+        .ok_or_else(format_string_overflow_error)?;
+    let width = spec.width.map(FormatWidth::get).unwrap_or(0);
+    let total = budget.ascii_field(numeric_bytes.max(width))?.get();
+    let padding = total - numeric_bytes;
+    let mut bytes = Vec::new();
+    reserve_format_output(&mut bytes, total)?;
+    if !spec.flags.contains(FormatFlag::LeftAlign) {
+        bytes.resize(padding, b' ');
+    }
+    // GNU numeric assembly preserves a signlike emitted byte before leading
+    // zeros (editfns.c:4097-4104). An empty %.0c contributes no prefix byte.
+    let prefix_byte = content_bytes != 0 && matches!(ascii, b'-' | b'+' | b' ');
+    if prefix_byte {
+        bytes.push(ascii);
+    }
+    bytes.resize(bytes.len() + precision.excess, b'0');
+    if content_bytes != 0 && !prefix_byte {
+        bytes.push(ascii);
+    }
+    if spec.flags.contains(FormatFlag::LeftAlign) {
+        bytes.resize(total, b' ');
+    }
+    Ok(bytes)
+}
+
 /// Format a string (%s) with width and precision.
 fn format_string_spec(
     data: &[u8],
@@ -3052,18 +3091,25 @@ fn do_format(
             'c' => {
                 let n = expect_int(&args[this_arg_idx])
                     .map_err(|_| format_spec_type_mismatch_error())?;
-                let formatted_char = format_char_argument(n)?;
-                if formatted_char.force_multibyte_result {
-                    result.promote_multibyte()?;
+                if let Ok(ascii) = u8::try_from(n)
+                    && ascii.is_ascii()
+                {
+                    let budget = FormatRemainingOutput::new(&result);
+                    format_ascii_char_spec(ascii, &spec, budget)?
+                } else {
+                    let formatted_char = format_char_argument(n)?;
+                    if formatted_char.force_multibyte_result {
+                        result.promote_multibyte()?;
+                    }
+                    let budget = FormatRemainingOutput::new(&result);
+                    format_string_spec(
+                        &formatted_char.rendered,
+                        FormatStringEncoding::Multibyte,
+                        &spec,
+                        ctx,
+                        budget,
+                    )?
                 }
-                let budget = FormatRemainingOutput::new(&result);
-                format_string_spec(
-                    &formatted_char.rendered,
-                    FormatStringEncoding::Multibyte,
-                    &spec,
-                    ctx,
-                    budget,
-                )?
             }
             _ => {
                 return Err(signal(
@@ -3662,13 +3708,17 @@ pub(crate) fn builtin_string_width(ctx: &mut super::eval::Context, args: Vec<Val
         )
     })?;
     let data = ls.as_bytes();
-    let is_multibyte = ls.is_multibyte();
+    let encoding = if ls.is_multibyte() {
+        FormatStringEncoding::Multibyte
+    } else {
+        FormatStringEncoding::Unibyte
+    };
     let policy = crate::encoding::CharacterWidthPolicy::from_context(ctx);
     let string_width = |data: &[u8]| {
         let mut width = 0usize;
         let mut position = 0usize;
         while position < data.len() {
-            let (code, bytes) = next_format_unit(data, position, is_multibyte);
+            let (code, bytes) = next_format_unit(data, position, encoding);
             width += policy.width(code);
             position += bytes;
         }

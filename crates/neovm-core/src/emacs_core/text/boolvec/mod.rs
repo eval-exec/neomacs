@@ -620,5 +620,5 @@ pub(crate) fn builtin_bool_vector_count_consecutive(args: Vec<Value>) -> EvalRes
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/zeroed_storage.rs"]
+#[path = "tests/zeroed_storage_test.rs"]
 mod zeroed_storage_tests;

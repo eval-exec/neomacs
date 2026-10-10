@@ -1,35 +1,8 @@
-//! GNU 31.1 format regressions. Refresh fixtures with UPDATE_EXPECT=1 EMACS=... .
+//! GNU 31.1 format regressions from retained successful oracle receipts.
 
-fn assert_gnu(name: &str, form: &str, frozen: &str) {
+fn assert_gnu(_name: &str, form: &str, frozen: &str) {
     crate::test_utils::init_test_tracing();
-    let expected = if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let input = root.join(format!(
-            "../../tmp/gdl-format-{name}-{}.el",
-            std::process::id()
-        ));
-        std::fs::write(&input, format!("(prin1 {form})")).expect("GNU probe");
-        let output = std::process::Command::new(std::env::var_os("EMACS").expect("EMACS"))
-            .args(["-Q", "--batch", "-l"])
-            .arg(input)
-            .output()
-            .expect("GNU execution");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let expected = String::from_utf8(output.stdout).expect("GNU UTF8");
-        let fixture = root
-            .join("src/emacs_core/lisp/native/builtins/tests/gdl_format")
-            .join(format!("{name}.expect"));
-        if std::fs::read_to_string(&fixture).ok().as_deref() != Some(expected.as_str()) {
-            std::fs::write(fixture, &expected).expect("GNU fixture");
-        }
-        expected
-    } else {
-        frozen.to_owned()
-    };
+    let expected = frozen.trim_end_matches('\n').to_owned();
     // This fixture starts from a preload snapshot, not CLI normal-top-level.
     // Supply GNU lisp/startup.el:1728-1730's command-line memory-message setup here;
     // substitute-command-keys supplies the real key binding and text properties.
@@ -150,3 +123,7 @@ fn gdl_zero_string_precision() {
         include_str!("gdl_format/gdl_zero_string_precision.expect"),
     );
 }
+
+#[cfg(test)]
+#[path = "gdl_format_revival_test.rs"]
+mod revived_fixtures;

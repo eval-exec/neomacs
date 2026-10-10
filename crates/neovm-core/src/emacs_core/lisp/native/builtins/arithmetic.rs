@@ -2859,17 +2859,17 @@ mod arithmetic_rounding_capture_test;
 mod arithmetic_integer_width_test;
 
 #[cfg(test)]
-#[path = "tests/gdl_random_bignum.rs"]
+#[path = "tests/gdl_random_bignum_test.rs"]
 mod gdl_random_bignum;
 
 #[cfg(test)]
-#[path = "tests/gdl_ash_validation.rs"]
+#[path = "tests/gdl_ash_validation_test.rs"]
 mod gdl_ash_validation;
 
 #[cfg(test)]
-#[path = "tests/gdl_mod_nan.rs"]
+#[path = "tests/gdl_mod_nan_test.rs"]
 mod gdl_mod_nan;
 
 #[cfg(test)]
-#[path = "tests/gdl_integer_width.rs"]
+#[path = "tests/gdl_integer_width_test.rs"]
 mod gdl_integer_width;

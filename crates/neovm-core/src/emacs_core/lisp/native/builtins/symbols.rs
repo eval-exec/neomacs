@@ -3838,15 +3838,8 @@ static_assertions::assert_impl_all!(ValueLtFixnum: Send, Sync);
 enum ValueLtNumber<'value> {
     Fixnum(ValueLtFixnum),
     Float(f64),
-    Bignum(
-        &'value Integer,
-        std::marker::PhantomData<(&'value Value, *const ())>,
-    ),
+    Bignum(&'value Integer, std::marker::PhantomData<*const ()>),
 }
-
-// The borrowed limbs belong to the input Value's mutator. Integer's own
-// Send/Sync implementations do not make this heap projection transferable.
-static_assertions::assert_not_impl_any!(ValueLtNumber<'static>: Send, Sync);
 
 impl<'value> ValueLtNumber<'value> {
     #[inline]

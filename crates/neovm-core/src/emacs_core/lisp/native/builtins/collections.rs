@@ -1829,5 +1829,5 @@ mod aset_string_in_place_test;
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
-#[path = "tests/vector_storage.rs"]
+#[path = "tests/vector_storage_test.rs"]
 mod vector_storage_tests;

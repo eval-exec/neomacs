@@ -4407,5 +4407,5 @@ mod branch_target_tests;
 mod function_param_tests;
 
 #[cfg(test)]
-#[path = "tests/gdl_integer_width.rs"]
+#[path = "tests/gdl_integer_width_test.rs"]
 mod gdl_integer_width_tests;

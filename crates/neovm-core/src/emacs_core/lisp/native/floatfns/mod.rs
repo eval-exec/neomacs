@@ -228,11 +228,11 @@ pub(crate) fn builtin_ftruncate(args: Vec<Value>) -> EvalResult {
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gdl_logb_exact.rs"]
+#[path = "tests/gdl_logb_exact_test.rs"]
 mod gdl_logb_exact;
 
 #[cfg(test)]
-#[path = "tests/gdl_ldexp_ieee.rs"]
+#[path = "tests/gdl_ldexp_ieee_test.rs"]
 mod gdl_ldexp_ieee;
 
 /// An exponent clamped to the C math ABI's integer range. Pure value with no

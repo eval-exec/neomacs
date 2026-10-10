@@ -1103,5 +1103,5 @@ fn neovm_internal_panic(_eval: &mut super::eval::Context, args: Vec<Value>) -> E
 }
 
 #[cfg(test)]
-#[path = "tests/gdl_format.rs"]
+#[path = "tests/gdl_format_test.rs"]
 mod gdl_format;

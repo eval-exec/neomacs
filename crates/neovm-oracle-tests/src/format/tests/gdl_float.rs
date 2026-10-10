@@ -1,5 +1,8 @@
 //! GNU 31.1 editfns.c:3840-4170 float conversion oracle regressions.
-use crate::common::{assert_oracle_parity_expect, return_if_neovm_enable_oracle_proptest_not_set};
+use crate::common::{
+    assert_oracle_parity, assert_oracle_parity_expect,
+    return_if_neovm_enable_oracle_proptest_not_set,
+};
 
 #[test]
 fn oracle_gdl_float_precision() {
@@ -74,4 +77,34 @@ fn oracle_gdl_float_byte_compiled() {
         r#""OK (\"-0.000000\" \"  inf\" \"9007199254740993\" \"9223372036854775807\" \" 003.142\" 70006)""#
     ]];
     assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_gdl_ascii_char_aggregate_order() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_oracle_parity(
+        r#"(let ((memory-signal-data (quote (error formatter-storage-exhausted)))) (condition-case e (format (concat "a%" (number-to-string (1- most-positive-fixnum)) "c") 10) (error e)))"#,
+    );
+}
+
+#[test]
+fn oracle_gdl_ascii_char_width_policy() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_oracle_parity(
+        r#"(let ((char-width-table (copy-sequence char-width-table))) (aset char-width-table ?a 0) (aset char-width-table ?é 7) (list (format "%3c" ?a) (format "%3c" ?é)))"#,
+    );
+}
+
+#[test]
+fn oracle_gdl_ascii_char_excess_precision() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_oracle_parity(
+        r#"(list (length (format "%.20000c" ?a)) (substring (format "%.20000c" ?a) 0 3) (substring (format "%.20000c" ?a) -1))"#,
+    );
+}
+
+#[test]
+fn oracle_gdl_ascii_char_zero_precision() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_oracle_parity(r#"(list (format "%.0c|" ?a) (format "%.1c|" ?a) (format "%+05c|" ?a))"#);
 }
