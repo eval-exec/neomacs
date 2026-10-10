@@ -7,6 +7,13 @@
 ;; as are one claim. This fixture paints one swatch per name and records the
 ;; editor's own `color-values' for it; the Rust side checks the rendered pixels
 ;; against both (issue #545).
+;;
+;; Its second half is issue #550: a key that resolves to *nothing* is painted by
+;; a rule, and the rule reads the frame's foreground -- never the face the image
+;; is displayed under, never the specification's `:foreground' (GNU
+;; `src/image.c:6518' and `:6537-6538'). GNU keeps the frame's `foreground-color'
+;; equal to the default face's foreground (`src/xfaces.c:4394-4404'), so the
+;; frame foreground is set to a colour nothing else in the frame uses.
 
 (require 'json)
 (require 'subr-x)
@@ -16,18 +23,40 @@
 
 (defconst xpm-named-color-swatch-size 48)
 
-(defun xpm-named-color-swatch (value)
-  "One XPM image filled with VALUE, taken as the XPM color value itself."
+(defconst xpm-named-color-fallback-value "opaque"
+  "A name no X11 database defines; GNU paints its pixels with the frame foreground.")
+
+(defconst xpm-named-colors-frame-foreground "#123456"
+  "Distinctive on purpose: the Rust side counts it, and nothing else paints it.")
+
+(defconst xpm-named-colors-label-face '(:foreground "black")
+  "Labels stay black so the frame foreground has only the swatches to come from.")
+
+(defun xpm-named-color-xpm (value)
+  "One XPM document filled with VALUE, taken as the XPM color value itself."
   (let ((row (concat "\"" (make-string xpm-named-color-swatch-size ?a) "\""))
         (side (number-to-string xpm-named-color-swatch-size)))
-    (create-image
-     (concat "/* XPM */\nstatic char *swatch[] = {\n\""
-             side " " side " 1 1\",\n"
-             "\"a c " value "\",\n"
-             (mapconcat #'identity
-                        (make-list xpm-named-color-swatch-size row) ",\n")
-             "\n};\n")
-     'xpm t :ascent 'center)))
+    (concat "/* XPM */\nstatic char *swatch[] = {\n\""
+            side " " side " 1 1\",\n"
+            "\"a c " value "\",\n"
+            (mapconcat #'identity
+                       (make-list xpm-named-color-swatch-size row) ",\n")
+            "\n};\n")))
+
+(defun xpm-named-color-swatch (value &rest properties)
+  "One swatch image for VALUE, with any image PROPERTIES applied."
+  (apply #'create-image (xpm-named-color-xpm value) 'xpm t
+         :ascent 'center properties))
+
+(defun xpm-named-colors-insert (label image)
+  "Insert LABEL and IMAGE as one row.
+IMAGE is an image object or a string that displays one; `insert' takes only
+the latter, which is what `insert-image' builds."
+  (insert (propertize (format "%-14s" label) 'face xpm-named-colors-label-face))
+  (if (stringp image)
+      (insert image)
+    (insert-image image))
+  (insert "\n"))
 
 (defun xpm-named-colors-probe ()
   (let ((buffer (get-buffer-create "*xpm-named-colors*")))
@@ -36,10 +65,21 @@
     (setq-local cursor-type nil)
     (setq-local mode-line-format nil)
     (setq-local header-line-format nil)
+    (modify-frame-parameters
+     nil `((foreground-color . ,xpm-named-colors-frame-foreground)))
+    (set-face-attribute 'default nil :foreground xpm-named-colors-frame-foreground)
     (dolist (case xpm-named-color-cases)
-      (insert (format "%-11s" case))
-      (insert-image (xpm-named-color-swatch case))
-      (insert "\n"))
+      (xpm-named-colors-insert case (xpm-named-color-swatch case)))
+    ;; The decoys: the same unresolvable key, once under a face asking for red
+    ;; and once with a specification asking for blue. Neither may win.
+    (xpm-named-colors-insert
+     "fallback-face"
+     (propertize " " 'display
+                 (xpm-named-color-swatch xpm-named-color-fallback-value)
+                 'face '(:foreground "red")))
+    (xpm-named-colors-insert
+     "fallback-spec"
+     (xpm-named-color-swatch xpm-named-color-fallback-value :foreground "blue"))
     (goto-char (point-min))
     (with-temp-file (getenv "NEOMACS_GUI_STATE_JSON")
       (insert
@@ -47,7 +87,14 @@
         (append
          (list (cons "native-engine"
                      (if (fboundp 'neomacs--write-frame-snapshot) t :json-false))
-               (cons "graphic" (if (display-graphic-p) t :json-false)))
+               (cons "graphic" (if (display-graphic-p) t :json-false))
+               ;; The fallback's input as this editor reports it: the frame's
+               ;; foreground-color, and the default face's foreground, which GNU
+               ;; keeps equal to it.
+               (cons "frame-foreground"
+                     (color-values (frame-parameter nil 'foreground-color)))
+               (cons "default-face-foreground"
+                     (color-values (face-attribute 'default :foreground))))
          ;; GNU answers 16-bit channels; the Rust side reduces them like the
          ;; renderer does.
          (mapcar (lambda (case) (cons case (color-values case)))
