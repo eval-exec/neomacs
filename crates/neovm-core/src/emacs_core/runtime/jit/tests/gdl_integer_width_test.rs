@@ -20,7 +20,7 @@ fn gdl_integer_width_native_signal_roots_operands_through_collecting_hook() {
     // Consume the entry operands themselves, leaving no residual stack that
     // could accidentally keep them alive for the register-operand root guard.
     function.ops = vec![Op::Mul, Op::Return];
-    function.max_stack = 2;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     function
         .jit_runtime()
         .record_numeric(0, function.ops.len(), NumericFeedback::Other);
