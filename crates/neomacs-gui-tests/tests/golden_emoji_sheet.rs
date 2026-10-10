@@ -130,7 +130,7 @@ fn colrv1_emoji_sheet_matches_its_golden() {
     }
 
     let golden_path = root.join("crates/neomacs-gui-tests/fixtures/golden-emoji/sheet.json");
-    if std::env::var_os("NEOMACS_GOLDEN_UPDATE").is_some() {
+    if std::env::var("NEOMACS_GOLDEN_UPDATE").as_deref() == Ok("1") {
         fs::write(
             &golden_path,
             serde_json::to_string_pretty(&serde_json::Value::Object(measured)).unwrap() + "\n",
