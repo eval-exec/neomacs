@@ -59,6 +59,7 @@ use super::stats::asm_dump::{self, PendingAsm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::SymId;
 
+mod affinity;
 mod queue;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod worker;
@@ -176,13 +177,17 @@ pub(crate) fn worker_nice() -> Option<i32> {
 }
 
 /// `NEOVM_JIT_BG_AFFINITY=<cpu>[,<cpu>...]`: pin the workers (measurement).
-pub(crate) fn worker_affinity() -> Option<Vec<usize>> {
+/// Returned CPU indices are validated for the platform's mask storage.
+pub(crate) fn worker_affinity() -> Option<Vec<affinity::WorkerCpu>> {
     let value = std::env::var("NEOVM_JIT_BG_AFFINITY").ok()?;
-    let cpus: Vec<usize> = value
-        .split(',')
-        .filter_map(|c| c.trim().parse().ok())
-        .collect();
-    (!cpus.is_empty()).then_some(cpus)
+    match affinity::parse(&value) {
+        Ok(cpus) => cpus,
+        Err(error) => {
+            tracing::warn!(target: "neovm_jit::bg", ?error,
+                "NEOVM_JIT_BG_AFFINITY does not fit the platform mask; keeping inherited affinity");
+            None
+        }
+    }
 }
 
 /// `NEOVM_JIT_BG_CLASSES=<class>[,<class>...]` (`osr`, `first_sight`,

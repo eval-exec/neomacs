@@ -75,12 +75,13 @@ fn apply_scheduling_knobs() {
         }
     }
     if let Some(cpus) = super::worker_affinity() {
-        // SAFETY: a zeroed cpu_set_t filled with CPU_SET, applied to this
-        // thread (pid 0).
+        // SAFETY: WorkerCpu's private constructor validates every index
+        // below CPU_SETSIZE, so CPU_SET cannot index outside this zeroed
+        // cpu_set_t. The mask is applied only to this thread (pid 0).
         let rc = unsafe {
             let mut set: libc::cpu_set_t = std::mem::zeroed();
             for cpu in &cpus {
-                libc::CPU_SET(*cpu, &mut set);
+                libc::CPU_SET(cpu.index(), &mut set);
             }
             libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set)
         };
