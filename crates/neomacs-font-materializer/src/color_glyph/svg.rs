@@ -244,7 +244,7 @@ fn has_attribute(start_tag: &str, name: &str) -> bool {
         if before_ok && after.trim_start().starts_with('=') {
             return true;
         }
-        rest = &after[..];
+        rest = after;
     }
     false
 }
