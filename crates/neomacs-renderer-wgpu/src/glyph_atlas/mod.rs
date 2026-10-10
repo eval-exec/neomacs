@@ -590,9 +590,11 @@ pub struct WgpuGlyphAtlas {
     /// Valid for the fontdb's lifetime (fonts are only ever appended by
     /// priming); dropped by [`Self::clear`] with the rest of the caches.
     resolved_fontdb_ids: HashMap<ResolvedFontId, Option<fontdb::ID>>,
-    /// Exact source asset per fontdb face, for the color stages Swash does not
-    /// implement (COLR version 1 paint graphs). Populated where faces are
-    /// pinned, so a glyph never re-resolves a file.
+    /// Source asset per fontdb face, for the color stages Swash does not
+    /// implement (COLR version 1 paint graphs). Exact pins register theirs;
+    /// a face that arrived through semantic fallback gets one derived from
+    /// fontdb's own file source on first use. Either way a glyph never
+    /// re-resolves a file.
     color_font_assets: FxHashMap<fontdb::ID, FontOutlineAsset>,
     /// Rasterizes color glyphs from those assets, caching opened faces.
     color_glyph_rasterizer: ColorGlyphRasterizer,
@@ -1423,6 +1425,8 @@ impl WgpuGlyphAtlas {
     /// Layered color outlines come first because Swash has no COLR version 1
     /// implementation, and a version 1 face normally has no outline under its
     /// emoji glyphs either — the Swash chain would return an empty bitmap.
+    /// The color sources ignore the synthetic-italic skew: engines skew
+    /// outlines, not color artwork.
     fn glyph_image(
         &mut self,
         cache_key: cosmic_text::CacheKey,
@@ -1445,16 +1449,15 @@ impl WgpuGlyphAtlas {
 
     /// Whether one raster holds any color glyph, which makes the whole
     /// cluster foreground-dependent (the same rule single glyphs follow).
-    fn composed_cluster_has_color_font(&self, face: Option<&Face>, text: &str) -> bool {
-        face.and_then(|face| {
-            self.frame_shaped_clusters
-                .get(&face.id)?
-                .get(text)?
-                .iter()
-                .any(|glyph| self.color_font_ids.contains(&glyph.resolved_font_id))
-                .then_some(())
-        })
-        .is_some()
+    fn composed_cluster_has_color_font(&self, face: &Face, text: &str) -> bool {
+        self.frame_shaped_clusters
+            .get(&face.id)
+            .and_then(|by_text| by_text.get(text))
+            .is_some_and(|glyphs| {
+                glyphs
+                    .iter()
+                    .any(|glyph| self.color_font_ids.contains(&glyph.resolved_font_id))
+            })
     }
 
     /// The layered-color source behind a fontdb face, when it has one.
@@ -2842,14 +2845,10 @@ impl WgpuGlyphAtlas {
         subpixel: SubpixelRequest,
     ) -> Result<Vec<GlyphAtlasHandle>, GlyphAtlasError> {
         let mut font_identity = glyph_font_identity(face);
-        if self.composed_cluster_has_color_font(face, text) {
-            font_identity = mix_foreground(
-                font_identity,
-                hash_foreground(face.map_or(
-                    neomacs_display_protocol::Color::rgb(0.0, 0.0, 0.0),
-                    |face| face.foreground,
-                )),
-            );
+        if let Some(face) = face
+            && self.composed_cluster_has_color_font(face, text)
+        {
+            font_identity = mix_foreground(font_identity, hash_foreground(face.foreground));
         }
         let key = ComposedGlyphKey {
             text: text.into(),

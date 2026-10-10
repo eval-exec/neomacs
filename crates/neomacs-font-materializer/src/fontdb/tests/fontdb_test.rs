@@ -371,7 +371,7 @@ fn streamed_classification_agrees_with_the_slice_classifier() {
         neomacs_test_fonts::noto_color_emoji_2_051(),
         neomacs_test_fonts::noto_color_emoji_colrv1(),
     ] {
-        let bytes = std::fs::read(&path).expect("read fixture");
+        let bytes = std::fs::read(path).expect("read fixture");
         let slice = classify_sfnt_face(&bytes, 0).expect("fixture is an SFNT face");
         let mut source = std::io::Cursor::new(bytes);
         let mut header = Vec::new();

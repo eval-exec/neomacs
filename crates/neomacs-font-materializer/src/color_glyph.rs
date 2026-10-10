@@ -153,6 +153,7 @@ pub struct ColorGlyphRasterizer {
 }
 
 impl ColorGlyphRasterizer {
+    /// An empty rasterizer; faces are opened and classified on demand.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -241,8 +242,8 @@ impl ColorGlyphRasterizer {
                 // Classify from the table directory first: the overwhelming
                 // majority of faces carry no color source, and reading a
                 // multi-megabyte font to learn that is avoidable work.
-                if !classify_file(&path, face_index)?
-                    .is_some_and(|sources| sources.color_glyph_sources().next().is_some())
+                if classify_file(&path, face_index)?
+                    .is_none_or(|sources| sources.color_glyph_sources().next().is_none())
                 {
                     return Ok(None);
                 }

@@ -924,11 +924,14 @@ impl<'a> RasterState<'a> {
                     let Some((mut layer, mode)) = self.layers.pop() else {
                         return false;
                     };
-                    // The layer was painted under the clip in force, and the
-                    // clip must also bound the composite: restricting the
-                    // layer is equivalent and keeps the destination untouched
-                    // outside the clip for non-source-over modes.
-                    if let Some(mask) = self.clips.last().and_then(Option::as_ref) {
+                    // Fills inside the layer already applied the clip in
+                    // force, so applying it again here would multiply every
+                    // antialiased edge by its own coverage twice and erode the
+                    // artwork.  Only a mode that can change the destination
+                    // outside the clip needs the extra bound.
+                    if !matches!(mode, CompositeMode::SourceOver)
+                        && let Some(mask) = self.clips.last().and_then(Option::as_ref)
+                    {
                         layer.apply_mask(mask);
                     }
                     let target = match self.layers.last_mut() {

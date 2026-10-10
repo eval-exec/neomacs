@@ -122,6 +122,24 @@ fn mean_color(raster: &ColorGlyphRaster) -> [f32; 3] {
     ]
 }
 
+/// Pixels that are fully covered must hold exactly the top layer's colour:
+/// source-over with full coverage replaces the destination outright, so any
+/// other value there means the layer order or the colour mapping is wrong.
+fn fully_opaque_mismatches(raster: &ColorGlyphRaster, expected: Rgba) -> (usize, usize) {
+    let mut opaque = 0;
+    let mut mismatched = 0;
+    for pixel in raster.rgba.chunks_exact(4) {
+        if pixel[3] != 255 {
+            continue;
+        }
+        opaque += 1;
+        if (0..3).any(|channel| pixel[channel].abs_diff(expected.0[channel]) > 2) {
+            mismatched += 1;
+        }
+    }
+    (opaque, mismatched)
+}
+
 fn assert_close_to(mean: [f32; 3], expected: Rgba, tolerance: f32) {
     for channel in 0..3 {
         let delta = (mean[channel] - f32::from(expected.0[channel])).abs();
@@ -188,8 +206,29 @@ fn colr_v0_table(base: u16, layers: &[(u16, u16)]) -> Vec<u8> {
 
 /// Version 1 `COLR` with one base glyph whose root paint table is `paint`.
 fn colr_v1_table(base: u16, paint: &[u8]) -> Vec<u8> {
+    colr_v1_table_with_clip_box(base, paint, None)
+}
+
+/// Version 1 `COLR`, optionally carrying a `ClipList` whose single `ClipBox`
+/// covers `base`.
+///
+/// The clip box is a bounding box: content outside it must not render, and it
+/// is the one clip ancestor that stays active across a whole composite's
+/// layers.
+fn colr_v1_table_with_clip_box(
+    base: u16,
+    paint: &[u8],
+    clip_box: Option<(i16, i16, i16, i16)>,
+) -> Vec<u8> {
     let base_glyph_list_offset = 34u32;
     let list_header = 4 + 6; // count + one BaseGlyphPaintRecord
+    // A non-zero offset with no ClipList behind it makes ttf-parser reject the
+    // whole table, so the field stays zero when there is nothing to point at.
+    let clip_list_offset = if clip_box.is_some() {
+        base_glyph_list_offset + list_header + paint.len() as u32
+    } else {
+        0
+    };
     let mut table = Vec::new();
     table.extend_from_slice(&1u16.to_be_bytes()); // version
     table.extend_from_slice(&0u16.to_be_bytes()); // numBaseGlyphRecords
@@ -198,13 +237,24 @@ fn colr_v1_table(base: u16, paint: &[u8]) -> Vec<u8> {
     table.extend_from_slice(&0u16.to_be_bytes()); // numLayerRecords
     table.extend_from_slice(&base_glyph_list_offset.to_be_bytes());
     table.extend_from_slice(&0u32.to_be_bytes()); // layerListOffset
-    table.extend_from_slice(&0u32.to_be_bytes()); // clipListOffset
+    table.extend_from_slice(&clip_list_offset.to_be_bytes());
     table.extend_from_slice(&0u32.to_be_bytes()); // varIndexMapOffset
     table.extend_from_slice(&0u32.to_be_bytes()); // itemVariationStoreOffset
     table.extend_from_slice(&1u32.to_be_bytes()); // numBaseGlyphPaintRecords
     table.extend_from_slice(&base.to_be_bytes());
-    table.extend_from_slice(&(list_header as u32).to_be_bytes()); // paint, from the list start
+    table.extend_from_slice(&list_header.to_be_bytes()); // paint, from the list start
     table.extend_from_slice(paint);
+    if let Some((x_min, y_min, x_max, y_max)) = clip_box {
+        table.push(1); // ClipList format
+        table.extend_from_slice(&1u32.to_be_bytes()); // numClips
+        table.extend_from_slice(&base.to_be_bytes()); // startGlyphID
+        table.extend_from_slice(&base.to_be_bytes()); // endGlyphID
+        table.extend_from_slice(&offset24(5 + 7)); // ClipBox, from the ClipList start
+        table.push(1); // ClipBox format 1 (static)
+        for value in [x_min, y_min, x_max, y_max] {
+            table.extend_from_slice(&value.to_be_bytes());
+        }
+    }
     table
 }
 
@@ -297,30 +347,43 @@ fn paint_composite(backdrop: &[u8], mode: u8, source: &[u8]) -> Vec<u8> {
 #[test]
 fn colrv0_layers_paint_their_palette_colors() {
     let (base, layer_glyph) = (glyph('A'), glyph('H'));
-    let font = font_with_color_tables(
+    // The same shape twice, painted over itself: the later layer must win, in
+    // palette order.  Overlapping distinct shapes could not distinguish "both
+    // layers painted" from "the top layer painted".
+    let green_on_top = font_with_color_tables(
         colr_v0_table(base, &[(layer_glyph, 0), (layer_glyph, 1)]),
         cpal_table(&[RED, GREEN]),
     );
+    let raster = rasterize_at(
+        &green_on_top,
+        "synthetic:colrv0",
+        base,
+        [0, 0, 0, 255],
+        96.0,
+    )
+    .expect("version 0 layer records paint");
+    let (opaque, mismatched) = fully_opaque_mismatches(&raster, GREEN);
+    assert!(opaque > 20, "only {opaque} fully covered pixels");
+    assert_eq!(mismatched, 0, "the top layer must win where it is opaque");
 
-    let raster = rasterize(&font, "synthetic:colrv0", base, [0, 0, 0, 255])
-        .expect("version 0 layer records paint");
-    // Layer 1 is drawn over layer 0, so both colors must appear.
-    let mut has_red = false;
-    let mut has_green = false;
-    for pixel in raster.rgba.chunks_exact(4) {
-        if pixel[3] > 200 {
-            if pixel[0] > 180 && pixel[1] < 90 {
-                has_red = true;
-            }
-            if pixel[1] > 150 && pixel[0] < 90 {
-                has_green = true;
-            }
-        }
-    }
-    assert!(has_green, "the top layer's palette color is missing");
-    // The first layer only shows where the second does not cover it; the
-    // fixture's glyphs overlap, so some red must survive.
-    assert!(has_red || mean_color(&raster)[1] > 100.0);
+    let red_on_top = font_with_color_tables(
+        colr_v0_table(base, &[(layer_glyph, 1), (layer_glyph, 0)]),
+        cpal_table(&[RED, GREEN]),
+    );
+    let raster = rasterize_at(
+        &red_on_top,
+        "synthetic:colrv0-reversed",
+        base,
+        [0, 0, 0, 255],
+        96.0,
+    )
+    .expect("version 0 layer records paint in order");
+    let (opaque, mismatched) = fully_opaque_mismatches(&raster, RED);
+    assert!(opaque > 20, "only {opaque} fully covered pixels");
+    assert_eq!(
+        mismatched, 0,
+        "reversing the layer order must reverse the result"
+    );
 }
 
 #[test]
@@ -394,18 +457,134 @@ fn paint_composite_source_mode_replaces_the_backdrop() {
 }
 
 #[test]
+fn clip_box_bounds_the_raster() {
+    let base = glyph(BLOCK);
+    let bounds = glyph_bounds(BLOCK);
+    let paint = paint_glyph(base, &paint_solid(0, 1.0));
+    let unclipped = font_with_color_tables(colr_v1_table(base, &paint), cpal_table(&[RED]));
+    // A box over the left half of the block: the artwork must be cut at the
+    // box, not merely resized.
+    let half = i16::midpoint(bounds.x_min, bounds.x_max);
+    let clipped = font_with_color_tables(
+        colr_v1_table_with_clip_box(
+            base,
+            &paint,
+            Some((
+                bounds.x_min,
+                bounds.y_min,
+                half,
+                bounds.y_max,
+            )),
+        ),
+        cpal_table(&[RED]),
+    );
+
+    let wide = rasterize_at(&unclipped, "synthetic:nobox", base, [0, 0, 0, 255], 64.0)
+        .expect("the unclipped fill paints");
+    let cut = rasterize_at(&clipped, "synthetic:clipbox", base, [0, 0, 0, 255], 64.0)
+        .expect("the clipped fill paints");
+    assert!(
+        cut.width + 2 <= wide.width / 2 + 4,
+        "a half-width clip box left a {} px raster of the {} px one",
+        cut.width,
+        wide.width
+    );
+    // The cut edge is still painted: the clip is a bound, not a shrink.
+    let last_column: u32 = cut
+        .rgba
+        .chunks_exact(4)
+        .skip((cut.width - 1) as usize)
+        .step_by(cut.width as usize)
+        .map(|pixel| u32::from(pixel[3]))
+        .sum();
+    assert!(last_column > 0, "the box's edge must carry ink");
+}
+
+#[test]
+fn source_over_composite_does_not_erode_edges() {
+    // A curved shape: its outline gives the clip mask partial coverage at the
+    // rim, which is exactly where a second application of that mask would
+    // square the edge alpha.
+    let base = glyph('O');
+    let invisible = Rgba([0, 0, 0, 0]);
+    // A box whose right edge cuts through the ink at a fractional device
+    // position: that is where a second application of the same mask to the
+    // composited layer would square the edge coverage.
+    let bounds = glyph_bounds('O');
+    let clip_box = Some((
+        bounds.x_min,
+        bounds.y_min,
+        i16::midpoint(bounds.x_min, bounds.x_max) + 3,
+        bounds.y_max,
+    ));
+    let plain = font_with_color_tables(
+        colr_v1_table_with_clip_box(base, &paint_glyph(base, &paint_solid(0, 1.0)), clip_box),
+        cpal_table(&[RED, invisible]),
+    );
+    // The same artwork one PaintComposite deep, over a backdrop that paints
+    // nothing: the composited layer's clip was already applied when it was
+    // filled, so applying it again would squarely multiply every edge
+    // coverage and thin the shape.
+    let composited = font_with_color_tables(
+        colr_v1_table_with_clip_box(
+            base,
+            &paint_composite(
+                &paint_glyph(base, &paint_solid(1, 1.0)),
+                3, // CompositeMode::SourceOver
+                &paint_glyph(base, &paint_solid(0, 1.0)),
+            ),
+            clip_box,
+        ),
+        cpal_table(&[RED, invisible]),
+    );
+
+    let plain_raster = rasterize_at(
+        &plain,
+        "synthetic:composite-plain",
+        base,
+        [0, 0, 0, 255],
+        96.0,
+    )
+    .expect("the plain fill paints");
+    let composited_raster = rasterize_at(
+        &composited,
+        "synthetic:composite-layer",
+        base,
+        [0, 0, 0, 255],
+        96.0,
+    )
+    .expect("the composited fill paints");
+    assert!(plain_raster.rgba.chunks_exact(4).any(|pixel| pixel[3] > 0));
+    assert_eq!(
+        (plain_raster.width, plain_raster.height),
+        (composited_raster.width, composited_raster.height)
+    );
+    let worst = plain_raster
+        .rgba
+        .iter()
+        .zip(&composited_raster.rgba)
+        .map(|(plain, composited)| plain.abs_diff(*composited))
+        .max()
+        .expect("rasters have pixels");
+    assert!(
+        worst <= 1,
+        "compositing eroded the artwork: worst channel delta {worst}"
+    );
+}
+
+#[test]
 fn colrv1_linear_gradient_runs_along_its_axis() {
     let base = glyph(BLOCK);
     let bounds = glyph_bounds(BLOCK);
     // The color line spans the glyph's own ink, so t = 0 is its left edge.
     // p2 sits directly above p0, making the color line run horizontally.
     let gradient = paint_linear_gradient(
-        bounds.x_min as i16,
-        bounds.y_min as i16,
-        bounds.x_max as i16,
-        bounds.y_min as i16,
-        bounds.x_min as i16,
-        bounds.y_max as i16,
+        bounds.x_min,
+        bounds.y_min,
+        bounds.x_max,
+        bounds.y_min,
+        bounds.x_min,
+        bounds.y_max,
         &[(0.0, 0), (1.0, 1)],
     );
     let font = font_with_color_tables(
@@ -449,8 +628,8 @@ fn colrv1_sweep_gradient_follows_the_design_grid_angles() {
     let base = glyph(BLOCK);
     let bounds = glyph_bounds(BLOCK);
     let (cx, cy) = (
-        i16::midpoint(bounds.x_min as i16, bounds.x_max as i16),
-        i16::midpoint(bounds.y_min as i16, bounds.y_max as i16),
+        i16::midpoint(bounds.x_min, bounds.x_max),
+        i16::midpoint(bounds.y_min, bounds.y_max),
     );
     let sweep = paint_sweep_gradient(
         cx,
