@@ -4144,6 +4144,34 @@ pub(crate) trait SyntaxLookup {
         self.char_syntax(c)
     }
 
+    /// Syntax of a full Emacs character. Byte8 keys must never be reduced to
+    /// their corresponding Latin-1 scalar before indexing a syntax table.
+    fn emacs_char_syntax(&self, c: emacs_char::EmacsChar) -> SyntaxClass {
+        c.as_rust_char().map_or_else(
+            || crate::emacs_core::syntax::standard_syntax_class_for_code(c.code()),
+            |c| self.char_syntax(c),
+        )
+    }
+
+    /// Position-aware syntax retaining byte8/non-Unicode table keys.
+    fn emacs_char_syntax_at(&self, c: emacs_char::EmacsChar, input_pos: usize) -> SyntaxClass {
+        c.as_rust_char().map_or_else(
+            || self.emacs_char_syntax(c),
+            |c| self.char_syntax_at(c, input_pos),
+        )
+    }
+
+    fn emacs_word_boundary_between(
+        &self,
+        c1: emacs_char::EmacsChar,
+        c2: emacs_char::EmacsChar,
+    ) -> bool {
+        match (c1.as_rust_char(), c2.as_rust_char()) {
+            (Some(c1), Some(c2)) => self.word_boundary_between(c1, c2),
+            _ => false,
+        }
+    }
+
     /// Return true if character `c` belongs to category `cat`.
     fn char_has_category(&self, c: char, cat: u8) -> bool;
 
@@ -4247,6 +4275,27 @@ impl SyntaxLookup for DefaultSyntaxLookup {
 }
 
 impl SyntaxLookup for BufferSyntaxLookup {
+    fn emacs_char_syntax(&self, c: emacs_char::EmacsChar) -> SyntaxClass {
+        self.syntax_table.char_syntax_code(c.code())
+    }
+
+    fn emacs_char_syntax_at(&self, c: emacs_char::EmacsChar, _input_pos: usize) -> SyntaxClass {
+        self.emacs_char_syntax(c)
+    }
+
+    fn emacs_word_boundary_between(
+        &self,
+        c1: emacs_char::EmacsChar,
+        c2: emacs_char::EmacsChar,
+    ) -> bool {
+        // GNU category.h:116-118: only full codes below 0x100 bypass
+        // word_boundary_p; a byte8 character is outside that range.
+        (c1.code() >= 0x100 || c2.code() >= 0x100)
+            && self
+                .word_boundary
+                .boundary_between_emacs_characters(c1, c2, self)
+    }
+
     fn char_syntax(&self, c: char) -> SyntaxClass {
         self.syntax_table.char_syntax(c)
     }
@@ -4458,10 +4507,10 @@ fn regex_unibyte_to_char(byte: u8) -> u32 {
     }
 }
 
-/// Rust `char` used for syntax-table lookups of an Emacs character code.
-/// Byte8 codes collapse to their raw byte so `char_syntax` sees the same
-/// 0x80..=0xFF index GNU's syntax table uses for eight-bit characters.
-fn regex_syntax_char(code: u32) -> char {
+/// Rust scalar used by Unicode predicates, scalar charset ranges and the
+/// existing standalone category matcher. Syntax and word-boundary table reads
+/// instead retain the full `EmacsChar`.
+fn regex_scalar_char(code: u32) -> char {
     if emacs_char::char_byte8_p(code) {
         char::from(emacs_char::char_to_byte8(code))
     } else {
@@ -4539,11 +4588,12 @@ fn posix_class_matches(
     case_mode: PosixClassCaseMode,
 ) -> bool {
     let byte = regex_char_to_unibyte(code);
-    let ch = regex_syntax_char(code);
+    let ch = regex_scalar_char(code);
+    let emacs_ch = emacs_char::EmacsChar::from_code_unchecked(code);
     let char_syntax = || {
         input_pos.map_or_else(
-            || syntax.char_syntax(ch),
-            |position| syntax.char_syntax_at(ch, position),
+            || syntax.emacs_char_syntax(emacs_ch),
+            |position| syntax.emacs_char_syntax_at(emacs_ch, position),
         )
     };
     let is_real_ascii = code < 0x80;
@@ -4921,7 +4971,7 @@ fn match_charset_at_slow(
             .multibyte_charsets
             .get(&charset_op_pos)
             .map(|ranges| {
-                let ch = regex_syntax_char(ch);
+                let ch = regex_scalar_char(ch);
                 ranges.iter().any(|&(lo, hi)| ch >= lo && ch <= hi)
             })
             .unwrap_or(false);
@@ -4953,7 +5003,8 @@ fn match_syntaxspec_at(
         return None;
     }
     let (c, len) = re_text_char(text, d, target_multibyte)?;
-    let is = syntax.char_syntax_at(regex_syntax_char(c), d) as u8 == class_byte;
+    let is = syntax.emacs_char_syntax_at(emacs_char::EmacsChar::from_code_unchecked(c), d) as u8
+        == class_byte;
     if is != negate { Some(len) } else { None }
 }
 
@@ -4971,7 +5022,8 @@ fn match_syntaxspecset_at(
         return None;
     }
     let (c, len) = re_text_char(text, d, target_multibyte)?;
-    let class = syntax.char_syntax_at(regex_syntax_char(c), d) as u16;
+    let class =
+        syntax.emacs_char_syntax_at(emacs_char::EmacsChar::from_code_unchecked(c), d) as u16;
     if (mask >> class) & 1 != 0 {
         Some(len)
     } else {
@@ -4994,7 +5046,7 @@ fn match_categoryspec_at(
         return None;
     }
     let (c, len) = re_text_char(text, d, target_multibyte)?;
-    let has = syntax.char_has_category(regex_syntax_char(c), cat);
+    let has = syntax.char_has_category(regex_scalar_char(c), cat);
     if has != negate { Some(len) } else { None }
 }
 
@@ -5006,10 +5058,10 @@ fn re_char_and_syntax(
     pos: usize,
     target_multibyte: bool,
     syntax: &dyn SyntaxLookup,
-) -> Option<(char, SyntaxClass)> {
+) -> Option<(emacs_char::EmacsChar, SyntaxClass)> {
     re_text_char(text, pos, target_multibyte).map(|(c, _)| {
-        let c = regex_syntax_char(c);
-        (c, syntax.char_syntax_at(c, pos))
+        let c = emacs_char::EmacsChar::from_code_unchecked(c);
+        (c, syntax.emacs_char_syntax_at(c, pos))
     })
 }
 
@@ -5023,7 +5075,7 @@ fn re_char_is_symbol(
 ) -> bool {
     re_text_char(text, pos, target_multibyte)
         .map(|(c, _)| {
-            let s = syntax.char_syntax_at(regex_syntax_char(c), pos);
+            let s = syntax.emacs_char_syntax_at(emacs_char::EmacsChar::from_code_unchecked(c), pos);
             s == SyntaxClass::Word || s == SyntaxClass::Symbol
         })
         .unwrap_or(false)
@@ -5054,7 +5106,7 @@ fn assert_word_boundary(
     let current = re_char_and_syntax(text, d, target_multibyte, syntax);
     match (previous, current) {
         (Some((c1, SyntaxClass::Word)), Some((c2, SyntaxClass::Word))) => {
-            syntax.word_boundary_between(c1, c2)
+            syntax.emacs_word_boundary_between(c1, c2)
         }
         (Some((_, previous)), Some((_, current))) => {
             (previous == SyntaxClass::Word) != (current == SyntaxClass::Word)
@@ -5082,7 +5134,7 @@ fn assert_word_beg(
     };
     match previous {
         (_, class) if class != SyntaxClass::Word => true,
-        (c1, SyntaxClass::Word) => syntax.word_boundary_between(c1, c2),
+        (c1, SyntaxClass::Word) => syntax.emacs_word_boundary_between(c1, c2),
         _ => false,
     }
 }
@@ -5108,7 +5160,7 @@ fn assert_word_end(
     };
     match current {
         (_, class) if class != SyntaxClass::Word => true,
-        (c2, SyntaxClass::Word) => syntax.word_boundary_between(c1, c2),
+        (c2, SyntaxClass::Word) => syntax.emacs_word_boundary_between(c1, c2),
         _ => false,
     }
 }
@@ -9976,3 +10028,7 @@ mod start_anchor_tests;
 #[cfg(test)]
 #[path = "tests/suffix_literal_test.rs"]
 mod suffix_literal_tests;
+
+#[cfg(test)]
+#[path = "tests/raw_byte_syntax_test.rs"]
+mod raw_byte_syntax_tests;

@@ -206,6 +206,39 @@ fn fast_string_match_answers_like_the_general_path() {
 }
 
 #[test]
+fn failed_string_search_changes_source_in_both_frontends() {
+    crate::test_utils::init_test_tracing();
+    let form = r#"(let (out)
+      (dolist (fn '(string-match posix-string-match))
+        (dolist (global '(nil t))
+          (dolist (arg '(nil t))
+            (with-temp-buffer
+              (insert "aébc")
+              (goto-char 1)
+              (re-search-forward "\\(éb\\)")
+              (let ((inhibit-changing-match-data global))
+                (funcall fn "zzz" "q" nil arg))
+              (push (list (match-beginning 0) (match-end 0)
+                          (match-beginning 1) (match-end 1)
+                          (bufferp (car (last (match-data t))))) out)))))
+      (nreverse out))"#;
+    // GNU search.c:422-427: source changes without shifting registers.
+    let expected = [
+        "(2 4 2 4 nil)",
+        "(2 4 2 4 t)",
+        "(2 4 2 4 t)",
+        "(2 4 2 4 t)",
+        "(2 4 2 4 nil)",
+        "(2 4 2 4 t)",
+        "(2 4 2 4 t)",
+        "(2 4 2 4 t)",
+    ];
+    for frontend in [false, true] {
+        assert_eq!(run_form(form, frontend), expected, "frontend {frontend}");
+    }
+}
+
+#[test]
 fn literal_searches_answer_alike_with_the_knob_on_and_off() {
     crate::test_utils::init_test_tracing();
     let general = run_form(LITERAL_MATRIX, false);

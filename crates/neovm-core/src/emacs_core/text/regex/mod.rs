@@ -162,6 +162,39 @@ impl PropertizeFrontier<'_> {
 }
 
 impl SyntaxLookup for BufferRegexpSyntaxLookup<'_> {
+    fn emacs_char_syntax(
+        &self,
+        c: crate::emacs_core::emacs_char::EmacsChar,
+    ) -> crate::emacs_core::syntax::SyntaxClass {
+        self.base.emacs_char_syntax(c)
+    }
+
+    fn emacs_char_syntax_at(
+        &self,
+        c: crate::emacs_core::emacs_char::EmacsChar,
+        input_pos: usize,
+    ) -> crate::emacs_core::syntax::SyntaxClass {
+        let abs = EmacsBytePos::new(self.input_start.get().saturating_add(input_pos));
+        if let Some(frontier) = self.frontier {
+            frontier.note_read(abs);
+        }
+        crate::emacs_core::syntax::regexp_syntax_class_for_emacs_char_at_buffer_byte(
+            self.buffer,
+            &self.base.syntax_table,
+            c,
+            abs,
+            &self.property_lookup,
+        )
+    }
+
+    fn emacs_word_boundary_between(
+        &self,
+        c1: crate::emacs_core::emacs_char::EmacsChar,
+        c2: crate::emacs_core::emacs_char::EmacsChar,
+    ) -> bool {
+        self.base.emacs_word_boundary_between(c1, c2)
+    }
+
     fn char_syntax(&self, c: char) -> crate::emacs_core::syntax::SyntaxClass {
         self.base.char_syntax(c)
     }
@@ -300,6 +333,34 @@ impl<'a> StringSyntaxLookup<'a> {
 }
 
 impl SyntaxLookup for StringRegexpSyntaxLookup<'_> {
+    fn emacs_char_syntax(
+        &self,
+        c: crate::emacs_core::emacs_char::EmacsChar,
+    ) -> crate::emacs_core::syntax::SyntaxClass {
+        self.base.emacs_char_syntax(c)
+    }
+
+    fn emacs_char_syntax_at(
+        &self,
+        c: crate::emacs_core::emacs_char::EmacsChar,
+        input_pos: usize,
+    ) -> crate::emacs_core::syntax::SyntaxClass {
+        crate::emacs_core::syntax::regexp_syntax_class_for_emacs_char_at_string_byte(
+            &self.base.syntax_table,
+            c,
+            input_pos,
+            &self.property_lookup,
+        )
+    }
+
+    fn emacs_word_boundary_between(
+        &self,
+        c1: crate::emacs_core::emacs_char::EmacsChar,
+        c2: crate::emacs_core::emacs_char::EmacsChar,
+    ) -> bool {
+        self.base.emacs_word_boundary_between(c1, c2)
+    }
+
     fn char_syntax(&self, c: char) -> crate::emacs_core::syntax::SyntaxClass {
         self.base.char_syntax(c)
     }
@@ -1220,6 +1281,25 @@ impl MatchData {
         match self.kind {
             MatchDataKind::StringChars { .. } => MatchDataSource::String,
             MatchDataKind::Buffer { id, .. } => MatchDataSource::Buffer(id),
+        }
+    }
+
+    /// A failed string search changes GNU's `last_thing_searched` to `Qt`
+    /// while retaining the register numbers (search.c:422-427). The old
+    /// buffer positions now name string indices; do not subtract one.
+    pub(crate) fn record_failed_string_search(&mut self) {
+        match &mut self.kind {
+            MatchDataKind::StringChars { searched, .. } => *searched = None,
+            MatchDataKind::Buffer { groups, .. } => {
+                let groups = std::mem::take(groups)
+                    .into_iter()
+                    .map(|range| range.map(|range| range.into_match_group().string_char_range()))
+                    .collect();
+                self.kind = MatchDataKind::StringChars {
+                    groups,
+                    searched: None,
+                };
+            }
         }
     }
 

@@ -2103,7 +2103,12 @@ fn commit_string_search_success(
             }
             Ok(Value::fixnum(start.get() as i64))
         }
-        Ok(None) => Ok(Value::NIL),
+        Ok(None) => {
+            if let Some(Some(match_data)) = match_data {
+                match_data.record_failed_string_search();
+            }
+            Ok(Value::NIL)
+        }
         Err(msg) => Err(regex_error_signal(msg)),
     }
 }
@@ -2327,7 +2332,15 @@ fn string_match_fast(
                 regs.publish_string_into(super::regex::SearchedString::Heap(args[1]), target);
             Ok(Value::fixnum(start.get() as i64))
         }
-        Ok(false) => Ok(Value::NIL),
+        Ok(false) => {
+            if !inhibit_modify
+                && !inhibit_changing
+                && let Some(match_data) = &mut eval.match_data
+            {
+                match_data.record_failed_string_search();
+            }
+            Ok(Value::NIL)
+        }
         Err(msg) => Err(regex_error_signal(msg)),
     })
 }
