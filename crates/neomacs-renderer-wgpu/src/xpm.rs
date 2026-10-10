@@ -16,17 +16,22 @@ use std::path::Path;
 
 /// Decode XPM image from in-memory data, returning (width, height, rgba_pixels).
 ///
-/// `fallback` is the color GNU paints pixels whose key has no resolvable color
-/// with: the frame's foreground pixel (src/image.c:6518-6538), i.e. the
-/// resolved face foreground the caller already holds (`ImageColorContext`).
-/// Its alpha is ignored — GNU's fallback is opaque.
-pub fn decode_xpm_data(data: &[u8], fallback: [u8; 4]) -> Option<(u32, u32, Vec<u8>)> {
+/// `fallback` is what GNU paints a pixel whose color key has no resolvable
+/// color with: `FRAME_FOREGROUND_PIXEL` read once at load (src/image.c:6518,
+/// 6537-6538) -- the frame's `foreground-color` parameter, which GNU keeps
+/// equal to the `default` face's foreground (src/xfaces.c:4394-4404). Callers
+/// pass the face foreground the image is displayed under, which is that same
+/// value whenever the face is `default` and the specification carries no
+/// `:foreground`; GNU ignores the image specification here, so a differing
+/// face or a specification foreground is a narrower approximation. GNU's
+/// fallback is opaque, so no alpha travels.
+pub fn decode_xpm_data(data: &[u8], fallback: [u8; 3]) -> Option<(u32, u32, Vec<u8>)> {
     let strings = extract_strings(data)?;
     decode_from_strings(&strings, fallback)
 }
 
 /// Decode XPM image from a file path. See [`decode_xpm_data`] for `fallback`.
-pub fn decode_xpm_file(path: &Path, fallback: [u8; 4]) -> Option<(u32, u32, Vec<u8>)> {
+pub fn decode_xpm_file(path: &Path, fallback: [u8; 3]) -> Option<(u32, u32, Vec<u8>)> {
     let data = std::fs::read(path).ok()?;
     decode_xpm_data(&data, fallback)
 }
@@ -131,7 +136,7 @@ fn trim_bytes(b: &[u8]) -> &[u8] {
     &b[start..end]
 }
 
-fn decode_from_strings(strings: &[&[u8]], fallback: [u8; 4]) -> Option<(u32, u32, Vec<u8>)> {
+fn decode_from_strings(strings: &[&[u8]], fallback: [u8; 3]) -> Option<(u32, u32, Vec<u8>)> {
     if strings.is_empty() {
         return None;
     }
@@ -151,7 +156,8 @@ fn decode_from_strings(strings: &[&[u8]], fallback: [u8; 4]) -> Option<(u32, u32
     // Parse color table. GNU fails the whole image for a malformed line
     // (`goto failure`, src/image.c:6440-6516) but keeps walking for a line
     // whose color merely does not resolve: that key stays out of the table.
-    let mut colors: HashMap<Vec<u8>, XpmColorValue> = HashMap::with_capacity(header.ncolors as usize);
+    let mut colors: HashMap<Vec<u8>, XpmColorValue> =
+        HashMap::with_capacity(header.ncolors as usize);
     for i in 0..header.ncolors as usize {
         let line = strings[1 + i];
         // `len <= chars_per_pixel` is GNU's failure test: a color line must
@@ -177,7 +183,7 @@ fn decode_from_strings(strings: &[&[u8]], fallback: [u8; 4]) -> Option<(u32, u32
     let w = header.width as usize;
     let h = header.height as usize;
     let mut rgba = vec![0u8; w * h * 4];
-    let fallback = XpmColorValue::Rgb([fallback[0], fallback[1], fallback[2]]);
+    let fallback = XpmColorValue::Rgb(fallback);
 
     for y in 0..h {
         let row = strings[1 + header.ncolors as usize + y];

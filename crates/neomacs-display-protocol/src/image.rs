@@ -390,14 +390,22 @@ impl ImageRgb {
         self.0
     }
 
+    /// The three channels, for the consumers GNU treats as opaque -- XPM
+    /// paints an unresolvable color key with the frame foreground pixel and no
+    /// alpha of its own (`src/image.c:6518-6538`), so no alpha travels here.
     #[must_use]
-    pub const fn rgba8(self) -> [u8; 4] {
+    pub const fn rgb8(self) -> [u8; 3] {
         [
             ((self.0 >> 16) & 0xff) as u8,
             ((self.0 >> 8) & 0xff) as u8,
             (self.0 & 0xff) as u8,
-            0xff,
         ]
+    }
+
+    #[must_use]
+    pub const fn rgba8(self) -> [u8; 4] {
+        let [red, green, blue] = self.rgb8();
+        [red, green, blue, 0xff]
     }
 }
 

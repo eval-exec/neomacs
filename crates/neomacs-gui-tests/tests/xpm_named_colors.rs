@@ -53,15 +53,14 @@ fn xpm_named_colors_resolve_like_gnu_and_paint_that_way() {
         program: std::env::var_os("NEOMACS_GNU_EMACS_BINARY")
             .map(PathBuf::from)
             .unwrap_or_else(|| "emacs".into()),
-        args: vec![
-            "-Q".into(),
-            "--load".into(),
-            fixture.display().to_string(),
-        ],
+        args: vec!["-Q".into(), "--load".into(), fixture.display().to_string()],
         env: vec![
             ("GDK_BACKEND".into(), "x11".into()),
             ("GSETTINGS_BACKEND".into(), "memory".into()),
-            ("NEOMACS_GUI_STATE_JSON".into(), gnu_state.display().to_string()),
+            (
+                "NEOMACS_GUI_STATE_JSON".into(),
+                gnu_state.display().to_string(),
+            ),
         ],
     };
     command.env.extend(gnu_session.env().iter().cloned());

@@ -54,14 +54,10 @@
                  xpm-named-color-cases)))))
     (redisplay t)
     ;; Let the compositor present the painted buffer before the process is
-    ;; asked to exit; `kill-emacs' during startup hangs under GTK.
-    (run-at-time
-     2 nil
-     (lambda ()
-       (when (fboundp 'neomacs--write-frame-snapshot)
-         (neomacs--write-frame-snapshot
-          (concat (getenv "NEOMACS_GUI_STATE_JSON") ".frame.json") nil 'json))
-       (kill-emacs 0)))))
+    ;; asked to exit; `kill-emacs' during startup hangs under GTK. The surface
+    ;; readback is what the Rust side asserts on, so no frame snapshot is
+    ;; written here.
+    (run-at-time 2 nil (lambda () (kill-emacs 0)))))
 
 (condition-case err
     (xpm-named-colors-probe)

@@ -1129,7 +1129,9 @@ impl ImageCache {
         // foreground this decode carries — and XBM takes both face colors.
         let fg = colors.foreground().rgba8();
         let bg = colors.background_rgba8();
-        if let Some(result) = crate::xpm::decode_xpm_file(Path::new(path), fg) {
+        if let Some(result) =
+            crate::xpm::decode_xpm_file(Path::new(path), colors.foreground().rgb8())
+        {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
                 rotation,
@@ -1231,7 +1233,7 @@ impl ImageCache {
         // file arm for why XPM takes the face foreground.
         let fg = colors.foreground().rgba8();
         let bg = colors.background_rgba8();
-        if let Some(result) = crate::xpm::decode_xpm_data(&data, fg) {
+        if let Some(result) = crate::xpm::decode_xpm_data(&data, colors.foreground().rgb8()) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
                 rotation,

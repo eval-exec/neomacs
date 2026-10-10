@@ -1,7 +1,7 @@
 use super::*;
 
 /// The face foreground every decode in this file passes as GNU's fallback.
-const FALLBACK: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
+const FALLBACK: [u8; 3] = [0xff, 0xff, 0xff];
 
 #[test]
 fn test_basic_xpm3() {
@@ -90,15 +90,12 @@ fn decode_one_pixel(value: &str) -> [u8; 4] {
 /// is not that color, so substituting it made the failure invisible.
 #[test]
 fn unresolvable_colors_take_the_face_foreground_not_black() {
-    let foreground = [0x12, 0x34, 0x56, 0xff];
+    let foreground = [0x12, 0x34, 0x56];
     let xpm = one_pixel_xpm("aqua"); // a CSS name `etc/rgb.txt` never defined
     let (width, height, rgba) = decode_xpm_data(xpm.as_bytes(), foreground).expect("decodes");
     assert_eq!((width, height), (1, 1));
-    assert_eq!(&rgba[..4], &foreground);
-
-    // GNU's fallback is opaque even if a caller hands over an alpha.
-    let (_, _, rgba) = decode_xpm_data(xpm.as_bytes(), [0x12, 0x34, 0x56, 0x00]).expect("decodes");
-    assert_eq!(&rgba[..4], &foreground);
+    // GNU's fallback is opaque; the parameter cannot carry an alpha to lose.
+    assert_eq!(&rgba[..4], &[0x12, 0x34, 0x56, 0xff]);
 }
 
 /// GNU resolves XPM color values through the frame terminal's

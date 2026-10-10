@@ -50,7 +50,12 @@ fn image_rgb_preserves_black_as_a_real_opaque_color() {
     let black = ImageRgb::from_pixel(0x0000_0000);
 
     assert_eq!(black.rgb24(), 0x0000_0000);
+    assert_eq!(black.rgb8(), [0, 0, 0]);
     assert_eq!(black.rgba8(), [0, 0, 0, 0xff]);
+    assert_eq!(
+        ImageRgb::from_pixel(0xaa_12_34_56).rgb8(),
+        [0x12, 0x34, 0x56]
+    );
 }
 
 #[test]
