@@ -4039,10 +4039,9 @@ fn run_gui_evaluator_worker(
     // the evaluator is deliberately retained for process exit. Unwinding and
     // failed startup also drop this guard.
     drop(font_observer);
-    if exit_status.is_ok() {
-        tracing::info!("Command loop exited normally");
-    } else {
-        tracing::warn!("Command loop exited with error");
+    match &exit_status {
+        Ok(()) => tracing::info!("Command loop exited normally"),
+        Err(error) => tracing::warn!(%error, "Command loop exited with error"),
     }
 
     tracing::info!("GUI evaluator shutting down render loop...");
@@ -4722,10 +4721,9 @@ pub fn run(mode: RuntimeMode) {
     tracing::info!("Entering GNU command loop (recursive-edit)...");
     mark_jit_command_loop_entry();
     let exit_status = evaluator.recursive_edit();
-    if exit_status.is_ok() {
-        tracing::info!("Command loop exited normally");
-    } else {
-        tracing::warn!("Command loop exited with error");
+    match &exit_status {
+        Ok(()) => tracing::info!("Command loop exited normally"),
+        Err(error) => tracing::warn!(%error, "Command loop exited with error"),
     }
 
     // 11. Shutdown

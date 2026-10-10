@@ -23420,6 +23420,28 @@ fn command_loop_error_test_context() -> (Context, Value) {
 /// Queue commands behind synthetic function keys, then a final command that
 /// stops the recursive edit after every signal has passed through recovery.
 fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands: &[(&str, &str)]) {
+    queue_command_loop_error_commands(ev, global_map, commands);
+    ev.recursive_edit_inner()
+        .expect("command loop should recover and run the stop command");
+}
+
+/// Make the command loop interactive.  An interactive loop needs an input
+/// source; keep the returned sender alive for the duration of the test.
+fn interactive_command_loop_input(
+    ev: &mut Context,
+) -> crossbeam_channel::Sender<crate::keyboard::InputEvent> {
+    ev.noninteractive = false;
+    let (tx, rx) = crossbeam_channel::unbounded();
+    ev.input_rx = Some(rx);
+    tx
+}
+
+/// Queue commands behind synthetic function keys, then the stop command.
+fn queue_command_loop_error_commands(
+    ev: &mut Context,
+    global_map: Value,
+    commands: &[(&str, &str)],
+) {
     for &(key, command) in commands {
         crate::emacs_core::keymap::list_keymap_define_seq(
             global_map,
@@ -23437,9 +23459,6 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
     .expect("define stop command");
     ev.command_loop.unread_event(Value::fixnum('q' as i64));
     ev.command_loop.running = true;
-
-    ev.recursive_edit_inner()
-        .expect("command loop should recover and run the stop command");
 }
 
 /// GNU `command_loop_2' catches an unhandled command signal with `cmd_error',
@@ -23475,6 +23494,273 @@ fn command_loop_error_uses_buffer_local_command_error_function() {
         ]),
         "GNU cmd_error must dispatch through the current buffer's handler"
     );
+}
+
+/// A `%' in a rendered command error is text, not a format directive.  GNU
+/// `print_error_message' writes the diagnostic literally; feeding it to
+/// `message' as the format string signalled "Not enough arguments for format
+/// string" from inside the reporter, which escaped `command_loop_2' and ended
+/// the session.
+#[test]
+fn command_error_report_shows_percent_literally() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, _global_map) = command_loop_error_test_context();
+    ev.noninteractive = false;
+    let data = ev
+        .eval_str(r#"'(error "Text is read-only: 50% of #chan%irc.example")"#)
+        .expect("error data");
+
+    ev.report_command_error(data, "")
+        .expect("reporting a command error must not signal");
+
+    let messages_id = ev
+        .buffers
+        .find_buffer_by_name("*Messages*")
+        .expect("the report must log to *Messages*");
+    let messages = ev
+        .buffers
+        .get(messages_id)
+        .expect("*Messages* live")
+        .buffer_string();
+    assert!(
+        messages.contains("Text is read-only: 50% of #chan%irc.example"),
+        "the diagnostic must be shown literally, got {messages:?}"
+    );
+}
+
+/// GNU runs `cmd_error' outside `command_loop_2's condition-case: a signal
+/// from `command-error-function' finds no handler and `signal_or_quit' throws
+/// to `top-level', so the command loop restarts instead of ending.
+#[test]
+fn command_loop_survives_signaling_command_error_function() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, global_map) = command_loop_error_test_context();
+    let _input = interactive_command_loop_input(&mut ev);
+    ev.eval_str(
+        r#"(progn
+             (setq neo-after-error-command-ran nil)
+             (set (make-local-variable 'command-error-function)
+                  (lambda (_data _context _caller)
+                    (signal 'error '("presentation failed"))))
+             (fset 'neo-signaling-command
+                   (lambda () (interactive) (signal 'error '("boom"))))
+             (fset 'neo-after-error-command
+                   (lambda () (interactive) (setq neo-after-error-command-ran t))))"#,
+    )
+    .expect("install failing command-error-function probe");
+
+    run_command_loop_error_commands(
+        &mut ev,
+        global_map,
+        &[
+            ("f9", "neo-signaling-command"),
+            ("f10", "neo-after-error-command"),
+        ],
+    );
+
+    assert_eq!(
+        ev.eval_symbol("neo-after-error-command-ran")
+            .expect("after-error observation"),
+        Value::T,
+        "the command loop must keep reading commands after a failed report"
+    );
+}
+
+/// GNU `top_level_1' reports a startup error through the same `cmd_error'; a
+/// signal from that report throws to `top-level', and `command_loop' still
+/// enters `command_loop_2'.
+#[test]
+fn command_loop_survives_signaling_report_of_startup_error() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, global_map) = command_loop_error_test_context();
+    let _input = interactive_command_loop_input(&mut ev);
+    ev.eval_str(
+        r#"(progn
+             (setq neo-after-error-command-ran nil)
+             (setq top-level '(signal 'error '("init failed")))
+             (set (make-local-variable 'command-error-function)
+                  (lambda (_data _context _caller)
+                    (signal 'error '("presentation failed"))))
+             (fset 'neo-after-error-command
+                   (lambda () (interactive) (setq neo-after-error-command-ran t))))"#,
+    )
+    .expect("install failing startup report probe");
+
+    run_command_loop_error_commands(&mut ev, global_map, &[("f10", "neo-after-error-command")]);
+
+    assert_eq!(
+        ev.eval_symbol("neo-after-error-command-ran")
+            .expect("after-error observation"),
+        Value::T,
+        "a failed startup report must not keep the command loop from reading commands"
+    );
+}
+
+/// GNU `signal_or_quit' throws to `top-level' only when no handler matches.
+/// A `condition-case' around a `recursive-edit' is outside the command loop's
+/// own handler, so a signal from the reporter must still reach it.
+#[test]
+fn command_loop_reporter_signal_reaches_enclosing_handler() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, global_map) = command_loop_error_test_context();
+    let _input = interactive_command_loop_input(&mut ev);
+    ev.eval_str(
+        r#"(progn
+             (put 'neo-report-failed 'error-conditions '(neo-report-failed error))
+             (put 'neo-report-failed 'error-message "Report failed")
+             (set (make-local-variable 'command-error-function)
+                  (lambda (_data _context _caller) (signal 'neo-report-failed nil)))
+             (fset 'neo-signaling-command
+                   (lambda () (interactive) (signal 'error '("boom")))))"#,
+    )
+    .expect("install enclosing-handler probe");
+    queue_command_loop_error_commands(&mut ev, global_map, &[("f9", "neo-signaling-command")]);
+
+    let result = ev
+        .eval_str("(condition-case nil (recursive-edit) (neo-report-failed 'caught))")
+        .expect("the enclosing handler must receive the reporter's signal");
+    assert_eq!(result, Value::symbol("caught"));
+}
+
+/// A builtin's signal reaches the reporter undispatched -- the `%' format
+/// error did.  Rerouting gives it GNU's normal dispatch exactly once
+/// (`signal-hook-function' included) before the top-level throw; a signal
+/// that was already dispatched is not dispatched again.
+#[test]
+fn command_error_report_failure_dispatches_an_undispatched_signal_once() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, _global_map) = command_loop_error_test_context();
+    ev.eval_str(
+        r#"(setq neo-signal-hook-calls 0
+                 signal-hook-function
+                 (lambda (_symbol _data)
+                   (setq neo-signal-hook-calls (1+ neo-signal-hook-calls))))"#,
+    )
+    .expect("install counting signal-hook-function");
+    let hook_calls = |ev: &mut Context| ev.eval_symbol("neo-signal-hook-calls").expect("count");
+    let undispatched = || {
+        crate::emacs_core::error::signal(
+            "error",
+            vec![Value::string("Not enough arguments for format string")],
+        )
+    };
+    let is_top_level_throw = |flow: &Flow| {
+        flow.as_throw()
+            .is_some_and(|thrown| thrown.tag.is_symbol_named("top-level"))
+    };
+
+    let rerouted = ev.command_error_report_failure(undispatched());
+    assert!(
+        is_top_level_throw(&rerouted),
+        "an unhandled signal throws to top-level"
+    );
+    assert_eq!(
+        hook_calls(&mut ev),
+        Value::fixnum(1),
+        "dispatched exactly once"
+    );
+
+    let FlowKind::Signal(sig) = undispatched().into_kind() else {
+        panic!("signal flow");
+    };
+    let dispatched = ev.dispatch_signal_if_needed(sig).expect("dispatch");
+    assert_eq!(hook_calls(&mut ev), Value::fixnum(2));
+    let rerouted = ev.command_error_report_failure(Flow::from_kind(FlowKind::Signal(dispatched)));
+    assert!(is_top_level_throw(&rerouted));
+    assert_eq!(hook_calls(&mut ev), Value::fixnum(2), "no second dispatch");
+}
+
+/// GNU `command_loop' runs its batch check after the catch around
+/// `command_loop_2' returns, including from a top-level throw: a batch
+/// session whose error report fails exits instead of reading on.  It exits
+/// with the status of a plain batch error (GNU hangs here instead).
+#[test]
+fn command_loop_batch_exits_after_failed_report() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, global_map) = command_loop_error_test_context();
+    ev.noninteractive = true;
+    ev.eval_str(
+        r#"(progn
+             (setq neo-after-error-command-ran nil)
+             (set (make-local-variable 'command-error-function)
+                  (lambda (_data _context _caller)
+                    (signal 'error '("presentation failed"))))
+             (fset 'neo-signaling-command
+                   (lambda () (interactive) (signal 'error '("boom"))))
+             (fset 'neo-after-error-command
+                   (lambda () (interactive) (setq neo-after-error-command-ran t))))"#,
+    )
+    .expect("install batch failing-report probe");
+
+    run_command_loop_error_commands(
+        &mut ev,
+        global_map,
+        &[
+            ("f9", "neo-signaling-command"),
+            ("f10", "neo-after-error-command"),
+        ],
+    );
+
+    assert_eq!(
+        ev.eval_symbol("neo-after-error-command-ran")
+            .expect("after-error observation"),
+        Value::NIL,
+        "a batch session must not read further commands after a failed report"
+    );
+    assert_eq!(
+        ev.shutdown_request
+            .as_ref()
+            .map(|request| request.exit_code),
+        Some(-1),
+        "a batch session ended by a failed report must not exit with success"
+    );
+}
+
+/// Run the batch top level FORM to its end and return the requested exit code.
+fn batch_top_level_exit_code(form: &str) -> Option<i32> {
+    let mut ev = Context::new();
+    ev.set_variable("noninteractive", Value::T);
+    let top_level = crate::emacs_core::value_reader::read_all(form, &test_ob())
+        .expect("parse top-level form")
+        .into_iter()
+        .next()
+        .expect("top-level form");
+    ev.set_variable("top-level", top_level);
+    let _ = ev.recursive_edit();
+    ev.shutdown_request().map(|request| request.exit_code)
+}
+
+/// `--batch --eval` whose error report signals: the startup report fails
+/// inside `top_level_1', input then ends, and the session must still exit
+/// with an error status.
+#[test]
+fn batch_startup_error_with_failed_report_exits_with_error_status() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        batch_top_level_exit_code(
+            r#"(progn
+                 (setq command-error-function
+                       (lambda (&rest _) (error "reporter boom")))
+                 (error "x"))"#,
+        ),
+        Some(-1)
+    );
+}
+
+/// Clean batch input exhaustion succeeds; a failed reporter must not change
+/// the exit status of a separate, ordinary EOF path.
+#[test]
+fn command_loop_batch_clean_eof_exits_with_success() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(batch_top_level_exit_code("nil"), Some(0));
+}
+
+/// A deliberate `(top-level)' in batch is not an error: the session still
+/// ends with success at end of input, as GNU's (kill-emacs t).
+#[test]
+fn batch_deliberate_top_level_exits_with_success() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(batch_top_level_exit_code("(top-level)"), Some(0));
 }
 
 /// GNU decides whether an error is ignored while dispatching the signal, before

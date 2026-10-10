@@ -2302,7 +2302,15 @@ impl super::eval::Context {
                 .map(|_| ());
         }
         let text = format!("{context_text}{rendered}");
-        super::builtins::misc_pure::builtin_message(self, vec![Value::string(text)])?;
+        // GNU `print_error_message' writes the text literally (message3, no
+        // format).  `message' formats its first argument, so the rendered
+        // diagnostic must be an argument: a `%' in it (a buffer named
+        // `#chan%irc.example', say) would otherwise signal a format error here
+        // and take the error out of the command loop's recovery.
+        super::builtins::misc_pure::builtin_message(
+            self,
+            vec![Value::string("%s"), Value::string(text)],
+        )?;
         Ok(())
     }
 
