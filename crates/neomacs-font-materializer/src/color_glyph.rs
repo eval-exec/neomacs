@@ -78,6 +78,32 @@ pub enum ColorGlyphError {
     MissingFace { path: String, face_index: u32 },
 }
 
+/// Classify one file face from its table directory, without reading its
+/// payload.
+///
+/// `None` covers "not an SFNT container" and "no such face index", both of
+/// which mean this rasterizer owns nothing in the file.
+fn classify_file(
+    path: &str,
+    face_index: u32,
+) -> Result<Option<SfntFaceRasterSources>, ColorGlyphError> {
+    use std::io::Read;
+    let read_error = |error: std::io::Error| ColorGlyphError::Read {
+        path: path.to_owned(),
+        reason: error.to_string(),
+    };
+    let mut file = std::fs::File::open(path).map_err(read_error)?;
+    let mut header = Vec::with_capacity(12);
+    (&mut file)
+        .take(12)
+        .read_to_end(&mut header)
+        .map_err(read_error)?;
+    match crate::fontdb::classify_sfnt_stream(&mut file, &header, face_index).map_err(read_error)? {
+        crate::fontdb::StreamedSfntSource::Sfnt(sources) => Ok(sources),
+        crate::fontdb::StreamedSfntSource::NotSfnt => Ok(None),
+    }
+}
+
 /// Key for one exact source face, mirroring the identity the display side
 /// uses for pinning: durable path or verified memory payload, plus face index.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -138,6 +164,40 @@ impl ColorGlyphRasterizer {
         self.faces.clear();
     }
 
+    /// Whether `asset` carries a color source this rasterizer can paint.
+    ///
+    /// Opens and classifies the face once; the answer then rides the face
+    /// cache, so a caller that must decide something per face (such as
+    /// whether a glyph's raster can depend on the text foreground) pays for
+    /// the table walk only once.
+    pub fn has_color_sources(&mut self, asset: &FontOutlineAsset) -> bool {
+        self.ensure_face(asset).is_some()
+    }
+
+    /// Open, classify, and cache one exact source face.
+    ///
+    /// `None` means no source in this module can paint the face, including
+    /// the failure cases, which stay cached so a repeated miss costs a hash
+    /// lookup rather than another file read.
+    fn ensure_face(&mut self, asset: &FontOutlineAsset) -> Option<&ColorFaceBytes> {
+        let key = ColorFaceKey::from_asset(asset);
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.faces.entry(key.clone()) {
+            let opened = match Self::open_color_face(asset) {
+                Ok(face) => face,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "font_boundary",
+                        %error,
+                        "layered color glyph source is unavailable"
+                    );
+                    None
+                }
+            };
+            entry.insert(opened);
+        }
+        self.faces.get(&key).and_then(Option::as_ref)
+    }
+
     /// Rasterize `request` from `asset`.
     ///
     /// Returns `Ok(None)` when the face carries no color source this module
@@ -151,11 +211,7 @@ impl ColorGlyphRasterizer {
         if !request.px_size.is_finite() || request.px_size <= 0.0 {
             return Ok(None);
         }
-        let key = ColorFaceKey::from_asset(asset);
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.faces.entry(key.clone()) {
-            entry.insert(Self::open_color_face(asset)?);
-        }
-        let Some(face) = self.faces.get(&key).and_then(Option::as_ref) else {
+        let Some(face) = self.ensure_face(asset) else {
             return Ok(None);
         };
 
@@ -180,11 +236,21 @@ impl ColorGlyphRasterizer {
     ) -> Result<Option<ColorFaceBytes>, ColorGlyphError> {
         let (path, bytes, face_index) = match asset {
             FontOutlineAsset::File(asset) => {
-                let bytes = std::fs::read(asset.path()).map_err(|error| ColorGlyphError::Read {
-                    path: asset.path().to_owned(),
+                let path = asset.path().to_owned();
+                let face_index = asset.face_index();
+                // Classify from the table directory first: the overwhelming
+                // majority of faces carry no color source, and reading a
+                // multi-megabyte font to learn that is avoidable work.
+                if !classify_file(&path, face_index)?
+                    .is_some_and(|sources| sources.color_glyph_sources().next().is_some())
+                {
+                    return Ok(None);
+                }
+                let bytes = std::fs::read(&path).map_err(|error| ColorGlyphError::Read {
+                    path: path.clone(),
                     reason: error.to_string(),
                 })?;
-                (asset.path().to_owned(), Arc::new(bytes), asset.face_index())
+                (path, Arc::new(bytes), face_index)
             }
             FontOutlineAsset::Memory(asset) => (
                 asset.key().to_owned(),

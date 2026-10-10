@@ -502,3 +502,37 @@ fn colrv1_sweep_gradient_follows_the_design_grid_angles() {
         "the -y direction must be the three-quarter-turn stop: {below:?}"
     );
 }
+
+/// Nested `PaintGlyph` clips are a conjunction, and the raster must honor the
+/// whole stack: the measurement pass intersects every clip, so painting only
+/// the innermost one would over-paint inside the outer clip's hole.
+#[test]
+fn nested_paint_glyph_clips_intersect() {
+    let (base, outer, inner) = (glyph('A'), glyph('O'), glyph(BLOCK));
+    // Inner ink covers the outer clip's hole, so an un-intersected stack
+    // paints the hole and an intersected one leaves it empty.
+    let paint = paint_glyph(outer, &paint_glyph(inner, &paint_solid(0, 1.0)));
+    let font = font_with_color_tables(colr_v1_table(base, &paint), cpal_table(&[RED]));
+    let raster = rasterize_at(&font, "synthetic:nested-clip", base, [0, 0, 0, 255], 96.0)
+        .expect("nested clips paint");
+
+    let sample = |x: u32, y: u32| -> [u8; 4] {
+        let index = ((y * raster.width + x) * 4) as usize;
+        raster.rgba[index..index + 4].try_into().expect("pixel")
+    };
+    let (mid_x, mid_y) = (raster.width / 2, raster.height / 2);
+    assert_eq!(
+        sample(mid_x, mid_y)[3],
+        0,
+        "the inner fill must not paint inside the outer clip's hole"
+    );
+    // The ring itself is still painted: its left edge at mid height.
+    let ring_left = (0..mid_x)
+        .rev()
+        .map(|x| sample(x, mid_y))
+        .find(|pixel| pixel[3] > 200);
+    assert!(
+        ring_left.is_some(),
+        "the outer clip's own stroke must still be painted"
+    );
+}

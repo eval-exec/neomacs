@@ -123,6 +123,62 @@ impl ExactFaceKey {
     }
 }
 
+/// What a streaming read saw at the head of a font source.
+pub(crate) enum StreamedSfntSource {
+    /// An SFNT face, classified from its table directory alone.  `None` means
+    /// the requested face index does not exist in the collection.
+    Sfnt(Option<SfntFaceRasterSources>),
+    /// Not an SFNT container: the caller must read the payload to decide.
+    NotSfnt,
+}
+
+/// Classify the SFNT face at `source`'s current position from `header` bytes.
+///
+/// Only the header and the selected face's table directory are read, so a
+/// multi-megabyte font costs a few hundred bytes here; a caller that needs the
+/// payload reads it afterwards.  `header` holds what a `take(12)` read
+/// returned, which is shorter than 12 for a truncated file.
+pub(crate) fn classify_sfnt_stream(
+    source: &mut (impl Read + Seek),
+    header: &[u8],
+    face_index: u32,
+) -> std::io::Result<StreamedSfntSource> {
+    if !is_sfnt(header) {
+        return Ok(StreamedSfntSource::NotSfnt);
+    }
+    let raster: std::io::Result<Option<SfntFaceRasterSources>> = (|| {
+        let directory = if header.starts_with(b"ttcf") {
+            if read_be_u32(header, 8).is_none_or(|count| face_index >= count) {
+                return Ok(None);
+            }
+            source.seek(SeekFrom::Start(12 + u64::from(face_index) * 4))?;
+            let mut offset = [0; 4];
+            source.read_exact(&mut offset)?;
+            u64::from(u32::from_be_bytes(offset))
+        } else if face_index == 0 {
+            0
+        } else {
+            return Ok(None);
+        };
+        source.seek(SeekFrom::Start(directory))?;
+        let mut table_directory = vec![0; 12];
+        source.read_exact(&mut table_directory)?;
+        let count = read_be_u16(&table_directory, 4).unwrap() as usize;
+        table_directory.resize(12 + count * 16, 0);
+        source.read_exact(&mut table_directory[12..])?;
+        Ok(classify_table_directory(&table_directory, 0))
+    })();
+    match raster {
+        Ok(raster) => Ok(StreamedSfntSource::Sfnt(raster)),
+        // Preserve the slice classifier's handling of truncated SFNT: fontdb
+        // remains responsible for accepting or rejecting it.
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Ok(StreamedSfntSource::Sfnt(None))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 impl FontContainer {
     fn read_source(
         source: &mut (impl Read + Seek),
@@ -134,36 +190,8 @@ impl FontContainer {
         // instead of copying every preceding font into an evaluator buffer.
         let mut header = Vec::with_capacity(12);
         source.take(12).read_to_end(&mut header)?;
-        if is_sfnt(&header) {
-            let raster: std::io::Result<Option<SfntFaceRasterSources>> = (|| {
-                let directory = if header.starts_with(b"ttcf") {
-                    if read_be_u32(&header, 8).is_none_or(|count| face_index >= count) {
-                        return Ok(None);
-                    }
-                    source.seek(SeekFrom::Start(12 + u64::from(face_index) * 4))?;
-                    let mut offset = [0; 4];
-                    source.read_exact(&mut offset)?;
-                    u64::from(u32::from_be_bytes(offset))
-                } else if face_index == 0 {
-                    0
-                } else {
-                    return Ok(None);
-                };
-                source.seek(SeekFrom::Start(directory))?;
-                let mut table_directory = vec![0; 12];
-                source.read_exact(&mut table_directory)?;
-                let count = read_be_u16(&table_directory, 4).unwrap() as usize;
-                table_directory.resize(12 + count * 16, 0);
-                source.read_exact(&mut table_directory[12..])?;
-                Ok(classify_table_directory(&table_directory, 0))
-            })();
-            let raster = match raster {
-                Ok(raster) => raster,
-                // Preserve the slice classifier's handling of truncated SFNT:
-                // fontdb remains responsible for accepting or rejecting it.
-                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => None,
-                Err(error) => return Err(error),
-            };
+        if let StreamedSfntSource::Sfnt(raster) = classify_sfnt_stream(source, &header, face_index)?
+        {
             return Ok((Self::from_raster_source(raster), Vec::new()));
         }
         // Webfont decoding needs the complete payload. Legacy bitmap probing

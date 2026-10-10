@@ -872,6 +872,9 @@ impl<'a> RasterState<'a> {
                     let clip = match resolve(self.paths, self.transform, positioned) {
                         Some((path, transform)) => {
                             mask.fill_path(path, FillRule::Winding, true, transform);
+                            if let Some(parent) = self.clips.last().and_then(Option::as_ref) {
+                                intersect_masks(parent, &mut mask);
+                            }
                             Some(mask)
                         }
                         // A clip with no shape clips everything away.
@@ -901,6 +904,9 @@ impl<'a> RasterState<'a> {
                         true,
                         matrix,
                     );
+                    if let Some(parent) = self.clips.last().and_then(Option::as_ref) {
+                        intersect_masks(parent, &mut mask);
+                    }
                     self.clips.push(Some(mask));
                 }
                 Step::PopClip => {
@@ -956,6 +962,18 @@ impl<'a> RasterState<'a> {
 /// transform).  Graph transforms still reach the shader, because the fill's
 /// transform moves the path and the shader's geometry is in the same space as
 /// the path.
+/// Narrow `child`'s coverage by `parent`'s.
+///
+/// The clip stack is a conjunction: nested `PaintGlyph` clips and a `ClipBox`
+/// all bound the same fill.  Multiplying coverages approximates the
+/// intersection and keeps paint-time clipping identical to the measurement
+/// pass, which intersects every active clip.
+fn intersect_masks(parent: &Mask, child: &mut Mask) {
+    for (child_byte, parent_byte) in child.data_mut().iter_mut().zip(parent.data()) {
+        *child_byte = ((u16::from(*child_byte) * u16::from(*parent_byte) + 127) / 255) as u8;
+    }
+}
+
 fn build_skia_paint(record: &PaintRecord) -> Option<SkiaPaint<'static>> {
     let solid = |color: RgbaColor| SkiaPaint {
         shader: Shader::SolidColor(to_skia_color(color)),

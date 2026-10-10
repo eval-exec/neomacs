@@ -23,11 +23,11 @@ use cosmic_text::{
 
 use bitmap_fonts::BitmapFontReplayCache;
 use neomacs_display_protocol::face::Face;
-use neomacs_display_protocol::font::FontOutlineAsset;
 use neomacs_display_protocol::font::{
     CharFontTable, FontCatalogGeneration, FontReplay, FontSlantKind, FrameFontBindings,
     ResolvedFont, ResolvedFontId, ResolvedFontTable, ResolvedGlyph, ShapedClusterTable,
 };
+use neomacs_display_protocol::font::{FontFileAsset, FontOutlineAsset};
 use neomacs_font_materializer::FontFileCache;
 use neomacs_font_materializer::{ColorGlyphRaster, ColorGlyphRasterizer, ColorGlyphRequest, Tag};
 use neomacs_layout_engine::font::subpixel::{FontconfigSubpixelOrder, default_subpixel_order};
@@ -453,6 +453,27 @@ use pages::{GlyphAtlasPages, PageAllocResult};
 use types::*;
 
 /// Wgpu-based glyph atlas for text rendering
+/// Fold a face foreground into a glyph identity.
+///
+/// Color rasters can resolve palette index 0xFFFF to the text foreground, so
+/// they must not be shared across faces that differ only in colour.
+fn mix_foreground(identity: u64, foreground: u64) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    identity.hash(&mut hasher);
+    foreground.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Hash every channel of a face foreground.
+fn hash_foreground(foreground: neomacs_display_protocol::Color) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    foreground.r.to_bits().hash(&mut hasher);
+    foreground.g.to_bits().hash(&mut hasher);
+    foreground.b.to_bits().hash(&mut hasher);
+    foreground.a.to_bits().hash(&mut hasher);
+    hasher.finish()
+}
+
 /// One rasterized glyph image, in the atlas's internal convention.
 ///
 /// The Swash-backed sources and the layered-color rasterizer both produce
@@ -575,6 +596,12 @@ pub struct WgpuGlyphAtlas {
     color_font_assets: FxHashMap<fontdb::ID, FontOutlineAsset>,
     /// Rasterizes color glyphs from those assets, caching opened faces.
     color_glyph_rasterizer: ColorGlyphRasterizer,
+    /// Resolved fonts whose rasters can resolve the text foreground (palette
+    /// index 0xFFFF).  Populated when a frame's fonts are installed, so every
+    /// identity computed for a glyph — the atlas's own and the row-reuse
+    /// keys the renderer builds — agrees on whether the foreground belongs in
+    /// it.
+    color_font_ids: FxHashSet<ResolvedFontId>,
     /// Total GUI text lookups whose face had no layout-resolved font and no
     /// font-file bridge — i.e. the renderer had to make a semantic font
     /// decision on its own (design §10 "emergency fallback"). Must stay 0
@@ -680,6 +707,7 @@ impl WgpuGlyphAtlas {
             resolved_fontdb_ids: HashMap::new(),
             color_font_assets: FxHashMap::default(),
             color_glyph_rasterizer: ColorGlyphRasterizer::new(),
+            color_font_ids: FxHashSet::default(),
             unresolved_face_text_total: 0,
             unresolved_face_warned: HashSet::new(),
             cache_hits_this_frame: 0,
@@ -1415,6 +1443,44 @@ impl WgpuGlyphAtlas {
         self.render_cache_key_image(cache_key, enable_subpixel)
     }
 
+    /// Whether one raster holds any color glyph, which makes the whole
+    /// cluster foreground-dependent (the same rule single glyphs follow).
+    fn composed_cluster_has_color_font(&self, face: Option<&Face>, text: &str) -> bool {
+        face.and_then(|face| {
+            self.frame_shaped_clusters
+                .get(&face.id)?
+                .get(text)?
+                .iter()
+                .any(|glyph| self.color_font_ids.contains(&glyph.resolved_font_id))
+                .then_some(())
+        })
+        .is_some()
+    }
+
+    /// The layered-color source behind a fontdb face, when it has one.
+    ///
+    /// Exact pins register their asset up front.  A face that arrived through
+    /// semantic fallback (`prime_file`) has no recorded asset, but fontdb
+    /// still names the file it loaded, which is all the rasterizer needs: the
+    /// derivation is cached so a face is read once.
+    fn color_asset_for(&mut self, fontdb_id: fontdb::ID) -> Option<FontOutlineAsset> {
+        if let Some(asset) = self.color_font_assets.get(&fontdb_id) {
+            return Some(asset.clone());
+        }
+        let derived = {
+            let face = self.font_system.db().face(fontdb_id)?;
+            let path = match &face.source {
+                fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => path,
+                // A binary face has no durable source outside its pin.
+                fontdb::Source::Binary(_) => return None,
+            };
+            let asset = FontFileAsset::new(path.to_string_lossy().into_owned(), face.index)?;
+            FontOutlineAsset::File(asset)
+        };
+        self.color_font_assets.insert(fontdb_id, derived.clone());
+        Some(derived)
+    }
+
     /// Rasterize `glyph_id` from the face's layered color source, when the
     /// face has one. Returns `None` for every other face, which keeps the
     /// Swash path free of table checks.
@@ -1427,7 +1493,7 @@ impl WgpuGlyphAtlas {
         x_bin: SubpixelBin,
         y_bin: SubpixelBin,
     ) -> Option<RasterGlyphImage> {
-        let asset = self.color_font_assets.get(&fontdb_id)?.clone();
+        let asset = self.color_asset_for(fontdb_id)?;
         let foreground = face
             .map(|face| face.foreground)
             .map(|color| {
@@ -1531,6 +1597,11 @@ impl WgpuGlyphAtlas {
             self.clear();
         }
         for font in fonts {
+            if let Some(asset) = font.replay.outline_asset()
+                && self.color_glyph_rasterizer.has_color_sources(asset)
+            {
+                self.color_font_ids.insert(font.id);
+            }
             self.frame_fonts.insert(font.id, font.clone());
         }
     }
@@ -1631,6 +1702,17 @@ impl WgpuGlyphAtlas {
             glyph.resolved_font_id.hash(&mut hasher);
             glyph.glyph_id.hash(&mut hasher);
         }
+        // A color raster can resolve palette index 0xFFFF to the text
+        // foreground and is drawn untinted, so faces that differ only in
+        // colour must not share glyph identities.  Mask glyphs are excluded:
+        // their colour is applied when the mask is drawn, so their identities
+        // (and cache hit rates) stay colour-independent.
+        if let Some(face) = face
+            && let Some(font) = self.resolved_font_for_char(c, face)
+            && self.color_font_ids.contains(&font.id)
+        {
+            hash_foreground(face.foreground).hash(&mut hasher);
+        }
         hasher.finish()
     }
 
@@ -1660,10 +1742,18 @@ impl WgpuGlyphAtlas {
         &mut self,
         asset: &neomacs_display_protocol::font::FontOutlineAsset,
     ) -> Option<&'static str> {
-        self.font_file_cache
+        let pinned = self
+            .font_file_cache
             .pin_exact_asset(&mut self.font_system, asset)
-            .ok()
-            .map(neomacs_font_materializer::PinnedFontFace::family)
+            .ok()?;
+        // Faces pinned here are shaped through their synthetic family, so the
+        // glyphs later rasterized carry THIS fontdb id.  The color stage must
+        // be able to resolve the asset from it, or a color face shaped on
+        // this path would rasterize as a monochrome outline.
+        self.color_font_assets
+            .entry(pinned.fontdb_id())
+            .or_insert_with(|| asset.clone());
+        Some(pinned.family())
     }
 
     fn exact_attrs_for_resolved_font(&mut self, font: &ResolvedFont) -> Option<Attrs<'static>> {
@@ -1880,6 +1970,7 @@ impl WgpuGlyphAtlas {
         self.resolved_fontdb_ids.clear();
         self.color_font_assets.clear();
         self.color_glyph_rasterizer.clear();
+        self.color_font_ids.clear();
         // A missing/replaced platform font can become available after the
         // render-side generation reset. Keep successful fontdb registrations,
         // but let the shared materializer retry only its failed observations.
@@ -2750,11 +2841,21 @@ impl WgpuGlyphAtlas {
         y_bin: SubpixelBin,
         subpixel: SubpixelRequest,
     ) -> Result<Vec<GlyphAtlasHandle>, GlyphAtlasError> {
+        let mut font_identity = glyph_font_identity(face);
+        if self.composed_cluster_has_color_font(face, text) {
+            font_identity = mix_foreground(
+                font_identity,
+                hash_foreground(face.map_or(
+                    neomacs_display_protocol::Color::rgb(0.0, 0.0, 0.0),
+                    |face| face.foreground,
+                )),
+            );
+        }
         let key = ComposedGlyphKey {
             text: text.into(),
             face_id,
             font_size_bits,
-            font_identity: glyph_font_identity(face),
+            font_identity,
             glyph_stream_identity: self.glyph_stream_identity_for_composed(face, text),
             x_bin,
             y_bin,

@@ -314,3 +314,78 @@ fn streamed_container_detection_preserves_truncated_and_non_sfnt_results() {
         }
     }
 }
+
+/// Font classification must not pay for a payload it does not need: the color
+/// source layer asks about every face it is handed, and reading a whole font
+/// to answer "no color tables" is most of a font cache's I/O.
+#[test]
+fn streamed_classification_reads_only_the_table_directory() {
+    struct Counted {
+        data: std::io::Cursor<Vec<u8>>,
+        read: usize,
+    }
+    impl Read for Counted {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.data.read(buf)?;
+            self.read += count;
+            Ok(count)
+        }
+    }
+    impl Seek for Counted {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.data.seek(pos)
+        }
+    }
+
+    let mut bytes = vec![0u8; 8 * 1024 * 1024];
+    bytes[..4].copy_from_slice(&TRUE_TYPE_TAG.to_be_bytes());
+    bytes[4..6].copy_from_slice(&1u16.to_be_bytes());
+    bytes[12..16].copy_from_slice(b"glyf");
+    bytes[24..28].copy_from_slice(&100u32.to_be_bytes());
+
+    let mut source = Counted {
+        data: std::io::Cursor::new(bytes),
+        read: 0,
+    };
+    let mut header = Vec::new();
+    (&mut source).take(12).read_to_end(&mut header).unwrap();
+    let classified = classify_sfnt_stream(&mut source, &header, 0).unwrap();
+    let StreamedSfntSource::Sfnt(Some(sources)) = classified else {
+        panic!("an SFNT face must classify as such");
+    };
+    assert!(sources.has_outline());
+    assert!(
+        sources.color_glyph_sources().next().is_none(),
+        "an outline-only face carries no color source"
+    );
+    assert!(
+        source.read <= 128,
+        "classification read {} bytes of an 8 MiB font",
+        source.read
+    );
+}
+
+#[test]
+fn streamed_classification_agrees_with_the_slice_classifier() {
+    for path in [
+        neomacs_test_fonts::noto_color_emoji_2_051(),
+        neomacs_test_fonts::noto_color_emoji_colrv1(),
+    ] {
+        let bytes = std::fs::read(&path).expect("read fixture");
+        let slice = classify_sfnt_face(&bytes, 0).expect("fixture is an SFNT face");
+        let mut source = std::io::Cursor::new(bytes);
+        let mut header = Vec::new();
+        (&mut source).take(12).read_to_end(&mut header).unwrap();
+        let StreamedSfntSource::Sfnt(Some(streamed)) =
+            classify_sfnt_stream(&mut source, &header, 0).unwrap()
+        else {
+            panic!("{} must classify as an SFNT face", path.display());
+        };
+        assert_eq!(
+            streamed,
+            slice,
+            "streaming and slice classification disagree for {}",
+            path.display()
+        );
+    }
+}

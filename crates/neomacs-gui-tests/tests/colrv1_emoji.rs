@@ -93,7 +93,10 @@ fn colrv1_emoji_cells_are_painted_in_color() {
     .with_env("FONTCONFIG_FILE", config.display().to_string())
     // The harness points the readback PNG at its own artifact path; only the
     // readback itself has to be switched on here.
-    .with_env("NEOMACS_DEBUG_SURFACE_READBACK", "32");
+    // The fixture draws during startup, so the first frames already carry the
+    // cells: a small window keeps the requested PNG inside the run's lifetime
+    // without racing the drawing.
+    .with_env("NEOMACS_DEBUG_SURFACE_READBACK", "4");
     for (key, value) in session.env() {
         plan = plan.with_env(key.clone(), value.clone());
     }

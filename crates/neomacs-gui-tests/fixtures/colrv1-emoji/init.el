@@ -22,6 +22,8 @@
     (with-temp-file (getenv "NEOMACS_GUI_STATE_JSON")
       (insert (json-encode result)))))
 
-(add-hook 'window-setup-hook (lambda () (run-at-time 1 nil #'colrv1-emoji-probe)))
-(add-hook 'window-setup-hook (lambda () (run-at-time 6 nil #'kill-emacs 0)) 90)
+;; Run in the hook itself, not on a timer: the surface readback dumps a fixed
+;; number of frames from startup, and a timer would race that window.
+(add-hook 'window-setup-hook #'colrv1-emoji-probe)
+(add-hook 'window-setup-hook (lambda () (run-at-time 8 nil #'kill-emacs 0)) 90)
 ;;; init.el ends here
