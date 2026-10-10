@@ -33,6 +33,11 @@ impl PreparedFrame {
         if queued.skipped_predecessor {
             prepared.invalidate_row_reuse();
         }
+        neomacs_display_protocol::present_trace::record(
+            neomacs_display_protocol::present_trace::Stage::Prepared,
+            prepared.state.frame_placement.frame().get(),
+            prepared.state.presentation(),
+        );
         prepared
     }
 
@@ -86,9 +91,25 @@ impl FramePreparation {
                         }
                     };
                     let prepared = PreparedFrame::from_queued(state);
+                    let frame = prepared.state.frame_placement.frame().get();
+                    let presentation = prepared.state.presentation();
                     select! {
-                        recv(stopped) -> _ => break,
-                        send(completed, prepared) -> sent => if sent.is_err() { break; },
+                        recv(stopped) -> _ => {
+                            neomacs_display_protocol::present_trace::record(
+                                neomacs_display_protocol::present_trace::Stage::Discarded,
+                                frame,
+                                presentation,
+                            );
+                            break;
+                        },
+                        send(completed, prepared) -> sent => if sent.is_err() {
+                            neomacs_display_protocol::present_trace::record(
+                                neomacs_display_protocol::present_trace::Stage::Discarded,
+                                frame,
+                                presentation,
+                            );
+                            break;
+                        },
                     }
                     wake();
                 }

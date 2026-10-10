@@ -160,6 +160,12 @@ pub(super) fn draw(
         );
     }
     frame_stats::count(&frame_stats::COMPOSITE_ONLY_FRAMES);
+    // This strategy may bypass root glyphs entirely; its composite also submits.
+    neomacs_display_protocol::present_trace::record(
+        neomacs_display_protocol::present_trace::Stage::Submit,
+        render.emacs_frame_id,
+        frame.presentation_id,
+    );
     Ok(())
 }
 

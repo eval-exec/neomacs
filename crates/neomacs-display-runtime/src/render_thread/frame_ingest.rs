@@ -612,6 +612,11 @@ impl RenderApp {
                 {
                     if let Some(superseded) = deferred.insert(frame_id.get(), display_state) {
                         let placement = superseded.state.frame_placement;
+                        neomacs_display_protocol::present_trace::record(
+                            neomacs_display_protocol::present_trace::Stage::Superseded,
+                            placement.frame().get(),
+                            placement.presentation(),
+                        );
                         self.comms.send_input(
                             crate::thread_comm::InputEvent::PresentationDiscarded {
                                 presentation: placement.presentation().get(),

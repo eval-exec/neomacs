@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{Receiver, SendError, Sender, TryRecvError, TrySendError, bounded};
-use neomacs_display_protocol::SealedFramePresentation;
+use neomacs_display_protocol::{SealedFramePresentation, present_trace};
 
 pub struct QueuedPresentation {
     pub(crate) state: SealedFramePresentation,
@@ -90,10 +90,29 @@ impl FrameSender {
             .iter()
             .position(|queued| queued.frame_placement.frame() == frame)
             .and_then(|index| pending.remove(index));
+        // Timestamp on the producer, before the consumer can acquire this
+        // state; queue the records only after releasing the lock.
+        let published = present_trace::stamp(
+            present_trace::Stage::Publish,
+            frame.get(),
+            state.presentation(),
+        );
+        let superseded = old.as_ref().and_then(|old| {
+            present_trace::stamp(
+                present_trace::Stage::Superseded,
+                frame.get(),
+                old.state.presentation(),
+            )
+        });
         pending.push_back(QueuedPresentation {
             state,
             skipped_predecessor: old.is_some(),
         });
+        drop(pending);
+        published
+            .into_iter()
+            .chain(superseded)
+            .for_each(present_trace::Stamp::emit);
         Ok(old.map(|queued| SupersededPresentation(queued.state)))
     }
 }

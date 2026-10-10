@@ -3896,6 +3896,8 @@ name = "neomacs-display-protocol"
 version = "0.0.19"
 dependencies = [
  "bitflags 2.13.1",
+ "crossbeam-channel",
+ "libc",
  "neomacs-infra",
  "num_enum",
  "nutype",
