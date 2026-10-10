@@ -58,7 +58,7 @@ fn reduce_to_8_bits((red, green, blue): (u16, u16, u16)) -> (u8, u8, u8) {
 /// `#`-prefixed hex payload split into three equal-length components:
 /// GNU's `(len - 1) % 3 == 0` arm of `parse_color_spec` (src/xfaces.c:984).
 fn parse_hex_color_payload(payload: &[u8]) -> Option<(u16, u16, u16)> {
-    if payload.is_empty() || payload.len() % 3 != 0 {
+    if payload.is_empty() || !payload.len().is_multiple_of(3) {
         return None;
     }
     let component_len = payload.len() / 3;
