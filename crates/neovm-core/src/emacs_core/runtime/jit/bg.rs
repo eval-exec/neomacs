@@ -786,6 +786,10 @@ pub(crate) struct BgReport {
     pub(crate) worker_panics: u64,
     pub(crate) worker_code_bytes: u64,
     pub(crate) worker_backend_max_us: u64,
+    pub(crate) worker_batches: u64,
+    pub(crate) worker_failed_batches: u64,
+    pub(crate) worker_published_modules_finalized: u64,
+    pub(crate) worker_published_arena_seals: u64,
 }
 
 impl BgReport {
@@ -805,6 +809,14 @@ impl BgReport {
             worker_panics: WORKER_STATS.panics.load(Ordering::Relaxed),
             worker_code_bytes: WORKER_STATS.code_bytes.load(Ordering::Relaxed),
             worker_backend_max_us: WORKER_STATS.backend_max_us.load(Ordering::Relaxed),
+            worker_batches: WORKER_STATS.batches.load(Ordering::Relaxed),
+            worker_failed_batches: WORKER_STATS.failed_batches.load(Ordering::Relaxed),
+            worker_published_modules_finalized: WORKER_STATS
+                .published_modules_finalized
+                .load(Ordering::Relaxed),
+            worker_published_arena_seals: WORKER_STATS
+                .published_arena_seals
+                .load(Ordering::Relaxed),
         })
     }
 
@@ -837,7 +849,8 @@ impl BgReport {
             "mode={} workers={} enqueued={} installed={} discarded={discarded} backend_us={} \
              backend_max_us={} queue_wait_us={} latency_hist_us[<100,<250,<500,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={latency} \
              pending_probes={} osr_waits={} refused={} interp_calls_while_pending={} native_calls_while_pending={} spec_restamps={} in_flight_at_exit={} worker_jobs={} \
-             worker_skipped={} worker_panics={} worker_code_bytes={} worker_backend_max_us={}",
+             worker_skipped={} worker_panics={} worker_code_bytes={} worker_backend_max_us={} \
+             worker_batches={} worker_failed_batches={} worker_published_modules_finalized={} worker_published_arena_seals={}",
             self.mode,
             self.workers,
             by_class(&self.stats.enqueued),
@@ -857,6 +870,10 @@ impl BgReport {
             self.worker_panics,
             self.worker_code_bytes,
             self.worker_backend_max_us,
+            self.worker_batches,
+            self.worker_failed_batches,
+            self.worker_published_modules_finalized,
+            self.worker_published_arena_seals,
         )
     }
 }
@@ -1048,6 +1065,15 @@ pub(crate) struct WorkerStats {
     pub(crate) code_bytes: AtomicU64,
     /// The longest backend run, µs.
     pub(crate) backend_max_us: AtomicU64,
+    /// Batches with at least one attempted backend definition.
+    pub(crate) batches: AtomicU64,
+    /// Attempted batches discarded after an error or panic.
+    pub(crate) failed_batches: AtomicU64,
+    /// Module finalizers of wholly successful published batches; partial
+    /// finalization on a discarded batch is intentionally excluded.
+    pub(crate) published_modules_finalized: AtomicU64,
+    /// Arena seals of wholly successful published batches.
+    pub(crate) published_arena_seals: AtomicU64,
 }
 
 pub(crate) static WORKER_STATS: WorkerStats = WorkerStats {
@@ -1056,6 +1082,10 @@ pub(crate) static WORKER_STATS: WorkerStats = WorkerStats {
     panics: AtomicU64::new(0),
     code_bytes: AtomicU64::new(0),
     backend_max_us: AtomicU64::new(0),
+    batches: AtomicU64::new(0),
+    failed_batches: AtomicU64::new(0),
+    published_modules_finalized: AtomicU64::new(0),
+    published_arena_seals: AtomicU64::new(0),
 };
 
 /// A test asked the next worker job to panic.

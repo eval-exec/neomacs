@@ -181,6 +181,62 @@ impl Pool {
         }
     }
 
+    /// Take an immediately ready job without waiting. A worker with
+    /// unsealed members must flush instead of blocking for more work.
+    pub(crate) fn try_pop(&self) -> Option<BackendJob> {
+        let mut state = self.lock();
+        #[cfg(test)]
+        if state.held {
+            return None;
+        }
+        let Queued(job) = state.jobs.pop()?;
+        state.running += 1;
+        state.insts -= job.insts;
+        Some(job)
+    }
+
+    /// A private preloaded queue for worker protocol tests; no process
+    /// pool, knobs, thread startup or queue push path is involved.
+    #[cfg(test)]
+    pub(super) fn from_jobs_for_worker_test(jobs: Vec<BackendJob>) -> Pool {
+        let insts = jobs.iter().map(|job| job.insts).sum();
+        Pool {
+            state: Mutex::new(PoolState {
+                jobs: jobs.into_iter().map(Queued).collect(),
+                insts,
+                running: 0,
+                workers: 0,
+                spawn_failed: false,
+                held: false,
+            }),
+            work: Condvar::new(),
+            idle: Condvar::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn running_for_worker_test(&self) -> usize {
+        self.lock().running
+    }
+
+    /// Identity only: local protocol tests never consume global fault/log hooks.
+    #[cfg(test)]
+    pub(super) fn is_global_for_worker_test(&self) -> bool {
+        POOL.get().is_some_and(|pool| std::ptr::eq(self, pool))
+    }
+
+    /// Add ready work to an independent local pool without touching admission knobs.
+    #[cfg(test)]
+    pub(super) fn push_ready_for_worker_test(&self, job: BackendJob) {
+        assert!(
+            !self.is_global_for_worker_test(),
+            "only an owned local queue"
+        );
+        let mut state = self.lock();
+        state.insts += job.insts;
+        state.jobs.push(Queued(job));
+    }
+
     /// A worker finished (or skipped) the job it popped.
     pub(crate) fn finish(&self) {
         let mut state = self.lock();
