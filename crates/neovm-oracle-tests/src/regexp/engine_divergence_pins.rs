@@ -91,6 +91,19 @@ fn oracle_pin_regexp_failed_string_match_preserves_registers_and_inhibition() {
 }
 
 #[test]
+fn oracle_pin_regexp_failed_string_match_retains_indices_for_extraction() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(with-temp-buffer
+      (insert "aébc") (goto-char 1) (re-search-forward "\\(éb\\)")
+      (string-match "zzz" "q")
+      (let ((before (list (match-data t) (match-string 1 "uvwxyz"))))
+        (match-data--translate -2)
+        (list before (match-data t) (match-string 1 "uvwxyz"))))"#;
+    let expect = expect_test::expect![[r#""OK (((2 4 2 4) \"wx\") (0 2 0 2) \"uv\")""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
 fn oracle_pin_regexp_replace_match_ampersand_uses_selected_subexpression() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

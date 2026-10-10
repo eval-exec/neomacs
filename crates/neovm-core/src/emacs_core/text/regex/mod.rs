@@ -758,11 +758,20 @@ enum MatchDataKind {
         groups: smallvec::SmallVec<[Option<CharRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
         searched: Option<SearchedString>,
     },
-    /// Buffer identity and published Lisp-coordinate payload travel together.
-    Buffer {
-        id: BufferId,
+    /// Published Lisp positions retained in place across a failed string
+    /// search. Provenance determines how extraction interprets the numbers.
+    LispRegisters {
+        source: LispRegisterSource,
         groups: smallvec::SmallVec<[Option<LispCharMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
     },
+}
+
+/// GNU retains register numbers when a failed string search changes
+/// `last_thing_searched` from a buffer to `Qt` (search.c:422-427).
+#[derive(Clone, Copy, Debug)]
+enum LispRegisterSource {
+    Buffer(BufferId),
+    RetainedString,
 }
 
 /// Private, zero-based Emacs-byte ranges returned by the regexp engine.
@@ -849,12 +858,13 @@ impl SearchRegisters {
 
     /// Publish these registers, in Lisp character positions of BUF, as the
     /// match data in TARGET, reusing TARGET's register storage when it
-    /// already holds buffer match data.
+    /// already holds Lisp registers, including those retained by a failed
+    /// string search.
     pub(crate) fn publish_buffer_into(&self, buf: &Buffer, target: &mut Option<MatchData>) {
         if let Some(match_data) = target
-            && let MatchDataKind::Buffer { id, groups } = &mut match_data.kind
+            && let MatchDataKind::LispRegisters { source, groups } = &mut match_data.kind
         {
-            *id = buf.id;
+            *source = LispRegisterSource::Buffer(buf.id);
             groups.clear();
             self.fill_buffer_groups(buf, groups);
             #[cfg(debug_assertions)]
@@ -866,7 +876,10 @@ impl SearchRegisters {
         let mut groups = smallvec::SmallVec::new();
         self.fill_buffer_groups(buf, &mut groups);
         *target = Some(MatchData {
-            kind: MatchDataKind::Buffer { id: buf.id, groups },
+            kind: MatchDataKind::LispRegisters {
+                source: LispRegisterSource::Buffer(buf.id),
+                groups,
+            },
             #[cfg(debug_assertions)]
             read_mask: Default::default(),
         });
@@ -1258,8 +1271,8 @@ impl MatchData {
 
     pub(crate) fn buffer_lisp_chars(groups: Vec<Option<MatchGroup>>, buffer_id: BufferId) -> Self {
         Self {
-            kind: MatchDataKind::Buffer {
-                id: buffer_id,
+            kind: MatchDataKind::LispRegisters {
+                source: LispRegisterSource::Buffer(buffer_id),
                 groups: groups
                     .into_iter()
                     .map(|group| group.map(LispCharMatchRange::from_match_group))
@@ -1273,14 +1286,17 @@ impl MatchData {
     pub(crate) fn searched_string(&self) -> Option<&SearchedString> {
         match &self.kind {
             MatchDataKind::StringChars { searched, .. } => searched.as_ref(),
-            _ => None,
+            MatchDataKind::LispRegisters { .. } => None,
         }
     }
 
     pub(crate) fn source(&self) -> MatchDataSource {
         match self.kind {
             MatchDataKind::StringChars { .. } => MatchDataSource::String,
-            MatchDataKind::Buffer { id, .. } => MatchDataSource::Buffer(id),
+            MatchDataKind::LispRegisters { source, .. } => match source {
+                LispRegisterSource::Buffer(id) => MatchDataSource::Buffer(id),
+                LispRegisterSource::RetainedString => MatchDataSource::String,
+            },
         }
     }
 
@@ -1290,15 +1306,8 @@ impl MatchData {
     pub(crate) fn record_failed_string_search(&mut self) {
         match &mut self.kind {
             MatchDataKind::StringChars { searched, .. } => *searched = None,
-            MatchDataKind::Buffer { groups, .. } => {
-                let groups = std::mem::take(groups)
-                    .into_iter()
-                    .map(|range| range.map(|range| range.into_match_group().string_char_range()))
-                    .collect();
-                self.kind = MatchDataKind::StringChars {
-                    groups,
-                    searched: None,
-                };
+            MatchDataKind::LispRegisters { source, .. } => {
+                *source = LispRegisterSource::RetainedString;
             }
         }
     }
@@ -1306,7 +1315,7 @@ impl MatchData {
     pub(crate) fn group_count(&self) -> usize {
         match &self.kind {
             MatchDataKind::StringChars { groups, .. } => groups.len(),
-            MatchDataKind::Buffer { groups, .. } => groups.len(),
+            MatchDataKind::LispRegisters { groups, .. } => groups.len(),
         }
     }
 
@@ -1319,7 +1328,7 @@ impl MatchData {
                 .copied()
                 .flatten()
                 .map(MatchGroup::from_char_range),
-            MatchDataKind::Buffer { groups, .. } => groups
+            MatchDataKind::LispRegisters { groups, .. } => groups
                 .get(index)
                 .copied()
                 .flatten()
@@ -1341,11 +1350,16 @@ impl MatchData {
     pub(crate) fn group_zero_based_char_range(&self, index: usize) -> Option<CharRange> {
         match &self.kind {
             MatchDataKind::StringChars { groups, .. } => groups.get(index).copied().flatten(),
-            MatchDataKind::Buffer { groups, .. } => groups
+            MatchDataKind::LispRegisters { source, groups } => groups
                 .get(index)
                 .copied()
                 .flatten()
-                .map(|range| range.zero_based()),
+                .map(|range| match source {
+                    LispRegisterSource::Buffer(_) => range.zero_based(),
+                    LispRegisterSource::RetainedString => {
+                        range.into_match_group().string_char_range()
+                    }
+                }),
         }
     }
 
@@ -1363,7 +1377,7 @@ impl MatchData {
                     *range = map(MatchGroup::from_char_range(*range)).string_char_range();
                 }
             }
-            MatchDataKind::Buffer { groups, .. } => {
+            MatchDataKind::LispRegisters { groups, .. } => {
                 for range in groups.iter_mut().flatten() {
                     *range = LispCharMatchRange::from_match_group(map(range.into_match_group()));
                 }
@@ -1388,7 +1402,7 @@ impl MatchData {
                     *range = map(MatchGroup::from_char_range(*range)).string_char_range();
                 }
             }
-            MatchDataKind::Buffer { groups, .. } => {
+            MatchDataKind::LispRegisters { groups, .. } => {
                 for range in groups.iter_mut().flatten() {
                     *range = LispCharMatchRange::from_match_group(map(range.into_match_group()));
                 }
@@ -1484,7 +1498,10 @@ impl EngineMatchData {
         >::with_capacity(self.groups.len());
         self.fill_buffer_groups(buf, &mut groups);
         MatchData {
-            kind: MatchDataKind::Buffer { id: buf.id, groups },
+            kind: MatchDataKind::LispRegisters {
+                source: LispRegisterSource::Buffer(buf.id),
+                groups,
+            },
             #[cfg(debug_assertions)]
             read_mask: Default::default(),
         }

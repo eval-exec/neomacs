@@ -239,6 +239,25 @@ fn failed_string_search_changes_source_in_both_frontends() {
 }
 
 #[test]
+fn failed_string_search_retains_indices_for_extraction_in_both_frontends() {
+    crate::test_utils::init_test_tracing();
+    // GNU search.c:422-427 keeps the numbers even when interpreted as string indices.
+    let form = r#"(with-temp-buffer
+      (insert "aébc") (goto-char 1) (re-search-forward "\\(éb\\)")
+      (string-match "zzz" "q")
+      (let ((before (list (match-data t) (match-string 1 "uvwxyz"))))
+        (match-data--translate -2)
+        (list before (match-data t) (match-string 1 "uvwxyz"))))"#;
+    for frontend in [false, true] {
+        assert_eq!(
+            run_form(form, frontend),
+            ["((2 4 2 4) \"wx\")", "(0 2 0 2)", "\"uv\""],
+            "frontend {frontend}"
+        );
+    }
+}
+
+#[test]
 fn literal_searches_answer_alike_with_the_knob_on_and_off() {
     crate::test_utils::init_test_tracing();
     let general = run_form(LITERAL_MATRIX, false);
