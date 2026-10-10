@@ -58,11 +58,10 @@ fn hex_forms_scale_every_channel_width() {
     }
 }
 
-/// Malformed hex resolves to nothing rather than to black, and a multi-byte
-/// character is rejected as the non-hex byte GNU sees, not sliced.
-/// The `rgb:`/`rgbi:` arms of GNU `parse_color_spec`, in the 16-bit channels
-/// the evaluator's `color-values` reports -- the same numbers neomacs's
-/// `color-values-from-color-spec` pins through the builtin.
+/// The numeric forms of GNU `parse_color_spec` -- the `#` widths and the
+/// `rgb:`/`rgbi:` arms -- in the 16-bit channels the evaluator's `color-values`
+/// reports, which is where neomacs's `color-values-from-color-spec` pins them
+/// through the builtin.
 #[test]
 fn numeric_specs_answer_gnu_sixteen_bit_channels() {
     assert_eq!(x11_color_spec_16bit(b"#fff"), Some((65535, 65535, 65535)));
@@ -84,6 +83,8 @@ fn numeric_specs_answer_gnu_sixteen_bit_channels() {
     assert_eq!(x11_color_spec_16bit(b"red"), None);
 }
 
+/// Malformed hex resolves to nothing rather than to black, and a multi-byte
+/// character is rejected as the non-hex byte GNU sees, not sliced.
 #[test]
 fn malformed_hex_resolves_to_nothing() {
     assert_eq!(x11_hex_color("#"), None);

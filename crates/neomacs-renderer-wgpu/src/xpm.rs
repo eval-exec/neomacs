@@ -335,7 +335,8 @@ fn parse_color_line(rest: &[u8]) -> Option<ColorLine> {
 
 /// Resolve one color value the way GNU hands it to the frame's
 /// `defined_color_hook` (src/image.c:6505-6510): `None` is transparency,
-/// everything else is an X11 database name or a `#`-hex color.
+/// everything else is an X11 database name or a numeric spec (`#`-hex,
+/// `rgb:R/G/B`, `rgbi:R/G/B`).
 ///
 /// `opaque` is deliberately not special-cased. The libXpm loader maps that name
 /// to the frame foreground explicitly (src/image.c:5634-5641); the hand-written

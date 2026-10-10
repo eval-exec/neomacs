@@ -16,9 +16,9 @@
 //! (issue #545). `docs/design/display-crate-layout.md` gives the rule: a value
 //! two crates can disagree about belongs here, next to `xterm_palette`.
 //!
-//! Scope: the database and the `#`-hex syntax. GNU's hook also accepts
-//! `rgb:R/G/B` and `rgbi:R/G/B` (its `parse_color_spec`), which the evaluator
-//! answers in its own 16-bit form; renderers do not meet those in image data.
+//! Scope: the whole of GNU's `parse_color_spec` -- the `#`-hex forms and the
+//! `rgb:R/G/B` / `rgbi:R/G/B` forms -- plus the name database. The evaluator
+//! reads the 16-bit channels; a renderer takes each channel's high byte.
 
 include!(concat!(env!("OUT_DIR"), "/x11_colors.rs"));
 
@@ -124,13 +124,14 @@ fn parse_float_color_comp(component: &[u8]) -> Option<u16> {
 /// evaluator's `color-values` and the renderers that resolve image color values
 /// (XPM `c` keys).
 ///
-/// One parser, so the two cannot drift: a renderer takes each channel's most
-/// significant 8 bits (`x11_hex_color` / `x11_color_value`), which is what GNU
-/// does to the same 16-bit value when it makes the pixel (`lookup_rgb_color`,
-/// `src/image.c:6884-6892`).
-/// GNU `parse_color_spec` (src/xfaces.c:976): the three numeric color forms
-/// `#RGB`, `rgb:R/G/B` and `rgbi:R/G/B`, each component 1-4 hex digits (or a
-/// float in [0,1] for `rgbi`).
+/// The forms are GNU `parse_color_spec`'s (src/xfaces.c:976-1043): `#` with
+/// 1..=4 hex digits per component, `rgb:R/G/B`, and `rgbi:R/G/B` with decimal
+/// floats in [0,1].
+///
+/// One parser, so the evaluator's 16-bit channels and a renderer's 8-bit value
+/// cannot drift: a renderer takes each channel's most significant 8 bits, which
+/// is what GNU does to the same 16-bit value when it makes the pixel
+/// (`lookup_rgb_color`, `src/image.c:6884-6892`).
 #[must_use]
 pub fn x11_color_spec_16bit(spec: &[u8]) -> Option<(u16, u16, u16)> {
     if let Some(payload) = spec.strip_prefix(b"#") {

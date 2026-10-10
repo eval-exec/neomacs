@@ -43,6 +43,7 @@ fn main() {
     // spaced spelling and the spaces-collapsed one are keys: XPM colour values
     // and Lisp colour specs in the wild use either.
     let mut colors: BTreeMap<String, (u8, u8, u8)> = BTreeMap::new();
+    let mut entries = 0;
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
@@ -61,6 +62,7 @@ fn main() {
         if name.is_empty() {
             continue;
         }
+        entries += 1;
         let lower = name.to_lowercase();
         let collapsed = lower.replace(' ', "");
         colors.entry(lower).or_insert((red, green, blue));
@@ -88,13 +90,14 @@ fn main() {
     // failure this table exists to prevent (issue #545) -- so say so where
     // cargo will actually read it. Cargo only takes directives from stdout, and
     // a note on every build would be noise, so this is a real warning under a
-    // floor rather than a per-build line.
+    // floor rather than a per-build line. The floor counts rgb.txt ENTRIES, the
+    // same quantity the drift-guard test counts; `colors` also holds each
+    // name's collapsed spelling, so it is the wrong thing to measure.
     const EXPECTED_ENTRIES: usize = 700;
-    if colors.len() < EXPECTED_ENTRIES {
+    if entries < EXPECTED_ENTRIES {
         println!(
-            "cargo:warning=the X11 color table has only {} entries (expected at least \
+            "cargo:warning=the X11 color table has only {entries} entries (expected at least \
              {EXPECTED_ENTRIES}) from {}",
-            colors.len(),
             rgb_path.display()
         );
     }
