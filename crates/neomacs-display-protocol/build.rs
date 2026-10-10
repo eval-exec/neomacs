@@ -84,11 +84,21 @@ fn main() {
     code.push_str("    }\n");
     code.push_str("}\n");
 
+    // A table that came out short resolves names to nothing, which is the
+    // failure this table exists to prevent (issue #545) -- so say so where
+    // cargo will actually read it. Cargo only takes directives from stdout, and
+    // a note on every build would be noise, so this is a real warning under a
+    // floor rather than a per-build line.
+    const EXPECTED_ENTRIES: usize = 700;
+    if colors.len() < EXPECTED_ENTRIES {
+        println!(
+            "cargo:warning=the X11 color table has only {} entries (expected at least \
+             {EXPECTED_ENTRIES}) from {}",
+            colors.len(),
+            rgb_path.display()
+        );
+    }
+
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     fs::write(out_dir.join("x11_colors.rs"), code).expect("failed to write x11_colors.rs");
-    eprintln!(
-        "cargo:warning=Generated X11 color table: {} entries from {}",
-        colors.len(),
-        rgb_path.display()
-    );
 }
