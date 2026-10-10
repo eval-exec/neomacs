@@ -54,6 +54,7 @@ pub mod ui_types;
 pub mod visual_config;
 pub mod window_animation;
 pub mod window_chrome;
+pub mod x11_colors;
 pub mod xterm_palette;
 pub mod xwidget_extent;
 pub use glyph_matrix::*;
@@ -91,6 +92,7 @@ pub use tty_palette::{TtyPalette, TtyPaletteEntry};
 pub use types::*;
 pub use ui_types::*;
 pub use visual_config::*;
+pub use x11_colors::{x11_color_lookup, x11_color_value, x11_hex_color};
 pub use xterm_palette::xterm_256_rgb;
 pub use xwidget_extent::*;
 
