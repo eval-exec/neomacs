@@ -276,6 +276,9 @@ impl super::eval::Context {
     ) -> Result<(), Flow> {
         let saved_current_buffer = self.buffers.current_buffer_id();
         let saved_deactivate_mark = self.eval_symbol("deactivate-mark").unwrap_or(Value::NIL);
+        let saved_inhibit_quit = self.eval_symbol("inhibit-quit").unwrap_or(Value::NIL);
+        let inhibition_roots = self.save_vm_roots();
+        self.push_vm_frame_root(saved_inhibit_quit);
         let specpdl_count = self.specpdl.len();
 
         let gc_roots = self.save_specpdl_roots();
@@ -289,21 +292,39 @@ impl super::eval::Context {
         // The GcRoot is popped by unbind_to together with the specbind.
         self.push_specpdl_root(saved_deactivate_mark);
 
-        let result = (|| {
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-quit"), Value::T)?;
-            self.apply(callback, args)
-        })();
-        if let Some(buffer_id) = saved_current_buffer {
-            self.restore_current_buffer_if_live(buffer_id);
-        }
-        // Restore before unbinding — the saved value loses its root when
-        // unbind_to pops the GcRoot above (GNU restores it under the
-        // still-bound inhibit-quit via its specpdl ordering too).
-        self.assign("deactivate-mark", saved_deactivate_mark);
-        let result = self.unbind_to_with_result(specpdl_count, result);
-        self.restore_specpdl_roots(gc_roots);
+        // Binding and unbinding inhibit-quit can themselves call Lisp variable
+        // watchers. Isolate the suspended reader across the entire boundary,
+        // including binding failure and the unwinder's callbacks.
+        let result = self.with_saved_key_reader(|eval| {
+            let result = (|| {
+                eval.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-quit"), Value::T)?;
+                eval.apply(callback, args)
+            })();
+            if let Some(buffer_id) = saved_current_buffer {
+                eval.restore_current_buffer_if_live(buffer_id);
+            }
+            // Restore before unbinding — the saved value loses its root when
+            // unbind_to pops the GcRoot above (GNU restores it under the
+            // still-bound inhibit-quit via its specpdl ordering too).
+            eval.assign("deactivate-mark", saved_deactivate_mark);
+            let result = eval.unbind_to_with_result(specpdl_count, result);
+            eval.restore_specpdl_roots(gc_roots);
+            result
+        });
 
-        self.finish_callback_flow(result, crate::emacs_core::process::AsyncCallbackKind::Timer)
+        // A signaling UNLET watcher has already popped its binding, but can
+        // skip the value store. Timer Signals are reported and then resumed,
+        // unlike Throws. Release only this timer-owned inhibition before that
+        // normal continuation, without replaying watchers or changing the
+        // outgoing error. Keep deliberate prior inhibition (including heap
+        // values) rather than applying command recovery's unconditional nil.
+        if result.as_ref().is_err_and(|flow| flow.is_signal()) {
+            self.assign("inhibit-quit", saved_inhibit_quit);
+        }
+        let result =
+            self.finish_callback_flow(result, crate::emacs_core::process::AsyncCallbackKind::Timer);
+        self.restore_vm_roots(inhibition_roots);
+        result
     }
 }
 
