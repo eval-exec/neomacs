@@ -1372,3 +1372,7 @@ mod queue_tests;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/soak_test.rs"]
 mod soak_tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "bg/tests/mutator_test.rs"]
+mod mutator_tests;
