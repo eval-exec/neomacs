@@ -1123,8 +1123,15 @@ impl ImageCache {
                 crate::svg::SvgResourceContext::BaseUri(path.to_owned()),
             );
         }
-        // Fallback: try XPM
-        if let Some(result) = crate::xpm::decode_xpm_file(Path::new(path)) {
+        // Fallbacks for the byte-oriented formats `image` cannot read. GNU
+        // paints an XPM pixel whose color key has no resolvable color with the
+        // frame's foreground pixel (src/image.c:6518-6538) — the face
+        // foreground this decode carries — and XBM takes both face colors.
+        let fg = colors.foreground().rgba8();
+        let bg = colors.background_rgba8();
+        if let Some(result) =
+            crate::xpm::decode_xpm_file(Path::new(path), colors.foreground().rgb8())
+        {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
                 rotation,
@@ -1132,9 +1139,6 @@ impl ImageCache {
                 mask,
             );
         }
-        // Fallback: try XBM
-        let fg = colors.foreground().rgba8();
-        let bg = colors.background_rgba8();
         if let Some(result) = crate::xbm::decode_xbm_file(Path::new(path), fg, bg) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
@@ -1225,8 +1229,11 @@ impl ImageCache {
                 resources,
             );
         }
-        // Fallback: try XPM
-        if let Some(result) = crate::xpm::decode_xpm_data(&data) {
+        // Fallbacks for the byte-oriented formats `image` cannot read; see the
+        // file arm for why XPM takes the face foreground.
+        let fg = colors.foreground().rgba8();
+        let bg = colors.background_rgba8();
+        if let Some(result) = crate::xpm::decode_xpm_data(&data, colors.foreground().rgb8()) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
                 rotation,
@@ -1234,9 +1241,6 @@ impl ImageCache {
                 mask,
             );
         }
-        // Fallback: try XBM
-        let fg = colors.foreground().rgba8();
-        let bg = colors.background_rgba8();
         if let Some(result) = crate::xbm::decode_xbm_data(&data, fg, bg) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,

@@ -21,9 +21,6 @@ mod dump_codes;
 mod remapping;
 pub use remapping::{FaceRemapEntry, FaceRemapping};
 
-// X11 color table generated at compile time from etc/rgb.txt
-include!(concat!(env!("OUT_DIR"), "/x11_colors.rs"));
-
 /// Identity of a GNU Lisp face in a frame's lface table.
 ///
 /// This is deliberately distinct from `neomacs_display_protocol::FaceId`,
@@ -218,28 +215,12 @@ impl RealizedColor {
     /// (16-bit channels) is what Emacs' `color-values`/blend math emits — e.g.
     /// indent-bars' computed bar colors like `#ffff33333333` — and dropping it
     /// left those faces with no foreground (rendered as the default black).
+    ///
+    /// The one implementation of that syntax lives in
+    /// [`neomacs_display_protocol::x11_hex_color`], shared with the XPM decoder:
+    /// a second copy here is how those two came to disagree (issue #545).
     pub fn from_hex(s: &str) -> Option<Self> {
-        let s = s.strip_prefix('#')?;
-        if s.is_empty() || s.len() % 3 != 0 {
-            return None;
-        }
-        let per = s.len() / 3;
-        if per > 4 {
-            return None;
-        }
-        let bits = 4 * per as u32;
-        let channel = |index: usize| -> Option<u8> {
-            let start = index * per;
-            let raw = u16::from_str_radix(&s[start..start + per], 16).ok()?;
-            Some(if bits >= 8 {
-                // Take the most-significant 8 bits (8/12/16-bit channels).
-                (raw >> (bits - 8)) as u8
-            } else {
-                // 4-bit `#RGB`: replicate the nibble so 0xf -> 0xff (== v*17).
-                ((raw << 4) | raw) as u8
-            })
-        };
-        Some(Color::rgb(channel(0)?, channel(1)?, channel(2)?))
+        neomacs_display_protocol::x11_hex_color(s).map(|(r, g, b)| Color::rgb(r, g, b))
     }
 
     /// Convert to "#RRGGBB" hex string.
@@ -247,18 +228,19 @@ impl RealizedColor {
         format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
 
-    /// Named color lookup (common X11/Emacs colors).
+    /// Named color lookup (the X11 `rgb.txt` database GNU resolves names from).
+    ///
+    /// [`neomacs_display_protocol::x11_color_lookup`] is the whole of the
+    /// database, shared with the image decoders that resolve names (XPM `c`
+    /// keys), so a face and an XPM carrying the same name cannot disagree.
     pub fn from_name(name: &str) -> Option<Self> {
-        x11_color_lookup(name).map(|(r, g, b)| Color::rgb(r, g, b))
+        neomacs_display_protocol::x11_color_lookup(name).map(|(r, g, b)| Color::rgb(r, g, b))
     }
 
-    /// Parse a color spec: hex string or named color.
+    /// Parse a color spec the way GNU's color hook does: a numeric form
+    /// (`#`-hex, `rgb:`, `rgbi:`) or a database name.
     pub fn parse(spec: &str) -> Option<Self> {
-        if spec.starts_with('#') {
-            Self::from_hex(spec)
-        } else {
-            Self::from_name(spec)
-        }
+        neomacs_display_protocol::x11_color_value(spec).map(|(r, g, b)| Color::rgb(r, g, b))
     }
 }
 

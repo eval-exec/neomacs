@@ -43,6 +43,11 @@ fn color_from_name() {
     assert_eq!(Color::from_name("nonexistent"), None);
 }
 
+/// The database is `etc/rgb.txt` (`neomacs_display_protocol::x11_colors`), so a
+/// face and an XPM carrying the same name resolve alike. The `grayNN` ladder
+/// and the multi-word names are the ones XPM artwork uses (issue #545); the
+/// listed entries pin the X11 values against the CSS ones (`green` would be
+/// #008000, `maroon` #800000).
 #[test]
 fn named_colors_follow_gnu_x11_rgb_database() {
     crate::test_utils::init_test_tracing();
@@ -51,6 +56,10 @@ fn named_colors_follow_gnu_x11_rgb_database() {
         ("gray", Color::rgb(190, 190, 190)),
         ("purple", Color::rgb(160, 32, 240)),
         ("maroon", Color::rgb(176, 48, 96)),
+        ("gray14", Color::rgb(36, 36, 36)),
+        ("gray50", Color::rgb(127, 127, 127)),
+        ("gray75", Color::rgb(191, 191, 191)),
+        ("light blue", Color::rgb(173, 216, 230)),
     ] {
         assert_eq!(Color::from_name(name), Some(expected), "{name}");
     }
