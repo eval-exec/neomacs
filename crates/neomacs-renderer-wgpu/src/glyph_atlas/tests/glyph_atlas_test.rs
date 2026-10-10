@@ -895,3 +895,113 @@ fn reused_resolved_font_id_invalidates_renderer_identity_caches() {
         replacement.get(&id).unwrap().identity
     );
 }
+
+/// Regression for issue #542: a COLRv1 face materializes through fontdb, but
+/// nothing in the Swash source chain can paint it — its emoji glyphs have
+/// paint graphs in `BaseGlyphList` and empty `glyf` outlines, so the Swash
+/// chain returns an empty bitmap and the cell stays blank. The color stage
+/// must paint it before Swash is consulted.
+#[test]
+fn colrv1_memory_asset_paints_through_the_color_stage() {
+    use cosmic_text::{Buffer, Metrics, Shaping};
+    use neomacs_display_protocol::font::{
+        FontBackendKind, FontMemoryAsset, FontSlantKind, ResolvedFont, ResolvedFontId,
+        ResolvedFontTable,
+    };
+    use std::sync::Arc;
+
+    let Some(mut atlas) = try_test_atlas() else {
+        return;
+    };
+    let bytes = std::fs::read(neomacs_test_fonts::noto_color_emoji_colrv1())
+        .expect("downloaded COLRv1 fixture");
+    let identity = ResolvedFontIdentity::from_memory(
+        FontBackendKind::Fontconfig,
+        "freeTypeFontconfig:test:Noto Color Emoji".to_owned(),
+        0,
+        Some("NotoColorEmoji".to_owned()),
+    );
+    let asset = FontOutlineAsset::Memory(
+        FontMemoryAsset::new(identity.stable_key.clone(), Arc::new(bytes), 0)
+            .expect("COLRv1 memory fixture"),
+    );
+    let id = ResolvedFontId(542);
+    let font = ResolvedFont {
+        id,
+        identity,
+        replay: FontReplay::Swash { asset },
+        family: "Noto Color Emoji".to_owned(),
+        full_name: Some("Noto Color Emoji".to_owned()),
+        postscript_name: Some("NotoColorEmoji".to_owned()),
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 16.0,
+        ascent_px: 12.0,
+        descent_px: 4.0,
+        space_advance_px: 8.0,
+        glyph_advance: Default::default(),
+    };
+    let mut fonts = ResolvedFontTable::default();
+    fonts.insert(id, font.clone());
+    atlas.install_frame_fonts(
+        &Default::default(),
+        &fonts,
+        &Default::default(),
+        &Default::default(),
+    );
+
+    let attrs = atlas
+        .exact_attrs_for_resolved_font(&font)
+        .expect("renderer pins the COLRv1 face");
+    let local_id = atlas
+        .local_fontdb_id_for(id)
+        .expect("renderer records its local COLRv1 face id");
+    let mut buffer = Buffer::new(&mut atlas.font_system, Metrics::new(16.0, 20.0));
+    buffer.set_size(&mut atlas.font_system, Some(64.0), Some(32.0));
+    buffer.set_text(
+        &mut atlas.font_system,
+        "\u{1F347}",
+        &attrs,
+        Shaping::Advanced,
+        None,
+    );
+    buffer.shape_until_scroll(&mut atlas.font_system, false);
+    let cache_key = buffer
+        .layout_runs()
+        .find_map(|run| run.glyphs.first())
+        .expect("shape the emoji glyph")
+        .physical((0.0, 0.0), 1.0)
+        .cache_key;
+
+    assert_eq!(
+        cache_key.font_id, local_id,
+        "shaping must use the pinned face"
+    );
+
+    // The bug: Swash cannot paint this face's emoji glyphs at all.
+    let swash_only = atlas.render_cache_key_image(cache_key, false);
+    assert!(
+        swash_only
+            .as_ref()
+            .is_none_or(|image| image.width == 0 || image.height == 0),
+        "the Swash chain is expected to produce nothing for a COLRv1 emoji glyph"
+    );
+
+    let image = atlas
+        .glyph_image(cache_key, None, 16.0, false)
+        .expect("the color stage paints the emoji glyph");
+    assert_eq!(image.content, super::RasterContent::Color);
+    assert!(
+        (12..=20).contains(&image.width) && (12..=20).contains(&image.height),
+        "16 px emoji rasterized {}x{}",
+        image.width,
+        image.height
+    );
+    let painted = image
+        .data
+        .chunks_exact(4)
+        .filter(|pixel| pixel[3] > 0)
+        .count();
+    assert!(painted > 0, "the emoji raster has no visible pixels");
+}

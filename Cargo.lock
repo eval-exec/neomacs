@@ -3966,6 +3966,7 @@ dependencies = [
  "neomacs-display-protocol",
  "neomacs-test-fonts",
  "thiserror 2.0.20",
+ "tiny-skia",
  "tracing",
  "ttf-parser",
 ]

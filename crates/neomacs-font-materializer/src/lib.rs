@@ -5,10 +5,18 @@
 //! opened font. File-container detection, FreeType handles, fixed-strike
 //! selection, and pixel-format normalization remain implementation details.
 
+pub mod color_glyph;
 mod fontdb;
+pub mod raster_sources;
 
+pub use color_glyph::{
+    ColorGlyphError, ColorGlyphRaster, ColorGlyphRasterizer, ColorGlyphRequest, Tag,
+};
 pub use fontdb::{
     FontDbLoadOutcome, FontDbSourceError, FontFileCache, LegacyBitmapFormat, PinnedFontFace,
+};
+pub use raster_sources::{
+    ColorGlyphSource, SfntFaceRasterSources, classify_sfnt_face, classify_table_directory,
 };
 
 use neomacs_display_protocol::font::ResolvedGlyphId;
