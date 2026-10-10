@@ -1205,6 +1205,34 @@ impl RenderComms {
         Option<neomacs_display_protocol::input_progress::InputReceipt>,
         Option<neomacs_display_protocol::input_latency::InputToken>,
     ) {
+        self.send_input_with_tracking(event, None)
+    }
+
+    /// Native key repeats use evaluator consumption, not bridge dequeueing,
+    /// to bound their backlog. Physical presses still use lossless delivery.
+    pub(super) fn send_key_input_with_receipt(
+        &self,
+        event: InputEvent,
+    ) -> (
+        Option<neomacs_display_protocol::input_progress::InputReceipt>,
+        Option<neomacs_display_protocol::input_progress::InputReceipt>,
+        Option<neomacs_display_protocol::input_latency::InputToken>,
+    ) {
+        let delivery = matches!(&event, InputEvent::Key { pressed: true, .. })
+            .then(neomacs_display_protocol::input_progress::InputDelivery::for_read);
+        let read = delivery.as_ref().map(|delivery| delivery.receipt());
+        let (completion, token) = self.send_input_with_tracking(event, delivery);
+        (read, completion, token)
+    }
+
+    fn send_input_with_tracking(
+        &self,
+        event: InputEvent,
+        read: Option<neomacs_display_protocol::input_progress::InputDelivery>,
+    ) -> (
+        Option<neomacs_display_protocol::input_progress::InputReceipt>,
+        Option<neomacs_display_protocol::input_latency::InputToken>,
+    ) {
         let receipt = if matches!(
             &event,
             InputEvent::Key {
@@ -1227,6 +1255,14 @@ impl RenderComms {
             _ => None,
         };
         let event = if let Some(receipt) = receipt {
+            InputEvent::Tracked {
+                receipt,
+                event: Box::new(event),
+            }
+        } else {
+            event
+        };
+        let event = if let Some(receipt) = read {
             InputEvent::Tracked {
                 receipt,
                 event: Box::new(event),

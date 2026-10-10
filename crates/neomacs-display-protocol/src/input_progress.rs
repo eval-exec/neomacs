@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 const MAX_PENDING: usize = 1024;
@@ -58,9 +58,10 @@ impl InputStream {
         frontier.pending.push_back(false);
         Some(InputDelivery(Arc::new(Delivery {
             receipt: InputReceipt {
-                stream: self.clone(),
+                stream: Some(self.clone()),
                 serial,
                 outcome: Arc::new(AtomicU8::new(0)),
+                consumed: Arc::new(AtomicBool::new(false)),
             },
         })))
     }
@@ -76,9 +77,11 @@ impl InputStream {
 /// Transport evidence only; this does not authorize any editor operation.
 #[derive(Clone)]
 pub struct InputReceipt {
-    stream: InputStream,
+    // Read-only receipts do not enter the command-completion ledger.
+    stream: Option<InputStream>,
     serial: u64,
     outcome: Arc<AtomicU8>,
+    consumed: Arc<AtomicBool>,
 }
 
 /// The queued event owns delivery; observational receipts do not keep it alive.
@@ -98,6 +101,20 @@ impl Drop for Delivery {
 }
 
 impl InputDelivery {
+    /// Track evaluator reading without occupying a completion frontier. A
+    /// command may read arbitrary input before returning; native repeats must
+    /// neither exhaust that ledger nor become scroll-preview inputs.
+    pub fn for_read() -> Self {
+        Self(Arc::new(Delivery {
+            receipt: InputReceipt {
+                stream: None,
+                serial: 0,
+                outcome: Arc::new(AtomicU8::new(0)),
+                consumed: Arc::new(AtomicBool::new(false)),
+            },
+        }))
+    }
+
     pub fn receipt(&self) -> InputReceipt {
         self.0.receipt.clone()
     }
@@ -112,21 +129,36 @@ impl InputDelivery {
 impl std::fmt::Debug for InputReceipt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InputReceipt")
-            .field("stream", &self.stream.0.id)
+            .field("stream", &self.stream.as_ref().map(|stream| stream.0.id))
             .field("serial", &self.serial)
             .finish()
     }
 }
 
 impl InputReceipt {
+    /// The evaluator read this input, or discarded its delivery. Unlike a
+    /// completion checkpoint this can advance inside a still-running command
+    /// (e.g. a prefix or `read-char`), so it is suitable for repeat backpressure.
+    pub fn consumed_or_cancelled(&self) -> bool {
+        self.consumed.load(Ordering::Acquire) || self.cancelled()
+    }
+
     pub fn acknowledged_by(&self, checkpoints: &[InputCheckpoint]) -> bool {
-        checkpoints.iter().any(|checkpoint| {
-            checkpoint.stream == self.stream.0.id && checkpoint.through >= self.serial
+        self.stream.as_ref().is_some_and(|stream| {
+            checkpoints.iter().any(|checkpoint| {
+                checkpoint.stream == stream.0.id && checkpoint.through >= self.serial
+            })
         })
     }
 
     pub fn same_input(&self, other: &Self) -> bool {
-        self.serial == other.serial && self.stream.0.id == other.stream.0.id
+        match (&self.stream, &other.stream) {
+            (Some(stream), Some(other_stream)) => {
+                self.serial == other.serial && stream.0.id == other_stream.0.id
+            }
+            (None, None) => Arc::ptr_eq(&self.outcome, &other.outcome),
+            _ => false,
+        }
     }
 
     pub fn cancelled(&self) -> bool {
@@ -141,7 +173,10 @@ impl InputReceipt {
         {
             return;
         }
-        let mut frontier = self.stream.0.frontier.lock().unwrap();
+        let Some(stream) = &self.stream else {
+            return;
+        };
+        let mut frontier = stream.0.frontier.lock().unwrap();
         let Some(offset) = self.serial.checked_sub(frontier.through + 1) else {
             return;
         };
@@ -172,10 +207,15 @@ struct InputStaging {
 
 impl InputProgress {
     pub fn consumed(&mut self, receipt: InputDelivery) {
+        receipt.0.receipt.consumed.store(true, Ordering::Release);
+        let Some(stream) = &receipt.0.receipt.stream else {
+            receipt.complete();
+            return;
+        };
         self.streams.retain(|_, stream| stream.strong_count() > 0);
         self.streams
-            .entry(receipt.0.receipt.stream.0.id)
-            .or_insert_with(|| Arc::downgrade(&receipt.0.receipt.stream.0));
+            .entry(stream.0.id)
+            .or_insert_with(|| Arc::downgrade(&stream.0));
         let mut staging = self.staging.borrow_mut();
         if let Some((_, inputs)) = staging.scopes.last_mut() {
             inputs.push(receipt);
@@ -244,6 +284,10 @@ impl Drop for CommandInputs {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "input_progress/repeat_tests.rs"]
+mod repeat_tests;
 
 #[cfg(test)]
 #[path = "tests/input_progress_test.rs"]
