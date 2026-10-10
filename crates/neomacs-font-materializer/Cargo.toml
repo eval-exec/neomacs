@@ -18,6 +18,7 @@ flate2.workspace = true
 fontdb.workspace = true
 neomacs-display-protocol.workspace = true
 thiserror.workspace = true
+tiny-skia.workspace = true
 tracing.workspace = true
 ttf-parser.workspace = true
 

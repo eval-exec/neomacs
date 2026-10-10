@@ -69,6 +69,7 @@ impl WgpuGlyphAtlas {
         let results = self
             .rasterize_resolved_cluster(
                 label.glyphs(),
+                None,
                 label.font_size(),
                 SubpixelBin::Zero,
                 SubpixelBin::Zero,

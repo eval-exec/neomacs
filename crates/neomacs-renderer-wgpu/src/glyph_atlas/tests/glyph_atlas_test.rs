@@ -1,13 +1,14 @@
 use super::{
-    BitmapFontReplayCache, ComposedGlyphKey, FontconfigSubpixelOrder, GlyphAtlasError, GlyphKey,
-    GlyphPixelKind, RasterizeResult, SampledSubGlyph, SingleCharGlyph, SubGlyph, SubpixelBin,
-    WgpuGlyphAtlas, effective_font_size, frame_font_bindings_identity, glyph_font_identity,
-    key_uses_default_font_metrics, normalize_subpixel_mask, rasterize_missing_glyph_box,
-    resolved_glyph_stream_identity,
+    AnyAtlasEntry, BitmapFontReplayCache, ComposedGlyphKey, FontconfigSubpixelOrder,
+    GlyphAtlasError, GlyphKey, GlyphPixelKind, RasterizeResult, SampledSubGlyph, SingleCharGlyph,
+    SubGlyph, SubpixelBin, SubpixelRequest, WgpuGlyphAtlas, effective_font_size,
+    frame_font_bindings_identity, glyph_font_identity, key_uses_default_font_metrics,
+    normalize_subpixel_mask, rasterize_missing_glyph_box, resolved_glyph_stream_identity,
 };
+use neomacs_display_protocol::face::Face;
 use neomacs_display_protocol::font::{
     CharFontTable, FontFileAsset, FontOutlineAsset, FontReplay, GlyphSampling, ResolvedCharGlyph,
-    ResolvedFontId, ResolvedFontIdentity, ResolvedGlyph, ResolvedGlyphId,
+    ResolvedFont, ResolvedFontId, ResolvedFontIdentity, ResolvedGlyph, ResolvedGlyphId,
 };
 use neomacs_display_protocol::types::FaceId;
 
@@ -893,5 +894,327 @@ fn reused_resolved_font_id_invalidates_renderer_identity_caches() {
     assert_eq!(
         atlas.frame_fonts.get(&id).unwrap().identity,
         replacement.get(&id).unwrap().identity
+    );
+}
+
+/// Install the reporter's COLRv1 face as an exact memory font.
+fn install_colrv1_memory_face(atlas: &mut WgpuGlyphAtlas) -> (ResolvedFontId, ResolvedFont) {
+    use neomacs_display_protocol::font::{
+        FontBackendKind, FontMemoryAsset, FontSlantKind, ResolvedFontTable,
+    };
+    use std::sync::Arc;
+
+    let bytes = std::fs::read(neomacs_test_fonts::noto_color_emoji_colrv1())
+        .expect("downloaded COLRv1 fixture");
+    let identity = ResolvedFontIdentity::from_memory(
+        FontBackendKind::Fontconfig,
+        "freeTypeFontconfig:test:Noto Color Emoji".to_owned(),
+        0,
+        Some("NotoColorEmoji".to_owned()),
+    );
+    let asset = FontOutlineAsset::Memory(
+        FontMemoryAsset::new(identity.stable_key.clone(), Arc::new(bytes), 0)
+            .expect("COLRv1 memory fixture"),
+    );
+    let id = ResolvedFontId(542);
+    let font = ResolvedFont {
+        id,
+        identity,
+        replay: FontReplay::Swash { asset },
+        family: "Noto Color Emoji".to_owned(),
+        full_name: Some("Noto Color Emoji".to_owned()),
+        postscript_name: Some("NotoColorEmoji".to_owned()),
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 16.0,
+        ascent_px: 12.0,
+        descent_px: 4.0,
+        space_advance_px: 8.0,
+        glyph_advance: Default::default(),
+    };
+    let mut fonts = ResolvedFontTable::default();
+    fonts.insert(id, font.clone());
+    atlas.install_frame_fonts(
+        &Default::default(),
+        &fonts,
+        &Default::default(),
+        &Default::default(),
+    );
+    (id, font)
+}
+
+/// Shape one emoji with `attrs` and return the leading glyph's cache key.
+fn shape_emoji(
+    atlas: &mut WgpuGlyphAtlas,
+    attrs: &cosmic_text::Attrs<'static>,
+) -> cosmic_text::CacheKey {
+    use cosmic_text::{Buffer, Metrics, Shaping};
+    let mut buffer = Buffer::new(&mut atlas.font_system, Metrics::new(16.0, 20.0));
+    buffer.set_size(&mut atlas.font_system, Some(64.0), Some(32.0));
+    buffer.set_text(
+        &mut atlas.font_system,
+        "\u{1F347}",
+        attrs,
+        Shaping::Advanced,
+        None,
+    );
+    buffer.shape_until_scroll(&mut atlas.font_system, false);
+    buffer
+        .layout_runs()
+        .find_map(|run| run.glyphs.first())
+        .expect("shape the emoji glyph")
+        .physical((0.0, 0.0), 1.0)
+        .cache_key
+}
+
+/// Regression for issue #542: a COLRv1 face materializes through fontdb, but
+/// nothing in the Swash source chain can paint it — its emoji glyphs have
+/// paint graphs in `BaseGlyphList` and empty `glyf` outlines, so the Swash
+/// chain returns an empty bitmap and the cell stays blank. The color stage
+/// must paint it before Swash is consulted.
+#[test]
+fn colrv1_memory_asset_paints_through_the_color_stage() {
+    let Some(mut atlas) = try_test_atlas() else {
+        return;
+    };
+    let (id, font) = install_colrv1_memory_face(&mut atlas);
+    let attrs = atlas
+        .exact_attrs_for_resolved_font(&font)
+        .expect("renderer pins the COLRv1 face");
+    let local_id = atlas
+        .local_fontdb_id_for(id)
+        .expect("renderer records its local COLRv1 face id");
+    let cache_key = shape_emoji(&mut atlas, &attrs);
+
+    assert_eq!(
+        cache_key.font_id, local_id,
+        "shaping must use the pinned face"
+    );
+
+    // The bug: Swash cannot paint this face's emoji glyphs at all.
+    let swash_only = atlas.render_cache_key_image(cache_key, false);
+    assert!(
+        swash_only
+            .as_ref()
+            .is_none_or(|image| image.width == 0 || image.height == 0),
+        "the Swash chain is expected to produce nothing for a COLRv1 emoji glyph"
+    );
+
+    let image = atlas
+        .glyph_image(cache_key, None, 16.0, false)
+        .expect("the color stage paints the emoji glyph");
+    assert_eq!(image.content, super::RasterContent::Color);
+    assert!(
+        (12..=20).contains(&image.width) && (12..=20).contains(&image.height),
+        "16 px emoji rasterized {}x{}",
+        image.width,
+        image.height
+    );
+    let painted = image
+        .data
+        .chunks_exact(4)
+        .filter(|pixel| pixel[3] > 0)
+        .count();
+    assert!(painted > 0, "the emoji raster has no visible pixels");
+}
+
+/// Shaping pins a face under a synthetic family without recording a fontdb id
+/// in the atlas's resolved-id table, so glyphs shaped through it carry a
+/// DIFFERENT fontdb id than the one `local_fontdb_id_for` returns.  That is the
+/// path `rasterize_text` takes (via `face_to_attrs_for_text`), and the color
+/// stage must resolve the face's asset from the shaping pin as well — otherwise
+/// a COLRv1 face paints on the fast path and stays blank here.
+#[test]
+fn colrv1_face_pinned_for_shaping_still_paints_in_color() {
+    let Some(mut atlas) = try_test_atlas() else {
+        return;
+    };
+    let (_id, font) = install_colrv1_memory_face(&mut atlas);
+    let attrs = atlas
+        .exact_attrs_for_resolved_font(&font)
+        .expect("renderer pins the COLRv1 face for shaping");
+    let cache_key = shape_emoji(&mut atlas, &attrs);
+
+    let image = atlas
+        .glyph_image(cache_key, None, 16.0, false)
+        .expect("a shaping-pinned color face paints");
+    assert_eq!(image.content, super::RasterContent::Color);
+    assert!(image.data.chunks_exact(4).any(|pixel| pixel[3] > 0));
+}
+
+/// A face that arrived through semantic fallback (`prime_file`) carries no
+/// recorded asset, so the color stage derives one from fontdb's own source: a
+/// face fontdb loaded from a file still names that file, which is all the
+/// rasterizer needs to classify and open it.
+#[test]
+fn colrv1_file_face_paints_through_a_derived_asset() {
+    let Some(mut atlas) = try_test_atlas() else {
+        return;
+    };
+    let path = neomacs_test_fonts::noto_color_emoji_colrv1();
+    let ids = atlas
+        .font_system
+        .db_mut()
+        .load_font_source(fontdb::Source::File(path.into()));
+    let fontdb_id = *ids.first().expect("fontdb loads the fixture");
+    let glyph = atlas
+        .font_system
+        .get_font(fontdb_id, fontdb::Weight::NORMAL)
+        .map(|font| font.as_swash().charmap().map('\u{1F347}'))
+        .expect("the fixture face is openable");
+
+    let image = atlas
+        .color_glyph_image(
+            fontdb_id,
+            glyph,
+            16.0,
+            None,
+            cosmic_text::SubpixelBin::Zero,
+            cosmic_text::SubpixelBin::Zero,
+        )
+        .expect("a file face paints through a derived asset");
+    assert_eq!(image.content, super::RasterContent::Color);
+}
+
+/// A color face's paint graph may resolve palette index 0xFFFF to the text
+/// foreground, and the resulting color raster is drawn untinted, so two faces
+/// that differ only in colour must not share one cached raster.  Mask glyphs
+/// are unaffected: their colour is applied when the mask is drawn.
+#[test]
+fn color_rasters_are_not_shared_across_foregrounds() {
+    let Some((device, queue, mut atlas)) = try_test_device_and_atlas() else {
+        return;
+    };
+    atlas.set_current_frame_fonts(
+        neomacs_display_protocol::FrameGlyphBuffer::default().font_bindings(),
+    );
+    let (id, _font) = install_colrv1_memory_face(&mut atlas);
+    assert_eq!(
+        super::mix_foreground(7, 1),
+        super::mix_foreground(7, 1),
+        "the mixer is deterministic"
+    );
+    assert_ne!(
+        super::mix_foreground(7, 1),
+        super::mix_foreground(7, 2),
+        "different foregrounds must produce different identities"
+    );
+
+    let face_with = |foreground: neomacs_display_protocol::Color| {
+        let mut face = Face::new(FaceId::new(11));
+        face.font_family = "Noto Color Emoji".to_owned();
+        face.font_size = 16.0;
+        face.default_resolved_font_id = Some(id);
+        face.foreground = foreground;
+        face
+    };
+    let key = GlyphKey {
+        charcode: '\u{1F347}' as u32,
+        face_id: FaceId::new(11),
+        font_size_bits: 16.0f32.to_bits(),
+        font_identity: 0,
+        x_bin: SubpixelBin::Zero,
+        y_bin: SubpixelBin::Zero,
+    };
+    let red = atlas
+        .get_or_create_atlas(
+            &device,
+            &queue,
+            &key,
+            Some(&face_with(neomacs_display_protocol::Color::rgb(
+                1.0, 0.0, 0.0,
+            ))),
+            SubpixelRequest::Disabled,
+        )
+        .expect("a red-face raster");
+    let blue = atlas
+        .get_or_create_atlas(
+            &device,
+            &queue,
+            &key,
+            Some(&face_with(neomacs_display_protocol::Color::rgb(
+                0.0, 0.0, 1.0,
+            ))),
+            SubpixelRequest::Disabled,
+        )
+        .expect("a blue-face raster");
+    assert!(
+        matches!(red.entry, AnyAtlasEntry::Color(_)),
+        "the fast path must produce a color entry: {:?}",
+        red.entry
+    );
+    assert!(matches!(blue.entry, AnyAtlasEntry::Color(_)));
+    assert_eq!(
+        atlas.len(),
+        2,
+        "two foregrounds must not share one cached color raster"
+    );
+}
+
+/// The other half of the foreground rule: a face whose font has no color
+/// source resolves no palette index to the text foreground, so its glyph
+/// identities — and therefore its atlas and row-reuse hit rates — must not
+/// depend on the foreground colour.
+#[test]
+fn mask_glyph_identities_ignore_the_foreground() {
+    use neomacs_display_protocol::font::{FontSlantKind, ResolvedFontTable};
+
+    let Some(mut atlas) = try_test_atlas() else {
+        return;
+    };
+    let (color_id, _color_font) = install_colrv1_memory_face(&mut atlas);
+    let outline_identity = ResolvedFontIdentity::from_file(
+        &test_font_path(neomacs_test_fonts::mplus_1_code_thin().to_path_buf()),
+        0,
+        None,
+    );
+    let outline_id = ResolvedFontId(543);
+    let outline_font = ResolvedFont {
+        id: outline_id,
+        replay: file_replay_for(&outline_identity),
+        identity: outline_identity,
+        family: "M PLUS 1 Code".to_owned(),
+        full_name: None,
+        postscript_name: None,
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 16.0,
+        ascent_px: 12.0,
+        descent_px: 4.0,
+        space_advance_px: 8.0,
+        glyph_advance: Default::default(),
+    };
+    let mut fonts = ResolvedFontTable::default();
+    fonts.insert(color_id, atlas.frame_fonts.get(&color_id).unwrap().clone());
+    fonts.insert(outline_id, outline_font);
+    atlas.install_frame_fonts(
+        &Default::default(),
+        &fonts,
+        &Default::default(),
+        &Default::default(),
+    );
+
+    let face_for = |resolved: ResolvedFontId, foreground: neomacs_display_protocol::Color| {
+        let mut face = Face::new(FaceId::new(21));
+        face.font_family = "Fixture".to_owned();
+        face.font_size = 16.0;
+        face.default_resolved_font_id = Some(resolved);
+        face.foreground = foreground;
+        face
+    };
+    let red = neomacs_display_protocol::Color::rgb(1.0, 0.0, 0.0);
+    let blue = neomacs_display_protocol::Color::rgb(0.0, 0.0, 1.0);
+
+    assert_ne!(
+        atlas.glyph_font_identity_for_char(Some(&face_for(color_id, red)), '\u{1F347}'),
+        atlas.glyph_font_identity_for_char(Some(&face_for(color_id, blue)), '\u{1F347}'),
+        "a color face's glyph identity must separate foregrounds"
+    );
+    assert_eq!(
+        atlas.glyph_font_identity_for_char(Some(&face_for(outline_id, red)), 'A'),
+        atlas.glyph_font_identity_for_char(Some(&face_for(outline_id, blue)), 'A'),
+        "a mask glyph's identity must ignore the foreground"
     );
 }

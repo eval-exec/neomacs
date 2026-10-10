@@ -311,6 +311,9 @@ wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }
 ash = "0.38"
 pollster = "1.0"
 resvg = "0.47"
+# Same version resvg 0.47 links, so COLR paint graphs rasterize with the
+# rasterizer already in the tree rather than a second copy of it.
+tiny-skia = "0.12"
 svgtypes = "0.16.1"
 simplecss = "0.2.2"
 cosmic-text = "0.18.2"
