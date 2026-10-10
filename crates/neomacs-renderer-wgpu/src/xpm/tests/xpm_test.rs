@@ -147,6 +147,20 @@ fn hex_color_values_cover_every_x11_channel_width() {
     assert_eq!(decode_one_pixel("#ffff00000000"), [0xff, 0x00, 0x00, 255]);
 }
 
+/// The other numeric forms GNU's hook accepts, which an XPM `c` value may
+/// carry: `rgb:R/G/B` (hex components) and `rgbi:R/G/B` (floats in [0,1]).
+#[test]
+fn rgb_and_rgbi_color_values_resolve_like_gnu() {
+    assert_eq!(decode_one_pixel("rgb:f/0/0"), [0xff, 0x00, 0x00, 255]);
+    assert_eq!(decode_one_pixel("rgb:ff/00/00"), [0xff, 0x00, 0x00, 255]);
+    assert_eq!(decode_one_pixel("rgb:abc/def/012"), [0xab, 0xde, 0x01, 255]);
+    assert_eq!(decode_one_pixel("rgbi:0/1/0"), [0x00, 0xff, 0x00, 255]);
+    assert_eq!(
+        decode_one_pixel("rgbi:0.5/0.5/0.5"),
+        [0x80, 0x80, 0x80, 255]
+    );
+}
+
 /// The reported asset: the grayNN ladder in the palette of the shipped
 /// `etc/images/commit.xpm` must arrive as rgb.txt's values. Pre-fix every one
 /// of them decoded to black, which is the shadow the report's screenshot shows.

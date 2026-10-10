@@ -237,13 +237,10 @@ impl RealizedColor {
         neomacs_display_protocol::x11_color_lookup(name).map(|(r, g, b)| Color::rgb(r, g, b))
     }
 
-    /// Parse a color spec: hex string or named color.
+    /// Parse a color spec the way GNU's color hook does: a numeric form
+    /// (`#`-hex, `rgb:`, `rgbi:`) or a database name.
     pub fn parse(spec: &str) -> Option<Self> {
-        if spec.starts_with('#') {
-            Self::from_hex(spec)
-        } else {
-            Self::from_name(spec)
-        }
+        neomacs_display_protocol::x11_color_value(spec).map(|(r, g, b)| Color::rgb(r, g, b))
     }
 }
 

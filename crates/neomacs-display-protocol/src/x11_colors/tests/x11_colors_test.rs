@@ -60,6 +60,30 @@ fn hex_forms_scale_every_channel_width() {
 
 /// Malformed hex resolves to nothing rather than to black, and a multi-byte
 /// character is rejected as the non-hex byte GNU sees, not sliced.
+/// The `rgb:`/`rgbi:` arms of GNU `parse_color_spec`, in the 16-bit channels
+/// the evaluator's `color-values` reports -- the same numbers neomacs's
+/// `color-values-from-color-spec` pins through the builtin.
+#[test]
+fn numeric_specs_answer_gnu_sixteen_bit_channels() {
+    assert_eq!(x11_color_spec_16bit(b"#fff"), Some((65535, 65535, 65535)));
+    assert_eq!(x11_color_spec_16bit(b"#f00"), Some((65535, 0, 0)));
+    assert_eq!(x11_color_spec_16bit(b"#abc"), Some((43690, 48059, 52428)));
+    assert_eq!(x11_color_spec_16bit(b"rgb:f/0/0"), Some((65535, 0, 0)));
+    assert_eq!(
+        x11_color_spec_16bit(b"rgb:abc/def/012"),
+        Some((43978, 57085, 288))
+    );
+    assert_eq!(x11_color_spec_16bit(b"rgbi:1/0/0"), Some((65535, 0, 0)));
+    assert_eq!(x11_color_spec_16bit(b"rgbi:0.5/0/0"), Some((32768, 0, 0)));
+    // Rejected forms, as GNU rejects them.
+    assert_eq!(x11_color_spec_16bit(b"#abcd"), None);
+    assert_eq!(x11_color_spec_16bit(b"rgb:ff/00"), None);
+    // The UTF-8 bytes of a non-ASCII character, which GNU's byte walk rejects.
+    assert_eq!(x11_color_spec_16bit(b"rgb:\xe3\x81\x82/0/0"), None);
+    assert_eq!(x11_color_spec_16bit(b"rgbi:2/0/0"), None);
+    assert_eq!(x11_color_spec_16bit(b"red"), None);
+}
+
 #[test]
 fn malformed_hex_resolves_to_nothing() {
     assert_eq!(x11_hex_color("#"), None);

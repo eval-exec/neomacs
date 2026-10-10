@@ -92,7 +92,7 @@ pub use tty_palette::{TtyPalette, TtyPaletteEntry};
 pub use types::*;
 pub use ui_types::*;
 pub use visual_config::*;
-pub use x11_colors::{x11_color_lookup, x11_color_value, x11_hex_color};
+pub use x11_colors::{x11_color_lookup, x11_color_spec_16bit, x11_color_value, x11_hex_color};
 pub use xterm_palette::xterm_256_rgb;
 pub use xwidget_extent::*;
 
