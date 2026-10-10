@@ -46,8 +46,16 @@ fn call_file_attributes(args: Vec<Value>) -> EvalResult {
     })
 }
 
+/// A temp path no other test, process or checkout uses: concurrent test runs
+/// from different worktrees used to delete and refill each other's fixtures.
+fn unique_temp_path(stem: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("neovm_{stem}_{}_{n}", std::process::id()))
+}
+
 fn make_test_dir(name: &str) -> (std::path::PathBuf, String) {
-    let dir = std::env::temp_dir().join(format!("neovm_dired_test_{}", name));
+    let dir = unique_temp_path(&format!("dired_test_{name}"));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let dir_str = dir.to_string_lossy().to_string();
@@ -94,7 +102,7 @@ fn test_directory_files_and_attributes_basic() {
 #[test]
 fn directory_files_and_attributes_decodes_names_before_matching_and_returning_them() {
     crate::test_utils::init_test_tracing();
-    let dir = std::env::temp_dir().join(format!("neovm_dfa_unicode_{}", std::process::id()));
+    let dir = unique_temp_path("dfa_unicode");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("Übung – Lösung.zip"), "").unwrap();
@@ -288,7 +296,7 @@ fn file_id_format_domain_matches_gnu_dired() {
 #[test]
 fn test_directory_files_and_attributes_eval_respects_default_directory() {
     crate::test_utils::init_test_tracing();
-    let base = std::env::temp_dir().join("neovm_dfa_eval_builtin");
+    let base = unique_temp_path("dfa_eval_builtin");
     let fixture = base.join("fixtures");
     let _ = fs::remove_dir_all(&base);
     fs::create_dir_all(&fixture).unwrap();
@@ -712,7 +720,22 @@ fn test_file_name_completion_regexps_fold_when_completion_ignore_case() {
         vec![Value::string(""), Value::string(&dir_str), Value::NIL],
     )
     .unwrap();
-    assert_eq!(result.as_utf8_str(), Some("con"));
+    // Folding lets "con" match both CONCAP.el and config.el.  Like GNU's
+    // `file_name_completion', the common prefix takes its case from whichever
+    // match the directory lists first: GNU returns "CON" or "con" for these
+    // files depending on readdir order, which varies by filesystem.
+    let folded = result.as_utf8_str();
+    assert!(matches!(folded, Some("CON" | "con")), "{folded:?}");
+
+    // Without folding only config.el matches, whatever the order.
+    eval.obarray
+        .set_symbol_value("completion-ignore-case", Value::NIL);
+    let result = builtin_file_name_completion(
+        &mut eval,
+        vec![Value::string(""), Value::string(&dir_str), Value::NIL],
+    )
+    .unwrap();
+    assert_eq!(result.as_utf8_str(), Some("config.el"));
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -1070,7 +1093,7 @@ fn test_system_groups_ignores_override_path() {
     let baseline = builtin_system_groups(vec![]).unwrap();
     let baseline_names = list_to_vec(&baseline).unwrap();
 
-    let dir = std::env::temp_dir().join("neovm_group_override");
+    let dir = unique_temp_path("group_override");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let file = dir.join("group");
@@ -1098,7 +1121,7 @@ fn test_system_users_ignores_override_path() {
     let baseline = builtin_system_users(vec![]).unwrap();
     let baseline_names = list_to_vec(&baseline).unwrap();
 
-    let dir = std::env::temp_dir().join("neovm_passwd_override");
+    let dir = unique_temp_path("passwd_override");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let file = dir.join("passwd");
@@ -1151,8 +1174,7 @@ fn test_parse_colon_file_names_handles_crlf_lines() {
 #[test]
 fn test_read_colon_file_names_reads_file() {
     crate::test_utils::init_test_tracing();
-    let dir = std::env::temp_dir();
-    let path = dir.join("neovm_dired_users.txt");
+    let path = unique_temp_path("dired_users.txt");
     let _ = fs::remove_file(&path);
     fs::write(
         &path,
@@ -1169,8 +1191,7 @@ fn test_read_colon_file_names_reads_file() {
 #[test]
 fn test_read_colon_file_names_missing_file_returns_empty() {
     crate::test_utils::init_test_tracing();
-    let dir = std::env::temp_dir();
-    let path = dir.join("neovm_dired_missing.txt");
+    let path = unique_temp_path("dired_missing.txt");
     let _ = fs::remove_file(&path);
     let names = read_colon_file_names(&path.to_string_lossy());
     assert!(names.is_empty());
@@ -1224,7 +1245,7 @@ fn test_system_groups_wrong_args() {
 fn test_format_mode_string() {
     crate::test_utils::init_test_tracing();
     // Regular file with 0o644.
-    let dir = std::env::temp_dir().join("neovm_mode_test");
+    let dir = unique_temp_path("mode_test");
     let _ = fs::create_dir_all(&dir);
     let path = dir.join("modefile.txt");
     {
