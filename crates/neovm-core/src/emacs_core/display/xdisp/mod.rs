@@ -8277,12 +8277,16 @@ fn resolve_exact_visible_metrics_with_layout(
     {
         return Ok(Some(found));
     }
-    if let Some(geometry) = compute_live_window_geometry(eval, fid, wid)? {
-        let Some(pos_lisp) =
-            resolve_live_target_position(&eval.frames, &eval.buffers, fid, wid, pos)?
-        else {
-            return Ok(None);
-        };
+    let Some(pos_lisp) = resolve_live_target_position(&eval.frames, &eval.buffers, fid, wid, pos)?
+    else {
+        return Ok(None);
+    };
+    if let Some(geometry) = compute_live_window_geometry_scope(
+        eval,
+        fid,
+        wid,
+        crate::window::WindowLayoutQueryScope::Position { target: pos_lisp },
+    )? {
         return Ok(geometry.point_for_buffer_pos(pos_lisp).map(|point| {
             (
                 wid,
@@ -8790,6 +8794,20 @@ fn compute_live_window_geometry(
     fid: FrameId,
     wid: WindowId,
 ) -> Result<Option<WindowDisplaySnapshot>, Flow> {
+    compute_live_window_geometry_scope(
+        eval,
+        fid,
+        wid,
+        crate::window::WindowLayoutQueryScope::Viewport,
+    )
+}
+
+fn compute_live_window_geometry_scope(
+    eval: &mut super::eval::Context,
+    fid: FrameId,
+    wid: WindowId,
+    scope: crate::window::WindowLayoutQueryScope,
+) -> Result<Option<WindowDisplaySnapshot>, Flow> {
     let Some(frame) = eval.frames.get(fid) else {
         return Ok(None);
     };
@@ -8832,7 +8850,7 @@ fn compute_live_window_geometry(
     {
         return Ok(None);
     }
-    match eval.query_window_layout(fid, wid) {
+    match eval.query_window_layout_scope(fid, wid, scope) {
         crate::window::WindowLayoutQueryOutcome::Ready(query) => Ok(query.into_geometry()),
         crate::window::WindowLayoutQueryOutcome::Unavailable => Ok(None),
         crate::window::WindowLayoutQueryOutcome::LayoutBusy => Err(signal(

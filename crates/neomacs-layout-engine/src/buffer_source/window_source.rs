@@ -10,7 +10,7 @@ use crate::scroll_policy::{
     line_start_below, top_margin,
 };
 use crate::types::{PartialBodyWalkStart, WindowKind, WindowParams};
-use neovm_core::buffer::{CharPos0, EmacsBytePos, TextPositionAnchor};
+use neovm_core::buffer::{CharLen, CharPos0, EmacsBytePos, TextPositionAnchor};
 
 #[cfg(test)]
 #[path = "tests/window_source_test.rs"]
@@ -26,6 +26,7 @@ pub(crate) mod property_keys_budget_support;
 enum BufferWindowReadBudget {
     #[default]
     WindowRows,
+    WindowChars(CharLen),
     SyncStop(crate::types::LayoutCharPos0),
     AccessibleEnd,
 }
@@ -37,10 +38,30 @@ pub(crate) enum BufferWindowReadBoundary {
     AccessibleEnd,
     #[default]
     WindowRows,
+    WindowChars(CharPos0),
     SyncHorizon,
 }
 
 impl BufferWindowReadBoundary {
+    /// Exclusive copied-source end; this is never the buffer's semantic ZV.
+    pub(crate) const fn acquisition_end(self) -> Option<CharPos0> {
+        match self {
+            Self::WindowChars(end) => Some(end),
+            Self::AccessibleEnd | Self::WindowRows | Self::SyncHorizon => None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn exhausts_window_horizon(
+        self,
+        byte_idx: usize,
+        bytes_read: usize,
+        charpos: i64,
+        accessible_end: i64,
+    ) -> bool {
+        matches!(self, Self::WindowChars(_)) && byte_idx >= bytes_read && charpos < accessible_end
+    }
+
     #[inline]
     pub(crate) fn exhausts_sync_horizon(
         self,
@@ -298,6 +319,13 @@ impl BufferWindowSourceRequest {
         self
     }
 
+    /// Limit acquisition only. GNU's iterator still observes the real ZV;
+    /// exhausting this attempt requires more source, never an EOB glyph.
+    pub(crate) fn with_window_chars(mut self, chars: CharLen) -> Self {
+        self.read_budget = BufferWindowReadBudget::WindowChars(chars);
+        self
+    }
+
     fn previous_viewport_point_relation(self) -> PreviousViewportPointRelation {
         let Some(previous) = self.previous_viewport else {
             return PreviousViewportPointRelation::Unknown;
@@ -406,12 +434,23 @@ impl BufferWindowSourceRequest {
             // property can consume. Wrapping and inserted strings add rows;
             // face-only overlays do not force a full-buffer copy. Selective
             // display still needs the unrestricted source walk.
-            let bounded_to = if self.read_budget == BufferWindowReadBudget::AccessibleEnd {
+            let bounded_to = if let BufferWindowReadBudget::WindowChars(chars) = self.read_budget {
+                let end = (window_start.max(0) as usize)
+                    .saturating_add(chars.get().max(1))
+                    .min(self.accessible_end.max(0) as usize);
+                if end < self.accessible_end.max(0) as usize {
+                    read_boundary = BufferWindowReadBoundary::WindowChars(CharPos0::new(end));
+                }
+                access.charpos_to_bytepos(end as i64)
+            } else if self.read_budget == BufferWindowReadBudget::AccessibleEnd {
                 byte_to
             } else if crate::neovm_bridge::buffer_selective_display(access.view()) == 0 {
                 let (scan_from, newlines, boundary) = match self.read_budget {
                     BufferWindowReadBudget::AccessibleEnd => {
                         unreachable!("handled by full measurement")
+                    }
+                    BufferWindowReadBudget::WindowChars(_) => {
+                        unreachable!("handled by character acquisition")
                     }
                     BufferWindowReadBudget::WindowRows => (
                         text_start_byte as i64,

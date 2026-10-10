@@ -67,6 +67,8 @@ mod posn_frame_pool_engine_test;
 #[cfg(test)]
 #[path = "posn_frame_pool_guard_test.rs"]
 mod posn_frame_pool_guard_test;
+#[path = "query_source_horizon_test.rs"]
+mod query_source_horizon_test;
 #[path = "replay_cursor_on_tab_test.rs"]
 mod replay_cursor_on_tab_test;
 #[path = "scroll_back_engine_test.rs"]

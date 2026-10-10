@@ -131,6 +131,27 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
         }
     }
 
+    pub(crate) fn new_for_window_range(
+        buffer_id: BufferId,
+        buffer: &'request B,
+        window_id: Option<u64>,
+        start_charpos: i64,
+        end: neovm_core::buffer::CharPos0,
+        text_start_byte: usize,
+    ) -> Self {
+        Self {
+            producer: BufferElementProducer::new_for_window_acquisition(
+                buffer_id,
+                buffer,
+                window_id,
+                start_charpos,
+                end,
+                text_start_byte,
+            ),
+            append_state: DisplaySourceRowAppendState::default(),
+        }
+    }
+
     pub(crate) fn append_state(&mut self) -> &mut DisplaySourceRowAppendState {
         &mut self.append_state
     }

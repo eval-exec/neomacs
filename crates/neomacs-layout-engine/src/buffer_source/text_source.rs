@@ -163,6 +163,10 @@ pub(crate) struct BufferTextSourceCursor<'a, B: LayoutBufferView + ?Sized> {
     window_id: Option<u64>,
     char_pos: CharPos0,
     end: CharPos0,
+    /// Absolute ordinary-run allocation limit for this exclusive query walk.
+    /// Complete composition/display elements still use the real semantic end.
+    /// No Lisp state or mutable cache is shared between independent mutators.
+    ordinary_run_horizon: Option<CharPos0>,
     // Absolute mappings within this immutable view. Decoding establishes the
     // current and next byte positions; a separate lookup slot keeps distant
     // property boundaries from displacing that sequential pair. Rewinds may
@@ -256,6 +260,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             window_id,
             char_pos: start,
             end,
+            ordinary_run_horizon: None,
             decoded_byte_positions: Cell::new([(start, start_byte); 2]),
             looked_up_byte_position: Cell::new((end, end_byte)),
             char_granularity_end: None,
@@ -297,6 +302,10 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     /// width) without routing through the producer.
     pub(crate) fn layout_buffer(&self) -> &B {
         self.buffer
+    }
+
+    pub(crate) fn set_ordinary_run_horizon(&mut self, end: CharPos0) {
+        self.ordinary_run_horizon = Some(end);
     }
 
     pub(crate) fn current_char_pos(&self) -> CharPos0 {
@@ -821,6 +830,9 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     }
 
     fn next_text_run_end(&self, start: CharPos0, limit: CharPos0) -> NonEmptyRunEnd {
+        let limit = self
+            .ordinary_run_horizon
+            .map_or(limit, |end| limit.min(end));
         let limit = self
             .buffer
             .layout_next_automatic_composition_start(start, limit)

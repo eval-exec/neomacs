@@ -11,7 +11,9 @@ use crate::buffer_source::overflow::{
 use crate::buffer_source::row_prelude::BufferSourceRowPreludeRequestContext;
 use crate::buffer_source::walk::BufferSourceWalk;
 use crate::display_cursor::{capture_cursor_info, update_cursor_info_for_main_char};
-use crate::display_item::DisplayItem;
+use crate::display_item::{
+    DisplayItem, DisplayItemKind, DisplaySourcePosition, DisplayTextComposition,
+};
 use crate::display_row::builder::DisplayRowAppendStatus;
 use crate::display_row::face_state::{DisplayRowActiveFaceState, DisplayRowExtendFace};
 use crate::display_row::source_state::DisplayRowSourceState;
@@ -60,6 +62,25 @@ pub(crate) fn render_source_char_and_apply<B: LayoutBufferView>(
     // split into N single-character items and pushed back through a pending
     // queue for later iterations to pop.
     source_item.retain_first_text_run_char(text_start_byte);
+
+    // An ordinary independent buffer glyph is a stable iterator position.
+    // Compositions, replacements, display vectors and zero-width elements
+    // need their existing complete-element/source-position lifecycle.
+    let ordinary_target = params.query_target.is_some_and(|target| {
+        params.wrap_mode == crate::types::LineWrapMode::Truncate
+            && !params.word_wrap
+            && !state.row_carryover.word_wrap.is_enabled()
+            && target.get() == source_item.source_step_char().start_charpos()
+            && source_item.source_end_charpos() == Some(target.get().saturating_add(1))
+    }) && matches!(
+        source_item.item().span.start,
+        DisplaySourcePosition::Buffer { .. }
+    ) && matches!(
+        source_item.item().span.end,
+        DisplaySourcePosition::Buffer { .. }
+    ) && matches!(&source_item.item().kind,
+            DisplayItemKind::TextRun(run) if run.composition == DisplayTextComposition::Independent
+                && run.text.chars().eq(std::iter::once(source_item.source_step_char().ch())));
 
     let (source_step_char, source_end_charpos, source_end_byte_idx, source_item) =
         source_item.into_render_parts();
@@ -185,6 +206,53 @@ pub(crate) fn render_source_char_and_apply<B: LayoutBufferView>(
 
     prepared_append
         .update_cursor_info_for_main_char(state.cursor_info, source_step_char.start_byte_idx());
+    let row_position = state.progress.row_position();
+    if ordinary_target
+        && row_position.x_px() >= state.surface.append_surface.right_edge()
+        && row_position.x_px() < state.surface.append_surface.line_end_fill_right_edge()
+    {
+        // GNU tests a truncated target before producing its glyph
+        // (xdisp.c:10267-10280). The reserved marker column is still a
+        // visible iterator position; a presentation marker cannot certify
+        // that source position because it does not extend the row's span.
+        let cursor = prepared_append.cursor_info_for_main_char(
+            active_face_state,
+            state.row_build.row_geometry.text_position(
+                row_position.x_px(),
+                source_step_char.start_byte_idx(),
+                row_position.col(),
+            ),
+            ch == '\t',
+        );
+        if let Some(width) = cursor.slot_width.filter(|width| *width > 0.0) {
+            state
+                .source_render
+                .include_current_row_metrics(state.row_build.row_geometry);
+            state
+                .source_render
+                .output_emitter()
+                .push_text_display_point(
+                    neovm_core::buffer::LispCharPos1::new(source_step_char.start_charpos() + 1),
+                    row_position.x_px(),
+                    state.row_build.row_geometry.y(),
+                    width,
+                    state.row_build.row_geometry.height(),
+                    state.row_build.row_geometry.row(),
+                    row_position.col(),
+                );
+            if state.cursor_info.should_capture_visible_glyph_at(
+                state.progress.charpos(),
+                loop_context.point_charpos(),
+            ) {
+                capture_cursor_info(state.cursor_info, cursor);
+            }
+            state
+                .source_render
+                .output_emitter()
+                .mark_query_target_reached();
+            return BufferSourceItemRenderOutcome::Stop;
+        }
+    }
     let overflow_outcome = BufferSourceOverflowRenderRequest::new(
         &prepared_append,
         source_step_char,
@@ -267,6 +335,14 @@ pub(crate) fn render_source_char_and_apply<B: LayoutBufferView>(
     }
     if let Some(end_byte_idx) = source_end_byte_idx {
         state.progress.set_byte_idx(end_byte_idx);
+    }
+
+    if ordinary_target && state.progress.row_position().x_px() > row_position.x_px() {
+        state
+            .source_render
+            .output_emitter()
+            .mark_query_target_reached();
+        return BufferSourceItemRenderOutcome::Stop;
     }
 
     BufferSourceItemRenderOutcome::Rendered

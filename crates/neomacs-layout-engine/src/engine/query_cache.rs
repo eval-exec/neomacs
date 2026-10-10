@@ -1,5 +1,6 @@
 //! Exact, bounded geometry reuse for synchronous queries. These entries are
 //! observations, never presentations or a source of retained window markers.
+use crate::buffer_source::render_attempt::QueryRowCoverage;
 use neovm_core::{
     emacs_core::Context,
     window::{FrameId, WindowId, WindowLayoutQuery, WindowLayoutQueryScope},
@@ -26,6 +27,8 @@ struct Entry {
     collections: neovm_core::tagged::collection_reads::CollectionReads,
     query: WindowLayoutQuery,
     restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
+    row_coverage: QueryRowCoverage,
+    target_prefix_policy: bool,
 }
 
 #[derive(Default)]
@@ -64,6 +67,23 @@ impl QueryCache {
             .get(buffer)?
             .point_lisp_char_pos();
         self.entries.iter().rev().find_map(|entry| {
+            // Target-prefix metrics can differ from a completed row's metrics
+            // when a later display element increases its height. Until the
+            // cache carries a metric certificate for each stop, another scope
+            // cannot answer this target merely because it emitted its point.
+            if entry.target_prefix_policy
+                && matches!(scope, WindowLayoutQueryScope::Position { .. }) && entry.scope != scope {
+                return None;
+            }
+            // A partial final row certifies only the original target under
+            // identical inputs. Its metrics cannot answer an earlier target
+            // or prove placement after a viewport change.
+            if entry.row_coverage == QueryRowCoverage::TargetPrefix
+                && (entry.scope != scope
+                    || entry.query.geometry()?.layout_freshness.as_ref() != Some(&current))
+            {
+                return None;
+            }
             tracing::trace!(target: "neomacs_layout_engine::query_cache", ?scope, entry_scope = ?entry.scope,
                 point_matches = entry.source_point == source_point,
                 collections_match = entry.collections.unchanged(),
@@ -171,6 +191,8 @@ impl QueryCache {
         query: &WindowLayoutQuery,
         collections: neovm_core::tagged::collection_reads::CollectionReads,
         mut restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
+        row_coverage: QueryRowCoverage,
+        target_prefix_policy: bool,
     ) {
         let Some(snapshot) = query.geometry() else {
             return;
@@ -230,6 +252,8 @@ impl QueryCache {
             collections,
             query: query.clone(),
             restart_rows,
+            row_coverage,
+            target_prefix_policy,
         });
         while self.entries.len() > MAX_ENTRIES
             || self

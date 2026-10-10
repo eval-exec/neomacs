@@ -322,11 +322,15 @@ impl<'a> BufferSourceItemRenderRequest<'a> {
             append_geometry,
         );
 
-        if text_run_request.can_render_whole_run(
-            &source_item,
-            &buffer_row_append_context,
-            &mut source_render,
-        ) {
+        let target_glyph_query = self.params.query_target.is_some()
+            && self.params.wrap_mode == crate::types::LineWrapMode::Truncate;
+        if !target_glyph_query
+            && text_run_request.can_render_whole_run(
+                &source_item,
+                &buffer_row_append_context,
+                &mut source_render,
+            )
+        {
             let outcome = text_run_request.render_and_apply(
                 source_item,
                 &active_face_state,
@@ -342,12 +346,17 @@ impl<'a> BufferSourceItemRenderRequest<'a> {
             return outcome;
         }
 
-        if let Some(prefix) = text_run_request.prefix_to_fit(
-            &source_item,
-            self.params.wrap_mode,
-            &buffer_row_append_context,
-            &mut source_render,
-        ) {
+        let fitting_prefix = if target_glyph_query {
+            None
+        } else {
+            text_run_request.prefix_to_fit(
+                &source_item,
+                self.params.wrap_mode,
+                &buffer_row_append_context,
+                &mut source_render,
+            )
+        };
+        if let Some(prefix) = fitting_prefix {
             // Consume only this prefix: the producer is reseated at the first
             // unfitting character, so the next element is produced from there.
             // The tail used to be queued purely for the next iteration to pop

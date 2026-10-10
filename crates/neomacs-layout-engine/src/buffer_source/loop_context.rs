@@ -104,6 +104,24 @@ impl BufferSourceLoopRequestContext {
             .exhausts_sync_horizon(byte_idx, bytes_read, charpos, self.accessible_end)
     }
 
+    pub(crate) fn source_acquisition_end(self) -> Option<neovm_core::buffer::CharPos0> {
+        self.read_boundary.acquisition_end()
+    }
+
+    pub(crate) fn exhausted_window_horizon(
+        self,
+        byte_idx: usize,
+        bytes_read: usize,
+        charpos: i64,
+    ) -> bool {
+        self.read_boundary.exhausts_window_horizon(
+            byte_idx,
+            bytes_read,
+            charpos,
+            self.accessible_end,
+        )
+    }
+
     pub(crate) fn invisible_text_request<'a>(
         self,
         text: &'a [u8],

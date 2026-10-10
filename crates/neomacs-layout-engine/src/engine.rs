@@ -36,7 +36,7 @@ use super::gui_chrome::{
 use super::types::*;
 #[cfg(test)]
 use super::window_output::RowMetricsSnapshot;
-use crate::buffer_source::render_attempt::WindowPositionPublication;
+use crate::buffer_source::render_attempt::{QueryRowCoverage, WindowPositionPublication};
 use crate::buffer_source::window_geometry::BufferWindowGeometryRequest;
 use crate::buffer_source::window_render::{
     BufferSourceRenderAttemptContext, BufferSourceRenderAttemptOutcome, BufferWindowRenderRequest,
@@ -922,6 +922,8 @@ pub struct LayoutEngine {
     /// the frame converges.
     window_snapshots: Vec<WindowPresentationSnapshot>,
     query_restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
+    query_row_coverage: QueryRowCoverage,
+    query_target_prefix_policy: bool,
     /// One renderer-inert full mini measurement. Owned numeric attempt result;
     /// never shared with other Context mutators or retained presentations.
     mini_preparation_height: Option<f32>,
@@ -1599,6 +1601,8 @@ impl LayoutEngine {
             text_buf: Vec::with_capacity(64 * 1024), // 64KB initial
             window_snapshots: Vec::new(),
             query_restart_rows: Vec::new(),
+            query_row_coverage: QueryRowCoverage::Complete,
+            query_target_prefix_policy: false,
             mini_preparation_height: None,
             query_body_reuse_allowed: false,
             query_cache: Default::default(),
@@ -1639,6 +1643,8 @@ impl LayoutEngine {
             text_buf: Vec::with_capacity(64 * 1024),
             window_snapshots: Vec::new(),
             query_restart_rows: Vec::new(),
+            query_row_coverage: QueryRowCoverage::Complete,
+            query_target_prefix_policy: false,
             mini_preparation_height: None,
             query_body_reuse_allowed: false,
             query_cache: Default::default(),
@@ -4029,6 +4035,8 @@ impl LayoutEngine {
         }
         self.query_body_reuse_allowed = true;
         self.query_restart_rows.clear();
+        self.query_row_coverage = QueryRowCoverage::Complete;
+        self.query_target_prefix_policy = false;
         self.mini_preparation_height = None;
         let (query, collections) = neovm_core::tagged::collection_reads::capture_normalized(
             evaluator,
@@ -4061,6 +4069,8 @@ impl LayoutEngine {
                 &query,
                 collections,
                 query_restart_rows,
+                self.query_row_coverage,
+                self.query_target_prefix_policy,
             );
         }
         Ok(query)
@@ -5031,7 +5041,8 @@ impl LayoutEngine {
                 };
             }
             BufferSourceRenderAttemptOutcome::ReplayMispredicted
-            | BufferSourceRenderAttemptOutcome::SyncSourceHorizonExhausted { .. } => {
+            | BufferSourceRenderAttemptOutcome::SyncSourceHorizonExhausted { .. }
+            | BufferSourceRenderAttemptOutcome::QuerySourceHorizonExhausted => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }
@@ -5201,6 +5212,8 @@ impl LayoutEngine {
             BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
                 query_restart_rows,
+                query_row_coverage,
+                query_target_prefix_policy,
                 window_end_record,
                 freshness_before_chrome: _,
                 effective_default_face,
@@ -5208,6 +5221,10 @@ impl LayoutEngine {
                 reused_matrix_rows,
                 line_number_field_width,
             } => {
+                if position_publication.is_synchronous_query() {
+                    self.query_row_coverage = query_row_coverage;
+                    self.query_target_prefix_policy = query_target_prefix_policy;
+                }
                 if params.measurement_pixels.is_some() {
                     self.query_restart_rows = query_restart_rows;
                 }

@@ -249,3 +249,169 @@ fn sync_source_budget_preserves_full_source_without_safe_lookahead() {
         assert_eq!(source.accessible_end(), 400);
     }
 }
+
+#[test]
+fn window_character_budget_bounds_long_lines_and_preserves_semantic_metadata() {
+    for text in [format!("{}λ", "a".repeat(800_000)), "λé".repeat(400_000)] {
+        let mut eval = Context::new();
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .insert(&text);
+        let buffer = eval.buffer_manager().current_buffer().unwrap();
+        let total_chars = text.chars().count();
+        for start in [0, 41_387] {
+            let view = crate::neovm_bridge::BorrowedLayoutBuffer::for_window(
+                buffer,
+                eval.obarray(),
+                CharPos0::new(start),
+                1024,
+                crate::display_property::DisplayPropertyTarget::for_window_system(true),
+            );
+            let access = RustBufferAccess::new(&view);
+            let request = BufferWindowSourceRequest::new(
+                start as i64,
+                None,
+                123,
+                0,
+                total_chars as i64,
+                38,
+                WindowKind::Main,
+                ScrollPolicy::Recenter,
+                0,
+            )
+            .with_window_chars(CharLen::new(1024));
+            let mut bytes = Vec::new();
+            let source = request.read_exact_into(&access, &mut bytes);
+            let expected: String = text.chars().skip(start).take(1024).collect();
+            assert_eq!(bytes, expected.as_bytes());
+            assert_eq!(source.bytes_read(), expected.len());
+            assert_eq!(
+                source.text_start_byte(),
+                text.chars().take(start).map(char::len_utf8).sum::<usize>()
+            );
+            assert_eq!(source.window_start(), start as i64);
+            assert_eq!(source.point_charpos(), 123);
+            assert_eq!(source.accessible_start(), 0);
+            assert_eq!(source.accessible_end(), total_chars as i64);
+            assert_eq!(
+                source.accessible_end_position().emacs_byte_pos().get(),
+                text.len()
+            );
+            assert_eq!(request.max_rows, 38);
+            assert_eq!(
+                source.read_boundary(),
+                BufferWindowReadBoundary::WindowChars(CharPos0::new(start + 1024))
+            );
+            assert_eq!(
+                source.read_boundary().acquisition_end(),
+                Some(CharPos0::new(start + 1024))
+            );
+        }
+    }
+}
+
+#[test]
+fn window_character_budget_distinguishes_horizon_from_real_accessible_end() {
+    let mut eval = Context::new();
+    eval.buffer_manager_mut()
+        .current_buffer_mut()
+        .unwrap()
+        .insert("中文éabc");
+    let buffer = eval.buffer_manager().current_buffer().unwrap();
+    let view = crate::neovm_bridge::BorrowedLayoutBuffer::for_window(
+        buffer,
+        eval.obarray(),
+        CharPos0::new(2),
+        128,
+        crate::display_property::DisplayPropertyTarget::for_window_system(true),
+    );
+    let access = RustBufferAccess::new(&view);
+    for (budget, expected, boundary) in [
+        (
+            1,
+            "é",
+            BufferWindowReadBoundary::WindowChars(CharPos0::new(3)),
+        ),
+        (4, "éabc", BufferWindowReadBoundary::AccessibleEnd),
+        (usize::MAX, "éabc", BufferWindowReadBoundary::AccessibleEnd),
+    ] {
+        let request = BufferWindowSourceRequest::new(
+            2,
+            None,
+            6,
+            0,
+            6,
+            38,
+            WindowKind::Main,
+            ScrollPolicy::Recenter,
+            0,
+        )
+        .with_window_chars(CharLen::new(budget));
+        let mut bytes = Vec::new();
+        let source = request.read_exact_into(&access, &mut bytes);
+        assert_eq!(bytes, expected.as_bytes());
+        assert_eq!(source.read_boundary(), boundary);
+        assert_eq!(source.accessible_end(), 6);
+        assert_eq!(
+            source.accessible_end_position().emacs_byte_pos().get(),
+            "中文éabc".len()
+        );
+        assert_eq!(source.point_charpos(), 6);
+    }
+    let horizon = BufferWindowReadBoundary::WindowChars(CharPos0::new(3));
+    assert!(horizon.exhausts_window_horizon(2, 2, 3, 6));
+    assert!(!horizon.exhausts_window_horizon(1, 2, 3, 6));
+    assert!(!horizon.exhausts_window_horizon(2, 2, 6, 6));
+    assert!(!horizon.exhausts_sync_horizon(2, 2, 3, 6));
+    assert!(!BufferWindowReadBoundary::AccessibleEnd.exhausts_window_horizon(2, 2, 3, 6));
+    assert_eq!(
+        BufferWindowReadBoundary::AccessibleEnd.acquisition_end(),
+        None
+    );
+}
+
+#[test]
+fn window_character_budget_remains_progressive_with_hidden_or_selective_source() {
+    for setup in [
+        "(put-text-property 1 (point-max) 'invisible t)",
+        "(put-text-property 1 (point-max) 'display \"replacement\")",
+        "(set (make-local-variable 'selective-display) 2)",
+    ] {
+        let mut eval = Context::new();
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .insert(&"a".repeat(800_000));
+        eval.eval_str(setup).unwrap();
+        let buffer = eval.buffer_manager().current_buffer().unwrap();
+        let view = crate::neovm_bridge::BorrowedLayoutBuffer::for_window(
+            buffer,
+            eval.obarray(),
+            CharPos0::ZERO,
+            1024,
+            crate::display_property::DisplayPropertyTarget::for_window_system(true),
+        );
+        let access = RustBufferAccess::new(&view);
+        let request = BufferWindowSourceRequest::new(
+            0,
+            None,
+            0,
+            0,
+            800_000,
+            38,
+            WindowKind::Main,
+            ScrollPolicy::Recenter,
+            0,
+        )
+        .with_window_chars(CharLen::new(1024));
+        let mut bytes = Vec::new();
+        let source = request.read_exact_into(&access, &mut bytes);
+        assert_eq!(bytes.len(), 1024, "{setup}");
+        assert_eq!(
+            source.read_boundary(),
+            BufferWindowReadBoundary::WindowChars(CharPos0::new(1024))
+        );
+        assert_eq!(source.accessible_end(), 800_000);
+    }
+}

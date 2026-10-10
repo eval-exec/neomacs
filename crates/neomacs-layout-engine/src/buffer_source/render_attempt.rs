@@ -189,9 +189,15 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
         /// No eager per-frame clone or new Lisp owner/cache is introduced.
         replay: Option<Box<crate::incremental_layout::ScrollReplay>>,
     },
+    /// A synchronous query needs more source, before any EOB publication.
+    QuerySourceHorizonExhausted,
     Finished {
         redisplay_positions: TextWindowRedisplayPositions,
         query_restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
+        query_row_coverage: QueryRowCoverage,
+        /// Whether this source policy admits a stop inside an ordinary target
+        /// glyph. Completed viewport metrics cannot certify such a prefix.
+        query_target_prefix_policy: bool,
         window_end_record: neovm_core::window::WindowEndRecord,
         /// Exact canonical inputs after body production and immediately before
         /// GNU's late `display_mode_lines` phase enters Lisp.
@@ -213,6 +219,15 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
         /// outcome is the only carrier that has already seen the measurement.
         line_number_field_width: f32,
     },
+}
+
+/// Numeric coverage of this attempt's final row. A target prefix answers only
+/// its own position and cannot certify row completion or viewport placement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum QueryRowCoverage {
+    #[default]
+    Complete,
+    TargetPrefix,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
