@@ -886,7 +886,9 @@ impl WgpuGlyphAtlas {
                     }
                 }
 
-                if let Some(image) = self.glyph_image(cache_key, face, font_size, enable_subpixel) {
+                if let Some(image) =
+                    self.glyph_image(cache_key, face, font_size, enable_subpixel, None)
+                {
                     let width = image.width;
                     let height = image.height;
 
@@ -1459,6 +1461,7 @@ impl WgpuGlyphAtlas {
         face: Option<&Face>,
         font_size: f32,
         enable_subpixel: bool,
+        resolved: Option<ResolvedFontId>,
     ) -> Option<RasterGlyphImage> {
         if let Some(image) = self.color_glyph_image(
             cache_key.font_id,
@@ -1467,6 +1470,7 @@ impl WgpuGlyphAtlas {
             face,
             cache_key.x_bin,
             cache_key.y_bin,
+            resolved,
         ) {
             return Some(image);
         }
@@ -1513,6 +1517,7 @@ impl WgpuGlyphAtlas {
     /// Rasterize `glyph_id` from the face's layered color source, when the
     /// face has one. Returns `None` for every other face, which keeps the
     /// Swash path free of table checks.
+    #[allow(clippy::too_many_arguments)]
     fn color_glyph_image(
         &mut self,
         fontdb_id: fontdb::ID,
@@ -1521,6 +1526,7 @@ impl WgpuGlyphAtlas {
         face: Option<&Face>,
         x_bin: SubpixelBin,
         y_bin: SubpixelBin,
+        resolved: Option<ResolvedFontId>,
     ) -> Option<RasterGlyphImage> {
         let asset = self.color_asset_for(fontdb_id)?;
         let foreground = face
@@ -1535,11 +1541,19 @@ impl WgpuGlyphAtlas {
             })
             .unwrap_or([0, 0, 0, 255]);
         let weight = face.map(|face| face.font_weight).unwrap_or(400);
-        let coordinates = self
-            .resolved_fonts_by_fontdb
-            .get(&fontdb_id)
-            .and_then(|resolved| self.frame_fonts.get(resolved))
+        // The caller's resolved instance comes first: two file-backed
+        // instances of the same face share one fontdb id, so the reverse map
+        // cannot tell them apart.  It remains the fallback for callers that
+        // only have the id (the reverse map keeps the latest binding).
+        let coordinates = resolved
+            .and_then(|resolved_id| self.frame_fonts.get(&resolved_id))
             .map(|font| font.identity.variation_coords.clone())
+            .or_else(|| {
+                self.resolved_fonts_by_fontdb
+                    .get(&fontdb_id)
+                    .and_then(|resolved_id| self.frame_fonts.get(resolved_id))
+                    .map(|font| font.identity.variation_coords.clone())
+            })
             .unwrap_or_default();
         let variations = color_variation_settings(&coordinates, weight);
         let request = ColorGlyphRequest {
@@ -1800,8 +1814,7 @@ impl WgpuGlyphAtlas {
             .entry(fontdb_id)
             .or_insert_with(|| asset.clone());
         self.resolved_fonts_by_fontdb
-            .entry(fontdb_id)
-            .or_insert(resolved_font_id);
+            .insert(fontdb_id, resolved_font_id);
         Some(pinned.family())
     }
 
@@ -2103,7 +2116,13 @@ impl WgpuGlyphAtlas {
                         font_weight: fontdb::Weight(font.weight),
                         flags: CacheKeyFlags::empty(),
                     };
-                    let image = self.glyph_image(cache_key, face, font_size, enable_subpixel)?;
+                    let image = self.glyph_image(
+                        cache_key,
+                        face,
+                        font_size,
+                        enable_subpixel,
+                        Some(glyph.resolved_font_id),
+                    )?;
                     let width = image.width;
                     let height = image.height;
                     if width == 0 || height == 0 {

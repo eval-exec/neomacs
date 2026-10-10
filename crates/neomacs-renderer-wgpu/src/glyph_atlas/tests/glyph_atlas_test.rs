@@ -982,12 +982,19 @@ fn install_nabla_memory_face(
     };
     use std::sync::Arc;
 
-    let bytes =
-        std::fs::read(neomacs_test_fonts::nabla_color_colrv1()).expect("downloaded Nabla fixture");
+    static BYTES: std::sync::OnceLock<Arc<Vec<u8>>> = std::sync::OnceLock::new();
+    let bytes = BYTES
+        .get_or_init(|| {
+            Arc::new(
+                std::fs::read(neomacs_test_fonts::nabla_color_colrv1())
+                    .expect("downloaded Nabla fixture"),
+            )
+        })
+        .clone();
     let variations = coords
         .iter()
-        .map(|(tag, value)| {
-            FontVariationCoord::try_new(u32::from_be_bytes(**tag), *value).expect("finite value")
+        .map(|&(tag, value)| {
+            FontVariationCoord::try_new(u32::from_be_bytes(*tag), value).expect("finite value")
         })
         .collect::<Vec<_>>();
     let identity = ResolvedFontIdentity::from_native_with_variations(
@@ -998,8 +1005,7 @@ fn install_nabla_memory_face(
         variations,
     );
     let asset = FontOutlineAsset::Memory(
-        FontMemoryAsset::new(identity.stable_key.clone(), Arc::new(bytes), 0)
-            .expect("Nabla memory fixture"),
+        FontMemoryAsset::new(identity.stable_key.clone(), bytes, 0).expect("Nabla memory fixture"),
     );
     let resolved_id = ResolvedFontId(id);
     let font = ResolvedFont {
@@ -1051,10 +1057,10 @@ fn colrv1_variation_instances_paint_differently() {
     assert_ne!(thin_key, thick_key, "instances must not share a key");
 
     let thin_image = atlas
-        .glyph_image(thin_key, None, 16.0, false)
+        .glyph_image(thin_key, None, 16.0, false, None)
         .expect("the thin instance paints");
     let thick_image = atlas
-        .glyph_image(thick_key, None, 16.0, false)
+        .glyph_image(thick_key, None, 16.0, false, None)
         .expect("the thick instance paints");
     assert_eq!(thin_image.content, super::RasterContent::Color);
     assert!(
@@ -1105,7 +1111,7 @@ fn colrv1_memory_asset_paints_through_the_color_stage() {
     );
 
     let image = atlas
-        .glyph_image(cache_key, None, 16.0, false)
+        .glyph_image(cache_key, None, 16.0, false, None)
         .expect("the color stage paints the emoji glyph");
     assert_eq!(image.content, super::RasterContent::Color);
     assert!(
@@ -1140,7 +1146,7 @@ fn colrv1_face_pinned_for_shaping_still_paints_in_color() {
     let cache_key = shape_emoji(&mut atlas, &attrs);
 
     let image = atlas
-        .glyph_image(cache_key, None, 16.0, false)
+        .glyph_image(cache_key, None, 16.0, false, None)
         .expect("a shaping-pinned color face paints");
     assert_eq!(image.content, super::RasterContent::Color);
     assert!(image.data.chunks_exact(4).any(|pixel| pixel[3] > 0));
@@ -1175,6 +1181,7 @@ fn colrv1_file_face_paints_through_a_derived_asset() {
             None,
             cosmic_text::SubpixelBin::Zero,
             cosmic_text::SubpixelBin::Zero,
+            None,
         )
         .expect("a file face paints through a derived asset");
     assert_eq!(image.content, super::RasterContent::Color);
