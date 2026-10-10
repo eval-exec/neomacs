@@ -2266,6 +2266,93 @@ fn dropping_heap_mid_concurrent_mark_retains_gc_storage() {
     );
 }
 
+/// Run `scenario` on a fresh thread and fail unless it finishes within
+/// `limit`. A heap waiting on another heap's GC work is a permanent hang;
+/// bounding it here turns that hang into a test failure.
+fn assert_finishes_within(limit: std::time::Duration, scenario: impl FnOnce() + Send + 'static) {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        scenario();
+        let _ = done_tx.send(());
+    });
+    match done_rx.recv_timeout(limit) {
+        Ok(()) => worker.join().expect("scenario thread"),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            if let Err(panic) = worker.join() {
+                std::panic::resume_unwind(panic);
+            }
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+            "deadlock: a heap is still waiting for GC work after {limit:?} \
+             while another heap's concurrent mark is in flight"
+        ),
+    }
+}
+
+/// Boxed heaps (stable addresses for `set_tagged_heap`), each with a
+/// concurrent mark launched and left in flight: their owner never reaches
+/// another GC safepoint, so the marks are never joined until the heaps drop.
+fn heaps_with_marks_in_flight(count: usize) -> Vec<Box<TaggedHeap>> {
+    (0..count)
+        .map(|_| {
+            let mut heap = Box::new(TaggedHeap::new());
+            set_tagged_heap(&mut heap);
+            let mut list = TaggedValue::fixnum(0);
+            for i in 0..64 {
+                list = heap.alloc_cons(TaggedValue::fixnum(i), list);
+            }
+            heap.concurrent_begin();
+            heap.seed_root(list);
+            heap.launch_concurrent_mark();
+            assert!(heap.concurrent_mark_running());
+            heap
+        })
+        .collect()
+}
+
+fn drop_heaps(heaps: Vec<Box<TaggedHeap>>) {
+    for mut heap in heaps {
+        set_tagged_heap(&mut heap);
+        drop(heap);
+    }
+}
+
+/// Two heaps in one process (two `Context`s, as the tier-I differential
+/// tests hold): heap A's concurrent mark is still in flight when heap B
+/// launches its own and is then dropped. B's drop joins B's mark, which
+/// must not wait for A's mark to end: only A's owner can end it, and here
+/// that owner is the thread blocked in B's drop.
+#[test]
+fn dropping_a_heap_does_not_wait_for_another_heaps_mark() {
+    crate::test_utils::init_test_tracing();
+    assert_finishes_within(std::time::Duration::from_secs(60), || {
+        let in_flight = heaps_with_marks_in_flight(2);
+        drop_heaps(heaps_with_marks_in_flight(1));
+        drop_heaps(in_flight);
+    });
+}
+
+/// The stop-the-world mark is handed to a GC worker too, and the mutator
+/// blocks until it is drained; it must not queue behind another heap's
+/// in-flight concurrent mark either.
+#[test]
+fn a_stop_the_world_collection_does_not_wait_for_another_heaps_mark() {
+    crate::test_utils::init_test_tracing();
+    assert_finishes_within(std::time::Duration::from_secs(60), || {
+        let in_flight = heaps_with_marks_in_flight(1);
+        let mut heap = Box::new(TaggedHeap::new());
+        set_tagged_heap(&mut heap);
+        let rooted = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::fixnum(2));
+        heap.collect_exact(std::iter::once(rooted));
+        assert_eq!(
+            unsafe { (*rooted.xcons_ptr()).load_car() }.0,
+            TaggedValue::fixnum(1).0
+        );
+        drop(heap);
+        drop_heaps(in_flight);
+    });
+}
+
 /// GNU `sweep_conses` (src/alloc.c:6856-6858) threads the free list through
 /// the dead cells and then writes `dead_object ()` into the car, so a cell
 /// on the free list is "recognizable in O(1)" (`deadp`, src/alloc.c:425-429).

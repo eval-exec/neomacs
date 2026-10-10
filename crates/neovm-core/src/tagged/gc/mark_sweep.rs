@@ -2029,9 +2029,8 @@ impl TaggedHeap {
     pub(super) fn mark_all_on_gc_thread(&mut self) {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let ptr = self as *mut TaggedHeap;
-        gc_thread()
-            .send(GcRequest::MarkAll(HeapPtr(ptr), done_tx))
-            .expect("neovm-gc thread is gone");
+        self.gc_worker
+            .send(GcRequest::MarkAll(HeapPtr(ptr), done_tx));
         // Block until the GC thread has finished marking on the shared heap.
         done_rx.recv().expect("neovm-gc thread did not respond");
     }

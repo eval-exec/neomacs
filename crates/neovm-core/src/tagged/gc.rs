@@ -793,6 +793,9 @@ pub struct TaggedHeap {
     /// Receives when the GC thread has exited its mark loop (so the mutator's
     /// termination can safely take over the gray queue). Set at start.
     gc_exited: Option<std::sync::mpsc::Receiver<ConcurrentMarkResult>>,
+    /// This heap's own GC thread (`GcWorker`): shared with no other heap, so
+    /// no heap's mark or drop waits behind another heap's mark.
+    gc_worker: GcWorker,
     /// Stage 1b CONCURRENT OBARRAY SCAN: a start-captured obarray chunk snapshot
     /// staged by the start handshake (`start_concurrent_mark`) just before
     /// `launch_concurrent_mark`, which moves it into the `ConcurrentMarkJob`. The
@@ -1064,6 +1067,7 @@ impl TaggedHeap {
             gc_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gc_wake: std::sync::Arc::new((std::sync::Mutex::new(()), std::sync::Condvar::new())),
             gc_exited: None,
+            gc_worker: GcWorker::default(),
             pending_obarray_scan: None,
             concurrent_obarray_start_slots: None,
             retired_vector_buffers: Vec::new(),
