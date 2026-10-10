@@ -1017,10 +1017,22 @@ pub(crate) fn enqueue(class: JobClass, payload: JobPayload) -> Result<(), JobPay
     };
     match queue::pool().push(job) {
         Ok(()) => {
+            super::stats::front_diag::handoff(
+                super::stats::front_diag::Route::WorkerPushOk,
+                seq,
+                enqueued_at,
+            );
             stash_deferred(cell, class, enqueued_at, seq, false);
             Ok(())
         }
-        Err(job) => Err(job.payload),
+        Err(job) => {
+            super::stats::front_diag::handoff(
+                super::stats::front_diag::Route::WorkerFallback,
+                seq,
+                enqueued_at,
+            );
+            Err(job.payload)
+        }
     }
 }
 
@@ -1148,6 +1160,7 @@ pub(crate) fn defer_in_line(
     let cell = JobCell::new();
     let enqueued_at = Instant::now();
     let seq = NEXT_SEQ.fetch_add(1, Ordering::Relaxed);
+    super::stats::front_diag::handoff(super::stats::front_diag::Route::Inline, seq, enqueued_at);
     let cpu_started = (class == JobClass::Upgrade).then(super::tier2::cpu_time_us);
     #[cfg(test)]
     let result = if FAIL_BACKEND_TEST.with(|c| c.replace(false)) {

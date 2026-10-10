@@ -1280,8 +1280,10 @@ fn compile_cache_entry(
         }
         return CacheEntry::Deferred(DeferReason::Backlog);
     }
+    let diagnostic = stats::front_diag::begin(id, request.origin, class);
     let defer = super::bg::DeferScope::enter(class);
     let clock = stats::CompileClock::start(request.origin);
+    let diagnostic_start = diagnostic.as_ref().map(|_| clock.started());
     let cpu_started = spine_upgrade.then(super::tier2::cpu_time_us);
     let result = compile_bytecode_function_requested(func, obarray, request);
     drop(defer);
@@ -1299,6 +1301,9 @@ fn compile_cache_entry(
         super::tier2::charge_compile(charged);
     }
     stats::record_compile(elapsed, func.executable_ops().len(), &result);
+    if let (Some(diagnostic), Some(start)) = (diagnostic, diagnostic_start) {
+        diagnostic.finish(start, elapsed, result.is_ok());
+    }
     if result.is_err()
         && let Some(code) = deferred.take()
     {
