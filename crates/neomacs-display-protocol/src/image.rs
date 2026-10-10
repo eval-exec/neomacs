@@ -418,6 +418,16 @@ impl ImageRgb {
 pub struct ImageColorContext {
     foreground: ImageRgb,
     background: ImageRgb,
+    /// What a decoder paints a pixel whose key resolves to no color with: the
+    /// frame's foreground, which GNU keeps equal to the `default` face's
+    /// foreground (read as `FRAME_FOREGROUND_PIXEL` at src/image.c:6518 and
+    /// used at :6537-6538; the frame-parameter sync is src/xfaces.c:4394-4404).
+    ///
+    /// Deliberately apart from `foreground`: an image is *displayed under* a
+    /// face and may carry a `:foreground` of its own, and GNU reads neither for
+    /// this (issue #550).
+    #[serde(default)]
+    frame_foreground: ImageRgb,
     #[serde(default)]
     background_policy: ImageBackgroundPolicy,
 }
@@ -443,11 +453,15 @@ pub enum ImageBackgroundPolicy {
 }
 
 impl ImageColorContext {
+    /// The face's colors, with the frame foreground defaulted to the face's own:
+    /// callers that know the frame replace it with
+    /// [`Self::with_frame_foreground`].
     #[must_use]
     pub const fn from_pixels(foreground: u32, background: u32) -> Self {
         Self {
             foreground: ImageRgb::from_pixel(foreground),
             background: ImageRgb::from_pixel(background),
+            frame_foreground: ImageRgb::from_pixel(foreground),
             background_policy: ImageBackgroundPolicy::FaceColor,
         }
     }
@@ -460,6 +474,18 @@ impl ImageColorContext {
     #[must_use]
     pub const fn background(self) -> ImageRgb {
         self.background
+    }
+
+    /// GNU's `FRAME_FOREGROUND_PIXEL` for the frame this image belongs to.
+    #[must_use]
+    pub const fn frame_foreground(self) -> ImageRgb {
+        self.frame_foreground
+    }
+
+    #[must_use]
+    pub const fn with_frame_foreground(mut self, frame_foreground: u32) -> Self {
+        self.frame_foreground = ImageRgb::from_pixel(frame_foreground);
+        self
     }
 
     #[must_use]

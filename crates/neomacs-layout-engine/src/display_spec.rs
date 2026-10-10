@@ -476,10 +476,16 @@ pub(crate) fn parse_display_fringe_layout(value: &Value) -> Option<DisplayFringe
     Some(DisplayFringeLayout { bitmap, side, face })
 }
 
+/// `face_fg`/`face_bg` are the face this image is displayed under (the
+/// specification's own `:foreground`/`:background` override them);
+/// `frame_foreground` is GNU's `FRAME_FOREGROUND_PIXEL` -- the frame's
+/// `foreground-color` (src/image.c:6518) -- which a decoder that must paint an
+/// unresolvable color key with something reads instead (issue #550).
 pub(crate) fn parse_display_image_layout(
     prop_val: &Value,
-    default_fg: u32,
-    default_bg: u32,
+    face_fg: u32,
+    face_bg: u32,
+    frame_foreground: u32,
 ) -> Option<DisplayImageLayout> {
     let items = list_to_vec(prop_val)?;
     if items.first()?.as_symbol_name() != Some(DisplaySpecHead::Image.into()) {
@@ -499,8 +505,8 @@ pub(crate) fn parse_display_image_layout(
     let mut scale = ImageScalePolicy::Unspecified;
     let mut ascent = DisplayImageAscentPolicy::default();
     let mut margin = DisplayImageMargin::default();
-    let mut fg_color = default_fg;
-    let mut bg_color = default_bg;
+    let mut fg_color = face_fg;
+    let mut bg_color = face_bg;
 
     let mut i = 1usize;
     while i + 1 < items.len() {
@@ -573,7 +579,8 @@ pub(crate) fn parse_display_image_layout(
                 height: DisplayImageAxisSize::resolve_precedence(height, max_height),
             },
             rotation,
-            colors: ImageColorContext::from_pixels(fg_color, bg_color),
+            colors: ImageColorContext::from_pixels(fg_color, bg_color)
+                .with_frame_foreground(frame_foreground),
             mask: image_mask_policy_from_items(&items),
             animation,
             frame,

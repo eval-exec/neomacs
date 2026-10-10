@@ -430,6 +430,7 @@ pub(crate) fn resolve_display_replacement(
     fallback_metrics: DisplayRowFallbackMetrics,
     image_scale_environment: ImageScaleEnvironment,
     image_slice: Option<DisplayImageSliceSpec>,
+    frame_foreground: u32,
 ) -> Option<ResolvedDisplayReplacement> {
     if let Some(media) = replacement.direct_replacement() {
         return Some(resolved_media_replacement(media));
@@ -442,6 +443,7 @@ pub(crate) fn resolve_display_replacement(
         fallback_metrics,
         image_scale_environment,
         image_slice,
+        frame_foreground,
     )
     .filter(|media| replacement.accepts_media_replacement(media))
     {
@@ -462,6 +464,7 @@ impl DisplayReplacementMediaSourceItem {
         fallback_metrics: DisplayRowFallbackMetrics,
         image_scale_environment: ImageScaleEnvironment,
         image_slice: Option<DisplayImageSliceSpec>,
+        frame_foreground: u32,
     ) -> Option<DisplayReplacementMediaSourceResolution> {
         match resolve_display_replacement(
             display_prop,
@@ -471,6 +474,7 @@ impl DisplayReplacementMediaSourceItem {
             fallback_metrics,
             image_scale_environment,
             image_slice,
+            frame_foreground,
         )? {
             ResolvedDisplayReplacement::Media(media) => {
                 Some(DisplayReplacementMediaSourceResolution::Media(Self::new(
@@ -562,6 +566,7 @@ impl<'a, 'source> DisplayPropertyReplacementSourceResolveRequest<'a, 'source> {
                         fallback_metrics,
                         self.params.image_scale_environment,
                         *image_slice,
+                        self.params.default_fg,
                     )?;
                     let kind = match resolution {
                         DisplayReplacementMediaSourceResolution::Media(item) => {
@@ -606,6 +611,7 @@ impl<'a, 'source> DisplayPropertyReplacementSourceResolveRequest<'a, 'source> {
                     fallback_metrics,
                     self.params.image_scale_environment,
                     display_property.image_slice(),
+                    self.params.default_fg,
                 )?;
                 DisplayPropertyReplacementSourceInputs::empty().with_media(media)
             }
@@ -1043,6 +1049,10 @@ impl DisplayItemFaceResolver for DisplaySourcePropertyResolver<'_> {
         let face_basis = self.params.face_basis();
         let fallback = face_basis.fallback_metrics();
         let resolved_face = self.state.resolved_face_for(face, face_basis.base_face());
+        // The basis's canonical face is the frame's `default` face: its
+        // foreground is what GNU reads for an unresolvable color key, while
+        // `resolved_face` is the face this image happens to be displayed under.
+        let frame_foreground = face_basis.canonical_face().fg;
         resolve_display_property_media(
             &display_prop,
             self.params.display_host(),
@@ -1050,6 +1060,7 @@ impl DisplayItemFaceResolver for DisplaySourcePropertyResolver<'_> {
             fallback,
             self.params.image_scale_environment(),
             image_slice,
+            frame_foreground,
         )
     }
 }
@@ -1102,8 +1113,13 @@ pub(crate) fn resolve_next_display_source_item(
 #[derive(Clone, Copy)]
 pub(crate) struct DisplayMediaResolveParams<'a> {
     pub(crate) display_host: &'a dyn DisplayHost,
+    /// The face this image is displayed under; a specification's `:foreground`
+    /// overrides it.
     pub(crate) default_fg: u32,
     pub(crate) default_bg: u32,
+    /// GNU's `FRAME_FOREGROUND_PIXEL`: the frame's `foreground-color`, equal to
+    /// the `default` face's foreground (src/image.c:6518, src/xfaces.c:4394-4404).
+    pub(crate) frame_foreground: u32,
     pub(crate) fallback_metrics: DisplayRowFallbackMetrics,
     pub(crate) image_scale_environment: ImageScaleEnvironment,
     pub(crate) image_dimension_environment: DisplayImageDimensionEnvironment,
@@ -1124,7 +1140,12 @@ fn resolve_image_display_property(
     display_prop: &Value,
     params: DisplayMediaResolveParams<'_>,
 ) -> Option<DisplayMediaReplacement> {
-    let spec = parse_display_image_layout(display_prop, params.default_fg, params.default_bg)?;
+    let spec = parse_display_image_layout(
+        display_prop,
+        params.default_fg,
+        params.default_bg,
+        params.frame_foreground,
+    )?;
     let ascent = spec.ascent;
     let margin = spec.margin;
     let request = spec.into_resolve_request(
@@ -1268,7 +1289,12 @@ fn resolve_surface_channel(
         return Some((SurfaceChannelKind::Surface, id));
     }
     if DisplaySpecHead::Image.is_head_of(value) {
-        let spec = parse_display_image_layout(value, params.default_fg, params.default_bg)?;
+        let spec = parse_display_image_layout(
+            value,
+            params.default_fg,
+            params.default_bg,
+            params.frame_foreground,
+        )?;
         let request = spec.into_resolve_request(
             params.image_scale_environment,
             params.image_dimension_environment,
@@ -1311,6 +1337,7 @@ pub(crate) fn resolve_display_property_media(
     fallback_metrics: DisplayRowFallbackMetrics,
     image_scale_environment: ImageScaleEnvironment,
     image_slice: Option<DisplayImageSliceSpec>,
+    frame_foreground: u32,
 ) -> Option<DisplayMediaReplacement> {
     let face_metrics = display_media_face_metrics(resolved_face, fallback_metrics);
     let font_size = if resolved_face.font_size.is_finite() && resolved_face.font_size > 0.0 {
@@ -1324,6 +1351,7 @@ pub(crate) fn resolve_display_property_media(
             display_host: display_host?,
             default_fg: resolved_face.fg,
             default_bg: resolved_face.bg,
+            frame_foreground,
             fallback_metrics: face_metrics,
             image_scale_environment,
             image_dimension_environment: DisplayImageDimensionEnvironment::new(

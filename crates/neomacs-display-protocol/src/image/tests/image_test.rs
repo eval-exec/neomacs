@@ -64,6 +64,17 @@ fn image_color_context_keeps_foreground_and_background_roles_distinct() {
 
     assert_eq!(colors.foreground().rgb24(), 0x12_34_56);
     assert_eq!(colors.background().rgb24(), 0x65_43_21);
+    // The frame foreground defaults to the face's own; a caller that knows the
+    // frame -- the layout path, whose face basis carries the default face --
+    // replaces it (issue #550).
+    assert_eq!(colors.frame_foreground().rgb24(), 0x12_34_56);
+    assert_eq!(
+        colors
+            .with_frame_foreground(0x00_ab_cd_ef)
+            .frame_foreground()
+            .rgb8(),
+        [0xab, 0xcd, 0xef]
+    );
 }
 
 #[test]

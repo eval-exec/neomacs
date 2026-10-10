@@ -1130,7 +1130,7 @@ impl ImageCache {
         let fg = colors.foreground().rgba8();
         let bg = colors.background_rgba8();
         if let Some(result) =
-            crate::xpm::decode_xpm_file(Path::new(path), colors.foreground().rgb8())
+            crate::xpm::decode_xpm_file(Path::new(path), colors.frame_foreground().rgb8())
         {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
@@ -1233,7 +1233,7 @@ impl ImageCache {
         // file arm for why XPM takes the face foreground.
         let fg = colors.foreground().rgba8();
         let bg = colors.background_rgba8();
-        if let Some(result) = crate::xpm::decode_xpm_data(&data, colors.foreground().rgb8()) {
+        if let Some(result) = crate::xpm::decode_xpm_data(&data, colors.frame_foreground().rgb8()) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
                 rotation,
