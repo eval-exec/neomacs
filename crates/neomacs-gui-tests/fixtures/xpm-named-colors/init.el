@@ -29,6 +29,11 @@
 (defconst xpm-named-colors-frame-foreground "#123456"
   "Distinctive on purpose: the Rust side counts it, and nothing else paints it.")
 
+(defconst xpm-named-colors-remap-foreground "#0a0b0c"
+  "The foreground this fixture remaps the `default' face to (issue #556).
+GNU's FRAME_FOREGROUND_PIXEL does not follow `face-remapping-alist', so the
+remapped fallback swatch must not paint this.")
+
 (defconst xpm-named-colors-label-face '(:foreground "black")
   "Labels stay black so the frame foreground has only the swatches to come from.")
 
@@ -68,6 +73,12 @@ the latter, which is what `insert-image' builds."
     (modify-frame-parameters
      nil `((foreground-color . ,xpm-named-colors-frame-foreground)))
     (set-face-attribute 'default nil :foreground xpm-named-colors-frame-foreground)
+    ;; Issue #556: the buffer's `default' face is remapped to a third colour.
+    ;; The fallback swatch below is displayed under it and must still paint the
+    ;; frame's foreground: GNU's FRAME_FOREGROUND_PIXEL is the frame's
+    ;; foreground-color, which face remapping does not move.
+    (setq-local face-remapping-alist
+                `((default (:foreground ,xpm-named-colors-remap-foreground))))
     (dolist (case xpm-named-color-cases)
       (xpm-named-colors-insert case (xpm-named-color-swatch case)))
     ;; The decoys: the same unresolvable key, once under a face asking for red
@@ -80,6 +91,11 @@ the latter, which is what `insert-image' builds."
     (xpm-named-colors-insert
      "fallback-spec"
      (xpm-named-color-swatch xpm-named-color-fallback-value :foreground "blue"))
+    ;; The third decoy: displayed under the buffer's remapped `default' face
+    ;; (issue #556).
+    (xpm-named-colors-insert
+     "fallback-remap"
+     (xpm-named-color-swatch xpm-named-color-fallback-value))
     (goto-char (point-min))
     (with-temp-file (getenv "NEOMACS_GUI_STATE_JSON")
       (insert
@@ -94,7 +110,9 @@ the latter, which is what `insert-image' builds."
                (cons "frame-foreground"
                      (color-values (frame-parameter nil 'foreground-color)))
                (cons "default-face-foreground"
-                     (color-values (face-attribute 'default :foreground))))
+                     (color-values (face-attribute 'default :foreground)))
+               (cons "face-remap-foreground"
+                     (color-values xpm-named-colors-remap-foreground)))
          ;; GNU answers 16-bit channels; the Rust side reduces them like the
          ;; renderer does.
          (mapcar (lambda (case) (cons case (color-values case)))

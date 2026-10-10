@@ -34,6 +34,11 @@ const PAINTED_PIXEL_FLOOR: usize = 1500;
 const FALLBACK_FACE_DECOY: [u8; 3] = [0xff, 0x00, 0x00];
 const FALLBACK_SPEC_DECOY: [u8; 3] = [0x00, 0x00, 0xff];
 
+/// The third decoy's colour: the foreground the fixture remaps the buffer's
+/// `default' face to. A remapped face is still a face, and the fallback must
+/// not follow it either (issue #556).
+const FALLBACK_REMAP_DECOY: [u8; 3] = [0x0a, 0x0b, 0x0c];
+
 /// The decoys appear nowhere else in the frame, so anything near a full swatch
 /// means the decoy won.
 const DECOY_PIXEL_CEILING: usize = 100;
@@ -173,9 +178,15 @@ fn xpm_named_colors_resolve_like_gnu_and_paint_that_way() {
         state["default-face-foreground"], state["frame-foreground"],
         "GNU keeps the frame's foreground-color and the default face's foreground equal: {state}"
     );
+    assert_eq!(
+        rgb16_to_rgb8(&state["face-remap-foreground"]),
+        Some(FALLBACK_REMAP_DECOY),
+        "the remapped default face foreground as the fixture reports it: {state}"
+    );
     for (label, decoy) in [
         ("fallback-face", FALLBACK_FACE_DECOY),
         ("fallback-spec", FALLBACK_SPEC_DECOY),
+        ("fallback-remap", FALLBACK_REMAP_DECOY),
     ] {
         let decoy_painted = count_pixels(&pixels, decoy);
         assert!(
