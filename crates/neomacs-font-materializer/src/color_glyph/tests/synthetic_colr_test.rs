@@ -7,10 +7,8 @@
 //! foreground palette index, palette alpha, a paint graph without any clip
 //! box, an unbounded graph, and composite layers.
 
+use super::test_support::{fixture_with_tables, glyph, glyph_bounds, rasterize, rasterize_at};
 use super::*;
-use crate::FontFileCache;
-use neomacs_display_protocol::font::{FontMemoryAsset, FontOutlineAsset};
-use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
 struct Rgba([u8; 4]);
@@ -23,84 +21,9 @@ const YELLOW: Rgba = Rgba([240, 220, 40, 255]);
 /// A filled rectangle: gradient sampling needs ink at every probe angle.
 const BLOCK: char = '\u{2588}';
 
-fn outline_fixture() -> Vec<u8> {
-    std::fs::read(neomacs_test_fonts::mplus_1_code_thin()).expect("read outline fixture")
-}
-
-/// (tag, payload) for every table in `bytes`.
-fn table_records(bytes: &[u8]) -> Vec<(u32, Vec<u8>)> {
-    let count = u16::from_be_bytes([bytes[4], bytes[5]]) as usize;
-    (0..count)
-        .map(|index| {
-            let record = &bytes[12 + index * 16..12 + index * 16 + 16];
-            let tag: [u8; 4] = record[0..4].try_into().expect("table tag");
-            let offset = u32::from_be_bytes(record[8..12].try_into().expect("offset")) as usize;
-            let length = u32::from_be_bytes(record[12..16].try_into().expect("length")) as usize;
-            (
-                u32::from_be_bytes(tag),
-                bytes[offset..offset + length].to_vec(),
-            )
-        })
-        .collect()
-}
-
 /// Add synthetic color tables to the outline fixture.
 fn font_with_color_tables(colr: Vec<u8>, cpal: Vec<u8>) -> Vec<u8> {
-    let base = outline_fixture();
-    let mut tables = table_records(&base);
-    // The fixture's signature covers the tables being replaced.
-    tables.retain(|(tag, _)| *tag != u32::from_be_bytes(*b"DSIG"));
-    tables.push((u32::from_be_bytes(*b"COLR"), colr));
-    tables.push((u32::from_be_bytes(*b"CPAL"), cpal));
-    FontFileCache::standalone_sfnt_from_tables(tables).expect("serialize synthetic color font")
-}
-
-fn asset(bytes: Vec<u8>, key: &str) -> FontOutlineAsset {
-    FontOutlineAsset::Memory(FontMemoryAsset::new(key, Arc::new(bytes), 0).expect("memory asset"))
-}
-
-/// The ink bounds of `c` in the outline fixture, in design units.
-fn glyph_bounds(c: char) -> ttf_parser::Rect {
-    let bytes = outline_fixture();
-    let face = ttf_parser::Face::parse(&bytes, 0).expect("outline fixture parses");
-    let glyph = face.glyph_index(c).expect("fixture maps the char");
-    face.glyph_bounding_box(glyph)
-        .expect("fixture glyph has ink")
-}
-
-/// A glyph id from the outline fixture, which every synthetic font reuses.
-fn glyph(c: char) -> u16 {
-    ttf_parser::Face::parse(&outline_fixture(), 0)
-        .expect("outline fixture parses")
-        .glyph_index(c)
-        .expect("fixture maps the char")
-        .0
-}
-
-fn rasterize(bytes: &[u8], key: &str, glyph: u16, foreground: [u8; 4]) -> Option<ColorGlyphRaster> {
-    rasterize_at(bytes, key, glyph, foreground, 48.0)
-}
-
-fn rasterize_at(
-    bytes: &[u8],
-    key: &str,
-    glyph: u16,
-    foreground: [u8; 4],
-    px_size: f32,
-) -> Option<ColorGlyphRaster> {
-    let asset = asset(bytes.to_vec(), key);
-    let mut rasterizer = ColorGlyphRasterizer::new();
-    rasterizer
-        .rasterize(
-            &asset,
-            &ColorGlyphRequest {
-                glyph_id: glyph,
-                px_size,
-                foreground,
-                ..ColorGlyphRequest::default()
-            },
-        )
-        .expect("synthetic source opens")
+    fixture_with_tables(&[(b"COLR", colr), (b"CPAL", cpal)])
 }
 
 /// Mean color of pixels with any coverage, in straight alpha.

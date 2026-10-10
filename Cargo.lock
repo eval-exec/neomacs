@@ -3975,6 +3975,7 @@ dependencies = [
  "freetype-rs",
  "neomacs-display-protocol",
  "neomacs-test-fonts",
+ "resvg",
  "thiserror 2.0.20",
  "tiny-skia",
  "tracing",
