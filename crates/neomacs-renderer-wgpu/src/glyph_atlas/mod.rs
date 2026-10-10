@@ -452,7 +452,6 @@ fn normalize_subpixel_mask(
 use pages::{GlyphAtlasPages, PageAllocResult};
 use types::*;
 
-/// Wgpu-based glyph atlas for text rendering
 /// Fold a face foreground into a glyph identity.
 ///
 /// Color rasters can resolve palette index 0xFFFF to the text foreground, so
@@ -529,6 +528,7 @@ impl RasterGlyphImage {
     }
 }
 
+/// Wgpu-based glyph atlas for text rendering
 pub struct WgpuGlyphAtlas {
     // FxHashMap, not std SipHash: these are looked up once per glyph every
     // frame (95%+ hit rate) with an internal, non-adversarial key -- the
@@ -1586,6 +1586,13 @@ impl WgpuGlyphAtlas {
             frame_font_bindings_identity(faces, fonts, char_fonts, shaped_clusters);
     }
 
+    /// Upsert one frame's resolved fonts, and classify which of them carry a
+    /// color source this atlas paints itself.
+    ///
+    /// The classification opens each font's file once per font-database
+    /// generation and feeds [`Self::color_font_ids`], which decides whether a
+    /// glyph's identity must fold in the text foreground (palette index
+    /// `0xFFFF` resolves to it).
     fn install_resolved_fonts<'a>(
         &mut self,
         fonts: impl Iterator<Item = &'a ResolvedFont> + Clone,

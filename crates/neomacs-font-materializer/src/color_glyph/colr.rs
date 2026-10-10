@@ -10,6 +10,11 @@
 //!
 //! * A basic fill with no bounding ancestor (no `PaintGlyph` clip and no
 //!   `ClipBox`) is unbounded, and must not render.
+//! * A fill with no shape of its own paints the clip in force: a `ClipBox`
+//!   alone (or an enclosing `PaintGlyph`) is what makes a bare fill bounded.
+//! * The clip that is a fill's own geometry is not applied to that fill a
+//!   second time; for a `PaintGlyph` the two are the same coverage field, and
+//!   multiplying them would square every antialiased edge.
 //! * Degenerate gradients paint nothing: a linear gradient whose axis
 //!   collapses onto its rotation reference, identical radial circles, a sweep
 //!   whose color line repeats around a single angle.
@@ -34,6 +39,15 @@ use ttf_parser::{Face, GlyphId, NormalizedCoordinate, OutlineBuilder, RgbaColor,
 /// about 160 px across.
 const MAX_SIDE: u32 = 1024;
 const MAX_PIXELS: u64 = MAX_SIDE as u64 * MAX_SIDE as u64;
+
+/// Caps on one recorded graph.  ttf-parser bounds recursion depth and detects
+/// cycles, but a legal graph can still fan out exponentially through the one
+/// `LayerList`; a real glyph stays orders of magnitude below these.
+const MAX_STEPS: usize = 1 << 15;
+const MAX_PATHS: usize = 1 << 12;
+
+/// One `F2DOT14` step, the smallest representable stop-offset gap.
+const F2DOT14_STEP: f32 = 1.0 / 16384.0;
 
 /// Index into the recorded path arena.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,6 +83,10 @@ enum Step {
 /// A recorded shader in font units.  Gradient stops are already sanitized and
 /// normalized into the shader's `[0, 1]` domain; the geometry is remapped to
 /// match, so no spread-mode adjustment is needed at paint time.
+///
+/// A sweep is recorded as a full-turn color line: the arc is folded into the
+/// stop list at record time, because tiny-skia skips its angle scale/bias
+/// stage when the start angle is zero and would then ignore the end angle.
 #[derive(Clone, Debug)]
 enum PaintRecord {
     Solid(RgbaColor),
@@ -88,10 +106,75 @@ enum PaintRecord {
     },
     Sweep {
         center: Point,
-        start_angle: f32,
-        end_angle: f32,
         stops: Vec<(f32, RgbaColor)>,
     },
+}
+
+/// Where a clip's own coverage came from.
+///
+/// A `PaintGlyph` fill and the clip it recorded are the same path; identity
+/// here is how a fill recognizes a clip that *is* its geometry rather than a
+/// bound on it, so that clip is not applied a second time.
+#[derive(Clone, Copy, Debug)]
+enum ClipSource {
+    Outline(Positioned),
+    Box {
+        clip_box: ClipBox,
+        transform: SkiaTransform,
+    },
+}
+
+impl ClipSource {
+    /// Whether the two cover the same region, which makes applying the second
+    /// a no-op for a fill that is the first.
+    ///
+    /// Outlines compare by geometry rather than by stored path: the same glyph
+    /// outlined twice — nested identical `PaintGlyph` clips, say — is the same
+    /// coverage field even though it has two path ids.
+    fn same_geometry(&self, other: &ClipSource, paths: &[Path]) -> bool {
+        match (self, other) {
+            (ClipSource::Outline(left), ClipSource::Outline(right)) => {
+                transform_matches(left.transform, right.transform)
+                    && match (left.path, right.path) {
+                        (Some(left), Some(right)) => paths_match(paths, left, right),
+                        _ => false,
+                    }
+            }
+            (
+                ClipSource::Box {
+                    clip_box: left,
+                    transform: left_transform,
+                },
+                ClipSource::Box {
+                    clip_box: right,
+                    transform: right_transform,
+                },
+            ) => left == right && transform_matches(*left_transform, *right_transform),
+            _ => false,
+        }
+    }
+}
+
+/// Exact geometry equality between two recorded paths.
+fn paths_match(paths: &[Path], left: PathId, right: PathId) -> bool {
+    if left == right {
+        return true;
+    }
+    let (Some(left), Some(right)) = (paths.get(left.0 as usize), paths.get(right.0 as usize))
+    else {
+        return false;
+    };
+    left.verbs() == right.verbs() && left.points() == right.points()
+}
+
+/// Exact transform equality: the two were composed from the same stack.
+fn transform_matches(left: SkiaTransform, right: SkiaTransform) -> bool {
+    left.sx.to_bits() == right.sx.to_bits()
+        && left.kx.to_bits() == right.kx.to_bits()
+        && left.ky.to_bits() == right.ky.to_bits()
+        && left.sy.to_bits() == right.sy.to_bits()
+        && left.tx.to_bits() == right.tx.to_bits()
+        && left.ty.to_bits() == right.ty.to_bits()
 }
 
 /// Maps a color line onto the shader's `t ∈ [0, 1]` domain.
@@ -153,8 +236,25 @@ impl<'a> GraphRecorder<'a> {
     }
 
     fn push_path(&mut self, path: Path) -> PathId {
+        if self.paths.len() >= MAX_PATHS {
+            self.malformed = true;
+            // A dangling id: nothing resolves it, and the graph is dropped.
+            return PathId(u32::MAX);
+        }
         self.paths.push(path);
         PathId(self.paths.len() as u32 - 1)
+    }
+
+    /// Record one step, or give up on the whole graph once the cap is hit.
+    ///
+    /// ttf-parser keeps traversing after the cap (the `Painter` trait cannot
+    /// stop it), so the recorder's job is only to stay cheap from here on.
+    fn record_step(&mut self, step: Step) {
+        if self.steps.len() >= MAX_STEPS {
+            self.malformed = true;
+            return;
+        }
+        self.steps.push(step);
     }
 
     fn record_paint(&mut self, paint: &Paint<'_>) -> Option<PaintRecord> {
@@ -254,7 +354,10 @@ impl<'a> GraphRecorder<'a> {
                     // exactly the pad form.
                     GradientExtend::Pad,
                 )?;
-                let (start_angle, end_angle, stops) = if gradient.start_angle > gradient.end_angle {
+                // Spec: the stored F2DOT14 is degrees biased by 180 — "add 1.0
+                // and multiply by 180°".  Halved, it is the fraction of a turn.
+                let turn = |raw: f32| (raw + 1.0) * 0.5;
+                let (start, end, stops) = if gradient.start_angle > gradient.end_angle {
                     // The arc runs the other way; the color line follows it.
                     let reversed = color_line
                         .stops
@@ -262,15 +365,38 @@ impl<'a> GraphRecorder<'a> {
                         .rev()
                         .map(|(offset, color)| (1.0 - offset, *color))
                         .collect();
-                    (gradient.end_angle, gradient.start_angle, reversed)
+                    (
+                        turn(gradient.end_angle),
+                        turn(gradient.start_angle),
+                        reversed,
+                    )
                 } else {
-                    (gradient.start_angle, gradient.end_angle, color_line.stops)
+                    (
+                        turn(gradient.start_angle),
+                        turn(gradient.end_angle),
+                        color_line.stops,
+                    )
                 };
+                // Fold the arc into a full-turn color line: before the arc the
+                // first colour holds, after it the last.  Equal angles collapse
+                // to a hard cut between the two, which is the pad limit.
+                let first = stops.first().map(|(_, color)| *color)?;
+                let last = stops.last().map(|(_, color)| *color)?;
+                let mut folded = Vec::with_capacity(stops.len() + 2);
+                if start > 0.0 {
+                    folded.push((0.0, first));
+                }
+                folded.extend(
+                    stops
+                        .into_iter()
+                        .map(|(offset, color)| (start + offset * (end - start), color)),
+                );
+                if end < 1.0 {
+                    folded.push((1.0, last));
+                }
                 Some(PaintRecord::Sweep {
                     center: Point::from_xy(gradient.center_x, gradient.center_y),
-                    start_angle,
-                    end_angle,
-                    stops,
+                    stops: sanitize_unit_stops(folded),
                 })
             }
         }
@@ -302,8 +428,16 @@ impl<'a> GraphRecorder<'a> {
                 // Spec: repeat/reflect around a single offset is ill-formed.
                 return None;
             }
+            // Spec: with every stop at one offset the first colour holds
+            // below it and the last holds at and above it — a hard cut, not a
+            // ramp.  Resampling the two-stop form also lands the cut correctly
+            // when the offset lies outside the unit domain.
+            let cut = [
+                (first, stops[0].1),
+                (first + F2DOT14_STEP, stops[stops.len() - 1].1),
+            ];
             return Some(ColorLine {
-                stops: vec![(0.0, stops[0].1), (1.0, stops[stops.len() - 1].1)],
+                stops: resample_to_unit_domain(&cut),
                 spread: SpreadMode::Pad,
                 omega_start: 0.0,
                 omega_span: 1.0,
@@ -399,7 +533,7 @@ fn mix_color(from: RgbaColor, to: RgbaColor, t: f32) -> RgbaColor {
 /// stops at one position, so the later color moves by one `F2DOT14` step,
 /// which is invisible at any raster size while still ordering the pair.
 fn sanitize_unit_stops(stops: Vec<(f32, RgbaColor)>) -> Vec<(f32, RgbaColor)> {
-    const STEP: f32 = 1.0 / 16384.0;
+    const STEP: f32 = F2DOT14_STEP;
     let mut out: Vec<(f32, RgbaColor)> = Vec::with_capacity(stops.len());
     let mut index = 0;
     while index < stops.len() {
@@ -425,22 +559,24 @@ fn sanitize_unit_stops(stops: Vec<(f32, RgbaColor)>) -> Vec<(f32, RgbaColor)> {
 
 impl<'a> Painter<'a> for GraphRecorder<'a> {
     fn outline_glyph(&mut self, glyph_id: GlyphId) {
-        let mut outline = GlyphPath::default();
-        let outlined = self.face.outline_glyph(glyph_id, &mut outline);
-        if outlined.is_none() && outline.empty {
-            // No outline: the current path stays empty, so a fill paints
-            // nothing and a clip clips everything away.
-            self.outlined = None;
+        if self.malformed {
             return;
         }
+        let mut outline = GlyphPath::default();
+        self.face.outline_glyph(glyph_id, &mut outline);
+        // No outline leaves the stored path empty, so a fill paints nothing
+        // and a clip clips everything away.
         self.outlined = outline.finish().map(|path| self.push_path(path));
     }
 
     fn paint(&mut self, paint: Paint<'a>) {
+        if self.malformed {
+            return;
+        }
         let Some(record) = self.record_paint(&paint) else {
             return;
         };
-        self.steps.push(Step::Fill {
+        let step = Step::Fill {
             shape: self.positioned(self.outlined),
             paint: record,
             // A fill is bounded by a bounding ancestor or by its own shape.
@@ -449,34 +585,55 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
             // fill with neither — a bare `PaintSolid` reached without a path —
             // is unbounded, and the spec requires it not to render.
             bounded: self.bounding_depth > 0 || self.outlined.is_some(),
-        });
+        };
+        self.record_step(step);
     }
 
     fn push_clip(&mut self) {
-        self.steps
-            .push(Step::PushClip(self.positioned(self.outlined)));
+        if self.malformed {
+            return;
+        }
+        let step = Step::PushClip(self.positioned(self.outlined));
+        self.record_step(step);
         self.bounding_depth += 1;
     }
 
     fn push_clip_box(&mut self, clip_box: ClipBox) {
-        self.steps.push(Step::PushClipBox {
+        if self.malformed {
+            return;
+        }
+        let step = Step::PushClipBox {
             clip_box,
             transform: self.current_transform(),
-        });
+        };
+        self.record_step(step);
         self.bounding_depth += 1;
     }
 
     fn pop_clip(&mut self) {
-        self.steps.push(Step::PopClip);
+        if self.malformed {
+            return;
+        }
+        self.record_step(Step::PopClip);
         self.bounding_depth = self.bounding_depth.saturating_sub(1);
+        // The outline scoped to that clip is gone with it: a fill recorded
+        // after the pop has no shape of its own and paints the clip in force
+        // (or is unbounded, when none is).
+        self.outlined = None;
     }
 
     fn push_layer(&mut self, mode: CompositeMode) {
-        self.steps.push(Step::PushLayer(mode));
+        if self.malformed {
+            return;
+        }
+        self.record_step(Step::PushLayer(mode));
     }
 
     fn pop_layer(&mut self) {
-        self.steps.push(Step::PopLayer);
+        if self.malformed {
+            return;
+        }
+        self.record_step(Step::PopLayer);
     }
 
     fn push_transform(&mut self, transform: Transform) {
@@ -524,36 +681,30 @@ fn transform_is_invertible(transform: &Transform) -> bool {
 #[derive(Default)]
 struct GlyphPath {
     builder: PathBuilder,
-    empty: bool,
 }
 
 impl GlyphPath {
+    /// `None` for an outline with no contours: `PathBuilder::finish` already
+    /// reports an empty builder that way.
     fn finish(self) -> Option<Path> {
-        if self.empty {
-            return None;
-        }
         self.builder.finish()
     }
 }
 
 impl OutlineBuilder for GlyphPath {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.empty = false;
         self.builder.move_to(x, y);
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.empty = false;
         self.builder.line_to(x, y);
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        self.empty = false;
         self.builder.quad_to(x1, y1, x, y);
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        self.empty = false;
         self.builder.cubic_to(x1, y1, x2, y2, x, y);
     }
 
@@ -647,10 +798,21 @@ struct DeviceBounds {
     height_cells: u32,
 }
 
+/// One clip in force during measurement: its own bounds, where that coverage
+/// came from, and — for a clip box — the rect a shapeless fill can adopt.
+struct MeasureClip {
+    own: Option<RectF>,
+    source: ClipSource,
+}
+
 /// Union of every bounded fill's transformed bounds, intersected with the clip
 /// stack in force when it was recorded.
+///
+/// A clip whose source *is* the fill's own geometry is skipped: it bounds the
+/// fill by being its shape, and multiplying it in again would square every
+/// antialiased edge.
 fn measure(recorder: &GraphRecorder<'_>, device: SkiaTransform) -> Option<DeviceBounds> {
-    let mut clips: Vec<Option<RectF>> = Vec::new();
+    let mut clips: Vec<MeasureClip> = Vec::new();
     let mut union: Option<RectF> = None;
     for step in &recorder.steps {
         match step {
@@ -658,14 +820,18 @@ fn measure(recorder: &GraphRecorder<'_>, device: SkiaTransform) -> Option<Device
                 if !bounded {
                     continue;
                 }
-                let Some(shape_bounds) = shape_bounds(recorder, shape, device) else {
+                let Some((bounds, source)) = measure_geometry(recorder, shape, &clips, device)
+                else {
                     continue;
                 };
                 let clipped = clips
                     .iter()
-                    .flatten()
-                    .copied()
-                    .try_fold(shape_bounds, |current, clip| current.intersect(clip));
+                    .filter(|clip| !clip.source.same_geometry(&source, &recorder.paths))
+                    .try_fold(bounds, |current, clip| {
+                        // An empty clip — an outline with no contours — hides
+                        // everything under it.
+                        current.intersect(clip.own?)
+                    });
                 if let Some(clipped) = clipped {
                     union = Some(match union {
                         Some(union) => union.union(clipped),
@@ -673,11 +839,20 @@ fn measure(recorder: &GraphRecorder<'_>, device: SkiaTransform) -> Option<Device
                     });
                 }
             }
-            Step::PushClip(positioned) => clips.push(shape_bounds(recorder, positioned, device)),
+            Step::PushClip(positioned) => clips.push(MeasureClip {
+                own: shape_bounds(recorder, positioned, device),
+                source: ClipSource::Outline(*positioned),
+            }),
             Step::PushClipBox {
                 clip_box,
                 transform,
-            } => clips.push(clip_box_bounds(*clip_box, *transform, device)),
+            } => clips.push(MeasureClip {
+                own: clip_box_bounds(*clip_box, *transform, device),
+                source: ClipSource::Box {
+                    clip_box: *clip_box,
+                    transform: *transform,
+                },
+            }),
             Step::PopClip => {
                 clips.pop();
             }
@@ -685,26 +860,62 @@ fn measure(recorder: &GraphRecorder<'_>, device: SkiaTransform) -> Option<Device
         }
     }
     let union = union?;
-    let left_px = union.x_min.floor() as i32;
-    let top_px = union.y_min.floor() as i32;
-    let right_px = union.x_max.ceil() as i32;
-    let bottom_px = union.y_max.ceil() as i32;
-    let width_cells = u32::try_from(right_px - left_px).ok()?;
-    let height_cells = u32::try_from(bottom_px - top_px).ok()?;
-    if width_cells == 0
-        || height_cells == 0
-        || width_cells > MAX_SIDE
-        || height_cells > MAX_SIDE
-        || u64::from(width_cells) * u64::from(height_cells) > MAX_PIXELS
-    {
+    // Widths first, in the measurement's own space: casting the edges to i32
+    // and subtracting them can overflow once a transform pushed the glyph
+    // past the type's range.
+    let left = union.x_min.floor();
+    let top = union.y_min.floor();
+    let width = union.x_max.ceil() - left;
+    let height = union.y_max.ceil() - top;
+    let cap = MAX_SIDE as f32;
+    if !(1.0..=cap).contains(&width) || !(1.0..=cap).contains(&height) {
+        return None;
+    }
+    let width_cells = width as u32;
+    let height_cells = height as u32;
+    if u64::from(width_cells) * u64::from(height_cells) > MAX_PIXELS {
         return None;
     }
     Some(DeviceBounds {
-        left_px,
-        top_px,
+        left_px: left as i32,
+        top_px: top as i32,
         width_cells,
         height_cells,
     })
+}
+
+/// The region a fill paints, per the recorded graph: its own shape, or the
+/// clip in force when it has none — the spec makes that clip the fill's shape.
+fn measure_geometry(
+    recorder: &GraphRecorder<'_>,
+    shape: &Positioned,
+    clips: &[MeasureClip],
+    device: SkiaTransform,
+) -> Option<(RectF, ClipSource)> {
+    if shape.path.is_some() {
+        let bounds = shape_bounds(recorder, shape, device)?;
+        return Some((bounds, ClipSource::Outline(*shape)));
+    }
+    match clips.last()?.source {
+        ClipSource::Outline(outline) if outline.path.is_some() => {
+            let bounds = shape_bounds(recorder, &outline, device)?;
+            Some((bounds, ClipSource::Outline(outline)))
+        }
+        ClipSource::Box {
+            clip_box,
+            transform,
+        } => {
+            let bounds = clip_box_bounds(clip_box, transform, device)?;
+            Some((
+                bounds,
+                ClipSource::Box {
+                    clip_box,
+                    transform,
+                },
+            ))
+        }
+        ClipSource::Outline(_) => None,
+    }
 }
 
 /// Axis-aligned device-space bounds of a positioned path.
@@ -806,14 +1017,63 @@ impl RectF {
     }
 }
 
+/// One clip in force: its own coverage, the coverage of every clip down to it,
+/// and where its own coverage came from.
+struct ClipFrame {
+    own: Mask,
+    cumulative: Mask,
+    source: ClipSource,
+    /// The rect a `ClipBox` frame clips to, kept so a shapeless fill under it
+    /// can adopt that rect as its own shape.
+    box_path: Option<Path>,
+}
+
 /// Replays recorded steps onto a pixmap: clip stack, layer stack, fills.
 struct RasterState<'a> {
     paths: &'a [Path],
     /// Pixel = transform(font units); graph transforms are composed per step.
     transform: SkiaTransform,
-    clips: Vec<Option<Mask>>,
+    clips: Vec<ClipFrame>,
     layers: Vec<(Pixmap, CompositeMode)>,
     size: (u32, u32),
+}
+
+/// The region a fill paints, for replay: its own recorded shape, or — when it
+/// has none — the clip in force, whose own path the spec makes the fill's
+/// shape.
+///
+/// Returns the source identity alongside so the caller can leave that one clip
+/// out of the mask: it bounds the fill by being its shape, not by narrowing it
+/// a second time.
+fn replay_geometry<'a>(
+    paths: &'a [Path],
+    clips: &'a [ClipFrame],
+    device: SkiaTransform,
+    shape: &Positioned,
+) -> Option<(&'a Path, SkiaTransform, ClipSource)> {
+    if shape.path.is_some() {
+        let (path, transform) = resolve(paths, device, shape)?;
+        return Some((path, transform, ClipSource::Outline(*shape)));
+    }
+    let frame = clips.last()?;
+    match frame.source {
+        ClipSource::Outline(outline) if outline.path.is_some() => {
+            let (path, transform) = resolve(paths, device, &outline)?;
+            Some((path, transform, ClipSource::Outline(outline)))
+        }
+        ClipSource::Box {
+            clip_box,
+            transform,
+        } => Some((
+            frame.box_path.as_ref()?,
+            device.pre_concat(transform),
+            ClipSource::Box {
+                clip_box,
+                transform,
+            },
+        )),
+        ClipSource::Outline(_) => None,
+    }
 }
 
 /// Apply a step's graph transform on top of the device transform.
@@ -848,17 +1108,41 @@ impl<'a> RasterState<'a> {
                     bounded,
                 } => {
                     if !*bounded {
-                        // The spec forbids rendering an unbounded fill.
+                        // The spec forbids rendering an unbounded fill; the
+                        // record pass already drops a glyph containing one.
                         tracing::trace!(target: "font_boundary", "skipping unbounded color fill");
                         continue;
                     }
-                    let Some((path, transform)) = resolve(self.paths, self.transform, shape) else {
-                        continue;
-                    };
                     let Some(paint) = build_skia_paint(paint) else {
                         continue;
                     };
-                    let clip = self.clips.last().and_then(Option::as_ref);
+                    let Some((path, transform, source)) =
+                        replay_geometry(self.paths, &self.clips, self.transform, shape)
+                    else {
+                        continue;
+                    };
+                    // The fill's own clip is left out of the mask: the fill's
+                    // path already carries its coverage, and multiplying it in
+                    // again would square every antialiased edge.
+                    let mut folded: Option<Mask> = None;
+                    let clip: Option<&Mask> = if self
+                        .clips
+                        .iter()
+                        .any(|frame| frame.source.same_geometry(&source, self.paths))
+                    {
+                        for frame in &self.clips {
+                            if frame.source.same_geometry(&source, self.paths) {
+                                continue;
+                            }
+                            match &mut folded {
+                                Some(mask) => intersect_masks(&frame.own, mask),
+                                None => folded = Some(frame.own.clone()),
+                            }
+                        }
+                        folded.as_ref()
+                    } else {
+                        self.clips.last().map(|frame| &frame.cumulative)
+                    };
                     let target = match self.layers.last_mut() {
                         Some((layer, _)) => layer,
                         None => &mut *surface,
@@ -866,48 +1150,59 @@ impl<'a> RasterState<'a> {
                     target.fill_path(path, &paint, FillRule::Winding, transform, clip);
                 }
                 Step::PushClip(positioned) => {
-                    let Some(mut mask) = Mask::new(self.size.0, self.size.1) else {
+                    let Some(mut own) = Mask::new(self.size.0, self.size.1) else {
                         return false;
                     };
-                    let clip = match resolve(self.paths, self.transform, positioned) {
-                        Some((path, transform)) => {
-                            mask.fill_path(path, FillRule::Winding, true, transform);
-                            if let Some(parent) = self.clips.last().and_then(Option::as_ref) {
-                                intersect_masks(parent, &mut mask);
-                            }
-                            Some(mask)
-                        }
-                        // A clip with no shape clips everything away.
-                        None => None,
-                    };
-                    self.clips.push(clip);
+                    if let Some((path, transform)) = resolve(self.paths, self.transform, positioned)
+                    {
+                        own.fill_path(path, FillRule::Winding, true, transform);
+                    }
+                    // A clip with no shape leaves its mask empty, so it hides
+                    // everything under it, as the record pass intends.
+                    let mut cumulative = own.clone();
+                    if let Some(parent) = self.clips.last() {
+                        intersect_masks(&parent.cumulative, &mut cumulative);
+                    }
+                    self.clips.push(ClipFrame {
+                        own,
+                        cumulative,
+                        source: ClipSource::Outline(*positioned),
+                        box_path: None,
+                    });
                 }
                 Step::PushClipBox {
                     clip_box,
                     transform,
                 } => {
-                    let Some(mut mask) = Mask::new(self.size.0, self.size.1) else {
+                    let Some(mut own) = Mask::new(self.size.0, self.size.1) else {
                         return false;
                     };
                     let matrix = self.transform.pre_concat(*transform);
-                    let Some(rect) = tiny_skia::Rect::from_ltrb(
+                    // A degenerate box has no rect to clip to, which leaves
+                    // the mask empty: nothing inside the box renders.
+                    let box_path = tiny_skia::Rect::from_ltrb(
                         clip_box.x_min,
                         clip_box.y_min,
                         clip_box.x_max,
                         clip_box.y_max,
-                    ) else {
-                        return false;
-                    };
-                    mask.fill_path(
-                        &PathBuilder::from_rect(rect),
-                        FillRule::Winding,
-                        true,
-                        matrix,
-                    );
-                    if let Some(parent) = self.clips.last().and_then(Option::as_ref) {
-                        intersect_masks(parent, &mut mask);
+                    )
+                    .map(PathBuilder::from_rect);
+                    if let Some(path) = &box_path {
+                        own.fill_path(path, FillRule::Winding, true, matrix);
                     }
-                    self.clips.push(Some(mask));
+                    let mut cumulative = own.clone();
+                    if let Some(parent) = self.clips.last() {
+                        intersect_masks(&parent.cumulative, &mut cumulative);
+                    }
+                    self.clips.push(ClipFrame {
+                        own,
+                        cumulative,
+                        source: ClipSource::Box {
+                            clip_box: *clip_box,
+                            transform: *transform,
+                        },
+                        box_path,
+                    });
                 }
                 Step::PopClip => {
                     if self.clips.pop().is_none() {
@@ -921,19 +1216,13 @@ impl<'a> RasterState<'a> {
                     self.layers.push((layer, *mode));
                 }
                 Step::PopLayer => {
-                    let Some((mut layer, mode)) = self.layers.pop() else {
+                    let Some((layer, mode)) = self.layers.pop() else {
                         return false;
                     };
-                    // Fills inside the layer already applied the clip in
-                    // force, so applying it again here would multiply every
-                    // antialiased edge by its own coverage twice and erode the
-                    // artwork.  Only a mode that can change the destination
-                    // outside the clip needs the extra bound.
-                    if !matches!(mode, CompositeMode::SourceOver)
-                        && let Some(mask) = self.clips.last().and_then(Option::as_ref)
-                    {
-                        layer.apply_mask(mask);
-                    }
+                    // No extra masking here: every fill already carried the
+                    // clip when it was painted, so the layer holds the clip's
+                    // coverage exactly once, and compositing two clipped
+                    // bitmaps confines the result to the clip for every mode.
                     let target = match self.layers.last_mut() {
                         Some((parent, _)) => parent,
                         None => &mut *surface,
@@ -957,6 +1246,20 @@ impl<'a> RasterState<'a> {
     }
 }
 
+/// Narrow `child`'s coverage by `parent`'s.
+///
+/// The clips in force on one fill are a conjunction: nested `PaintGlyph` clips
+/// and a `ClipBox` all bound it.  Multiplying coverages approximates the
+/// intersection and keeps paint-time clipping identical to the measurement
+/// pass, which intersects the same clips.  The one clip that *is* the fill's
+/// own geometry is left out by both passes: it bounds the fill by being the
+/// shape it paints, and multiplying it in would square every edge.
+fn intersect_masks(parent: &Mask, child: &mut Mask) {
+    for (child_byte, parent_byte) in child.data_mut().iter_mut().zip(parent.data()) {
+        *child_byte = ((u16::from(*child_byte) * u16::from(*parent_byte) + 127) / 255) as u8;
+    }
+}
+
 /// Build the tiny-skia paint for one recorded shader.
 ///
 /// The shader transform is the identity on purpose: tiny-skia evaluates shader
@@ -965,18 +1268,6 @@ impl<'a> RasterState<'a> {
 /// transform).  Graph transforms still reach the shader, because the fill's
 /// transform moves the path and the shader's geometry is in the same space as
 /// the path.
-/// Narrow `child`'s coverage by `parent`'s.
-///
-/// The clip stack is a conjunction: nested `PaintGlyph` clips and a `ClipBox`
-/// all bound the same fill.  Multiplying coverages approximates the
-/// intersection and keeps paint-time clipping identical to the measurement
-/// pass, which intersects every active clip.
-fn intersect_masks(parent: &Mask, child: &mut Mask) {
-    for (child_byte, parent_byte) in child.data_mut().iter_mut().zip(parent.data()) {
-        *child_byte = ((u16::from(*child_byte) * u16::from(*parent_byte) + 127) / 255) as u8;
-    }
-}
-
 fn build_skia_paint(record: &PaintRecord) -> Option<SkiaPaint<'static>> {
     let solid = |color: RgbaColor| SkiaPaint {
         shader: Shader::SolidColor(to_skia_color(color)),
@@ -1024,16 +1315,14 @@ fn build_skia_paint(record: &PaintRecord) -> Option<SkiaPaint<'static>> {
             )?,
             ..SkiaPaint::default()
         },
-        PaintRecord::Sweep {
-            center,
-            start_angle,
-            end_angle,
-            stops,
-        } => SkiaPaint {
+        PaintRecord::Sweep { center, stops } => SkiaPaint {
+            // The arc is already folded into `stops` over a full turn; a
+            // full-circle sweep is the one form tiny-skia evaluates without
+            // its angle scale/bias stage.
             shader: tiny_skia::SweepGradient::new(
                 *center,
-                *start_angle,
-                *end_angle,
+                0.0,
+                360.0,
                 gradient_stops(stops),
                 SpreadMode::Pad,
                 SkiaTransform::identity(),

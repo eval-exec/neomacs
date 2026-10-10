@@ -220,15 +220,50 @@ fn colr_v1_table_with_clip_box(
     paint: &[u8],
     clip_box: Option<(i16, i16, i16, i16)>,
 ) -> Vec<u8> {
+    colr_v1_table_full(base, paint, None, clip_box)
+}
+
+/// Version 1 `COLR` with a `LayerList` holding `layers`, for paint graphs the
+/// root reaches through `PaintColrLayers`.
+fn colr_v1_table_with_layers(
+    base: u16,
+    paint: &[u8],
+    layers: &[Vec<u8>],
+    clip_box: Option<(i16, i16, i16, i16)>,
+) -> Vec<u8> {
+    colr_v1_table_full(base, paint, Some(layers), clip_box)
+}
+
+/// A `LayerList` with `layers` as paint tables, offsets from the list start.
+fn layer_list_bytes(layers: &[Vec<u8>]) -> Vec<u8> {
+    let mut list = Vec::new();
+    list.extend_from_slice(&(layers.len() as u32).to_be_bytes());
+    let mut offset = 4 + 4 * layers.len() as u32;
+    for layer in layers {
+        list.extend_from_slice(&offset.to_be_bytes());
+        offset += layer.len() as u32;
+    }
+    for layer in layers {
+        list.extend_from_slice(layer);
+    }
+    list
+}
+
+fn colr_v1_table_full(
+    base: u16,
+    paint: &[u8],
+    layers: Option<&[Vec<u8>]>,
+    clip_box: Option<(i16, i16, i16, i16)>,
+) -> Vec<u8> {
     let base_glyph_list_offset = 34u32;
     let list_header = 4 + 6; // count + one BaseGlyphPaintRecord
+    let layer_list = layers.map(layer_list_bytes);
+    let paint_end = base_glyph_list_offset + list_header + paint.len() as u32;
+    let layer_list_offset = if layer_list.is_some() { paint_end } else { 0 };
+    let table_end = paint_end + layer_list.as_ref().map_or(0, Vec::len) as u32;
     // A non-zero offset with no ClipList behind it makes ttf-parser reject the
     // whole table, so the field stays zero when there is nothing to point at.
-    let clip_list_offset = if clip_box.is_some() {
-        base_glyph_list_offset + list_header + paint.len() as u32
-    } else {
-        0
-    };
+    let clip_list_offset = if clip_box.is_some() { table_end } else { 0 };
     let mut table = Vec::new();
     table.extend_from_slice(&1u16.to_be_bytes()); // version
     table.extend_from_slice(&0u16.to_be_bytes()); // numBaseGlyphRecords
@@ -236,7 +271,7 @@ fn colr_v1_table_with_clip_box(
     table.extend_from_slice(&0u32.to_be_bytes()); // layerRecordsOffset
     table.extend_from_slice(&0u16.to_be_bytes()); // numLayerRecords
     table.extend_from_slice(&base_glyph_list_offset.to_be_bytes());
-    table.extend_from_slice(&0u32.to_be_bytes()); // layerListOffset
+    table.extend_from_slice(&layer_list_offset.to_be_bytes());
     table.extend_from_slice(&clip_list_offset.to_be_bytes());
     table.extend_from_slice(&0u32.to_be_bytes()); // varIndexMapOffset
     table.extend_from_slice(&0u32.to_be_bytes()); // itemVariationStoreOffset
@@ -244,6 +279,9 @@ fn colr_v1_table_with_clip_box(
     table.extend_from_slice(&base.to_be_bytes());
     table.extend_from_slice(&list_header.to_be_bytes()); // paint, from the list start
     table.extend_from_slice(paint);
+    if let Some(layer_list) = layer_list {
+        table.extend_from_slice(&layer_list);
+    }
     if let Some((x_min, y_min, x_max, y_max)) = clip_box {
         table.push(1); // ClipList format
         table.extend_from_slice(&1u32.to_be_bytes()); // numClips
@@ -302,13 +340,17 @@ fn paint_linear_gradient(
     paint
 }
 
-/// Format 8: a sweep gradient around `center`, 0 degrees pointing +x in the
-/// design grid, measured counter-clockwise as the spec defines it.
+/// Format 8: a sweep gradient around `center`, in counter-clockwise degrees
+/// from +x in the design grid, as the spec defines them.
+///
+/// The spec stores degrees biased by 180 ("add 1.0 and multiply by 180° to
+/// retrieve counter-clockwise degrees"), and the builder takes the degrees so
+/// tests cannot repeat the mistake of encoding them raw.
 fn paint_sweep_gradient(
     center_x: i16,
     center_y: i16,
-    start: f32,
-    end: f32,
+    start_degrees: f32,
+    end_degrees: f32,
     stops: &[(f32, u16)],
 ) -> Vec<u8> {
     let mut color_line = vec![0u8]; // extend: pad
@@ -324,9 +366,34 @@ fn paint_sweep_gradient(
     for value in [center_x, center_y] {
         paint.extend_from_slice(&value.to_be_bytes());
     }
-    paint.extend_from_slice(&f2dot14(start).to_be_bytes());
-    paint.extend_from_slice(&f2dot14(end).to_be_bytes());
+    for degrees in [start_degrees, end_degrees] {
+        paint.extend_from_slice(&f2dot14(degrees / 180.0 - 1.0).to_be_bytes());
+    }
     paint.extend_from_slice(&color_line);
+    paint
+}
+
+/// Format 1: the layer list range is painted bottom-up.
+fn paint_colr_layers(first_layer_index: u32, layers_count: u8) -> Vec<u8> {
+    let mut paint = vec![1u8];
+    paint.push(layers_count);
+    paint.extend_from_slice(&first_layer_index.to_be_bytes());
+    paint
+}
+
+/// Format 12: an affine transform applied to `child`. Matrix values are
+/// 16.16 fixed point, in the order xx, yx, xy, yy, dx, dy.
+fn paint_transform(child: &[u8], matrix: [f32; 6]) -> Vec<u8> {
+    const HEADER: u32 = 1 + 3 + 3;
+    const MATRIX: u32 = 24;
+    let mut paint = vec![12u8];
+    paint.extend_from_slice(&offset24(HEADER + MATRIX)); // child, after the matrix
+    paint.extend_from_slice(&offset24(HEADER)); // Affine2x3
+    for value in matrix {
+        let fixed = (f64::from(value) * 65536.0).round() as i32;
+        paint.extend_from_slice(&fixed.to_be_bytes());
+    }
+    paint.extend_from_slice(child);
     paint
 }
 
@@ -469,12 +536,7 @@ fn clip_box_bounds_the_raster() {
         colr_v1_table_with_clip_box(
             base,
             &paint,
-            Some((
-                bounds.x_min,
-                bounds.y_min,
-                half,
-                bounds.y_max,
-            )),
+            Some((bounds.x_min, bounds.y_min, half, bounds.y_max)),
         ),
         cpal_table(&[RED]),
     );
@@ -507,14 +569,14 @@ fn source_over_composite_does_not_erode_edges() {
     // square the edge alpha.
     let base = glyph('O');
     let invisible = Rgba([0, 0, 0, 0]);
-    // A box whose right edge cuts through the ink at a fractional device
-    // position: that is where a second application of the same mask to the
-    // composited layer would square the edge coverage.
+    // A box whose right edge cuts through the ring's ink at a fractional
+    // device position: that is where a second application of the same mask to
+    // the composited layer would square the edge coverage.
     let bounds = glyph_bounds('O');
     let clip_box = Some((
         bounds.x_min,
         bounds.y_min,
-        i16::midpoint(bounds.x_min, bounds.x_max) + 3,
+        bounds.x_min + 3 * (bounds.x_max - bounds.x_min) / 4,
         bounds.y_max,
     ));
     let plain = font_with_color_tables(
@@ -663,8 +725,9 @@ fn colrv1_sweep_gradient_follows_the_design_grid_angles() {
         ]
     };
     let reach = f32::from(bounds.x_max - bounds.x_min) * 0.35;
-    // The +x probe must sit strictly on one side of the center row: exactly on
-    // it, tiny-skia's angle lands on the sweep's seam (t = 1, the last stop).
+    // The shader's unit angle wraps at +x, where t = 0 — the first stop. A
+    // hair below the axis still rounds onto the center row, which is the seam
+    // row itself.
     let right = sample(reach, -reach * 0.02);
     let above = sample(0.0, reach);
     let below = sample(0.0, -reach);
@@ -713,5 +776,457 @@ fn nested_paint_glyph_clips_intersect() {
     assert!(
         ring_left.is_some(),
         "the outer clip's own stroke must still be painted"
+    );
+}
+
+// --- paint graph fidelity regressions ------------------------------------
+
+/// A `PaintGlyph` clip and the fill it bounds are the same path.  Repainting
+/// that fill through the clip's own coverage multiplies every antialiased
+/// edge by itself, so version 1 artwork would render thinner than the same
+/// shape through a version 0 layer record.  One painter serves both versions,
+/// so the two rasters must agree exactly.
+#[test]
+fn paint_glyph_edges_match_version0_layers() {
+    let (base, layer) = (glyph('A'), glyph('O'));
+    let version0 = font_with_color_tables(colr_v0_table(base, &[(layer, 0)]), cpal_table(&[RED]));
+    let version1 = font_with_color_tables(
+        colr_v1_table(base, &paint_glyph(layer, &paint_solid(0, 1.0))),
+        cpal_table(&[RED]),
+    );
+    let flat = rasterize_at(&version0, "synthetic:v0-edges", base, [0, 0, 0, 255], 64.0)
+        .expect("the version 0 layer paints");
+    let painted = rasterize_at(&version1, "synthetic:v1-edges", base, [0, 0, 0, 255], 64.0)
+        .expect("the version 1 fill paints");
+    assert_eq!((flat.width, flat.height), (painted.width, painted.height));
+    let partial = flat
+        .rgba
+        .chunks_exact(4)
+        .filter(|pixel| (1..255).contains(&pixel[3]))
+        .count();
+    assert!(
+        partial > 12,
+        "the shape needs antialiased edges for the probe: {partial} partial pixels"
+    );
+    let worst = flat
+        .rgba
+        .iter()
+        .zip(&painted.rgba)
+        .map(|(flat, painted)| flat.abs_diff(*painted))
+        .max()
+        .expect("rasters have pixels");
+    assert!(
+        worst <= 2,
+        "the clip was applied to its own fill: worst channel delta {worst}"
+    );
+}
+
+/// The same clip pushed twice around the same fill must not compound: the
+/// region it paints is one copy of the outline.
+#[test]
+fn nested_identical_clips_apply_once() {
+    let (base, layer) = (glyph('A'), glyph('O'));
+    let once = font_with_color_tables(
+        colr_v1_table(base, &paint_glyph(layer, &paint_solid(0, 1.0))),
+        cpal_table(&[RED]),
+    );
+    let twice = font_with_color_tables(
+        colr_v1_table(
+            base,
+            &paint_glyph(layer, &paint_glyph(layer, &paint_solid(0, 1.0))),
+        ),
+        cpal_table(&[RED]),
+    );
+    let once = rasterize_at(&once, "synthetic:one-clip", base, [0, 0, 0, 255], 64.0)
+        .expect("a single clip paints");
+    let twice = rasterize_at(&twice, "synthetic:two-clips", base, [0, 0, 0, 255], 64.0)
+        .expect("nested identical clips paint");
+    assert_eq!((once.width, once.height), (twice.width, twice.height));
+    let worst = once
+        .rgba
+        .iter()
+        .zip(&twice.rgba)
+        .map(|(once, twice)| once.abs_diff(*twice))
+        .max()
+        .expect("rasters have pixels");
+    assert!(
+        worst <= 2,
+        "an identical clip was applied twice: worst channel delta {worst}"
+    );
+}
+
+/// Spec: a clip box makes the color glyph bounded without inspecting the
+/// graph, so a root fill with no shape of its own paints the box.
+#[test]
+fn clip_box_bounds_a_shapeless_fill() {
+    let base = glyph(BLOCK);
+    let bounds = glyph_bounds(BLOCK);
+    let half = i16::midpoint(bounds.x_min, bounds.x_max);
+    let full = font_with_color_tables(
+        colr_v1_table(base, &paint_glyph(base, &paint_solid(0, 1.0))),
+        cpal_table(&[RED]),
+    );
+    let boxed = font_with_color_tables(
+        colr_v1_table_with_clip_box(
+            base,
+            &paint_solid(0, 1.0),
+            Some((bounds.x_min, bounds.y_min, half, bounds.y_max)),
+        ),
+        cpal_table(&[RED]),
+    );
+    let full = rasterize_at(
+        &full,
+        "synthetic:box-solid-full",
+        base,
+        [0, 0, 0, 255],
+        64.0,
+    )
+    .expect("the shaped fill paints");
+    let cut = rasterize_at(&boxed, "synthetic:box-solid", base, [0, 0, 0, 255], 64.0)
+        .expect("the clip box alone bounds the fill, so it must paint");
+    let half_width = full.width as i32 / 2;
+    assert!(
+        (half_width - 3..=half_width + 3).contains(&(cut.width as i32)),
+        "the box is half the glyph but the raster is {} px of {}",
+        cut.width,
+        full.width
+    );
+    assert!(
+        cut.rgba.chunks_exact(4).any(|pixel| pixel[3] == 255),
+        "the box interior must be filled"
+    );
+}
+
+/// Spec: an outline with no contours puts an empty clip in force.  Everything
+/// inside it must disappear, however far down the graph it sits.
+#[test]
+fn inkless_clip_hides_its_subgraph() {
+    let (base, blank) = (glyph('A'), glyph(' '));
+    let font = font_with_color_tables(
+        colr_v1_table(
+            base,
+            &paint_glyph(blank, &paint_glyph(glyph(BLOCK), &paint_solid(0, 1.0))),
+        ),
+        cpal_table(&[RED]),
+    );
+    assert_eq!(
+        rasterize(&font, "synthetic:inkless-clip", base, [0, 0, 0, 255]),
+        None,
+        "an empty clip must clip everything away"
+    );
+}
+
+/// A bare fill after a `pop_clip` has no shape of its own any more.  Nothing
+/// bounds it — no clip box and no `PaintGlyph` ancestor — so the spec forbids
+/// rendering it, and it must not silently keep painting the previous layer's
+/// outline.
+#[test]
+fn a_bare_layer_fill_has_no_inherited_outline() {
+    let (base, layer) = (glyph('A'), glyph('H'));
+    let layers = vec![
+        paint_glyph(layer, &paint_solid(0, 1.0)),
+        paint_solid(1, 1.0),
+    ];
+    let root = paint_colr_layers(0, 2);
+    let with_bare = font_with_color_tables(
+        colr_v1_table_with_layers(base, &root, &layers, None),
+        cpal_table(&[RED, GREEN]),
+    );
+    let layered_only = font_with_color_tables(
+        colr_v1_table_with_layers(base, &paint_colr_layers(0, 1), &layers[..1], None),
+        cpal_table(&[RED, GREEN]),
+    );
+    let with_bare = rasterize(&with_bare, "synthetic:stale-outline", base, [0, 0, 0, 255])
+        .expect("the shaped layer still paints");
+    let layered_only = rasterize(&layered_only, "synthetic:layers-only", base, [0, 0, 0, 255])
+        .expect("the shaped layer still paints");
+    assert_eq!(
+        (with_bare.width, with_bare.height),
+        (layered_only.width, layered_only.height)
+    );
+    let worst = with_bare
+        .rgba
+        .iter()
+        .zip(&layered_only.rgba)
+        .map(|(with_bare, layered_only)| with_bare.abs_diff(*layered_only))
+        .max()
+        .expect("rasters have pixels");
+    assert!(
+        worst == 0,
+        "the unbounded bare fill painted into the layer list: worst channel delta {worst}"
+    );
+
+    // The same graph under a clip box is bounded: the bare fill paints the
+    // box, and the second layer covers the first.
+    let bounds = glyph_bounds('H');
+    let bounded = font_with_color_tables(
+        colr_v1_table_with_layers(
+            base,
+            &root,
+            &layers,
+            Some((bounds.x_min, bounds.y_min, bounds.x_max, bounds.y_max)),
+        ),
+        cpal_table(&[RED, GREEN]),
+    );
+    let raster = rasterize(&bounded, "synthetic:boxed-layers", base, [0, 0, 0, 255])
+        .expect("a boxed layer list paints");
+    assert_close_to(mean_color(&raster), GREEN, 8.0);
+}
+
+/// A legal graph can fan out exponentially through the one `LayerList`;
+/// ttf-parser bounds recursion depth and cycles but not the number of visits,
+/// so the recorder has to stop instead of allocating millions of steps.
+#[test]
+fn layer_fan_out_is_capped() {
+    /// `leaves` fills, then `levels` `PaintColrLayers`, each referencing
+    /// every layer before it.  Nothing repeats on a path, so the graph is
+    /// legal; the visit count doubles per level.
+    fn fan_out(leaves: usize, levels: usize) -> (Vec<Vec<u8>>, Vec<u8>) {
+        let mut layers: Vec<Vec<u8>> = (0..leaves)
+            .map(|_| paint_glyph(glyph(BLOCK), &paint_solid(0, 1.0)))
+            .collect();
+        for _ in 0..levels {
+            layers.push(paint_colr_layers(0, layers.len() as u8));
+        }
+        let root = paint_colr_layers(layers.len() as u32 - 1, 1);
+        (layers, root)
+    }
+
+    let base = glyph('A');
+    let (layers, root) = fan_out(3, 7);
+    let modest = font_with_color_tables(
+        colr_v1_table_with_layers(base, &root, &layers, None),
+        cpal_table(&[RED]),
+    );
+    assert!(
+        rasterize_at(
+            &modest,
+            "synthetic:fan-out-small",
+            base,
+            [0, 0, 0, 255],
+            8.0
+        )
+        .is_some(),
+        "a graph below the cap must keep painting"
+    );
+
+    let (layers, root) = fan_out(3, 20);
+    let exploded = font_with_color_tables(
+        colr_v1_table_with_layers(base, &root, &layers, None),
+        cpal_table(&[RED]),
+    );
+    assert_eq!(
+        rasterize_at(
+            &exploded,
+            "synthetic:fan-out-big",
+            base,
+            [0, 0, 0, 255],
+            8.0
+        ),
+        None,
+        "a graph past the cap must be dropped, not allocated"
+    );
+}
+
+/// Nested transforms can push device coordinates far past `i32`; the
+/// measurement must reject such a glyph instead of overflowing.
+#[test]
+fn huge_transforms_do_not_overflow_the_measurement() {
+    let base = glyph(BLOCK);
+    let huge = paint_transform(
+        &paint_transform(
+            &paint_glyph(base, &paint_solid(0, 1.0)),
+            [32000.0, 0.0, 0.0, 32000.0, -32000.0, -32000.0],
+        ),
+        [32000.0, 0.0, 0.0, 32000.0, 0.0, 0.0],
+    );
+    let font = font_with_color_tables(colr_v1_table(base, &huge), cpal_table(&[RED]));
+    assert_eq!(
+        rasterize(&font, "synthetic:huge-transform", base, [0, 0, 0, 255]),
+        None,
+        "a glyph scaled past the size cap must not render"
+    );
+}
+
+/// A non-source-over composite is clipped by its contents, not by a second
+/// application of the clip mask at composite time: the composited artwork
+/// must have the same edges as the plain fill.
+#[test]
+fn non_source_over_composites_do_not_erode_edges() {
+    let base = glyph('O');
+    let invisible = Rgba([0, 0, 0, 0]);
+    let bounds = glyph_bounds('O');
+    // The box's right edge must cut through the ring's ink: a box edge over
+    // the counter would show no coverage anywhere and mask nothing.
+    let clip_box = Some((
+        bounds.x_min,
+        bounds.y_min,
+        bounds.x_min + 3 * (bounds.x_max - bounds.x_min) / 4,
+        bounds.y_max,
+    ));
+    let plain = font_with_color_tables(
+        colr_v1_table_with_clip_box(base, &paint_glyph(base, &paint_solid(0, 1.0)), clip_box),
+        cpal_table(&[RED, invisible]),
+    );
+    let composited = font_with_color_tables(
+        colr_v1_table_with_clip_box(
+            base,
+            &paint_composite(
+                &paint_glyph(base, &paint_solid(1, 1.0)),
+                1, // CompositeMode::Source
+                &paint_glyph(base, &paint_solid(0, 1.0)),
+            ),
+            clip_box,
+        ),
+        cpal_table(&[RED, invisible]),
+    );
+    let plain = rasterize_at(&plain, "synthetic:source-plain", base, [0, 0, 0, 255], 96.0)
+        .expect("the plain fill paints");
+    let composited = rasterize_at(
+        &composited,
+        "synthetic:source-layer",
+        base,
+        [0, 0, 0, 255],
+        96.0,
+    )
+    .expect("the composited fill paints");
+    assert_eq!(
+        (plain.width, plain.height),
+        (composited.width, composited.height)
+    );
+    let worst = plain
+        .rgba
+        .iter()
+        .zip(&composited.rgba)
+        .map(|(plain, composited)| plain.abs_diff(*composited))
+        .max()
+        .expect("rasters have pixels");
+    assert!(
+        worst <= 2,
+        "source compositing eroded the artwork: worst channel delta {worst}"
+    );
+}
+
+/// Spec: when every stop shares one offset, the first colour holds below it
+/// and the last holds at and above it — a hard cut, never a ramp.
+#[test]
+fn equal_offset_stops_cut_hard() {
+    let base = glyph(BLOCK);
+    let bounds = glyph_bounds(BLOCK);
+    let gradient = paint_linear_gradient(
+        bounds.x_min,
+        bounds.y_min,
+        bounds.x_max,
+        bounds.y_min,
+        bounds.x_min,
+        bounds.y_max,
+        &[(0.5, 0), (0.5, 1)],
+    );
+    let font = font_with_color_tables(
+        colr_v1_table(base, &paint_glyph(base, &gradient)),
+        cpal_table(&[RED, GREEN]),
+    );
+    let raster = rasterize_at(&font, "synthetic:hard-cut", base, [0, 0, 0, 255], 64.0)
+        .expect("a hard-cut color line paints");
+    let at = |fraction: f32| -> [u8; 4] {
+        let x = ((raster.width as f32 - 1.0) * fraction).round() as u32;
+        let y = raster.height / 2;
+        let index = ((y * raster.width + x) * 4) as usize;
+        raster.rgba[index..index + 4].try_into().expect("pixel")
+    };
+    let left = at(0.25);
+    let right = at(0.75);
+    assert!(
+        left[0] > 200 && left[1] < 60,
+        "below the offset the first colour holds: {left:?}"
+    );
+    assert!(
+        right[1] > 150 && right[0] < 90,
+        "above the offset the last colour holds: {right:?}"
+    );
+}
+
+/// The same rule with every offset past the domain: the whole line is the
+/// first colour, never a ramp.
+#[test]
+fn equal_offset_stops_outside_the_domain_hold_the_first_color() {
+    let base = glyph(BLOCK);
+    let bounds = glyph_bounds(BLOCK);
+    let gradient = paint_linear_gradient(
+        bounds.x_min,
+        bounds.y_min,
+        bounds.x_max,
+        bounds.y_min,
+        bounds.x_min,
+        bounds.y_max,
+        &[(2.0, 0), (2.0, 1)],
+    );
+    let font = font_with_color_tables(
+        colr_v1_table(base, &paint_glyph(base, &gradient)),
+        cpal_table(&[RED, GREEN]),
+    );
+    let raster = rasterize_at(&font, "synthetic:offset-cut", base, [0, 0, 0, 255], 64.0)
+        .expect("the constant line paints");
+    let opaque: Vec<[u8; 4]> = raster
+        .rgba
+        .chunks_exact(4)
+        .filter(|pixel| pixel[3] > 200)
+        .map(|pixel| pixel.try_into().expect("pixel"))
+        .collect();
+    assert!(opaque.len() > 20, "the fill must cover the block");
+    assert!(
+        opaque.iter().all(|pixel| pixel[0] > 200 && pixel[1] < 60),
+        "every covered pixel must be the first colour"
+    );
+}
+
+/// Spec: the sweep arc is given in counter-clockwise degrees (stored biased
+/// by 180); outside the arc the nearest end colour holds.
+#[test]
+fn sweep_gradient_maps_its_arc_to_degrees() {
+    let base = glyph(BLOCK);
+    let bounds = glyph_bounds(BLOCK);
+    let (cx, cy) = (
+        i16::midpoint(bounds.x_min, bounds.x_max),
+        i16::midpoint(bounds.y_min, bounds.y_max),
+    );
+    // A quarter-turn arc from +y to -y through -x, red to green.
+    let sweep = paint_sweep_gradient(cx, cy, 90.0, 270.0, &[(0.0, 0), (1.0, 1)]);
+    let font = font_with_color_tables(
+        colr_v1_table(base, &paint_glyph(base, &sweep)),
+        cpal_table(&[RED, GREEN]),
+    );
+    let raster = rasterize_at(&font, "synthetic:sweep-arc", base, [0, 0, 0, 255], 64.0)
+        .expect("a sweep arc paints");
+    let scale = raster.width as f32 / f32::from(bounds.x_max - bounds.x_min);
+    let sample = |dx: f32, dy: f32| -> [u8; 4] {
+        let x = ((f32::from(cx) + dx - f32::from(bounds.x_min)) * scale) as u32;
+        let y = ((f32::from(bounds.y_max) - f32::from(cy) - dy) * scale) as u32;
+        let index =
+            ((y.min(raster.height - 1) * raster.width + x.min(raster.width - 1)) * 4) as usize;
+        raster.rgba[index..index + 4].try_into().expect("pixel")
+    };
+    let reach = f32::from(bounds.x_max - bounds.x_min) * 0.35;
+    let start = sample(reach * 0.02, reach); // the arc's start at +y
+    let end = sample(reach * 0.02, -reach);
+    let middle = sample(-reach, 0.0); // -x is the arc's midpoint
+    // 30 degrees past the arc's end, far enough from the +x seam that the
+    // probe lands on its own pixel row.
+    let outside = sample(reach * 0.5, -reach * 0.866);
+    assert!(
+        start[0] > 200 && start[1] < 60,
+        "the arc starts red at +y: {start:?}"
+    );
+    assert!(
+        middle[0] > 90 && middle[1] > 90,
+        "the arc's midpoint must interpolate: {middle:?}"
+    );
+    assert!(
+        end[1] > 150 && end[0] < 90,
+        "the arc ends green at -y: {end:?}"
+    );
+    assert!(
+        outside[1] > 150 && outside[0] < 90,
+        "after the arc the last colour holds: {outside:?}"
     );
 }
