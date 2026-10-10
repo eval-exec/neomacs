@@ -7,9 +7,7 @@
 /// Runtime workspace root: nextest's NEXTEST_WORKSPACE_ROOT when present,
 /// the compile-time constant otherwise (see neomacs-infra).
 pub fn workspace_root() -> std::path::PathBuf {
-    std::env::var_os("NEXTEST_WORKSPACE_ROOT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR")))
+    neomacs_infra::workspace_root()
 }
 
 use std::collections::BTreeMap;
@@ -17,7 +15,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -128,13 +125,13 @@ fn prepare_plemol_jp() -> Result<PathBuf, FixtureError> {
         if destination.exists() && verify_sha256(&destination, FONT_SHA).is_ok() {
             return Ok(destination);
         }
-        let archive = root.join("PlemolJP_NF_v3.1.0.zip");
-        ensure_download_with_limit(
-            &archive,
+        let archive = neomacs_infra::pinned::pinned_file_with_limit(
+            "PlemolJP_NF_v3.1.0.zip",
             "https://github.com/yuru7/PlemolJP/releases/download/v3.1.0/PlemolJP_NF_v3.1.0.zip",
             ZIP_SHA,
             192 * 1024 * 1024,
-        )?;
+        )
+        .map_err(FixtureError::Fixture)?;
         let file = File::open(&archive).map_err(|source| FixtureError::Io {
             path: archive.clone(),
             source,
@@ -346,13 +343,13 @@ fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
         source,
     })?;
     let result = (|| {
-        let archive_path = cache.join(format!("{LXGW_NERD_RELEASE}.tar.gz"));
-        ensure_download_with_limit(
-            &archive_path,
+        let archive_path = neomacs_infra::pinned::pinned_file_with_limit(
+            &format!("{LXGW_NERD_RELEASE}.tar.gz"),
             LXGW_NERD_ARCHIVE_URL,
             LXGW_NERD_ARCHIVE_SHA256,
             MAX_LXGW_ARCHIVE_BYTES,
-        )?;
+        )
+        .map_err(FixtureError::Fixture)?;
         let directory = cache.join(LXGW_NERD_RELEASE);
         create_dir_all(&directory)?;
         let destination = directory.join(LXGW_NERD_REGULAR);
@@ -432,8 +429,8 @@ enum FixtureError {
         #[source]
         source: io::Error,
     },
-    #[error("download from {url} failed: {message}")]
-    Download { url: &'static str, message: String },
+    #[error("pinned fixture: {0}")]
+    Fixture(String),
     #[error("SHA-256 mismatch for {path}: expected {expected}, got {actual}")]
     Checksum {
         path: PathBuf,
@@ -470,30 +467,20 @@ fn prepare_pinned_file(
     url: &'static str,
     sha256: &'static str,
 ) -> Result<PathBuf, FixtureError> {
-    let cache_root = workspace_root().join("tmp/font-fixtures");
-    create_dir_all(&cache_root)?;
-    let lock_path = cache_root.join(format!(".{name}.lock"));
-    let lock = open_lock(&lock_path)?;
-    lock.lock().map_err(|source| FixtureError::Io {
-        path: lock_path.clone(),
-        source,
-    })?;
-    let destination = cache_root.join(name);
-    let result = ensure_download(&destination, url, sha256).map(|()| destination);
-    FileExt::unlock(&lock).map_err(|source| FixtureError::Io {
-        path: lock_path,
-        source,
-    })?;
-    result
+    neomacs_infra::pinned::pinned_file(name, url, sha256).map_err(FixtureError::Fixture)
 }
 
 fn prepare_spleen_fixtures_locked(cache_root: &Path) -> Result<SpleenFixtures, FixtureError> {
-    let archive_path = cache_root.join(format!("{RELEASE_NAME}.tar.gz"));
-    ensure_release_archive(&archive_path)?;
+    let archive = neomacs_infra::pinned::pinned_file(
+        &format!("{RELEASE_NAME}.tar.gz"),
+        RELEASE_URL,
+        RELEASE_SHA256,
+    )
+    .map_err(FixtureError::Fixture)?;
 
     let fixture_root = cache_root.join(RELEASE_NAME);
     if !all_extracted_files_match(&fixture_root)? {
-        extract_verified_fonts(&archive_path, &fixture_root)?;
+        extract_verified_fonts(&archive, &fixture_root)?;
     }
     ensure_gzipped_pcf(&fixture_root)?;
 
@@ -518,80 +505,6 @@ fn create_dir_all(path: &Path) -> Result<(), FixtureError> {
         path: path.to_path_buf(),
         source,
     })
-}
-
-fn ensure_release_archive(path: &Path) -> Result<(), FixtureError> {
-    ensure_download(path, RELEASE_URL, RELEASE_SHA256)
-}
-
-fn ensure_download(
-    path: &Path,
-    url: &'static str,
-    expected_sha256: &'static str,
-) -> Result<(), FixtureError> {
-    ensure_download_with_limit(path, url, expected_sha256, MAX_PINNED_FIXTURE_BYTES)
-}
-
-fn ensure_download_with_limit(
-    path: &Path,
-    url: &'static str,
-    expected_sha256: &'static str,
-    max_bytes: u64,
-) -> Result<(), FixtureError> {
-    if path.exists() && verify_sha256(path, expected_sha256).is_ok() {
-        return Ok(());
-    }
-
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(120)))
-        .timeout_connect(Some(Duration::from_secs(15)))
-        .timeout_recv_body(Some(Duration::from_secs(60)))
-        .build();
-    let agent = ureq::Agent::new_with_config(config);
-    let mut response = agent
-        .get(url)
-        .call()
-        .map_err(|error| FixtureError::Download {
-            url,
-            message: error.to_string(),
-        })?;
-    let bytes = response
-        .body_mut()
-        .with_config()
-        .limit(max_bytes)
-        .read_to_vec()
-        .map_err(|error| FixtureError::Download {
-            url,
-            message: error.to_string(),
-        })?;
-
-    let actual = sha256_bytes(&bytes);
-    if actual != expected_sha256 {
-        return Err(FixtureError::Checksum {
-            path: path.to_path_buf(),
-            expected: expected_sha256,
-            actual,
-        });
-    }
-
-    let partial = path.with_file_name(format!(
-        ".{}.partial",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("font-fixture")
-    ));
-    write_all(&partial, &bytes)?;
-    if path.exists() {
-        fs::remove_file(path).map_err(|source| FixtureError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    }
-    fs::rename(&partial, path).map_err(|source| FixtureError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    verify_sha256(path, expected_sha256)
 }
 
 fn all_extracted_files_match(root: &Path) -> Result<bool, FixtureError> {

@@ -4171,10 +4171,10 @@ version = "0.0.19"
 dependencies = [
  "flate2",
  "fs4",
+ "neomacs-infra",
  "sha2",
  "tar",
  "thiserror 2.0.20",
- "ureq",
  "zip",
 ]
 
