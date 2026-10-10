@@ -17,7 +17,7 @@ fn image_spec(ascent: Option<Value>) -> Value {
 }
 
 fn parsed_image_ascent(value: Option<Value>) -> DisplayImageAscentPolicy {
-    parse_display_image_layout(&image_spec(value), 0, 0)
+    parse_display_image_layout(&image_spec(value), 0, 0, 0)
         .expect("valid image spec")
         .ascent
 }
@@ -36,7 +36,7 @@ fn image_data_base_uri_survives_as_an_explicit_resource_capability() {
         Value::string("/tmp/telega/dummy"),
     ]);
 
-    let parsed = parse_display_image_layout(&image, 0, 0).expect("valid data image");
+    let parsed = parse_display_image_layout(&image, 0, 0, 0).expect("valid data image");
     let ImageResolveSource::Data(ImageDataSource::WithBaseUri { data, base_uri }) =
         parsed.request.source
     else {
@@ -82,7 +82,12 @@ fn image_scale_default_survives_parsing_until_frame_realization() {
         Value::symbol("default"),
     ]);
 
-    let parsed = parse_display_image_layout(&image, 0, 0).expect("valid image spec");
+    let parsed = parse_display_image_layout(&image, 0, 0, 0x12_34_56).expect("valid image spec");
+    assert_eq!(
+        parsed.request.colors.frame_foreground().rgb24(),
+        0x12_34_56,
+        "the frame foreground travels beside the face colors"
+    );
     assert_eq!(parsed.scale, ImageScalePolicy::Default);
 
     let request = parsed.into_resolve_request(
@@ -115,7 +120,7 @@ fn image_dimensions_resolve_gnu_face_relative_units_in_logical_pixels() {
         Value::keyword("height"),
         Value::cons(Value::make_float(0.5), Value::symbol("ch")),
     ]);
-    let exact_request = parse_display_image_layout(&exact, 0, 0)
+    let exact_request = parse_display_image_layout(&exact, 0, 0, 0)
         .expect("valid image spec")
         .into_resolve_request(scale, dimensions);
     assert_eq!(
@@ -133,7 +138,7 @@ fn image_dimensions_resolve_gnu_face_relative_units_in_logical_pixels() {
         Value::keyword("max-height"),
         Value::fixnum(18),
     ]);
-    let clamped_request = parse_display_image_layout(&clamped, 0, 0)
+    let clamped_request = parse_display_image_layout(&clamped, 0, 0, 0)
         .expect("valid image spec")
         .into_resolve_request(scale, dimensions);
     assert_eq!(
@@ -192,14 +197,14 @@ fn image_margin_preserves_gnu_scalar_and_pair_geometry() {
     ]);
 
     assert_eq!(
-        parse_display_image_layout(&scalar, 0, 0).unwrap().margin,
+        parse_display_image_layout(&scalar, 0, 0, 0).unwrap().margin,
         DisplayImageMargin {
             horizontal: 2.0,
             vertical: 2.0,
         }
     );
     assert_eq!(
-        parse_display_image_layout(&pair, 0, 0).unwrap().margin,
+        parse_display_image_layout(&pair, 0, 0, 0).unwrap().margin,
         DisplayImageMargin {
             horizontal: 3.0,
             vertical: 4.0,
@@ -220,7 +225,7 @@ fn image_background_is_only_decoder_input_not_opacity_evidence() {
     ]);
 
     assert_eq!(
-        parse_display_image_layout(&explicit, 0, 0)
+        parse_display_image_layout(&explicit, 0, 0, 0)
             .unwrap()
             .request
             .colors

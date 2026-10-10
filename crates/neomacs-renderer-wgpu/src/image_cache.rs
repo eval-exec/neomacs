@@ -1125,12 +1125,12 @@ impl ImageCache {
         }
         // Fallbacks for the byte-oriented formats `image` cannot read. GNU
         // paints an XPM pixel whose color key has no resolvable color with the
-        // frame's foreground pixel (src/image.c:6518-6538) — the face
+        // frame's foreground pixel (src/image.c:6518-6538) — the frame
         // foreground this decode carries — and XBM takes both face colors.
         let fg = colors.foreground().rgba8();
         let bg = colors.background_rgba8();
         if let Some(result) =
-            crate::xpm::decode_xpm_file(Path::new(path), colors.foreground().rgb8())
+            crate::xpm::decode_xpm_file(Path::new(path), colors.frame_foreground().rgb8())
         {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
@@ -1230,10 +1230,10 @@ impl ImageCache {
             );
         }
         // Fallbacks for the byte-oriented formats `image` cannot read; see the
-        // file arm for why XPM takes the face foreground.
+        // file arm for why XPM takes the frame foreground.
         let fg = colors.foreground().rgba8();
         let bg = colors.background_rgba8();
-        if let Some(result) = crate::xpm::decode_xpm_data(&data, colors.foreground().rgb8()) {
+        if let Some(result) = crate::xpm::decode_xpm_data(&data, colors.frame_foreground().rgb8()) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
                 rotation,

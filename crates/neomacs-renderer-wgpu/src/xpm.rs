@@ -20,11 +20,9 @@ use std::path::Path;
 /// color with: `FRAME_FOREGROUND_PIXEL` read once at load (src/image.c:6518,
 /// 6537-6538) -- the frame's `foreground-color` parameter, which GNU keeps
 /// equal to the `default` face's foreground (src/xfaces.c:4394-4404). Callers
-/// pass the face foreground the image is displayed under, which is that same
-/// value whenever the face is `default` and the specification carries no
-/// `:foreground`; GNU ignores the image specification here, so a differing
-/// face or a specification foreground is a narrower approximation. GNU's
-/// fallback is opaque, so no alpha travels.
+/// pass `ImageColorContext::frame_foreground`, which is that value; the face
+/// the image is displayed under and the specification's `:foreground` are not
+/// consulted, as in GNU. GNU's fallback is opaque, so no alpha travels.
 pub fn decode_xpm_data(data: &[u8], fallback: [u8; 3]) -> Option<(u32, u32, Vec<u8>)> {
     let strings = extract_strings(data)?;
     decode_from_strings(&strings, fallback)
@@ -361,3 +359,9 @@ mod tests;
 #[cfg(test)]
 #[path = "xpm/tests/corpus_test.rs"]
 mod corpus_tests;
+
+/// The issue's own upstream artwork, pinned by URL and SHA-256 and fetched at
+/// test time rather than vendored (nyan-mode, issue #545).
+#[cfg(test)]
+#[path = "xpm/tests/nyan_mode_test.rs"]
+mod nyan_mode_tests;

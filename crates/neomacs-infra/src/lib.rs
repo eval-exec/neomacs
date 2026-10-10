@@ -22,6 +22,7 @@ pub mod config_env;
 pub mod display;
 pub mod inventory;
 pub mod packages;
+pub mod pinned;
 pub mod runtime_image;
 pub mod tools;
 

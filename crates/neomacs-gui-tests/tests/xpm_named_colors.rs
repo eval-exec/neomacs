@@ -29,6 +29,15 @@ const CASES: [(&str, [u8; 3]); 6] = [
 /// One 48x48 swatch is 2304 pixels; allow for the odd blend at its edges.
 const PAINTED_PIXEL_FLOOR: usize = 1500;
 
+/// The colours the two fallback swatches ask for and must not get: one face
+/// asks for red, one specification asks for blue (issue #550).
+const FALLBACK_FACE_DECOY: [u8; 3] = [0xff, 0x00, 0x00];
+const FALLBACK_SPEC_DECOY: [u8; 3] = [0x00, 0x00, 0xff];
+
+/// The decoys appear nowhere else in the frame, so anything near a full swatch
+/// means the decoy won.
+const DECOY_PIXEL_CEILING: usize = 100;
+
 /// GNU and Neomacs both answer `color-values' in 16-bit channels; the renderer
 /// keeps the most-significant 8 bits (257 == 0x0101).
 fn rgb16_to_rgb8(value: &serde_json::Value) -> Option<[u8; 3]> {
@@ -146,17 +155,48 @@ fn xpm_named_colors_resolve_like_gnu_and_paint_that_way() {
     let png = image::open(&result.artifacts.png).expect("the readback PNG exists");
     let pixels = png.to_rgba8();
     for (name, expected) in CASES {
-        let painted = pixels
-            .pixels()
-            .filter(|pixel| {
-                let [red, green, blue, _] = pixel.0;
-                [red, green, blue] == expected
-            })
-            .count();
+        let painted = count_pixels(&pixels, expected);
         assert!(
             painted >= PAINTED_PIXEL_FLOOR,
             "{name}: {painted} pixels of {expected:?} in the frame; \
              the swatch is missing or rendered another color"
         );
     }
+
+    // Issue #550: a key that resolves to nothing is painted by a rule, and the
+    // rule reads the frame's foreground (GNU FRAME_FOREGROUND_PIXEL, read once
+    // at src/image.c:6518 and used at :6537-6538) -- never the face the image
+    // is displayed under, never the specification's :foreground.
+    let frame_foreground = rgb16_to_rgb8(&state["frame-foreground"])
+        .expect("the fixture records the frame foreground");
+    assert_eq!(
+        state["default-face-foreground"], state["frame-foreground"],
+        "GNU keeps the frame's foreground-color and the default face's foreground equal: {state}"
+    );
+    for (label, decoy) in [
+        ("fallback-face", FALLBACK_FACE_DECOY),
+        ("fallback-spec", FALLBACK_SPEC_DECOY),
+    ] {
+        let decoy_painted = count_pixels(&pixels, decoy);
+        assert!(
+            decoy_painted < DECOY_PIXEL_CEILING,
+            "{label}: {decoy_painted} pixels of {decoy:?}; the swatch followed the \
+             {label} colour instead of the frame foreground"
+        );
+        let painted = count_pixels(&pixels, frame_foreground);
+        assert!(
+            painted >= PAINTED_PIXEL_FLOOR,
+            "{label}: {painted} pixels of the frame foreground {frame_foreground:?} in the frame"
+        );
+    }
+}
+
+fn count_pixels(pixels: &image::RgbaImage, colour: [u8; 3]) -> usize {
+    pixels
+        .pixels()
+        .filter(|pixel| {
+            let [red, green, blue, _] = pixel.0;
+            [red, green, blue] == colour
+        })
+        .count()
 }

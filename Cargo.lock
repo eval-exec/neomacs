@@ -4021,6 +4021,7 @@ dependencies = [
  "getrandom 0.4.3",
  "sha2",
  "tempfile",
+ "ureq",
  "wait-timeout",
 ]
 
