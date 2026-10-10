@@ -125,7 +125,8 @@ fn explicit_module_path(module: &ItemMod) -> Option<PathBuf> {
 }
 
 /// This is a test-local, single-threaded source walker, with no runtime state.
-struct ProductionWalker {
+struct ProductionWalker<'generated> {
+    x11_colors: &'generated str,
     source: PathBuf,
     module_directory: PathBuf,
     // #[path] on an out-of-line module is relative to its containing source,
@@ -134,11 +135,15 @@ struct ProductionWalker {
     sites: BTreeMap<PathBuf, usize>,
 }
 
-impl ProductionWalker {
+impl ProductionWalker<'_> {
     fn file(&mut self, path: &Path) {
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let syntax = syn::parse_file(&source)
+        self.source_file(path, &source);
+    }
+
+    fn source_file(&mut self, path: &Path, source: &str) {
+        let syntax = syn::parse_file(source)
             .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
         if test_only(&syntax.attrs) {
             return;
@@ -184,7 +189,7 @@ fn macro_transmutes(mut cursor: syn::buffer::Cursor<'_>) -> usize {
     count
 }
 
-impl<'ast> Visit<'ast> for ProductionWalker {
+impl<'ast> Visit<'ast> for ProductionWalker<'_> {
     fn visit_item(&mut self, item: &'ast Item) {
         if !test_only(item_attributes(item)) {
             visit::visit_item(self, item);
@@ -261,7 +266,18 @@ impl<'ast> Visit<'ast> for ProductionWalker {
             let path = include_path(&expression)
                 .expect("teach the transmute guard to resolve this include! source path");
             let path = self.source.parent().expect("source has parent").join(path);
-            self.file(&path);
+            if path == Path::new(env!("OUT_DIR")).join("x11_colors.rs") {
+                // Archived tests do not retain the producer's OUT_DIR. Scan
+                // the same generated source embedded when this test was built.
+                let generated_path = self
+                    .source
+                    .parent()
+                    .expect("source has parent")
+                    .join("x11_colors.rs");
+                self.source_file(&generated_path, self.x11_colors);
+            } else {
+                self.file(&path);
+            }
             return;
         }
         let tokens = syn::buffer::TokenBuffer::new2(invocation.tokens.clone());
@@ -284,8 +300,8 @@ impl<'ast> Visit<'ast> for ProductionWalker {
     }
 }
 
-// Resolve source includes rather than scanning their path string. OUT_DIR is
-// supplied by this crate's build script; unknown forms fail closed so a new
+// Resolve source includes rather than scanning their path string. Only the
+// known generated source is embedded; unknown forms fail closed so a new
 // include cannot silently hide conversions from the ratchet.
 fn include_path(expression: &Expr) -> Option<String> {
     match expression {
@@ -315,7 +331,15 @@ fn include_path(expression: &Expr) -> Option<String> {
 }
 
 fn production_sites(root: &Path) -> BTreeMap<PathBuf, usize> {
+    production_sites_with_generated(
+        root,
+        include_str!(concat!(env!("OUT_DIR"), "/x11_colors.rs")),
+    )
+}
+
+fn production_sites_with_generated(root: &Path, x11_colors: &str) -> BTreeMap<PathBuf, usize> {
     let mut walker = ProductionWalker {
+        x11_colors,
         source: PathBuf::new(),
         module_directory: PathBuf::new(),
         path_directory: PathBuf::new(),
@@ -397,6 +421,39 @@ fn transmute_guard_parses_code_and_follows_production_module_paths() {
     assert_eq!(sites[&root.join("nested/child.rs")], 1);
     assert_eq!(sites[&root.join("included.rs")], 1);
     assert_production_ceiling(root, &sites);
+}
+
+#[test]
+fn transmute_guard_scans_embedded_generated_source() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    let root = directory.path();
+    std::fs::write(
+        root.join("lib.rs"),
+        r#"include!(concat!(env!("OUT_DIR"), "/x11_colors.rs"));"#,
+    )
+    .expect("write generated include fixture");
+    let generated = r#"
+        // core::mem::transmute(0)
+        const MESSAGE: &str = "core::mem::transmute(0)";
+        #[cfg(test)] fn check() { unsafe { core::mem::transmute(0); } }
+        fn generated() { unsafe { core::mem::transmute::<u8, i8>(0); } }
+        macro_rules! conversion { () => { unsafe { core::mem::transmute(0) } }; }
+    "#;
+    let sites = production_sites_with_generated(root, generated);
+    assert_eq!(sites.values().sum::<usize>(), 2);
+    assert_eq!(sites[&root.join("x11_colors.rs")], 2);
+}
+
+#[test]
+#[should_panic(expected = "teach the transmute guard to resolve this include! source path")]
+fn transmute_guard_rejects_unknown_generated_include() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    std::fs::write(
+        directory.path().join("lib.rs"),
+        r#"include!(concat!(env!("UNKNOWN_SOURCE_DIR"), "/x11_colors.rs"));"#,
+    )
+    .expect("write unsupported include fixture");
+    production_sites(directory.path());
 }
 
 #[test]
