@@ -7,9 +7,9 @@
 //! fixture. Nothing is vendored -- the file stays upstream's, and the hash is
 //! what makes the pin a pin.
 //!
-//! This is the same convention `neomacs-test-fonts` applies to its fonts; the
-//! simple single-file case lives here so tests that are not about fonts do not
-//! grow a second copy of it.
+//! `neomacs-test-fonts` applies the same convention to its fonts -- including
+//! its archives, via [`pinned_file_with_limit`]; unpacking an archive stays
+//! with the caller.
 
 use std::fs::{self, File};
 use std::path::PathBuf;
@@ -23,7 +23,9 @@ fn cache_root() -> PathBuf {
     crate::workspace_root().join("tmp/pinned-fixtures")
 }
 
-/// The largest fixture this will fetch: a test asset, not a distribution.
+/// The largest fixture [`pinned_file`] will fetch: a test asset, not a
+/// distribution. Callers with larger pins name their own cap through
+/// [`pinned_file_with_limit`].
 const MAX_PINNED_FIXTURE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Fetch `url` into the shared fixture cache as `name`, verifying `sha256`
@@ -33,6 +35,17 @@ const MAX_PINNED_FIXTURE_BYTES: u64 = 32 * 1024 * 1024;
 /// upstream artifact must not pass on a fixture that is not the pinned bytes,
 /// and must not quietly skip either.
 pub fn pinned_file(name: &str, url: &str, sha256: &str) -> Result<PathBuf, String> {
+    pinned_file_with_limit(name, url, sha256, MAX_PINNED_FIXTURE_BYTES)
+}
+
+/// [`pinned_file`] with the fetch's size cap named by the caller: a font
+/// archive is a pinned fixture too, just not a small one.
+pub fn pinned_file_with_limit(
+    name: &str,
+    url: &str,
+    sha256: &str,
+    max_bytes: u64,
+) -> Result<PathBuf, String> {
     let root = cache_root();
     fs::create_dir_all(&root).map_err(|error| format!("create {}: {error}", root.display()))?;
     let destination = root.join(name);
@@ -42,12 +55,17 @@ pub fn pinned_file(name: &str, url: &str, sha256: &str) -> Result<PathBuf, Strin
         .map_err(|error| format!("create {}: {error}", lock_path.display()))?;
     lock.lock()
         .map_err(|error| format!("lock {}: {error}", lock_path.display()))?;
-    let result = ensure_pinned(&destination, url, sha256);
+    let result = ensure_pinned(&destination, url, sha256, max_bytes);
     let _ = FileExt::unlock(&lock);
     result.map(|()| destination)
 }
 
-fn ensure_pinned(destination: &std::path::Path, url: &str, sha256: &str) -> Result<(), String> {
+fn ensure_pinned(
+    destination: &std::path::Path,
+    url: &str,
+    sha256: &str,
+    max_bytes: u64,
+) -> Result<(), String> {
     if destination.exists() && verify(destination, sha256)?.is_ok() {
         return Ok(());
     }
@@ -63,7 +81,7 @@ fn ensure_pinned(destination: &std::path::Path, url: &str, sha256: &str) -> Resu
     let bytes = response
         .body_mut()
         .with_config()
-        .limit(MAX_PINNED_FIXTURE_BYTES)
+        .limit(max_bytes)
         .read_to_vec()
         .map_err(|error| format!("GET {url}: {error}"))?;
 
