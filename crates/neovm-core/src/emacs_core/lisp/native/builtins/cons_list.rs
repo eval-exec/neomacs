@@ -238,29 +238,54 @@ pub(crate) fn proper_list_length_or_signal(list: Value) -> Result<usize, Flow> {
     }
 }
 
-#[inline]
-fn proper_list_length_or_signal_scan<const OBSERVED: bool>(list: Value) -> Result<usize, Flow> {
-    let mut len = 0usize;
-    let mut tail = list;
-    let mut tortoise = list;
-    let mut max = 2i64;
-    let mut n = 0i64;
-    let mut q = 2u16;
+/// GNU 32 list_length's FOR_EACH_TAIL schedule (lisp.h): keep the
+/// tortoise at the head for 4096 steps, then move it at powers of two.
+/// Restrict this to list_length and Fapply's fused measurement/copy walk;
+/// the existing general list walkers keep their own cycle protocol.
+#[derive(Debug)]
+pub(crate) struct GnuListLengthCycle {
+    tortoise: Value,
+    steps: usize,
+    mutator: std::marker::PhantomData<*const ()>,
+}
 
-    while tail.is_cons() {
-        len = len.saturating_add(1);
+static_assertions::assert_not_impl_any!(GnuListLengthCycle: Send, Sync);
 
-        tail = scan_cdr::<OBSERVED>(tail);
-        if tail.is_cons()
-            && let Some(cycle_tail) =
-                for_each_tail_cycle_tail(tail, &mut tortoise, &mut max, &mut n, &mut q)
-        {
-            return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+impl GnuListLengthCycle {
+    pub(crate) fn new(head: Value) -> Self {
+        Self {
+            tortoise: head,
+            steps: 0,
+            mutator: std::marker::PhantomData,
         }
     }
 
+    #[inline]
+    pub(crate) fn check(&mut self, advanced_tail: Value) -> Result<(), Flow> {
+        const FOR_EACH_TAIL_THRESHOLD: usize = 4096;
+        if advanced_tail.bits() == self.tortoise.bits() {
+            return Err(circular_list_error(advanced_tail));
+        }
+        self.steps = self.steps.saturating_add(1);
+        if self.steps & (FOR_EACH_TAIL_THRESHOLD - 1) == 0 && self.steps.is_power_of_two() {
+            self.tortoise = advanced_tail;
+        }
+        Ok(())
+    }
+}
+
+#[inline]
+fn proper_list_length_or_signal_scan<const OBSERVED: bool>(list: Value) -> Result<usize, Flow> {
+    let mut tail = list;
+    let mut cycle = GnuListLengthCycle::new(list);
+
+    while tail.is_cons() {
+        tail = scan_cdr::<OBSERVED>(tail);
+        cycle.check(tail)?;
+    }
+
     if tail.is_nil() {
-        Ok(len)
+        Ok(cycle.steps)
     } else {
         Err(signal(
             LispCondition::WrongTypeArgument,

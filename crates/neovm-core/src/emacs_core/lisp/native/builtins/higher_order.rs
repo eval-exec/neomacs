@@ -395,7 +395,7 @@ pub(crate) fn builtin_apply_slice(eval: &mut super::eval::Context, args: &[Value
     // copying while taking the same FOR_EACH_TAIL steps signals the same
     // `circular-list` or `listp` condition, with the same data, before the
     // function is called -- in one walk instead of two.
-    let mut cycle = super::cons_list::GnuTailCycle::new(last);
+    let mut cycle = super::cons_list::GnuListLengthCycle::new(last);
     let mut call_args = LispArgVec::new();
     let mut cursor = last;
     let func = if args.len() == 1 {
