@@ -15,8 +15,11 @@ use std::collections::BinaryHeap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
+mod admission;
+
 use super::{JobCell, JobClass};
 use crate::emacs_core::jit::compile::shared::split::JobPayload;
+use admission::QueueLimits;
 
 /// One job for a backend thread: the payload and where its result goes.
 /// Plain data (see `JobPayload`): nothing here reaches the Lisp heap. With
@@ -114,6 +117,13 @@ impl Pool {
     /// Queue `job` for a worker, starting the workers on first use. `Err`
     /// hands the job back when no worker can run it (a spawn failed).
     pub(crate) fn push(&'static self, job: BackendJob) -> Result<(), BackendJob> {
+        let limits = QueueLimits::configured();
+        // An intrinsically oversized job must not evict useful work, spawn
+        // a worker, or trigger the Err path's synchronous codegen fallback.
+        if !limits.fits(job.insts) {
+            job.cell.publish_dropped();
+            return Ok(());
+        }
         let mut state = self.lock();
         if state.spawn_failed {
             return Err(job);
@@ -137,28 +147,7 @@ impl Pool {
                 }
             }
         }
-        // Make room: drop the lowest-class, newest queued job while that is
-        // not the new one.
-        let (cap, insts_cap) = (super::queue_cap(), super::queue_insts_cap());
-        while !state.jobs.is_empty()
-            && (state.jobs.len() >= cap || state.insts + job.insts > insts_cap)
-        {
-            let victim = state.jobs.iter().map(Queued::key).max().expect("not empty");
-            if victim < (job.class, job.seq) {
-                return Err(job);
-            }
-            let mut jobs = std::mem::take(&mut state.jobs).into_vec();
-            let at = jobs
-                .iter()
-                .position(|queued| queued.key() == victim)
-                .expect("the victim is queued");
-            let Queued(dropped) = jobs.swap_remove(at);
-            state.jobs = BinaryHeap::from(jobs);
-            state.insts -= dropped.insts;
-            dropped.cell.publish_dropped();
-        }
-        state.insts += job.insts;
-        state.jobs.push(Queued(job));
+        state.push_bounded(job, limits)?;
         drop(state);
         self.work.notify_one();
         Ok(())
