@@ -150,6 +150,36 @@ fn hex_color_values_cover_every_x11_channel_width() {
     assert_eq!(decode_one_pixel("#ffff00000000"), [0xff, 0x00, 0x00, 255]);
 }
 
+/// The reported asset: the grayNN ladder in the palette of the shipped
+/// `etc/images/commit.xpm` must arrive as rgb.txt's values. Pre-fix every one
+/// of them decoded to black, which is the shadow the report's screenshot shows.
+#[test]
+fn shipped_commit_xpm_keeps_its_named_gray_ladder() {
+    let path = neomacs_infra::workspace_root().join("etc/images/commit.xpm");
+    let (width, height, rgba) = decode_xpm_file(&path, FALLBACK).expect("commit.xpm decodes");
+    assert!(width > 0 && height > 0);
+    let painted: std::collections::HashSet<[u8; 3]> = rgba
+        .chunks_exact(4)
+        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+        .collect();
+    // The named entries this file's pixel data actually paints, with rgb.txt's
+    // values for them.
+    for (name, expected) in [
+        ("gray13", [33, 33, 33]),
+        ("gray14", [36, 36, 36]),
+        ("gray25", [64, 64, 64]),
+        ("gray75", [191, 191, 191]),
+        ("gray98", [250, 250, 250]),
+        ("white", [255, 255, 255]),
+    ] {
+        assert!(
+            painted.contains(&expected),
+            "{name} is not painted as {expected:?} in {}",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn test_multi_cpp() {
     // chars_per_pixel = 2
