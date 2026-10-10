@@ -1149,6 +1149,12 @@ fn composite_is_bounded(mode: CompositeMode, source: bool, backdrop: bool) -> bo
         CompositeMode::Clear => true,
         CompositeMode::Source | CompositeMode::SourceOut => source,
         CompositeMode::Destination | CompositeMode::DestinationOut => backdrop,
+        // Porter-Duff output alpha: source-atop paints only where the
+        // backdrop is opaque, destination-atop only where the source is —
+        // stronger than the table's "all other modes" fallback, which would
+        // reject these graphs even when one operand bounds them.
+        CompositeMode::SourceAtop => backdrop,
+        CompositeMode::DestinationAtop => source,
         CompositeMode::SourceIn | CompositeMode::DestinationIn => source || backdrop,
         _ => source && backdrop,
     }

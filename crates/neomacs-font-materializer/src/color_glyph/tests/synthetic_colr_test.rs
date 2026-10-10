@@ -1303,3 +1303,46 @@ fn paint_transform_inside_paint_glyph_moves_the_gradient() {
         "the transform did not reach the gradient: worst channel delta {worst}"
     );
 }
+
+/// Porter-Duff: a source-atop output is confined to the backdrop's opaque
+/// region, so a bounded backdrop bounds it even when the source is a bare
+/// fill.  The format-32 fallback would reject this graph outright.
+#[test]
+fn composite_source_atop_is_bounded_by_its_backdrop() {
+    let base = glyph('A');
+    let composite = paint_composite(
+        &paint_glyph(base, &paint_solid(0, 1.0)), // backdrop: bounded red A
+        9,                                        // CompositeMode::SourceAtop
+        &paint_solid(1, 1.0),                     // source: unbounded green
+    );
+    let font = font_with_color_tables(colr_v1_table(base, &composite), cpal_table(&[RED, GREEN]));
+    let raster = rasterize(&font, "synthetic:composite-src-atop", base, [0, 0, 0, 255])
+        .expect("a backdrop-bounded source-atop paints");
+    let painted = raster.rgba.chunks_exact(4).filter(|p| p[3] > 0).count();
+    assert!(
+        painted > 100,
+        "source-atop must keep the backdrop's ink, got {painted} painted pixels"
+    );
+    assert_close_to(mean_color(&raster), GREEN, 8.0);
+}
+
+/// The mirror: a destination-atop output is confined to the source's opaque
+/// region, so a bounded source bounds it despite a bare-fill backdrop.
+#[test]
+fn composite_destination_atop_is_bounded_by_its_source() {
+    let base = glyph('A');
+    let composite = paint_composite(
+        &paint_solid(0, 1.0),                     // backdrop: unbounded red
+        10,                                       // CompositeMode::DestinationAtop
+        &paint_glyph(base, &paint_solid(1, 1.0)), // source: bounded green A
+    );
+    let font = font_with_color_tables(colr_v1_table(base, &composite), cpal_table(&[RED, GREEN]));
+    let raster = rasterize(&font, "synthetic:composite-dest-atop", base, [0, 0, 0, 255])
+        .expect("a source-bounded destination-atop paints");
+    let painted = raster.rgba.chunks_exact(4).filter(|p| p[3] > 0).count();
+    assert!(
+        painted > 100,
+        "destination-atop must keep the source's shape, got {painted} painted pixels"
+    );
+    assert_close_to(mean_color(&raster), RED, 8.0);
+}

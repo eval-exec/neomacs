@@ -23004,7 +23004,7 @@ Optional COLS, ROWS set the terminal size.
 
 ;;; Generated autoloads from neomacs-image.el
 
-(register-definition-prefixes "neomacs-image" '("neomacs-image-"))
+(register-definition-prefixes "neomacs-image" '("neomacs-"))
 
 
 ;;; Generated autoloads from neomacs-shader-playground.el
