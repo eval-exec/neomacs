@@ -2199,7 +2199,8 @@ impl From<FloatConversion> for u8 {
 }
 
 unsafe extern "C" {
-    fn neovm_float_useful_precision() -> libc::c_int;
+    #[link_name = "neovm_float_useful_precision_limit"]
+    static NATIVE_FLOAT_USEFUL_PRECISION_LIMIT: libc::c_int;
     fn neovm_float_format_signed(
         buffer: *mut libc::c_char,
         capacity: usize,
@@ -2229,13 +2230,17 @@ static_assertions::assert_impl_all!(FloatPrecision: Send, Sync);
 
 impl FloatPrecision {
     fn new(requested: Option<usize>) -> Self {
-        // SAFETY: the bridge reads compile-time float constants; no pointers or state.
-        let limit = unsafe { neovm_float_useful_precision() } as usize;
         match requested {
-            Some(requested) => Self {
-                native: requested.min(limit) as libc::c_int,
-                excess: requested.saturating_sub(limit),
-            },
+            Some(requested) => {
+                // SAFETY: C defines this immutable c_int from the target's
+                // compile-time float constants. It has static lifetime, no
+                // writer or runtime initialization, and contains no Lisp state.
+                let limit = unsafe { NATIVE_FLOAT_USEFUL_PRECISION_LIMIT } as usize;
+                Self {
+                    native: requested.min(limit) as libc::c_int,
+                    excess: requested.saturating_sub(limit),
+                }
+            }
             None => Self {
                 native: -1,
                 excess: 0,

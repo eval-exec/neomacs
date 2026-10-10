@@ -1791,7 +1791,13 @@ pub(crate) fn builtin_ash_slice(args: &[Value]) -> EvalResult {
     let count_val = &args[1];
     // GNU src/data.c:3568-3569 validates VALUE before COUNT, including
     // the bignum COUNT branches that can otherwise return or signal early.
-    if !value.is_fixnum() && !value.is_bignum() {
+    // Retain the scalar classification validated before COUNT; do not inspect
+    // or borrow a bignum payload until the existing branch needs it.
+    let value_kind = value.kind();
+    if !matches!(
+        value_kind,
+        ValueKind::Fixnum(_) | ValueKind::Veclike(VecLikeType::Bignum)
+    ) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("integerp"), *value],
@@ -1817,7 +1823,7 @@ pub(crate) fn builtin_ash_slice(args: &[Value]) -> EvalResult {
             }
             if *big < 0 {
                 // Negative count + nonzero value: result is 0 (or -1 for negative).
-                let sign_neg = match value.kind() {
+                let sign_neg = match value_kind {
                     ValueKind::Fixnum(n) => n < 0,
                     ValueKind::Veclike(VecLikeType::Bignum) => *value.as_bignum().unwrap() < 0,
                     _ => {
@@ -1842,7 +1848,7 @@ pub(crate) fn builtin_ash_slice(args: &[Value]) -> EvalResult {
     // Materialize VALUE as a Integer once. We could try to keep
     // small fixnum shifts on the i64 path, but ash is rare enough that
     // correctness over branchy fast-pathing is the right tradeoff.
-    let value_big = match value.kind() {
+    let value_big = match value_kind {
         ValueKind::Fixnum(n) => Integer::from(n),
         ValueKind::Veclike(VecLikeType::Bignum) => value.as_bignum().unwrap().clone(),
         _ => {

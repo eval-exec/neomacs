@@ -10,11 +10,10 @@ _Static_assert(FLT_RADIX == 2 || FLT_RADIX == 10 || FLT_RADIX == 16,
                "GNU useful precision requires a supported float radix");
 _Static_assert(LDBL_MIN_EXP < 1, "GNU useful precision must be positive");
 
-int neovm_float_useful_precision(void)
-{
-  return (1 - LDBL_MIN_EXP) * (FLT_RADIX == 2 || FLT_RADIX == 10 ? 1
-                              : FLT_RADIX == 16 ? 4 : -1);
-}
+/* Immutable target C float metadata; no runtime initialization or writer. */
+const int neovm_float_useful_precision_limit =
+  (1 - LDBL_MIN_EXP) * (FLT_RADIX == 2 || FLT_RADIX == 10 ? 1
+                       : FLT_RADIX == 16 ? 4 : -1);
 
 static int format_long_double(char *buffer, size_t capacity,
                               const char *format, int precision,

@@ -126,8 +126,14 @@ pub(crate) fn builtin_ldexp(args: Vec<Value>) -> EvalResult {
     // Scaling the significand inside libm preserves subnormals, signed zero,
     // infinities and NaN payloads without intermediate under/overflow.
     let exponent = LdexpExponent::from(exponent);
-    // SAFETY: ldexp is a pure C math function accepting every double/int pair.
-    let result = unsafe { c_math::ldexp(significand, exponent.0) };
+    // Scaling either signed zero leaves its bits unchanged for every exponent.
+    // Keep both GNU argument checks above and allocate the ordinary fresh float.
+    let result = if significand == 0.0 {
+        significand
+    } else {
+        // SAFETY: ldexp is a pure C math function accepting every double/int pair.
+        unsafe { c_math::ldexp(significand, exponent.0) }
+    };
 
     Ok(Value::make_float(result))
 }
