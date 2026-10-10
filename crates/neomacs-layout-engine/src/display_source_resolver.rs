@@ -422,6 +422,10 @@ fn resolved_media_replacement(geometry: DisplayMediaReplacement) -> ResolvedDisp
     ResolvedDisplayReplacement::Media(geometry)
 }
 
+// The arguments are the resolution context the media helpers beside it take;
+// bundling them into a struct is a wider refactor, so the over-long pair is
+// allowed item by item.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_display_replacement(
     display_prop: Value,
     replacement: &DisplayMediaReplacementProperty,
@@ -456,6 +460,7 @@ pub(crate) fn resolve_display_replacement(
 }
 
 impl DisplayReplacementMediaSourceItem {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn resolve_display_property(
         display_prop: Value,
         replacement: &DisplayMediaReplacementProperty,

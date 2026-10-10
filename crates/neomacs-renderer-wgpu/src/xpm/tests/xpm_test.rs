@@ -89,7 +89,7 @@ fn decode_one_pixel(value: &str) -> [u8; 4] {
 /// 6537-6538); a pixel key the table never defined behaves the same way. Black
 /// is not that color, so substituting it made the failure invisible.
 #[test]
-fn unresolvable_colors_take_the_face_foreground_not_black() {
+fn unresolvable_colors_take_the_frame_foreground_not_black() {
     let foreground = [0x12, 0x34, 0x56];
     let xpm = one_pixel_xpm("aqua"); // a CSS name `etc/rgb.txt` never defined
     let (width, height, rgba) = decode_xpm_data(xpm.as_bytes(), foreground).expect("decodes");

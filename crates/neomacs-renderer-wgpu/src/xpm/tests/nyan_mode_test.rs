@@ -4,7 +4,7 @@
 //! of it: the pin is the URL plus the SHA-256, and `neomacs-infra`'s
 //! `pinned_file` verifies the bytes on every use. The report's claim was that
 //! "gray details turn black" in this file, and its palette is where the
-//! ladder lives -- fifteen `grayNN` names, nine of which the pixel data paints.
+//! ladder lives -- fourteen `grayNN` names, nine of which the pixel data paints.
 
 use super::*;
 
