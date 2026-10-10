@@ -29,8 +29,13 @@ fn a_verified_cache_entry_resolves_for_a_caller_named_limit() {
     std::fs::write(&path, b"cached fixture").expect("write probe");
     let sha256 = crate::inventory::sha256_hex(b"cached fixture");
 
-    let resolved = pinned_file_with_limit(&name, "https://127.0.0.1:1/never", &sha256, 192 * 1024 * 1024)
-        .expect("a verified cache entry resolves offline");
+    let resolved = pinned_file_with_limit(
+        &name,
+        "https://127.0.0.1:1/never",
+        &sha256,
+        192 * 1024 * 1024,
+    )
+    .expect("a verified cache entry resolves offline");
     assert_eq!(resolved, path);
     std::fs::remove_file(&path).ok();
 }

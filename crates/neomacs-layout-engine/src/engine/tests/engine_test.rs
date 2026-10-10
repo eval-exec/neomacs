@@ -18129,7 +18129,10 @@ impl ImageCatalog for RecordingImageCatalog {
             load: test_image_load(9),
             metadata:
                 neovm_core::emacs_core::image_catalog::ResolvedImageMetadata::layout_is_image_pixels(
-                    400, 300, 0, false,
+                    400,
+                    300,
+                    0,
+                    false,
                     neomacs_display_protocol::ImageMaskKind::None,
                 ),
         })
@@ -18161,11 +18164,7 @@ fn space_image_operand_keys_the_catalog_with_the_frame_foreground() {
         Value::keyword("foreground"),
         Value::string("blue"),
     ]);
-    let spec = Value::list(vec![
-        Value::symbol("space"),
-        Value::keyword("width"),
-        image,
-    ]);
+    let spec = Value::list(vec![Value::symbol("space"), Value::keyword("width"), image]);
 
     let _geometry = DisplaySpaceGeometry::from_display_space_spec(
         &spec, 0.0, 0.0, 8.0, 8.0, 10.0, 7.0, &params,
