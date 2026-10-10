@@ -1,6 +1,10 @@
 use super::*;
 
 #[cfg(test)]
+#[path = "retention.rs"]
+mod retention;
+
+#[cfg(test)]
 #[path = "source_slice_graft_test.rs"]
 mod source_slice_graft;
 

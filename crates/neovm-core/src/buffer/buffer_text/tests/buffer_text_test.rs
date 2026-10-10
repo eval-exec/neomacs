@@ -9,6 +9,9 @@ use crate::emacs_core::value::Value;
 
 use super::BufferText;
 
+#[path = "interval_retention.rs"]
+mod interval_retention;
+
 #[path = "reverse_scan_test.rs"]
 mod reverse_scan_test;
 

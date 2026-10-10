@@ -644,6 +644,10 @@ impl IntervalRun {
 struct IntervalTree {
     root: Option<IntervalId>,
     nodes: Vec<IntervalNode>,
+    /// Head of the detached slots, chained through their `right` links.
+    /// `push_node` reuses them before growing `nodes`, so the arena stays
+    /// bounded by the peak number of simultaneously linked intervals.
+    free_head: Option<IntervalId>,
     /// Positional last-descent memo for `find_id`: `(start, end, id)` of the most
     /// recently located interval, tagged with the tree version it was valid for.
     /// A lookup that lands inside `[start, end)` returns in O(1) instead of
@@ -720,6 +724,7 @@ impl Clone for IntervalTree {
         Self {
             root: self.root,
             nodes: self.nodes.clone(),
+            free_head: self.free_head,
             version: AtomicU64::new(0),
             cache_gen: MemoGeneration::default(),
             cache_start: AtomicUsize::new(0),
@@ -965,9 +970,36 @@ impl IntervalTree {
 
     fn push_node(&mut self, node: IntervalNode) -> IntervalId {
         self.invalidate_find_cache();
+        if let Some(id) = self.free_head {
+            self.free_head = self.nodes[id.0].right;
+            self.nodes[id.0] = node;
+            return id;
+        }
         let id = IntervalId(self.nodes.len());
         self.nodes.push(node);
         id
+    }
+
+    /// Return `id` to the free list. The caller must already have removed
+    /// every link to it and must not use `id` afterwards; live ids never move.
+    fn recycle_node(&mut self, id: IntervalId) {
+        self.invalidate_find_cache();
+        let node = &mut self.nodes[id.0];
+        node.left = None;
+        node.parent = None;
+        node.total_length = CharLen::ZERO;
+        node.plist = Value::NIL;
+        node.refresh_cache();
+        node.right = self.free_head;
+        self.free_head = Some(id);
+    }
+
+    /// Drop every interval. `nodes` keeps its capacity for reuse.
+    fn clear(&mut self) {
+        self.invalidate_find_cache();
+        self.root = None;
+        self.nodes.clear();
+        self.free_head = None;
     }
 
     fn leftmost_id(&self, mut id: IntervalId) -> IntervalId {
@@ -1073,8 +1105,8 @@ impl IntervalTree {
 
     /// Node `id`, reached through `root` or another node's link, without
     /// the bounds check. Every id a tree holds was minted by `push_node` as
-    /// the index it pushed at, and `nodes` only grows -- `delete_node`
-    /// unlinks a node and leaves its slot in place, and a rebuilt tree comes
+    /// an allocated slot; `recycle_node` reuses only unlinked slots, `clear`
+    /// truncates `nodes` only together with the root, and a rebuilt tree comes
     /// with its own `nodes` -- so a linked id is always in bounds. The
     /// balancing code below is the one user: it reads and rewrites a handful
     /// of neighbouring nodes per step, and the checks were over a quarter of
@@ -1715,6 +1747,29 @@ impl IntervalTree {
         if let Some(root) = self.root {
             walk(self, root, None);
         }
+        // Every arena slot is either linked into the tree or on the free list.
+        fn linked_ids(tree: &IntervalTree, id: Option<IntervalId>, seen: &mut FxHashSet<usize>) {
+            if let Some(id) = id {
+                assert!(seen.insert(id.0), "interval {} linked twice", id.0);
+                linked_ids(tree, tree.nodes[id.0].left, seen);
+                linked_ids(tree, tree.nodes[id.0].right, seen);
+            }
+        }
+        let mut seen = FxHashSet::default();
+        linked_ids(self, self.root, &mut seen);
+        let mut free = self.free_head;
+        while let Some(id) = free {
+            assert!(
+                seen.insert(id.0),
+                "free interval {} is linked or cyclic",
+                id.0
+            );
+            let node = &self.nodes[id.0];
+            assert!(node.left.is_none() && node.parent.is_none());
+            assert!(node.total_length.is_empty() && node.plist.is_nil());
+            free = node.right;
+        }
+        assert_eq!(seen.len(), self.nodes.len(), "unaccounted interval slots");
     }
 
     #[cfg(test)]
@@ -1958,13 +2013,7 @@ impl IntervalTree {
             }
         }
 
-        let node = &mut self.nodes[id.0];
-        node.left = None;
-        node.right = None;
-        node.parent = None;
-        node.total_length = CharLen::ZERO;
-        node.plist = Value::NIL;
-        node.refresh_cache();
+        self.recycle_node(id);
     }
 
     fn interval_deletion_adjustment(
@@ -2024,7 +2073,7 @@ impl IntervalTree {
 
         let mut left_to_delete = end.min(tree_len).saturating_sub(start);
         if left_to_delete == tree_len {
-            self.root = None;
+            self.clear();
             return;
         }
 
@@ -2033,7 +2082,7 @@ impl IntervalTree {
                 return;
             };
             if left_to_delete == self.nodes[root.0].total_length {
-                self.root = None;
+                self.clear();
                 return;
             }
             let deleted = self.interval_deletion_adjustment(root, start, left_to_delete);
@@ -2105,6 +2154,7 @@ impl IntervalTree {
             self.invalidate_find_cache();
         }
 
+        self.recycle_node(id);
         Some(removed_len)
     }
 
@@ -4990,6 +5040,11 @@ impl TextPropertyTable {
     #[cfg(test)]
     pub(crate) fn tree_max_depth_for_test(&self) -> usize {
         self.intervals.max_depth_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arena_slot_counts_for_test(&self) -> (usize, usize) {
+        (self.intervals.nodes.len(), self.intervals.nodes.capacity())
     }
 
     /// `(start, end, plist pairs)` of every interval, empty ones included.
