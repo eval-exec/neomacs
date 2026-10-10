@@ -1054,7 +1054,7 @@ fn benchmark_environment_preserves_vulkan_driver_discovery() {
 
 /// The editor child gets the allowlisted host variables plus any operator-set
 /// JIT master switch, `NEOVM_JIT_*` diagnostic knob, AOT runtime knob, OSR trace or
-/// allowlisted collector knob (not the GC trace, not the logging filter).
+/// allowlisted collector knob (including GC trace, not the logging filter).
 #[test]
 fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
     use std::ffi::OsString;
@@ -1149,6 +1149,7 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
             "NEOVM_GC_CENSUS",
             "NEOVM_GC_CENSUS_FILE",
             "NEOVM_GC_CHUNK_MAP",
+            "NEOVM_GC_TRACE",
             "NEOVM_JIT",
             "NEOVM_JIT_PROFILE",
             "NEOVM_JIT_THRESHOLD",
