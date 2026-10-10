@@ -6,7 +6,7 @@
 //!   selects the default writer. See [`LogTarget`] for the per-variant
 //!   policy and the `NEOMACS_LOG_FILE` override.  Returns a
 //!   [`LoggingGuard`] that must be kept alive until process exit so
-//!   any file appender can flush its queue.
+//!   diagnostics can drain their queues (best-effort at GUI process exit).
 //!
 //! - [`init_for_tests`] — thin wrapper around [`init`] with
 //!   [`LogTarget::Test`] for unit/integration tests. Uses
@@ -19,6 +19,13 @@
 //! (e.g. `cosmic-text`, `wgpu`) flow into the tracing subscriber.
 
 use std::sync::OnceLock;
+
+#[path = "logging/gui_stdout.rs"]
+mod gui_stdout;
+
+#[cfg(test)]
+#[path = "logging/tests.rs"]
+mod tests;
 
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
@@ -37,14 +44,19 @@ pub enum LogTarget {
     /// Write to stdout.
     ///
     /// Used by:
-    /// - the GUI binary (`neomacs` under `Gui` frontend), where stdout
-    ///   is captured to a log file by convention (`> /tmp/neomacs.log 2>&1`);
     /// - build-time utilities (`neomacs-temacs`, `bootstrap-neomacs`),
     ///   whose stdout is captured by the `xtask` driver and surfaced
     ///   in build logs.
     ///
     /// With `NEOMACS_LOG_FILE=<path>`: stdout **and** file.
     Stdout,
+    /// Bounded nonblocking stdout diagnostics for the user-facing GUI.
+    ///
+    /// Retains `RUST_LOG` filtering and stdout + optional file output.
+    /// Whole records are rejected at 256 queued records or 64 KiB per record;
+    /// admission loss is counted and reported on the next successful write.
+    /// Guard drop requests best-effort draining but never waits for stdout.
+    GuiStdout,
     /// Write to a file, never to stdout/stderr.
     ///
     /// Used by the TUI binary (`neomacs -nw` / `--batch` for user-
@@ -63,15 +75,82 @@ pub enum LogTarget {
     Test,
 }
 
-/// Held by the binary's `main` function for the duration of the process so
-/// the non-blocking file appender's background worker can flush on
-/// shutdown.
+/// Held by the binary's `main` function for the duration of the process.
+/// For GUI logging, drop only requests best-effort stdout/file draining on
+/// owned background workers; it never waits for or writes to a blocked sink.
+/// Process exit may discard accepted but undelivered diagnostics. Other
+/// targets retain the existing file appender's shutdown/flush policy.
 ///
 /// Drop this only when the process is about to exit; dropping it earlier
 /// will cause subsequent log lines to be lost from the file output.
 #[must_use = "drop the LoggingGuard only at process exit; dropping early loses file log lines"]
 pub struct LoggingGuard {
-    _file: Option<tracing_appender::non_blocking::WorkerGuard>,
+    _file: Option<FileGuard>,
+    gui: Option<gui_stdout::GuiGuard>,
+}
+
+impl LoggingGuard {
+    /// GUI records rejected at admission (full queue, oversized, or closed).
+    /// This is not a delivery receipt: exit can discard accepted records.
+    pub fn gui_rejected_records(&self) -> usize {
+        self.gui
+            .as_ref()
+            .map_or(0, |guard| guard.rejected_records())
+    }
+
+    /// Failed GUI sink write/flush operations observed by the worker.
+    pub fn gui_write_failures(&self) -> usize {
+        self.gui.as_ref().map_or(0, |guard| guard.write_failures())
+    }
+}
+
+struct FileGuard {
+    _direct: Option<tracing_appender::non_blocking::WorkerGuard>,
+    stop: Option<crossbeam_channel::Sender<()>>,
+    _shutdown_worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl FileGuard {
+    fn new(worker: tracing_appender::non_blocking::WorkerGuard, target: LogTarget) -> Option<Self> {
+        if target != LogTarget::GuiStdout {
+            return Some(Self {
+                _direct: Some(worker),
+                stop: None,
+                _shutdown_worker: None,
+            });
+        }
+        // The existing file appender's destructor can print to stdout when its
+        // queue is full. Keep even that shutdown work off the GUI caller.
+        let (stop, stopped) = crossbeam_channel::bounded::<()>(1);
+        match std::thread::Builder::new()
+            .name("neomacs-log-shutdown".into())
+            .spawn(move || {
+                let _ = stopped.recv();
+                drop(worker);
+            }) {
+            Ok(handle) => Some(Self {
+                _direct: None,
+                stop: Some(stop),
+                _shutdown_worker: Some(handle),
+            }),
+            Err(e) => {
+                // No subscriber has been installed yet, so there is no queued
+                // file output when the failed spawn drops its captured guard.
+                eprintln!(
+                    "warning: could not start log shutdown worker: {e}; continuing without file output"
+                );
+                None
+            }
+        }
+    }
+}
+
+impl Drop for FileGuard {
+    fn drop(&mut self) {
+        if let Some(stop) = &self.stop {
+            let _ = stop.try_send(());
+        }
+    }
 }
 
 type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
@@ -82,7 +161,8 @@ type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 ///
 /// | target | default writer | with `NEOMACS_LOG_FILE=<path>` |
 /// |---|---|---|
-/// | [`LogTarget::Stdout`] | stdout | stdout + file |
+/// | [`LogTarget::Stdout`] | synchronous stdout (build utilities) | stdout + file |
+/// | [`LogTarget::GuiStdout`] | bounded nonblocking stdout | stdout + file |
 /// | [`LogTarget::File`] | silent (no file) | file at `<path>` |
 /// | [`LogTarget::Test`] | captured test writer | test writer + file |
 ///
@@ -100,7 +180,7 @@ type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 ///   guard.
 /// - If the configured log file fails to open, a warning is printed to
 ///   stderr and the function continues with the default writer only
-///   (for [`LogTarget::Stdout`] and [`LogTarget::Test`]) or silently
+///   (for [`LogTarget::Stdout`], [`LogTarget::GuiStdout`] and [`LogTarget::Test`]) or silently
 ///   (for [`LogTarget::File`]).
 ///
 /// Legacy: `NEOMACS_LOG_TO_FILE=1` is still accepted and is equivalent
@@ -108,12 +188,15 @@ type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 /// directory. New call sites should prefer `NEOMACS_LOG_FILE`.
 pub fn init(target: LogTarget) -> LoggingGuard {
     static INIT: OnceLock<()> = OnceLock::new();
-    let mut guard: Option<tracing_appender::non_blocking::WorkerGuard> = None;
+    let mut guard = LoggingGuard {
+        _file: None,
+        gui: None,
+    };
     INIT.get_or_init(|| {
         install_first_panic_capture();
         guard = init_inner(target);
     });
-    LoggingGuard { _file: guard }
+    guard
 }
 
 /// Install a panic hook that records the FIRST panic's location and
@@ -202,7 +285,7 @@ fn default_layer(target: LogTarget) -> Option<BoxedLayer> {
                 .with_filter(make_env_filter())
                 .boxed(),
         ),
-        LogTarget::File => None,
+        LogTarget::GuiStdout | LogTarget::File => None,
         LogTarget::Test => Some(
             tracing_subscriber::fmt::layer()
                 .with_test_writer()
@@ -257,7 +340,7 @@ fn file_layer_for(
     open_file_layer(&path)
 }
 
-fn init_inner(target: LogTarget) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+fn init_inner(target: LogTarget) -> LoggingGuard {
     // Note: `tracing_subscriber::fmt::Subscriber::try_init` (which the
     // `.try_init()` call below ultimately runs) installs the log→tracing
     // bridge itself via `LogTracer::init`, so we do NOT call
@@ -271,8 +354,33 @@ fn init_inner(target: LogTarget) -> Option<tracing_appender::non_blocking::Worke
     // failed via `log::SetLoggerError`, which `tracing_subscriber`
     // surfaces as a `TryInitError::Logger`.
 
-    let default = default_layer(target);
-    let (file, file_guard) = file_layer_for(target);
+    let (default, gui) = if target == LogTarget::GuiStdout {
+        match gui_stdout::stdout() {
+            Ok((writer, guard)) => (
+                Some(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(writer)
+                        .with_filter(make_env_filter())
+                        .boxed(),
+                ),
+                Some(guard),
+            ),
+            Err(e) => {
+                // Do not fall back to synchronous GUI stdout on spawn failure.
+                eprintln!(
+                    "warning: could not start GUI logging worker: {e}; continuing without stdout diagnostics"
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (default_layer(target), None)
+    };
+    let (mut file, file_guard) = file_layer_for(target);
+    let file_guard = file_guard.and_then(|worker| FileGuard::new(worker, target));
+    if file_guard.is_none() {
+        file = None;
+    }
 
     // Each layer carries its own `EnvFilter` (per-layer filter), so the
     // registry is not wrapped in a global filter. We combine the
@@ -308,5 +416,8 @@ fn init_inner(target: LogTarget) -> Option<tracing_appender::non_blocking::Worke
     if let Err(e) = result {
         eprintln!("warning: tracing subscriber init failed: {e}");
     }
-    file_guard
+    LoggingGuard {
+        _file: file_guard,
+        gui,
+    }
 }
