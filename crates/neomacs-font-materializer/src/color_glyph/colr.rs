@@ -37,8 +37,8 @@ use ttf_parser::{Face, GlyphId, NormalizedCoordinate, OutlineBuilder, RgbaColor,
 /// Caps that keep a malformed paint graph from allocating an unbounded
 /// surface.  Real color glyphs stay far below them: a 128 px emoji rasterizes
 /// about 160 px across.
-const MAX_SIDE: u32 = 1024;
-const MAX_PIXELS: u64 = MAX_SIDE as u64 * MAX_SIDE as u64;
+pub(super) const MAX_SIDE: u32 = 1024;
+pub(super) const MAX_PIXELS: u64 = MAX_SIDE as u64 * MAX_SIDE as u64;
 
 /// Caps on one recorded graph.  ttf-parser bounds recursion depth and detects
 /// cycles, but a legal graph can still fan out exponentially through the one

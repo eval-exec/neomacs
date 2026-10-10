@@ -7,12 +7,15 @@
 //! *nothing*: not the color layers, not a monochrome fallback.  This module
 //! traverses the paint graph with ttf-parser and rasterizes it with tiny-skia,
 //! producing the placement and pixel conventions the Swash-backed path
-//! produces, so callers cannot tell the two apart.
+//! produces, so callers cannot tell the two apart.  `SVG ` table documents —
+//! the other source Swash never paints — render through usvg and resvg with
+//! the same conventions.
 //!
 //! The face cache belongs to the caller: rasterization is asked per glyph, and
 //! the table directory of a face is read once per asset, not once per glyph.
 
 mod colr;
+mod svg;
 
 use crate::raster_sources::{ColorGlyphSource, SfntFaceRasterSources, classify_sfnt_face};
 use neomacs_display_protocol::font::FontOutlineAsset;
@@ -223,10 +226,16 @@ impl ColorGlyphRasterizer {
                         return Ok(Some(raster));
                     }
                 }
+                ColorGlyphSource::SvgDocuments => {
+                    if let Some(parsed) = face.face()
+                        && let Some(raster) = svg::paint_svg_glyph(&parsed, request)
+                    {
+                        return Ok(Some(raster));
+                    }
+                }
                 // Embedded color strikes rasterize through Swash's source
-                // chain, which the caller drives; SVG documents are not
-                // rasterized yet.
-                ColorGlyphSource::EmbeddedColorBitmaps | ColorGlyphSource::SvgDocuments => {}
+                // chain, which the caller drives.
+                ColorGlyphSource::EmbeddedColorBitmaps => {}
             }
         }
         Ok(None)
@@ -280,6 +289,14 @@ impl ColorGlyphRasterizer {
 #[cfg(test)]
 #[path = "color_glyph/tests/color_glyph_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "color_glyph/tests/support.rs"]
+mod test_support;
+
+#[cfg(test)]
+#[path = "color_glyph/tests/svg_test.rs"]
+mod svg_tests;
 
 #[cfg(test)]
 #[path = "color_glyph/tests/synthetic_colr_test.rs"]
