@@ -177,3 +177,61 @@ fn compiled_sequence_edges() {
         expect_test::expect![[r#""OK ((1 2) nil (wrong-type-argument listp (1 . 2)) t)""#]],
     );
 }
+
+#[test]
+fn gdl_bounded_memory_binding_survives_public_loader_roundtrips() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let load_root = crate::common::oracle_sandbox::OracleSandbox::create_fixture_tempdir()
+        .expect("memory roundtrip fixture directory");
+    // The backing layout overflows before allocation. Load inside the dynamic
+    // descriptor binding and condition-case, rather than preloading the file.
+    std::fs::write(
+        load_root.path().join("gdl-oom-roundtrip.el"),
+        ";; -*- lexical-binding: nil; -*-\n(make-vector most-positive-fixnum 0)\n",
+    )
+    .expect("memory roundtrip payload");
+    let form = r#"
+(progn
+  (defvar gdl-roundtrip-hook-count 0)
+  (defvar gdl-roundtrip-debug-count 0)
+  (let ((gdl-roundtrip-payload
+         (expand-file-name "gdl-oom-roundtrip.el"
+                           (getenv "NEOVM_ORACLE_LOAD_ROOT"))))
+    (mapcar
+     (lambda (operation)
+       (let* ((memory-signal-data (cons 'error 'gdl-roundtrip-owned-tail))
+              (gdl-roundtrip-hook-count 0)
+              (gdl-roundtrip-debug-count 0)
+              (internal-when-entered-debugger -1)
+              (inhibit-debugger nil)
+              (debug-ignored-errors nil)
+              (debug-on-error t)
+              (debug-on-signal t)
+              (debugger (lambda (&rest ignored)
+                          (setq gdl-roundtrip-debug-count
+                                (1+ gdl-roundtrip-debug-count))))
+              (signal-hook-function
+               (lambda (&rest ignored)
+                 (setq gdl-roundtrip-hook-count
+                       (1+ gdl-roundtrip-hook-count)))))
+         (let ((result
+                (condition-case e
+                    (cond
+                     ((eq operation 'direct)
+                      (make-vector most-positive-fixnum 0))
+                     ((eq operation 'load)
+                      (load gdl-roundtrip-payload nil t t))
+                     ((eq operation 'load-file)
+                      (load-file gdl-roundtrip-payload))
+                     ((eq operation 'require)
+                      (require 'gdl-oom-public-roundtrip-audit-20261010
+                               gdl-roundtrip-payload)))
+                  (error (list e (eq e memory-signal-data))))))
+           (list operation result
+                 gdl-roundtrip-hook-count gdl-roundtrip-debug-count))))
+     '(direct load load-file require))))
+"#;
+    // Pure live parity uses the existing oracle_gdl harness and its sandbox.
+    // No unverified snapshot expectation is installed by this proposal.
+    crate::common::assert_oracle_parity_with_load_root(form, &[], load_root.path());
+}

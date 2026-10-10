@@ -111,7 +111,11 @@ fn pinned_slot(error: &EvalError) -> (InFlightRegistryHandle, InFlightSlotId) {
     let EvalError::Signal { pin, .. } = error else {
         panic!("expected a pinned signal");
     };
-    let pin = pin.pin.as_ref().expect("signal has traceable payload");
+    let pin = pin
+        .in_flight_roots()
+        .pin
+        .as_ref()
+        .expect("signal has traceable payload");
     (pin.registry.clone(), InFlightSlotId(pin.slot))
 }
 

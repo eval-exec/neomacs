@@ -188,3 +188,131 @@ fn eval_error_round_trip_per_kind() {
     let back = flow_from_eval_error(map_flow(Flow::shutdown(request)));
     assert_eq!(back.shutdown_request(), Some(request));
 }
+
+#[test]
+fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc() {
+    use super::{
+        SignalDelivery, collect_in_flight_flow_gc_roots, make_signal_binding_value,
+        memory_signal_from_binding_value,
+    };
+    use crate::emacs_core::eval::ResumeTarget;
+
+    crate::test_utils::init_test_tracing();
+    let mut ctx = Context::new();
+    // This descriptor is not stored in a Lisp variable. Only the in-flight
+    // signal owns a collector-visible root for its original cons.
+    let binding = ctx
+        .eval_str("(cons (make-symbol \"gdl-roundtrip-local-error\") (cons (vector 7) 99))")
+        .unwrap();
+    let symbol = binding.cons_car().as_symbol_id().unwrap();
+    let tail = binding.cons_cdr();
+    let vector = tail.cons_car();
+    let target = ResumeTarget::SafeFuncall {
+        condition_stack_base: 7,
+    };
+    let mut flow = memory_signal_from_binding_value(binding);
+    let signal = flow.as_signal_mut().unwrap();
+    signal.selected_resume = Some(target.clone());
+    signal.search_complete = true;
+
+    let original_error = map_flow(flow);
+    let error = original_error.clone();
+    drop(original_error);
+    let mut roots = Vec::new();
+    collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    assert!(
+        roots.iter().any(|root| root.bits() == binding.bits()),
+        "the public error clone must pin the original memory descriptor"
+    );
+    ctx.gc_collect_exact();
+    for value in [binding, tail, vector] {
+        assert!(ctx.tagged_heap.owns_heap_value_for_test(value));
+    }
+
+    let back = flow_from_eval_error(error);
+    let signal = back.as_signal().unwrap();
+    assert!(matches!(
+        signal.delivery(),
+        SignalDelivery::MemoryExhausted(_)
+    ));
+    assert_eq!(signal.symbol, symbol);
+    assert_eq!(signal.raw_data, Some(tail));
+    assert_eq!(make_signal_binding_value(signal).bits(), binding.bits());
+    assert_eq!(signal.selected_resume, Some(target));
+    assert!(signal.search_complete);
+    ctx.gc_collect_exact();
+    assert!(ctx.tagged_heap.owns_heap_value_for_test(binding));
+    assert!(ctx.tagged_heap.owns_heap_value_for_test(vector));
+    assert_eq!(binding.cons_car().as_symbol_id(), Some(symbol));
+    assert_eq!(tail.cons_cdr(), Value::fixnum(99));
+    assert_eq!(vector.as_vector_data().unwrap()[0], Value::fixnum(7));
+}
+
+#[test]
+fn gdl_eval_error_round_trip_keeps_hook_suppression() {
+    use super::{SignalDelivery, signal_suppressed};
+
+    crate::test_utils::init_test_tracing();
+    let _ctx = Context::new();
+    let back = flow_from_eval_error(map_flow(signal_suppressed(
+        LispCondition::Error,
+        vec![Value::fixnum(2)],
+    )));
+    let signal = back.as_signal().unwrap();
+    assert!(matches!(signal.delivery(), SignalDelivery::HookSuppressed));
+    assert_eq!(signal.data, vec![Value::fixnum(2)]);
+    assert!(signal.selected_resume.is_none());
+    assert!(!signal.search_complete);
+}
+
+#[test]
+fn gdl_eval_error_round_trip_keeps_completed_handler_selection() {
+    use super::{SignalDelivery, signal_suppressed};
+    use crate::emacs_core::eval::ResumeTarget;
+
+    crate::test_utils::init_test_tracing();
+    let _ctx = Context::new();
+    for mut flow in [
+        signal(LispCondition::Error, vec![Value::fixnum(3)]),
+        signal_suppressed(LispCondition::Error, vec![Value::fixnum(4)]),
+    ] {
+        let target = ResumeTarget::InterpreterConditionCase {
+            handler_index: 3,
+            condition_stack_base: 2,
+        };
+        let suppressed = matches!(
+            flow.as_signal().unwrap().delivery(),
+            SignalDelivery::HookSuppressed
+        );
+        let signal = flow.as_signal_mut().unwrap();
+        signal.selected_resume = Some(target.clone());
+        signal.search_complete = true;
+        // A second public boundary models repeated loader cleanup crossings;
+        // none may restart handler-bind search or discard the chosen target.
+        let back = flow_from_eval_error(map_flow(flow_from_eval_error(map_flow(flow))));
+        let signal = back.as_signal().unwrap();
+        assert_eq!(signal.selected_resume, Some(target));
+        assert!(signal.search_complete);
+        assert_eq!(
+            matches!(signal.delivery(), SignalDelivery::HookSuppressed),
+            suppressed
+        );
+    }
+}
+
+#[test]
+fn gdl_eval_error_public_signal_constructor_starts_ordinary_unselected() {
+    use super::SignalDelivery;
+
+    crate::test_utils::init_test_tracing();
+    let _ctx = Context::new();
+    let back = flow_from_eval_error(EvalError::signal(
+        Value::symbol("error").as_symbol_id().unwrap(),
+        vec![Value::fixnum(5)],
+        None,
+    ));
+    let signal = back.as_signal().unwrap();
+    assert!(matches!(signal.delivery(), SignalDelivery::Ordinary));
+    assert!(signal.selected_resume.is_none());
+    assert!(!signal.search_complete);
+}

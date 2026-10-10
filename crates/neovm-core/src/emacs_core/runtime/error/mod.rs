@@ -27,9 +27,10 @@ thread_local! {
 /// reason [`Flow`]'s payloads do: a boundary that holds an `EvalError` while
 /// more Lisp runs is holding Lisp values the precise collector cannot see. An
 /// enum variant cannot have a private FIELD (a variant's fields are as visible
-/// as the enum), so the pin is a field of a type that has no constructor
-/// outside this module — which makes the struct literal unwritable elsewhere
-/// and [`EvalError::signal`] / [`EvalError::uncaught_throw`] the only ways in.
+/// as the enum), so each owning state has no constructor outside this module.
+/// This makes struct literals unwritable elsewhere; [`EvalError::signal`] and
+/// [`EvalError::uncaught_throw`] remain the public constructors. The signal
+/// state also preserves delivery policy and completed handler selection.
 /// Existing `EvalError::Signal { symbol, data, .. }` patterns keep working
 /// unchanged; only construction sites move (DIVERGENCES.md 162).
 #[derive(Clone, Debug)]
@@ -38,8 +39,8 @@ pub enum EvalError {
         symbol: SymId,
         data: Vec<Value>,
         raw_data: Option<Value>,
-        /// Not constructible outside `error.rs`; see the type docs.
-        pin: InFlightRoots,
+        /// Rooted signal state, not constructible outside this module.
+        pin: EvalSignalState,
     },
     UncaughtThrow {
         tag: Value,
@@ -51,20 +52,47 @@ pub enum EvalError {
     Shutdown(super::eval::ShutdownRequest),
 }
 
+/// Opaque signal state crossing the public error boundary. Its owning pin
+/// covers the payload and any original memory-exhaustion descriptor; delivery
+/// and completed handler selection stay with that pin through a roundtrip.
+/// Private fields prevent construction or extraction of unrooted metadata.
+#[derive(Clone, Debug)]
+pub struct EvalSignalState {
+    roots: InFlightRoots,
+    delivery: SignalDelivery,
+    selected_resume: Option<ResumeTarget>,
+    search_complete: bool,
+}
+
 impl EvalError {
-    /// The only way to build a signal error: pins the symbol and payload as GC
-    /// roots for as long as the error (or any clone of it) lives.
+    /// The only public way to build a signal error: pins the symbol and payload
+    /// as GC roots for as long as the error (or any clone of it) lives.
     pub fn signal(symbol: SymId, data: Vec<Value>, raw_data: Option<Value>) -> Self {
-        let pin = InFlightRoots::pin(
-            std::iter::once(Value::from_sym_id(symbol))
-                .chain(data.iter().copied())
-                .chain(raw_data),
-        );
+        Self::from_signal(SignalData::new(symbol, data, raw_data, false))
+    }
+
+    /// Transfer an existing signal without dropping its owning roots or
+    /// restarting delivery after loader cleanups cross this public boundary.
+    fn from_signal(signal: SignalData) -> Self {
+        let SignalData {
+            symbol,
+            data,
+            raw_data,
+            delivery,
+            selected_resume,
+            search_complete,
+            pin,
+        } = signal;
         Self::Signal {
             symbol,
             data,
             raw_data,
-            pin,
+            pin: EvalSignalState {
+                roots: pin,
+                delivery,
+                selected_resume,
+                search_complete,
+            },
         }
     }
 
@@ -119,8 +147,24 @@ pub(crate) fn flow_from_eval_error(err: EvalError) -> Flow {
             symbol,
             data,
             raw_data,
-            ..
-        } => Flow::signal_boxed(Box::new(SignalData::new(symbol, data, raw_data, false))),
+            pin,
+        } => {
+            let EvalSignalState {
+                roots,
+                delivery,
+                selected_resume,
+                search_complete,
+            } = pin;
+            Flow::signal_boxed(Box::new(SignalData {
+                symbol,
+                data,
+                raw_data,
+                delivery,
+                selected_resume,
+                search_complete,
+                pin: roots,
+            }))
+        }
         EvalError::UncaughtThrow { tag, value, .. } => Flow::throw(tag, value),
         EvalError::Shutdown(request) => Flow::shutdown(request),
     }
@@ -422,6 +466,12 @@ pub(crate) trait InFlightPinned {
     // constructible here), and the compile-time guarantee IS the product.
     #[allow(dead_code)]
     fn in_flight_roots(&self) -> &InFlightRoots;
+}
+
+impl InFlightPinned for EvalSignalState {
+    fn in_flight_roots(&self) -> &InFlightRoots {
+        &self.roots
+    }
 }
 
 /// `(throw TAG VALUE)` in flight.
@@ -1071,11 +1121,7 @@ pub(crate) fn signal_with_data_id(symbol: SymId, data: Value) -> Flow {
 /// Convert internal flow to public EvalError.
 pub fn map_flow(flow: Flow) -> EvalError {
     match flow.into_kind() {
-        FlowKind::Signal(sig) => {
-            // `sig` (and with it the SignalData pin) stays alive until the new
-            // pin is taken, so the payload is never momentarily unrooted.
-            EvalError::signal(sig.symbol, sig.data.clone(), sig.raw_data)
-        }
+        FlowKind::Signal(sig) => EvalError::from_signal(*sig),
         FlowKind::Throw(thrown) => EvalError::uncaught_throw(thrown.tag, thrown.value),
         FlowKind::Shutdown(request) => EvalError::Shutdown(request),
         FlowKind::ThreadBlocked(blocked) => EvalError::signal(
