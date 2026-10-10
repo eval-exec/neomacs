@@ -189,3 +189,42 @@ fn zero_and_invalid_sizes_paint_nothing() {
         );
     }
 }
+
+/// The COLRv1 painter follows the instance's coordinates: on the variable
+/// Nabla face, two `EDPT` settings paint different layers of the same glyph.
+#[test]
+fn colrv1_variations_change_the_paint() {
+    let bytes = std::fs::read(neomacs_test_fonts::nabla_color_colrv1()).expect("Nabla fixture");
+    let face = ttf_parser::Face::parse(&bytes, 0).expect("Nabla parses");
+    let glyph = face.glyph_index('A').expect("Nabla maps A").0;
+    let asset = FontOutlineAsset::Memory(
+        FontMemoryAsset::new("nabla-variations", Arc::new(bytes), 0).expect("memory asset"),
+    );
+    let rasterize = |edpt: f32| {
+        let variations = [(Tag::from_bytes(b"EDPT"), edpt)];
+        let mut rasterizer = ColorGlyphRasterizer::new();
+        rasterizer
+            .rasterize(
+                &asset,
+                &ColorGlyphRequest {
+                    glyph_id: glyph,
+                    px_size: 64.0,
+                    variations: &variations,
+                    ..ColorGlyphRequest::default()
+                },
+            )
+            .expect("Nabla opens")
+            .expect("the glyph paints")
+    };
+    let light = rasterize(0.0);
+    let heavy = rasterize(100.0);
+    assert!(light.rgba.iter().any(|byte| *byte != 0), "no ink at EDPT 0");
+    assert!(
+        heavy.rgba.iter().any(|byte| *byte != 0),
+        "no ink at EDPT 100"
+    );
+    assert_ne!(
+        light.rgba, heavy.rgba,
+        "EDPT did not change the paint: variations were dropped"
+    );
+}

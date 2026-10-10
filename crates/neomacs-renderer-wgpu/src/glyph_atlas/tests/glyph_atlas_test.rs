@@ -949,23 +949,132 @@ fn shape_emoji(
     atlas: &mut WgpuGlyphAtlas,
     attrs: &cosmic_text::Attrs<'static>,
 ) -> cosmic_text::CacheKey {
+    shape_single(atlas, attrs, "\u{1F347}")
+}
+
+/// Shape `text` with `attrs` and return the leading glyph's cache key.
+fn shape_single(
+    atlas: &mut WgpuGlyphAtlas,
+    attrs: &cosmic_text::Attrs<'static>,
+    text: &str,
+) -> cosmic_text::CacheKey {
     use cosmic_text::{Buffer, Metrics, Shaping};
     let mut buffer = Buffer::new(&mut atlas.font_system, Metrics::new(16.0, 20.0));
     buffer.set_size(&mut atlas.font_system, Some(64.0), Some(32.0));
-    buffer.set_text(
-        &mut atlas.font_system,
-        "\u{1F347}",
-        attrs,
-        Shaping::Advanced,
-        None,
-    );
+    buffer.set_text(&mut atlas.font_system, text, attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(&mut atlas.font_system, false);
     buffer
         .layout_runs()
         .find_map(|run| run.glyphs.first())
-        .expect("shape the emoji glyph")
+        .expect("shape the glyph")
         .physical((0.0, 0.0), 1.0)
         .cache_key
+}
+
+/// Install one variation instance of the variable COLRv1 face.
+fn install_nabla_memory_face(
+    atlas: &mut WgpuGlyphAtlas,
+    id: u32,
+    coords: &[(&[u8; 4], f32)],
+) -> (ResolvedFontId, ResolvedFont) {
+    use neomacs_display_protocol::font::{
+        FontBackendKind, FontMemoryAsset, FontSlantKind, FontVariationCoord, ResolvedFontTable,
+    };
+    use std::sync::Arc;
+
+    static BYTES: std::sync::OnceLock<Arc<Vec<u8>>> = std::sync::OnceLock::new();
+    let bytes = BYTES
+        .get_or_init(|| {
+            Arc::new(
+                std::fs::read(neomacs_test_fonts::nabla_color_colrv1())
+                    .expect("downloaded Nabla fixture"),
+            )
+        })
+        .clone();
+    let variations = coords
+        .iter()
+        .map(|&(tag, value)| {
+            FontVariationCoord::try_new(u32::from_be_bytes(*tag), value).expect("finite value")
+        })
+        .collect::<Vec<_>>();
+    let identity = ResolvedFontIdentity::from_native_with_variations(
+        FontBackendKind::Fontconfig,
+        format!("freeTypeFontconfig:test:Nabla-{id}"),
+        0,
+        Some("Nabla".to_owned()),
+        variations,
+    );
+    let asset = FontOutlineAsset::Memory(
+        FontMemoryAsset::new(identity.stable_key.clone(), bytes, 0).expect("Nabla memory fixture"),
+    );
+    let resolved_id = ResolvedFontId(id);
+    let font = ResolvedFont {
+        id: resolved_id,
+        identity,
+        replay: FontReplay::Swash { asset },
+        family: "Nabla".to_owned(),
+        full_name: Some("Nabla".to_owned()),
+        postscript_name: Some("Nabla".to_owned()),
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 16.0,
+        ascent_px: 12.0,
+        descent_px: 4.0,
+        space_advance_px: 8.0,
+        glyph_advance: Default::default(),
+    };
+    let mut fonts = ResolvedFontTable::default();
+    fonts.insert(resolved_id, font.clone());
+    atlas.install_frame_fonts(
+        &Default::default(),
+        &fonts,
+        &Default::default(),
+        &Default::default(),
+    );
+    (resolved_id, font)
+}
+
+/// A resolved variation instance must reach the color painter: the variable
+/// COLRv1 face paints different layers for different `EDPT` coordinates, and
+/// the two instances lose their distinction only if the request drops them.
+#[test]
+fn colrv1_variation_instances_paint_differently() {
+    let Some(mut atlas) = try_test_atlas() else {
+        return;
+    };
+    let (_, thin) = install_nabla_memory_face(&mut atlas, 553, &[(b"EDPT", 0.0)]);
+    let (_, thick) = install_nabla_memory_face(&mut atlas, 554, &[(b"EDPT", 100.0)]);
+
+    let thin_attrs = atlas
+        .exact_attrs_for_resolved_font(&thin)
+        .expect("renderer pins the thin instance");
+    let thick_attrs = atlas
+        .exact_attrs_for_resolved_font(&thick)
+        .expect("renderer pins the thick instance");
+    let thin_key = shape_single(&mut atlas, &thin_attrs, "A");
+    let thick_key = shape_single(&mut atlas, &thick_attrs, "A");
+    assert_ne!(thin_key, thick_key, "instances must not share a key");
+
+    let thin_image = atlas
+        .glyph_image(thin_key, None, 16.0, false, None)
+        .expect("the thin instance paints");
+    let thick_image = atlas
+        .glyph_image(thick_key, None, 16.0, false, None)
+        .expect("the thick instance paints");
+    assert_eq!(thin_image.content, super::RasterContent::Color);
+    assert!(
+        thin_image.data.chunks_exact(4).any(|pixel| pixel[3] > 0),
+        "the thin instance has no ink"
+    );
+    assert!(
+        thick_image.data.chunks_exact(4).any(|pixel| pixel[3] > 0),
+        "the thick instance has no ink"
+    );
+    assert_ne!(
+        thin_image.data, thick_image.data,
+        "the two EDPT instances painted identically: the request dropped the variation"
+    );
 }
 
 /// Regression for issue #542: a COLRv1 face materializes through fontdb, but
@@ -1002,7 +1111,7 @@ fn colrv1_memory_asset_paints_through_the_color_stage() {
     );
 
     let image = atlas
-        .glyph_image(cache_key, None, 16.0, false)
+        .glyph_image(cache_key, None, 16.0, false, None)
         .expect("the color stage paints the emoji glyph");
     assert_eq!(image.content, super::RasterContent::Color);
     assert!(
@@ -1037,7 +1146,7 @@ fn colrv1_face_pinned_for_shaping_still_paints_in_color() {
     let cache_key = shape_emoji(&mut atlas, &attrs);
 
     let image = atlas
-        .glyph_image(cache_key, None, 16.0, false)
+        .glyph_image(cache_key, None, 16.0, false, None)
         .expect("a shaping-pinned color face paints");
     assert_eq!(image.content, super::RasterContent::Color);
     assert!(image.data.chunks_exact(4).any(|pixel| pixel[3] > 0));
@@ -1072,6 +1181,7 @@ fn colrv1_file_face_paints_through_a_derived_asset() {
             None,
             cosmic_text::SubpixelBin::Zero,
             cosmic_text::SubpixelBin::Zero,
+            None,
         )
         .expect("a file face paints through a derived asset");
     assert_eq!(image.content, super::RasterContent::Color);
@@ -1216,5 +1326,27 @@ fn mask_glyph_identities_ignore_the_foreground() {
         atlas.glyph_font_identity_for_char(Some(&face_for(outline_id, red)), 'A'),
         atlas.glyph_font_identity_for_char(Some(&face_for(outline_id, blue)), 'A'),
         "a mask glyph's identity must ignore the foreground"
+    );
+}
+
+/// Resolved coordinates win over the weight fallback; an instance without
+/// coordinates keeps the one axis Swash scaling applies.
+#[test]
+fn color_variation_settings_prefer_resolved_coordinates() {
+    use neomacs_display_protocol::font::{FontVariationCoord, FontVariationSet};
+
+    let tag = |bytes: &[u8; 4]| neomacs_font_materializer::Tag::from_bytes(bytes);
+    let empty = FontVariationSet::default();
+    assert_eq!(
+        super::color_variation_settings(&empty, 700),
+        vec![(tag(b"wght"), 700.0)]
+    );
+
+    let resolved = FontVariationSet::new(vec![
+        FontVariationCoord::try_new(u32::from_be_bytes(*b"EDPT"), 42.5).expect("finite value"),
+    ]);
+    assert_eq!(
+        super::color_variation_settings(&resolved, 700),
+        vec![(tag(b"EDPT"), 42.5)]
     );
 }
