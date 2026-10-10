@@ -156,6 +156,10 @@ pub struct PixelCalcImageInputs {
     pub dimensions: crate::display_spec::DisplayImageDimensionEnvironment,
     pub default_fg: u32,
     pub default_bg: u32,
+    /// GNU's `FRAME_FOREGROUND_PIXEL`: the frame's `foreground-color`, which
+    /// keys the catalog entry a decoder that must paint an unresolvable color
+    /// key with something would read (src/image.c:6518; issue #556).
+    pub frame_foreground: u32,
 }
 
 fn collect_space_image_operands(
@@ -170,14 +174,11 @@ fn collect_space_image_operands(
         return;
     }
     if value.cons_car().is_symbol_named("image")
-        // The size path has only the face in hand: nothing is decoded from this
-        // context, it keys the catalog lookup, so the face stands in for the
-        // frame foreground it cannot name.
         && let Some(layout) = crate::display_spec::parse_display_image_layout(
             value,
             inputs.default_fg,
             inputs.default_bg,
-            inputs.default_fg,
+            inputs.frame_foreground,
         )
         && let Some(catalog) = inputs.catalog.as_ref()
     {

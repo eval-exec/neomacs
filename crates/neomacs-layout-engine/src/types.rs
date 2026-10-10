@@ -190,6 +190,7 @@ impl WindowParams {
             ),
             default_fg: self.default_fg,
             default_bg: self.default_bg,
+            frame_foreground: self.frame_foreground,
         }
     }
 }
@@ -333,6 +334,16 @@ pub struct WindowParams {
     /// Default face foreground/background for this window
     pub default_fg: u32,
     pub default_bg: u32,
+
+    /// GNU's `FRAME_FOREGROUND_PIXEL` for this window's frame: the frame's
+    /// `foreground-color` parameter (src/image.c:6518, :6537-6538), which GNU
+    /// keeps equal to the `default` face's foreground (src/xfaces.c:4394-4404).
+    ///
+    /// Apart from `default_fg`, which is the face in effect in this buffer and
+    /// follows `face-remapping-alist`; a decoder that must paint an
+    /// unresolvable color key with something reads this one, as in GNU
+    /// (issue #556).
+    pub frame_foreground: u32,
 
     /// Character cell dimensions
     pub char_width: f32,

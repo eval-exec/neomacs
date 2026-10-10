@@ -11,10 +11,10 @@ publish = false
 [dependencies]
 flate2.workspace = true
 fs4.workspace = true
+neomacs-infra.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
-ureq.workspace = true
 zip.workspace = true
 
 [lints]

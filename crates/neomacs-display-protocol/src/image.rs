@@ -415,6 +415,7 @@ impl ImageRgb {
 /// the render command, and the decoder.  Consequently a decoder cannot accept
 /// an unlabelled `(u32, u32)` pair or mistake valid black for a missing color.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "ImageColorContextWire")]
 pub struct ImageColorContext {
     foreground: ImageRgb,
     background: ImageRgb,
@@ -426,10 +427,34 @@ pub struct ImageColorContext {
     /// Deliberately apart from `foreground`: an image is *displayed under* a
     /// face and may carry a `:foreground` of its own, and GNU reads neither for
     /// this (issue #550).
-    #[serde(default)]
     frame_foreground: ImageRgb,
+    background_policy: ImageBackgroundPolicy,
+}
+
+/// Deserialization mirror of [`ImageColorContext`].
+///
+/// An absent `frame_foreground` reads as the face foreground -- the default
+/// [`ImageColorContext::from_pixels`] documents -- never as black, which is a
+/// real color here and not an "unset" (issue #556).
+#[derive(serde::Deserialize)]
+struct ImageColorContextWire {
+    foreground: ImageRgb,
+    background: ImageRgb,
+    #[serde(default)]
+    frame_foreground: Option<ImageRgb>,
     #[serde(default)]
     background_policy: ImageBackgroundPolicy,
+}
+
+impl From<ImageColorContextWire> for ImageColorContext {
+    fn from(wire: ImageColorContextWire) -> Self {
+        Self {
+            foreground: wire.foreground,
+            background: wire.background,
+            frame_foreground: wire.frame_foreground.unwrap_or(wire.foreground),
+            background_policy: wire.background_policy,
+        }
+    }
 }
 
 /// Editor images use GNU's face-colored wrapper; chrome icons preserve alpha

@@ -61,6 +61,7 @@ fn window_params_construction() {
         scroll_margin: 0,
         tab_stop_list: vec![],
         default_fg: 0x00FFFFFF,
+        frame_foreground: 0x00FFFFFF,
         default_bg: 0x00000000,
         char_width: 8.0,
         char_height: 16.0,
@@ -114,6 +115,16 @@ fn window_params_construction() {
     assert_eq!(params.tab_width, 8);
     assert_eq!(params.fill_column_indicator, 80);
     assert_eq!(params.fill_column_indicator_char, '|');
+
+    // Issue #556: `space_image_inputs` hands the size path the frame
+    // foreground beside the face colors -- GNU reads `FRAME_FOREGROUND_PIXEL`
+    // for an unresolvable XPM color key (src/image.c:6518).
+    let mut params = params;
+    params.default_fg = 0x00_aa_00_00;
+    params.frame_foreground = 0x00_12_34_56;
+    let inputs = params.space_image_inputs();
+    assert_eq!(inputs.default_fg, 0x00_aa_00_00);
+    assert_eq!(inputs.frame_foreground, 0x00_12_34_56);
 }
 
 #[test]
@@ -154,6 +165,7 @@ fn window_params_minibuffer() {
         scroll_margin: 0,
         tab_stop_list: vec![],
         default_fg: 0x00FFFFFF,
+        frame_foreground: 0x00FFFFFF,
         default_bg: 0x00000000,
         char_width: 8.0,
         char_height: 16.0,
@@ -239,6 +251,7 @@ fn window_params_clone() {
         scroll_margin: 0,
         tab_stop_list: vec![],
         default_fg: 0,
+        frame_foreground: 0,
         default_bg: 0,
         char_width: 8.0,
         char_height: 16.0,
