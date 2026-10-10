@@ -317,3 +317,93 @@ fn real_svg_documents_render_from_the_pinned_fixture() {
         ink(&raster)
     );
 }
+
+/// A crafted stream must not be able to expand without bound: the inflate
+/// step refuses documents past its ceiling instead of allocating first.
+#[test]
+fn oversized_decompressed_documents_are_refused() {
+    let payload = vec![b'x'; 4096];
+    let compressed = gzip_bytes(&payload);
+    assert!(
+        super::svg::bounded_decompress(&compressed, 1024).is_none(),
+        "a stream past the limit must be refused"
+    );
+    assert_eq!(
+        super::svg::bounded_decompress(&compressed, 4096).as_deref(),
+        Some(payload.as_slice()),
+        "a stream at the limit decodes intact"
+    );
+}
+
+/// Spec: a document that sets the color property itself overrides the host's
+/// currentColor — and injecting a second color attribute would break the XML
+/// outright.
+#[test]
+fn documents_with_their_own_root_color_keep_it() {
+    let base = glyph('\u{2588}');
+    let doc = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" color=\"#123456\">\
+         <g id=\"glyph{base}\"><rect x=\"100\" y=\"-600\" width=\"400\" height=\"500\" \
+         fill=\"currentColor\"/></g></svg>"
+    )
+    .into_bytes();
+    let font = fixture_with_tables(&[(b"SVG ", svg_table(&[(base, base, doc, false)]))]);
+    let raster = rasterize_at(
+        &font,
+        "synthetic:svg-own-color",
+        base,
+        [200, 10, 120, 255],
+        100.0,
+    )
+    .expect("the document's own color paints");
+    assert_eq!(pixel(&raster, 20, 25), [0x12, 0x34, 0x56, 0xff]);
+}
+
+/// Definitions may live outside `defs` and still be referenced; pruning must
+/// not take them away with the sibling that owns them.
+#[test]
+fn definitions_outside_defs_stay_reachable() {
+    let base = glyph('\u{2588}');
+    let gradient = "<linearGradient id=\"grad\" gradientUnits=\"userSpaceOnUse\" \
+                    x1=\"100\" y1=\"-600\" x2=\"500\" y2=\"-600\">\
+                    <stop offset=\"0\" stop-color=\"#2200ee\"/>\
+                    <stop offset=\"1\" stop-color=\"#22aa22\"/></linearGradient>";
+    let doc = document(&format!(
+        "{gradient}<g id=\"glyph{base}\"><rect x=\"100\" y=\"-600\" width=\"400\" height=\"500\" \
+         fill=\"url(#grad)\"/></g>"
+    ));
+    let font = fixture_with_tables(&[(b"SVG ", svg_table(&[(base, base, doc, false)]))]);
+    let raster = rasterize_at(&font, "synthetic:svg-gradef", base, [0, 0, 0, 255], 100.0)
+        .expect("a gradient defined outside defs still paints");
+    let left = pixel(&raster, 2, 25);
+    let right = pixel(&raster, 37, 25);
+    assert!(
+        left[2] > left[1] + 80 && left[3] > 200,
+        "the gradient's first stop must show at the left: {left:?}"
+    );
+    assert!(
+        right[1] > right[2] + 80 && right[3] > 200,
+        "the gradient's last stop must show at the right: {right:?}"
+    );
+}
+
+/// Only the requested glyph description paints: a stray renderable sibling
+/// stays out of the rendered tree even though it is kept for references.
+#[test]
+fn stray_renderable_siblings_do_not_paint() {
+    let base = glyph('\u{2588}');
+    let stray = "<rect x=\"0\" y=\"-1000\" width=\"1000\" height=\"1000\" fill=\"#ff0000\"/>";
+    let doc = document(&format!(
+        "{stray}<g id=\"glyph{base}\"><rect x=\"100\" y=\"-600\" width=\"400\" height=\"500\" \
+         fill=\"#2200ee\"/></g>"
+    ));
+    let font = fixture_with_tables(&[(b"SVG ", svg_table(&[(base, base, doc, false)]))]);
+    let raster = rasterize_at(&font, "synthetic:svg-stray", base, [0, 0, 0, 255], 100.0)
+        .expect("the glyph paints without the stray sibling");
+    assert_eq!(
+        (raster.left, raster.top, raster.width, raster.height),
+        (10, 60, 40, 50),
+        "the raster must be the glyph's own box, not the stray's"
+    );
+    assert_eq!(pixel(&raster, 20, 25), INDIGO);
+}

@@ -92,17 +92,28 @@ pub(super) fn paint_svg_glyph(
     })
 }
 
+/// Decompressed-document ceiling.  Real documents stay far below it — the
+/// pinned Noto fixture's largest decodes to 14 MB — so it only stops a
+/// crafted stream from expanding without bound.
+const MAX_SVG_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
+
 /// Spec: documents may be gzip-encoded; the header starts `1F 8B 08`.
 fn decompressed(data: &[u8]) -> Option<Vec<u8>> {
     if data.starts_with(&[0x1f, 0x8b, 0x08]) {
-        let mut decoded = Vec::new();
-        flate2::read::GzDecoder::new(data)
-            .read_to_end(&mut decoded)
-            .ok()?;
-        Some(decoded)
+        bounded_decompress(data, MAX_SVG_DOCUMENT_BYTES)
     } else {
         Some(data.to_vec())
     }
+}
+
+/// Inflate `data`, failing when the decoded size exceeds `limit`.
+pub(super) fn bounded_decompress(data: &[u8], limit: usize) -> Option<Vec<u8>> {
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(data)
+        .take(limit as u64 + 1)
+        .read_to_end(&mut decoded)
+        .ok()?;
+    (decoded.len() <= limit).then_some(decoded)
 }
 
 /// The element `id` for one glyph, per the spec's `glyph<glyphID>` rule.
@@ -132,27 +143,55 @@ fn pruned_document(text: &str, glyph_id: u16) -> Option<String> {
         .descendants()
         .find(|node| node.is_element() && node.attribute("id") == Some(wanted.as_str()))?;
 
-    let mut removals: Vec<std::ops::Range<usize>> = Vec::new();
+    // Rebuild from the root down to the glyph's element, keeping every
+    // sibling that is not another glyph description.  Definitions may live
+    // outside `defs` and still be referenced, so a renderable sibling is
+    // wrapped in one instead of deleted: its artwork must not paint, but
+    // references into it must resolve.
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
     let mut current = target;
     while let Some(parent) = current.parent_element() {
         for child in parent.children().filter(|child| child.is_element()) {
-            if child == current || child.tag_name().name() == "defs" {
+            if child == current {
                 continue;
             }
-            removals.push(child.range());
+            if is_glyph_description(&child) {
+                edits.push((child.range(), String::new()));
+            } else if GRAPHIC_ELEMENTS.contains(&child.tag_name().name()) {
+                let body = &text[child.range()];
+                edits.push((child.range(), format!("<defs>{body}</defs>")));
+            }
         }
         current = parent;
     }
-    removals.sort_by_key(|range| range.start);
+    edits.sort_by_key(|(range, _)| range.start);
 
     let mut out = String::with_capacity(text.len());
     let mut cursor = 0;
-    for range in removals {
+    for (range, replacement) in edits {
         out.push_str(&text[cursor..range.start]);
+        out.push_str(&replacement);
         cursor = range.end;
     }
     out.push_str(&text[cursor..]);
     Some(out)
+}
+
+/// Element names usvg renders; keeping one outside a `defs` would paint
+/// sibling artwork the requested glyph never asked for.
+const GRAPHIC_ELEMENTS: &[&str] = &[
+    "a", "circle", "ellipse", "g", "image", "line", "path", "polygon", "polyline", "rect", "svg",
+    "switch", "text", "use",
+];
+
+/// Whether this element is another `glyph<id>` description — one that must
+/// not render when a different glyph of the same document was requested.  The
+/// requested glyph itself is on the ancestor chain, never a sibling.
+fn is_glyph_description(node: &usvg::roxmltree::Node<'_, '_>) -> bool {
+    node.attribute("id").is_some_and(|id| {
+        id.strip_prefix("glyph")
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+    })
 }
 
 /// Rewrite the document text for the two host-environment hooks the spec
@@ -171,6 +210,13 @@ fn inject_foreground(text: &str, foreground: [u8; 4]) -> String {
     let Some(tag_end) = text[svg_start..].find('>').map(|i| svg_start + i) else {
         return text.to_owned();
     };
+    let start_tag = &text[svg_start..tag_end];
+    // Spec: a document that sets the color property explicitly overrides the
+    // host's currentColor, and a second attribute of the same name would not
+    // even be XML.
+    if has_attribute(start_tag, "color") {
+        return text.to_owned();
+    }
     let [red, green, blue, alpha] = foreground;
     let property = if alpha == 0xff {
         format!("color=\"#{red:02x}{green:02x}{blue:02x}\"")
@@ -183,6 +229,24 @@ fn inject_foreground(text: &str, foreground: [u8; 4]) -> String {
     out.push_str(&property);
     out.push_str(&text[tag_end..]);
     out
+}
+
+/// Whether a start tag already carries the attribute `name`, matched at a
+/// name boundary so `color-interpolation` is not a `color`.
+fn has_attribute(start_tag: &str, name: &str) -> bool {
+    let mut rest = start_tag;
+    while let Some(index) = rest.find(name) {
+        let before_ok = rest[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace());
+        let after = &rest[index + name.len()..];
+        if before_ok && after.trim_start().starts_with('=') {
+            return true;
+        }
+        rest = &after[..];
+    }
+    false
 }
 
 /// Replace `var(--colorN, fallback)` with the CPAL entry, or with the
