@@ -29,6 +29,7 @@
 //! not needed (a leaf runs on the thread that compiled it). Other targets
 //! keep Cranelift's provider, which does the cache maintenance they need.
 
+use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Mutex};
 
@@ -178,7 +179,7 @@ impl CodeArena {
         ArenaHandle {
             arena: self.clone(),
             open: None,
-            unsealed: Vec::new(),
+            unsealed: VecDeque::new(),
             other: SystemMemoryProvider::new(),
         }
     }
@@ -196,7 +197,7 @@ impl CodeArena {
 
 /// A run of pages a handle holds: `[start, bump)` written, `[bump, end)`
 /// free, nothing sealed.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct Run {
     start: usize,
     bump: usize,
@@ -210,7 +211,7 @@ pub(crate) struct ArenaHandle {
     open: Option<Run>,
     /// Earlier runs written since the last seal (not contiguous with
     /// `open`).
-    unsealed: Vec<Run>,
+    unsealed: VecDeque<Run>,
     /// Non-code kinds (data objects; the JIT defines none).
     other: SystemMemoryProvider,
 }
@@ -248,7 +249,7 @@ impl ArenaHandle {
                 if let Some(run) = open.take()
                     && run.bump > run.start
                 {
-                    self.unsealed.push(run);
+                    self.unsealed.push_back(run);
                 }
                 *open = Some(Run {
                     start,
@@ -263,35 +264,26 @@ impl ArenaHandle {
     /// Make every page written since the last seal read+execute. The open
     /// run's unwritten whole pages stay writable for the next leaf.
     fn seal(&mut self) -> io::Result<()> {
-        let mut runs = std::mem::take(&mut self.unsealed);
-        if let Some(run) = self.open
-            && run.bump > run.start
-        {
-            runs.push(run);
-        }
-        for (i, run) in runs.iter().enumerate() {
-            let sealed_end = page_ceil(run.bump);
-            // SAFETY: `[start, sealed_end)` is page-aligned, inside this
-            // arena's live mapping, and holds only code this handle wrote
-            // and nobody executes yet; dropping write access is the seal.
-            let rc = unsafe {
-                libc::mprotect(
-                    run.start as *mut libc::c_void,
-                    sealed_end - run.start,
-                    libc::PROT_READ | libc::PROT_EXEC,
-                )
-            };
-            if rc != 0 {
-                let err = io::Error::last_os_error();
-                // Keep what is not sealed yet for the next attempt.
-                self.unsealed.extend_from_slice(&runs[i..]);
-                return Err(err);
-            }
+        self.seal_with(protect_run)
+    }
+
+    /// One protection operation per pending run. The generic operation is
+    /// the real mprotect in production and an injected failure in unit tests;
+    /// no process-wide or thread-local failure state is introduced.
+    #[inline]
+    fn seal_with(&mut self, mut protect: impl FnMut(&Run) -> io::Result<()>) -> io::Result<()> {
+        // A run has exactly one owner. Successful earlier runs are retired
+        // immediately; a failed operation leaves its owner in place. No open
+        // run is copied into the pending queue, including on retry/unwind.
+        while let Some(run) = self.unsealed.front() {
+            protect(run)?;
+            let _ = self.unsealed.pop_front();
             self.arena.lock().stats.seals += 1;
         }
         if let Some(run) = &mut self.open
             && run.bump > run.start
         {
+            protect(run)?;
             let sealed_end = page_ceil(run.bump);
             if sealed_end >= run.end {
                 self.open = None;
@@ -299,8 +291,30 @@ impl ArenaHandle {
                 run.start = sealed_end;
                 run.bump = sealed_end;
             }
+            self.arena.lock().stats.seals += 1;
         }
         Ok(())
+    }
+}
+
+/// Seal only the written pages of one exclusively owned pending run.
+#[inline]
+fn protect_run(run: &Run) -> io::Result<()> {
+    let sealed_end = page_ceil(run.bump);
+    // SAFETY: `[start, sealed_end)` is page-aligned, inside this arena's
+    // live mapping, and holds only code this handle wrote and nobody
+    // executes yet; dropping write access is the seal.
+    let rc = unsafe {
+        libc::mprotect(
+            run.start as *mut libc::c_void,
+            sealed_end - run.start,
+            libc::PROT_READ | libc::PROT_EXEC,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
@@ -333,3 +347,7 @@ impl JITMemoryProvider for ArenaHandle {
         self.other.finalize(branch_protection)
     }
 }
+
+#[cfg(test)]
+#[path = "code_arena/tests/retry_test.rs"]
+mod retry_tests;
