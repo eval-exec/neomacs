@@ -10193,6 +10193,61 @@ fn read_process_output_max_limits_filter_chunks_and_snapshots_at_creation() {
     assert_eq!(result, "OK (5 5 5 1)");
 }
 
+/// Every read shares one reusable buffer (no per-read zeroed allocation of
+/// the read ceiling).  A read must still deliver only the bytes it got:
+/// a short read after a long one, or a small-`readmax' process after a
+/// large one, never sees what an earlier read left in the buffer.
+#[test]
+fn process_reads_share_a_buffer_without_leaking_earlier_bytes() {
+    crate::test_utils::init_test_tracing();
+    let result = runtime_startup_eval_one(
+        r#"(let ((process-connection-type nil)
+                 (out nil))
+             (dolist (spec '((5242880 "printf %010000d 0; sleep 0.1; printf b")
+                             (5 "printf 0123456789abcdef")
+                             (5242880 "printf c")))
+               (let ((chunks nil)
+                     (p nil))
+                 (unwind-protect
+                     (progn
+                       (let ((read-process-output-max (car spec)))
+                         (setq p
+                               (make-process
+                                :name "read-scratch-unit"
+                                :buffer nil
+                                :connection-type 'pipe
+                                :command (list "/bin/sh" "-c" (cadr spec))
+                                :filter (lambda (_ string) (push string chunks)))))
+                       (while (process-live-p p)
+                         (accept-process-output p 1))
+                       (while (accept-process-output p 0))
+                       (let ((all (apply #'concat (reverse chunks))))
+                         (push (if (= (car spec) 5)
+                                   (list (mapcar #'length (reverse chunks)) all)
+                                 (list (length all)
+                                       (string-match-p "\\`0*[bc]\\'" all)
+                                       (substring all -1)))
+                               out)))
+                   (when p (ignore-errors (delete-process p))))))
+             (nreverse out))"#,
+    );
+
+    assert_eq!(
+        result,
+        "OK ((10001 0 \"b\") ((5 5 5 1) \"0123456789abcdef\") (1 0 \"c\"))"
+    );
+}
+
+#[test]
+fn process_read_scratch_grows_once_and_is_reused() {
+    let mut scratch = super::types::ProcessReadScratch::default();
+    let big = scratch.get(5 << 20).as_ptr();
+    assert_eq!(scratch.get(5 << 20).len(), 5 << 20);
+    assert_eq!(scratch.get(4096).len(), 4096);
+    assert_eq!(scratch.get(4096).as_ptr(), big);
+    assert_eq!(scratch.get(5 << 20).as_ptr(), big);
+}
+
 #[test]
 fn read_process_output_carries_split_decode_sequences_between_chunks() {
     crate::test_utils::init_test_tracing();
