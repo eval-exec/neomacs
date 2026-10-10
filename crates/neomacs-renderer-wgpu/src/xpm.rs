@@ -336,6 +336,12 @@ fn parse_color_line(rest: &[u8]) -> Option<ColorLine> {
 /// Resolve one color value the way GNU hands it to the frame's
 /// `defined_color_hook` (src/image.c:6505-6510): `None` is transparency,
 /// everything else is an X11 database name or a `#`-hex color.
+///
+/// `opaque` is deliberately not special-cased. The libXpm loader maps that name
+/// to the frame foreground explicitly (src/image.c:5634-5641); the hand-written
+/// loader this decoder mirrors leaves it unresolved, which paints the same
+/// pixel (src/image.c:6512-6538). `etc/images/letter.xpm` ships that name and
+/// is covered by the corpus cross-check beside these tests.
 fn resolve_color_value(value: &[u8]) -> Option<XpmColorValue> {
     // GNU's `xstrcasecmp (max_color, "None")`.
     let value = std::str::from_utf8(value).ok()?;
@@ -348,3 +354,9 @@ fn resolve_color_value(value: &[u8]) -> Option<XpmColorValue> {
 #[cfg(test)]
 #[path = "xpm/tests/xpm_test.rs"]
 mod tests;
+
+/// The independent-decoder cross-check lives beside the GNU-shaped tests:
+/// GNU is the specification, so it is a smoke check rather than an oracle.
+#[cfg(test)]
+#[path = "xpm/tests/corpus_test.rs"]
+mod corpus_tests;
