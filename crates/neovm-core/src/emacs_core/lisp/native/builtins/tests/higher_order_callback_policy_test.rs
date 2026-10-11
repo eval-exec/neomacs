@@ -13,7 +13,7 @@ fn callback(car: bool) -> Value {
         code.ops.push(Op::Car);
     }
     code.ops.push(Op::Return);
-    code.max_stack = 8;
+    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     Value::make_bytecode(code)
 }
 

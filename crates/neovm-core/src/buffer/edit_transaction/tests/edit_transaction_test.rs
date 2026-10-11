@@ -339,3 +339,155 @@ fn transposition_storage_plan_swaps_outer_regions_over_full_span() {
     );
     assert_eq!(plan.edit(), MeasuredSameLenEdit::covering(span));
 }
+
+#[test]
+fn physical_edit_lease_validates_live_geometry_and_cancellation() {
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer(" *physical-edit-lease-validation*");
+    buffers
+        .get_mut(id)
+        .expect("live buffer")
+        .set_multibyte_value(true);
+    buffers
+        .insert_lisp_string_into_buffer(id, &LispString::from_utf8("aé€"))
+        .expect("seed multibyte text");
+    for (start, end) in [(2, 1), (0, 4), (4, 4)] {
+        assert!(
+            buffers
+                .prepare_buffer_edit(
+                    id,
+                    crate::buffer::CharRange::new(CharPos0::new(start), CharPos0::new(end),)
+                )
+                .is_none()
+        );
+    }
+    let dead = buffers.create_buffer(" *physical-edit-lease-dead*");
+    assert!(buffers.kill_buffer(dead));
+    assert!(
+        buffers
+            .prepare_buffer_edit(
+                dead,
+                crate::buffer::CharRange::new(CharPos0::ZERO, CharPos0::ZERO,)
+            )
+            .is_none()
+    );
+    // The physical boundary is independent of command-specific narrowing.
+    buffers
+        .narrow_buffer_to_emacs_byte_range(
+            id,
+            EmacsByteRange::new(EmacsBytePos::new(1), EmacsBytePos::new(3)),
+        )
+        .expect("narrow to é");
+    {
+        let lease = buffers
+            .prepare_buffer_edit(
+                id,
+                crate::buffer::CharRange::new(CharPos0::new(1), CharPos0::new(3)),
+            )
+            .expect("valid live physical range");
+        assert_eq!(lease.buffer_id(), id);
+        assert_eq!(
+            lease.range().char_range(),
+            crate::buffer::CharRange::new(CharPos0::new(1), CharPos0::new(3),)
+        );
+        assert_eq!(
+            lease.range().byte_range(),
+            EmacsByteRange::new(EmacsBytePos::new(1), EmacsBytePos::new(6),)
+        );
+        // Dropping an unconsumed lease cancels without callbacks or edits.
+    }
+    let buffer = buffers.get(id).expect("live buffer");
+    assert_eq!(
+        buffer.buffer_substring_range(buffer.full_emacs_byte_range()),
+        "aé€"
+    );
+    assert_eq!(
+        buffer.accessible_emacs_byte_range(),
+        EmacsByteRange::new(EmacsBytePos::new(1), EmacsBytePos::new(3),)
+    );
+}
+
+#[test]
+fn physical_edit_lease_consumes_typed_multibyte_mutations() {
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer(" *physical-edit-lease-mutations*");
+    buffers
+        .get_mut(id)
+        .expect("live buffer")
+        .set_multibyte_value(true);
+    buffers
+        .insert_lisp_string_into_buffer(id, &LispString::from_utf8("aé€"))
+        .expect("seed multibyte text");
+    let extracted = buffers
+        .prepare_buffer_edit(
+            id,
+            crate::buffer::CharRange::new(CharPos0::new(1), CharPos0::new(2)),
+        )
+        .expect("live extract lease")
+        .delete_and_extract()
+        .expect("extracted é");
+    assert_eq!(extracted.as_bytes(), "é".as_bytes());
+    assert!(extracted.is_multibyte());
+    assert_eq!(buffers.get(id).expect("live buffer").buffer_string(), "a€");
+    let extent = buffers
+        .prepare_buffer_edit(
+            id,
+            crate::buffer::CharRange::new(CharPos0::new(1), CharPos0::new(2)),
+        )
+        .expect("live replace lease")
+        .replace(&LispString::from_utf8("λq"))
+        .expect("replaced €");
+    assert_eq!(
+        extent,
+        TextExtent::new(CharLen::new(2), EmacsByteLen::new(3))
+    );
+    assert_eq!(buffers.get(id).expect("live buffer").buffer_string(), "aλq");
+    assert_eq!(
+        buffers
+            .prepare_buffer_edit(
+                id,
+                crate::buffer::CharRange::new(CharPos0::ZERO, CharPos0::new(1),)
+            )
+            .expect("live delete lease")
+            .delete(),
+        Ok(())
+    );
+    assert_eq!(buffers.get(id).expect("live buffer").buffer_string(), "λq");
+}
+
+#[test]
+fn physical_edit_lease_empty_operations_preserve_legacy_results() {
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer(" *physical-edit-lease-empty*");
+    let empty = crate::buffer::CharRange::new(CharPos0::ZERO, CharPos0::ZERO);
+    assert_eq!(
+        buffers
+            .prepare_buffer_edit(id, empty)
+            .expect("empty lease")
+            .delete(),
+        Ok(())
+    );
+    assert!(
+        buffers
+            .prepare_buffer_edit(id, empty)
+            .expect("empty lease")
+            .delete_and_extract()
+            .is_none()
+    );
+    assert_eq!(
+        buffers
+            .prepare_buffer_edit(id, empty)
+            .expect("empty lease")
+            .replace(&LispString::from_unibyte(Vec::new())),
+        Some(TextExtent::ZERO)
+    );
+    assert_eq!(buffers.delete_buffer_char_range(id, empty), Some(()));
+    assert_eq!(
+        buffers.replace_buffer_emacs_byte_range_lisp_string(
+            id,
+            EmacsByteRange::new(EmacsBytePos::ZERO, EmacsBytePos::ZERO),
+            &LispString::from_unibyte(Vec::new())
+        ),
+        Some(())
+    );
+}

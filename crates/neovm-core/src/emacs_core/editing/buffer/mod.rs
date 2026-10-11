@@ -353,7 +353,7 @@ pub(crate) fn builtin_find_buffer(eval: &mut super::eval::Context, args: Vec<Val
         .iter()
         .rev()
         .find_map(|frame| frame.get(&name_id).cloned())
-        .or_else(|| obarray.symbol_value(name).cloned())
+        .or_else(|| obarray.symbol_value_copied(name))
         .ok_or_else(|| signal(LispCondition::VoidVariable, vec![Value::symbol(name)]))?;
 
     let mut scan_order = Vec::new();
@@ -502,6 +502,57 @@ pub(crate) fn builtin_get_file_buffer(
     Ok(Value::NIL)
 }
 
+/// What `kill-buffer`'s hooks decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KillBufferHooks {
+    /// Go on killing the buffer (unless a hook already killed it).
+    Proceed,
+    /// A `kill-buffer-query-functions` member returned nil.
+    Refused,
+}
+
+/// The hook phase of GNU `Fkill_buffer` (buffer.c:1936-1986), run with BUFFER
+/// selected; the caller owns the excursion that restores the caller's state.
+fn run_kill_buffer_hooks(
+    eval: &mut super::eval::Context,
+    buffer: BufferId,
+    inhibit_buffer_hooks: bool,
+) -> Result<KillBufferHooks, Flow> {
+    // GNU selects with `set_buffer_internal`, not `record_buffer`: killing
+    // or querying a buffer must not make it the head of `buffer-list`.
+    eval.set_current_buffer_unrecorded(buffer)?;
+    if !inhibit_buffer_hooks {
+        let query_sym = crate::emacs_core::hook_runtime::hook_symbol_by_name(
+            eval,
+            "kill-buffer-query-functions",
+        );
+        let query_value = crate::emacs_core::hook_runtime::hook_value_by_id(eval, query_sym)
+            .unwrap_or(Value::NIL);
+        let answer = crate::emacs_core::hook_runtime::run_hook_value_until_failure(
+            eval,
+            query_sym,
+            query_value,
+            &[],
+            true,
+        )?;
+        if answer.is_nil() {
+            return Ok(KillBufferHooks::Refused);
+        }
+    }
+    // "If the hooks have killed the buffer, exit now."
+    if eval.buffers.get(buffer).is_none() {
+        return Ok(KillBufferHooks::Proceed);
+    }
+    if !inhibit_buffer_hooks {
+        let hook_sym =
+            crate::emacs_core::hook_runtime::hook_symbol_by_name(eval, "kill-buffer-hook");
+        let hook_value =
+            crate::emacs_core::hook_runtime::hook_value_by_id(eval, hook_sym).unwrap_or(Value::NIL);
+        crate::emacs_core::hook_runtime::run_hook_value(eval, hook_sym, hook_value, &[], true)?;
+    }
+    Ok(KillBufferHooks::Proceed)
+}
+
 pub(crate) fn builtin_kill_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("kill-buffer", &args, 1)?;
     let id = match args.first() {
@@ -542,49 +593,22 @@ pub(crate) fn builtin_kill_buffer(eval: &mut super::eval::Context, args: Vec<Val
         },
     };
 
-    let saved_current = eval.buffers.current_buffer_id();
     let inhibit_buffer_hooks = eval.buffers.buffer_hooks_inhibited(id);
-    // GNU `Fkill_buffer` runs query functions and `kill-buffer-hook` after
-    // `set_buffer_internal`/`Fset_buffer`, not `record_buffer`; killing or
-    // querying a buffer must not make it the head of `buffer-list`.
-    eval.set_current_buffer_unrecorded(id)?;
-    let query_result = if inhibit_buffer_hooks {
-        Value::T
-    } else {
-        let query_sym = crate::emacs_core::hook_runtime::hook_symbol_by_name(
-            eval,
-            "kill-buffer-query-functions",
-        );
-        let query_value = crate::emacs_core::hook_runtime::hook_value_by_id(eval, query_sym)
-            .unwrap_or(Value::NIL);
-        crate::emacs_core::hook_runtime::run_hook_value_until_failure(
-            eval,
-            query_sym,
-            query_value,
-            &[],
-            true,
-        )?
-    };
-    if let Some(buffer_id) = saved_current {
-        eval.restore_current_buffer_if_live(buffer_id);
-    }
-    if query_result.is_nil() {
-        return Ok(Value::NIL);
-    }
-    if eval.buffers.get(id).is_none() {
-        return Ok(Value::T);
-    }
-
-    eval.set_current_buffer_unrecorded(id)?;
-    if !inhibit_buffer_hooks {
-        let hook_sym =
-            crate::emacs_core::hook_runtime::hook_symbol_by_name(eval, "kill-buffer-hook");
-        let hook_value =
-            crate::emacs_core::hook_runtime::hook_value_by_id(eval, hook_sym).unwrap_or(Value::NIL);
-        crate::emacs_core::hook_runtime::run_hook_value(eval, hook_sym, hook_value, &[], true)?;
-    }
-    if let Some(buffer_id) = saved_current {
-        eval.restore_current_buffer_if_live(buffer_id);
+    // GNU `Fkill_buffer` (buffer.c:1931-1987) runs the query functions and
+    // `kill-buffer-hook` with the dying buffer current inside ONE
+    // `record_unwind_protect_excursion`, so the caller's buffer and its
+    // point come back on every exit, a hook signal included.
+    let mut hooks = KillBufferHooks::Proceed;
+    let mut excursion = super::eval::ExcursionScope::enter(eval);
+    let result =
+        run_kill_buffer_hooks(excursion.context(), id, inhibit_buffer_hooks).map(|outcome| {
+            hooks = outcome;
+            Value::NIL
+        });
+    excursion.finish(result)?;
+    match hooks {
+        KillBufferHooks::Refused => return Ok(Value::NIL),
+        KillBufferHooks::Proceed => {}
     }
     if eval.buffers.get(id).is_none() {
         return Ok(Value::T);
@@ -659,11 +683,17 @@ pub(crate) fn builtin_kill_buffer(eval: &mut super::eval::Context, args: Vec<Val
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
     {
         let buffers = &mut eval.buffers;
-        let obarray = &mut eval.obarray;
-        for killed_id in &killed_ids_to_reset {
-            if let Some(buffer) = buffers.get_mut(*killed_id) {
-                buffer.kill_all_local_variables(obarray, true, &buffer_defaults);
-            }
+        // SAFETY: killed-buffer retirement only resets buffer/BLV value
+        // caches and reads properties. All process/Lisp callbacks finished
+        // above; no function or canonical descriptor writer runs in this phase.
+        unsafe {
+            eval.obarray.with_legacy_value_write(|obarray| {
+                for killed_id in &killed_ids_to_reset {
+                    if let Some(buffer) = buffers.get_mut(*killed_id) {
+                        buffer.kill_all_local_variables(obarray, true, &buffer_defaults);
+                    }
+                }
+            });
         }
     }
 
@@ -1249,7 +1279,7 @@ fn checked_buffer_substring_for_char_region_in_manager(
 fn compare_buffer_substring_strings(
     left: &crate::heap_types::LispString,
     right: &crate::heap_types::LispString,
-    case_fold: bool,
+    fold: impl Fn(u32) -> u32,
 ) -> i64 {
     // Issue #131: compare the two substrings character-by-character over their
     // exact Emacs bytes (GNU `Fcompare_buffer_substrings` returns the 1-based
@@ -1264,15 +1294,34 @@ fn compare_buffer_substring_strings(
     loop {
         match (lp < left_bytes.len(), rp < right_bytes.len()) {
             (true, true) => {
-                let (a_code, a_len) = crate::emacs_core::emacs_char::string_char(&left_bytes[lp..]);
-                let (b_code, b_len) =
-                    crate::emacs_core::emacs_char::string_char(&right_bytes[rp..]);
+                let (a_code, a_len) = if left.is_multibyte() {
+                    crate::emacs_core::emacs_char::string_char(&left_bytes[lp..])
+                } else {
+                    (
+                        crate::emacs_core::emacs_char::unibyte_to_char(left_bytes[lp]),
+                        1,
+                    )
+                };
+                let (b_code, b_len) = if right.is_multibyte() {
+                    crate::emacs_core::emacs_char::string_char(&right_bytes[rp..])
+                } else {
+                    (
+                        crate::emacs_core::emacs_char::unibyte_to_char(right_bytes[rp]),
+                        1,
+                    )
+                };
                 lp += a_len;
                 rp += b_len;
-                let a = fold_emacs_char_code(a_code, case_fold);
-                let b = fold_emacs_char_code(b_code, case_fold);
-                if a != b {
-                    return if a < b { -pos } else { pos };
+                // GNU editfns.c:1860-1867 applies the same current canonical
+                // table to both characters. Equal source codes therefore
+                // remain equal; this callback-free comparison need not look
+                // them up, even when an installed table changes their case.
+                if a_code != b_code {
+                    let a = fold(a_code);
+                    let b = fold(b_code);
+                    if a != b {
+                        return if a < b { -pos } else { pos };
+                    }
                 }
                 pos += 1;
             }
@@ -1280,18 +1329,6 @@ fn compare_buffer_substring_strings(
             (false, true) => return -pos,
             (false, false) => return 0,
         }
-    }
-}
-
-/// Issue #131: lowercase an Emacs character code when `case_fold` is set,
-/// preserving non-Unicode/eight-bit codes (which have no Rust `char`) verbatim.
-fn fold_emacs_char_code(code: u32, case_fold: bool) -> u32 {
-    if !case_fold {
-        return code;
-    }
-    match char::from_u32(code) {
-        Some(ch) => ch.to_lowercase().next().map(|c| c as u32).unwrap_or(code),
-        None => code,
     }
 }
 
@@ -1534,9 +1571,14 @@ pub(crate) fn builtin_kill_all_local_variables(
     // - resets only a small fixed reset-on-kill-all subset
     // - clears conditional slot locals unless they are permanent-local
     // - walks local_var_alist for LOCALIZED entries (Phase 10E)
-    let _ =
-        eval.buffers
-            .clear_buffer_local_properties(current_id, &mut eval.obarray, kill_permanent);
+    let buffers = &mut eval.buffers;
+    // SAFETY: the major-mode hook has returned. This local-value/cache reset
+    // invokes no Lisp and preserves canonical dispatch metadata and storage.
+    let _ = unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            buffers.clear_buffer_local_properties(current_id, obarray, kill_permanent)
+        })
+    };
     // GNU performs this after the hook and local reset. `bset_update_mode_line`
     // raises global `update_mode_lines` even for an offscreen buffer, ensuring
     // the menu and mode line are rebuilt if this major-mode transition is
@@ -1555,10 +1597,10 @@ pub(crate) fn builtin_kill_all_local_variables(
 /// `(ntake N LIST)` -> LIST
 pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
     expect_args("ntake", &args, 2)?;
-    let n = expect_int(&args[0])?;
-    if n <= 0 {
+    use crate::emacs_core::builtins_extra::TakeCount;
+    let TakeCount::Positive(n) = TakeCount::try_from(args[0])? else {
         return Ok(Value::NIL);
-    }
+    };
 
     let head = args[1];
     if head.is_nil() {
@@ -1572,7 +1614,7 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
     }
 
     let mut cursor = head;
-    for _ in 1..n {
+    for _ in 1..n.get() {
         match cursor.kind() {
             ValueKind::Cons => {
                 let next = cursor.cons_cdr();
@@ -1582,7 +1624,7 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
                     _other => {
                         return Err(signal(
                             LispCondition::WrongTypeArgument,
-                            vec![Value::symbol("listp"), next],
+                            vec![Value::symbol("listp"), head],
                         ));
                     }
                 }
@@ -1591,7 +1633,7 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
             _other => {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), cursor],
+                    vec![Value::symbol("listp"), head],
                 ));
             }
         }
@@ -1605,7 +1647,7 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
         ValueKind::Nil => Ok(head),
         _other => Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("listp"), cursor],
+            vec![Value::symbol("listp"), head],
         )),
     }
 }
@@ -1961,13 +2003,22 @@ pub(crate) fn builtin_replace_region_contents(
     if comparison_disabled || a_codes.is_empty() || b_codes.is_empty() {
         let replacement = buffer_insert_piece_from_string(source_value, target_multibyte)?
             .into_replacement_text();
-        let new_extent = super::editfns::lisp_string_text_extent(&replacement);
-        let change = TextChange::new(old_range, new_extent);
-        super::editfns::signal_before_text_change(eval, change)?;
-        eval.buffers
-            .replace_buffer_measured_region_lisp_string(current_id, old_range, &replacement)
-            .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-        super::editfns::signal_after_text_change(eval, change)?;
+        // GNU `replace_range (min_a, min_a + size_a, source, true, ...)`
+        // (editfns.c:2044): the range is re-measured after the callbacks.
+        let pending = super::editfns::PendingTextEdit::new(
+            old_range,
+            super::editfns::RemeasureRule::ReplaceRange,
+        );
+        if let Some(prepared) = pending.prepare(eval)? {
+            let new_extent = prepared
+                .lease(&mut eval.buffers)
+                .and_then(|lease| lease.replace(&replacement))
+                .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
+            super::editfns::signal_after_text_change(
+                eval,
+                TextChange::new(prepared.range(), new_extent),
+            )?;
+        }
         eval.restore_specpdl_roots(source_root_scope);
         return Ok(Value::T);
     }
@@ -2007,13 +2058,34 @@ pub(crate) fn builtin_replace_region_contents(
     let change = TextChange::new(old_range, new_extent);
     super::editfns::signal_before_text_change(eval, change)?;
 
-    let region_start = byte_range.start().get();
-    // Apply the change runs back-to-front so that earlier byte positions stay
+    // GNU computes every run as `min_a + i` in characters before the
+    // callbacks ran, and `replace_range` clamps each one to BEGV..ZV of the
+    // live buffer (editfns.c:2165-2183, insdel.c:1509-1513). Measuring the
+    // runs in the live text keeps a callback's edit from leaving them past
+    // the text or inside a multibyte sequence.
+    let region_start = old_range.char_start();
+    // Apply the change runs back-to-front so that earlier positions stay
     // valid as we edit (mirrors GNU walking the change lists backwards).
     for run in runs.iter().rev() {
-        let del_start = EmacsBytePos::new(region_start + a_decoded[run.a_start].1);
-        let del_end = EmacsBytePos::new(region_start + a_decoded[run.a_end].1);
-        let del_range = EmacsByteRange::new(del_start, del_end);
+        let Some((target, del_range)) = eval.buffers.current_buffer().map(|buf| {
+            let begv = buf.point_min_char_pos();
+            let zv = buf.point_max_char_pos();
+            let total = buf.total_char_end_pos();
+            let from = region_start
+                .add_len(CharLen::new(run.a_start))
+                .max(begv)
+                .min(total);
+            let to = region_start
+                .add_len(CharLen::new(run.a_end))
+                .min(zv)
+                .clamp(from, total.max(from));
+            (
+                buf.id,
+                buf.edit_range_for_char_range(CharRange::new(from, to)),
+            )
+        }) else {
+            break;
+        };
 
         // Replacement text for this run: characters [b_start, b_end) of the
         // source, sliced from the original SOURCE value so text properties are
@@ -2030,11 +2102,17 @@ pub(crate) fn builtin_replace_region_contents(
         let replacement =
             buffer_insert_piece_from_string(replacement, target_multibyte)?.into_replacement_text();
         eval.buffers
-            .replace_buffer_emacs_byte_range_lisp_string(current_id, del_range, &replacement)
+            .replace_buffer_measured_region_lisp_string(target, del_range, &replacement)
             .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     }
 
-    super::editfns::signal_after_text_change(eval, change)?;
+    // GNU `signal_after_change (min_a, size_a, size_b)` (editfns.c:2189).
+    super::editfns::signal_after_change_chars(
+        eval,
+        region_start,
+        old_range.char_len(),
+        new_extent.chars(),
+    )?;
 
     eval.restore_specpdl_roots(source_root_scope);
     Ok(Value::T)
@@ -2430,6 +2508,13 @@ pub(crate) fn builtin_split_window_internal(
         )
         .is_some_and(|value| value.is_t()),
     );
+    let sibling_resize = super::window_cmds::SiblingResize::from(
+        super::builtins::misc_eval::dynamic_or_global_symbol_value(
+            eval,
+            "window-combination-resize",
+        )
+        .unwrap_or(Value::NIL),
+    );
     let result = super::window_cmds::split_window_internal_impl_in_state_with_normal(
         &mut eval.frames,
         &mut eval.buffers,
@@ -2438,6 +2523,7 @@ pub(crate) fn builtin_split_window_internal(
         args[2],
         args[3],
         combination_limit,
+        sibling_resize,
     )?;
     if crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
         && let Some(window) = result.as_window_id().map(crate::window::WindowId)
@@ -2468,13 +2554,28 @@ pub(crate) fn builtin_compare_buffer_substrings(
         super::builtins::misc_eval::dynamic_or_global_symbol_value(eval, "case-fold-search")
             .map(|value| !value.is_nil())
             .unwrap_or(true);
-    builtin_compare_buffer_substrings_with_case_fold(case_fold, &eval.buffers, args)
+    // GNU editfns.c:1769-1771 uses the current buffer's canonical table,
+    // including standard equivalence classes (sigma/final sigma, micro sign).
+    let canon = if case_fold {
+        Some(super::casetab::current_case_canon_table(eval)?)
+    } else {
+        None
+    };
+    compare_buffer_substrings_with_translation(&eval.buffers, args, |code| {
+        canon
+            .and_then(|table| super::chartable::ct_lookup(&table, code as i64).ok())
+            .and_then(|value| value.as_fixnum())
+            .filter(|&mapped| {
+                (0..=crate::emacs_core::emacs_char::MAX_CHAR as i64).contains(&mapped)
+            })
+            .map_or(code, |mapped| mapped as u32)
+    })
 }
 
-pub(crate) fn builtin_compare_buffer_substrings_with_case_fold(
-    case_fold: bool,
+fn compare_buffer_substrings_with_translation(
     buffers: &BufferManager,
     args: Vec<Value>,
+    fold: impl Fn(u32) -> u32,
 ) -> EvalResult {
     expect_args("compare-buffer-substrings", &args, 6)?;
 
@@ -2503,7 +2604,7 @@ pub(crate) fn builtin_compare_buffer_substrings_with_case_fold(
         args[5],
     )?;
     Ok(Value::fixnum(compare_buffer_substring_strings(
-        &left, &right, case_fold,
+        &left, &right, fold,
     )))
 }
 
@@ -2589,6 +2690,75 @@ pub(crate) fn builtin_constrain_to_field(
     builtin_constrain_to_field_5(eval, &args)
 }
 
+/// GNU field motion first coerces markers and saturates bignums to fixnums.
+/// This immutable scalar owns no heap pointers or mutable buffer state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FieldMotionPosition(crate::tagged::value::Fixnum);
+
+impl TryFrom<(&BufferManager, Value)> for FieldMotionPosition {
+    type Error = Flow;
+
+    fn try_from((buffers, value): (&BufferManager, Value)) -> Result<Self, Self::Error> {
+        if let Some(position) = value.as_fixnum_value() {
+            return Ok(Self(position));
+        }
+        let position = expect_integer_or_marker_in_buffers(buffers, &value)?;
+        crate::tagged::value::Fixnum::try_from(position)
+            .map(Self)
+            .map_err(|error| match error {
+                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            })
+    }
+}
+
+impl From<crate::buffer::position::BufferLispPos> for FieldMotionPosition {
+    fn from(position: crate::buffer::position::BufferLispPos) -> Self {
+        Self(position.into())
+    }
+}
+
+static_assertions::assert_impl_all!(FieldMotionPosition: Send, Sync);
+
+/// The accessible region `[BEGV, ZV]` that field-motion probe positions must
+/// lie in, read once from the current buffer before any Lisp can run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FieldProbeBounds {
+    begv: LispCharPos1,
+    zv: LispCharPos1,
+}
+
+impl From<&Buffer> for FieldProbeBounds {
+    fn from(buffer: &Buffer) -> Self {
+        Self {
+            begv: buffer.point_min_lisp_char_pos(),
+            zv: buffer.point_max_lisp_char_pos(),
+        }
+    }
+}
+
+impl FieldProbeBounds {
+    /// GNU's char-property probes signal `args-out-of-range` outside the
+    /// accessible region.
+    fn check_probe(self, position: FieldMotionPosition) -> Result<(), Flow> {
+        let candidate = LispCharPos1::new(i64::from(position.0));
+        if candidate < self.begv || candidate > self.zv {
+            return Err(field_probe_out_of_range(position));
+        }
+        Ok(())
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn field_probe_out_of_range(position: FieldMotionPosition) -> Flow {
+    signal(
+        LispCondition::ArgsOutOfRange,
+        vec![Value::from_fixnum(position.0)],
+    )
+}
+
 /// `constrain-to-field` on an argument slice (2..=5 values, already
 /// arity-checked): the internal callers (`line-beginning-position`,
 /// `line-end-position`, `forward-word`) pass a stack array instead of
@@ -2601,18 +2771,22 @@ pub(crate) fn builtin_constrain_to_field_5(
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let point_min = current.point_min_lisp_char_pos().as_i64();
+    let bounds = FieldProbeBounds::from(&**current);
+    let point_min = bounds.begv.as_i64();
     let orig_point = if args[0].is_nil() {
-        Some(current.point_lisp_char_pos().as_i64())
+        Some(FieldMotionPosition::from(current.point_position()))
     } else {
         None
     };
-    let mut new_pos = if let Some(point) = orig_point {
+    let new_argument = if let Some(point) = orig_point {
         point
     } else {
-        expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?
+        FieldMotionPosition::try_from((&eval.buffers, args[0]))?
     };
-    let old_pos = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
+    let old_argument = FieldMotionPosition::try_from((&eval.buffers, args[1]))?;
+    let mut result = new_argument;
+    let new_pos = i64::from(new_argument.0);
+    let old_pos = i64::from(old_argument.0);
     let escape_from_edge = args.get(2).is_some_and(|value| value.is_truthy());
     let only_in_line = args.get(3).is_some_and(|value| value.is_truthy());
 
@@ -2630,6 +2804,11 @@ pub(crate) fn builtin_constrain_to_field_5(
 
     let mut constrain = !inhibit_field_text_motion && new_pos != old_pos;
     if constrain && current_buffer_cannot_have_fields(eval) {
+        // These two probes would both return nil before GNU's OR completes.
+        // Retain their accessible-range checks when skipping the lookups.
+        // Buffers with fields keep the original short-circuit probe ordering.
+        bounds.check_probe(new_argument)?;
+        bounds.check_probe(old_argument)?;
         // GNU would now run up to four `Fget_char_property` probes; when the
         // buffer cannot hold a `field` anywhere they all answer nil, and
         // `line-beginning-position` calls this once per line (~1.8K Ir).
@@ -2679,38 +2858,38 @@ pub(crate) fn builtin_constrain_to_field_5(
     if constrain {
         let forward = new_pos > old_pos;
         let field_bound = if forward {
-            expect_int(&builtin_field_end(
+            builtin_field_end(
                 eval,
                 vec![
-                    Value::fixnum(old_pos),
+                    Value::from_fixnum(old_argument.0),
                     Value::bool_val(escape_from_edge),
-                    Value::fixnum(new_pos),
+                    Value::from_fixnum(new_argument.0),
                 ],
-            )?)?
+            )?
         } else {
-            expect_int(&builtin_field_beginning(
+            builtin_field_beginning(
                 eval,
                 vec![
-                    Value::fixnum(old_pos),
+                    Value::from_fixnum(old_argument.0),
                     Value::bool_val(escape_from_edge),
-                    Value::fixnum(new_pos),
+                    Value::from_fixnum(new_argument.0),
                 ],
-            )?)?
+            )?
         };
+        expect_int(&field_bound)?;
+        let field_bound = FieldMotionPosition::try_from((&eval.buffers, field_bound))?;
+        let bound = i64::from(field_bound.0);
 
-        let should_constrain = if field_bound < new_pos {
-            forward
-        } else {
-            !forward
-        };
+        let should_constrain = if bound < new_pos { forward } else { !forward };
         let same_line = !only_in_line
-            || !current_buffer_has_newline_between_positions(&eval.buffers, new_pos, field_bound)?;
+            || !current_buffer_has_newline_between_positions(&eval.buffers, new_pos, bound)?;
         if should_constrain && same_line {
-            new_pos = field_bound;
+            result = field_bound;
         }
     }
 
-    if let Some(orig_point) = orig_point
+    let new_pos = i64::from(result.0);
+    if let Some(orig_point) = orig_point.map(|point| i64::from(point.0))
         && new_pos != orig_point
     {
         let current_id = eval
@@ -2727,7 +2906,7 @@ pub(crate) fn builtin_constrain_to_field_5(
             .goto_buffer_emacs_byte_pos(current_id, byte_pos);
     }
 
-    Ok(Value::fixnum(new_pos))
+    Ok(Value::from_fixnum(result.0))
 }
 
 fn char_property_in_current_buffer(
@@ -3053,7 +3232,7 @@ pub(crate) fn builtin_point_0(eval: &mut super::eval::Context) -> EvalResult {
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    Ok(Value::fixnum(buf.point_lisp_char_pos().as_i64()))
+    Ok(Value::from_fixnum(buf.point_position().into()))
 }
 
 pub(crate) fn builtin_point_min_0(eval: &mut super::eval::Context) -> EvalResult {
@@ -3061,7 +3240,7 @@ pub(crate) fn builtin_point_min_0(eval: &mut super::eval::Context) -> EvalResult
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    Ok(Value::fixnum(buf.point_min_lisp_char_pos().as_i64()))
+    Ok(Value::from_fixnum(buf.point_min_position().into()))
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -3075,7 +3254,7 @@ pub(crate) fn builtin_point_max_0(eval: &mut super::eval::Context) -> EvalResult
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    Ok(Value::fixnum(buf.point_max_lisp_char_pos().as_i64()))
+    Ok(Value::from_fixnum(buf.point_max_position().into()))
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -3993,7 +4172,20 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
             vec![Value::symbol("characterp"), args[0]],
         ));
     };
-    let mut bytes = Vec::with_capacity(unit.len() * count as usize);
+    let existing = eval
+        .buffers
+        .current_buffer()
+        .map_or(0, |buffer| buffer.total_emacs_byte_len().get());
+    let length = crate::emacs_core::alloc::BufferByteLen::repeated(
+        unit.len(),
+        crate::emacs_core::alloc::RepeatCount::try_from(count).map_err(
+            |crate::emacs_core::alloc::RepeatCountError::OutOfRange| {
+                crate::emacs_core::alloc::buffer_overflow()
+            },
+        )?,
+        existing,
+    )?;
+    let mut bytes = length.reserved_bytes()?;
     for _ in 0..count {
         bytes.extend_from_slice(&unit);
     }
@@ -4087,7 +4279,20 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
         multibyte,
     )
     .expect("insert-byte must produce a valid buffer encoding");
-    let mut bytes = Vec::with_capacity(unit.len() * count as usize);
+    let existing = eval
+        .buffers
+        .current_buffer()
+        .map_or(0, |buffer| buffer.total_emacs_byte_len().get());
+    let length = crate::emacs_core::alloc::BufferByteLen::repeated(
+        unit.len(),
+        crate::emacs_core::alloc::RepeatCount::try_from(count).map_err(
+            |crate::emacs_core::alloc::RepeatCountError::OutOfRange| {
+                crate::emacs_core::alloc::buffer_overflow()
+            },
+        )?,
+        existing,
+    )?;
+    let mut bytes = length.reserved_bytes()?;
     for _ in 0..count {
         bytes.extend_from_slice(&unit);
     }

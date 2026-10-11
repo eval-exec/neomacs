@@ -1,0 +1,19 @@
+[package]
+name = "ctrace-slot-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# Keep the model and its dependency graph outside the production workspace.
+[workspace]
+
+[dev-dependencies]
+loom = "=0.7.2"
+num_enum = "=0.7.6"
+static_assertions = "=1.1.0"
+
+[[test]]
+name = "slot_publication"
+path = "tests/slot_publication.rs"

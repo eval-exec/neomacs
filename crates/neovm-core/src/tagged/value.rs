@@ -33,6 +33,71 @@ use crate::emacs_core::intern::{
 };
 use crate::heap_types::LispString;
 
+/// An integer proven to fit the immediate fixnum payload.
+/// This immutable scalar contains no heap state and is safe between mutators.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Fixnum(i64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum FixnumRangeError {
+    #[error("integer {0} is outside the fixnum range")]
+    OutOfRange(i64),
+}
+
+impl TryFrom<i64> for Fixnum {
+    type Error = FixnumRangeError;
+
+    #[inline]
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        if (TaggedValue::MOST_NEGATIVE_FIXNUM..=TaggedValue::MOST_POSITIVE_FIXNUM).contains(&value)
+        {
+            Ok(Self(value))
+        } else {
+            Err(FixnumRangeError::OutOfRange(value))
+        }
+    }
+}
+
+impl From<Fixnum> for i64 {
+    #[inline]
+    fn from(value: Fixnum) -> Self {
+        value.0
+    }
+}
+
+impl Fixnum {
+    /// Truncating division whose result stays in the immediate domain.
+    /// Zero and the sole overflowing pair need Lisp's arithmetic slow path.
+    #[inline]
+    pub(crate) fn checked_div(self, rhs: Self) -> Option<Self> {
+        if rhs.0 == 0 || (self.0 == TaggedValue::MOST_NEGATIVE_FIXNUM && rhs.0 == -1) {
+            None
+        } else {
+            // Division cannot increase magnitude, except when negating MIN.
+            Some(Self(self.0 / rhs.0))
+        }
+    }
+
+    /// Interpret GNU's explicit fixnum payload bit pattern as a signed integer.
+    /// This operation is for representation-level callers, not Lisp integers.
+    #[inline]
+    pub(crate) const fn from_payload_bits(bits: u64) -> Self {
+        Self((bits.wrapping_shl(FIXNUM_SHIFT) as i64) >> FIXNUM_SHIFT)
+    }
+
+    #[inline]
+    pub(crate) fn saturating(value: i64) -> Self {
+        Self(value.clamp(
+            TaggedValue::MOST_NEGATIVE_FIXNUM,
+            TaggedValue::MOST_POSITIVE_FIXNUM,
+        ))
+    }
+}
+
+const _: () = assert!(size_of::<Fixnum>() == size_of::<i64>());
+static_assertions::assert_impl_all!(Fixnum: Send, Sync);
+
 use super::header::{
     BignumObj, ConsCell, FloatObj, ModuleFunctionObj, SqliteObj, StringObj, SubrObj,
     SymbolWithPosObj, UserPtrObj, VecLikeHeader, VecLikeType,
@@ -316,13 +381,21 @@ impl TaggedValue {
 
     // -- Fixnum --
 
-    /// Create a fixnum (62-bit signed integer, no heap allocation).
+    /// Create a Lisp integer, promoting computed values outside the fixnum range.
+    /// Proven immediate values may use `from_fixnum` to avoid another range check.
     #[inline(always)]
     pub fn fixnum(n: i64) -> Self {
-        // Encode: (n << 2) | 2. The low 2 bits are `10`, matching GNU's
-        // fixnum tags 010 and 110.
+        match Fixnum::try_from(n) {
+            Ok(value) => Self::from_fixnum(value),
+            Err(FixnumRangeError::OutOfRange(_)) => Self::make_int(n),
+        }
+    }
+
+    /// Encode a validated immediate integer without an additional range check.
+    #[inline]
+    pub(crate) fn from_fixnum(value: Fixnum) -> Self {
         Self(
-            ((n as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE,
+            ((value.0 as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE,
             PhantomData,
         )
     }
@@ -687,6 +760,13 @@ impl TaggedValue {
         } else {
             None
         }
+    }
+
+    /// The fixnum payload as a [`Fixnum`]: decoding never leaves the fixnum
+    /// range, so callers need no further range check.
+    #[inline]
+    pub(crate) fn as_fixnum_value(self) -> Option<Fixnum> {
+        self.as_fixnum().map(Fixnum)
     }
 
     /// Extract fixnum value without tag check. Caller must ensure `is_fixnum()`.
@@ -1273,3 +1353,7 @@ impl fmt::Debug for TaggedValue {
 #[cfg(test)]
 #[path = "value/tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "value/tests/fixnum_boundary.rs"]
+mod fixnum_boundary_tests;

@@ -1,0 +1,5 @@
+error[E0609]: no field `contents` on type `&mut SubCharTableWrite<'_>`
+ --> tests/chartable_write_ui/grow_contents.rs:5:49
+  |
+5 |     table.with_sub_char_table_mut(|write| write.contents.ensure_owned().push(Value::T));
+  |                                                 ^^^^^^^^ unknown field

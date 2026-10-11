@@ -251,7 +251,7 @@ fn constant_bits(fb: &FunctionBuilder, v: ClifValue) -> Option<i64> {
     if tag != FIXNUM_CHECK_VALUE as i64 || shift != i64::from(FIXNUM_SHIFT) {
         return None;
     }
-    Some(Value::fixnum(iconst_bits(fb, raw)?).bits() as i64)
+    Some(iconst_bits(fb, raw)?.wrapping_shl(FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE as i64)
 }
 
 fn trusted() -> MemFlagsData {
@@ -771,13 +771,13 @@ pub(crate) fn emit_symbol_cell_read(
         OBARRAY_CHUNK_SLOTS, OBARRAY_JIT_LEN_OFFSET, OBARRAY_JIT_SPINE_OFFSET,
         SYMBOL_FLAGS_REDIRECT_MASK,
     };
-    let ob = super::jit_layout::CONTEXT_OBARRAY_OFFSET;
     let vmctx = fb.use_var(rt.vmctx_var);
+    let obarray = super::jit_layout::emit_obarray_base(fb, vmctx);
     let len = fb.ins().load(
         types::I64,
         MemFlagsData::trusted(),
-        vmctx,
-        (ob + OBARRAY_JIT_LEN_OFFSET) as i32,
+        obarray,
+        OBARRAY_JIT_LEN_OFFSET as i32,
     );
     let in_range = fb.ins().icmp(IntCC::UnsignedLessThan, sym_v, len);
     let cell_blk = fb.create_block();
@@ -787,8 +787,8 @@ pub(crate) fn emit_symbol_cell_read(
     let spine = fb.ins().load(
         rt.ptr_ty,
         MemFlagsData::trusted(),
-        vmctx,
-        (ob + OBARRAY_JIT_SPINE_OFFSET) as i32,
+        obarray,
+        OBARRAY_JIT_SPINE_OFFSET as i32,
     );
     // Same-session JIT symbol identities are constants. AOT may
     // load a relocated identity, so fold only proven constants.

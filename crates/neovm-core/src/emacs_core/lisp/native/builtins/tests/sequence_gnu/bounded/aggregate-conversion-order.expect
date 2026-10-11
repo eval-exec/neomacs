@@ -1,0 +1,1 @@
+((error "Format specifier doesn’t match argument type") (error "Format specifier doesn’t match argument type") (error "Invalid format operation %q") (error "Not enough arguments for format string"))

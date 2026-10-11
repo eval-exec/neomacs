@@ -736,7 +736,7 @@ fn default_bookmark_file() -> LispString {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn active_bookmark_default_file(eval: &super::eval::Context) -> LispString {
-    if let Some(v) = eval.obarray.symbol_value("bookmark-default-file")
+    if let Some(v) = eval.obarray.symbol_value_copied("bookmark-default-file")
         && let Some(ls) = v.as_lisp_string()
     {
         return ls.clone();
@@ -746,7 +746,9 @@ fn active_bookmark_default_file(eval: &super::eval::Context) -> LispString {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn bookmark_timestamp_file(eval: &super::eval::Context) -> Option<LispString> {
-    let value = eval.obarray.symbol_value("bookmark-bookmarks-timestamp")?;
+    let value = eval
+        .obarray
+        .symbol_value_copied("bookmark-bookmarks-timestamp")?;
     if !value.is_cons() {
         return None;
     };

@@ -200,6 +200,11 @@ impl CompileClock {
         }
     }
 
+    /// Existing timer start for optional out-of-band diagnostics.
+    pub(crate) fn started(&self) -> Instant {
+        self.started
+    }
+
     /// Stop the clock: fold this compile's origin row (and its phase split,
     /// when tracked) into the thread's aggregates, and return the stall.
     pub(crate) fn finish(mut self, ok: bool) -> Duration {

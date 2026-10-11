@@ -5,10 +5,13 @@
 
 use super::*;
 
-/// An explicit marker finish could not establish its completion handoff.
-/// The heap remains in its active mark state and must not be swept or reused.
+/// Explicit marker finish or resource shutdown could not complete.
+/// A failed marker handoff preserves active state; facade retention refuses
+/// resource reclamation while its publication or reader obligations remain.
 #[derive(Debug, thiserror::Error)]
 pub enum MarkFinishError {
+    #[error("facade roots still retain heap {0:?}; resource shutdown is excluded")]
+    FacadeRetained(HeapIdentity),
     #[error("active GC marker has no completion receiver")]
     MissingCompletion,
     #[error("GC marker disconnected before its completion handoff")]
@@ -17,7 +20,7 @@ pub enum MarkFinishError {
     PoisonedCollectorState,
 }
 
-static_assertions::assert_impl_all!(MarkFinishError: Send, Sync);
+static_assertions::assert_impl_all!(MarkFinishError: Send, Sync, std::fmt::Debug);
 
 impl TaggedHeap {
     /// True if a concurrent mark should drive THIS collection.
@@ -46,16 +49,30 @@ impl TaggedHeap {
 
     /// True when the NEXT collection would be the first partition cycle (a
     /// registered dump not yet promoted+blackened). The driver runs it
-    /// concurrently via [`Self::arm_first_cycle_concurrent`] +
-    /// `concurrent_begin`/`launch_concurrent_mark` instead of the STW
+    /// concurrently via [`ConcurrentMarkPermit::arm_first_cycle`] and its
+    /// closed begin/capture/launch extent instead of the STW
     /// bootstrap.
     pub fn is_partition_first_cycle(&self) -> bool {
         self.partition_dump && !self.dump_blackened
     }
 
     /// Arm the concurrent first partition cycle (see the field doc).
-    pub fn arm_first_cycle_concurrent(&mut self) {
+    pub(super) fn raw_arm_first_cycle_concurrent(
+        &mut self,
+        proof: &facade_mark::ConcurrentMarkStageProof,
+    ) {
+        debug_assert!(proof.matches(self));
         self.first_cycle_concurrent = true;
+    }
+
+    /// Legacy unit-test adapter; production enters through the exclusive loan.
+    #[cfg(test)]
+    pub(crate) fn arm_first_cycle_concurrent(&mut self) {
+        // SAFETY: these direct GC fixtures own the heap and admit their
+        // serialized start before spawning any worker or publishing a job.
+        let mut permit = unsafe { self.permit_concurrent_mark() }
+            .expect("unit-test first-cycle admission must be idle and unexcluded");
+        permit.arm_first_cycle();
     }
 
     /// Complete the first partition cycle once its (possibly deferred) sweep
@@ -154,7 +171,8 @@ impl TaggedHeap {
     /// `mark_in_progress`. The caller then seeds context roots and calls
     /// `launch_concurrent_mark`. No Steele owner-tracking: the concurrent SATB
     /// barrier (keyed on `concurrent_mark_running`) preserves the snapshot.
-    pub(crate) fn concurrent_begin(&mut self) {
+    pub(super) fn raw_concurrent_begin(&mut self, proof: &facade_mark::ConcurrentMarkStageProof) {
+        debug_assert!(proof.matches(self));
         if tagged_heap_is_current(self) {
             TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
         }
@@ -177,6 +195,31 @@ impl TaggedHeap {
         self.handshake.last_start_remembered_roots = self.last_remembered_seed_roots;
         self.mark_in_progress = true;
         self.incremental_mark_us = 0;
+    }
+
+    /// Direct unit-test starts release the loan between seeding statements.
+    /// The matching launch adapter validates this heap's begun phase again.
+    #[cfg(test)]
+    pub(crate) fn concurrent_begin(&mut self) {
+        // SAFETY: the unit-test owner excludes all heap/obarray/TLS writers
+        // at this start. Tests that install TLS retain that same owner until
+        // the real job's publication; no callback or safepoint runs here.
+        let permit = unsafe { self.permit_concurrent_mark() }
+            .expect("unit-test start admission must be idle and unexcluded");
+        drop(permit.begin());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn launch_concurrent_mark(&mut self) {
+        // SAFETY: this is the same direct-fixture serialized owner admitted
+        // by concurrent_begin, after its root seeding and before any worker
+        // can read the new snapshots. Resume is test-only and revalidates the
+        // started phase and exclusion; it cannot forge an idle admission.
+        let capture = unsafe { ConcurrentMarkCapture::resume_for_test(self) }
+            .expect("unit-test launch must resume an unexcluded begun cycle");
+        capture
+            .launch()
+            .expect("validated unit-test capture must launch");
     }
 
     /// Hand the seeded gray queue (the full root snapshot) to the GC thread and
@@ -209,7 +252,11 @@ impl TaggedHeap {
         self.concurrent_obarray_start_slots.take()
     }
 
-    pub(crate) fn launch_concurrent_mark(&mut self) {
+    pub(super) fn raw_launch_concurrent_mark(
+        &mut self,
+        proof: &facade_mark::ConcurrentMarkStageProof,
+    ) {
+        debug_assert!(proof.matches(self));
         assert!(
             !self.concurrent_mark_running,
             "an unfinished or failed marker cannot be replaced"
@@ -253,6 +300,9 @@ impl TaggedHeap {
             // only (or explicit VERIFY_PARTITION): the release drain
             // profilers are themselves cfg(test) binaries, and this walk
             // would re-add cost inside the timed vecsnap region.
+            // SAFETY: the closed start loan retains the admitted heap and
+            // its authoritative non-cons inventory; no sweep, writer or
+            // callback can remove a Box while this header filter reads it.
             let box_filter_count = self
                 .non_cons_object_addrs
                 .iter()
@@ -779,7 +829,8 @@ impl TaggedHeap {
     /// Finish the marker and explicitly reclaim native resources before
     /// releasing this heap's ownership. Module finalizers and SQLite teardown
     /// may block or fail; automatic Drop never invokes those operations.
-    /// On marker error, Drop abandons the marker-readable allocations.
+    /// On marker error or retained facade obligations, Drop abandons the
+    /// backing allocations instead of reclaiming them.
     pub fn shutdown(mut self) -> Result<(), MarkFinishError> {
         // SAFETY: shutdown consumes this heap, and its only remaining access
         // is automatic destruction after the explicit resource teardown.
@@ -793,6 +844,9 @@ impl TaggedHeap {
     /// Lisp Value access, including through legacy TLS aliases. Its only
     /// remaining operation is automatic destruction after this returns.
     pub(crate) unsafe fn shutdown_owned_resources(&mut self) -> Result<(), MarkFinishError> {
+        if self.facade_mark_is_excluded() {
+            return Err(MarkFinishError::FacadeRetained(self.heap_identity()));
+        }
         self.finish_concurrent_mark()?;
         crate::tagged::gc::clear_tagged_heap_if_installed(&self);
         self.reclaim_intrusive_objects(ReclamationMode::Explicit);

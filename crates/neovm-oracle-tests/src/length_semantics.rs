@@ -82,6 +82,8 @@ fn oracle_length_comparisons_on_circular_lists() {
 #[test]
 fn oracle_length_circular_list_error_payloads() {
     return_if_neovm_enable_oracle_proptest_not_set!();
+    // length follows GNU Emacs 32 list_length; length< retains the pinned
+    // FOR_EACH_TAIL schedule, independently of the list_length correction.
 
     let form = r#"
 (let* ((x (list 'a 'b 'c))
@@ -106,7 +108,7 @@ fn oracle_length_circular_list_error_payloads() {
 "#;
 
     let expect =
-        expect_test::expect![[r#""OK ((circular-list 1 t t c) (circular-list 1 t t c))""#]];
+        expect_test::expect![[r#""OK ((circular-list 1 nil t a) (circular-list 1 t t c))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

@@ -21,6 +21,13 @@ use std::ffi::{CStr, OsString};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod calendar;
+use calendar::{CalendarFieldOverflow, CalendarTime};
+mod time_zone_spec;
+use time_zone_spec::TimeZoneSpec;
+mod unix_timestamp;
+pub(crate) use unix_timestamp::{TimestampError, UnixTimestamp};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 enum TimeConvertSymbolForm {
     #[strum(serialize = "integer")]
@@ -354,9 +361,9 @@ fn time_spec_invalid() -> Flow {
     signal("error", vec![Value::string("Invalid time specification")])
 }
 
-fn time_error_overflow() -> Flow {
+pub(crate) fn time_error_overflow() -> Flow {
     signal(
-        "error",
+        LispCondition::Error,
         vec![Value::string("Specified time is not representable")],
     )
 }
@@ -521,7 +528,8 @@ fn parse_time_detailed(val: &Value) -> Result<ParsedTime, Flow> {
             } else {
                 0
             };
-            let secs = high * 65536 + low;
+            let secs = i64::try_from(i128::from(high) * 65536 + i128::from(low))
+                .map_err(|_| time_error_overflow())?;
             Ok(ParsedTime {
                 time: TimeMicros {
                     secs,
@@ -910,36 +918,9 @@ fn time_cmp(a: &Value, b: &Value) -> Result<std::cmp::Ordering, Flow> {
 /// (GNU `TM_YEAR_BASE`): `tm_year = year - 1900`.
 const TM_YEAR_BASE: i64 = 1900;
 
+#[cfg(test)]
 fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-fn days_in_month(month: i64, year: i64) -> i64 {
-    match month {
-        1 => 31,
-        2 => {
-            if is_leap_year(year) {
-                29
-            } else {
-                28
-            }
-        }
-        3 => 31,
-        4 => 30,
-        5 => 31,
-        6 => 30,
-        7 => 31,
-        8 => 31,
-        9 => 30,
-        10 => 31,
-        11 => 30,
-        12 => 31,
-        _ => 30,
-    }
-}
-
-fn days_in_year(year: i64) -> i64 {
-    if is_leap_year(year) { 366 } else { 365 }
 }
 
 /// Decoded time in UTC: (sec min hour day month year dow dst utcoff).
@@ -1022,42 +1003,12 @@ fn decode_epoch_secs(total_secs: i64) -> Result<DecodedTime, Flow> {
     })
 }
 
-/// Encode date/time components to epoch seconds (UTC).
+#[cfg(test)]
 fn encode_to_epoch_secs(sec: i64, min: i64, hour: i64, day: i64, month: i64, year: i64) -> i64 {
-    // Normalize an out-of-range MONTH into 1..=12, rolling the YEAR, exactly
-    // like GNU's `encode-time` (mktime/timegm semantics): month 0 -> December of
-    // the previous year, month 13 -> January of the next year, month -1 ->
-    // November of the previous year, and so on. DAY is handled by the
-    // day-of-year arithmetic below (it works for any integer via `day - 1`), so
-    // only MONTH needs an explicit rollover here; without it `for m in 1..month`
-    // silently treats month 0 as January of the same year and mis-indexes
-    // `days_in_month` for month > 12.
-    let m0 = month - 1;
-    let year = year + m0.div_euclid(12);
-    let month = m0.rem_euclid(12) + 1;
-
-    // Count days from epoch (1970-01-01) to the given date.
-    let mut total_days: i64 = 0;
-
-    if year >= 1970 {
-        for y in 1970..year {
-            total_days += days_in_year(y);
-        }
-    } else {
-        for y in year..1970 {
-            total_days -= days_in_year(y);
-        }
-    }
-
-    // Add days for months in the target year.
-    for m in 1..month {
-        total_days += days_in_month(m, year);
-    }
-
-    // Add days within month (day is 1-based).
-    total_days += day - 1;
-
-    total_days * 86400 + hour * 3600 + min * 60 + sec
+    CalendarTime::try_from([sec, min, hour, day, month, year])
+        .unwrap()
+        .epoch_seconds()
+        .unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -1303,6 +1254,8 @@ fn refresh_tz_env() {
     unsafe extern "C" {
         fn tzset();
     }
+    // SAFETY: tzset has no pointer arguments. Timezone mutations using this
+    // helper are serialized by ScopedTzEnv's process-wide lock.
     unsafe {
         tzset();
     }
@@ -1311,26 +1264,72 @@ fn refresh_tz_env() {
 #[cfg(not(unix))]
 fn refresh_tz_env() {}
 
-struct ScopedTzEnv {
-    previous: Option<OsString>,
+/// Serializes local libc timezone reads with temporary timezone writers.
+/// This lock-only guard preserves the process TZ and stays on its mutator thread.
+#[cfg(unix)]
+#[must_use = "dropping the guard permits temporary timezone writers"]
+#[derive(Debug)]
+struct LocalTzReadGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
+#[cfg(unix)]
+static_assertions::assert_not_impl_any!(LocalTzReadGuard: Send, Sync);
+
+#[cfg(unix)]
+impl LocalTzReadGuard {
+    fn new() -> Self {
+        Self {
+            _lock: tz_env_lock()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Restores the process timezone while retaining the serialization lock.
+/// The owned lock and thread marker keep the guard confined to its creating thread.
+#[must_use = "dropping the guard restores the previous timezone"]
+#[derive(Debug)]
+struct ScopedTzEnv {
+    previous: Option<OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(ScopedTzEnv: Send, Sync);
+
 impl ScopedTzEnv {
-    fn new(spec: Option<&str>) -> Self {
+    fn new(spec: Option<TimeZoneSpec<'_>>) -> Self {
+        let lock = tz_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let previous = std::env::var_os("TZ");
         match spec {
-            Some(v) => unsafe { std::env::set_var("TZ", v) },
+            // SAFETY: the guard owns the timezone serialization lock, and
+            // TimeZoneSpec guarantees there is no embedded NUL.
+            Some(v) => unsafe { std::env::set_var("TZ", v.as_ref()) },
+            // SAFETY: the guard owns the timezone serialization lock.
             None => unsafe { std::env::remove_var("TZ") },
         }
         refresh_tz_env();
-        Self { previous }
+        Self {
+            previous,
+            _lock: lock,
+            _thread: std::marker::PhantomData,
+        }
     }
 }
 
 impl Drop for ScopedTzEnv {
     fn drop(&mut self) {
         match &self.previous {
+            // SAFETY: the serialization lock is still held, and an OS
+            // environment value contains no embedded NUL.
             Some(v) => unsafe { std::env::set_var("TZ", v) },
+            // SAFETY: the serialization lock is still held.
             None => unsafe { std::env::remove_var("TZ") },
         }
         refresh_tz_env();
@@ -1338,8 +1337,7 @@ impl Drop for ScopedTzEnv {
 }
 
 fn with_tz_env<T>(spec: Option<&str>, f: impl FnOnce() -> T) -> T {
-    let _lock = tz_env_lock().lock().expect("time zone env lock poisoned");
-    let _guard = ScopedTzEnv::new(spec);
+    let _guard = ScopedTzEnv::new(spec.map(TimeZoneSpec::from));
     f()
 }
 
@@ -1395,7 +1393,10 @@ fn effective_zone_rule(zone: Option<&Value>) -> Result<ZoneRule, Flow> {
 #[cfg(unix)]
 fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
     match rule {
-        ZoneRule::Local => local_offset_name_at_epoch(epoch_secs),
+        ZoneRule::Local => {
+            let _guard = LocalTzReadGuard::new();
+            local_offset_name_at_epoch(epoch_secs)
+        }
         ZoneRule::Utc => (0, "GMT".to_string()),
         // GNU `tzlookup` builds a POSIX TZ string and hands it to libc
         // `tzalloc`; the resulting offset is therefore clamped to +/-24h and a
@@ -1454,7 +1455,11 @@ pub(crate) fn zone_offset_name_for_time(
 
 fn decode_time_for_zone(rule: &ZoneRule, epoch_secs: i64) -> Result<ZonedDecodedTime, Flow> {
     match rule {
-        ZoneRule::Local => local_decoded_time_at_epoch(epoch_secs),
+        ZoneRule::Local => {
+            #[cfg(unix)]
+            let _guard = LocalTzReadGuard::new();
+            local_decoded_time_at_epoch(epoch_secs)
+        }
         ZoneRule::Utc => Ok(ZonedDecodedTime {
             time: decode_epoch_secs(epoch_secs)?,
             dst: Value::NIL,
@@ -1622,33 +1627,12 @@ impl TmIsDst {
 /// treats `tm_isdst` as an *input* that disambiguates which UTC offset applies,
 /// so an explicit `nil` DST slot forces standard time even during the summer.
 #[cfg(unix)]
-fn mktime_with_isdst(
-    sec: i64,
-    min: i64,
-    hour: i64,
-    day: i64,
-    month: i64,
-    year: i64,
-    isdst: TmIsDst,
-) -> Result<i64, Flow> {
-    // `mktime` normalizes out-of-range fields itself, but `tm_year`/`tm_mon`
-    // must fit in a C `int`; bail out the same way GNU `check_tm_member` does.
-    let tm_year = year.checked_sub(1900).filter(|v| i32::try_from(*v).is_ok());
-    let Some(tm_year) = tm_year else {
-        return Err(time_error_overflow());
-    };
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    tm.tm_sec = sec as libc::c_int;
-    tm.tm_min = min as libc::c_int;
-    tm.tm_hour = hour as libc::c_int;
-    tm.tm_mday = day as libc::c_int;
-    tm.tm_mon = (month - 1) as libc::c_int;
-    tm.tm_year = tm_year as libc::c_int;
+fn mktime_with_isdst(calendar: CalendarTime, isdst: TmIsDst) -> Result<i64, Flow> {
+    let mut tm = calendar.into_tm();
     tm.tm_isdst = isdst.to_c();
-    // GNU sets `tm.tm_wday = -1` and treats a still-negative `tm_wday` after
-    // `mktime_z` as an error; libc `mktime` returns `(time_t)-1` on failure.
     tm.tm_wday = -1;
-    let value = unsafe { libc::mktime(&mut tm as *mut _) };
+    // SAFETY: tm points to an initialized, exclusively borrowed struct tm.
+    let value = unsafe { libc::mktime(&mut tm) };
     if value == -1 && tm.tm_wday < 0 {
         return Err(time_error_overflow());
     }
@@ -1656,43 +1640,118 @@ fn mktime_with_isdst(
 }
 
 #[cfg(not(unix))]
-fn mktime_with_isdst(
-    sec: i64,
-    min: i64,
-    hour: i64,
-    day: i64,
-    month: i64,
-    year: i64,
-    _isdst: TmIsDst,
+fn mktime_with_isdst(calendar: CalendarTime, _isdst: TmIsDst) -> Result<i64, Flow> {
+    calendar.epoch_seconds()
+}
+
+#[cfg(unix)]
+fn encode_calendar_in_fixed_zone(
+    calendar: CalendarTime,
+    spec: &str,
+    _offset: i64,
 ) -> Result<i64, Flow> {
-    Ok(encode_to_epoch_secs(sec, min, hour, day, month, year))
+    with_tz_env(Some(spec), || mktime_with_isdst(calendar, TmIsDst::Auto))
+}
+
+#[cfg(not(unix))]
+fn encode_calendar_in_fixed_zone(
+    calendar: CalendarTime,
+    _spec: &str,
+    offset: i64,
+) -> Result<i64, Flow> {
+    let seconds = calendar
+        .epoch_seconds()?
+        .checked_sub(fixed_offset_clamped(offset))
+        .ok_or_else(time_error_overflow)?;
+    Ok(seconds)
+}
+
+/// An offset that POSIX timezone parsing leaves unchanged. The private field
+/// permits direct calendar arithmetic without bypassing GNU's offset clamping.
+/// This immutable scalar contains no mutator state and is Send + Sync.
+#[derive(Clone, Copy, Debug)]
+struct DirectZoneOffset(i32);
+
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+enum OffsetNormalization {
+    #[error("Offset requires timezone normalization")]
+    Required,
+}
+
+impl TryFrom<i64> for DirectZoneOffset {
+    type Error = OffsetNormalization;
+
+    fn try_from(offset: i64) -> Result<Self, Self::Error> {
+        if !(-86_400..=86_400).contains(&offset) {
+            return Err(OffsetNormalization::Required);
+        }
+        Ok(Self(
+            i32::try_from(offset).map_err(|_| OffsetNormalization::Required)?,
+        ))
+    }
+}
+
+impl From<DirectZoneOffset> for i64 {
+    fn from(offset: DirectZoneOffset) -> Self {
+        i64::from(offset.0)
+    }
+}
+
+static_assertions::assert_impl_all!(DirectZoneOffset: Send, Sync);
+
+impl CalendarTime {
+    fn at_offset(self, offset: DirectZoneOffset) -> Result<i64, Flow> {
+        let seconds = self
+            .epoch_seconds()?
+            .checked_sub(i64::from(offset))
+            .ok_or_else(time_error_overflow)?;
+        // GNU also requires the resulting UTC year to fit tm_year.
+        decode_epoch_secs(seconds)?;
+        Ok(seconds)
+    }
+}
+
+fn encode_calendar_numeric_zone(calendar: CalendarTime, offset: i64) -> Result<i64, Flow> {
+    match DirectZoneOffset::try_from(offset) {
+        Ok(offset) => calendar.at_offset(offset),
+        Err(OffsetNormalization::Required) => {
+            encode_calendar_in_fixed_zone(calendar, &tz_string_for_fixed_offset(offset), offset)
+        }
+    }
+}
+
+fn encode_calendar_named_zone(
+    calendar: CalendarTime,
+    offset: i64,
+    name: &str,
+) -> Result<i64, Flow> {
+    if name.len() >= 3 && name.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        match DirectZoneOffset::try_from(offset) {
+            Ok(offset) => return calendar.at_offset(offset),
+            Err(OffsetNormalization::Required) => {}
+        }
+    }
+    encode_calendar_in_fixed_zone(calendar, &tz_string_for_named_offset(offset, name), offset)
 }
 
 /// Encode a broken-down local time to epoch seconds honoring the zone's DST
 /// rules and the forced `isdst` flag, mirroring GNU `Fencode_time` +
 /// `mktime_z`. For zones without DST transitions (`Utc`/fixed offsets) the flag
 /// is irrelevant and a plain offset subtraction suffices.
-#[allow(clippy::too_many_arguments)] // broken-down time fields mirror encode-time's positional contract
-fn encode_time_to_epoch(
-    sec: i64,
-    min: i64,
-    hour: i64,
-    day: i64,
-    month: i64,
-    year: i64,
-    zone: &Value,
-    isdst: TmIsDst,
-) -> Result<i64, Flow> {
+fn encode_time_to_epoch(calendar: CalendarTime, zone: &Value, isdst: TmIsDst) -> Result<i64, Flow> {
     let rule = effective_zone_rule(Some(zone))?;
-    let local_secs = encode_to_epoch_secs(sec, min, hour, day, month, year);
+
     match rule {
-        ZoneRule::Local => mktime_with_isdst(sec, min, hour, day, month, year, isdst),
-        ZoneRule::TzString(spec) => with_tz_env(Some(&spec), || {
-            mktime_with_isdst(sec, min, hour, day, month, year, isdst)
-        }),
-        ZoneRule::Utc => Ok(local_secs),
-        ZoneRule::FixedOffset(offset) | ZoneRule::FixedNamedOffset(offset, _) => {
-            Ok(local_secs - offset)
+        ZoneRule::Local => {
+            #[cfg(unix)]
+            let _guard = LocalTzReadGuard::new();
+            mktime_with_isdst(calendar, isdst)
+        }
+        ZoneRule::TzString(spec) => with_tz_env(Some(&spec), || mktime_with_isdst(calendar, isdst)),
+        ZoneRule::Utc => calendar.epoch_seconds(),
+        ZoneRule::FixedOffset(offset) => encode_calendar_numeric_zone(calendar, offset),
+        ZoneRule::FixedNamedOffset(offset, name) => {
+            encode_calendar_named_zone(calendar, offset, &name)
         }
     }
 }
@@ -1988,7 +2047,9 @@ pub(crate) fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
         )
     };
 
-    let total_secs = encode_time_to_epoch(sec, min, hour, day, month, year, &zone, isdst)?;
+    let calendar = CalendarTime::try_from([sec, min, hour, day, month, year])
+        .map_err(|CalendarFieldOverflow::OutOfRange| time_error_overflow())?;
+    let total_secs = encode_time_to_epoch(calendar, &zone, isdst)?;
     if hz <= 1 {
         // Integer-second SECOND field: keep GNU's (HIGH LOW) result form
         // (`current-time-list' defaults to t).

@@ -11,9 +11,6 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
    = help: within `{closure@$DIR/tests/thread_safety_ui/tls_scope_send.rs:12:24: 12:31}`, the trait `Send` is not implemented for `Rc<()>`
 note: required because it appears within the type `PhantomData<Rc<()>>`
   --> $RUST/core/src/marker.rs
-   |
-   | pub struct PhantomData<T: PointeeSized>;
-   |            ^^^^^^^^^^^
 note: required because it appears within the type `TlsScope<u32, Cell<u32>>`
   --> tests/thread_safety_ui/../../src/tls_scope.rs
    |
@@ -26,9 +23,3 @@ note: required because it's used within this closure
    |                        ^^^^^^^
 note: required by a bound in `spawn`
   --> $RUST/std/src/thread/functions.rs
-   |
-   | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
-   |        ----- required by a bound in this function
-...
-   |     F: Send + 'static,
-   |        ^^^^ required by this bound in `spawn`

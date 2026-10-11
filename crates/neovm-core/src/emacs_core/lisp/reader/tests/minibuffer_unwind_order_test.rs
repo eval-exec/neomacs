@@ -34,9 +34,10 @@ fn trace_minibuffer_unwind_layout() {
         let lets = jit_layout::let_layout();
         let backtraces = jit_layout::backtrace_layout();
         tracing::info!(target: "d5::mini_unwind_layout",
-            let_available = lets.is_some(), backtrace_available = backtraces.is_some(),
+            let_available = true, backtrace_available = backtraces.is_some(),
             "mini unwind template probes");
-        if let Some(layout) = lets {
+        {
+            let layout = lets;
             for (name, template) in [
                 ("let", layout.let_),
                 ("let_local", layout.let_local),
@@ -147,8 +148,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
     eval.input_rx = Some(rx);
     let map = eval
         .obarray
-        .symbol_value("d5-mini-map")
-        .copied()
+        .symbol_value_copied("d5-mini-map")
         .expect("map");
     let mut expired = None;
     let handlers = eval.condition_stack.len();
@@ -242,8 +242,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
         .expect("first post-reader hook pass");
     let calls = eval
         .obarray
-        .symbol_value("d5-mini-buffer-calls")
-        .copied()
+        .symbol_value_copied("d5-mini-buffer-calls")
         .expect("calls");
     let calls = list_to_vec(&calls).expect("call list");
     assert_eq!(
@@ -258,8 +257,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
         .expect("idle post-reader pass");
     let idle = eval
         .obarray
-        .symbol_value("d5-mini-buffer-calls")
-        .copied()
+        .symbol_value_copied("d5-mini-buffer-calls")
         .expect("idle calls");
     assert_eq!(
         list_to_vec(&idle).expect("idle list"),

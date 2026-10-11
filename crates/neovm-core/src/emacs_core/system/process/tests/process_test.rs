@@ -13623,10 +13623,48 @@ fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
 /// every child is `setsid`-ed into one (`isolate_child_command`), which is
 /// also GNU's arrangement.  Signal 0 throughout, so nothing is signalled.
 /// Ledger 169 residual 5, ledger 175.
+#[cfg(unix)]
 #[test]
 fn signal_process_takes_a_negative_integer_as_a_process_group_like_gnu() {
+    use std::os::unix::process::CommandExt;
+
     crate::test_utils::init_test_tracing();
     let sh = find_bin("sh");
+    // A fixed numeric group can exist on a busy host. Create our own group,
+    // with no descendants, and reap its only member before checking absence.
+    let mut child = std::process::Command::new(&sh)
+        .args(["-c", "exit 0"])
+        .process_group(0)
+        .spawn()
+        .expect("spawn the temporary process-group leader");
+    let pgid = libc::pid_t::try_from(child.id()).expect("child ID fits pid_t");
+    assert!(
+        pgid > 1,
+        "a negative group ID must not select all processes"
+    );
+    assert!(
+        child
+            .wait()
+            .expect("reap the temporary group leader")
+            .success()
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: This probes our reaped child's group. Signal 0 delivers no
+        // signal; pgid > 1 excludes kill's special -1 target.
+        if unsafe { libc::kill(-pgid, 0) } == -1 {
+            let error = std::io::Error::last_os_error();
+            assert_eq!(error.raw_os_error(), Some(libc::ESRCH), "{error}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "process group {pgid} still exists"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let absent_group = -pgid;
     let result = eval_one(&format!(
         r#"(let* ((p (make-process
                       :name "pw175-siggroup"
@@ -13638,7 +13676,7 @@ fn signal_process_takes_a_negative_integer_as_a_process_group_like_gnu() {
                          (condition-case e (funcall thunk)
                            (error (list 'error (car e) (cadr e)))))))
              (prog1
-                 (list :absent-group (funcall try (lambda () (signal-process -99999 0)))
+                 (list :absent-group (funcall try (lambda () (signal-process {absent_group} 0)))
                        :own-group    (funcall try (lambda ()
                                                     (signal-process (- (process-id p)) 0)))
                        :own-pid      (funcall try (lambda () (signal-process (process-id p) 0)))
@@ -14341,9 +14379,9 @@ fn an_exited_child_is_a_zombie_here_and_reaped_in_gnu() {
 /// as a function this port can call.  It is not wired to any Lisp entry
 /// point (see `UpdateStatusSite::recording` and the pin above), so this test
 /// is what keeps it honest: it drives a `ProcessManager` with no wait loop
-/// at all, waits until `/proc` says the child is a ZOMBIE -- exited and not
-/// reaped -- and asserts that the sweep, and only the sweep, turns `run`
-/// into `(exit . 7)`.
+/// at all, waits until the kernel reports the child exited without reaping
+/// it, and asserts that the sweep, and only the sweep, turns `run` into
+/// `(exit . 7)`. Linux uses `/proc`; Darwin uses `waitid` with `WNOWAIT`.
 ///
 /// The second half is ledger 165's inversion as a compile-time fact rather
 /// than a comment: `handle_child_signal` passes `p->pid` to
@@ -14385,6 +14423,7 @@ fn gnus_sigchld_sweep_records_an_exited_child_and_cannot_reach_a_pidless_process
     // Wait for the kernel, not for the clock: a zombie is exited-and-unreaped,
     // which is the exact state GNU's handler would have found.
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    #[cfg(not(target_os = "macos"))]
     let is_zombie = |pid: u32| {
         std::fs::read_to_string(format!("/proc/{pid}/stat"))
             .ok()
@@ -14398,6 +14437,32 @@ fn gnus_sigchld_sweep_records_an_exited_child_and_cannot_reach_a_pidless_process
                     .map(str::to_string)
             })
             .is_some_and(|state| state == "Z")
+    };
+    #[cfg(target_os = "macos")]
+    let is_zombie = |pid: u32| {
+        // Darwin has no /proc. GNU's handler consumes the owned child's
+        // wait status (process.c:7741-7748; sysdep.c:471,515-517), so this
+        // fixture must leave it available for the sweep's first reap.
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: pid is this test's unreaped child; info points to writable
+        // storage. WNOWAIT reports its exit without consuming the status.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            assert_eq!(error.raw_os_error(), Some(libc::EINTR), "waitid: {error}");
+            return false;
+        }
+        // SAFETY: siginfo_t's integer and pointer fields admit zero values;
+        // the successful waitid writes its report into the zeroed storage.
+        let info = unsafe { info.assume_init() };
+        info.si_pid == pid as libc::pid_t && info.si_code == libc::CLD_EXITED && info.si_status == 7
     };
     while std::time::Instant::now() < deadline && !is_zombie(os_pid) {
         std::thread::sleep(Duration::from_millis(1));

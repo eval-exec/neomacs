@@ -830,7 +830,7 @@ impl Context {
             buffer_ticks,
             gensym_counter: self
                 .obarray
-                .symbol_value_id(gensym_counter_symbol())
+                .symbol_value_id_copied(gensym_counter_symbol())
                 .map_or(0, |value| value.bits()),
             function_epoch: self.obarray.function_epoch(),
             obarray_len: self.obarray.len(),
@@ -993,8 +993,7 @@ impl Context {
         let mut limit = self.max_depth;
         if let Some(global) = as_limit(
             self.obarray
-                .symbol_value_id(max_lisp_eval_depth_symbol())
-                .copied(),
+                .symbol_value_id_copied(max_lisp_eval_depth_symbol()),
         ) {
             limit = limit.min(global);
         }

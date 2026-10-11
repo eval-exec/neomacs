@@ -132,10 +132,17 @@ fn cache_key_event_symbol_properties(
     eval: &mut super::eval::Context,
     events: &[Value],
 ) -> EvalResult {
-    for event in events {
-        cache_event_symbol_value_properties_in_obarray(eval.obarray_mut(), *event)?;
+    // SAFETY: this loop only parses event designators and writes their cached
+    // properties. It invokes no Lisp or canonical dispatch producer and leaves
+    // no manager/interior reference outside its single cohesive phase.
+    unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            for event in events {
+                cache_event_symbol_value_properties_in_obarray(obarray, *event)?;
+            }
+            Ok(Value::NIL)
+        })
     }
-    Ok(Value::NIL)
 }
 
 fn lucid_event_type_list_p(value: &Value) -> bool {
@@ -780,8 +787,7 @@ pub(super) fn builtin_help_describe_vector(
         // GNU truncates it at the first member that is not (bug#9293).
         let check_ranges = eval
             .obarray
-            .symbol_value("describe-bindings-check-shadowing-in-ranges")
-            .copied()
+            .symbol_value_copied("describe-bindings-check-shadowing-in-ranges")
             .unwrap_or(Value::NIL);
         let skip_self_insert = check_ranges.as_symbol_name() == Some("ignore-self-insert")
             && definition.as_symbol_name() == Some("self-insert-command");
@@ -924,8 +930,7 @@ fn describe_buffer_binding_sections(
     let mut sections = Vec::new();
     let named_map = |name: &str| -> Option<Value> {
         eval.obarray
-            .symbol_value(name)
-            .copied()
+            .symbol_value_copied(name)
             .filter(|map| !map.is_nil())
     };
 

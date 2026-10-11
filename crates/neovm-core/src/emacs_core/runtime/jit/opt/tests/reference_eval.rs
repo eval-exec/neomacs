@@ -1095,8 +1095,12 @@ fn evaluate_opaque(
         .map(|bits| bits.to_value())
         .collect::<Vec<_>>()
         .into();
-    function.max_stack =
-        u16::try_from(args.len() + 8).map_err(|_| invalid("operator stack too large"))?;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(
+        args.len()
+            .checked_add(8)
+            .ok_or_else(|| invalid("operator stack too large"))?,
+    )
+    .map_err(|_| invalid("operator stack too large"))?;
     function.ops.push(op.clone());
     if !has_result {
         function.ops.push(Op::Nil);

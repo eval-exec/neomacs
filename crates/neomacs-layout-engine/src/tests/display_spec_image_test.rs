@@ -14,7 +14,7 @@ fn image_frame_index_survives_layout_parsing_and_realization() {
         Value::fixnum(7),
     ]);
 
-    let request = parse_display_image_layout(&spec, 0, 0)
+    let request = parse_display_image_layout(&spec, 0, 0, 0)
         .expect("valid image spec")
         .into_resolve_request(
             ImageScaleEnvironment::default(),

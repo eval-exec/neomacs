@@ -6,21 +6,19 @@ fn windows_symbol_registration_matches_gnu_bootstrap_shape() {
     register_bootstrap_symbols(&mut obarray);
 
     assert_eq!(
-        obarray.symbol_value("w32-quote-process-args").copied(),
+        obarray.symbol_value_copied("w32-quote-process-args"),
         Some(Value::T)
     );
     assert_eq!(
-        obarray
-            .symbol_value("w32-get-true-file-attributes")
-            .copied(),
+        obarray.symbol_value_copied("w32-get-true-file-attributes"),
         Some(Value::symbol("local"))
     );
     assert_eq!(
-        obarray.symbol_value("x-toolkit-scroll-bars").copied(),
+        obarray.symbol_value_copied("x-toolkit-scroll-bars"),
         Some(Value::T)
     );
     assert_eq!(
-        obarray.symbol_value("tree-sitter--library-abi").copied(),
+        obarray.symbol_value_copied("tree-sitter--library-abi"),
         Some(Value::fixnum(tree_sitter::LANGUAGE_VERSION as i64))
     );
     assert!(obarray.is_special("w32-quote-process-args"));
@@ -52,8 +50,7 @@ fn non_windows_context_does_not_leak_w32_surface() {
     let eval = super::super::eval::Context::new();
     let features = eval
         .obarray()
-        .symbol_value("features")
-        .copied()
+        .symbol_value_copied("features")
         .expect("features should be bound");
     let feature_list =
         super::super::value::list_to_vec(&features).expect("features should be a list");

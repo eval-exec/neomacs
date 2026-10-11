@@ -1152,6 +1152,18 @@ impl Clone for LispString {
     }
 }
 
+/// Rust-owned string payloads retain the Lisp objects in their interval plists.
+/// Heap strings and Context-held copies have the same tracing obligation.
+impl crate::gc_trace::GcTrace for LispString {
+    fn trace_roots(&self, roots: &mut Vec<crate::emacs_core::value::Value>) {
+        self.intervals().for_each_root(|root| roots.push(root));
+    }
+
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(crate::emacs_core::value::Value)) {
+        self.intervals().for_each_root(visit);
+    }
+}
+
 impl Drop for LispString {
     fn drop(&mut self) {
         // `&mut self` during drop: no concurrent GC read can be in flight for

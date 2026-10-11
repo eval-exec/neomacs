@@ -214,8 +214,18 @@ impl TaggedHeap {
         init: TaggedValue,
         n_extras: usize,
     ) -> TaggedValue {
+        self.alloc_char_table_with_extras(purpose, init, vec![init; n_extras])
+    }
+
+    /// Use already-reserved extra slots from the validated Lisp boundary.
+    pub(crate) fn alloc_char_table_with_extras(
+        &mut self,
+        purpose: TaggedValue,
+        init: TaggedValue,
+        extras: Vec<TaggedValue>,
+    ) -> TaggedValue {
+        let n_extras = extras.len();
         let contents = [init; CHAR_TABLE_TOP_SLOTS];
-        let extras = vec![init; n_extras];
         self.add_memory_use_count(
             MemoryUseCountSlot::VectorCells,
             (4 + CHAR_TABLE_TOP_SLOTS + n_extras) as u64,

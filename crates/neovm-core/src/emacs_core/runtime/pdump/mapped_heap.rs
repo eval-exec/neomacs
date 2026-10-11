@@ -638,14 +638,17 @@ pub(crate) fn rebuild_heap_metadata(heap: &mut DumpTaggedHeap) -> Result<(), Dum
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct BytecodeExtras {
-    pub max_stack: u16,
-    pub n_required: u16,
-    pub n_optional: u16,
+    pub max_stack: u64,
+    pub n_required: u64,
+    pub n_optional: u64,
     pub flags: u16,
+    pub params_kind: u8,
+    pub _pad_params: u8,
     pub rest_sym: u32,
     pub closure_slot_count: u32,
     pub n_extra_slots: u32,
     pub docstring_size: u32,
+    pub _pad0: u32,
     pub docstring_size_byte: i64,
     /// v14: GNU byte-span offset RELATIVE to the owning object's veclike
     /// span offset (0 when absent — presence is BC_FLAG_HAS_GNU, not this
@@ -664,7 +667,46 @@ pub(crate) struct BytecodeExtras {
     pub _pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<BytecodeExtras>() == 96);
+impl BytecodeExtras {
+    /// Validates scalar parameter metadata after image word fixups. Named
+    /// parameters additionally require the bounds-checked symbol-id span.
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub(crate) fn unnamed_params(
+        &self,
+    ) -> Result<Option<crate::emacs_core::bytecode::FunctionParams>, super::DumpError> {
+        use super::types::DumpFunctionParamsKind;
+        use crate::emacs_core::bytecode::FunctionParams;
+        let kind = DumpFunctionParamsKind::try_from(self.params_kind)
+            .map_err(super::DumpError::BytecodeParameterKind)?;
+        match kind {
+            DumpFunctionParamsKind::Named => Ok(None),
+            DumpFunctionParamsKind::Stack | DumpFunctionParamsKind::Dynamic => {
+                if self.n_required != 0
+                    || self.n_optional != 0
+                    || self.flags & BC_FLAG_HAS_REST != 0
+                    || self.flags & BC_FLAG_HAS_ARGLIST == 0
+                {
+                    return Err(super::DumpError::BytecodeParameterShape);
+                }
+                let params = FunctionParams::try_from(crate::emacs_core::value::Value::from_bits(
+                    self.arglist_word as usize,
+                ))
+                .map_err(|_| super::DumpError::BytecodeParameterShape)?;
+                if matches!(
+                    (&params, kind),
+                    (FunctionParams::Stack(_), DumpFunctionParamsKind::Stack)
+                        | (FunctionParams::Dynamic(_), DumpFunctionParamsKind::Dynamic)
+                ) {
+                    Ok(Some(params))
+                } else {
+                    Err(super::DumpError::BytecodeParameterShape)
+                }
+            }
+        }
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<BytecodeExtras>() == 120);
 
 /// Walk every heap-reference word a LAZY bytecode stub's mapped regions
 /// carry, WITHOUT materializing and without allocating: the GC's stub legs
@@ -748,7 +790,10 @@ pub(crate) fn bytecode_extras_len(function: &super::types::DumpByteCodeFunction)
     ) {
         return 0;
     }
-    let ids = function.params.required.len() + function.params.optional.len();
+    let ids = function
+        .params
+        .named()
+        .map_or(0, |params| params.required.len() + params.optional.len());
     let ids_bytes = (ids * 4 + 7) & !7;
     let doc_bytes = function.docstring.as_ref().map_or(0, |doc| doc.data.len());
     std::mem::size_of::<BytecodeExtras>() + ids_bytes + function.extra_slots.len() * 8 + doc_bytes
@@ -881,11 +926,19 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         addr_of_mut!((*p).ops).write(Vec::new());
         addr_of_mut!((*p).ops_sealed).write(true);
         addr_of_mut!((*p).constants).write(Vec::new().into());
-        addr_of_mut!((*p).params.required).write(Vec::new());
-        addr_of_mut!((*p).params.optional).write(Vec::new());
+        // SAFETY: FunctionParams has repr(C, u8), with first variant
+        // Stack's tag equal to zero; ArgTemplate is repr(transparent) i64.
+        // All-zero bytes therefore represent the concrete Stack(0) variant.
+        // Only that variant's payload is read; inactive Named Vec bytes are
+        // never interpreted. Writing bytes keeps inactive payload and padding
+        // deterministic without forming a transient invalid enum reference.
+        std::ptr::write_bytes(
+            addr_of_mut!((*p).params).cast::<u8>(),
+            0,
+            std::mem::size_of::<crate::emacs_core::bytecode::FunctionParams>(),
+        );
         addr_of_mut!((*p).closure_slot_count).write(extras_len);
         addr_of_mut!((*p).extra_slots).write(Vec::new());
-        write_canonical_none(addr_of_mut!((*p).params.rest), None, Option::is_none);
         write_canonical_none(addr_of_mut!((*p).env), None, Option::is_none);
         write_canonical_none(
             addr_of_mut!((*p).gnu_byte_offset_map),
@@ -911,9 +964,13 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         assert_eq!(stub.source_id, 0);
         assert!(!stub.stack_verified);
         assert!(stub.constants.as_slice().is_empty());
-        assert_eq!(stub.max_stack, 0);
-        assert!(stub.params.required.is_empty() && stub.params.optional.is_empty());
-        assert!(stub.params.rest.is_none());
+        assert_eq!(
+            stub.max_stack,
+            crate::emacs_core::bytecode::StackDepth::ZERO
+        );
+        assert!(
+            matches!(stub.params, crate::emacs_core::bytecode::FunctionParams::Stack(template) if template.raw() == 0)
+        );
         assert_eq!(
             stub.arglist.bits(),
             crate::emacs_core::value::Value::NIL.bits()
@@ -1707,6 +1764,7 @@ impl MappedHeapBuilder {
         let (const_rel, const_count) = slots_span.map_or((0i64, 0u32), |span| {
             (span.offset as i64 - obj_offset as i64, span.len as u32)
         });
+        let named_params = function.params.named();
         let mut flags = 0u16;
         if has_gnu {
             flags |= BC_FLAG_HAS_GNU;
@@ -1717,7 +1775,7 @@ impl MappedHeapBuilder {
         if function.ops_sealed {
             flags |= BC_FLAG_OPS_SEALED;
         }
-        if function.params.rest.is_some() {
+        if named_params.is_some_and(|params| params.rest.is_some()) {
             flags |= BC_FLAG_HAS_REST;
         }
         if function.docstring.is_some() {
@@ -1737,13 +1795,18 @@ impl MappedHeapBuilder {
         }
         let header = BytecodeExtras {
             max_stack: function.max_stack,
-            n_required: function.params.required.len() as u16,
-            n_optional: function.params.optional.len() as u16,
+            n_required: named_params.map_or(0, |params| params.required.len() as u64),
+            n_optional: named_params.map_or(0, |params| params.optional.len() as u64),
             flags,
-            rest_sym: function.params.rest.as_ref().map_or(0, |s| s.0),
+            params_kind: function.params.kind().into(),
+            _pad_params: 0,
+            rest_sym: named_params
+                .and_then(|params| params.rest.as_ref())
+                .map_or(0, |s| s.0),
             closure_slot_count: function.closure_slot_count as u32,
             n_extra_slots: function.extra_slots.len() as u32,
             docstring_size: function.docstring.as_ref().map_or(0, |doc| doc.size as u32),
+            _pad0: 0,
             docstring_size_byte: function.docstring.as_ref().map_or(0, |doc| doc.size_byte),
             gnu_rel,
             gnu_len,
@@ -1782,11 +1845,9 @@ impl MappedHeapBuilder {
             }
         }
         let mut cursor = base + std::mem::size_of::<BytecodeExtras>();
-        for id in function
-            .params
-            .required
-            .iter()
-            .chain(function.params.optional.iter())
+        for id in named_params
+            .into_iter()
+            .flat_map(|params| params.required.iter().chain(params.optional.iter()))
         {
             self.write_bytes(cursor, &id.0.to_le_bytes());
             cursor += 4;

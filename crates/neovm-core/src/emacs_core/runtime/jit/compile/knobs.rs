@@ -3,6 +3,67 @@
 //! Every emission a knob gates is decided at compile time, so both sides of
 //! an A/B run in one binary.
 
+/// Whether an unresolved Switch table participates in ops-only loop policy.
+/// Threading: immutable scalar compile configuration; no Lisp state or cache.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, strum::EnumString)]
+pub(crate) enum SwitchLoopPolicy {
+    #[default]
+    #[strum(serialize = "off")]
+    DirectOnly,
+    #[strum(serialize = "on", serialize = "1")]
+    Conservative,
+}
+
+pub(super) fn parse_switch_loop_policy(value: Option<&str>) -> SwitchLoopPolicy {
+    value
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or_default()
+}
+
+/// Read once, before emitting a leaf. Off preserves the previous direct-edge
+/// loop policy; on also classifies operandless Switch as a possible loop.
+pub(crate) fn jit_switch_loop_policy() -> SwitchLoopPolicy {
+    #[cfg(test)]
+    if let Some(policy) = SWITCH_LOOP_POLICY_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return policy;
+    }
+    static POLICY: std::sync::OnceLock<SwitchLoopPolicy> = std::sync::OnceLock::new();
+    *POLICY.get_or_init(|| {
+        parse_switch_loop_policy(
+            std::env::var("NEOVM_JIT_SWITCH_LOOP_POLICY")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Compiler-test scalar only; never a mutator's Lisp state.
+    static SWITCH_LOOP_POLICY_TEST_OVERRIDE: std::cell::Cell<Option<SwitchLoopPolicy>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+#[must_use]
+pub(crate) fn switch_loop_policy_scope_for_test(policy: SwitchLoopPolicy) -> impl Drop {
+    #[must_use]
+    #[derive(Debug)]
+    struct Scope {
+        previous: Option<SwitchLoopPolicy>,
+        _compiler_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            let _ = SWITCH_LOOP_POLICY_TEST_OVERRIDE.try_with(|current| current.set(self.previous));
+        }
+    }
+    Scope {
+        previous: SWITCH_LOOP_POLICY_TEST_OVERRIDE.with(|current| current.replace(Some(policy))),
+        _compiler_thread: std::marker::PhantomData,
+    }
+}
+
 /// Full allocation for bodies with at most this many bytecode ops; zero
 /// preserves the original policy. Threading: immutable process configuration,
 /// safely initialized once and shared by every mutator's compiler.
@@ -1569,7 +1630,7 @@ pub(crate) fn jit_call_census_on() -> bool {
 
 /// Mid-end selection, independent of the T2 countdown trigger. Threading:
 /// immutable process configuration; test overrides contain configuration only.
-/// Legacy is the default, so the new backend is off and existing CLIF is kept.
+/// Legacy is the parser fallback; the default profile selects bounded opt.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum OptMode {
     #[default]
@@ -1591,8 +1652,18 @@ pub(crate) fn jit_opt_mode() -> OptMode {
     if let Some(mode) = OPT_TEST_OVERRIDE.with(|v| v.get()) {
         return mode;
     }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.mode;
+    }
     static MODE: std::sync::OnceLock<OptMode> = std::sync::OnceLock::new();
-    *MODE.get_or_init(|| OptMode::parse(std::env::var("NEOVM_JIT_OPT").ok().as_deref()))
+    *MODE.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT").as_deref(),
+            || super::opt_profile::selected().mode,
+            OptMode::parse,
+        )
+    })
 }
 
 /// Reach admissions for the new backend. Threading: an immutable scalar mask,
@@ -1637,8 +1708,18 @@ pub(crate) fn jit_opt_admit() -> OptAdmit {
     if let Some(bits) = OPT_ADMIT_TEST_OVERRIDE.with(|v| v.get()) {
         return bits;
     }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.admit;
+    }
     static BITS: std::sync::OnceLock<OptAdmit> = std::sync::OnceLock::new();
-    *BITS.get_or_init(|| OptAdmit::parse(std::env::var("NEOVM_JIT_OPT_ADMIT").ok().as_deref()))
+    *BITS.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_ADMIT").as_deref(),
+            || super::opt_profile::selected().admit,
+            OptAdmit::parse,
+        )
+    })
 }
 #[cfg(test)]
 thread_local! {
@@ -1657,14 +1738,25 @@ pub(crate) fn force_opt_for_test(mode: Option<OptMode>, admit: Option<OptAdmit>)
 /// Threading: test-thread compiler configuration only, never Lisp state; nested
 /// scopes restore the exact previous override, including its absence.
 #[cfg(test)]
+#[must_use = "the backend override ends when the returned guard is dropped"]
 pub(crate) fn opt_mode_scope_for_test(mode: OptMode) -> impl Drop {
-    struct Scope(Option<OptMode>);
+    /// Threading: scalar override owned and restored on this test's compiler thread.
+    #[derive(Debug)]
+    #[must_use = "dropping the guard restores the previous test backend"]
+    struct Scope {
+        previous: Option<OptMode>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
     impl Drop for Scope {
         fn drop(&mut self) {
-            OPT_TEST_OVERRIDE.with(|value| value.set(self.0));
+            OPT_TEST_OVERRIDE.with(|value| value.set(self.previous));
         }
     }
-    Scope(OPT_TEST_OVERRIDE.with(|value| value.replace(Some(mode))))
+    Scope {
+        previous: OPT_TEST_OVERRIDE.with(|value| value.replace(Some(mode))),
+        _thread: std::marker::PhantomData,
+    }
 }
 
 /// Independently selected mid-end passes. Threading: immutable process-wide
@@ -1721,17 +1813,342 @@ pub(crate) fn jit_opt_passes() -> OptPasses {
     if let Some(passes) = OPT_PASSES_TEST_OVERRIDE.with(|v| v.get()) {
         return passes;
     }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.passes;
+    }
     static PASSES: std::sync::OnceLock<OptPasses> = std::sync::OnceLock::new();
-    *PASSES.get_or_init(|| OptPasses::parse(std::env::var("NEOVM_JIT_OPT_PASSES").ok().as_deref()))
+    *PASSES.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_PASSES").as_deref(),
+            || super::opt_profile::selected().passes,
+            OptPasses::parse,
+        )
+    })
 }
 
 #[cfg(test)]
 thread_local! {
     /// Compiler configuration only, never mutator or Lisp state.
     static OPT_PASSES_TEST_OVERRIDE: std::cell::Cell<Option<OptPasses>> = const { std::cell::Cell::new(None) };
+    /// Test-thread work schedule only, never Lisp or mutator state.
+    static OPT_FAST_TEST_OVERRIDE: std::cell::Cell<Option<FastWorkSchedule>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
 pub(crate) fn force_opt_passes_for_test(passes: Option<OptPasses>) {
     OPT_PASSES_TEST_OVERRIDE.with(|v| v.set(passes));
+}
+
+/// Test-owned work policy; neither variant changes generated-code semantics.
+/// Threading: copied scalar configuration on the compiling test thread only.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FastWorkSchedule {
+    RepeatChecks,
+    ReuseChecks,
+}
+
+#[cfg(test)]
+impl FastWorkSchedule {
+    const fn enabled(self) -> bool {
+        match self {
+            Self::RepeatChecks => false,
+            Self::ReuseChecks => true,
+        }
+    }
+}
+
+/// Override the test's pass selection and restore its exact prior selection.
+/// Threading: this scalar TLS guard cannot migrate from its compiler thread.
+#[cfg(test)]
+#[must_use = "the pass override ends when the returned guard is dropped"]
+pub(super) fn opt_passes_scope_for_test(passes: OptPasses) -> impl Drop {
+    #[derive(Debug)]
+    #[must_use = "dropping the guard restores the previous test passes"]
+    struct Scope {
+        previous: Option<OptPasses>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            OPT_PASSES_TEST_OVERRIDE.with(|value| value.set(self.previous));
+        }
+    }
+    Scope {
+        previous: OPT_PASSES_TEST_OVERRIDE.with(|value| value.replace(Some(passes))),
+        _thread: std::marker::PhantomData,
+    }
+}
+
+/// Override work policy and restore its exact previous test-thread state.
+/// Threading: the guard retains no IR, Lisp values or runtime pointers.
+#[cfg(test)]
+#[must_use = "the work override ends when the returned guard is dropped"]
+pub(super) fn opt_fast_scope_for_test(schedule: FastWorkSchedule) -> impl Drop {
+    #[derive(Debug)]
+    #[must_use = "dropping the guard restores the previous test work schedule"]
+    struct Scope {
+        previous: Option<FastWorkSchedule>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            OPT_FAST_TEST_OVERRIDE.with(|value| value.set(self.previous));
+        }
+    }
+    Scope {
+        previous: OPT_FAST_TEST_OVERRIDE.with(|value| value.replace(Some(schedule))),
+        _thread: std::marker::PhantomData,
+    }
+}
+
+/// Profile-controlled compile-time work elision, on in lists48-osr, off with
+/// PROFILE=off. Threading: immutable process
+/// configuration only, never Lisp state, mutator pointers or compiler scratch.
+pub(crate) fn jit_opt_fast() -> bool {
+    #[cfg(test)]
+    if let Some(schedule) = OPT_FAST_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return schedule.enabled();
+    }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.fast;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_FAST").as_deref(),
+            || super::opt_profile::selected().fast,
+            |value| value == Some("on"),
+        )
+    })
+}
+
+/// Compile-only profitability policy. Threading: immutable process configuration;
+/// test overrides hold only the scalar policy, never Lisp or mutator state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OptProfitMode {
+    #[default]
+    Off,
+    Loops,
+    Lists,
+    PrimitiveLists,
+    Kernels,
+}
+impl OptProfitMode {
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("loops") => Self::Loops,
+            Some("lists") => Self::Lists,
+            Some("primitive-lists") => Self::PrimitiveLists,
+            Some("kernels") => Self::Kernels,
+            _ => Self::Off,
+        }
+    }
+}
+pub(crate) fn jit_opt_profit() -> OptProfitMode {
+    #[cfg(test)]
+    if let Some(mode) = OPT_PROFIT_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return mode;
+    }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.profit;
+    }
+    static MODE: std::sync::OnceLock<OptProfitMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_PROFIT").as_deref(),
+            || super::opt_profile::selected().profit,
+            OptProfitMode::parse,
+        )
+    })
+}
+#[cfg(test)]
+thread_local! {
+    /// Compiler configuration only, never Lisp state or runtime feedback.
+    static OPT_PROFIT_TEST_OVERRIDE: std::cell::Cell<Option<OptProfitMode>> =
+        const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(crate) fn force_opt_profit_for_test(mode: Option<OptProfitMode>) {
+    OPT_PROFIT_TEST_OVERRIDE.with(|value| value.set(mode));
+}
+
+/// Profile-controlled normal-entry prerequisite, on in lists48-osr, off with
+/// PROFILE=off. Threading: process configuration
+/// is an immutable scalar; test overrides belong only to the current compiler
+/// invocation, with no Lisp state, cache entries or runtime recording.
+pub(crate) fn jit_opt_require_osr() -> bool {
+    #[cfg(test)]
+    if let Some(value) = OPT_REQUIRE_OSR_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return value;
+    }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.require_osr;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_REQUIRE_OSR").as_deref(),
+            || super::opt_profile::selected().require_osr,
+            |value| value == Some("on"),
+        )
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-thread scalar compiler configuration only, never Lisp/mutator state.
+    static OPT_REQUIRE_OSR_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn force_opt_require_osr_for_test(value: Option<bool>) {
+    OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.set(value));
+}
+
+/// Test-only normal Opt admission prerequisite. Threading: immutable compiler
+/// configuration, retaining no Lisp value or cache ownership.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OptOsrRequirement {
+    Optional,
+    Required,
+}
+
+/// Test-owned scalar selection, restoring the exact previous override.
+/// Threading: the guard can only restore the current test compiler's override.
+#[cfg(test)]
+#[must_use = "the OSR prerequisite override ends when the returned guard is dropped"]
+pub(crate) fn opt_require_osr_scope_for_test(requirement: OptOsrRequirement) -> impl Drop {
+    /// Compiler-local scalar override; no mutator/Lisp state is stored here.
+    #[derive(Debug)]
+    #[must_use = "dropping the guard restores the previous test OSR prerequisite"]
+    struct Scope {
+        previous: Option<bool>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.set(self.previous));
+        }
+    }
+    let value = match requirement {
+        OptOsrRequirement::Optional => false,
+        OptOsrRequirement::Required => true,
+    };
+    Scope {
+        previous: OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.replace(Some(value))),
+        _thread: std::marker::PhantomData,
+    }
+}
+
+/// Compile-time early-loop policy. Threading: immutable configuration, never
+/// runtime recording or mutator state. Off keeps the original profit policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OptEarlyMode {
+    #[default]
+    Off,
+    Hot,
+    On,
+}
+impl OptEarlyMode {
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("hot") => Self::Hot,
+            Some("on") => Self::On,
+            _ => Self::Off,
+        }
+    }
+}
+pub(crate) fn jit_opt_early() -> OptEarlyMode {
+    #[cfg(test)]
+    if let Some(value) = OPT_EARLY_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return value;
+    }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.early;
+    }
+    static MODE: std::sync::OnceLock<OptEarlyMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_EARLY").as_deref(),
+            || super::opt_profile::selected().early,
+            OptEarlyMode::parse,
+        )
+    })
+}
+/// Optional original/final selected-front size bound; zero is disabled.
+/// Threading: immutable compiler configuration only. The builder retains its
+/// independent 1000-op hard ceiling.
+pub(crate) fn jit_opt_max_ops() -> usize {
+    #[cfg(test)]
+    if let Some(value) = OPT_MAX_OPS_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return value;
+    }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.max_ops;
+    }
+    static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_MAX_OPS").as_deref(),
+            || super::opt_profile::selected().max_ops,
+            |value| {
+                value
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(0)
+            },
+        )
+    })
+}
+#[cfg(test)]
+thread_local! {
+    /// Scalar compiler configuration only; never Lisp/runtime state.
+    static OPT_EARLY_TEST_OVERRIDE: std::cell::Cell<Option<OptEarlyMode>> = const { std::cell::Cell::new(None) };
+    /// Scalar compiler configuration only; never Lisp/runtime state.
+    static OPT_MAX_OPS_TEST_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(crate) fn force_opt_early_for_test(value: Option<OptEarlyMode>) {
+    OPT_EARLY_TEST_OVERRIDE.with(|mode| mode.set(value));
+}
+#[cfg(test)]
+pub(crate) fn force_opt_max_ops_for_test(value: Option<usize>) {
+    OPT_MAX_OPS_TEST_OVERRIDE.with(|mode| mode.set(value));
+}
+
+/// Independent cold-only opt construction report. Threading: safely published
+/// immutable process path; it does not enable report_requested, native entry
+/// counters, leaf naming, feedback or source identity assignment. Absent/off
+/// disables it; no file is opened during compilation.
+pub(crate) fn jit_opt_report_path() -> Option<&'static std::path::Path> {
+    static PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        std::env::var_os("NEOVM_JIT_OPT_REPORT_FILE")
+            .filter(|value| !value.is_empty() && value.as_os_str() != std::ffi::OsStr::new("off"))
+            .map(std::path::PathBuf::from)
+    })
+    .as_deref()
+}
+
+/// Exit-only scalar evidence. Threading: immutable process path is safely
+/// published once; no Lisp state, native counter or phase clock is enabled.
+pub(crate) fn jit_exit_path() -> Option<&'static std::path::Path> {
+    static PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        std::env::var_os("NEOVM_JIT_EXIT_FILE")
+            .filter(|value| !value.is_empty() && value.as_os_str() != std::ffi::OsStr::new("off"))
+            .map(std::path::PathBuf::from)
+    })
+    .as_deref()
 }

@@ -6,7 +6,7 @@ fn runtime_owned_system_name_refreshes_but_a_lisp_replacement_does_not() {
     refresh_system_name_from(&mut eval, "host-after-refresh".to_string());
     assert_eq!(
         eval.obarray()
-            .symbol_value("system-name")
+            .symbol_value_copied("system-name")
             .and_then(|value| value.as_utf8_str()),
         Some("host-after-refresh")
     );
@@ -18,7 +18,7 @@ fn runtime_owned_system_name_refreshes_but_a_lisp_replacement_does_not() {
     refresh_system_name_from(&mut eval, "host-after-second-refresh".to_string());
     assert_eq!(
         eval.obarray()
-            .symbol_value("system-name")
+            .symbol_value_copied("system-name")
             .and_then(|value| value.as_utf8_str()),
         Some("host-after-refresh")
     );

@@ -3791,6 +3791,35 @@ pub(crate) fn regexp_syntax_class_at_string_byte(
     syntax_entry_from_table(table, ch).class
 }
 
+/// String-property syntax lookup retaining the full Emacs character domain.
+/// Unicode inputs keep the existing fast path; property tables index byte8
+/// and non-Unicode inputs by their original code (GNU syntax.h:98-103).
+pub(crate) fn regexp_syntax_class_for_emacs_char_at_string_byte(
+    table: &SyntaxTable,
+    ch: EmacsChar,
+    byte_pos: usize,
+    prop_cache: &StringSyntaxPropByteRun<'_>,
+) -> SyntaxClass {
+    if let Some(ch) = ch.as_rust_char() {
+        return regexp_syntax_class_at_string_byte(table, ch, byte_pos, prop_cache);
+    }
+    if let Some(prop) = prop_cache.syntax_table_prop_at_string_byte(byte_pos)
+        && let Some(entry) = syntax_entry_from_emacs_syntax_property(prop, ch)
+    {
+        return entry.class;
+    }
+    record_syntax_table_decode();
+    table.char_syntax_code(ch.code())
+}
+
+fn syntax_entry_from_emacs_syntax_property(prop: Value, ch: EmacsChar) -> Option<SyntaxEntry> {
+    if builtin_syntax_table_p(vec![prop]).ok()?.is_truthy() {
+        syntax_entry_at_char_code(&prop, ch.code())
+    } else {
+        syntax_entry_from_chartable_entry(&prop)
+    }
+}
+
 /// Per-scan cache of the `syntax-table` text-property run, mirroring GNU
 /// `syntax.c` `gl_state` (`b_property`/`e_property` plus the current value).
 /// A scan reads the property once per char, but it is almost always nil over
@@ -4175,6 +4204,26 @@ pub(crate) fn regexp_syntax_class_at_emacs_byte(
     prop_cache: &SyntaxPropByteRun<'_>,
 ) -> SyntaxClass {
     effective_syntax_entry_for_char_at_byte(buf, table, ch, byte_pos, prop_cache).class
+}
+
+/// Buffer-property syntax lookup retaining the full Emacs character domain.
+pub(crate) fn regexp_syntax_class_for_emacs_char_at_buffer_byte(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: EmacsChar,
+    byte_pos: EmacsBytePos,
+    prop_cache: &SyntaxPropByteRun<'_>,
+) -> SyntaxClass {
+    if let Some(ch) = ch.as_rust_char() {
+        return regexp_syntax_class_at_emacs_byte(buf, table, ch, byte_pos, prop_cache);
+    }
+    if let Some(prop) = prop_cache.syntax_table_prop_at_emacs_byte(buf, byte_pos)
+        && let Some(entry) = syntax_entry_from_emacs_syntax_property(prop, ch)
+    {
+        return entry.class;
+    }
+    record_syntax_table_decode();
+    table.char_syntax_code(ch.code())
 }
 
 /// Word-only syntax lookup, keeping byte8 and non-Unicode keys intact.

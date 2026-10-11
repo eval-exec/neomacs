@@ -198,7 +198,7 @@ fn predicate_branches_resume_type_deopt_without_repeating_effects() {
             f.ops.push(Op::Constant(2));
         }
         f.ops.push(Op::Return);
-        f.max_stack = 8;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
         f.seal_hand_assembled_ops();
         let leaf = lower_leaf_full(&f.ops, &f.constants, 2, None, Some(&ctx.obarray), 0).unwrap();
         for (a, b, yes) in [

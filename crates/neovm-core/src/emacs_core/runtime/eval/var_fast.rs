@@ -390,10 +390,42 @@ impl Context {
 
     #[inline(always)]
     fn try_set_var_cached_impl<const COMPILED: bool>(&mut self, id: SymId, value: Value) -> bool {
+        self.try_set_var_cached_in_obarray::<COMPILED>(&self.obarray, id, value)
+    }
+
+    /// The uncompiled cached-set tier under a short, noncalling Obarray read.
+    /// The manager root has already been chosen by this owner's live operand
+    /// phase. Plain cells remain the exclusive CellWrite phase's responsibility;
+    /// these unchanged commits touch only the admitted BLV cons or forwarder.
+    ///
+    /// # Safety
+    /// `obarray` must be this Context owner's current manager, loaned from its
+    /// still-live unpublished cursor. No manager/interior reference escapes,
+    /// and neither the closure nor this method may call Lisp, collect or
+    /// replace owner/manager storage. The caller must select this method only
+    /// for uncompiled stores; compiled observation policy uses the existing
+    /// const-generic wrappers instead.
+    #[inline(never)]
+    pub(crate) unsafe fn try_set_var_cached_in_uncompiled_read_phase(
+        &self,
+        obarray: &crate::emacs_core::symbol::Obarray,
+        id: SymId,
+        value: Value,
+    ) -> bool {
+        self.try_set_var_cached_in_obarray::<false>(obarray, id, value)
+    }
+
+    #[inline(always)]
+    fn try_set_var_cached_in_obarray<const COMPILED: bool>(
+        &self,
+        obarray: &crate::emacs_core::symbol::Obarray,
+        id: SymId,
+        value: Value,
+    ) -> bool {
         if !var_cache_tier_on(VarCacheTier::Set) {
             return false;
         }
-        let Some(sym) = self.obarray.get_by_id(id) else {
+        let Some(sym) = obarray.get_by_id(id) else {
             return false;
         };
         let window = sym.write_window() & SYMCELL_INLINE_WRITE_MASK;

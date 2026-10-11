@@ -445,8 +445,8 @@ fn classes_agree_with_the_matcher_tests_on_every_sample_character() {
                                 checked += 1;
                             }
                             let (code, _) = re_text_char(&text, d, multibyte).unwrap();
-                            let ch = regex_syntax_char(code);
-                            let class_syntax = syntax.char_syntax_at(ch, d);
+                            let ch = emacs_char::EmacsChar::from_code_unchecked(code);
+                            let class_syntax = syntax.emacs_char_syntax_at(ch, d);
                             let mask = nfa.fact_mask();
                             let word = class_syntax == SyntaxClass::Word;
                             let expected = [
@@ -456,7 +456,7 @@ fn classes_agree_with_the_matcher_tests_on_every_sample_character() {
                                     Facts::WORD_OR_SYMBOL,
                                     word || class_syntax == SyntaxClass::Symbol,
                                 ),
-                                (Facts::WIDE_WORD, word && ch as u32 > 0xFF),
+                                (Facts::WIDE_WORD, word && ch.code() > 0xFF),
                             ];
                             for (fact, holds) in expected {
                                 if mask.contains(fact) {

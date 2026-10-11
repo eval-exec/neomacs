@@ -6533,3 +6533,102 @@ fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
         "the tail's coding cookie must be inside the probe"
     );
 }
+
+#[cfg(test)]
+#[path = "time_boundary.rs"]
+mod time_boundary;
+
+// Native panic fixture: exercises Rust unwinding through the actual
+// format-decode callback path of the insert-file pipeline.
+fn p410_panicking_format_decode(eval: &mut Context, _args: Vec<Value>) -> EvalResult {
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-point-motion-hooks")
+            .is_truthy()
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-modification-hooks")
+            .is_truthy()
+    );
+    assert!(crate::buffer::undo::undo_list_is_disabled(
+        &eval
+            .buffers
+            .current_buffer()
+            .expect("source")
+            .get_undo_list()
+    ));
+    let target = eval
+        .buffers
+        .find_buffer_by_name(" *p410-panic-target*")
+        .expect("target");
+    eval.set_current_buffer_unrecorded(target)
+        .expect("callback buffer switch");
+    panic!("native format-decode panic fixture");
+}
+
+/// A Rust panic during decoding retires the dynamic suffix and the saved
+/// undo root storage-only (P4.11), but keeps what GNU's signal path keeps:
+/// the callback-selected buffer and the disabled undo list (fileio.c:5198).
+#[test]
+fn decoding_panic_cleans_dynamic_suffix_and_roots_but_keeps_inverse_state() {
+    use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    let mut eval = Context::new();
+    let source = eval.buffers.current_buffer_id().expect("source");
+    let target = eval.buffers.create_buffer(" *p410-panic-target*");
+    eval.buffers
+        .insert_into_buffer(source, "abc")
+        .expect("source text");
+    eval.buffers
+        .configure_buffer_undo_list(target, Value::NIL)
+        .expect("target undo");
+    let old_undo = Value::cons(Value::fixnum(424242), Value::NIL);
+    eval.buffers
+        .configure_buffer_undo_list(source, old_undo)
+        .expect("source undo");
+    for name in ["inhibit-point-motion-hooks", "inhibit-modification-hooks"] {
+        eval.try_set_runtime_binding_by_id(intern(name), Value::NIL)
+            .expect("initial dynamic value");
+    }
+    eval.register_subr(SubrSpec::new(
+        "format-decode",
+        NativeFn::ContextVec(p410_panicking_format_decode),
+        SubrArity::new(3, Some(3)),
+    ));
+    let original_count = eval.specpdl.len();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = run_after_insert_file_pipeline(&mut eval, source, false, false, 3);
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(
+        eval.specpdl.len(),
+        original_count,
+        "bindings and saved undo root must retire"
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-point-motion-hooks")
+            .is_nil()
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-modification-hooks")
+            .is_nil()
+    );
+    assert_eq!(
+        eval.buffers.current_buffer_id(),
+        Some(target),
+        "callback-selected buffer persists"
+    );
+    assert!(crate::buffer::undo::undo_list_is_disabled(
+        &eval.buffers.get(source).expect("source").get_undo_list()
+    ));
+    assert!(
+        eval.buffers
+            .get(target)
+            .expect("target")
+            .get_undo_list()
+            .is_nil()
+    );
+    eval.gc_collect_exact();
+    assert!(
+        !eval.tagged_heap.owns_heap_value_for_test(old_undo),
+        "retired undo snapshot must not leak a GC root"
+    );
+}

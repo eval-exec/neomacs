@@ -19,7 +19,7 @@ fn function(arity: usize, constants: Vec<Value>, ops: Vec<Op>) -> ByteCodeFuncti
     f.lexical = true;
     f.constants = constants.into();
     f.ops = ops;
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     f
 }

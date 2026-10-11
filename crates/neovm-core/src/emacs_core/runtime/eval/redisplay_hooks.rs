@@ -1015,8 +1015,16 @@ impl Drop for RedisplayTransaction<'_> {
                 .restore_outermost_restrictions(restrictions);
         }
         self.eval.gnu_redisplay_hooks.active = RedisplayActiveOwner::Idle;
-        // Recovery only: normal Lisp binding exits propagate their Flow.
-        self.eval.unbind_to(self.binding_count);
+        if std::thread::panicking() {
+            // A Rust panic must not evaluate Lisp while unwinding (P4.11):
+            // retire the transaction's bindings storage-only, exactly like a
+            // saved-state scope's Drop. Watchers and unwind forms the
+            // frontend pushed run only on the normal and Flow paths.
+            self.eval.discard_specpdl_to(self.binding_count);
+        } else {
+            // Recovery only: normal Lisp binding exits propagate their Flow.
+            self.eval.unbind_to(self.binding_count);
+        }
     }
 }
 

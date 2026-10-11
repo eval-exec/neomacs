@@ -5,10 +5,10 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::range;
+use super::{range, reps_lift::LiftStats};
 
 use crate::emacs_core::jit::opt::{
-    ir::{Block, Func, Inst, InstData, Opcode, Rep, Term, Value, ValueData, ValueDef},
+    ir::{Block, Func, Inst, InstData, Opcode, Rep, RepsCensus, Term, Value, ValueData, ValueDef},
     mem::{AliasClass, Effects},
     types::{Range, TypeSet},
     verify::VerifyError,
@@ -35,6 +35,70 @@ pub(crate) fn run(func: &mut Func) -> Result<RepsStats, VerifyError> {
     candidate.verify()?;
     *func = candidate;
     Ok(stats)
+}
+
+/// Owned output of Reps's complete input and candidate validation. The graph
+/// cannot be borrowed mutably or cloned while this terminal state is retained.
+/// Threading: compilation-owned IR and opaque scalar bits; transferable without
+/// Lisp dereference, mutator pointers, runtime publication or shared caches.
+#[derive(Debug)]
+#[must_use = "finish the verified Reps census before publishing the terminal plan"]
+pub(crate) struct VerifiedRepsTail {
+    func: Func,
+    stats: RepsStats,
+}
+
+/// Terminal graph with its reporting census attached. Only immutable recording
+/// and immediate consuming publication are available to the backend.
+/// Threading: owned compiler data, independent of any compiling thread or mutator.
+#[derive(Debug)]
+#[must_use = "record and publish the completed terminal Reps plan"]
+pub(crate) struct CompletedRepsPlan {
+    func: Func,
+}
+
+static_assertions::assert_impl_all!(VerifiedRepsTail: Send, Sync);
+static_assertions::assert_impl_all!(CompletedRepsPlan: Send, Sync);
+static_assertions::assert_not_impl_any!(VerifiedRepsTail: Clone, Copy, std::ops::DerefMut);
+static_assertions::assert_not_impl_any!(CompletedRepsPlan: Clone, Copy, std::ops::DerefMut);
+const _: () = assert!(std::mem::size_of::<CompletedRepsPlan>() == std::mem::size_of::<Func>());
+
+/// Keep the original transactional pass and BOTH complete checks. This is the
+/// only constructor of terminal authority, available only after `run` succeeds.
+pub(crate) fn run_terminal(mut func: Func) -> Result<VerifiedRepsTail, VerifyError> {
+    let stats = run(&mut func)?;
+    Ok(VerifiedRepsTail { func, stats })
+}
+
+impl VerifiedRepsTail {
+    #[must_use]
+    pub(crate) fn stats(&self) -> &RepsStats {
+        &self.stats
+    }
+
+    /// Consume the pending census without changing any verifier premise. The
+    /// verifier does not read OptCensus; all graph and child-proof data stay owned.
+    #[must_use]
+    pub(crate) fn finish(self, lift: LiftStats) -> CompletedRepsPlan {
+        let Self { mut func, stats } = self;
+        func.census.reps = Some(RepsCensus {
+            lift,
+            selection: stats,
+        });
+        CompletedRepsPlan { func }
+    }
+}
+
+impl CompletedRepsPlan {
+    #[must_use]
+    pub(crate) fn as_func(&self) -> &Func {
+        &self.func
+    }
+
+    #[must_use]
+    pub(crate) fn into_func(self) -> Func {
+        self.func
+    }
 }
 
 /// Successful fixnum proofs indexed by original value IDs, including aliases.

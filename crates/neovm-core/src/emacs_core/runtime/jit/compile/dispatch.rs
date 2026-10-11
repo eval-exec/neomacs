@@ -1134,8 +1134,11 @@ macro_rules! spec_call_body {
         let direct_consts = slot_ref.direct_consts.load(Ordering::Relaxed);
         if direct_consts != 0
             && ctx_ref.attention_clear(AttentionMask::SPEC_CALL)
-            && slot_ref.epoch.load(Ordering::Relaxed) == ctx_ref.obarray.function_epoch_exclusive()
-            && !ctx_ref.debug_on_next_call_is_armed()
+            && {
+                let mut projection = ctx_ref.dispatch_projection_exclusive();
+                slot_ref.epoch.load(Ordering::Relaxed) == projection.function_epoch()
+                    && !projection.debug_on_next_call_armed_fast()
+            }
             && ctx_ref.depth < ctx_ref.max_depth
         {
             #[cfg(any(test, debug_assertions))]
@@ -1591,7 +1594,7 @@ fn call_spec_slow(
                 let armed = if slot_epoch == SPEC_EPOCH_DISARMED {
                     false
                 } else {
-                    let epoch = ctx.obarray.function_epoch();
+                    let epoch = ctx.dispatch_projection().function_epoch();
                     // NEOVM_JIT_FORCE_SLOW_SPEC pretends the armed epoch is stale so
                     // every call exercises the re-validate/re-arm branch.
                     (!jit_force_slow_spec() && slot_epoch == epoch) || {
@@ -1765,7 +1768,8 @@ pub(crate) fn arith_intrinsic_op_by_name(name: &str, nargs: usize) -> Option<u8>
 #[inline(always)]
 pub(crate) fn subr_spec_armed(ctx: &mut Context, sym: i64, expected: i64, slot: &SpecSlot) -> bool {
     if ctx.attention_word_clear(AttentionMask::SUBR_ARMING)
-        && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch_exclusive()
+        && slot.epoch.load(Ordering::Relaxed)
+            == ctx.dispatch_projection_exclusive().function_epoch()
     {
         return true;
     }
@@ -1806,7 +1810,7 @@ pub(crate) fn subr_spec_armed_reference(
     if ctx.compiler_function_overrides_active() {
         return false;
     }
-    let epoch = ctx.obarray.function_epoch();
+    let epoch = ctx.dispatch_projection().function_epoch();
     // NEOVM_JIT_FORCE_SLOW_SPEC pretends the armed epoch is stale so every
     // call exercises the re-validate/re-arm branch.
     (!jit_force_slow_spec() && slot_epoch == epoch) || {
@@ -1891,8 +1895,12 @@ fn call_fixed_builtin_from_native(
     if ctx.depth > ctx.max_depth
         && let Err(flow) = Vm::from_context(ctx).bytecode_depth_exceeded()
     {
-        ctx.depth -= 1;
-        return Some(ctx.pop_bytecode_backtrace_frame_with_result(bt_count, Err(flow)));
+        // GNU checks depth before recording this rejected callee's frame.
+        // Dispatch at the counted depth, with the caller's native roots live.
+        let flow = ctx
+            .pop_bytecode_backtrace_frame_with_result(bt_count, Err(flow))
+            .expect_err("a rejected callee has no cleanup or result");
+        return Some(Err(ctx.finish_lisp_depth_overflow(flow)));
     }
     let result = match function {
         Some(SubrFn::A0(f)) => f(ctx),
@@ -2060,8 +2068,11 @@ pub extern "C" fn neovm_jit_call_subr_spec(
         // answer), and take the direct fixed-arity call -- so this does.
         // Every other state runs that sequence verbatim.
         if ctx.attention_clear(AttentionMask::SPEC_SUBR)
-            && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch_exclusive()
-            && !ctx.debug_on_next_call_is_armed()
+            && {
+                let mut projection = ctx.dispatch_projection_exclusive();
+                slot.epoch.load(Ordering::Relaxed) == projection.function_epoch()
+                    && !projection.debug_on_next_call_armed_fast()
+            }
         {
             #[cfg(debug_assertions)]
             SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);

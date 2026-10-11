@@ -11,6 +11,7 @@
 pub(crate) mod build;
 pub(crate) mod ir;
 pub(crate) mod mem;
+pub(crate) mod pass_fast;
 pub(crate) mod passes;
 pub(crate) mod sink_recipes;
 pub(crate) mod sink_shape;

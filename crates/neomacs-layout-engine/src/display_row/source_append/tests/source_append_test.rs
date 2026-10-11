@@ -11474,6 +11474,7 @@ fn display_replacement_media_append_item_resolves_direct_media_property() {
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         None,
+        0,
     )
     .expect("direct media replacement");
 
@@ -11501,6 +11502,7 @@ fn display_replacement_media_append_item_resolves_placeholder_item_without_host(
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         None,
+        0,
     )
     .expect("image placeholder");
 

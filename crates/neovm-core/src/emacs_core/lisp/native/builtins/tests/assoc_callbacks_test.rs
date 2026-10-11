@@ -175,7 +175,7 @@ fn assoc_callbacks_resolve_and_call_named_bytecode() {
     });
     bytecode.lexical = true;
     bytecode.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::List(2), Op::Return];
-    bytecode.max_stack = 8;
+    bytecode.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     let callable = Value::make_bytecode(bytecode);
     eval.obarray
         .set_symbol_function("assoc-callback-bytecode", callable);

@@ -1196,9 +1196,10 @@ impl Context {
     #[inline(never)]
     pub(crate) fn record_save_excursion(&mut self) -> Option<usize> {
         let buffer_id = self.buffers.current_buffer_id()?;
-        let (marker, marker_id) =
+        let (marker, _marker_id) =
             super::super::marker::make_registered_point_marker(&mut self.buffers, buffer_id)
                 .expect("the current buffer is live, so its point marker registers");
+        let saved_window = super::ExcursionWindow::capture(&self.frames, buffer_id);
         let count = self.specpdl.len();
         // Reserve before constructing the entry so it is written directly
         // into its final slot. Vec::push built a 32-byte stack temporary;
@@ -1206,7 +1207,7 @@ impl Context {
         self.specpdl.reserve(1);
         self.specpdl.spare_capacity_mut()[0].write(SpecBinding::SaveExcursion {
             _saved_buffer_id: buffer_id,
-            _saved_marker_id: marker_id,
+            saved_window,
             marker,
         });
         // SAFETY: reserve ensured a spare slot and write initialized it above.
@@ -1506,20 +1507,30 @@ impl Context {
         // more (a buffer-local or forwarded `let`, a watched symbol, an
         // `unwind-protect`, ...) hands the remaining suffix -- in the same
         // top-down order -- to the general unwinder.
-        let quitf = self.quit_flag_value();
-        if !quitf.is_nil() {
-            self.set_quit_flag_value(Value::NIL);
+        if !self.quit_flag_value().is_nil() {
+            return self.unbind_suffix_suspending_quit(count, result);
         }
+        // No quit pending: GNU's bracket saves and puts back nil, so there is
+        // nothing to suspend, root or restore.
+        self.unbind_suffix_to(count, result)
+    }
+
+    #[inline(always)]
+    fn unbind_suffix_to(&mut self, count: usize, result: EvalResult) -> EvalResult {
         self.pop_simple_specpdl_suffix(count);
-        let result = if self.specpdl.len() > count {
+        if self.specpdl.len() > count {
             self.drain_unwind_to(count, result)
         } else {
             result
-        };
-        if !quitf.is_nil() && self.quit_flag_value().is_nil() {
-            self.set_quit_flag_value(quitf);
         }
-        result
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn unbind_suffix_suspending_quit(&mut self, count: usize, result: EvalResult) -> EvalResult {
+        let mut quit_scope = super::specpdl::UnwindQuitScope::enter(self);
+        let result = quit_scope.context().unbind_suffix_to(count, result);
+        quit_scope.finish(result)
     }
 
     /// Pop entries from the top of the specpdl down toward COUNT while each
@@ -1538,6 +1549,7 @@ impl Context {
     /// is a store; `drain_unwind_to` is the path that roots them.  The symbol's shape is read when the entry is popped, not
     /// when it was pushed: a watcher added or a local made inside the `let`
     /// body sends that entry to the general path, as in GNU.
+    #[inline(always)]
     pub(crate) fn pop_simple_specpdl_suffix(&mut self, count: usize) {
         use crate::emacs_core::symbol::{SymbolRedirect, SymbolTrappedWrite};
         while self.specpdl.len() > count {
@@ -1628,6 +1640,33 @@ impl Context {
                     // nothing (const-asserted beside `trivial_spec_binding_pop`).
                     unsafe { self.specpdl.set_len(top_idx) };
                 }
+                SpecBinding::SaveCurrentBuffer { buffer_id }
+                    if self.buffers.current_buffer_id() == Some(*buffer_id) =>
+                {
+                    // GNU set_buffer_internal_1 returns immediately when this
+                    // buffer is still current (buffer.c:2333-2334). There is
+                    // no callback, allocation or runtime synchronization to
+                    // protect, so retain RESULT without opening a root frame.
+                    // SAFETY: this variant owns only a BufferId, whose lack
+                    // of drop glue is const-asserted beside the trivial pops.
+                    unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+                }
+                SpecBinding::SaveExcursion {
+                    marker,
+                    saved_window,
+                    ..
+                } => {
+                    let (marker, saved_window) = (*marker, *saved_window);
+                    match self.restore_excursion_in_current_buffer(marker, saved_window) {
+                        super::specpdl::ExcursionStorageRestore::Completed => {
+                            // SAFETY: restoration completed while the original
+                            // entry still rooted MARKER. All three payload
+                            // types are const-asserted to have no drop glue.
+                            unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+                        }
+                        super::specpdl::ExcursionStorageRestore::NeedsRuntime => break,
+                    }
+                }
                 other => match trivial_spec_binding_pop(other) {
                     Some(TrivialSpecBindingPop::BacktraceArgs(args)) => {
                         self.release_backtrace_args(&args);
@@ -1656,15 +1695,16 @@ impl Context {
         // GNU eval.c `unbind_to(count, value)` carries VALUE through cleanup.
         // In Rust the value is not on the C stack/register root set, so keep
         // all heap payloads rooted while unwind-protect/watchers may allocate.
-        let root_scope = self.save_vm_roots();
-        self.push_eval_result_roots(&result);
+        let mut roots = super::specpdl::UnwindVmRootsScope::enter(self);
+        let context = roots.context();
+        context.push_eval_result_roots(&result);
         let mut cleanup_error = None;
-        while self.specpdl.len() > count {
-            match self.unbind_to_result(count) {
+        while context.specpdl.len() > count {
+            match context.unbind_to_result(count) {
                 Ok(()) => break,
                 Err(flow) => {
                     let rooted_error: EvalResult = Err(flow);
-                    self.push_eval_result_roots(&rooted_error);
+                    context.push_eval_result_roots(&rooted_error);
                     cleanup_error = rooted_error.err();
                     // A cleanup nonlocal exit has already popped its own
                     // specbinding. Continue toward COUNT so lower dynamic
@@ -1673,7 +1713,7 @@ impl Context {
                 }
             }
         }
-        self.restore_vm_roots(root_scope);
+        roots.finish();
         if let Some(flow) = cleanup_error {
             return Err(flow);
         }
@@ -2017,23 +2057,36 @@ impl Context {
         A: Into<LispArgVec>,
     {
         let specpdl_count = self.specpdl.len();
-        let result = (|| {
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-redisplay"), Value::T)?;
-            // GNU's catch-all internal condition handler prevents the debugger
-            // from running. Neomacs dispatches signals on function return, so
-            // an explicit binding provides the same boundary before we demote
-            // the resulting Flow::Signal below.
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-debugger"), Value::T)?;
-            self.apply(function, args)
-        })();
-        let result = self.unbind_to_with_result(specpdl_count, result);
-        match result.kinded() {
-            Err(FlowKind::Signal(flow)) => {
+        self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-redisplay"), Value::T)?;
+        let condition_stack_base = self.condition_stack_len();
+        let resume = ResumeTarget::SafeFuncall {
+            condition_stack_base,
+        };
+        // GNU internal_condition_case_n installs Qt on the handler stack
+        // (eval.c:1782, 3239). This stops the search before outer handler-bind
+        // handlers and suppresses the ordinary signal debugger. The callback
+        // still observes its caller's inhibit-debugger binding, and GNU's
+        // debug-on-signal override remains effective (eval.c:2044).
+        // The barrier is owned by this Context's mutator, as is condition_stack;
+        // no Lisp state is shared with another concurrently executing Context.
+        self.push_condition_frame(ConditionFrame::ConditionCase {
+            conditions: Value::T,
+            resume: resume.clone(),
+        });
+        let result = self.apply(function, args);
+        let result = self.dispatch_signal_result_if_needed(result);
+        self.truncate_condition_stack(condition_stack_base);
+        let result = match result.kinded() {
+            Err(FlowKind::Signal(flow)) if flow.selected_resume.as_ref() == Some(&resume) => {
                 tracing::debug!(?flow, "error muted by safe_funcall");
                 Ok(Value::NIL)
             }
             other => other.map_err(Flow::from_kind),
-        }
+        };
+        // GNU removes the condition handler before the callback's error is
+        // muted and before safe_funcall restores inhibit-redisplay
+        // (eval.c:1787-1788, 1794, 3241). Errors from this restoration escape.
+        self.unbind_to_with_result(specpdl_count, result)
     }
 
     /// Apply from GNU's Lisp-visible `apply` / `funcall` subrs.
@@ -2322,7 +2375,7 @@ impl Context {
         };
         let (_, entry) = subr_entry_from_value(subr)?;
         (entry.dispatch_kind == SubrDispatchKind::Builtin)
-            .then(|| (subr, self.obarray.function_epoch()))
+            .then(|| (subr, self.dispatch_projection().function_epoch()))
     }
 
     /// `apply1` of DESIGNATOR, a symbol [`Self::resolve_mapped_subr_callee`]
@@ -2357,7 +2410,7 @@ impl Context {
                 Err(flow) => Err(flow),
                 Ok(()) => self.maybe_grow_eval_stack(|ctx| {
                     let args = [arg0];
-                    if ctx.obarray.function_epoch() != epoch
+                    if ctx.dispatch_projection().function_epoch() != epoch
                         || ctx.compiler_function_overrides_active()
                     {
                         return ctx
@@ -2405,7 +2458,7 @@ impl Context {
                     // `LispArgVec` was copied 16 bytes wide over these two
                     // 8-byte stores (a store-forward block per call).
                     let args = [arg0, arg1];
-                    if ctx.obarray.function_epoch() != epoch
+                    if ctx.dispatch_projection().function_epoch() != epoch
                         || ctx.compiler_function_overrides_active()
                     {
                         return ctx
@@ -3451,7 +3504,7 @@ impl Context {
     #[inline]
     pub(super) fn resolve_named_call_target_by_id(&mut self, sym_id: SymId) -> NamedCallTarget {
         let compiler_overrides_active = self.compiler_function_overrides_active();
-        let function_epoch = self.obarray.function_epoch();
+        let function_epoch = self.dispatch_projection().function_epoch();
         if !compiler_overrides_active {
             // Fast path: a HashMap lookup that returns the cached target
             // when the function epoch hasn't moved.  An epoch mismatch
@@ -3517,7 +3570,7 @@ impl Context {
     #[inline]
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(super) fn store_named_call_cache(&mut self, symbol: SymId, target: NamedCallTarget) {
-        let function_epoch = self.obarray.function_epoch();
+        let function_epoch = self.dispatch_projection().function_epoch();
         if self.named_call_cache.len() < NAMED_CALL_CACHE_CAPACITY {
             self.named_call_cache.insert(
                 symbol,

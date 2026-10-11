@@ -15,7 +15,7 @@ pub(crate) fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> Byt
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
 }
@@ -541,7 +541,9 @@ fn optional_add1() -> ByteCodeFunction {
         vec![Value::make_int(1)],
         1,
     );
-    f.params.optional = vec![SymId(9)];
+    let mut params = f.params.named().expect("named fixture parameters").clone();
+    params.optional = vec![SymId(9)];
+    f.params = params.into();
     f
 }
 
@@ -589,7 +591,13 @@ fn jit_pipeline_leaf_records_its_mir_verdict() {
         ("baseline", Some("gate_opt".to_string()))
     );
     let mut rest = optional_add1();
-    rest.params.rest = Some(SymId(10));
+    let mut params = rest
+        .params
+        .named()
+        .expect("named fixture parameters")
+        .clone();
+    params.rest = Some(SymId(10));
+    rest.params = params.into();
     assert_eq!(
         verdict(&rest),
         ("baseline", Some("gate_rest+gate_opt".to_string())),

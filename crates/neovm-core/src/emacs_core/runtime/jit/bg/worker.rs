@@ -12,15 +12,20 @@
 //! flight (their results are dropped with the process).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use super::WORKER_STATS;
 use super::queue::{BackendJob, Pool};
-use super::{BackendOut, WORKER_STATS};
-use crate::emacs_core::jit::backend::BackendError;
 use crate::emacs_core::jit::compile::CompileError;
 use crate::emacs_core::jit::compile::shared::WorkerBackend;
+use crate::emacs_core::jit::compile::shared::batch::{BatchCapacity, WORKER_BATCH_LIMIT};
 use crate::emacs_core::jit::stats::asm_dump;
+
+mod completion;
+mod hooks;
+use completion::{CpuCharge, Failure, FailureStage, FinishOnDrop, Member, elapsed_cpu};
+use hooks::BatchHooks;
 
 /// Stack of a worker thread: Cranelift recursion on large functions.
 const WORKER_STACK_BYTES: usize = 16 << 20;
@@ -80,7 +85,7 @@ fn apply_scheduling_knobs() {
         let rc = unsafe {
             let mut set: libc::cpu_set_t = std::mem::zeroed();
             for cpu in &cpus {
-                libc::CPU_SET(*cpu, &mut set);
+                libc::CPU_SET(cpu.index(), &mut set);
             }
             libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set)
         };
@@ -90,90 +95,172 @@ fn apply_scheduling_knobs() {
     }
 }
 
+struct PoppedJob<'a> {
+    job: BackendJob,
+    finish: FinishOnDrop<'a>,
+}
+
+impl<'a> PoppedJob<'a> {
+    fn new(pool: &'a Pool, job: BackendJob) -> Self {
+        #[cfg(test)]
+        if pool.is_global_for_worker_test() {
+            super::note_served_for_test(job.class, job.seq, job.cell.is_cancelled());
+        }
+        Self {
+            job,
+            finish: FinishOnDrop(pool),
+        }
+    }
+}
+
 fn run(pool: &'static Pool) {
     block_async_signals();
     apply_scheduling_knobs();
     let mut backend = WorkerBackend::new();
+    let mut carry = None;
     loop {
-        let job = pool.pop();
-        serve(&mut backend, job);
-        pool.finish();
+        let first = carry
+            .take()
+            .unwrap_or_else(|| PoppedJob::new(pool, pool.pop()));
+        carry = serve_batch(&mut backend, pool, first, &mut BatchHooks::default());
     }
 }
 
-/// Compile one job and publish its result (or skip it, cancelled).
-fn serve(backend: &mut WorkerBackend, job: BackendJob) {
-    let BackendJob {
-        payload,
-        enqueued_at,
-        cell,
-        class,
-        seq,
-        ..
-    } = job;
-    #[cfg(test)]
-    super::note_served_for_test(class, seq, cell.is_cancelled());
-    #[cfg(not(test))]
-    let _ = class;
-    if super::stress_enabled() {
-        // The soak: start 0-2 ms late.
-        std::thread::sleep(std::time::Duration::from_micros(
-            super::stress_mix(seq) % 2_001,
-        ));
-    }
-    if cell.is_cancelled() {
-        WORKER_STATS.skipped.fetch_add(1, Ordering::Relaxed);
-        return;
-    }
-    let started = Instant::now();
-    let cpu_started =
-        (class == super::JobClass::Upgrade).then(crate::emacs_core::jit::tier2::cpu_time_us);
-    let queue_wait_us = started.saturating_duration_since(enqueued_at).as_micros() as u64;
-    let outcome = catch_unwind(AssertUnwindSafe(|| {
-        if super::take_forced_panic() {
-            panic!("backend panic forced by a test");
-        }
-        backend.define_with_groups(payload)
-    }));
-    let result = match outcome {
-        Ok(result) => result,
-        Err(_) => {
-            // The backend's module and contexts may be mid-update: start a
-            // fresh one (the old code stays mapped, as always).
-            *backend = WorkerBackend::new();
-            WORKER_STATS.panics.fetch_add(1, Ordering::Relaxed);
-            tracing::error!(target: "neovm_jit::bg", "a JIT backend job panicked; the dispatcher keeps its current tier");
-            Err(CompileError::Backend(BackendError::Define(
-                "the background backend panicked".into(),
-            )))
-        }
-    };
-    let backend_us = started.elapsed().as_micros() as u64;
-    let asm = asm_dump::take_stashed();
-    if let Ok(code) = &result {
-        WORKER_STATS
-            .code_bytes
-            .fetch_add(code.code_bytes as u64, Ordering::Relaxed);
-    }
-    WORKER_STATS.jobs.fetch_add(1, Ordering::Relaxed);
-    add_max(&WORKER_STATS.backend_max_us, backend_us);
-    cell.publish(BackendOut {
-        result: result.map(|code| code.entry),
-        backend_us,
-        backend_cpu_us: cpu_started.map_or(0, |started| {
-            let finished = crate::emacs_core::jit::tier2::cpu_time_us();
-            if started == 0 || finished == 0 {
-                backend_us
-            } else {
-                finished.saturating_sub(started)
+/// Compile only immediately ready jobs, never wait with unsealed code.
+/// `carry` already owns its dequeue lease: a module-limit boundary seals
+/// prior jobs, then starts this one without requeueing/reprioritizing it.
+fn serve_batch<'a>(
+    backend: &mut WorkerBackend,
+    pool: &'a Pool,
+    first: PoppedJob<'a>,
+    hooks: &mut BatchHooks,
+) -> Option<PoppedJob<'a>> {
+    let mut batch = backend.batch();
+    let mut current = Some(first);
+    let mut carry = None;
+    let mut members = Vec::with_capacity(WORKER_BATCH_LIMIT);
+    let mut failure = None;
+    let mut considered = 0;
+    while let Some(popped) = current.take() {
+        considered += 1;
+        if popped.job.cell.is_cancelled() {
+            WORKER_STATS.skipped.fetch_add(1, Ordering::Relaxed);
+            drop(popped);
+        } else {
+            match batch.capacity(popped.job.payload.regalloc) {
+                BatchCapacity::SealFirst => {
+                    carry = Some(popped);
+                    break;
+                }
+                // An Aborted guard rejects prepare through its own state check.
+                BatchCapacity::Available | BatchCapacity::Aborted => {}
             }
-        }),
-        queue_wait_us,
-        asm,
-        dropped: false,
-    });
+            let PoppedJob { job, finish } = popped;
+            let BackendJob {
+                payload,
+                enqueued_at,
+                cell,
+                class,
+                seq,
+                ..
+            } = job;
+            if super::stress_enabled() {
+                std::thread::sleep(std::time::Duration::from_micros(
+                    super::stress_mix(seq) % 2_001,
+                ));
+            }
+            // A cancellation during the stress delay can still avoid codegen.
+            if cell.is_cancelled() {
+                WORKER_STATS.skipped.fetch_add(1, Ordering::Relaxed);
+                drop(finish);
+            } else {
+                // Each definition owns its own asm stash; stale text from an
+                // aborted attempt must never contaminate the following job.
+                let _ = asm_dump::take_stashed();
+                let started = Instant::now();
+                let cpu_started = (class == super::JobClass::Upgrade)
+                    .then(crate::emacs_core::jit::tier2::cpu_time_us);
+                let queue_wait_us =
+                    started.saturating_duration_since(enqueued_at).as_micros() as u64;
+                let index = members.len();
+                let prepared = catch_unwind(AssertUnwindSafe(|| {
+                    batch.prepare(payload)?;
+                    // Force a panic after real preparation: this tests the
+                    // worst unpublished-code case instead of an untouched module.
+                    if take_forced_panic(pool) {
+                        panic!("backend panic forced by a test");
+                    }
+                    hooks.prepared(seq, index);
+                    Ok::<(), CompileError>(())
+                }));
+                let codegen_us = started.elapsed().as_micros() as u64;
+                let codegen_cpu_us =
+                    cpu_started.map_or(0, |started| elapsed_cpu(started, codegen_us));
+                let asm = asm_dump::take_stashed();
+                members.push(Member {
+                    cell,
+                    class,
+                    codegen_us,
+                    codegen_cpu_us,
+                    queue_wait_us,
+                    asm,
+                    finish,
+                });
+                match prepared {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        failure = Some(Failure::error(FailureStage::Prepare, error));
+                        break;
+                    }
+                    Err(_) => {
+                        failure = Some(Failure::panic(FailureStage::Prepare));
+                        break;
+                    }
+                }
+            }
+        }
+        if considered >= WORKER_BATCH_LIMIT {
+            break;
+        }
+        current = pool.try_pop().map(|job| PoppedJob::new(pool, job));
+    }
+    if members.is_empty() {
+        // All selected jobs were already cancelled; Empty Drop does no reset.
+        drop(batch);
+        return carry;
+    }
+    WORKER_STATS.batches.fetch_add(1, Ordering::Relaxed);
+    let charge_cpu = if members
+        .iter()
+        .any(|member| member.class == super::JobClass::Upgrade)
+    {
+        CpuCharge::ContainsUpgrade
+    } else {
+        CpuCharge::EntryOnly
+    };
+    let mut completed = completion::seal(batch, members.len(), charge_cpu, failure, hooks);
+    if completed.requires_reset(members.len()) {
+        let started = Instant::now();
+        let cpu_started = charge_cpu.start();
+        *backend = WorkerBackend::new();
+        let cleanup_us = started.elapsed().as_micros() as u64;
+        completed.charge_cleanup(
+            cleanup_us,
+            cpu_started.map_or(0, |started| elapsed_cpu(started, cleanup_us)),
+        );
+    }
+    completed.publish(members, hooks);
+    carry
 }
 
-fn add_max(cell: &AtomicU64, value: u64) {
-    cell.fetch_max(value, Ordering::Relaxed);
+fn take_forced_panic(_pool: &Pool) -> bool {
+    #[cfg(test)]
+    if !_pool.is_global_for_worker_test() {
+        return false;
+    }
+    super::take_forced_panic()
 }
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "worker/tests/batch_test.rs"]
+mod batch_tests;

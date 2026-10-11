@@ -11,7 +11,7 @@ fn context_with_mapping(mapped: u32, multibyte: bool) -> Context {
     let up = chartable::copy_char_table(table.as_char_table_obj().unwrap().extras.as_slice()[0])
         .unwrap();
     chartable::ct_set_single(&up, b'a' as i64, Value::fixnum(mapped as i64));
-    table.with_char_table_mut(|obj| obj.extras.ensure_owned()[0] = up);
+    table.with_char_table_mut(|obj| obj.set_extra(0, up));
     casetab::builtin_set_case_table(&mut ctx, vec![table]).unwrap();
     let id = ctx.buffers.current_buffer_id().unwrap();
     ctx.buffers

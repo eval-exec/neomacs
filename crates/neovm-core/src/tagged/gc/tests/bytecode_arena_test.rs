@@ -1313,10 +1313,11 @@ fn full_prototype_fn(constants: Vec<TaggedValue>) -> ByteCodeFunction {
         required: vec![crate::emacs_core::intern::intern("bia-a")],
         optional: vec![crate::emacs_core::intern::intern("bia-b")],
         rest: Some(crate::emacs_core::intern::intern("bia-r")),
-    };
+    }
+    .into();
     f.arglist = TaggedValue::fixnum(0x0181);
     f.lexical = true;
-    f.max_stack = 11;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(11);
     f.ops_sealed = true;
     f.stack_verified = true;
     f.gnu_byte_offset_map = Some(vec![GnuByteOffsetMapEntry::new(0, 0)]);
@@ -1383,9 +1384,7 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
     assert_eq!(i.ops_sealed, p.ops_sealed);
     assert_eq!(i.stack_verified, p.stack_verified);
     assert_eq!(i.max_stack, p.max_stack);
-    assert_eq!(i.params.required, p.params.required);
-    assert_eq!(i.params.optional, p.params.optional);
-    assert_eq!(i.params.rest, p.params.rest);
+    assert_eq!(i.params, p.params);
     assert_eq!(i.arglist, p.arglist);
     assert_eq!(i.lexical, p.lexical);
     assert_eq!(i.env, p.env);

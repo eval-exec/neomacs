@@ -9,6 +9,8 @@
 //! `Face` value type, merge core, `FaceTable` derived cache) lives in
 //! `crate::face`; font.c matching stays in `super::font`.
 
+pub(crate) mod height;
+
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
@@ -41,8 +43,7 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
 pub(crate) fn ensure_startup_compat_variables(eval: &mut crate::emacs_core::eval::Context) {
     match eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()
+        .symbol_value_copied("face--new-frame-defaults")
     {
         Some(table) if table.is_hash_table() => seed_face_new_frame_defaults_table(table),
         _ => eval.set_variable(
@@ -54,7 +55,12 @@ pub(crate) fn ensure_startup_compat_variables(eval: &mut crate::emacs_core::eval
     // that every defface has run and all faces are known. This is the startup
     // sync point that fixes `face-id` for bootstrap faces (see
     // stamp_face_id_properties).
-    stamp_face_id_properties(eval.obarray_mut());
+    // SAFETY: stamping registry IDs writes only symbol properties; the helper
+    // neither calls Lisp nor changes canonical function/debugger metadata.
+    unsafe {
+        eval.obarray
+            .with_legacy_value_write(stamp_face_id_properties);
+    }
 
     let defaults = [
         ("face-filters-always-match", Value::NIL),
@@ -67,7 +73,7 @@ pub(crate) fn ensure_startup_compat_variables(eval: &mut crate::emacs_core::eval
         ("face-font-lax-matched-attributes", Value::T),
     ];
     for (name, value) in defaults {
-        if eval.obarray().symbol_value(name).is_none() {
+        if eval.obarray().symbol_value_copied(name).is_none() {
             eval.set_variable(name, value);
         }
     }
@@ -195,8 +201,7 @@ pub(crate) fn ensure_face_new_frame_defaults_entry(
 ) -> Option<Value> {
     let table = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()?;
+        .symbol_value_copied("face--new-frame-defaults")?;
     // The table is fully seeded once at bootstrap (`register_bootstrap_vars`)
     // and again at startup (`ensure_startup_compat_variables`). Re-seeding here
     // -- on every ensure/lookup -- rebuilt every face's cons + lface vector only
@@ -243,8 +248,7 @@ pub(crate) fn remove_face_new_frame_defaults_entry(
 ) {
     let Some(table) = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()
+        .symbol_value_copied("face--new-frame-defaults")
     else {
         return;
     };
@@ -282,8 +286,7 @@ pub(crate) fn lookup_face_new_frame_defaults_vector(
 ) -> Option<Value> {
     let table = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()?;
+        .symbol_value_copied("face--new-frame-defaults")?;
     let entry = lookup_frame_face_hash_entry(table, key)?;
     if entry.is_cons() {
         Some(entry.cons_cdr())
@@ -2700,7 +2703,9 @@ fn merge_face_height_value(
     match from.kind() {
         ValueKind::Fixnum(_) => from,
         ValueKind::Float => match to.kind() {
-            ValueKind::Fixnum(height) => Value::fixnum((from.xfloat() * height as f64) as i64),
+            ValueKind::Fixnum(height) => Value::from_fixnum(height::gnu_height_merge_fixnum(
+                from.xfloat() * height as f64,
+            )),
             ValueKind::Float => Value::make_float(from.xfloat() * to.xfloat()),
             _ if is_reset_like_face_attr_value(&to) => from,
             _ => invalid,
@@ -2763,43 +2768,35 @@ fn normalize_face_attr_for_set_with_eval(
         }
         ":height" => {
             if !is_reset_like {
-                if face_name == "default" {
-                    match normalized.kind() {
-                        ValueKind::Fixnum(n) if n > 0 => {}
-                        _ => {
-                            return Err(signal(
-                                "error",
-                                vec![
-                                    Value::string("Default face height not absolute and positive"),
-                                    normalized,
-                                ],
-                            ));
-                        }
+                let valid = match height::NumericFaceHeight::try_from(normalized) {
+                    Ok(height::NumericFaceHeight::Absolute(_)) => true,
+                    Ok(height::NumericFaceHeight::Relative(_)) => face_name != "default",
+                    Err(height::FaceHeightError::InvalidNumericHeight)
+                        if face_name == "default" || normalized.is_number() =>
+                    {
+                        false
                     }
-                } else {
-                    match normalized.kind() {
-                        ValueKind::Fixnum(n) if n > 0 => {}
-                        ValueKind::Float if normalized.xfloat() > 0.0 => {}
-                        _ => {
-                            let test = merge_face_height_value(
-                                eval,
-                                normalized,
-                                Value::fixnum(10),
-                                Value::NIL,
-                            );
-                            if test.as_int().is_none_or(|n| n <= 0) {
-                                return Err(signal(
-                                    "error",
-                                    vec![
-                                        Value::string(
-                                            "Face height does not produce a positive integer",
-                                        ),
-                                        normalized,
-                                    ],
-                                ));
-                            }
-                        }
+                    Err(height::FaceHeightError::InvalidNumericHeight) => {
+                        let test = merge_face_height_value(
+                            eval,
+                            normalized,
+                            Value::fixnum(10),
+                            Value::NIL,
+                        );
+                        test.as_int().is_some_and(|height| height > 0)
                     }
+                    Err(height::FaceHeightError::BackendRange) => false,
+                };
+                if !valid {
+                    let message = if face_name == "default" {
+                        "Default face height not absolute and positive"
+                    } else {
+                        "Face height does not produce a positive integer"
+                    };
+                    return Err(signal(
+                        LispCondition::Error,
+                        vec![Value::string(message), normalized],
+                    ));
                 }
             }
         }
@@ -3385,8 +3382,8 @@ fn lisp_value_to_face_attr_resolved(
     resolver: FaceColorResolver<'_>,
 ) -> Option<crate::face::FaceAttrValue> {
     use crate::face::{
-        BoxBorder, BoxStyle, FaceAttrValue, FaceHeight, FontSlant, FontWeight, FontWidth,
-        SpecifiedColor, Underline, UnderlinePosition, UnderlineStyle,
+        BoxBorder, BoxStyle, FaceAttrValue, FontSlant, FontWeight, FontWidth, SpecifiedColor,
+        Underline, UnderlinePosition, UnderlineStyle,
     };
 
     // "unspecified" symbol = reset the attribute
@@ -3420,10 +3417,10 @@ fn lisp_value_to_face_attr_resolved(
             let name = value.as_symbol_name()?;
             Some(FaceAttrValue::Width(FontWidth::from_symbol(name)?))
         }
-        LFaceAttr::Height => match value.kind() {
-            ValueKind::Fixnum(n) => Some(FaceAttrValue::Height(FaceHeight::Absolute(n as i32))),
-            ValueKind::Float => Some(FaceAttrValue::Height(FaceHeight::Relative(value.xfloat()))),
-            _ => None,
+        LFaceAttr::Height => match height::BackendFaceHeight::try_from(value) {
+            Ok(height) => Some(FaceAttrValue::Height(height.into())),
+            Err(height::FaceHeightError::InvalidNumericHeight) => None,
+            Err(height::FaceHeightError::BackendRange) => None,
         },
         LFaceAttr::Family | LFaceAttr::Foundry => {
             if value.is_string() {
@@ -4253,95 +4250,16 @@ pub(crate) fn builtin_color_distance(
     Ok(Value::fixnum(color_distance_metric(lhs, rhs)))
 }
 
-/// `#`-prefixed hex payload split into three equal-length components:
-/// GNU's `(len - 1) % 3 == 0` arm of `parse_color_spec` (src/xfaces.c:984).
-fn parse_hex_color_payload(payload: &[u8]) -> Option<(i64, i64, i64)> {
-    if payload.is_empty() || payload.len() % 3 != 0 {
-        return None;
-    }
-    let component_len = payload.len() / 3;
-    let red = parse_hex_color_comp(&payload[..component_len])?;
-    let green = parse_hex_color_comp(&payload[component_len..2 * component_len])?;
-    let blue = parse_hex_color_comp(&payload[2 * component_len..])?;
-    Some((i64::from(red), i64::from(green), i64::from(blue)))
-}
-
-/// One hex color component of 1-4 digits, normalized so the maximum value for
-/// that digit count becomes 65535.
+/// GNU `parse_color_spec` (src/xfaces.c:976-1043), answering the `i64` channels
+/// the builtins below report.
 ///
-/// Mirrors GNU `parse_hex_color_comp` (src/xfaces.c:928): it walks the spec's
-/// BYTES and fails on any non-hex byte, so a multi-byte character (whose UTF-8
-/// bytes are all non-hex) is rejected rather than sliced.
-fn parse_hex_color_comp(component: &[u8]) -> Option<u16> {
-    let digits = component.len();
-    if digits == 0 || digits > 4 {
-        return None;
-    }
-    let mut value: u32 = 0;
-    for &byte in component {
-        let digit = match byte {
-            b'0'..=b'9' => byte - b'0',
-            b'A'..=b'F' => byte - b'A' + 10,
-            b'a'..=b'f' => byte - b'a' + 10,
-            _ => return None,
-        };
-        value = (value << 4) | u32::from(digit);
-    }
-    let max_value = (1u32 << (digits * 4)) - 1;
-    Some((value * 65535 / max_value) as u16)
-}
-
-/// Decimal float component in [0,1], scaled to 16 bits.
-///
-/// Mirrors GNU `parse_float_color_comp` (src/xfaces.c:955): only decimal
-/// literals without whitespace are accepted; an EMPTY component is `strtod`'s
-/// 0.0 with `end == s == e`, so it parses as 0; and the scale uses `lrint`'s
-/// round-half-to-even.
-fn parse_float_color_comp(component: &[u8]) -> Option<u16> {
-    if !component
-        .iter()
-        .all(|byte| matches!(byte, b'0'..=b'9' | b'.' | b'+' | b'-' | b'e' | b'E'))
-    {
-        return None;
-    }
-    let value: f64 = if component.is_empty() {
-        0.0
-    } else {
-        // Every accepted byte is ASCII, so the UTF-8 conversion cannot fail,
-        // and `parse` consumes the whole component like GNU's `end == e`.
-        std::str::from_utf8(component).ok()?.parse().ok()?
-    };
-    if (0.0..=1.0).contains(&value) {
-        Some((value * 65535.0).round_ties_even() as u16)
-    } else {
-        None
-    }
-}
-
-/// GNU `parse_color_spec` (src/xfaces.c:976): the three numeric color forms
-/// `#RGB`, `rgb:R/G/B` and `rgbi:R/G/B`, each component 1-4 hex digits (or a
-/// float in [0,1] for `rgbi`).
+/// The parser itself is shared with the renderer
+/// ([`neomacs_display_protocol::x11_color_spec_16bit`]), so `color-values` and
+/// the XPM decoder's values cannot drift apart; this wrapper only widens the
+/// channels.
 fn parse_color_spec(spec: &[u8]) -> Option<(i64, i64, i64)> {
-    if let Some(payload) = spec.strip_prefix(b"#") {
-        return parse_hex_color_payload(payload);
-    }
-    if let Some(rest) = spec.strip_prefix(b"rgb:") {
-        let mut components = rest.splitn(3, |&byte| byte == b'/');
-        let red = parse_hex_color_comp(components.next()?)?;
-        let green = parse_hex_color_comp(components.next()?)?;
-        // GNU measures the last component to the end of the string, so a
-        // further '/' stays inside it and fails the hex validation.
-        let blue = parse_hex_color_comp(components.next()?)?;
-        return Some((i64::from(red), i64::from(green), i64::from(blue)));
-    }
-    if let Some(rest) = spec.strip_prefix(b"rgbi:") {
-        let mut components = rest.splitn(3, |&byte| byte == b'/');
-        let red = parse_float_color_comp(components.next()?)?;
-        let green = parse_float_color_comp(components.next()?)?;
-        let blue = parse_float_color_comp(components.next()?)?;
-        return Some((i64::from(red), i64::from(green), i64::from(blue)));
-    }
-    None
+    neomacs_display_protocol::x11_color_spec_16bit(spec)
+        .map(|(red, green, blue)| (i64::from(red), i64::from(green), i64::from(blue)))
 }
 
 fn parse_named_color_16bit(name: &str) -> Option<(i64, i64, i64)> {

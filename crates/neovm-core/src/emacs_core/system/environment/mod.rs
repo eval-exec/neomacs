@@ -68,7 +68,7 @@ fn host_process_environment() -> Value {
 pub(crate) fn install_host_environment_snapshot(eval: &mut Context) {
     let process_environment = host_process_environment();
     {
-        let obarray = eval.obarray_mut();
+        let mut obarray = eval.obarray_mut();
         obarray.make_special("initial-environment");
         obarray.make_special("process-environment");
     }

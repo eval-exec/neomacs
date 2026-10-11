@@ -103,7 +103,7 @@ fn install_noarg_hook_probe(
     body: Vec<Value>,
 ) {
     let lambda = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![]),
+        params: LambdaParams::simple(vec![]).into(),
         body,
         env: None,
         docstring: None,
@@ -739,7 +739,7 @@ fn pure_dispatch_typed_vconcat_flattens_bool_vector_logical_bits() {
 fn pure_dispatch_typed_length_tracks_interpreted_closure_slot_count() {
     crate::test_utils::init_test_tracing();
     let bare = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x")]),
+        params: LambdaParams::simple(vec![intern("x")]).into(),
         body: vec![Value::symbol("x")],
         env: Some(Value::NIL),
         docstring: None,
@@ -747,7 +747,7 @@ fn pure_dispatch_typed_length_tracks_interpreted_closure_slot_count() {
         interactive: None,
     });
     let with_doc = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x")]),
+        params: LambdaParams::simple(vec![intern("x")]).into(),
         body: vec![Value::symbol("x")],
         env: Some(Value::NIL),
         docstring: Some(crate::heap_types::LispString::from_utf8("doc")),
@@ -856,7 +856,7 @@ fn malformed_interpreted_closure_arglists_signal_invalid_function_at_call_time()
 }
 
 #[test]
-fn compiled_literal_reifier_preserves_ordinary_vectors() {
+fn make_byte_code_preserves_ordinary_vectors() {
     crate::test_utils::init_test_tracing();
     let closure_vec = Value::vector(vec![
         Value::list(vec![Value::symbol("x")]),
@@ -868,7 +868,17 @@ fn compiled_literal_reifier_preserves_ordinary_vectors() {
         Value::NIL,
     ]);
 
-    let converted = super::symbols::try_convert_nested_compiled_literal(closure_vec);
+    let function = make_byte_code_from_parts(
+        &Value::fixnum(0),
+        &Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![192, 135])),
+        &Value::vector(vec![closure_vec]),
+        &Value::fixnum(1),
+        None,
+        None,
+    )
+    .unwrap();
+    let converted = function.get_bytecode_data().unwrap().constants[0];
+    assert_eq!(converted, closure_vec);
     assert!(
         converted.is_vector(),
         "ordinary vectors are not reader closures"
@@ -876,7 +886,7 @@ fn compiled_literal_reifier_preserves_ordinary_vectors() {
 }
 
 #[test]
-fn compiled_literal_reifier_preserves_cperl_key_vector_shape() {
+fn make_byte_code_preserves_cperl_key_vector_shape() {
     crate::test_utils::init_test_tracing();
     let key_vec = Value::vector(vec![
         Value::list(vec![Value::symbol("control"), Value::fixnum(99)]),
@@ -884,7 +894,17 @@ fn compiled_literal_reifier_preserves_cperl_key_vector_shape() {
         Value::fixnum(70),
     ]);
 
-    let converted = super::symbols::try_convert_nested_compiled_literal(key_vec);
+    let function = make_byte_code_from_parts(
+        &Value::fixnum(0),
+        &Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![192, 135])),
+        &Value::vector(vec![key_vec]),
+        &Value::fixnum(1),
+        None,
+        None,
+    )
+    .unwrap();
+    let converted = function.get_bytecode_data().unwrap().constants[0];
+    assert_eq!(converted, key_vec);
     assert!(
         converted.is_vector(),
         "key vectors must not become closures"
@@ -2290,13 +2310,13 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("mib-last-clone-buffer")
+            .symbol_value_copied("mib-last-clone-buffer")
             .and_then(|v| v.as_utf8_str()),
         Some("*mib-clone*")
     );
     assert_eq!(
-        eval.obarray().symbol_value("mib-buffer-list-ran"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("mib-buffer-list-ran"),
+        Some(Value::T)
     );
 
     eval.obarray_mut()
@@ -2317,14 +2337,14 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
 
     assert_eq!(
         eval.obarray()
-            .symbol_value("mib-last-clone-buffer")
+            .symbol_value_copied("mib-last-clone-buffer")
             .and_then(|v| v.as_utf8_str()),
         Some("*mib-clone-inhibit*"),
         "clone-indirect-buffer-hook should still run"
     );
     assert_eq!(
-        eval.obarray().symbol_value("mib-buffer-list-ran"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("mib-buffer-list-ran"),
+        Some(Value::NIL),
         "buffer-list-update-hook should be inhibited"
     );
 }
@@ -4194,6 +4214,8 @@ fn split_window_internal_validates_core_argument_types() {
     // `(split-window-internal (selected-window) nil nil nil)` signals
     // `fixnump`.  This assertion used to pass Value::NIL and expect a window
     // back, which pinned the divergence as though it were the contract.
+    eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 12))")
+        .expect("stage the old window before a valid primitive split");
     let split = builtin_split_window_internal(
         &mut eval,
         vec![
@@ -4282,11 +4304,23 @@ fn split_window_internal_validates_core_argument_types() {
     //   (split-window-internal (selected-window) 10 "x" 0.5) => geometry error
     //   (split-window-internal (selected-window) 10 nil 0.5) => geometry error
     // (all three fail identically, on the resize step, as does SIDE `below').
+    // The first split left the selected window 12 lines tall, so this one
+    // stages and requests 6 lines: an unstaged or oversized request fails
+    // GNU's resize check before SIDE matters.
+    eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 6))")
+        .expect("stage the old window before a valid primitive split");
     let side_not_checked = builtin_split_window_internal(
         &mut eval,
-        vec![Value::NIL, Value::fixnum(12), Value::fixnum(9), Value::NIL],
+        vec![Value::NIL, Value::fixnum(6), Value::fixnum(9), Value::NIL],
     )
-    .expect("split-window-internal must not type-check SIDE");
+    .unwrap_or_else(|flow| {
+        panic!(
+            "split-window-internal must not type-check SIDE: {}",
+            crate::emacs_core::error::format_eval_result(&Err(crate::emacs_core::error::map_flow(
+                flow
+            )))
+        )
+    });
     assert!(side_not_checked.is_window());
 }
 
@@ -4363,7 +4397,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         Value::symbol("primitive-function")
     );
     let lambda = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x")]),
+        params: LambdaParams::simple(vec![intern("x")]).into(),
         body: Vec::new(),
         env: None,
         docstring: None,
@@ -6172,7 +6206,7 @@ fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat(
         panic!("obarray-make should return obarray");
     };
     let created_data = crate::emacs_core::builtins::symbols::obarray_buckets(made).unwrap();
-    assert_eq!(created_data.len(), 3);
+    assert_eq!(created_data.len(), 4);
     assert!(created_data.iter().all(|v| v.is_nil()));
 
     let default = dispatch_builtin_pure("obarray-make", vec![])
@@ -6183,7 +6217,7 @@ fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat(
     };
     assert_eq!(
         crate::emacs_core::builtins::symbols::obarray_len(default).unwrap(),
-        1511
+        8
     );
 
     let table = Value::vector(vec![Value::NIL, Value::list(vec![Value::symbol("x")])]);
@@ -8170,9 +8204,7 @@ fn defvar_1_binds_only_when_default_is_unbound() {
     .expect("defvar-1 should succeed");
     assert_eq!(result, Value::symbol("vm-defvar-1"));
     assert_eq!(
-        eval.obarray()
-            .symbol_value_id(intern("vm-defvar-1"))
-            .copied(),
+        eval.obarray().symbol_value_id_copied(intern("vm-defvar-1")),
         Some(Value::fixnum(7))
     );
 
@@ -8183,9 +8215,7 @@ fn defvar_1_binds_only_when_default_is_unbound() {
     .expect("second defvar-1 should succeed");
     assert_eq!(result, Value::symbol("vm-defvar-1"));
     assert_eq!(
-        eval.obarray()
-            .symbol_value_id(intern("vm-defvar-1"))
-            .copied(),
+        eval.obarray().symbol_value_id_copied(intern("vm-defvar-1")),
         Some(Value::fixnum(7))
     );
 }
@@ -8208,7 +8238,7 @@ fn defconst_1_sets_value_and_risky_local_property_without_constant_trap() {
     assert_eq!(result, Value::symbol("vm-defconst-1"));
     let symbol = intern("vm-defconst-1");
     assert_eq!(
-        eval.obarray().symbol_value_id(symbol).copied(),
+        eval.obarray().symbol_value_id_copied(symbol),
         Some(Value::fixnum(11))
     );
     assert_eq!(
@@ -8226,7 +8256,7 @@ fn defconst_1_sets_value_and_risky_local_property_without_constant_trap() {
     )
     .expect("GNU allows setting a defconst variable");
     assert_eq!(
-        eval.obarray().symbol_value_id(symbol).copied(),
+        eval.obarray().symbol_value_id_copied(symbol),
         Some(Value::fixnum(12))
     );
 }
@@ -8339,15 +8369,12 @@ fn pure_dispatch_make_placeholder_cluster_matches_compat_contracts() {
     let bc = make_byte_code_with_hash
         .get_bytecode_data()
         .expect("make-byte-code should produce bytecode data");
-    if !bc.constants[0].is_hash_table() {
-        panic!("expected hash-table constant, got {:?}", bc.constants[0]);
-    };
-    let entry = {
-        let table = bc.constants[0].as_hash_table().unwrap();
-        let key = Value::symbol("foo").to_hash_key(&table.test);
-        table.data.get(&key).copied()
-    };
-    assert_eq!(entry, Some(Value::fixnum(42)));
+    // GNU Fmake_byte_code stores each supplied constant unchanged.
+    assert!(bc.constants[0].is_cons(), "the constant remains list data");
+    assert_eq!(
+        bc.constants[0], hash_literal,
+        "constant identity is preserved"
+    );
 
     let make_char_result = dispatch_builtin_pure("make-char", vec![Value::fixnum(1)])
         .expect("builtin make-char should resolve");
@@ -13111,7 +13138,7 @@ fn prin1_to_string_preserves_gensym_lambda_parameter_identity_like_gnu() {
     let mut eval = crate::emacs_core::eval::Context::new();
     let sym = crate::emacs_core::intern::intern_uninterned("stack");
     let lambda = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![sym]),
+        params: LambdaParams::simple(vec![sym]).into(),
         body: vec![Value::from_sym_id(sym)],
         env: Some(Value::NIL),
         docstring: None,
@@ -15643,7 +15670,7 @@ fn internal_save_selected_window_helpers_restore_selected_window() {
     let result = eval
         .eval_str(
             r#"(let* ((orig (selected-window))
-                  (new (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+                  (new ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
              (select-window new)
              (save-selected-window
                (select-window orig)
@@ -16255,7 +16282,7 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
     assert_eq!(second, Value::fixnum(1));
     assert_eq!(eval.macro_expand_calls - calls0, 2);
     assert_eq!(
-        eval.obarray().symbol_value("vm-macroexpand-count").copied(),
+        eval.obarray().symbol_value_copied("vm-macroexpand-count"),
         Some(Value::fixnum(2))
     );
 
@@ -16271,7 +16298,7 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
     assert_eq!(fourth, Value::fixnum(2));
     assert_eq!(eval.macro_expand_calls - calls0, 4);
     assert_eq!(
-        eval.obarray().symbol_value("vm-macroexpand-count").copied(),
+        eval.obarray().symbol_value_copied("vm-macroexpand-count"),
         Some(Value::fixnum(4))
     );
 }
@@ -16311,8 +16338,7 @@ fn macroexpand_runtime_repeated_expansions_survive_exact_gc() {
     assert_eq!(eval.macro_expand_calls - calls0, 2);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-macroexpand-gc-count")
-            .copied(),
+            .symbol_value_copied("vm-macroexpand-gc-count"),
         Some(Value::fixnum(2))
     );
 }
@@ -19591,3 +19617,7 @@ fn a_user_defined_hash_table_test_answers_like_gnu_through_the_bucket_index() {
         )
     );
 }
+
+#[cfg(test)]
+#[path = "sequence_gnu_test.rs"]
+mod sequence_gnu;

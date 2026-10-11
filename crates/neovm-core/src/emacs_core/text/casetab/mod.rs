@@ -353,7 +353,7 @@ pub(crate) fn builtin_current_case_table(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("current-case-table", &args, 0)?;
-    current_case_table_for_buffer_in_state(&mut ctx.obarray, &mut ctx.buffers)
+    current_case_table_for_context(ctx)
 }
 
 /// `(standard-case-table)` -- evaluator-backed standard case table object.
@@ -362,7 +362,7 @@ pub(crate) fn builtin_standard_case_table(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("standard-case-table", &args, 0)?;
-    ensure_standard_case_table_object_in_state(&mut ctx.obarray)
+    ensure_standard_case_table_for_context(ctx)
 }
 
 /// `(set-case-table TABLE)` -- evaluator-backed current buffer case table set.
@@ -378,7 +378,7 @@ pub(crate) fn builtin_set_case_table(
         ));
     }
     let table = args[0];
-    let _ = ensure_standard_case_table_object_in_state(&mut ctx.obarray)?;
+    let _ = ensure_standard_case_table_for_context(ctx)?;
     ensure_case_table_derived_slots(table)?;
     set_current_case_table_for_buffer_in_state(&mut ctx.buffers, table)?;
     Ok(table)
@@ -408,10 +408,34 @@ pub(crate) fn builtin_set_standard_case_table(
     Ok(table)
 }
 
+#[inline(always)]
+fn ensure_standard_case_table_for_context(
+    ctx: &mut crate::emacs_core::eval::Context,
+) -> EvalResult {
+    // SAFETY: lazy standard-table creation only reads/stores a variable value;
+    // it cannot call Lisp or publish canonical dispatch metadata or raw storage.
+    unsafe {
+        ctx.obarray
+            .with_legacy_value_write(ensure_standard_case_table_object_in_state)
+    }
+}
+
+#[inline(always)]
+fn current_case_table_for_context(
+    ctx: &mut crate::emacs_core::eval::Context,
+) -> Result<Value, Flow> {
+    let buffers = &mut ctx.buffers;
+    // SAFETY: this noncalling phase selects/seeds case-table Values and buffer
+    // slots, without changing function/debugger metadata or escaping a loan.
+    unsafe {
+        ctx.obarray.with_legacy_value_write(|obarray| {
+            current_case_table_for_buffer_in_state(obarray, buffers)
+        })
+    }
+}
+
 fn ensure_standard_case_table_object_in_state(obarray: &mut super::symbol::Obarray) -> EvalResult {
-    if let Some(value) = obarray
-        .symbol_value_id(standard_case_table_object_symbol_id())
-        .cloned()
+    if let Some(value) = obarray.symbol_value_id_copied(standard_case_table_object_symbol_id())
         && is_case_table(&value)
     {
         return Ok(value);
@@ -451,14 +475,14 @@ fn current_case_table_for_buffer_in_state(
 pub(crate) fn sync_current_buffer_case_table_state(
     ctx: &mut crate::emacs_core::eval::Context,
 ) -> Result<(), Flow> {
-    let _ = current_case_table_for_buffer_in_state(&mut ctx.obarray, &mut ctx.buffers)?;
+    let _ = current_case_table_for_context(ctx)?;
     Ok(())
 }
 
 pub(crate) fn current_case_canon_table(
     ctx: &mut crate::emacs_core::eval::Context,
 ) -> Result<Value, Flow> {
-    let table = current_case_table_for_buffer_in_state(&mut ctx.obarray, &mut ctx.buffers)?;
+    let table = current_case_table_for_context(ctx)?;
     ensure_case_table_derived_slots(table)?;
     Ok(case_table_extra(table, 1))
 }
@@ -469,7 +493,7 @@ pub(crate) fn current_case_canon_table(
 pub(crate) fn current_case_upcase_table(
     ctx: &mut crate::emacs_core::eval::Context,
 ) -> Result<Value, Flow> {
-    let table = current_case_table_for_buffer_in_state(&mut ctx.obarray, &mut ctx.buffers)?;
+    let table = current_case_table_for_context(ctx)?;
     // GNU prepare_casing_context only rebuilds a modified table when the
     // canonicalize slot is nil, so ordinary comparisons do not write tables.
     if case_table_extra(table, 1).is_nil() {
@@ -503,7 +527,7 @@ pub(crate) fn buffer_case_canon_table(buf: &crate::buffer::Buffer) -> Option<Val
 }
 
 /// Which subsidiary case char-table to consult for a per-buffer override.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CaseMap {
     /// The downcase (main) table — `BVAR (current_buffer, downcase_table)`.
     Down,
@@ -514,30 +538,24 @@ pub(crate) enum CaseMap {
     Canon,
 }
 
-/// Per-buffer case-table override layer.
-///
-/// NeoMacs keeps a hardwired full-Unicode casing path (`casefiddle.rs` /
-/// `strings.rs`) for speed and Unicode coverage. The Lisp-visible case table
-/// (`set-case-table`) only carries explicit per-character entries — the ASCII
-/// range for the standard table, plus whatever a custom table overrides. This
-/// override resolves a single character against that table, returning:
-///
-/// * `Some(mapped)` — the table has an explicit (fixnat) entry for `code`,
-///   which is GNU's `downcase`/`upcase`/canon result (`buffer.h` `downcase`).
-/// * `None` — no explicit entry, so the caller falls through to the hardwired
-///   Unicode path. This keeps the default/standard path byte-identical: the
-///   standard table's ASCII entries equal the hardwired ASCII mapping, and
-///   characters outside the table (all of non-ASCII) are deferred entirely.
-///
-/// When the installed table is the standard object (by identity), the whole
-/// override is skipped so the hot path stays allocation-free.
-#[derive(Clone, Copy)]
-pub(crate) struct CaseTableOverride {
+/// Call-local case-table projection. Standard Unicode and installed tables
+/// are distinct modes: a missing entry in an installed table means identity,
+/// never fallback to Unicode (GNU buffer.h:1649-1663). Installed heap handles
+/// remain on the mutator that resolved them; no shared cache is added.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CaseTableOverride {
+    Standard,
+    Installed(InstalledCaseTables),
+}
+
+/// Mutator-local heap handles borrowed from the current buffer's case table.
+/// The buffer owns their roots throughout a synchronous casing operation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InstalledCaseTables {
     down: Value,
     up: Value,
     canon: Value,
-    /// True when a non-standard case table is installed in the current buffer.
-    custom: bool,
+    mutator: std::marker::PhantomData<*const ()>,
 }
 
 impl CaseTableOverride {
@@ -552,43 +570,33 @@ impl CaseTableOverride {
         if ctx.buffers.current_buffer_id().is_none() {
             return Ok(Self::none());
         }
-        let standard = ensure_standard_case_table_object_in_state(&mut ctx.obarray)?;
-        let table = current_case_table_for_buffer_in_state(&mut ctx.obarray, &mut ctx.buffers)?;
+        let standard = ensure_standard_case_table_for_context(ctx)?;
+        let table = current_case_table_for_context(ctx)?;
         // The standard table's explicit entries already match the hardwired
         // ASCII path; skip the override entirely so we stay byte-identical.
         if table.bits() == standard.bits() {
-            return Ok(Self {
-                down: Value::NIL,
-                up: Value::NIL,
-                canon: Value::NIL,
-                custom: false,
-            });
+            return Ok(Self::Standard);
         }
         // A custom table is installed: make sure the up/canon subsidiary tables
         // exist (GNU `set_case_table` recomputes them lazily via extras[1] nil).
         ensure_case_table_derived_slots(table)?;
-        Ok(Self {
+        Ok(Self::Installed(InstalledCaseTables {
             down: table,
             up: case_table_extra(table, 0),
             canon: case_table_extra(table, 1),
-            custom: true,
-        })
+            mutator: std::marker::PhantomData,
+        }))
     }
 
     /// An override that never overrides — used by pure/test callers and the
     /// default path so the hardwired Unicode mapping is used verbatim.
     pub(crate) fn none() -> Self {
-        Self {
-            down: Value::NIL,
-            up: Value::NIL,
-            canon: Value::NIL,
-            custom: false,
-        }
+        Self::Standard
     }
 
     /// True when a non-standard case table is installed.
     pub(crate) fn is_custom(&self) -> bool {
-        self.custom
+        matches!(self, Self::Installed(_))
     }
 
     /// Read-only counterpart of [`Self::for_current_buffer`]: resolve the
@@ -605,16 +613,16 @@ impl CaseTableOverride {
         if standard.is_some_and(|s| s.bits() == table.bits()) {
             return Self::none();
         }
-        Self {
+        Self::Installed(InstalledCaseTables {
             down: table,
             up: case_table_extra(table, 0),
             canon: case_table_extra(table, 1),
-            custom: true,
-        }
+            mutator: std::marker::PhantomData,
+        })
     }
 
     /// GNU `UPPERCASEP(c)`: downcasing through the case table changes the char.
-    /// Falls back to Unicode when the table has no explicit entry.
+    /// Standard tables use Unicode; missing installed entries mean identity.
     pub(crate) fn is_upper(&self, ch: char) -> bool {
         match self.map(CaseMap::Down, ch as i64) {
             Some(down) => down != ch as i64,
@@ -623,7 +631,7 @@ impl CaseTableOverride {
     }
 
     /// GNU `LOWERCASEP(c)`: not uppercase, and upcasing through the case table
-    /// changes the char. Falls back to Unicode when the table has no entry.
+    /// changes the char. Missing installed entries mean identity.
     pub(crate) fn is_lower(&self, ch: char) -> bool {
         if self.is_upper(ch) {
             return false;
@@ -634,33 +642,26 @@ impl CaseTableOverride {
         }
     }
 
-    /// Look up `code` in the requested subsidiary table. Returns `Some(mapped)`
-    /// only when the table holds an explicit fixnat entry (GNU's `downcase`
-    /// returns the entry if `FIXNATP`, else the char unchanged); otherwise
-    /// `None`, signalling the caller to use the hardwired Unicode path.
+    /// Standard tables defer to the built-in Unicode mapping; installed tables
+    /// return their natnum entry or the original character for every lookup.
     pub(crate) fn map(&self, which: CaseMap, code: i64) -> Option<i64> {
-        if !self.custom {
+        let Self::Installed(tables) = *self else {
             return None;
-        }
+        };
         let table = match which {
-            CaseMap::Down => self.down,
-            CaseMap::Up => self.up,
-            CaseMap::Canon => self.canon,
+            CaseMap::Down => tables.down,
+            CaseMap::Up => tables.up,
+            CaseMap::Canon => tables.canon,
         };
         if !is_case_table_subsidiary(&table) {
-            return None;
+            return Some(code);
         }
-        match super::chartable::ct_lookup(&table, code) {
-            Ok(value) => match value.kind() {
-                ValueKind::Fixnum(n)
-                    if (0..=crate::emacs_core::emacs_char::MAX_CHAR as i64).contains(&n) =>
-                {
-                    Some(n)
-                }
-                _ => None,
-            },
-            Err(_) => None,
-        }
+        Some(
+            super::chartable::ct_lookup(&table, code)
+                .ok()
+                .and_then(fixnum_char)
+                .unwrap_or(code),
+        )
     }
 }
 
@@ -699,9 +700,7 @@ fn case_table_extra(table: Value, idx: usize) -> Value {
 
 fn set_case_table_extra(table: Value, idx: usize, value: Value) {
     let _ = table.with_char_table_mut(|obj| {
-        if let Some(slot) = obj.extras.ensure_owned().get_mut(idx) {
-            *slot = value;
-        }
+        obj.set_extra(idx, value);
     });
 }
 

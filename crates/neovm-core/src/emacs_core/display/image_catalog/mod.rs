@@ -187,7 +187,7 @@ impl Default for ImageScaleEnvironment {
 /// entry point so the same image spec cannot acquire two geometries.
 #[must_use]
 pub fn image_scale_environment(frame: &Frame, obarray: &Obarray) -> ImageScaleEnvironment {
-    let default_scale = match obarray.symbol_value("image-scaling-factor").copied() {
+    let default_scale = match obarray.symbol_value_copied("image-scaling-factor") {
         Some(value) if value.is_symbol_named("auto") => ImageDefaultScale::Auto,
         Some(value) => numeric_image_scale(value)
             .map(ImageDefaultScale::Explicit)
@@ -214,7 +214,7 @@ pub fn image_scale_environment(frame: &Frame, obarray: &Obarray) -> ImageScaleEn
 pub fn image_size_limit(frame: &Frame, obarray: &Obarray) -> ImageSizeLimit {
     // GNU tests `FIXNUMP` before `FLOATP`; `Value` splits the same way, and
     // anything else (nil, a string, a symbol) is GNU's "no explicit limit".
-    match obarray.symbol_value("max-image-size").copied() {
+    match obarray.symbol_value_copied("max-image-size") {
         Some(value) if value.as_int().is_some() => {
             ImageSizeLimit::from_axis_pixels(value.as_int().expect("tested fixnum"))
         }

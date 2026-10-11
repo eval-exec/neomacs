@@ -25,6 +25,9 @@ use crate::heap_types::LispString;
 use std::ffi::CStr;
 use strum::IntoStaticStr;
 
+mod text_edit;
+pub(crate) use text_edit::{DeletedText, PendingTextEdit, RemeasureRule, delete_text_range};
+
 // ---------------------------------------------------------------------------
 // Argument helpers
 // ---------------------------------------------------------------------------
@@ -252,7 +255,7 @@ pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context)
             SymbolRedirect::Plainval => {
                 return ctx
                     .obarray
-                    .symbol_value_id(sym)
+                    .symbol_value_id_copied(sym)
                     .is_some_and(|v| !v.is_unbound() && v.is_truthy());
             }
             // The arm a booted session takes: the code-conversion work buffer
@@ -280,7 +283,7 @@ pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context)
                 }
                 return ctx
                     .obarray
-                    .symbol_value_id(sym)
+                    .symbol_value_id_copied(sym)
                     .is_some_and(|v| !v.is_unbound() && v.is_truthy());
             }
             SymbolRedirect::Varalias => {}
@@ -363,15 +366,167 @@ fn verify_change_text_read_only(
     Ok(())
 }
 
+/// Where a pending change starts, through the callbacks its preparation runs.
+///
+/// GNU `prepare_to_modify_buffer (start, end, preserve_ptr)`: a deletion or a
+/// replacement passes `&from`, and edits made by the callbacks move FROM the
+/// way they move a marker (insdel.c:2149-2156 around
+/// `verify_interval_modification`, PRESERVE_VALUE in `signal_before_change`).
+/// An insertion or a property change passes NULL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChangeStartPolicy {
+    Fixed,
+    Preserved,
+}
+
+/// The range a change is being prepared for, kept usable across Lisp.
+///
+/// Native preparation leaves measured bytes authoritative. Capture the text
+/// only immediately before a boundary that can run Lisp; consume that snapshot
+/// on return so subsequent native stages require no buffer/tick probes.
+#[derive(Clone, Copy, Debug)]
+struct LiveChangeRange {
+    range: TextEditRange,
+    before_callbacks: Option<ChangeTextSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ChangeTextSnapshot {
+    buffer: Option<crate::buffer::BufferId>,
+    chars_tick: i64,
+}
+
+impl LiveChangeRange {
+    #[inline]
+    fn new(range: TextEditRange) -> Self {
+        Self {
+            range,
+            before_callbacks: None,
+        }
+    }
+
+    #[inline]
+    fn capture_for_callbacks(&mut self, ctx: &crate::emacs_core::eval::Context) {
+        let buffer = ctx.buffers.current_buffer_id();
+        self.before_callbacks = Some(ChangeTextSnapshot {
+            buffer,
+            chars_tick: current_chars_tick(ctx, buffer),
+        });
+    }
+
+    /// Re-measure only when callback Lisp could have invalidated the bytes.
+    #[inline(always)]
+    fn refresh(&mut self, ctx: &crate::emacs_core::eval::Context) -> TextEditRange {
+        if let Some(before) = self.before_callbacks.take() {
+            let buffer = ctx.buffers.current_buffer_id();
+            let chars_tick = current_chars_tick(ctx, buffer);
+            if buffer != before.buffer || chars_tick != before.chars_tick {
+                if let Some(buf) = buffer.and_then(|id| ctx.buffers.get(id)) {
+                    self.range = live_edit_range_for_chars(buf, self.range.char_range());
+                }
+            }
+        }
+        self.range
+    }
+}
+
+fn current_chars_tick(
+    ctx: &crate::emacs_core::eval::Context,
+    buffer: Option<crate::buffer::BufferId>,
+) -> i64 {
+    buffer
+        .and_then(|id| ctx.buffers.get(id))
+        .map_or(0, Buffer::chars_modified_tick)
+}
+
+/// Measure character positions in the live text, clamped to its end: a
+/// position computed before a callback shrank the buffer must not reach past
+/// the text (GNU would read beyond Z there; neomacs must not panic).
+fn live_edit_range_for_chars(buf: &Buffer, chars: crate::buffer::CharRange) -> TextEditRange {
+    let end = buf.total_char_end_pos();
+    buf.edit_range_for_char_range(crate::buffer::CharRange::new(
+        chars.start().min(end),
+        chars.end().min(end),
+    ))
+}
+
+/// CHARS measured in the current buffer's live text, clamped to its end:
+/// for callers that, like GNU, reuse numeric character positions computed
+/// before Lisp ran. None when there is no current buffer.
+pub(crate) fn current_buffer_live_range(
+    ctx: &crate::emacs_core::eval::Context,
+    chars: crate::buffer::CharRange,
+) -> Option<TextEditRange> {
+    ctx.buffers
+        .current_buffer()
+        .map(|buf| live_edit_range_for_chars(buf, chars))
+}
+
+/// Run modification callbacks with the change's start carried across them.
+///
+/// For `ChangeStartPolicy::Preserved` this is GNU's PRESERVE_VALUE /
+/// RESTORE_VALUE pair: a temporary marker (insertion type nil) holds FROM
+/// while Lisp runs and is read back and unchained afterwards. Only callers
+/// that know Lisp is about to run call this, so the callback-free path does
+/// no marker work. The marker is a GC root of this mutator's specpdl for
+/// exactly the callbacks' extent.
+fn run_preserving_change_start(
+    ctx: &mut crate::emacs_core::eval::Context,
+    policy: ChangeStartPolicy,
+    start: crate::buffer::CharPos0,
+    callbacks: impl FnOnce(&mut crate::emacs_core::eval::Context) -> Result<(), Flow>,
+) -> Result<crate::buffer::CharPos0, Flow> {
+    let marker = match (policy, ctx.buffers.current_buffer_id()) {
+        (ChangeStartPolicy::Preserved, Some(buffer)) => {
+            Some(crate::emacs_core::marker::make_registered_buffer_marker(
+                &mut ctx.buffers,
+                buffer,
+                start.to_lisp(),
+                false,
+            ))
+        }
+        (ChangeStartPolicy::Preserved, None) | (ChangeStartPolicy::Fixed, _) => None,
+    };
+    let Some(marker) = marker else {
+        callbacks(ctx)?;
+        return Ok(start);
+    };
+    let roots = ctx.save_specpdl_roots();
+    ctx.push_specpdl_root(marker);
+    let result = callbacks(ctx);
+    // GNU `marker_position` signals when the callbacks killed the marker's
+    // buffer; a nonlocal exit from the callbacks takes precedence.
+    let preserved = crate::emacs_core::marker::marker_logical_fields(&marker).and_then(
+        |(buffer, position, _)| {
+            buffer
+                .and_then(|buffer| ctx.buffers.get(buffer))
+                .and(position)
+        },
+    );
+    crate::emacs_core::marker::unchain_marker(&mut ctx.buffers, &marker);
+    ctx.restore_specpdl_roots(roots);
+    result?;
+    preserved
+        .map(crate::buffer::CharPos0::from_lisp)
+        .ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("Marker does not point anywhere")],
+            )
+        })
+}
+
 /// GNU buffer-modification preparation, with an explicit distinction between
 /// character input consumed by Tree-sitter and property-only modifications.
-/// `byte_range` is 0-based Emacs bytes and is converted to 1-based character
-/// positions for Lisp hooks.
+/// `range` is measured in the current buffer; its 1-based character positions
+/// are what the Lisp hooks receive. Returns the change's start after the
+/// callbacks ran (moved only for `ChangeStartPolicy::Preserved`).
 fn prepare_buffer_change(
     ctx: &mut crate::emacs_core::eval::Context,
-    byte_range: EmacsByteRange,
+    range: TextEditRange,
     kind: BufferChangeKind,
-) -> Result<(), Flow> {
+    start_policy: ChangeStartPolicy,
+) -> Result<crate::buffer::CharPos0, Flow> {
     // GNU `prepare_to_modify_buffer_1` (insdel.c): the *first* action is
     // `Fbarf_if_buffer_read_only`, which signals `buffer-read-only` when the
     // buffer's `read-only' flag is set (and `inhibit-read-only' is nil) BEFORE
@@ -384,12 +539,15 @@ fn prepare_buffer_change(
     // and only barfed afterwards, so a rejected insert double-counted the
     // hook.
     ensure_current_buffer_writable_in_state(&ctx.obarray, &[], &ctx.buffers)?;
+    let mut start = range.char_start();
+    let mut live = LiveChangeRange::new(range);
 
     let gnu_hooks = crate::emacs_core::eval::gnu_redisplay_hooks_enabled();
     if !gnu_hooks {
-        verify_change_text_read_only(ctx, byte_range)?;
+        verify_change_text_read_only(ctx, range.byte_range())?;
     }
 
+    let mut range = range;
     if let Some(current_id) = ctx.buffers.current_buffer_id() {
         let undo_enabled = ctx
             .buffers
@@ -397,90 +555,119 @@ fn prepare_buffer_change(
             .is_some_and(|buf| !buf.get_undo_list().is_t());
         let undoable_change = undo_auto_undoable_change_symbol();
         if undo_enabled && ctx.obarray.fboundp_id(undoable_change) {
+            live.capture_for_callbacks(ctx);
             ctx.apply(Value::from_sym_id(undoable_change), vec![])?;
+            range = live.refresh(ctx);
         }
     }
 
     let Some(current_id) = ctx.buffers.current_buffer_id() else {
-        return Ok(());
+        return Ok(start);
     };
     // GNU insdel.c:2145 publishes after undoable-change and before any
     // interval callback, including the inhibited-modification-hooks arm.
     if gnu_hooks {
         ctx.gnu_mark_buffer_redisplay(current_id);
-        verify_change_text_read_only(ctx, byte_range)?;
+        verify_change_text_read_only(ctx, range.byte_range())?;
     }
-    let beg = byte_range.start();
-    let end = byte_range.end();
 
     if kind == BufferChangeKind::Characters
         && ctx.treesit.has_editable_tree(current_id)
         && let Some(buf) = ctx.buffers.get(current_id)
     {
         ctx.treesit
-            .begin_buffer_edit(current_id, buf, EmacsByteRange::ordered(beg, end));
+            .begin_buffer_edit(current_id, buf, range.byte_range());
     }
 
     if inhibit_modification_hooks(ctx) {
-        return Ok(());
+        return Ok(start);
     }
 
     // GNU `prepare_to_modify_buffer_1` locks a clean file-visiting base buffer
     // at this exact chokepoint, before first-change-hook and
     // before-change-functions.  Text edits already converge here, so the lock
     // transition remains complete without being duplicated across producers.
-    super::filelock::lock_current_buffer_before_change(ctx)?;
+    super::filelock::lock_current_buffer_before_change(ctx, |ctx| {
+        live.capture_for_callbacks(ctx);
+    })?;
+    let range = live.refresh(ctx);
+    let Some(current_id) = ctx.buffers.current_buffer_id() else {
+        return Ok(start);
+    };
 
-    crate::emacs_core::textprop::prepare_interval_modification_for_change(
-        ctx, current_id, beg, end,
-    )?;
+    // GNU preserves FROM around `verify_interval_modification` only when the
+    // buffer has intervals; a range with no properties runs no hook Lisp.
+    let preserve_interval_start = start_policy == ChangeStartPolicy::Preserved
+        && !range.is_empty()
+        && ctx
+            .buffers
+            .get(current_id)
+            .is_some_and(|buf| !buf.text_props_is_empty());
+    let bytes = range.byte_range();
+    let mut prepare_intervals = |ctx: &mut crate::emacs_core::eval::Context| {
+        crate::emacs_core::textprop::prepare_interval_modification_for_change(
+            ctx,
+            current_id,
+            bytes.start(),
+            bytes.end(),
+            |ctx| live.capture_for_callbacks(ctx),
+        )
+    };
+    if preserve_interval_start {
+        start = run_preserving_change_start(ctx, start_policy, start, prepare_intervals)?;
+    } else {
+        prepare_intervals(ctx)?;
+    }
+    let range = live.refresh(ctx);
+    let Some(current_id) = ctx.buffers.current_buffer_id() else {
+        return Ok(start);
+    };
+    if before_change_hooks_quiet(ctx, current_id) {
+        ctx.last_overlay_modification_hooks = Vec::new();
+    } else if start_policy == ChangeStartPolicy::Preserved {
+        start = run_preserving_change_start(ctx, start_policy, start, |ctx| {
+            run_before_change_hooks(ctx, current_id, range)
+        })?;
+    } else {
+        run_before_change_hooks(ctx, current_id, range)?;
+    }
+    deactivate_mark_after_preparing_change(ctx)?;
+    Ok(start)
+}
 
-    signal_before_change_hooks(ctx, current_id, byte_range)?;
-    deactivate_mark_after_preparing_change(ctx);
-    Ok(())
+/// True when no before-change callback can run: no first-change hook due,
+/// `before-change-functions` nil, and no overlays.
+///
+/// GNU binds `inhibit-modification-hooks` unconditionally (insdel.c
+/// signal_before_change), but its bind is a C specpdl push; ours was ~590 Ir
+/// of bind+unbind per modification, and with nothing to run under it the
+/// binding is unobservable.
+#[inline(always)]
+fn before_change_hooks_quiet(
+    ctx: &crate::emacs_core::eval::Context,
+    current_id: crate::buffer::BufferId,
+) -> bool {
+    let first_change_due = ctx
+        .buffers
+        .get(current_id)
+        .is_some_and(|buf| buf.modified_state_value().is_nil())
+        && hook_symbol_value_truthy(ctx, first_change_hook_symbol());
+    !first_change_due
+        && !hook_symbol_value_truthy(ctx, before_change_functions_symbol())
+        && !buffer_has_overlays(ctx, current_id)
 }
 
 /// Run callbacks only. Preparation owns mark deactivation so the inhibited
 /// path and the callback-free fast path cannot accidentally have the same
 /// selection side effects (GNU insdel.c: prepare_to_modify_buffer_1).
-fn signal_before_change_hooks(
+fn run_before_change_hooks(
     ctx: &mut crate::emacs_core::eval::Context,
     current_id: crate::buffer::BufferId,
-    byte_range: EmacsByteRange,
+    range: TextEditRange,
 ) -> Result<(), Flow> {
-    // Quiet fast path: when nothing can run under the bind — no
-    // first-change hook due, `before-change-functions` nil, no overlays —
-    // the `inhibit-modification-hooks` binding is unobservable. GNU binds
-    // unconditionally (insdel.c signal_before_change), but its bind is a C
-    // specpdl push; ours was ~590 Ir of bind+unbind per modification.
-    {
-        let first_change_due = ctx
-            .buffers
-            .get(current_id)
-            .is_some_and(|buf| buf.modified_state_value().is_nil())
-            && hook_symbol_value_truthy(ctx, first_change_hook_symbol());
-        if !first_change_due
-            && !hook_symbol_value_truthy(ctx, before_change_functions_symbol())
-            && !buffer_has_overlays(ctx, current_id)
-        {
-            ctx.last_overlay_modification_hooks = Vec::new();
-            return Ok(());
-        }
-    }
-
-    // Convert byte positions to 1-based character positions.
-    let (lisp_beg, lisp_end) = {
-        let Some(buf) = ctx.buffers.get(current_id) else {
-            return Ok(());
-        };
-        let beg_char = buf
-            .emacs_byte_pos_to_lisp_char_pos(byte_range.start())
-            .as_i64();
-        let end_char = buf
-            .emacs_byte_pos_to_lisp_char_pos(byte_range.end())
-            .as_i64();
-        (beg_char, end_char)
-    };
+    let byte_range = range.byte_range();
+    let lisp_beg = range.char_start().to_lisp().as_i64();
+    let lisp_end = range.char_end().to_lisp().as_i64();
 
     let hook_args = vec![Value::fixnum(lisp_beg), Value::fixnum(lisp_end)];
     let run_first_change = ctx
@@ -509,15 +696,19 @@ fn signal_before_change_hooks(
         .map(|_| ())
 }
 
+/// Run the before-change protocol for an edit whose range the caller will
+/// not re-measure: an insertion, or a change whose callbacks cannot move it.
 pub(crate) fn signal_before_text_change(
     ctx: &mut crate::emacs_core::eval::Context,
     change: TextChange,
 ) -> Result<(), Flow> {
     prepare_buffer_change(
         ctx,
-        change.before_byte_range(),
+        change.old_range(),
         BufferChangeKind::Characters,
+        ChangeStartPolicy::Fixed,
     )
+    .map(|_| ())
 }
 
 /// The before-change signal for an insertion, which needs a POSITION and not a
@@ -539,11 +730,21 @@ pub(crate) fn signal_before_insertion_at_emacs_byte_pos(
     ctx: &mut crate::emacs_core::eval::Context,
     byte_pos: EmacsBytePos,
 ) -> Result<(), Flow> {
+    // Insertions happen at point, whose character position the buffer keeps
+    // beside its byte position, so this is not a text walk.
+    let char_pos = ctx
+        .buffers
+        .current_buffer()
+        .map_or(crate::buffer::CharPos0::ZERO, |buf| {
+            buf.emacs_byte_pos_to_char_pos_clamped(byte_pos)
+        });
     prepare_buffer_change(
         ctx,
-        EmacsByteRange::from_start_len(byte_pos, EmacsByteLen::ZERO),
+        TextEditRange::empty_at(byte_pos, char_pos),
         BufferChangeKind::Characters,
+        ChangeStartPolicy::Fixed,
     )
+    .map(|_| ())
 }
 
 /// Run GNU's modification-hook protocol for a text-property-only change.
@@ -555,12 +756,17 @@ pub(crate) fn signal_before_property_change(
 ) -> Result<(), Flow> {
     prepare_buffer_change(
         ctx,
-        change.before_byte_range(),
+        change.old_range(),
         BufferChangeKind::PropertiesOnly,
+        ChangeStartPolicy::Fixed,
     )
+    .map(|_| ())
 }
 
-fn deactivate_mark_after_preparing_change(ctx: &mut crate::emacs_core::eval::Context) {
+#[inline(always)]
+fn deactivate_mark_after_preparing_change(
+    ctx: &mut crate::emacs_core::eval::Context,
+) -> Result<(), Flow> {
     // GNU `prepare_to_modify_buffer_1` (insdel.c), with hooks enabled, runs
     // `Fset (Qdeactivate_mark, Qt)` after signaling before-change. Because
     // `deactivate-mark` is buffer-local-when-set, this creates a buffer-local
@@ -573,9 +779,12 @@ fn deactivate_mark_after_preparing_change(ctx: &mut crate::emacs_core::eval::Con
     // was the single most expensive step of a text-property put.
     let sym = deactivate_mark_symbol();
     if deactivate_mark_set_is_noop(ctx, sym) {
-        return;
+        return Ok(());
     }
-    let _ = ctx.try_set_runtime_binding_by_id(sym, Value::T);
+    // `Fset` notifies variable watchers, and a watcher's signal aborts the
+    // modification before any text changes (insdel.c:2189 runs before the
+    // caller's mutation).
+    super::builtins::symbols::builtin_set_2(ctx, Value::from_sym_id(sym), Value::T).map(|_| ())
 }
 
 /// True when `(set 'deactivate-mark t)` would change no binding and notify no
@@ -594,7 +803,7 @@ fn deactivate_mark_set_is_noop(
         return false;
     }
     match symbol.redirect() {
-        SymbolRedirect::Plainval => ctx.obarray.symbol_value_id(sym).copied() == Some(Value::T),
+        SymbolRedirect::Plainval => ctx.obarray.symbol_value_id_copied(sym) == Some(Value::T),
         SymbolRedirect::Localized => {
             ctx.buffers
                 .current_buffer()
@@ -789,6 +998,32 @@ pub(crate) fn signal_after_text_change(
     )
 }
 
+/// GNU `signal_after_change (charpos, lendel, lenins)` in character terms,
+/// for callers whose positions were computed before Lisp ran: the inserted
+/// range is measured in the live text (clamped to its end), so a stale
+/// position can neither reach past the text nor split a character.
+pub(crate) fn signal_after_change_chars(
+    ctx: &mut crate::emacs_core::eval::Context,
+    start: crate::buffer::CharPos0,
+    deleted: CharLen,
+    inserted: CharLen,
+) -> Result<(), Flow> {
+    let Some(after) = ctx.buffers.current_buffer().map(|buf| {
+        live_edit_range_for_chars(
+            buf,
+            crate::buffer::CharRange::from_start_len(start, inserted),
+        )
+    }) else {
+        return Ok(());
+    };
+    signal_after_change_with_kind(
+        ctx,
+        after.byte_range(),
+        deleted,
+        BufferChangeKind::Characters,
+    )
+}
+
 pub(crate) fn signal_after_property_change(
     ctx: &mut crate::emacs_core::eval::Context,
     change: TextChange,
@@ -965,8 +1200,7 @@ fn combine_after_change_calls_active(ctx: &crate::emacs_core::eval::Context) -> 
             {
                 let default_val = ctx
                     .obarray
-                    .default_value_id(before_sym)
-                    .copied()
+                    .default_value_id_copied(before_sym)
                     .unwrap_or(Value::NIL);
                 return default_val.is_nil();
             }
@@ -1509,12 +1743,8 @@ pub(crate) fn builtin_delete_char(
             start,
             end,
         )?;
-        let change = TextChange::deletion(delete_range);
-        signal_before_text_change(ctx, change)?;
-        let _ = ctx
-            .buffers
-            .delete_buffer_measured_region(current_id, delete_range);
-        signal_after_text_change(ctx, change)?;
+        // GNU `Fdelete_char` -> `del_range (PT, pos)` -> `del_range_1`.
+        delete_text_range(ctx, delete_range, DeletedText::Discard)?;
     }
     Ok(Value::NIL)
 }
@@ -1572,12 +1802,8 @@ pub(crate) fn builtin_delete_region_2(
 
     let delete_range =
         buffer_edit_range_for_byte_range_in_manager(&ctx.buffers, current_id, byte_range)?;
-    let change = TextChange::deletion(delete_range);
-    signal_before_text_change(ctx, change)?;
-    let _ = ctx
-        .buffers
-        .delete_buffer_measured_region(current_id, delete_range);
-    signal_after_text_change(ctx, change)?;
+    // GNU `Fdelete_region` -> `del_range` -> `del_range_1`.
+    delete_text_range(ctx, delete_range, DeletedText::Discard)?;
     Ok(Value::NIL)
 }
 
@@ -1622,19 +1848,12 @@ pub(crate) fn builtin_delete_and_extract_region(
 
     let delete_range =
         buffer_edit_range_for_byte_range_in_manager(&ctx.buffers, current_id, byte_range)?;
-    let change = TextChange::deletion(delete_range);
-    signal_before_text_change(ctx, change)?;
     // GNU `del_range_1 (from, to, true, true)`: the string is made by
     // `del_range_2` AFTER `prepare_to_modify_buffer` ran the before-change
     // hooks, and it is the same string `record_delete` gets -- one
     // `make_buffer_string_both`, not a substring plus a second copy for undo.
-    let deleted = ctx
-        .buffers
-        .delete_and_extract_buffer_measured_region(current_id, delete_range)
-        .map(Value::heap_string)
-        .unwrap_or_else(|| Value::string(""));
-    signal_after_text_change(ctx, change)?;
-    Ok(deleted)
+    Ok(delete_text_range(ctx, delete_range, DeletedText::Return)?
+        .map_or_else(|| Value::string(""), Value::heap_string))
 }
 
 /// `(erase-buffer)` — delete all text and remove any narrowing restriction.

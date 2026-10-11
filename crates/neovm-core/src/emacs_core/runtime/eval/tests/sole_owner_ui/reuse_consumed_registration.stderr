@@ -1,0 +1,15 @@
+error[E0382]: use of moved value: `registration`
+  --> src/emacs_core/runtime/eval/tests/sole_owner_ui/reuse_consumed_registration.rs:10:22
+   |
+ 8 |     let registration = construction.registration();
+   |         ------------ move occurs because `registration` has type `SoleOwnerRegistration`, which does not implement the `Copy` trait
+ 9 |     let _vm = registration.into_vm();
+   |                            --------- `registration` moved due to this method call
+10 |     let _duplicate = registration.into_vm();
+   |                      ^^^^^^^^^^^^ value used here after move
+   |
+note: `SoleOwnerRegistration::into_vm` takes ownership of the receiver `self`, which moves `registration`
+  --> src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+   |
+   |     pub(crate) fn into_vm(self) -> SoleOwnerVm {
+   |                           ^^^^

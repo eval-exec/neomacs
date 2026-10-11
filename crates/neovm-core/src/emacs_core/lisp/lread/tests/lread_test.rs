@@ -19,11 +19,11 @@ fn eval_buffer_evaluates_current_buffer_forms() {
     let result = builtin_eval_buffer(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("lread-eb-a").cloned(),
+        ev.obarray.symbol_value_copied("lread-eb-a"),
         Some(Value::fixnum(11))
     );
     assert_eq!(
-        ev.obarray.symbol_value("lread-eb-b").cloned(),
+        ev.obarray.symbol_value_copied("lread-eb-b"),
         Some(Value::fixnum(12))
     );
 }
@@ -95,8 +95,7 @@ fn eval_buffer_preserves_unibyte_string_literals() {
     assert!(result.is_nil());
     let value = ev
         .obarray
-        .symbol_value("lread-eb-raw")
-        .copied()
+        .symbol_value_copied("lread-eb-raw")
         .expect("setq should bind lread-eb-raw");
     let text = value
         .as_lisp_string()
@@ -116,7 +115,7 @@ fn eval_buffer_accepts_shebang_reader_prefix() {
     let result = builtin_eval_buffer(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("lread-eb-shebang").cloned(),
+        ev.obarray.symbol_value_copied("lread-eb-shebang"),
         Some(Value::symbol("ok"))
     );
 }
@@ -176,7 +175,7 @@ fn eval_buffer_uses_source_text_without_switching_current() {
     let result = builtin_eval_buffer(&mut ev, vec![Value::make_buffer(target)]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("lread-eb-current-name").cloned(),
+        ev.obarray.symbol_value_copied("lread-eb-current-name"),
         Some(Value::string("*lread-eval-buffer-caller*"))
     );
 }
@@ -221,8 +220,7 @@ fn eval_buffer_preserves_unibyte_filename_in_load_state() {
 
     let current_load_list = ev
         .obarray
-        .symbol_value("lread-eb-current-load-list")
-        .copied()
+        .symbol_value_copied("lread-eb-current-load-list")
         .expect("eval-buffer should capture current-load-list");
     let current_load_items =
         list_to_vec(&current_load_list).expect("current-load-list should be a list");
@@ -235,8 +233,7 @@ fn eval_buffer_preserves_unibyte_filename_in_load_state() {
 
     let load_history = ev
         .obarray
-        .symbol_value("load-history")
-        .copied()
+        .symbol_value_copied("load-history")
         .expect("eval-buffer should update load-history");
     let load_history_entries = list_to_vec(&load_history).expect("load-history should be a list");
     let first_entry = load_history_entries
@@ -278,8 +275,7 @@ fn eval_buffer_load_in_progress_preserves_unibyte_current_load_list() {
     for symbol_name in ["lread-eb-load-file-name", "lread-eb-load-true-file-name"] {
         let value = ev
             .obarray
-            .symbol_value(symbol_name)
-            .copied()
+            .symbol_value_copied(symbol_name)
             .unwrap_or_else(|| panic!("eval-buffer should bind {symbol_name}"));
         assert!(
             value.is_nil(),
@@ -289,8 +285,7 @@ fn eval_buffer_load_in_progress_preserves_unibyte_current_load_list() {
 
     let current_load_list = ev
         .obarray
-        .symbol_value("lread-eb-current-load-list")
-        .copied()
+        .symbol_value_copied("lread-eb-current-load-list")
         .expect("eval-buffer should capture current-load-list");
     let current_load_items =
         list_to_vec(&current_load_list).expect("current-load-list should be a list");
@@ -372,11 +367,11 @@ fn eval_region_evaluates_forms_in_range() {
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("lread-er-a").cloned(),
+        ev.obarray.symbol_value_copied("lread-er-a"),
         Some(Value::fixnum(1))
     );
     assert_eq!(
-        ev.obarray.symbol_value("lread-er-b").cloned(),
+        ev.obarray.symbol_value_copied("lread-er-b"),
         Some(Value::fixnum(3))
     );
 }
@@ -417,14 +412,12 @@ fn eval_region_uses_read_function_result_instead_of_source_text() {
     assert!(result.is_nil());
     assert_eq!(
         ev.obarray
-            .symbol_value("lread-er-read-function-result")
-            .copied(),
+            .symbol_value_copied("lread-er-read-function-result"),
         Some(Value::symbol("transformed"))
     );
     assert_eq!(
         ev.obarray
-            .symbol_value("lread-er-read-function-got-buffer")
-            .copied(),
+            .symbol_value_copied("lread-er-read-function-got-buffer"),
         Some(Value::T)
     );
     assert_eq!(
@@ -488,17 +481,16 @@ fn eval_region_advances_from_reader_point_before_evaluating_returned_form() {
     }
 
     assert_eq!(
-        ev.obarray.symbol_value("lread-er-point-a").copied(),
+        ev.obarray.symbol_value_copied("lread-er-point-a"),
         Some(Value::fixnum(1))
     );
     assert_eq!(
-        ev.obarray.symbol_value("lread-er-point-b").copied(),
+        ev.obarray.symbol_value_copied("lread-er-point-b"),
         Some(Value::fixnum(2))
     );
     assert_eq!(
         ev.obarray
-            .symbol_value("lread-er-point-reader-count")
-            .copied(),
+            .symbol_value_copied("lread-er-point-reader-count"),
         Some(Value::fixnum(2))
     );
     assert_eq!(
@@ -533,8 +525,7 @@ fn eval_region_preserves_unibyte_string_literals() {
     assert!(result.is_nil());
     let value = ev
         .obarray
-        .symbol_value("lread-er-raw")
-        .copied()
+        .symbol_value_copied("lread-er-raw")
         .expect("setq should bind lread-er-raw");
     let text = value
         .as_lisp_string()
@@ -557,7 +548,7 @@ fn eval_region_nil_or_reversed_bounds_are_noop() {
     let nil_bounds = builtin_eval_region(&mut ev, vec![Value::NIL, Value::NIL]).unwrap();
     assert!(nil_bounds.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("lread-er-noop").cloned(),
+        ev.obarray.symbol_value_copied("lread-er-noop"),
         Some(Value::fixnum(0))
     );
 
@@ -569,7 +560,7 @@ fn eval_region_nil_or_reversed_bounds_are_noop() {
         builtin_eval_region(&mut ev, vec![Value::fixnum(point_max), Value::fixnum(1)]).unwrap();
     assert!(reversed.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("lread-er-noop").cloned(),
+        ev.obarray.symbol_value_copied("lread-er-noop"),
         Some(Value::fixnum(0))
     );
 }
@@ -606,7 +597,7 @@ fn eval_region_accepts_marker_bounds_like_gnu() {
     let result = builtin_eval_region(&mut ev, vec![start, end]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("lread-er-marker").cloned(),
+        ev.obarray.symbol_value_copied("lread-er-marker"),
         Some(Value::fixnum(17))
     );
 }
@@ -756,7 +747,7 @@ fn eval_region_accepts_shebang_reader_prefix() {
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("lread-er-shebang").cloned(),
+        ev.obarray.symbol_value_copied("lread-er-shebang"),
         Some(Value::symbol("ok"))
     );
 }
@@ -1075,8 +1066,8 @@ fn read_event_consumes_non_character_event_and_preserves_tail() {
     let result = builtin_read_event(&mut ev, vec![]).unwrap();
     assert_eq!(result, Value::symbol("foo"));
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(97)]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(97)]))
     );
 }
 
@@ -1089,8 +1080,8 @@ fn read_event_consumes_character_event() {
     let result = builtin_read_event(&mut ev, vec![]).unwrap();
     assert_eq!(result.as_int(), Some(97));
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::NIL)
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::NIL)
     );
 }
 
@@ -1105,8 +1096,8 @@ fn read_event_preserves_trailing_events_after_non_character() {
     let result = builtin_read_event(&mut ev, vec![]).unwrap();
     assert_eq!(result, Value::symbol("foo"));
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::char('a')]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::char('a')]))
     );
 }
 
@@ -1298,8 +1289,8 @@ fn read_char_exclusive_skips_non_character_and_empty_tail() {
             .unwrap();
     assert_eq!(result.as_int(), Some(97));
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::NIL),
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::NIL),
     );
 }
 
@@ -1320,8 +1311,8 @@ fn read_char_exclusive_skips_non_character_and_leaves_tail() {
             .unwrap();
     assert_eq!(result.as_int(), Some(97));
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(98)])),
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(98)])),
     );
 }
 

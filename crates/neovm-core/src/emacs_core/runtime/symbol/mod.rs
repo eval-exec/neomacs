@@ -653,6 +653,167 @@ fn note_function_cell_unchanged() {
     crate::emacs_core::jit::stats::note_function_cell_unchanged();
 }
 
+/// Detached domain for the existing function-binding publication clock.
+/// Zero and restored dump values retain their current valid meaning.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub(crate) struct FunctionEpoch(u64);
+
+impl From<FunctionEpoch> for u64 {
+    #[inline(always)]
+    fn from(epoch: FunctionEpoch) -> Self {
+        epoch.0
+    }
+}
+
+/// A stable canonical debugger descriptor, including valid stand-ins.
+///
+/// This is the descriptor identity, never a cached Boolean. Its private
+/// constructor accepts only the canonical never-null descriptor read.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub(crate) struct DebuggerDescriptor(&'static crate::emacs_core::forward::LispBoolFwd);
+
+impl PartialEq for DebuggerDescriptor {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+impl Eq for DebuggerDescriptor {}
+
+impl std::fmt::Debug for DebuggerDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DebuggerDescriptor")
+            .field(&std::ptr::from_ref(self.0))
+            .finish()
+    }
+}
+
+impl DebuggerDescriptor {
+    #[inline(always)]
+    pub(crate) fn armed(self) -> bool {
+        self.0.get()
+    }
+
+    #[inline(always)]
+    pub(crate) fn resolved(self) -> Option<&'static crate::emacs_core::forward::LispBoolFwd> {
+        (!self.0.is_debug_on_next_call_stand_in()).then_some(self.0)
+    }
+}
+
+static_assertions::assert_impl_all!(DebuggerDescriptor: Send, Sync, Clone, Copy, Eq, PartialEq, std::fmt::Debug);
+static_assertions::assert_eq_size!(FunctionEpoch, u64);
+static_assertions::assert_eq_size!(DebuggerDescriptor, usize);
+const _: () = {
+    assert!(std::mem::align_of::<FunctionEpoch>() == std::mem::align_of::<u64>());
+    assert!(std::mem::align_of::<DebuggerDescriptor>() == std::mem::align_of::<usize>());
+};
+
+/// Canonical dispatch cells physically owned by one Obarray allocation.
+///
+/// The atomics permit detached reads; they do not authorize concurrent mutable
+/// access to the whole manager. A persistent projection derives from the final
+/// allocation's UnsafeCell root and is used only after mutable phases finish.
+#[repr(C)]
+#[derive(Debug)]
+pub(crate) struct CanonicalDispatchCells {
+    /// Publication clock for function-binding changes. Producers hold exclusive
+    /// obarray write access (including chunk growth), publish stamps/floors
+    /// first, then Release-store this clock. Mutator readers Acquire-load it
+    /// before reading stamps, retaining that snapshot if they refresh a cache.
+    /// Atomic storage also keeps those readers safe when a writer runs on
+    /// another mutator; it does not replace the producer's exclusive access.
+    function_epoch: AtomicU64,
+    /// Cached `debug-on-next-call` `DEFVAR_BOOL` descriptor.  GNU's three
+    /// armed dispatch sites read `globals.f_debug_on_next_call` as ONE load
+    /// (`src/bytecode.c:798`, `src/eval.c:2601`, `src/eval.c:3189`);
+    /// re-resolving the descriptor through the symbol slot on every bytecode
+    /// `Op::Call` cost ~48 Ir/call on the Tier-0 differential.
+    ///
+    /// Never null, so the hot read is a pointer load and a byte test
+    /// ([`Obarray::debug_on_next_call_armed_fast`]): it names the resolved
+    /// descriptor, or `DEBUG_ON_NEXT_CALL_UNRESOLVED` (reads armed, so the
+    /// reader's reference path resolves) until first resolved, or
+    /// `DEBUG_ON_NEXT_CALL_ABSENT` (reads disarmed) when the obarray has no
+    /// `DEFVAR_BOOL` for it.  The address is stable for THIS obarray once
+    /// resolved: `define_bool_variable` reuses an existing descriptor rather
+    /// than replacing it, `make_blv` moves the SAME cell into the BLV, and
+    /// the two places that install a descriptor (`install_boolfwd`,
+    /// `reattach_localized_forwarder`) store it here themselves.  `clone()`
+    /// resets it because clone duplicates stateful forwarders.
+    debug_on_next_call_fwd: std::sync::atomic::AtomicPtr<crate::emacs_core::forward::LispBoolFwd>,
+}
+
+impl CanonicalDispatchCells {
+    fn new(epoch: FunctionEpoch) -> Self {
+        Self {
+            function_epoch: AtomicU64::new(epoch.0),
+            debug_on_next_call_fwd: std::sync::atomic::AtomicPtr::new(
+                std::ptr::from_ref(&crate::emacs_core::forward::DEBUG_ON_NEXT_CALL_UNRESOLVED)
+                    .cast_mut(),
+            ),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn function_epoch(&self) -> u64 {
+        self.function_epoch.load(Ordering::Acquire)
+    }
+
+    /// Detached clock domain for the current owner's admission mirror.
+    #[inline(always)]
+    pub(crate) fn admission_epoch(&self) -> FunctionEpoch {
+        FunctionEpoch(self.function_epoch.load(Ordering::Acquire))
+    }
+
+    /// The canonical descriptor identity, retaining its live Boolean cell.
+    #[inline(always)]
+    pub(crate) fn admission_debugger(&self) -> DebuggerDescriptor {
+        DebuggerDescriptor(self.debug_on_next_call_cell_ref())
+    }
+
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
+        *self.function_epoch.get_mut()
+    }
+
+    #[inline(always)]
+    pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
+        self.debug_on_next_call_cell_ref().get()
+    }
+
+    #[inline(always)]
+    fn debug_on_next_call_cell_ref(&self) -> &'static crate::emacs_core::forward::LispBoolFwd {
+        let cell = self.debug_on_next_call_fwd.load(Ordering::Relaxed);
+        // SAFETY: every constructor and writer installs a leaked descriptor or
+        // one of the never-null static unresolved/absent stand-ins.
+        unsafe { &*cell }
+    }
+}
+
+/// Pair-relative offset of the canonical function clock.
+pub(crate) const DISPATCH_FUNCTION_EPOCH_OFFSET: usize =
+    std::mem::offset_of!(CanonicalDispatchCells, function_epoch);
+/// Pair-relative offset of the canonical debugger descriptor slot.
+pub(crate) const DISPATCH_DEBUG_FWD_OFFSET: usize =
+    std::mem::offset_of!(CanonicalDispatchCells, debug_on_next_call_fwd);
+
+static_assertions::assert_impl_all!(CanonicalDispatchCells: Send, Sync, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(CanonicalDispatchCells: Clone, Copy);
+static_assertions::assert_impl_all!(FunctionEpoch: Send, Sync, Clone, Copy, std::fmt::Debug);
+const _: () = {
+    assert!(DISPATCH_FUNCTION_EPOCH_OFFSET == 0);
+    assert!(DISPATCH_DEBUG_FWD_OFFSET == std::mem::size_of::<AtomicU64>());
+    let payload = std::mem::size_of::<AtomicU64>()
+        + std::mem::size_of::<std::sync::atomic::AtomicPtr<crate::emacs_core::forward::LispBoolFwd>>(
+        );
+    let alignment = std::mem::align_of::<CanonicalDispatchCells>();
+    assert!(std::mem::size_of::<CanonicalDispatchCells>() == payload.next_multiple_of(alignment));
+    assert!(std::mem::align_of::<CanonicalDispatchCells>() == std::mem::align_of::<AtomicU64>());
+};
+
 /// The obarray — a table of interned symbols.
 ///
 /// This is the central symbol registry. `intern` looks up or creates symbols,
@@ -672,21 +833,17 @@ pub struct Obarray {
     #[cfg(test)]
     symbol_slot_read_count: std::sync::atomic::AtomicUsize,
     global_member_count: usize,
-    /// Publication clock for function-binding changes. Producers hold exclusive
-    /// obarray write access (including chunk growth), publish stamps/floors
-    /// first, then Release-store this clock. Mutator readers Acquire-load it
-    /// before reading stamps, retaining that snapshot if they refresh a cache.
-    /// Atomic storage also keeps those readers safe when a writer runs on
-    /// another mutator; it does not replace the producer's exclusive access.
-    function_epoch: AtomicU64,
+    /// Canonical function clock and debugger descriptor, addressed together by
+    /// the Context-owned World projection. Neither value is mirrored.
+    dispatch_cells: CanonicalDispatchCells,
     /// Bumped whenever global-obarray MEMBERSHIP changes (mark/clear);
     /// keys the completion bucket-order cache below.
     members_epoch: u64,
     /// Memoized GNU-bucket-order symbol list for completion over the
     /// global obarray: try-completion/all-completions re-derive the same
-    /// ~30k-symbol hash+sort per call (a bootstrap hotspot). Mutex, not
-    /// RefCell — `&Obarray` is shared with the concurrent GC scan thread
-    /// (uncontended in practice: completion runs on the Lisp thread).
+    /// ~30k-symbol hash+sort per call (a bootstrap hotspot). Completion owns
+    /// this cache on the mutator. The concurrent marker receives a leased
+    /// symbol snapshot and never accesses the cache or `&Obarray`.
     completion_order_cache: std::sync::Mutex<Option<CompletionOrderCache>>,
     /// Heap-allocated BLVs for `SYMBOL_LOCALIZED` symbols. Each entry
     /// is a `Box::into_raw` pointer; freed in [`Obarray::drop`]. The
@@ -699,24 +856,6 @@ pub struct Obarray {
     /// which `staticpro` and `mark_kboards` root for the same reason.
     /// Membership is decided by `LispFwd::owned_value`, not by the caller.
     value_fwds: Vec<&'static crate::emacs_core::forward::LispFwd>,
-    /// Cached `debug-on-next-call` `DEFVAR_BOOL` descriptor.  GNU's three
-    /// armed dispatch sites read `globals.f_debug_on_next_call` as ONE load
-    /// (`src/bytecode.c:798`, `src/eval.c:2601`, `src/eval.c:3189`);
-    /// re-resolving the descriptor through the symbol slot on every bytecode
-    /// `Op::Call` cost ~48 Ir/call on the Tier-0 differential.
-    ///
-    /// Never null, so the hot read is a pointer load and a byte test
-    /// ([`Self::debug_on_next_call_armed_fast`]): it names the resolved
-    /// descriptor, or `DEBUG_ON_NEXT_CALL_UNRESOLVED` (reads armed, so the
-    /// reader's reference path resolves) until first resolved, or
-    /// `DEBUG_ON_NEXT_CALL_ABSENT` (reads disarmed) when the obarray has no
-    /// `DEFVAR_BOOL` for it.  The address is stable for THIS obarray once
-    /// resolved: `define_bool_variable` reuses an existing descriptor rather
-    /// than replacing it, `make_blv` moves the SAME cell into the BLV, and
-    /// the two places that install a descriptor (`install_boolfwd`,
-    /// `reattach_localized_forwarder`) store it here themselves.  `clone()`
-    /// resets it because clone duplicates stateful forwarders.
-    debug_on_next_call_fwd: std::sync::atomic::AtomicPtr<crate::emacs_core::forward::LispBoolFwd>,
     /// Whether `max-lisp-eval-depth` has EVER been made buffer-local in this
     /// obarray. The eval-depth guard on every function call has to know
     /// whether a buffer-local value could undercut the global limit; asking
@@ -735,6 +874,12 @@ pub struct Obarray {
     /// walk (`jit::cache::sync_cache_to_obarray`).
     generation: u64,
 }
+
+// The owner contains thread-local Values and mutable BLV records. Atomic
+// symbol words do not admit sharing their containing owner; the marker moves
+// only an admitted ObarrayScanSnapshot with retained chunk storage.
+static_assertions::assert_impl_all!(Obarray: Clone, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(Obarray: Send, Sync);
 
 /// The next [`Obarray::generation`]: one process-global counter, so no two
 /// obarrays alive at once (or ever) share a generation.
@@ -816,8 +961,8 @@ struct SymbolChunks {
     /// — kept equal to `chunks.as_ptr()` by every operation that can move it
     /// (construction, clone, growth). Compiled code reads it at a fixed offset
     /// to reach a symbol's cell without a call (see
-    /// [`OBARRAY_JIT_SPINE_OFFSET`]). A plain integer, not a raw pointer, so
-    /// the store stays `Send`/`Sync`.
+    /// [`OBARRAY_JIT_SPINE_OFFSET`]). This integer preserves the JIT layout;
+    /// it does not make the containing thread-local symbol store Send/Sync.
     spine_addr: usize,
 }
 
@@ -842,21 +987,25 @@ impl Drop for SymbolChunks {
 /// LISP_SYMBOL_SIZE`. An empty slot reads as a `Plainval` unbound cell.
 pub(crate) const OBARRAY_JIT_SPINE_OFFSET: usize =
     std::mem::offset_of!(Obarray, symbols) + std::mem::offset_of!(SymbolChunks, spine_addr);
+/// Where the stable allocation root reaches the complete canonical pair.
+pub(crate) const OBARRAY_DISPATCH_CELLS_OFFSET: usize =
+    std::mem::offset_of!(Obarray, dispatch_cells);
 /// Where compiled code reads the obarray's function epoch (a `u64`), which
 /// every function-cell write moves: an armed call site compares it inline.
 pub(crate) const OBARRAY_FUNCTION_EPOCH_OFFSET: usize =
-    std::mem::offset_of!(Obarray, function_epoch);
+    OBARRAY_DISPATCH_CELLS_OFFSET + DISPATCH_FUNCTION_EPOCH_OFFSET;
 
-// The clock keeps the old field's layout, including baked JIT offsets.
+// Atomic scalar layouts retain the existing clock representation. The grouped
+// address is derived and salted separately; no old containing offset is assumed.
 const _: () = {
     assert!(std::mem::size_of::<AtomicU64>() == std::mem::size_of::<u64>());
     assert!(std::mem::align_of::<AtomicU64>() == std::mem::align_of::<u64>());
 };
 /// Where compiled code reads the memoized `debug-on-next-call` descriptor
 /// pointer (never null: a stand-in until resolved; see
-/// `Obarray::debug_on_next_call_fwd`).
+/// `CanonicalDispatchCells::debug_on_next_call_fwd`).
 pub(crate) const OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET: usize =
-    std::mem::offset_of!(Obarray, debug_on_next_call_fwd);
+    OBARRAY_DISPATCH_CELLS_OFFSET + DISPATCH_DEBUG_FWD_OFFSET;
 /// See [`OBARRAY_JIT_SPINE_OFFSET`].
 pub(crate) const OBARRAY_JIT_LEN_OFFSET: usize =
     std::mem::offset_of!(Obarray, symbols) + std::mem::offset_of!(SymbolChunks, len);
@@ -1160,10 +1309,12 @@ static_assertions::const_assert_eq!(
 // SAFETY: construction requires the heap-identified serialized-writer admission.
 // Every raw chunk/side pointer has a storage lease: owner destruction retains
 // the allocations until the marker has finished reading. The one owning marker
-// uses atomic presence/slot loads and the admitted writer's seqlock protocol.
+// uses the Acquire presence gate and the admitted writer's seqlock protocol
+// for the redirect/payload pair. Function and plist are independent atomic
+// words. It never accesses BLVs, descriptor interiors or the completion cache.
 unsafe impl Send for ObarrayScanSnapshot {}
 static_assertions::assert_impl_all!(ObarrayScanSnapshot: Send, std::fmt::Debug);
-static_assertions::assert_not_impl_any!(ObarrayScanSnapshot: Sync);
+static_assertions::assert_not_impl_any!(ObarrayScanSnapshot: Sync, Copy, Clone);
 
 impl std::fmt::Debug for ObarrayScanSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1349,28 +1500,19 @@ impl Clone for Obarray {
             #[cfg(test)]
             symbol_slot_read_count: std::sync::atomic::AtomicUsize::new(0),
             global_member_count: self.global_member_count,
-            function_epoch: AtomicU64::new(self.function_epoch()),
+            // Clone re-leaks stateful forwarders, so its canonical descriptor
+            // starts unresolved rather than pointing at the source's cell.
+            dispatch_cells: CanonicalDispatchCells::new(FunctionEpoch(self.function_epoch())),
             members_epoch: self.members_epoch,
             completion_order_cache: std::sync::Mutex::new(None),
             blvs,
             value_fwds,
-            // The clone re-leaked every stateful forwarder above; the cached
-            // descriptor belongs to the source obarray, so the clone starts
-            // unresolved.
-            debug_on_next_call_fwd: Self::debug_on_next_call_unresolved(),
             max_lisp_eval_depth_localized: self.max_lisp_eval_depth_localized,
             // A deep copy is new storage: every address it holds is new.
             generation: next_obarray_generation(),
         }
     }
 }
-
-// Safety: Obarray contains raw pointers to its own heap allocations.
-// They're owned by the obarray, so sending the obarray across threads
-// (via Send) or sharing it via &Obarray (via Sync) is safe — the
-// pointers don't escape and don't carry interior mutability.
-unsafe impl Send for Obarray {}
-unsafe impl Sync for Obarray {}
 
 impl Default for Obarray {
     fn default() -> Self {
@@ -1642,12 +1784,11 @@ impl Obarray {
             #[cfg(test)]
             symbol_slot_read_count: std::sync::atomic::AtomicUsize::new(0),
             global_member_count: 0,
-            function_epoch: AtomicU64::new(0),
+            dispatch_cells: CanonicalDispatchCells::new(FunctionEpoch(0)),
             members_epoch: 0,
             completion_order_cache: std::sync::Mutex::new(None),
             blvs: Vec::new(),
             value_fwds: Vec::new(),
-            debug_on_next_call_fwd: Self::debug_on_next_call_unresolved(),
             max_lisp_eval_depth_localized: false,
             generation: next_obarray_generation(),
         };
@@ -1870,14 +2011,17 @@ impl Obarray {
         self.slot_mut(id)
     }
 
-    /// Get the value cell of a symbol.
+    /// Copy the global value of a symbol.
     ///
     /// **This is not GNU's `Vfoo`.** For a symbol some buffer has localised it
     /// answers the BLV *defcell*, and for a `DEFVAR_PER_BUFFER` name it
     /// answers `None`; see [`BufferlessValue`] for why, and
     /// [`Self::value_in_buffer`] for the reader that does mirror GNU's C.
-    pub fn symbol_value(&self, name: &str) -> Option<&Value> {
-        self.symbol_value_id(intern(name))
+    ///
+    /// The returned word does not borrow the mutable symbol or descriptor slot.
+    #[inline]
+    pub fn symbol_value_copied(&self, name: &str) -> Option<Value> {
+        self.symbol_value_id_copied(intern(name))
     }
 
     /// GNU's `Vfoo` / `foo` / `BVAR (current_buffer, foo)` -- the one spelling
@@ -1915,7 +2059,7 @@ impl Obarray {
     /// symbol no buffer has ever localised can have no alist entry (every
     /// insertion path marks it `Localized` first), so the walk would only ever
     /// answer `None`. That keeps this reader roughly the cost of
-    /// [`Self::symbol_value`] on the overwhelmingly common global path, which
+    /// [`Self::symbol_value_copied`] on the overwhelmingly common global path, which
     /// matters where a caller reads a dozen names at once -- the `print-*`
     /// family, for one.
     pub fn value_in_buffer_id(
@@ -2050,62 +2194,14 @@ impl Obarray {
 
     /// Get a symbol's value by identity, returning nil when unbound.
     ///
-    /// This is the copied-value equivalent of the common
-    /// `symbol_value_id(...).copied().unwrap_or(Value::NIL)` pattern.
     /// GNU's `find_symbol_value` returns a `Lisp_Object` directly; keeping
-    /// hot evaluator reads in this shape avoids an extra borrowed Option path.
+    /// hot evaluator reads in this shape avoids an extra Option path.
     #[inline(always)]
     pub fn symbol_value_id_or_nil(&self, id: SymId) -> Value {
         match self.symbol_value_id_copied(id) {
             Some(value) => value,
             None => Value::NIL,
         }
-    }
-
-    pub fn symbol_value_id(&self, id: SymId) -> Option<&Value> {
-        let mut current = id;
-        for _ in 0..50 {
-            let sym = match self.symbols.get(Self::slot_index(current)) {
-                Some(sym) => sym,
-                _ => return None,
-            };
-            match sym.value_cell() {
-                ValueCell::Plain(_) => {
-                    // UNBOUND sentinel = unbound.
-                    return sym.plain_value_ref().filter(|v| !v.is_unbound());
-                }
-                ValueCell::Alias(target) => {
-                    current = target;
-                }
-                ValueCell::Localized(_) => {
-                    // Return the BLV defcell default (global) value.
-                    // The defcell is a heap-allocated cons (sym . default);
-                    // its cdr field lives in the GC heap, which is owned
-                    // by `self` for the lifetime of `&self`.
-                    // UNBOUND cdr means the symbol has no global default.
-                    return self.blv(current).and_then(|blv| {
-                        // Safety: defcell is a valid heap cons (allocated
-                        // by Value::cons in make_symbol_localized and kept
-                        // alive by the GC root in blv.defcell). The cdr
-                        // field lives in the ConsCell in the GC heap and
-                        // is valid for the lifetime of `&self`.
-                        let cdr_ref = unsafe {
-                            let cons_ptr = blv.defcell.xcons_ptr();
-                            &(*cons_ptr).cdr_or_next.cdr
-                        };
-                        if cdr_ref.is_unbound() {
-                            None
-                        } else {
-                            Some(cdr_ref)
-                        }
-                    });
-                }
-                ValueCell::Forwarded(fwd) => {
-                    return fwd.load_ref();
-                }
-            }
-        }
-        None // alias cycle
     }
 
     /// Set the value cell of a symbol. Interns if needed.
@@ -2384,13 +2480,53 @@ impl Obarray {
     /// GNU spells `globals.f_debug_on_next_call`: one load, no symbol lookup.
     /// The bytecode `Op::Call` arm performs this test on every call
     /// (`src/bytecode.c:798`), which is why it cannot afford the slot walk.
+    /// Resolution is a mutable publication phase: an owning Obarray view must
+    /// retire its admission header after the canonical descriptor changes.
+    /// Shared readers may use only the cached descriptor or armed Boolean.
     #[inline]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "standalone manager resolver retained for its cold-owner and compile-fail contracts"
+        )
+    )]
     pub(crate) fn debug_on_next_call_bool_fwd(
+        &mut self,
+        id: SymId,
+    ) -> Option<&'static crate::emacs_core::forward::LispBoolFwd> {
+        match self.debug_on_next_call_bool_fwd_cached() {
+            Some(resolved) => Some(resolved),
+            None => {
+                let resolved = self.debug_on_next_call_bool_fwd_slow(id);
+                self.publish_debug_on_next_call_descriptor(resolved)
+            }
+        }
+    }
+
+    /// Pure discovery, with no canonical publication. Owning views complete
+    /// this read before constructing their current-owner publication capability.
+    #[inline(always)]
+    pub(crate) fn discover_debug_on_next_call_descriptor(
         &self,
         id: SymId,
     ) -> Option<&'static crate::emacs_core::forward::LispBoolFwd> {
         self.debug_on_next_call_bool_fwd_cached()
             .or_else(|| self.debug_on_next_call_bool_fwd_slow(id))
+    }
+
+    /// Commit an already discovered stable descriptor. This noncalling phase
+    /// only selects the absent stand-in or descriptor and stores its pointer;
+    /// it cannot allocate, look up a symbol, assert or unwind.
+    #[inline(always)]
+    pub(crate) fn publish_debug_on_next_call_descriptor(
+        &mut self,
+        resolved: Option<&'static crate::emacs_core::forward::LispBoolFwd>,
+    ) -> Option<&'static crate::emacs_core::forward::LispBoolFwd> {
+        self.set_debug_on_next_call_cell(
+            resolved.unwrap_or(&crate::emacs_core::forward::DEBUG_ON_NEXT_CALL_ABSENT),
+        );
+        resolved
     }
 
     /// The memoized descriptor of [`Self::debug_on_next_call_bool_fwd`], when
@@ -2414,32 +2550,16 @@ impl Obarray {
         self.debug_on_next_call_cell_ref().get()
     }
 
-    /// The cell the pointer names: a leaked descriptor or a stand-in.
+    /// The canonical cell the pointer names: a leaked descriptor or stand-in.
     #[inline(always)]
     fn debug_on_next_call_cell_ref(&self) -> &'static crate::emacs_core::forward::LispBoolFwd {
-        let cell = self
-            .debug_on_next_call_fwd
-            .load(std::sync::atomic::Ordering::Relaxed);
-        // Safety: never null. Every store puts a `Box::leak`ed descriptor or
-        // one of the two `'static` stand-ins here (the initializers, the slow
-        // path below, and the install hooks).
-        unsafe { &*cell }
-    }
-
-    /// A pointer word naming the unresolved stand-in: every constructor's
-    /// initial value.
-    fn debug_on_next_call_unresolved()
-    -> std::sync::atomic::AtomicPtr<crate::emacs_core::forward::LispBoolFwd> {
-        std::sync::atomic::AtomicPtr::new(
-            std::ptr::from_ref(&crate::emacs_core::forward::DEBUG_ON_NEXT_CALL_UNRESOLVED)
-                .cast_mut(),
-        )
+        self.dispatch_cells.debug_on_next_call_cell_ref()
     }
 
     /// Point the memoized cell at FWD, the descriptor now canonical for
     /// `debug-on-next-call` in this obarray.
     fn set_debug_on_next_call_cell(&self, fwd: &'static crate::emacs_core::forward::LispBoolFwd) {
-        self.debug_on_next_call_fwd.store(
+        self.dispatch_cells.debug_on_next_call_fwd.store(
             std::ptr::from_ref(fwd).cast_mut(),
             std::sync::atomic::Ordering::Relaxed,
         );
@@ -2451,17 +2571,9 @@ impl Obarray {
         &self,
         id: SymId,
     ) -> Option<&'static crate::emacs_core::forward::LispBoolFwd> {
-        let Some(fwd) = self.bool_forwarder(id) else {
-            // No `DEFVAR_BOOL`: the missing cell reads disarmed, as `None`
-            // always meant. A descriptor installed later replaces this
-            // through the install hooks.
-            self.set_debug_on_next_call_cell(
-                &crate::emacs_core::forward::DEBUG_ON_NEXT_CALL_ABSENT,
-            );
-            return None;
-        };
-        self.set_debug_on_next_call_cell(fwd);
-        Some(fwd)
+        // The existing cold frontier is discovery only. Canonical publication
+        // happens after this fallible read returns, inside the owning writer.
+        self.bool_forwarder(id)
     }
 
     /// The install hooks' test: is ID `debug-on-next-call`?
@@ -2693,6 +2805,31 @@ impl Obarray {
         // Otherwise the alist is authoritative (see `read_localized`).
         let key = Value::from_sym_id(id);
         !assq(key, target_alist).is_nil()
+    }
+
+    /// Retire a BLV's selected local cell into its global default.
+    ///
+    /// The closed operation exposes no mutable BLV or forwarder. It preserves
+    /// the existing descriptor identity and cache-reset/SATB behavior.
+    #[inline]
+    pub fn reset_blv_cache_to_default(&mut self, id: SymId) {
+        if let Some(blv) = self.blv_mut(id) {
+            blv.set_where(Value::NIL);
+            blv.found = false;
+            blv.valcell = blv.defcell;
+        }
+    }
+
+    /// Reset only when this BLV currently selects `buffer`.
+    #[inline]
+    pub fn reset_blv_cache_for_buffer(&mut self, id: SymId, buffer: Value) {
+        if let Some(blv) = self.blv_mut(id)
+            && crate::emacs_core::value::eq_value(&blv.where_buf, &buffer)
+        {
+            blv.set_where(Value::NIL);
+            blv.found = false;
+            blv.valcell = blv.defcell;
+        }
     }
 
     /// Mutable BLV access. Used by `set_internal` (Phase 5) and
@@ -3504,7 +3641,9 @@ impl Obarray {
         let epoch = self.next_function_epoch();
         // Floor first, then the clock (the publication order, `fn_stamps`).
         self.symbols.raise_fn_floor(epoch);
-        self.function_epoch.store(epoch, Ordering::Release);
+        self.dispatch_cells
+            .function_epoch
+            .store(epoch, Ordering::Release);
         crate::emacs_core::eval::note_function_epoch_move(why, None);
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::stats::note_function_epoch_bump(why, None);
@@ -3570,7 +3709,9 @@ impl Obarray {
         // `fn_stamps`): every cache entry made before this change fails its
         // clock compare, and then its per-symbol test, for exactly `id`.
         self.symbols.stamp_function(Self::slot_index(id), epoch);
-        self.function_epoch.store(epoch, Ordering::Release);
+        self.dispatch_cells
+            .function_epoch
+            .store(epoch, Ordering::Release);
         crate::emacs_core::eval::note_function_epoch_move(why, Some(id));
         #[cfg(feature = "jit")]
         {
@@ -4196,46 +4337,25 @@ impl Obarray {
         Ok(())
     }
 
-    /// Get the default value of a symbol, following aliases.
-    /// For `Plainval` this is the direct value; for `Localized` it's the
-    /// BLV defcell default; for `Varalias` it follows the chain; for
-    /// `Forwarded` BUFFER_OBJFWD it returns the forwarder's static default.
+    /// Copy the global default, including a per-buffer forwarder's default.
     ///
-    /// Phase F: reads from the redirect union (`val`) rather than the
-    /// legacy `value` enum field.
-    pub fn default_value_id(&self, id: SymId) -> Option<&Value> {
+    /// Aliases and localized variables retain the same resolution rules as a
+    /// global read. No returned value borrows a symbol, BLV or descriptor slot.
+    pub fn default_value_id_copied(&self, id: SymId) -> Option<Value> {
         let mut current = id;
         for _ in 0..50 {
             let sym = self.slot(current)?;
             match sym.value_cell() {
-                ValueCell::Plain(_) => {
-                    return sym.plain_value_ref().filter(|v| !v.is_unbound());
-                }
-                ValueCell::Alias(target) => {
-                    current = target;
-                }
+                ValueCell::Plain(value) => return (!value.is_unbound()).then_some(value),
+                ValueCell::Alias(target) => current = target,
                 ValueCell::Localized(_) => {
-                    // Return a reference to the BLV defcell cdr (the default).
-                    return self.blv(current).and_then(|blv| {
-                        // Safety: same as symbol_value_id's Localized arm.
-                        let cdr_ref = unsafe {
-                            let cons_ptr = blv.defcell.xcons_ptr();
-                            &(*cons_ptr).cdr_or_next.cdr
-                        };
-                        if cdr_ref.is_unbound() {
-                            None
-                        } else {
-                            Some(cdr_ref)
-                        }
-                    });
+                    let value = self.blv(current)?.defcell.cons_cdr();
+                    return (!value.is_unbound()).then_some(value);
                 }
                 ValueCell::Forwarded(fwd) => {
-                    if let Some(value) = fwd.load_ref() {
-                        return Some(value);
-                    }
-                    // `load_ref` answers for every family but the per-buffer
-                    // slot, whose registration default is immutable.
-                    return fwd.as_buffer_obj_fwd().map(|buf_fwd| &buf_fwd.default);
+                    return fwd
+                        .load()
+                        .or_else(|| fwd.as_buffer_obj_fwd().map(|buf_fwd| buf_fwd.default));
                 }
             }
         }
@@ -4355,7 +4475,7 @@ impl Obarray {
     /// following its proof leaves the refreshed entry below the new clock.
     #[inline(always)]
     pub fn function_epoch(&self) -> u64 {
-        self.function_epoch.load(Ordering::Acquire)
+        self.dispatch_cells.function_epoch.load(Ordering::Acquire)
     }
 
     /// Read the publication clock while this obarray is exclusively owned.
@@ -4367,13 +4487,15 @@ impl Obarray {
     #[cfg(feature = "jit")]
     #[inline]
     pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
-        *self.function_epoch.get_mut()
+        *self.dispatch_cells.function_epoch.get_mut()
     }
 
     /// Test-only: set `function_epoch` (the wrap-skip tests).
     #[cfg(test)]
     pub(crate) fn set_function_epoch_for_test(&mut self, epoch: u64) {
-        self.function_epoch.store(epoch, Ordering::Release);
+        self.dispatch_cells
+            .function_epoch
+            .store(epoch, Ordering::Release);
     }
 
     /// True when `fmakunbound` explicitly masked this symbol's fallback function definition.
@@ -4464,12 +4586,11 @@ impl Obarray {
             #[cfg(test)]
             symbol_slot_read_count: std::sync::atomic::AtomicUsize::new(0),
             global_member_count: 0,
-            function_epoch: AtomicU64::new(function_epoch),
+            dispatch_cells: CanonicalDispatchCells::new(FunctionEpoch(function_epoch)),
             members_epoch: 0,
             completion_order_cache: std::sync::Mutex::new(None),
             blvs: Vec::new(),
             value_fwds: Vec::new(),
-            debug_on_next_call_fwd: Self::debug_on_next_call_unresolved(),
             // Set by `load_obarray`'s second pass, which re-localizes every
             // dumped Localized symbol through `make_symbol_localized`.
             max_lisp_eval_depth_localized: false,
@@ -4611,3 +4732,11 @@ mod fn_stamps_tests;
 #[cfg(test)]
 #[path = "tests/buffer_local_global_read_test.rs"]
 mod buffer_local_global_read_tests;
+
+#[cfg(test)]
+#[path = "tests/copied_value_test.rs"]
+mod copied_value_tests;
+
+#[cfg(test)]
+#[path = "tests/canonical_dispatch_test.rs"]
+mod canonical_dispatch_tests;

@@ -1785,13 +1785,20 @@ fn concurrent_claim_reaches_obarray_symbol_value_strings() {
         .alloc_string(crate::heap_types::LispString::from_utf8("obarray-only"));
     ev.obarray.set_symbol_value("neovm--str-claim-probe", s);
 
-    // Stage the obarray snapshot exactly like the start handshake does.
-    // SAFETY: this test captures on the sole owner before starting the marker.
-    let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut ev.tagged_heap) };
-    let snap = ev.obarray.scan_snapshot(&world);
-    ev.tagged_heap.set_pending_obarray_scan(snap);
-    ev.tagged_heap.concurrent_begin();
-    ev.tagged_heap.launch_concurrent_mark();
+    // Admit and begin before staging the obarray snapshot, as the actual
+    // handshake does. No direct root seed may replace this obarray-only sink.
+    // SAFETY: this Context is the heap/obarray's sole writer; there is no
+    // callback, safepoint or ownership handoff during start and publication.
+    let permit = unsafe { ev.tagged_heap.permit_concurrent_mark() }.unwrap();
+    let mut capture = permit.begin();
+    let snap = {
+        // SAFETY: the same admitted owner captures its matching obarray
+        // before worker publication; no other writer or callback can enter.
+        let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(capture.heap_mut()) };
+        ev.obarray.scan_snapshot(&world)
+    };
+    capture.heap_mut().set_pending_obarray_scan(snap);
+    capture.launch().unwrap();
     while !ev.tagged_heap.concurrent_mark_done() {
         std::thread::yield_now();
     }
@@ -3229,7 +3236,7 @@ fn a_plain_variable_store_logs_its_pre_image_only_while_marking() {
     assert!(stored);
     assert_eq!(logged, vec![second.bits()], "the overwritten value");
     assert_eq!(
-        ob.symbol_value_id(sym).map(|v| v.bits()),
+        ob.symbol_value_id_copied(sym).map(|v| v.bits()),
         Some(TaggedValue::fixnum(3).bits())
     );
 }
@@ -3272,7 +3279,7 @@ fn a_specbind_swap_logs_its_pre_image_only_while_marking() {
     assert_eq!(old.map(|v| v.bits()), Some(second.bits()));
     assert_eq!(logged, vec![second.bits()], "the overwritten value");
     assert_eq!(
-        ob.symbol_value_id(sym).map(|v| v.bits()),
+        ob.symbol_value_id_copied(sym).map(|v| v.bits()),
         Some(TaggedValue::fixnum(3).bits())
     );
 }

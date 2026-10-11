@@ -50,6 +50,7 @@ use crate::emacs_core::jit::stats::{self, CompilePhase, enter_phase};
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use super::code_arena::CodeArena;
 
+pub(crate) mod batch;
 pub(crate) mod split;
 
 /// Leaves defined into one module before it is replaced (bounds the

@@ -578,13 +578,19 @@ pub(crate) fn builtin_define_fringe_bitmap(
     }
 
     ctx.note_macro_expansion_mutation();
-    super::symbols::put_in_obarray_values(
-        ctx.obarray_mut(),
-        args[0],
-        Value::symbol("fringe"),
-        Value::fixnum(index as i64),
-        symbols_with_pos_enabled,
-    )?;
+    // SAFETY: the fringe registry/variable updates have completed; this phase
+    // only writes its symbol property and cannot invoke Lisp or dispatch writers.
+    unsafe {
+        ctx.obarray.with_legacy_value_write(|obarray| {
+            super::symbols::put_in_obarray_values(
+                obarray,
+                args[0],
+                Value::symbol("fringe"),
+                Value::fixnum(index as i64),
+                symbols_with_pos_enabled,
+            )
+        })
+    }?;
 
     Ok(args[0])
 }
@@ -626,13 +632,19 @@ pub(crate) fn builtin_destroy_fringe_bitmap(
     if user_defined {
         let remaining = fringe_bitmaps_without(ctx, args[0]);
         ctx.assign("fringe-bitmaps", remaining);
-        super::symbols::put_in_obarray_values(
-            ctx.obarray_mut(),
-            args[0],
-            Value::symbol("fringe"),
-            Value::NIL,
-            symbols_with_pos_enabled,
-        )?;
+        // SAFETY: callbacks/variable updates finished before this property-only
+        // removal. No Lisp or canonical metadata writer runs under this loan.
+        unsafe {
+            ctx.obarray.with_legacy_value_write(|obarray| {
+                super::symbols::put_in_obarray_values(
+                    obarray,
+                    args[0],
+                    Value::symbol("fringe"),
+                    Value::NIL,
+                    symbols_with_pos_enabled,
+                )
+            })
+        }?;
     }
     Ok(Value::NIL)
 }

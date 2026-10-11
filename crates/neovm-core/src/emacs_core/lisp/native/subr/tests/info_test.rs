@@ -20,7 +20,7 @@ fn make_lambda(required: Vec<&str>, optional: Vec<&str>, rest: Option<&str>) -> 
 
 fn make_macro(required: Vec<&str>) -> Value {
     Value::make_macro(LambdaData {
-        params: LambdaParams::simple(required.into_iter().map(intern).collect()),
+        params: LambdaParams::simple(required.into_iter().map(intern).collect()).into(),
         body: vec![],
         env: None,
         docstring: None,

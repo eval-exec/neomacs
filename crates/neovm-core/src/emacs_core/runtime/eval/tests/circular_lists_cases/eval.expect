@@ -1,1 +1,1 @@
-OK (((circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1)) (circular-list a) (circular-list a) (circular-list 3) (wrong-type-argument listp))
+OK (((circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1)) (circular-list a) (circular-list a) (circular-list 1) (wrong-type-argument listp))

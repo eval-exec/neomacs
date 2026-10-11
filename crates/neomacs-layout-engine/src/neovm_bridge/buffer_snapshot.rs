@@ -189,7 +189,7 @@ fn active_composition_table(
     {
         return None;
     }
-    obarray.symbol_value("composition-function-table").copied()
+    obarray.symbol_value_copied("composition-function-table")
 }
 
 fn capture_layout_category_symbol_plists(
@@ -269,7 +269,7 @@ pub(super) fn resolve_layout_vars(
         };
         vars[*var as usize] = local.or_else(|| {
             info.captures_default
-                .then(|| obarray?.default_value_id(var.sym_id()).copied())
+                .then(|| obarray?.default_value_id_copied(var.sym_id()))
                 .flatten()
         });
     }

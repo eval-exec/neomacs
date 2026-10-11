@@ -102,7 +102,11 @@ impl Program {
 }
 
 fn prepared(source: &ByteCodeFunction) -> ir::Func {
-    let arity = source.params.required.len();
+    let arity = source
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     let cfg = analyze_cfg(
         source.executable_ops(),
         &source.constants,
@@ -140,7 +144,11 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
     let leaf = lower_opt_ir_for_test(
         source.executable_ops(),
         &source.constants,
-        source.params.required.len(),
+        source
+            .params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         source.executable_gnu_byte_offset_map(),
         plan,
     )
@@ -592,7 +600,7 @@ fn opt_gvn_native_call_gc_and_poll_invalidate_mutable_fields() {
             assert_eq!(print_value(&actual), expected);
             assert_eq!(bytecode_branch_poll_count(), (n / 255) as usize);
             assert_eq!(
-                ctx.obarray.symbol_value("t34-o34-gc-count").copied(),
+                ctx.obarray.symbol_value_copied("t34-o34-gc-count"),
                 Some(Value::fixnum(n / 255))
             );
             assert_eq!(ctx.jit_root_stack_top, 0);
@@ -806,7 +814,7 @@ fn opt_gvn_native_errors_nil_and_identity_keep_gnu_observations() {
                         snapshot.stack
                     );
                     assert_eq!(args[0].cons_car(), x);
-                    let side = ctx.obarray.symbol_value("t34-o34-side").copied().unwrap();
+                    let side = ctx.obarray.symbol_value_copied("t34-o34-side").unwrap();
                     assert_eq!(side.cons_cdr().cons_cdr().cons_car(), x);
                     assert_eq!(side.cons_cdr().cons_cdr().cons_cdr().cons_car(), payload);
                     let mut vm = Vm::from_context(&mut ctx);
@@ -1386,7 +1394,7 @@ fn opt_gvn_native_adjacent_list_accessor_coemits_original_guard_and_clif() {
                     }
                     if after_store {
                         assert_eq!(args[0].cons_car(), x);
-                        let side = ctx.obarray.symbol_value("t34-o34-side").copied().unwrap();
+                        let side = ctx.obarray.symbol_value_copied("t34-o34-side").unwrap();
                         assert_eq!(side.cons_cdr().cons_cdr().cons_car(), x);
                         assert_eq!(side.cons_cdr().cons_cdr().cons_cdr().cons_car(), payload);
                     }

@@ -582,7 +582,13 @@ fn create(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     }
     eval.xwidgets.ensure_webkit_state(webview_id);
     eval.xwidgets.internal_xwidget_list = Value::cons(xwidget, eval.xwidgets.internal_xwidget_list);
-    eval.xwidgets.publish(&mut eval.obarray);
+    let xwidgets = &eval.xwidgets;
+    // SAFETY: publish only stores xwidget-list value cells; host callbacks run
+    // outside this noncalling phase, which cannot change canonical dispatch.
+    unsafe {
+        eval.obarray
+            .with_legacy_value_write(|obarray| xwidgets.publish(obarray));
+    }
     Ok(xwidget)
 }
 
@@ -669,7 +675,13 @@ fn delete_view(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let value = expect_xwidget_view(args[0])?;
     eval.xwidgets.internal_xwidget_view_list =
         delq_from_list(eval.xwidgets.internal_xwidget_view_list, value);
-    eval.xwidgets.publish(&mut eval.obarray);
+    let xwidgets = &eval.xwidgets;
+    // SAFETY: publish only stores xwidget-list value cells; host callbacks run
+    // outside this noncalling phase, which cannot change canonical dispatch.
+    unsafe {
+        eval.obarray
+            .with_legacy_value_write(|obarray| xwidgets.publish(obarray));
+    }
     Ok(Value::NIL)
 }
 
@@ -752,7 +764,13 @@ fn kill(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let id = value.as_xwidget().unwrap().webview_id;
     eval.xwidgets.internal_xwidget_list =
         delq_from_list(eval.xwidgets.internal_xwidget_list, value);
-    eval.xwidgets.publish(&mut eval.obarray);
+    let xwidgets = &eval.xwidgets;
+    // SAFETY: publish only stores xwidget-list value cells; host callbacks run
+    // outside this noncalling phase, which cannot change canonical dispatch.
+    unsafe {
+        eval.obarray
+            .with_legacy_value_write(|obarray| xwidgets.publish(obarray));
+    }
     if let Some(host) = eval.display_host.as_ref() {
         host.destroy_webkit_xwidget(id)
             .map_err(|err| signal("error", vec![Value::string(err)]))?;

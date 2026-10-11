@@ -228,9 +228,11 @@ fn ccl_quit_pending() -> bool {
     if obarray.is_null() {
         return true;
     }
+    // SAFETY: with_ccl_obarray keeps this same-thread borrowed obarray alive
+    // for the body, restores the prior pointer before that borrow ends, and
+    // the null pointer was rejected above. This read returns a copied Value.
     let inhibited = unsafe { &*obarray }
-        .symbol_value("inhibit-quit")
-        .copied()
+        .symbol_value_copied("inhibit-quit")
         .is_some_and(|value| !value.is_nil());
     !inhibited
 }
@@ -435,9 +437,11 @@ fn checked_lisp_translation_hash_lookup(id: i64, key: i64) -> Option<Translation
     if obarray.is_null() {
         return None;
     }
-    let slot_of_vector = unsafe { &*obarray }
-        .symbol_value("translation-hash-table-vector")
-        .copied()?;
+    // SAFETY: with_ccl_obarray keeps this same-thread borrowed obarray alive
+    // for the body, restores the prior pointer before that borrow ends, and
+    // the null pointer was rejected above. This read returns a copied Value.
+    let slot_of_vector =
+        unsafe { &*obarray }.symbol_value_copied("translation-hash-table-vector")?;
     if !slot_of_vector.is_vector() {
         return Some(TranslationHashLookup::Invalid);
     }
@@ -482,7 +486,10 @@ fn lisp_vector_slot(name: &str, id: i64) -> Option<Value> {
     if obarray.is_null() {
         return None;
     }
-    let vector = unsafe { &*obarray }.symbol_value(name).copied()?;
+    // SAFETY: with_ccl_obarray keeps this same-thread borrowed obarray alive
+    // for the body, restores the prior pointer before that borrow ends, and
+    // the null pointer was rejected above. This read returns a copied Value.
+    let vector = unsafe { &*obarray }.symbol_value_copied(name)?;
     let data = vector.as_vector_data()?;
     let index = usize::try_from(id).ok()?;
     data.get(index).copied()

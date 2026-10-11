@@ -516,8 +516,7 @@ impl TextQuotingStyle {
 /// in batch/UTF-8, matching `builtin_text_quoting_style').
 pub(crate) fn effective_text_quoting_style(obarray: &Obarray) -> TextQuotingStyle {
     let var = obarray
-        .symbol_value("text-quoting-style")
-        .copied()
+        .symbol_value_copied("text-quoting-style")
         .unwrap_or(Value::NIL);
     if var.is_nil() {
         return TextQuotingStyle::Curve;

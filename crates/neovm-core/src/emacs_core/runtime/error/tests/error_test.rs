@@ -293,15 +293,15 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
         );
         assert_eq!(eval.shutdown_request(), Some(request));
         assert_eq!(
-            eval.obarray.symbol_value("shutdown-count").copied(),
+            eval.obarray.symbol_value_copied("shutdown-count"),
             Some(Value::fixnum(1))
         );
         assert_eq!(
-            eval.obarray.symbol_value("shutdown-continued").copied(),
+            eval.obarray.symbol_value_copied("shutdown-continued"),
             Some(Value::T)
         );
         assert_eq!(
-            eval.obarray.symbol_value("shutdown-later").copied(),
+            eval.obarray.symbol_value_copied("shutdown-later"),
             Some(Value::T)
         );
         let repeated = eval.shutdown_with_hooks(crate::emacs_core::eval::ShutdownRequest {
@@ -313,7 +313,7 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
             Some(request)
         );
         assert_eq!(
-            eval.obarray.symbol_value("shutdown-count").copied(),
+            eval.obarray.symbol_value_copied("shutdown-count"),
             Some(Value::fixnum(1))
         );
     }

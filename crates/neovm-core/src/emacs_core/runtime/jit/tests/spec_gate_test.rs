@@ -21,7 +21,7 @@ fn lambda(nargs: usize, hot: bool, ops: Vec<Op>, constants: Vec<Value>) -> Value
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     if hot {
         f.jit_runtime().set_hot_for_test();
@@ -320,7 +320,7 @@ fn a_subr_spec_site_under_compiler_overrides_takes_the_generic_call() {
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
     f.constants = vec![Value::symbol("symbol-name")].into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     let arg = Value::symbol("zzz");

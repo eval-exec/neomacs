@@ -4504,3 +4504,38 @@ fn composition_match_length_preserves_native_regexp_extent() {
         .is_err()
     );
 }
+
+#[test]
+fn retained_match_registers_preserve_existing_layout() {
+    // This is the representation before failure could retag Lisp registers.
+    // Its size/alignment (including Option's niche) must remain unchanged.
+    #[allow(dead_code)]
+    enum PreviousKind {
+        StringChars {
+            groups: smallvec::SmallVec<[Option<CharRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
+            searched: Option<SearchedString>,
+        },
+        Buffer {
+            id: BufferId,
+            groups: smallvec::SmallVec<[Option<LispCharMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
+        },
+    }
+    #[allow(dead_code)]
+    struct PreviousMatchData {
+        kind: PreviousKind,
+        #[cfg(debug_assertions)]
+        read_mask: std::cell::Cell<u64>,
+    }
+    assert_eq!(
+        std::mem::size_of::<MatchData>(),
+        std::mem::size_of::<PreviousMatchData>()
+    );
+    assert_eq!(
+        std::mem::align_of::<MatchData>(),
+        std::mem::align_of::<PreviousMatchData>()
+    );
+    assert_eq!(
+        std::mem::size_of::<Option<MatchData>>(),
+        std::mem::size_of::<Option<PreviousMatchData>>()
+    );
+}

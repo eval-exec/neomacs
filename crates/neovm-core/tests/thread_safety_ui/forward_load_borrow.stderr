@@ -1,0 +1,12 @@
+error[E0308]: mismatched types
+ --> tests/thread_safety_ui/forward_load_borrow.rs:4:5
+  |
+3 | fn borrow_slot(header: &'static LispFwd) -> &'static Value {
+  |                                             -------------- expected `&'static TaggedValue` because of return type
+4 |     header.load().expect("object slot")
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&TaggedValue`, found `TaggedValue`
+  |
+help: consider borrowing here
+  |
+4 |     &header.load().expect("object slot")
+  |     +

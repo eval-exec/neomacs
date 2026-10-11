@@ -66,7 +66,7 @@ pub fn register_bootstrap_vars(obarray: &mut super::super::symbol::Obarray) {
 /// GNU Emacs defaults this to `t`, meaning processes should use PTYs.
 /// When nil, pipe-based I/O is used instead.
 pub(super) fn process_connection_type_is_pty(obarray: &super::super::symbol::Obarray) -> bool {
-    match obarray.symbol_value("process-connection-type") {
+    match obarray.symbol_value_copied("process-connection-type") {
         Some(v) if v.is_nil() => false,
         Some(_) => true,
         // Default is t (PTY) when the variable has not been set.
@@ -216,10 +216,45 @@ pub(super) fn resolve_signal_process_target_in_state(
     Ok(SignalProcessTarget::Process(id))
 }
 
-pub(super) fn parse_signal_number(value: &Value) -> Result<i32, Flow> {
+/// A signal code representable by the C signal API. Validation never truncates
+/// a Lisp integer; any C-int value remains valid, including zero and negatives,
+/// because GNU passes that domain to the OS. Immutable and mutator-independent.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SignalNumber(i32);
+
+static_assertions::assert_impl_all!(SignalNumber: Send, Sync);
+const _: () = assert!(std::mem::size_of::<SignalNumber>() == std::mem::size_of::<i32>());
+
+impl TryFrom<i64> for SignalNumber {
+    type Error = std::num::TryFromIntError;
+
+    #[inline]
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        i32::try_from(value).map(Self)
+    }
+}
+
+impl From<SignalNumber> for i32 {
+    #[inline]
+    fn from(value: SignalNumber) -> Self {
+        value.0
+    }
+}
+
+pub(super) fn parse_signal_number(value: &Value) -> Result<SignalNumber, Flow> {
     match value.kind() {
-        ValueKind::Fixnum(n) => Ok(n as i32),
-        ValueKind::String => Err(signal(
+        ValueKind::Fixnum(n) => SignalNumber::try_from(n).map_err(|_| {
+            signal(
+                LispCondition::ArgsOutOfRange,
+                vec![
+                    *value,
+                    Value::fixnum(i64::from(i32::MIN)),
+                    Value::fixnum(i64::from(i32::MAX)),
+                ],
+            )
+        }),
+        ValueKind::String | ValueKind::Veclike(VecLikeType::Bignum) => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), *value],
         )),
@@ -227,7 +262,9 @@ pub(super) fn parse_signal_number(value: &Value) -> Result<i32, Flow> {
             // Borrow the symbol name before consuming it
             let sym_name = value.as_symbol_name().map(|s| s.to_owned());
             if let Some(name) = sym_name {
-                sys::signal_name_number(&name).ok_or_else(|| signal_undefined_signal_name(&name))
+                sys::signal_name_number(&name)
+                    .map(SignalNumber)
+                    .ok_or_else(|| signal_undefined_signal_name(&name))
             } else {
                 Err(signal_wrong_type_integerp(*value))
             }

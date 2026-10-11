@@ -11,8 +11,8 @@ error[E0382]: use of moved value: `context`
 note: `neovm_core::Context::shutdown` takes ownership of the receiver `self`, which moves `context`
  --> src/emacs_core/runtime/eval/mod.rs
   |
-  |     pub fn shutdown(mut self: Box<Self>) -> Result<(), crate::tagged::gc::MarkFinishError> {
-  |                         ^^^^
+  |     pub fn shutdown(self: Box<Self>) -> Result<(), ContextShutdownError> {
+  |                     ^^^^
 help: you could `clone` the value and consume it, if the `neovm_core::Context: Clone` trait bound could be satisfied
   |
 5 |     context.clone().shutdown().unwrap();

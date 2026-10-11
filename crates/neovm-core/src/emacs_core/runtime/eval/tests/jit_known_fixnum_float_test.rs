@@ -54,7 +54,7 @@ fn probe() -> ByteCodeFunction {
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f
 }
 
@@ -147,7 +147,7 @@ fn an_osr_entered_float_loop_is_compiled_with_its_numeric_feedback() {
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 7;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(7);
     let f = Value::make_bytecode(f);
     let ValueKind::Symbol(id) = Value::symbol("osr-float-loop-probe").kind() else {
         panic!("symbol")

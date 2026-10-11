@@ -5,9 +5,18 @@
 
 use super::*;
 
+/// Select raw constructor storage BEFORE the World is sealed or callable.
+/// There is no safe replacement of an admitted manager beneath a continuation.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ConstructionSurface {
+    Full,
+    #[cfg(test)]
+    MinimalVm,
+}
+
 impl Context {
     pub fn new() -> Self {
-        let mut ctx = Self::new_inner(true);
+        let mut ctx = Self::new_inner(ConstructionSurface::Full);
         // Register builtins AFTER new_inner returns — the function is too
         // large (1500+ lines) for reliable codegen in debug mode when
         // combined with the full native subr manifest in the same frame.
@@ -41,9 +50,14 @@ impl Context {
     pub(crate) fn new_minimal_vm_harness() -> Self {
         // Keep this reduced constructor only for low-level VM/opcode tests
         // that intentionally do not depend on the full builtin surface.
-        let mut ev = Self::new_inner(true);
-        ev.obarray = Obarray::new();
-        super::super::errors::init_standard_errors(&mut ev.obarray);
+        let mut ev = Self::new_inner(ConstructionSurface::MinimalVm);
+        // SAFETY: standard error seeding is a noncalling property/value helper;
+        // it changes no function cell, descriptor or admitted manager identity.
+        unsafe {
+            ev.obarray.with_legacy_value_write(|obarray| {
+                super::super::errors::init_standard_errors(obarray);
+            });
+        }
         ev.obarray
             .set_symbol_value("most-positive-fixnum", Value::fixnum(i64::MAX >> 2));
         ev.obarray.make_special("most-positive-fixnum");
@@ -60,25 +74,25 @@ impl Context {
         ev.loads_in_progress.clear();
         ev.load_read_cursors.clear();
         ev.last_uncaught_signal_backtrace = None;
-        ev.buffers = BufferManager::new();
+        ev.buffers.reset_for_minimal_runtime();
         ev.xwidgets = super::super::xwidget::XwidgetState::new();
         ev.last_overlay_modification_hooks.clear();
         ev.interval_insert_behind_hooks = Value::NIL;
         ev.interval_insert_in_front_hooks = Value::NIL;
         ev.match_data = None;
         ev.processes = ProcessManager::new();
-        ev.watchers = VariableWatcherList::new();
+        *ev.watchers = VariableWatcherList::new();
         ev.current_local_map = Value::NIL;
         ev.selected_global_map = super::super::keymap::SelectedGlobalMap::default();
         ev.registers = RegisterManager::new();
         ev.bookmarks = BookmarkManager::new();
         ev.abbrevs = AbbrevManager::new();
-        ev.autoloads = AutoloadManager::new();
+        *ev.autoloads = AutoloadManager::new();
         ev.custom = CustomManager::new();
         ev.rectangle = RectangleState::new();
         ev.interactive = InteractiveRegistry::new();
         ev.input_mode_interrupt = false;
-        ev.frames = lisp_frame_manager();
+        *ev.frames = lisp_frame_manager();
         ev.modes = ModeRegistry::new();
         ev.threads = ThreadManager::new();
         ev.kmacro = KmacroManager::new();
@@ -95,7 +109,7 @@ impl Context {
         ev.window_layout_query_adapter = WindowLayoutQueryAdapter::Unavailable;
         ev.scroll_goal = None;
         ev.display_host = None;
-        ev.coding_systems = CodingSystemManager::new();
+        *ev.coding_systems = CodingSystemManager::new();
         ev.face_table = FaceTable::new();
         ev.face_change_count = 0;
         ev.display_var_change_count = 0;
@@ -118,7 +132,7 @@ impl Context {
         ev.macro_expand_calls = 0;
         ev.macro_expand_total_us = 0;
         ev.macro_perf_enabled = std::env::var_os("NEOVM_TRACE_MACRO_PERF").is_some();
-        ev.macro_perf_stats = MacroPerfStats::default();
+        *ev.macro_perf_stats = MacroPerfStats::default();
         ev.interpreted_closure_filter_fn = None;
         register_subrs(&mut ev);
         ev.finish_runtime_activation(false);
@@ -2001,7 +2015,7 @@ impl Context {
         obarray.define_special_variable("x-show-tooltip-timeout", Value::fixnum(5));
     }
 
-    pub(super) fn new_inner(reset_thread_locals: bool) -> Self {
+    pub(super) fn new_inner(surface: ConstructionSurface) -> Self {
         // Create the heap and set thread-locals so tagged constructors work
         // during evaluator initialization.
         let mut tagged_heap = Box::new(crate::tagged::gc::TaggedHeap::new());
@@ -2010,11 +2024,9 @@ impl Context {
         // Clear any caches that hold heap-allocated Values (tagged pointers) from a
         // previous heap. Critical for test isolation when multiple Contexts
         // are created sequentially on the same thread.
-        if reset_thread_locals {
-            super::super::pdump::runtime::reset_runtime_for_new_heap(
-                super::super::pdump::runtime::HeapResetMode::FreshContext,
-            );
-        }
+        super::super::pdump::runtime::reset_runtime_for_new_heap(
+            super::super::pdump::runtime::HeapResetMode::FreshContext,
+        );
 
         let mut obarray = Obarray::new();
         // Builtin names are interned by SubrSpec registration during init_builtins(),
@@ -2163,14 +2175,41 @@ impl Context {
         let throw_on_input =
             obarray.symbol_value_id_or_nil(core_eval_symbols.throw_on_input_symbol);
 
+        // Preserve startup allocation order: buffers precede frame Lisp cells.
+        let world_buffers = BufferManager::new_world_parts();
+        let world_frames = lisp_frame_manager();
+        // Minimal tests replace only the unadmitted, local builder value. The
+        // finished view's manager/header/lease are then constructed together.
+        let obarray = match surface {
+            ConstructionSurface::Full => obarray,
+            #[cfg(test)]
+            ConstructionSurface::MinimalVm => Obarray::new(),
+        };
+        let world = world::WorldStorageBuilder {
+            owned_roots: Default::default(),
+            obarray,
+            features: initial_feature_ids(),
+            watchers: VariableWatcherList::new(),
+            active_variable_watchers: HashSet::new(),
+            autoloads: AutoloadManager::new(),
+            treesit: super::super::treesit::TreeSitterManager::new(),
+            frames: world_frames,
+            coding_systems: CodingSystemManager::new(),
+            macro_perf_stats: MacroPerfStats::default(),
+            buffers: world_buffers,
+            // Prepare allocation-capable managers before retiring the old TLS
+            // installation. The closed factory reinstalls the final view.
+            tagged_heap,
+        }
+        .build();
         let mut ev = Self {
             integer_width_context: Default::default(),
-            owned_roots: Default::default(),
-            tagged_heap,
+            owned_roots: world.owned_roots,
+            tagged_heap: world.tagged_heap,
             pdump_image: None,
             after_pdump_load_hook_pending: false,
             cached_system_name: Value::NIL,
-            obarray,
+            obarray: world.obarray,
             window_edge_drag: crate::emacs_core::window_edge_drag::WindowEdgeDrag::default(),
             specpdl: Vec::new(),
             suspended_thread_bindings: Vec::new(),
@@ -2199,12 +2238,12 @@ impl Context {
             print_symbols_bare_symbol: core_eval_symbols.print_symbols_bare_symbol,
             runtime_projection_mask: core_eval_symbols.runtime_projection_mask,
             print_symbols_bare,
-            features: initial_feature_ids(),
+            features: world.features,
             require_stack: Vec::new(),
             loads_in_progress: Vec::new(),
             load_read_cursors: Vec::new(),
             last_uncaught_signal_backtrace: None,
-            buffers: BufferManager::new(),
+            buffers: world.buffers,
             xwidgets: super::super::xwidget::XwidgetState::new(),
             last_overlay_modification_hooks: Vec::new(),
             interval_insert_behind_hooks: Value::NIL,
@@ -2214,8 +2253,8 @@ impl Context {
             combine_after_change_buffer: None,
             message_log_need_newline: false,
             processes: ProcessManager::new(),
-            watchers: VariableWatcherList::new(),
-            active_variable_watchers: HashSet::new(),
+            watchers: world.watchers,
+            active_variable_watchers: world.active_variable_watchers,
             standard_syntax_table,
             syntax_code_objects,
             standard_category_table,
@@ -2224,11 +2263,11 @@ impl Context {
             registers: RegisterManager::new(),
             bookmarks: BookmarkManager::new(),
             abbrevs: AbbrevManager::new(),
-            autoloads: AutoloadManager::new(),
+            autoloads: world.autoloads,
             custom,
             rectangle: RectangleState::new(),
             interactive: InteractiveRegistry::new(),
-            treesit: super::super::treesit::TreeSitterManager::new(),
+            treesit: world.treesit,
             minibuffers: MinibufferManager::new(),
             interactive_minibuffer_read_count: 0,
             current_message: None,
@@ -2244,7 +2283,7 @@ impl Context {
             input_mode_interrupt: true,
             quit_char: 7,
             waiting_for_user_input: false,
-            frames: lisp_frame_manager(),
+            frames: world.frames,
             modes: ModeRegistry::new(),
             threads: ThreadManager::new(),
             kmacro: KmacroManager::new(),
@@ -2266,7 +2305,7 @@ impl Context {
             tty_frame_host_factory: None,
             visual_config: neomacs_display_protocol::VisualConfig::default(),
             pending_menu_bar_popup_anchor: None,
-            coding_systems: CodingSystemManager::new(),
+            coding_systems: world.coding_systems,
             code_conversion_workspace:
                 crate::code_conversion_workspace::CodeConversionWorkspace::default(),
             face_table: FaceTable::new(),
@@ -2332,7 +2371,7 @@ impl Context {
             macro_expand_calls: 0,
             macro_expand_total_us: 0,
             macro_perf_enabled: std::env::var_os("NEOVM_TRACE_MACRO_PERF").is_some(),
-            macro_perf_stats: MacroPerfStats::default(),
+            macro_perf_stats: world.macro_perf_stats,
             interpreted_closure_filter_fn: None,
             cconv_memo: cconv_memo::CconvMemo::from_env(),
             tier_i: tier_i::TierI::from_env(),
@@ -2352,12 +2391,20 @@ impl Context {
             cached_standard_case_table: None,
         };
         super::super::runtime_identity::install(&mut ev);
-        ev.provide_value(
-            Value::symbol("make-network-process"),
-            Some(super::super::process::make_network_process_subfeatures()),
-        )
-        .expect("startup make-network-process provide should succeed");
-        ev.finish_runtime_activation(false);
+        match surface {
+            ConstructionSurface::Full => {
+                ev.provide_value(
+                    Value::symbol("make-network-process"),
+                    Some(super::super::process::make_network_process_subfeatures()),
+                )
+                .expect("startup make-network-process provide should succeed");
+                ev.finish_runtime_activation(false);
+            }
+            // The minimal constructor performs its final activation after its
+            // remaining test-only private-state resets and subr registration.
+            #[cfg(test)]
+            ConstructionSurface::MinimalVm => {}
+        }
         ev
     }
 }

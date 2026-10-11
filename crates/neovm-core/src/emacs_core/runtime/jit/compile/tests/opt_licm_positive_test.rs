@@ -184,12 +184,12 @@ fn reset_watcher(ctx: &mut Context) {
 
 fn assert_one_store(ctx: &Context) {
     assert_eq!(
-        ctx.obarray.symbol_value("opt-licm-side"),
-        Some(&Value::symbol("stored"))
+        ctx.obarray.symbol_value_copied("opt-licm-side"),
+        Some(Value::symbol("stored"))
     );
     assert_eq!(
-        ctx.obarray.symbol_value("opt-licm-watch-count"),
-        Some(&Value::fixnum(1))
+        ctx.obarray.symbol_value_copied("opt-licm-watch-count"),
+        Some(Value::fixnum(1))
     );
 }
 
@@ -405,8 +405,8 @@ fn opt_licm_native_anticipated_header_guard_replays_full_entry_after_store() {
         Value::fixnum(255)
     );
     assert_eq!(
-        ctx.obarray.symbol_value("opt-licm-watch-count"),
-        Some(&Value::fixnum(1)),
+        ctx.obarray.symbol_value_copied("opt-licm-watch-count"),
+        Some(Value::fixnum(1)),
         "replay must not repeat the completed preheader store"
     );
 }

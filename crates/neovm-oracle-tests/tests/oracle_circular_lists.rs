@@ -1,5 +1,5 @@
-//! Circular traversal parity with GNU Emacs 31.1. Refresh expectations using
-//! NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1.
+//! Circular traversal parity, including GNU Emacs 32 list-length conditions.
+//! Refresh using a GNU Emacs 32 oracle and NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1.
 #![allow(dead_code)]
 #[path = "../src/common.rs"]
 mod common;
@@ -47,7 +47,7 @@ fn circular_lists_eval_oracle() {
         "../../neovm-core/src/emacs_core/runtime/eval/tests/circular_lists_cases/eval.el"
     );
     let expected = expect_test::expect![[
-        r#""OK (((circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1)) (circular-list a) (circular-list a) (circular-list 3) (wrong-type-argument listp))""#
+        r#""OK (((circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1)) (circular-list a) (circular-list a) (circular-list 1) (wrong-type-argument listp))""#
     ]];
     common::assert_oracle_parity_expect(form, expected);
 }

@@ -11,7 +11,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
 }
@@ -330,7 +330,7 @@ fn mir_call_observability_matches_the_interpreter() {
             };
             let debug_calls = ev
                 .obarray
-                .symbol_value("mir-call-debug-count")
+                .symbol_value_copied("mir-call-debug-count")
                 .unwrap()
                 .as_fixnum()
                 .unwrap();

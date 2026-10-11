@@ -68,7 +68,10 @@
 //! code: it flows as its `usize` bit pattern (`i64` in CLIF), exactly as the
 //! interpreter stores it.
 
+pub(crate) mod param_shape;
+
 use crate::emacs_core::error::LispCondition;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use cranelift_codegen::ir::Value as ClifValue;
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
@@ -467,8 +470,10 @@ fn jit_profile_emit(
     // `calls - inlinable` are subr / dynamic / non-bytecode callees inlining
     // can't directly take. This sizes inlining's TRUE surface (vs the
     // call-bearing upper bound).
-    let arity =
-        f.params.required.len() + f.params.optional.len() + usize::from(f.params.rest.is_some());
+    let Ok(params) = JitParamShape::try_from(f) else {
+        return;
+    };
+    let arity = params.entry_depth();
     let inlinable = match obarray {
         Some(ob) => analyze_cfg(ops, &f.constants, f.executable_gnu_byte_offset_map(), arity)
             .map(|cfg| {
@@ -505,7 +510,7 @@ fn jit_profile_emit(
         u8::from(backedges > 0),
         u8::from(compiled),
         inlinable,
-        f.params.required.len() + f.params.optional.len() + usize::from(f.params.rest.is_some()),
+        arity,
         reason,
         fingerprint,
         elapsed.as_micros(),
@@ -880,9 +885,39 @@ pub fn compile_bytecode_function_requested(
     let started = std::time::Instant::now();
     super::stats::verdict::begin();
     let named_t2 = inline_planning::named_tier_eligible(f, request, self_recursive);
-    let opt_request = (jit_opt_mode() == OptMode::Opt).then_some(request);
-    let mut result =
-        compile_bytecode_function_inner(f, obarray, named_t2, request.tier, opt_request);
+    let front = opt_profit::front(
+        request,
+        f.executable_ops(),
+        opt_profit::CallDensity::from(call_heavy),
+        f.jit_runtime(),
+    );
+    let front = opt_profit::ready_osr_front(front, f, obarray);
+    let opt_request = (jit_opt_mode() == OptMode::Opt && front != opt_profit::FrontChoice::Legacy)
+        .then_some(request);
+    let mut selected_declined = false;
+    let mut result = compile_bytecode_function_inner(
+        f,
+        obarray,
+        named_t2,
+        request.tier,
+        opt_request,
+        front,
+        &mut selected_declined,
+    );
+    if selected_declined {
+        // A refused SSA attempt returns to the original MIR frontend before
+        // any baseline code generation. Existing compile-owned scopes remain
+        // live; the failed inner attempt has already dropped its local scopes.
+        result = compile_bytecode_function_inner(
+            f,
+            obarray,
+            false,
+            request.tier,
+            None,
+            opt_profit::FrontChoice::Legacy,
+            &mut selected_declined,
+        );
+    }
     if jit_opt_mode() == OptMode::Opt {
         super::stats::inline_census::note_selected_compile_outcome(f, &result);
     } else {
@@ -905,19 +940,6 @@ pub fn compile_bytecode_function_requested(
         );
     }
     result
-}
-
-/// Whether `ops` jump backwards anywhere: the body can loop, so its work per
-/// entry is unbounded (the same classification `jit_profile_emit` counts).
-pub(crate) fn has_back_edge(ops: &[Op]) -> bool {
-    ops.iter().enumerate().any(|(i, op)| match op {
-        Op::Goto(t)
-        | Op::GotoIfNil(t)
-        | Op::GotoIfNotNil(t)
-        | Op::GotoIfNilElsePop(t)
-        | Op::GotoIfNotNilElsePop(t) => (*t as usize) <= i,
-        _ => false,
-    })
 }
 
 /// The register allocator for a compile of `ops` under `policy` (the forced
@@ -1005,8 +1027,8 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     // Required-only lexical, and no captured lexenv: inlining drops the lexenv
     // install, which is only otherwise safe because lexenv-reading ops lower to
     // Opaque and `callee_inlinable` rejects them — keep the safety local here too.
-    if !bc.lexical || bc.env.is_some() || !bc.params.optional.is_empty() || bc.params.rest.is_some()
-    {
+    let arity = JitParamShape::try_from(bc).ok()?.fixed_arity()?;
+    if !bc.lexical || bc.env.is_some() {
         return None;
     }
     // A patched source's leading constants are per-instance; inlining would
@@ -1046,7 +1068,7 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
         bc.executable_ops(),
         &bc.constants,
         bc.executable_gnu_byte_offset_map(),
-        bc.params.required.len(),
+        arity,
     )
     .ok()
 }
@@ -1057,14 +1079,18 @@ fn compile_bytecode_function_inner(
     named_t2: bool,
     tier: super::tier2::CompileTier,
     opt_request: Option<CompileRequest>,
+    front: opt_profit::FrontChoice,
+    selected_declined: &mut bool,
 ) -> Result<CompiledLeaf, CompileError> {
     use super::stats::{CompilePhase, enter_phase};
     let gate_phase = enter_phase(CompilePhase::Gate);
     let ops = f.executable_ops();
-    let required = f.params.required.len();
-    let nonrest = required + f.params.optional.len();
-    let has_rest = f.params.rest.is_some();
-    let native_arity = nonrest + usize::from(has_rest);
+    let params = JitParamShape::try_from(f)?;
+    let optional = params.optional();
+    let required = params.required();
+    let nonrest = params.nonrest();
+    let has_rest = params.rest().is_present();
+    let native_arity = params.entry_depth();
     if native_arity > 0 && !params_on_stack(f) {
         // Params are dynamically bound, not on the stack — `StackRef` would not
         // find them.
@@ -1094,8 +1120,20 @@ fn compile_bytecode_function_inner(
     // cannot preserve the v2 annotations, so a fused-v2 body stays on the
     // baseline until the opt builder consumes its frame states. Off keeps
     // the original MIR-first, late-fuser path below.
-    let inline2 = jit_inline2_mode();
-    let early_fused = inline_planning::early_fused(f, constants, obarray, native_arity, named_t2);
+    let inline2 = if matches!(
+        front,
+        opt_profit::FrontChoice::Legacy | opt_profit::FrontChoice::SelectedAfterMir
+    ) {
+        Inline2Mode::Off
+    } else {
+        jit_inline2_mode()
+    };
+    let early_fused = (!matches!(
+        front,
+        opt_profit::FrontChoice::Legacy | opt_profit::FrontChoice::SelectedAfterMir
+    ))
+    .then(|| inline_planning::early_fused(f, constants, obarray, native_arity, named_t2))
+    .flatten();
     opt_backend::build_census(f, early_fused.as_deref());
     let fused_v2 = early_fused.as_ref().is_some_and(|body| body.is_v2());
     let (ops, constants) = early_fused.as_ref().map_or((ops, constants), |body| {
@@ -1109,7 +1147,7 @@ fn compile_bytecode_function_inner(
     if has_rest {
         super::stats::record_mir(super::stats::MirFunnel::GateRest);
     }
-    if !f.params.optional.is_empty() {
+    if optional != 0 {
         super::stats::record_mir(super::stats::MirFunnel::GateOptional);
     }
     if dynamic_prefix > 0 {
@@ -1128,9 +1166,13 @@ fn compile_bytecode_function_inner(
     }
     drop(gate_phase);
     let mir_phase = enter_phase(CompilePhase::MirBuild);
-    let mir_built = (jit_opt_mode() == OptMode::Legacy
+    let mir_built = ((jit_opt_mode() == OptMode::Legacy
+        || matches!(
+            front,
+            opt_profit::FrontChoice::Legacy | opt_profit::FrontChoice::SelectedAfterMir
+        ))
         && !has_rest
-        && f.params.optional.is_empty()
+        && optional == 0
         && dynamic_prefix == 0
         && !reopt_gate
         && !fused_v2)
@@ -1287,6 +1329,11 @@ fn compile_bytecode_function_inner(
         None => (ops, constants),
     };
     drop(fuse_phase);
+    // A selected source can grow during static fusion. Check the final slice
+    // before SSA and emit the existing baseline once when it exceeds the bound;
+    // returning Err here would repeat MIR and fusion in the outer retry.
+    let selected_final_size = opt_profit::final_size_admitted(front, ops.len());
+    let opt_request = opt_request.filter(|_| selected_final_size);
     // The MIR tier above already claimed any body its inlining/unboxing makes
     // worthwhile. What's left goes to the baseline, whose per-op call shims aren't
     // worth it for a call-dominated body — keep those on the interpreter.
@@ -1304,17 +1351,43 @@ fn compile_bytecode_function_inner(
         .as_ref()
         .map(|fused| publish_numeric_feedback_vec(fused.feedback.clone()));
     let opt_params = (jit_opt_mode() == OptMode::Opt
-        && matches!(
+        && front != opt_profit::FrontChoice::Legacy
+        && selected_final_size
+        && (matches!(
+            front,
+            opt_profit::FrontChoice::Selected | opt_profit::FrontChoice::SelectedAfterMir
+        ) || matches!(
             tier,
             super::tier2::CompileTier::Upgrade(super::tier2::T2Upgrade::Feedback)
-        )
+        ))
         && !reopt_gate)
         .then_some(super::opt::ir::ParamShape {
             required,
             optional: nonrest - required,
             has_rest,
         });
-    let mut leaf = if let Some(request) = opt_request {
+    let mut leaf = if matches!(
+        front,
+        opt_profit::FrontChoice::Selected | opt_profit::FrontChoice::SelectedAfterMir
+    ) && !reopt_gate
+        && selected_final_size
+    {
+        opt_backend::lower_selected_requested(
+            ops,
+            constants,
+            native_arity,
+            match &fused {
+                Some(fused) => fused.offset_map.as_deref(),
+                None => f.executable_gnu_byte_offset_map(),
+            },
+            obarray,
+            None,
+            dynamic_prefix,
+            opt_params.expect("selected opt parameters"),
+            opt_request.expect("selected compiler request"),
+        )
+        .inspect_err(|_| *selected_declined = true)?
+    } else if let Some(request) = opt_request {
         opt_backend::lower_best_requested(
             ops,
             constants,
@@ -1698,12 +1771,6 @@ const SUBR_MANY_ALLOWLIST: &[&str] = &[
 ///   builtins; special forms / context-callables have different call
 ///   protocols. Checked again at run time (fresh entry read) since entries
 ///   are rewritten in place.
-/// * `aset`/`fillarray` excluded on BOTH the site name and the resolved subr
-///   name — their mutating-first-string-arg WRITEBACK protocol
-///   (`Vm::mutates_first_arg_name` / `maybe_writeback_mutating_first_arg`)
-///   wraps the generic call; the resolved-name check also covers
-///   `(fset 'alias (symbol-function 'aset))` aliases, which
-///   `writeback_mutating_callable_names` detects through the cell.
 /// * `funcall`/`apply`/`eval` excluded (both names) — re-entrant drivers;
 ///   depth/backtrace conservatism (`eval` IS a fixed-arity A2).
 ///
@@ -1738,7 +1805,7 @@ fn subr_spec_kind(binding: Value, site_sym: SymId, nargs: usize) -> Option<SpecC
     let resolved_name = resolve_sym(subr_sym);
     if [site_name, resolved_name]
         .iter()
-        .any(|name| matches!(*name, "aset" | "fillarray" | "funcall" | "apply" | "eval"))
+        .any(|name| matches!(*name, "funcall" | "apply" | "eval"))
     {
         return None;
     }
@@ -2634,8 +2701,8 @@ pub(crate) fn analyze_cfg(
                             let un = *un as usize;
                             if un > binds {
                                 // Unbinding more than this function bound —
-                                // bail to the interpreter (its bind_stack
-                                // saturation handles it).
+                                // bail to the interpreter, which reports
+                                // invalid byte-code without unwinding callers.
                                 return Err(CompileError::UnsupportedOp("unbalanced-unbind"));
                             }
                             binds -= un;
@@ -3268,24 +3335,6 @@ fn emit_backedge_jump_with_representations(
 
 /// Lower a leaf bytecode body taking `arity` fixed arguments to native code.
 ///
-/// Whether the body has a BACKWARD jump (a loop) — needs the back-edge poll
-/// (GC safepoint + quit), mirroring the interpreter's `branch_to!` wrap. Switch
-/// targets count: a jump-table edge can also close a loop. Single source of truth
-/// for both the JIT (`lower_leaf_full`) and the baseline-AOT emit (R2-E).
-pub(crate) fn baseline_has_backedge(ops: &[Op], cfg: &Cfg) -> bool {
-    ops.iter().enumerate().any(|(i, o)| match o {
-        Op::Goto(t)
-        | Op::GotoIfNil(t)
-        | Op::GotoIfNotNil(t)
-        | Op::GotoIfNilElsePop(t)
-        | Op::GotoIfNotNilElsePop(t) => (*t as usize) <= i,
-        _ => false,
-    }) || cfg
-        .switch_targets
-        .iter()
-        .any(|(i, ts)| ts.iter().any(|&(_, t)| t <= *i))
-}
-
 /// Whether the body re-enters the runtime (needs vmctx + the `neovm_jit_*` shim
 /// scaffolding): a back-edge polls through vmctx; Eq/Symbolp use the
 /// symbols-with-pos slow path; VarRef/VarSet/VarBind/Unbind hit the variable
@@ -3538,6 +3587,18 @@ fn lower_leaf_full_osr_with_plan_impl(
     opt_override: Option<&super::opt::ir::Func>,
     opt_request: Option<CompileRequest>,
 ) -> Result<CompiledLeaf, CompileError> {
+    // Count actual opt construction at this single normal/OSR seam. This
+    // cold report never enables runtime observation, naming or source heat.
+    let construction_site = if opt_params.is_some() || opt_override.is_some() {
+        match osr_pc {
+            None => opt_report::ConstructionSite::Normal,
+            Some(pc) => opt_report::ConstructionSite::Osr { pc },
+        }
+    } else {
+        opt_report::ConstructionSite::Unselected
+    };
+    let opt_attempt = opt_report::Attempt::begin(construction_site, opt_request, ops.len());
+    let exit_attempt = super::stats::exit_snapshot::Attempt::begin(construction_site);
     // Every analysis and the reloc collection below see the MASKED view; only
     // the emitter's `Op::Constant` arm knows the prefix (it loads those slots
     // through the callee at run time).
@@ -3847,6 +3908,17 @@ fn lower_leaf_full_osr_with_plan_impl(
         clif_insts: clif_size_now().0,
     });
     obs.label = label.map(String::into_boxed_str);
+    let constructed_state = if entry.is_null() {
+        opt_report::ConstructedState::Deferred
+    } else {
+        opt_report::ConstructedState::Ready
+    };
+    if let Some(attempt) = opt_attempt {
+        attempt.constructed(constructed_state);
+    }
+    if let Some(attempt) = exit_attempt {
+        attempt.constructed(constructed_state);
+    }
     Ok(CompiledLeaf {
         tier: LeafTier::Baseline,
         regalloc: lowering::active_regalloc_choice(),
@@ -4009,11 +4081,16 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
 
 mod boolean;
 mod leaf_builder;
+mod loop_walk;
+pub(crate) use loop_walk::{baseline_has_backedge, has_back_edge};
 mod leaf_builder_selected;
 mod numeric_carrier;
 pub(crate) mod opt_backend;
 pub(crate) mod opt_census;
 mod opt_emission;
+mod opt_profile;
+pub(crate) mod opt_profit;
+pub(crate) mod opt_report;
 mod sink_cold_snapshot;
 mod sqrt_binding;
 mod sqrt_snapshot;
@@ -4105,6 +4182,8 @@ pub(crate) mod heap_inline;
 #[path = "tests/inline_heap_ops_test.rs"]
 mod inline_heap_ops_tests;
 
+mod atomic_forward;
+pub(crate) use atomic_forward::ForwardAtomics;
 #[cfg(test)]
 #[path = "tests/gen0_tracked_collection_revision_test.rs"]
 mod gen0_tracked_collection_revision_tests;
@@ -4318,3 +4397,15 @@ mod opt_sink_native_verification;
 #[cfg(test)]
 #[path = "compile/tests/opt_rootwin_counts_test.rs"]
 mod opt_rootwin_count_tests;
+
+#[cfg(test)]
+#[path = "tests/branch_targets.rs"]
+mod branch_target_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/function_params.rs"]
+mod function_param_tests;
+
+#[cfg(test)]
+#[path = "tests/gdl_integer_width_test.rs"]
+mod gdl_integer_width_tests;

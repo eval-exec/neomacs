@@ -153,7 +153,7 @@ impl Context {
     /// GNU's swap-in leaves the current buffer's value *in that same cell*, so
     /// reading it there is right for the buffer-local case too.
     #[inline]
-    fn debug_on_next_call_cell(&self) -> Option<&'static LispBoolFwd> {
+    fn debug_on_next_call_cell(&mut self) -> Option<&'static LispBoolFwd> {
         self.obarray
             .debug_on_next_call_bool_fwd_cached()
             .or_else(|| {
@@ -176,12 +176,12 @@ impl Context {
     /// path that takes the arm properly -- and resolves the cell there.
     #[inline(always)]
     pub(crate) fn debug_on_next_call_is_armed(&self) -> bool {
-        self.obarray.debug_on_next_call_armed_fast()
+        self.dispatch_projection().debug_on_next_call_armed_fast()
     }
 
     /// Resolve the memoized cell now, so the unresolved window closes before
     /// any Lisp runs (`finish_runtime_activation`).
-    pub(crate) fn resolve_debug_on_next_call_cell(&self) {
+    pub(crate) fn resolve_debug_on_next_call_cell(&mut self) {
         let _ = self
             .obarray
             .debug_on_next_call_bool_fwd(debug_on_next_call_symbol());
@@ -256,6 +256,10 @@ impl Context {
     /// `val = call_debugger (list2 (Qexit, val))`, so a debugger that returns a
     /// different object *replaces the call's result*.
     pub(crate) fn call_debugger(&mut self, arg: Vec<Value>) -> Result<Value, Flow> {
+        // GNU eval.c:286-291 records the unwind boundary before borrowing
+        // two hundred evaluator frames, ahead of the debugger's bindings.
+        let count = self.specpdl.len();
+        self.ensure_lisp_eval_depth_room(200);
         // eval.c:298, before anything the debugger runs can be dispatched.
         self.disarm_debug_on_next_call();
         // eval.c:299 `when_entered_debugger = num_nonmacro_input_events`.
@@ -270,10 +274,8 @@ impl Context {
             .set_symbol_value_id(when_entered_debugger_symbol(), Value::fixnum(events));
         let debugger = self
             .obarray
-            .symbol_value_id(debugger_symbol())
-            .copied()
+            .symbol_value_id_copied(debugger_symbol())
             .unwrap_or(Value::NIL);
-        let count = self.specpdl.len();
         // GNU's four `specbind`s, in GNU's order (`src/eval.c:306-314`).
         // `debugger-may-continue` is `debug_while_redisplaying ? Qnil : Qt`
         // there; this port has no redisplay re-entry to detect, and in batch

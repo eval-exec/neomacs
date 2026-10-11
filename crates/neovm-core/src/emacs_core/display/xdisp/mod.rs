@@ -145,11 +145,7 @@ impl super::eval::Context {
         self.buffers
             .get(buffer_id)
             .and_then(|buffer| buffer.buffer_local_value("window-scroll-functions"))
-            .or_else(|| {
-                self.obarray
-                    .symbol_value("window-scroll-functions")
-                    .copied()
-            })
+            .or_else(|| self.obarray.symbol_value_copied("window-scroll-functions"))
             .is_some_and(|hook| !hook.is_nil())
     }
 
@@ -2429,7 +2425,7 @@ fn mode_line_symbol_value_in_state(
         return Some(value);
     }
 
-    obarray.symbol_value(name).copied()
+    obarray.symbol_value_copied(name)
 }
 
 fn mode_line_human_readable_size(mut quotient: usize) -> String {
@@ -2738,10 +2734,10 @@ fn build_mode_line_percent_context(
             )
         } else {
             let term_cs = obarray
-                .symbol_value("terminal-coding-system")
+                .symbol_value_copied("terminal-coding-system")
                 .and_then(|v| v.as_symbol_id());
             let kbd_cs = obarray
-                .symbol_value("keyboard-coding-system")
+                .symbol_value_copied("keyboard-coding-system")
                 .and_then(|v| v.as_symbol_id());
             (
                 kbd_cs
@@ -2860,8 +2856,7 @@ fn coding_system_eol_indicator_value(
         "eol-mnemonic-undecided"
     };
     obarray
-        .symbol_value(var_name)
-        .copied()
+        .symbol_value_copied(var_name)
         .filter(|value| value.is_string() || value.as_char().is_some())
 }
 
@@ -6566,10 +6561,7 @@ fn bidi_buffer_var(ctx: &super::eval::Context, buf_id: BufferId, name: &str) -> 
             return value;
         }
     }
-    ctx.obarray
-        .symbol_value(name)
-        .copied()
-        .unwrap_or(Value::NIL)
+    ctx.obarray.symbol_value_copied(name).unwrap_or(Value::NIL)
 }
 
 pub(crate) fn builtin_current_bidi_paragraph_direction(
@@ -8285,12 +8277,16 @@ fn resolve_exact_visible_metrics_with_layout(
     {
         return Ok(Some(found));
     }
-    if let Some(geometry) = compute_live_window_geometry(eval, fid, wid)? {
-        let Some(pos_lisp) =
-            resolve_live_target_position(&eval.frames, &eval.buffers, fid, wid, pos)?
-        else {
-            return Ok(None);
-        };
+    let Some(pos_lisp) = resolve_live_target_position(&eval.frames, &eval.buffers, fid, wid, pos)?
+    else {
+        return Ok(None);
+    };
+    if let Some(geometry) = compute_live_window_geometry_scope(
+        eval,
+        fid,
+        wid,
+        crate::window::WindowLayoutQueryScope::Position { target: pos_lisp },
+    )? {
         return Ok(geometry.point_for_buffer_pos(pos_lisp).map(|point| {
             (
                 wid,
@@ -8798,6 +8794,20 @@ fn compute_live_window_geometry(
     fid: FrameId,
     wid: WindowId,
 ) -> Result<Option<WindowDisplaySnapshot>, Flow> {
+    compute_live_window_geometry_scope(
+        eval,
+        fid,
+        wid,
+        crate::window::WindowLayoutQueryScope::Viewport,
+    )
+}
+
+fn compute_live_window_geometry_scope(
+    eval: &mut super::eval::Context,
+    fid: FrameId,
+    wid: WindowId,
+    scope: crate::window::WindowLayoutQueryScope,
+) -> Result<Option<WindowDisplaySnapshot>, Flow> {
     let Some(frame) = eval.frames.get(fid) else {
         return Ok(None);
     };
@@ -8840,7 +8850,7 @@ fn compute_live_window_geometry(
     {
         return Ok(None);
     }
-    match eval.query_window_layout(fid, wid) {
+    match eval.query_window_layout_scope(fid, wid, scope) {
         crate::window::WindowLayoutQueryOutcome::Ready(query) => Ok(query.into_geometry()),
         crate::window::WindowLayoutQueryOutcome::Unavailable => Ok(None),
         crate::window::WindowLayoutQueryOutcome::LayoutBusy => Err(signal(
@@ -9649,10 +9659,11 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
     obarray.define_special_variable("auto-fill-chars", auto_fill);
 
     // char-width-table: a char-table for character display widths.
-    // Official Emacs (character.c) creates it with default 1.
+    // GNU character.c:1112-1119 seeds default 1 plus C1/raw-byte width 4.
+    // Include characters.el Unicode ranges for contexts before Lisp bootstrap.
     obarray.set_symbol_value(
         "char-width-table",
-        make_char_table_value(Value::symbol("char-width-table"), Value::fixnum(1)),
+        crate::encoding::default_char_width_table(),
     );
 
     // translation-table-vector: vector recording all translation tables.

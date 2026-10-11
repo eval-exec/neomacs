@@ -15,15 +15,18 @@ use crate::emacs_core::value::LambdaParams;
 
 /// Scalar test configuration belongs to this test's compiler thread; no
 /// Lisp state or frame cache is shared with another mutator.
+/// The returned backend guard restores the enclosing scalar mode and keeps
+/// the legacy v2 producer selected independently of the opt profile.
 struct Knobs;
 impl Knobs {
-    fn enter() -> Self {
+    fn enter() -> (Self, impl Drop) {
+        let backend = compile::opt_mode_scope_for_test(compile::OptMode::Legacy);
         crate::test_utils::init_test_tracing();
         force_inline_for_test(Some(true));
         compile::force_inline2_for_test(Some(Inline2Mode::Named));
         compile::force_profit_gate_for_test(false);
         compile::force_deopt_for_test(false);
-        Self
+        (Self, backend)
     }
 }
 impl Drop for Knobs {
@@ -45,7 +48,7 @@ fn function(arity: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 32;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -382,8 +385,7 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
     );
     let observed = ctx
         .obarray
-        .symbol_value("named-runtime-observed-call")
-        .copied()
+        .symbol_value_copied("named-runtime-observed-call")
         .unwrap();
     assert_eq!(
         observed.cons_car(),

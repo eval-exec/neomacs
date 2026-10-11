@@ -590,7 +590,7 @@ fn assert_sink_only_cons_is_virtual_at_aset(
         source.executable_ops(),
         &source.constants,
         source.executable_gnu_byte_offset_map(),
-        source.params.required.len(),
+        source.params.fixed_arity().unwrap(),
     )
     .expect("exact sink repro CFG");
     let constants = source
@@ -604,7 +604,7 @@ fn assert_sink_only_cons_is_virtual_at_aset(
         constants: &constants,
         cfg: &cfg,
         params: ir::ParamShape {
-            required: source.params.required.len(),
+            required: source.params.fixed_arity().unwrap(),
             ..Default::default()
         },
         dynamic_prefix: 0,
@@ -669,12 +669,18 @@ fn assert_sink_only_cons_is_virtual_at_aset(
 #[cfg(feature = "jit")]
 fn sink_cannot_call_advised_aset(all_passes: bool) {
     use crate::emacs_core::jit::compile::opt_census::{SelectedTier, snapshot_leaf};
-    use crate::emacs_core::jit::compile::{self, NativeRun, OptAdmit, OptMode, OptPasses};
+    use crate::emacs_core::jit::compile::{
+        self, NativeRun, OptAdmit, OptEarlyMode, OptMode, OptPasses, OptProfitMode,
+    };
+    /// Scalar overrides belong to this test's compiler thread, with no Lisp state.
     struct Settings;
     impl Drop for Settings {
         fn drop(&mut self) {
             compile::force_opt_for_test(None, None);
             compile::force_opt_passes_for_test(None);
+            compile::force_opt_profit_for_test(None);
+            compile::force_opt_require_osr_for_test(None);
+            compile::force_opt_early_for_test(None);
             compile::force_profit_gate_for_test(true);
         }
     }
@@ -688,6 +694,11 @@ fn sink_cannot_call_advised_aset(all_passes: bool) {
             ..OptPasses::default()
         }
     }));
+    // This fixture verifies native Sink semantics through an explicit feedback
+    // upgrade, independently of the default list-loop admission policy.
+    compile::force_opt_profit_for_test(Some(OptProfitMode::Off));
+    compile::force_opt_require_osr_for_test(Some(false));
+    compile::force_opt_early_for_test(Some(OptEarlyMode::Off));
     compile::force_profit_gate_for_test(false);
     let expected = gnu_expect(
         "sink",
@@ -749,7 +760,7 @@ fn sink_cannot_call_advised_aset(all_passes: bool) {
     // Check before dereferencing the returned string: the old implementation
     // could already have collected the virtual cons's copied string.
     assert_eq!(
-        ctx.obarray.symbol_value("gnuop--sink-calls").copied(),
+        ctx.obarray.symbol_value_copied("gnuop--sink-calls"),
         Some(Value::make_int(0)),
         "Baset never invokes collecting advice"
     );

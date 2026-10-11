@@ -97,7 +97,8 @@ fn oracle_list_walks_detect_cycles_entered_late() {
     // GNU's FOR_EACH_TAIL Brent counter `q` is an unsigned short: cycles
     // entered past ~131K steps must still be found, by the same tail after
     // the same number of steps. Covers the PREDICATE and eq plist walks,
-    // put on a circular symbol plist, and length.
+    // put on a circular symbol plist, and length. The plist walks retain
+    // the pinned GNU schedule; length uses GNU Emacs 32 list_length data.
     let form = r#"(let* ((make (lambda (pairs cycle-pairs)
                      (let ((l (make-list (* 2 pairs) 'v)) (i 0) (c nil))
                        (setq c l)
@@ -134,7 +135,7 @@ fn oracle_list_walks_detect_cycles_entered_late() {
                              (circular-list (list 'circ (funcall index m (cadr err) limit))))))))))
               (mapcar (lambda (spec) (apply run spec)) '((5 2) (131071 1) (140000 3000))))"#;
     let expect = expect_test::expect![[
-        r#""OK ((5 2 (circ 8 8) (circ 8 8) (nil 8) (circ 8) (circ 8) nil (circ 8) (circ 6)) (131071 1 (circ 262140 131071) (circ 262140 131071) (nil 131071) (circ 262140) (circ 262140) nil (circ 262140) (circ 262140)) (140000 3000 (circ 278284 265142) (circ 278284 265142) (nil 265142) (circ 278284) (circ 278284) nil (circ 278284) (circ 278286)))""#
+        r#""OK ((5 2 (circ 8 8) (circ 8 8) (nil 8) (circ 8) (circ 8) nil (circ 8) (circ 8)) (131071 1 (circ 262140 131071) (circ 262140 131071) (nil 131071) (circ 262140) (circ 262140) nil (circ 262140) (circ 262140)) (140000 3000 (circ 278284 265142) (circ 278284 265142) (nil 265142) (circ 278284) (circ 278284) nil (circ 278284) (circ 278288)))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

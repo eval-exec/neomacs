@@ -35,8 +35,8 @@ fn test_pdump_round_trip_basic() {
 
     // Verify the symbol value survived
     assert_eq!(
-        loaded.obarray.symbol_value("test-pdump-var"),
-        Some(&Value::fixnum(42))
+        loaded.obarray.symbol_value_copied("test-pdump-var"),
+        Some(Value::fixnum(42))
     );
 }
 
@@ -187,9 +187,9 @@ fn test_pdump_bytecode_round_trips_image_resident() {
     // Classic constant-returning GNU bytecode: constants[0]=42, Breturn.
     eval.eval_str("(defvar bcarena-pdump-fn #[0 \"\\300\\207\" [42] 1])")
         .expect("defvar should evaluate");
-    let pre = *eval
+    let pre = eval
         .obarray
-        .symbol_value("bcarena-pdump-fn")
+        .symbol_value_copied("bcarena-pdump-fn")
         .expect("pre-dump value");
     assert_eq!(
         pre.veclike_type(),
@@ -206,9 +206,9 @@ fn test_pdump_bytecode_round_trips_image_resident() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
     let mut restored = load_from_dump(&dump_path).expect("load should succeed");
 
-    let post = *restored
+    let post = restored
         .obarray
-        .symbol_value("bcarena-pdump-fn")
+        .symbol_value_copied("bcarena-pdump-fn")
         .expect("restored value");
     assert_eq!(
         post.veclike_type(),
@@ -251,9 +251,9 @@ fn test_pdump_bytecode_round_trips_image_resident() {
         .eval_str("(funcall bcarena-pdump-fn)")
         .expect("bytecode runs after GC");
     assert_eq!(out2, Value::fixnum(42));
-    let after_gc = *restored
+    let after_gc = restored
         .obarray
-        .symbol_value("bcarena-pdump-fn")
+        .symbol_value_copied("bcarena-pdump-fn")
         .expect("value after GC");
     assert!(
         restored.tagged_heap.mapped_image_owns_for_test(after_gc),
@@ -412,8 +412,10 @@ fn file_pdump_stores_symbol_table_in_raw_mmap_section() {
 
     let loaded = load_from_dump(&dump_path).expect("load should succeed");
     assert_eq!(
-        loaded.obarray.symbol_value("pdump-symbol-section-probe"),
-        Some(&Value::fixnum(71))
+        loaded
+            .obarray
+            .symbol_value_copied("pdump-symbol-section-probe"),
+        Some(Value::fixnum(71))
     );
 }
 
@@ -448,9 +450,9 @@ fn file_pdump_loads_heap_string_bytes_from_mmap_image() {
     );
 
     let loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-string")
+        .symbol_value_copied("test-pdump-mapped-string")
         .expect("restored string symbol");
     let string = value.as_lisp_string().expect("restored string");
 
@@ -480,9 +482,9 @@ fn mapped_pdump_string_bytes_copy_only_on_mutation() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-copy-on-mutation")
+        .symbol_value_copied("test-pdump-copy-on-mutation")
         .expect("restored string symbol");
     let string = value.as_lisp_string().expect("restored string");
     assert!(
@@ -516,9 +518,9 @@ fn file_pdump_preserves_immovable_string_size_byte() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-immovable-string")
+        .symbol_value_copied("test-pdump-immovable-string")
         .expect("restored string symbol");
     let string = value.as_lisp_string().expect("restored string");
     assert_eq!(string.as_bytes(), &[0xC0, 0x87]);
@@ -539,9 +541,9 @@ fn file_pdump_preserves_rodata_string_with_static_relocation() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-rodata-string")
+        .symbol_value_copied("test-pdump-rodata-string")
         .expect("restored string symbol");
     let string = value.as_lisp_string().expect("restored string");
     assert_eq!(string.as_bytes(), b"rodata");
@@ -595,9 +597,9 @@ fn file_pdump_loads_string_text_props_from_mmap_object() {
     );
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-string-props")
+        .symbol_value_copied("test-pdump-mapped-string-props")
         .expect("restored string symbol");
 
     assert!(
@@ -610,9 +612,9 @@ fn file_pdump_loads_string_text_props_from_mmap_object() {
     );
 
     loaded.gc_collect_exact();
-    let value_after_gc = *loaded
+    let value_after_gc = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-string-props")
+        .symbol_value_copied("test-pdump-mapped-string-props")
         .expect("restored string symbol after GC");
     let runs = get_string_text_properties_for_value(value_after_gc).expect("text props after GC");
     let plist = list_to_vec(&runs[0].plist).expect("plist values");
@@ -643,9 +645,9 @@ fn file_pdump_loads_vector_slots_from_mmap_image() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-vector")
+        .symbol_value_copied("test-pdump-mapped-vector")
         .expect("restored vector symbol");
     let slots = value.as_vector_data().expect("restored vector");
 
@@ -668,9 +670,9 @@ fn file_pdump_loads_vector_slots_from_mmap_image() {
     );
 
     loaded.gc_collect_exact();
-    let value_after_gc = *loaded
+    let value_after_gc = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-vector")
+        .symbol_value_copied("test-pdump-mapped-vector")
         .expect("restored vector symbol after GC");
     assert_eq!(
         value_after_gc.as_vector_data().unwrap().as_slice()[2]
@@ -699,9 +701,9 @@ fn file_pdump_loads_record_object_from_mmap_image() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-record")
+        .symbol_value_copied("test-pdump-mapped-record")
         .expect("restored record symbol");
     let slots = value.as_record_data().expect("restored record");
 
@@ -722,9 +724,9 @@ fn file_pdump_loads_record_object_from_mmap_image() {
     );
 
     loaded.gc_collect_exact();
-    let value_after_gc = *loaded
+    let value_after_gc = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-record")
+        .symbol_value_copied("test-pdump-mapped-record")
         .expect("restored record symbol after GC");
     assert_eq!(
         value_after_gc.as_record_data().unwrap().as_slice()[1]
@@ -752,9 +754,9 @@ fn file_pdump_loads_lambda_object_from_mmap_image() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-lambda")
+        .symbol_value_copied("test-pdump-mapped-lambda")
         .expect("restored lambda symbol");
     let slots = value.closure_slots().expect("restored lambda slots");
 
@@ -775,9 +777,9 @@ fn file_pdump_loads_lambda_object_from_mmap_image() {
     );
 
     loaded.gc_collect_exact();
-    let value_after_gc = *loaded
+    let value_after_gc = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-lambda")
+        .symbol_value_copied("test-pdump-mapped-lambda")
         .expect("restored lambda symbol after GC");
     assert_eq!(
         value_after_gc.closure_slots().unwrap().as_slice()[1]
@@ -806,9 +808,9 @@ fn file_pdump_loads_cons_cells_from_mmap_image() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-cons")
+        .symbol_value_copied("test-pdump-mapped-cons")
         .expect("restored cons symbol");
 
     assert!(value.is_cons());
@@ -830,9 +832,9 @@ fn file_pdump_loads_cons_cells_from_mmap_image() {
     );
 
     loaded.gc_collect_exact();
-    let value_after_gc = *loaded
+    let value_after_gc = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-cons")
+        .symbol_value_copied("test-pdump-mapped-cons")
         .expect("restored cons symbol after GC");
     assert_eq!(
         value_after_gc
@@ -859,9 +861,9 @@ fn file_pdump_loads_float_objects_from_mmap_image() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-float")
+        .symbol_value_copied("test-pdump-mapped-float")
         .expect("restored float symbol");
 
     assert!(value.is_float());
@@ -872,9 +874,9 @@ fn file_pdump_loads_float_objects_from_mmap_image() {
     );
 
     loaded.gc_collect_exact();
-    let value_after_gc = *loaded
+    let value_after_gc = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-float")
+        .symbol_value_copied("test-pdump-mapped-float")
         .expect("restored float symbol after GC");
     assert_eq!(value_after_gc.xfloat(), std::f64::consts::PI);
 }
@@ -902,9 +904,9 @@ fn file_pdump_loads_marker_object_from_mmap_image() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-marker")
+        .symbol_value_copied("test-pdump-mapped-marker")
         .expect("restored marker symbol");
     let marker = value.as_marker_data().expect("restored marker");
 
@@ -918,9 +920,9 @@ fn file_pdump_loads_marker_object_from_mmap_image() {
     assert_eq!(marker.charpos, 7);
 
     loaded.gc_collect_exact();
-    let value_after_gc = *loaded
+    let value_after_gc = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-marker")
+        .symbol_value_copied("test-pdump-mapped-marker")
         .expect("restored marker symbol after GC");
     assert_eq!(
         value_after_gc
@@ -959,9 +961,9 @@ fn a_mapped_marker_set_into_a_buffer_keeps_tracking_edits_across_gcs() {
     let dump_path = dir.path().join("chained-marker.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-chained-marker")
+        .symbol_value_copied("test-pdump-chained-marker")
         .expect("restored marker symbol");
     assert!(
         loaded.pdump_image_contains_ptr(value.as_veclike_ptr().unwrap().cast::<u8>()),
@@ -1016,9 +1018,9 @@ fn file_pdump_loads_overlay_object_from_mmap_image() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let value = *loaded
+    let value = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-overlay")
+        .symbol_value_copied("test-pdump-mapped-overlay")
         .expect("restored overlay symbol");
     let overlay = value.as_overlay_data().expect("restored overlay");
     let plist = list_to_vec(&overlay.plist).expect("overlay plist");
@@ -1040,9 +1042,9 @@ fn file_pdump_loads_overlay_object_from_mmap_image() {
     );
 
     loaded.gc_collect_exact();
-    let value_after_gc = *loaded
+    let value_after_gc = loaded
         .obarray
-        .symbol_value("test-pdump-mapped-overlay")
+        .symbol_value_copied("test-pdump-mapped-overlay")
         .expect("restored overlay symbol after GC");
     let overlay_after_gc = value_after_gc.as_overlay_data().expect("overlay after GC");
     let plist_after_gc = list_to_vec(&overlay_after_gc.plist).expect("overlay plist after GC");
@@ -1073,8 +1075,8 @@ fn pdump_dumps_default_value_for_active_dynamic_plain_binding() {
 
     let loaded = load_from_dump(&dump_path).expect("load should succeed");
     assert_eq!(
-        loaded.obarray.symbol_value_id(sym),
-        Some(&Value::symbol("default-value")),
+        loaded.obarray.symbol_value_id_copied(sym),
+        Some(Value::symbol("default-value")),
         "pdump must serialize the top-level value, not the active dynamic binding"
     );
 }
@@ -1143,9 +1145,9 @@ fn the_stop_the_world_first_cycle_traces_each_image_veclike_once() {
     let dump_path = dir.path().join("premark.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let vector = *loaded
+    let vector = loaded
         .obarray
-        .symbol_value("premark-probe")
+        .symbol_value_copied("premark-probe")
         .expect("restored vector");
     assert!(
         loaded.tagged_heap.mapped_image_owns_for_test(vector),
@@ -1369,8 +1371,10 @@ fn test_file_load_records_pdumper_stats_without_running_after_pdump_load_hook() 
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     assert_eq!(
-        loaded.obarray.symbol_value("compat-pdump-hook-fired"),
-        Some(&Value::NIL)
+        loaded
+            .obarray
+            .symbol_value_copied("compat-pdump-hook-fired"),
+        Some(Value::NIL)
     );
 
     let forms = crate::emacs_core::value_reader::read_all("(pdumper-stats)", &test_ob()).unwrap();
@@ -1777,9 +1781,9 @@ fn test_restore_snapshot_preserves_lone_uninterned_symbol_identity() {
     let snapshot = snapshot_evaluator(&template);
 
     let restored = restore_snapshot(&snapshot).expect("restored snapshot should succeed");
-    let held = *restored
+    let held = restored
         .obarray
-        .symbol_value("compat-pdump-uninterned-holder")
+        .symbol_value_copied("compat-pdump-uninterned-holder")
         .expect("holder binding should exist");
     let held_id = held.as_symbol_id().expect("holder should contain a symbol");
     assert_eq!(
@@ -1816,9 +1820,9 @@ fn test_restore_snapshot_preserves_raw_unibyte_symbol_name_storage() {
         ("compat-pdump-raw-uninterned-holder", false),
         ("compat-pdump-raw-canonical-holder", true),
     ] {
-        let held = *restored
+        let held = restored
             .obarray
-            .symbol_value(holder)
+            .symbol_value_copied(holder)
             .expect("holder binding should exist");
         let held_id = held.as_symbol_id().expect("holder should contain a symbol");
         let restored_name = crate::emacs_core::intern::resolve_sym_lisp_string(held_id);
@@ -1842,9 +1846,9 @@ fn test_restore_snapshot_preserves_subr_name_identity_via_name_atoms() {
     let snapshot = snapshot_evaluator(&template);
 
     let restored = restore_snapshot(&snapshot).expect("restored snapshot should succeed");
-    let held = *restored
+    let held = restored
         .obarray
-        .symbol_value("compat-pdump-subr-holder")
+        .symbol_value_copied("compat-pdump-subr-holder")
         .expect("holder binding should exist");
 
     assert!(held.is_subr(), "holder should round-trip a subr object");
@@ -1872,8 +1876,8 @@ fn test_restore_snapshot_does_not_report_file_based_pdump_session() {
     assert_eq!(
         restored
             .obarray
-            .symbol_value("compat-pdump-snapshot-hook-fired"),
-        Some(&Value::NIL)
+            .symbol_value_copied("compat-pdump-snapshot-hook-fired"),
+        Some(Value::NIL)
     );
 
     let forms = crate::emacs_core::value_reader::read_all("(pdumper-stats)", &test_ob()).unwrap();
@@ -2189,7 +2193,7 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
     });
     function.ops = vec![Op::Constant(0), Op::Return];
     function.constants = vec![secret].into();
-    function.max_stack = 8;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     function.lexical = true;
     function.docstring = Some(crate::heap_types::LispString::from_unibyte(
         b"Lazy stub docstring.".to_vec(),
@@ -2209,9 +2213,9 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
-    let func = *loaded
+    let func = loaded
         .obarray
-        .symbol_value("pdump-lazy-probe")
+        .symbol_value_copied("pdump-lazy-probe")
         .expect("value cell should be restored");
     assert!(func.is_bytecode(), "restored value must be bytecode");
     let was_stub = func.bytecode_data_if_materialized().is_none();
@@ -2250,12 +2254,16 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
             .bytecode_data_if_materialized()
             .expect("the call must have materialized the stub");
         assert_eq!(
-            crate::emacs_core::intern::resolve_sym(data.params.required[0]),
+            crate::emacs_core::intern::resolve_sym(data.params.named().unwrap().required[0]),
             "pdump-lazy-a",
             "param symbols must resolve after the fallback-path id rewrite"
         );
         assert_eq!(
-            data.params.rest.map(crate::emacs_core::intern::resolve_sym),
+            data.params
+                .named()
+                .unwrap()
+                .rest
+                .map(crate::emacs_core::intern::resolve_sym),
             Some("pdump-lazy-c"),
         );
     }
@@ -2312,3 +2320,6 @@ mod bytecode_slot_objects;
 #[cfg(test)]
 #[path = "decode_hardening_test.rs"]
 mod decode_hardening;
+
+#[path = "bytecode_function_params.rs"]
+mod bytecode_function_params;

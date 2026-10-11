@@ -22,7 +22,7 @@ fn frame_shader_failure_is_visible_without_optional_lisp_library() {
     let mut eval = crate::emacs_core::Context::new();
     assert!(
         eval.obarray
-            .symbol_value("neomacs-frame-shader-error-functions")
+            .symbol_value_copied("neomacs-frame-shader-error-functions")
             .is_none(),
         "the -Q primitive path starts without neomacs-surface.el"
     );
@@ -52,8 +52,7 @@ fn frame_shader_failure_uses_customizable_hook_when_loaded() {
 
     let captured = eval
         .obarray
-        .symbol_value("neomacs-frame-shader-test-error")
-        .copied()
+        .symbol_value_copied("neomacs-frame-shader-test-error")
         .expect("hook captured the renderer error");
     assert_eq!(
         captured

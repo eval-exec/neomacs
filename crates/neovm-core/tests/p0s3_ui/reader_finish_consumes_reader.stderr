@@ -1,0 +1,15 @@
+error[E0382]: use of moved value: `reader`
+ --> tests/p0s3_ui/reader_finish_consumes_reader.rs:5:13
+  |
+3 | fn acknowledge_twice(reader: RootBatchReader<'_>) {
+  |                      ------ move occurs because `reader` has type `RootBatchReader<'_>`, which does not implement the `Copy` trait
+4 |     let _ = reader.finish();
+  |                    -------- `reader` moved due to this method call
+5 |     let _ = reader.finish();
+  |             ^^^^^^ value used here after move
+  |
+note: `RootBatchReader::<'r>::finish` takes ownership of the receiver `self`, which moves `reader`
+ --> src/tagged/transport/root_batch.rs
+  |
+  |     pub fn finish(mut self) -> Result<(), RootBatchError> {
+  |                       ^^^^

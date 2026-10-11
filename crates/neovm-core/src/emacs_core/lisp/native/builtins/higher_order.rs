@@ -683,11 +683,67 @@ pub(crate) fn builtin_mapcan(eval: &mut super::eval::Context, args: Vec<Value>) 
     builtin_nconc(mapped)
 }
 
+/// Direction is a sort policy, distinct from whether the input is reused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SortDirection {
+    Ascending,
+    Descending,
+}
+
+impl SortDirection {
+    fn is_descending(self) -> bool {
+        match self {
+            Self::Ascending => false,
+            Self::Descending => true,
+        }
+    }
+}
+
+impl From<Value> for SortDirection {
+    fn from(reverse: Value) -> Self {
+        if reverse.is_truthy() {
+            Self::Descending
+        } else {
+            Self::Ascending
+        }
+    }
+}
+
+/// GNU's legacy form reuses its input; the keyword form defaults to a copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SortMutation {
+    CopyInput,
+    MutateInput,
+}
+
+impl SortMutation {
+    fn mutates_input(self) -> bool {
+        match self {
+            Self::CopyInput => false,
+            Self::MutateInput => true,
+        }
+    }
+}
+
+impl From<Value> for SortMutation {
+    fn from(in_place: Value) -> Self {
+        if in_place.is_truthy() {
+            Self::MutateInput
+        } else {
+            Self::CopyInput
+        }
+    }
+}
+
+const _: () = assert!(size_of::<SortDirection>() == size_of::<bool>());
+const _: () = assert!(size_of::<SortMutation>() == size_of::<bool>());
+
+#[derive(Debug)]
 pub(crate) struct SortOptions {
     pub(crate) key_fn: Value,
     pub(crate) lessp_fn: Value,
-    pub(crate) reverse: bool,
-    pub(crate) in_place: bool,
+    pub(crate) reverse: SortDirection,
+    pub(crate) in_place: SortMutation,
 }
 
 /// A sort's `lessp' predicate, resolved once for the whole sort.
@@ -803,36 +859,46 @@ fn resolve_sort_function(eval: &super::eval::Context, function: Value) -> Value 
         .unwrap_or(function)
 }
 
-/// Root handles are owned by one sorting activation. Buffered native sorts
-/// defer publishing their local values until an actual Lisp/GC boundary.
-#[derive(Clone, Copy)]
-pub(crate) enum SortRootScope {
-    Runtime(crate::emacs_core::eval::SpecpdlRootScopeState),
-    Buffered(usize),
-}
-#[derive(Clone, Copy)]
-pub(crate) enum SortRootSlot {
-    Runtime(crate::emacs_core::eval::SpecpdlRootSlot),
-    Buffered(usize),
-}
-
-/// Roots for one merge's remaining temporary values. The range variant
-/// indexes a mutator-owned buffered arena; it never borrows heap backing or
-/// shares a root cache between sort activations or mutators.
-pub(crate) enum SortRootBatch {
-    Slots(Vec<SortRootSlot>),
-    Buffered(std::ops::Range<usize>),
-}
-
 /// A predicate frame remains live until the owning storage publishes its
 /// permutation and roots before an error can enter Lisp. Activation-local;
 /// no heap backing borrow or shared callback state is retained.
+#[derive(Debug)]
+#[must_use = "finish the native comparison to release its live predicate frame"]
 pub(crate) struct NativeSortCall {
     pub(crate) frame_base: usize,
     pub(crate) result: EvalResult,
 }
 
-pub(crate) trait SortRuntime {
+/// A saved specpdl boundary belonging to this mutator's sort. Restoration
+/// consumes the handle; it cannot be copied or sent to another mutator.
+#[derive(Debug)]
+#[must_use = "restore the sort's roots at the end of their scope"]
+pub(crate) struct SortRootScope {
+    state: crate::emacs_core::eval::SpecpdlRootScopeState,
+    _owner: std::marker::PhantomData<*const ()>,
+}
+
+/// A specpdl slot in the owning mutator, distinct from a buffered arena index.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SortRootSlot {
+    slot: crate::emacs_core::eval::SpecpdlRootSlot,
+    _owner: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_not_impl_any!(SortRootScope: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(SortRootSlot: Send, Sync);
+const _: () = assert!(
+    size_of::<SortRootScope>() == size_of::<crate::emacs_core::eval::SpecpdlRootScopeState>()
+);
+const _: () =
+    assert!(size_of::<SortRootSlot>() == size_of::<crate::emacs_core::eval::SpecpdlRootSlot>());
+
+/// One mutator's sorting runtime. Root handles are backend-specific: buffered
+/// arena indices cannot be passed to the specpdl backend, or vice versa.
+pub(crate) trait SortRuntime: sort_runtime_sealed::Sealed {
+    type RootScope: std::fmt::Debug;
+    type RootSlot: std::fmt::Debug;
+    type RootBatch: Default + std::fmt::Debug;
     fn resolve_sort_key(&mut self, key: Value) -> Value {
         key
     }
@@ -844,31 +910,15 @@ pub(crate) trait SortRuntime {
         arg1: Value,
     ) -> Result<Value, Flow>;
     fn root_sort_value(&mut self, value: Value);
-    fn save_sort_roots(&self) -> SortRootScope;
-    fn restore_sort_roots(&mut self, scope: SortRootScope);
-    fn root_sort_slot(&mut self, value: Value) -> SortRootSlot;
-    fn clear_sort_slot(&mut self, slot: &SortRootSlot);
-    fn set_sort_slot(&mut self, slot: &SortRootSlot, value: Value);
+    fn save_sort_roots(&self) -> Self::RootScope;
+    fn restore_sort_roots(&mut self, scope: Self::RootScope);
+    fn root_sort_slot(&mut self, value: Value) -> Self::RootSlot;
+    fn clear_sort_slot(&mut self, slot: &Self::RootSlot);
+    fn set_sort_slot(&mut self, slot: &Self::RootSlot, value: Value);
     /// Root the merge's temporary values before any comparison can collect.
-    #[inline]
-    fn root_sort_batch(&mut self, items: &[SortItem]) -> SortRootBatch {
-        SortRootBatch::Slots(
-            items
-                .iter()
-                .map(|item| self.root_sort_slot(item.value))
-                .collect(),
-        )
-    }
+    fn root_sort_batch(&mut self, values: impl Iterator<Item = Value>) -> Self::RootBatch;
     /// Clear only consumed temporaries, retaining GNU's remaining-value roots.
-    #[inline]
-    fn clear_sort_batch(&mut self, batch: &SortRootBatch, range: std::ops::Range<usize>) {
-        let SortRootBatch::Slots(slots) = batch else {
-            unreachable!("ordinary sort roots use individual runtime slots")
-        };
-        for slot in &slots[range] {
-            self.clear_sort_slot(slot);
-        }
-    }
+    fn clear_sort_batch(&mut self, batch: &Self::RootBatch, range: std::ops::Range<usize>);
     /// Resolve the predicate once, before the first comparison.
     fn resolve_sort_predicate(&mut self, predicate: Value) -> SortPredicate {
         if predicate.is_nil() {
@@ -912,30 +962,48 @@ pub(crate) trait SortRuntime {
     ) -> Result<std::cmp::Ordering, Flow>;
 }
 
+mod sort_runtime_sealed {
+    pub trait Sealed {}
+}
+
+impl sort_runtime_sealed::Sealed for super::eval::Context {}
+impl sort_runtime_sealed::Sealed for crate::emacs_core::bytecode::Vm<'_> {}
+
 impl SortRuntime for super::eval::Context {
-    fn save_sort_roots(&self) -> SortRootScope {
-        SortRootScope::Runtime(self.save_specpdl_roots())
+    type RootScope = SortRootScope;
+    type RootSlot = SortRootSlot;
+    type RootBatch = Vec<Self::RootSlot>;
+
+    fn save_sort_roots(&self) -> Self::RootScope {
+        SortRootScope {
+            state: self.save_specpdl_roots(),
+            _owner: std::marker::PhantomData,
+        }
     }
-    fn restore_sort_roots(&mut self, scope: SortRootScope) {
-        let SortRootScope::Runtime(scope) = scope else {
-            unreachable!()
-        };
-        self.restore_specpdl_roots(scope);
+    fn restore_sort_roots(&mut self, scope: Self::RootScope) {
+        self.restore_specpdl_roots(scope.state);
     }
-    fn root_sort_slot(&mut self, value: Value) -> SortRootSlot {
-        SortRootSlot::Runtime(self.push_specpdl_root_slot(value))
+    fn root_sort_slot(&mut self, value: Value) -> Self::RootSlot {
+        SortRootSlot {
+            slot: self.push_specpdl_root_slot(value),
+            _owner: std::marker::PhantomData,
+        }
     }
-    fn clear_sort_slot(&mut self, slot: &SortRootSlot) {
-        let SortRootSlot::Runtime(slot) = slot else {
-            unreachable!()
-        };
-        self.set_specpdl_root_slot(slot, Value::NIL);
+    fn clear_sort_slot(&mut self, slot: &Self::RootSlot) {
+        self.set_specpdl_root_slot(&slot.slot, Value::NIL);
     }
-    fn set_sort_slot(&mut self, slot: &SortRootSlot, value: Value) {
-        let SortRootSlot::Runtime(slot) = slot else {
-            unreachable!()
-        };
-        self.set_specpdl_root_slot(slot, value);
+    fn set_sort_slot(&mut self, slot: &Self::RootSlot, value: Value) {
+        self.set_specpdl_root_slot(&slot.slot, value);
+    }
+    #[inline]
+    fn root_sort_batch(&mut self, values: impl Iterator<Item = Value>) -> Self::RootBatch {
+        values.map(|value| self.root_sort_slot(value)).collect()
+    }
+    #[inline]
+    fn clear_sort_batch(&mut self, batch: &Self::RootBatch, range: std::ops::Range<usize>) {
+        for slot in &batch[range] {
+            self.clear_sort_slot(slot);
+        }
     }
     fn resolve_sort_key(&mut self, key: Value) -> Value {
         resolve_sort_function(self, key)
@@ -1008,14 +1076,25 @@ impl SortRuntime for super::eval::Context {
                 None => self.apply2_resolved_subr(designator, subr, epoch, arg0, arg1),
             },
             SortPredicate::NumericLessp { subr, epoch } => {
-                self.apply2_resolved_subr(subr, subr, epoch, arg0, arg1)
+                // Ordinary list/keyed-vector callers already publish and root
+                // their values. Keep the captured GNU funcall frame through
+                // finish even when the proven body returns a signal.
+                match self.begin_buffered_native_sort_call(predicate, arg0, arg1) {
+                    Some(call) => self.finish_buffered_native_sort_call(call),
+                    None => self.apply2_resolved_subr(subr, subr, epoch, arg0, arg1),
+                }
             }
             SortPredicate::StringLessp { subr, epoch } => {
-                self.apply2_sort_string_lessp(subr, epoch, arg0, arg1)
+                match self.begin_buffered_native_sort_call(predicate, arg0, arg1) {
+                    Some(call) => self.finish_buffered_native_sort_call(call),
+                    None => self.apply2_sort_string_lessp(subr, epoch, arg0, arg1),
+                }
             }
         }
     }
 
+    // This adapter belongs only to the buffered sort comparison path.
+    #[inline(always)]
     fn begin_native_sort_call(
         &mut self,
         predicate: SortPredicate,
@@ -1049,15 +1128,15 @@ pub(crate) fn parse_sort_options(args: &[Value]) -> Result<SortOptions, Flow> {
     // Old form: (sort SEQ PRED) — still supported, always in-place.
     let mut key_fn = Value::NIL;
     let mut lessp_fn = Value::NIL;
-    let mut reverse = false;
-    let mut in_place = false;
+    let mut reverse = SortDirection::Ascending;
+    let mut in_place = SortMutation::CopyInput;
 
     if args.len() == 2 {
         lessp_fn = args[1];
-        in_place = true;
+        in_place = SortMutation::MutateInput;
     } else if args.len().is_multiple_of(2) {
         return Err(signal(
-            "error",
+            LispCondition::Error,
             vec![Value::string("Invalid argument list")],
         ));
     } else if args.len() > 1 {
@@ -1066,11 +1145,11 @@ pub(crate) fn parse_sort_options(args: &[Value]) -> Result<SortOptions, Flow> {
             match args[i].as_symbol_name() {
                 Some(":key") => key_fn = args[i + 1],
                 Some(":lessp") => lessp_fn = args[i + 1],
-                Some(":reverse") => reverse = args[i + 1].is_truthy(),
-                Some(":in-place") => in_place = args[i + 1].is_truthy(),
+                Some(":reverse") => reverse = args[i + 1].into(),
+                Some(":in-place") => in_place = args[i + 1].into(),
                 _ => {
                     return Err(signal(
-                        "error",
+                        LispCondition::Error,
                         vec![Value::string("Invalid keyword argument"), args[i]],
                     ));
                 }
@@ -1122,7 +1201,7 @@ pub(crate) fn builtin_sort_slice(eval: &mut super::eval::Context, args: &[Value]
             let sorted_result = stable_sort_values_with(eval, &values, key_fn, lessp_fn, reverse);
             eval.restore_specpdl_roots(roots);
             let mut sorted_values = sorted_result?;
-            if in_place {
+            if in_place.mutates_input() {
                 // Re-walk the (rooted) chain at write-back time instead of
                 // caching interior cells across the Lisp predicate calls: a
                 // predicate that setcdr's the list would leave cached cells
@@ -1144,7 +1223,7 @@ pub(crate) fn builtin_sort_slice(eval: &mut super::eval::Context, args: &[Value]
         ValueKind::Veclike(VecLikeType::Vector) => {
             // GNU fns.c:2432-2439 sorts the vector's actual contents.
             // Retain a handle, never a Rust borrow, across Lisp callbacks.
-            let vector = if in_place {
+            let vector = if in_place.mutates_input() {
                 args[0]
             } else {
                 Value::vector(args[0].as_vector_data().unwrap().clone())
@@ -1169,7 +1248,7 @@ fn sort_vector_values(
     vector: Value,
     key_fn: Value,
     lessp_fn: Value,
-    reverse: bool,
+    reverse: SortDirection,
 ) -> Result<(), Flow> {
     let len = vector.as_vector_data().unwrap().len();
     if len < 2 {
@@ -1186,11 +1265,11 @@ fn sort_vector_values(
             SortPredicate::NumericLessp { .. } | SortPredicate::StringLessp { .. } => {
                 return sort_buffered::sort_native_vector(runtime, vector, predicate, reverse);
             }
-            _ => {}
+            SortPredicate::Generic(_) | SortPredicate::Subr { .. } => {}
         }
     }
     let mut storage = VectorSortStorage::new(vector);
-    if reverse {
+    if reverse.is_descending() {
         storage.reverse(0..len);
     }
     // GNU sort.c:1109 resolves the key only after the initial reversal.
@@ -1211,24 +1290,24 @@ fn sort_vector_values(
         storage.keys = Some(keys);
     }
     gnu_style_sort_items(runtime, &mut storage, predicate)?;
-    if reverse {
+    if reverse.is_descending() {
         storage.reverse(0..len);
     }
     Ok(())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct SortItem {
     value: Value,
     key: Value,
 }
 
-pub(crate) fn stable_sort_values_with(
-    runtime: &mut impl SortRuntime,
+pub(crate) fn stable_sort_values_with<R: SortRuntime>(
+    runtime: &mut R,
     values: &[Value],
     key_fn: Value,
     lessp_fn: Value,
-    reverse: bool,
+    reverse: SortDirection,
 ) -> Result<Vec<Value>, Flow> {
     if values.len() < 2 {
         return Ok(values.to_vec());
@@ -1241,6 +1320,22 @@ pub(crate) fn stable_sort_values_with(
         runtime.root_sort_value(callable);
     }
 
+    if key_fn.is_nil() {
+        // GNU fns.c:2381-2424 keeps one private value array for list sorts.
+        // Every value is rooted by the owning list invocation, including when
+        // a predicate changes the original list and collects its old elements.
+        let mut sorted = values.to_vec();
+        let mut storage = sort::UnkeyedListStorage::<R::RootSlot>::new(&mut sorted);
+        if reverse.is_descending() {
+            storage.reverse(0..values.len());
+        }
+        gnu_style_sort_items(runtime, &mut storage, lessp_fn)?;
+        if reverse.is_descending() {
+            storage.reverse(0..values.len());
+        }
+        return Ok(sorted);
+    }
+
     let mut items: Vec<SortItem> = values
         .iter()
         .copied()
@@ -1250,7 +1345,7 @@ pub(crate) fn stable_sort_values_with(
         })
         .collect();
 
-    if reverse {
+    if reverse.is_descending() {
         items.reverse();
     }
 
@@ -1277,7 +1372,7 @@ pub(crate) fn stable_sort_values_with(
 
     gnu_style_sort_items(runtime, items.as_mut_slice(), lessp_fn)?;
 
-    if reverse {
+    if reverse.is_descending() {
         items.reverse();
     }
 

@@ -80,3 +80,83 @@ fn gc_scratch_roots_without_an_active_heap_share_only_immediates() {
     ctx.gc_collect_exact();
     restore_scratch_gc_roots(saved);
 }
+
+fn propertized_echo_message(ctx: &mut Context) -> Vec<Value> {
+    let value = ctx
+        .eval_str("(propertize \"echo text\" 'face '(echo-face))")
+        .unwrap();
+    ctx.set_current_message(Some(value.as_lisp_string().unwrap().clone()));
+    let mut plists = Vec::new();
+    ctx.current_message
+        .as_ref()
+        .unwrap()
+        .intervals()
+        .for_each_root(|plist| plists.push(plist));
+    assert!(!plists.is_empty());
+    plists
+}
+
+#[test]
+fn gc_preserves_echo_message_interval_plists_without_the_source_string() {
+    let mut ctx = Context::new();
+    let plists = propertized_echo_message(&mut ctx);
+    for _ in 0..3 {
+        ctx.gc_collect_exact();
+        for &plist in &plists {
+            assert!(
+                ctx.tagged_heap.owns_heap_value_for_test(plist),
+                "current-message retained a reclaimed interval plist"
+            );
+        }
+    }
+    let value = ctx.current_message_value().unwrap();
+    let face = value
+        .as_lisp_string()
+        .unwrap()
+        .intervals()
+        .get_property_at_char_pos(crate::buffer::CharPos0::ZERO, Value::symbol("face"))
+        .unwrap();
+    assert_eq!(crate::emacs_core::print::print_value(&face), "(echo-face)");
+}
+
+#[test]
+fn gc_preserves_redisplay_message_snapshot_interval_plists() {
+    let mut ctx = Context::new();
+    let plists = propertized_echo_message(&mut ctx);
+    let signature = ctx.redisplay_signature();
+    ctx.set_current_message(None);
+    ctx.last_redisplay_signature = Some(signature);
+    for _ in 0..3 {
+        ctx.gc_collect_exact();
+        for &plist in &plists {
+            assert!(
+                ctx.tagged_heap.owns_heap_value_for_test(plist),
+                "redisplay snapshot retained a reclaimed interval plist"
+            );
+        }
+    }
+}
+
+#[test]
+fn gc_preserves_retained_load_name_interval_plists() {
+    let mut ctx = Context::new();
+    let value = ctx
+        .eval_str("(propertize \"retained-load.el\" 'face '(load-face))")
+        .unwrap();
+    ctx.loads_in_progress
+        .push(value.as_lisp_string().unwrap().clone());
+    let mut plists = Vec::new();
+    ctx.loads_in_progress[0]
+        .intervals()
+        .for_each_root(|plist| plists.push(plist));
+    assert!(!plists.is_empty());
+    for _ in 0..3 {
+        ctx.gc_collect_exact();
+        for &plist in &plists {
+            assert!(
+                ctx.tagged_heap.owns_heap_value_for_test(plist),
+                "load bookkeeping retained a reclaimed interval plist"
+            );
+        }
+    }
+}

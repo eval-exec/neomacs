@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 
 #[test]
 fn explicit_policy_is_required_and_invalid_values_preserve_baseline() {
@@ -289,4 +290,57 @@ fn legacy_body_acceptance_preserves_window_change_ownership() {
             .contains(&frame)
     );
     assert_eq!(eval.gnu_redisplay_hooks.dimensions.get(&window), Some(&old));
+}
+
+/// A Rust panic through the frontend callback must not evaluate Lisp while
+/// unwinding (P4.11): the transaction's Drop retires the pushed bindings
+/// storage-only, so neither the unwind form nor the variable watcher runs.
+#[test]
+fn redisplay_transaction_panic_fallback_never_calls_panicking_lisp() {
+    fn panic_on_recovery_lisp(eval: &mut Context, _: Vec<Value>) -> EvalResult {
+        eval.obarray
+            .set_symbol_value("redisplay-recovery-lisp-ran", Value::T);
+        panic!("Lisp callback must not run during Rust panic recovery");
+    }
+    let _policy = RedisplayHookPolicyGuard::gnu();
+    let mut eval = Context::new();
+    let sentinel = crate::emacs_core::intern::intern("redisplay-recovery-lisp-ran");
+    let symbol = crate::emacs_core::intern::intern("redisplay-recovery-watched");
+    eval.obarray.set_symbol_value_id(sentinel, Value::NIL);
+    eval.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    let count = eval.specpdl.len();
+    eval.register_subr(SubrSpec::new(
+        "redisplay-recovery-panic",
+        NativeFn::ContextVec(panic_on_recovery_lisp),
+        SubrArity::new(0, None),
+    ));
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        eval.try_specbind(symbol, Value::fixnum(20))
+            .expect("frontend binds saved value");
+        crate::emacs_core::advice::builtin_add_variable_watcher(
+            eval,
+            vec![
+                Value::from_sym_id(symbol),
+                Value::symbol("redisplay-recovery-panic"),
+            ],
+        )
+        .expect("register recovery watcher");
+        let cleanup = Value::list(vec![Value::symbol("redisplay-recovery-panic")]);
+        eval.specpdl.push(SpecBinding::UnwindProtect {
+            forms: cleanup,
+            lexenv: eval.lexenv,
+        });
+        panic!("simulate frontend panic");
+    }));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = eval.redisplay_with_force_flow(true);
+    }));
+    assert!(outcome.is_err());
+    assert_eq!(eval.obarray.symbol_value_id_or_nil(sentinel), Value::NIL);
+    assert_eq!(
+        eval.obarray.symbol_value_id_or_nil(symbol),
+        Value::fixnum(10)
+    );
+    assert_eq!(eval.specpdl.len(), count);
+    assert!(!eval.gnu_redisplay_hooks.active.is_active());
 }

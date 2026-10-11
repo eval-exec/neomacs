@@ -24,6 +24,7 @@ use crate::emacs_core::advice::{VariableWatcher, VariableWatcherList};
 use crate::emacs_core::autoload::{AutoloadEntry, AutoloadManager, AutoloadType};
 use crate::emacs_core::bookmark::{Bookmark, BookmarkManager};
 use crate::emacs_core::bytecode::chunk::ByteCodeFunction;
+use crate::emacs_core::bytecode::{FunctionParams, StackDepth};
 use crate::emacs_core::charset::{
     CharsetInfoSnapshot, CharsetMethodSnapshot, CharsetRegistrySnapshot, restore_charset_registry,
     snapshot_charset_registry,
@@ -1060,8 +1061,8 @@ impl<'a> LoadDecoder<'a> {
                         ops_sealed: false,
                         stack_verified: false,
                         constants: Vec::new().into(),
-                        max_stack: 0,
-                        params: LambdaParams::simple(Vec::new()),
+                        max_stack: StackDepth::ZERO,
+                        params: LambdaParams::simple(Vec::new()).into(),
                         arglist: Value::NIL,
                         lexical: false,
                         env: None,
@@ -1716,8 +1717,8 @@ impl<'a> LoadDecoder<'a> {
                     ops_sealed: false,
                     stack_verified: false,
                     constants: Vec::new().into(),
-                    max_stack: 0,
-                    params: LambdaParams::simple(Vec::new()),
+                    max_stack: StackDepth::ZERO,
+                    params: LambdaParams::simple(Vec::new()).into(),
                     arglist: Value::NIL,
                     lexical: false,
                     env: None,
@@ -1962,6 +1963,8 @@ impl<'a> LoadDecoder<'a> {
             ));
         }
         let header: BytecodeExtras = bytemuck::pod_read_unaligned(&bytes[..header_len]);
+        StackDepth::try_from(header.max_stack).map_err(DumpError::BytecodeStackDepth)?;
+        header.unnamed_params()?;
         let flags = header.flags;
 
         // v14 STUB-FINALIZE: the placeholder already wrote the lazy stub;
@@ -1972,15 +1975,28 @@ impl<'a> LoadDecoder<'a> {
         // MAP_PRIVATE, so the rewrite is process-local), and (c) honors the
         // eager-GNU toggle by materializing immediately, preserving that
         // mode's load-time decode+validate timing.
-        let n_ids = header.n_required as usize + header.n_optional as usize;
-        let ids_end = header_len + n_ids * 4;
+        let n_ids = usize::try_from(header.n_required)
+            .ok()
+            .zip(usize::try_from(header.n_optional).ok())
+            .and_then(|(required, optional)| required.checked_add(optional))
+            .ok_or(DumpError::BytecodeParameterShape)?;
+        let ids_end = n_ids
+            .checked_mul(4)
+            .and_then(|len| header_len.checked_add(len))
+            .ok_or(DumpError::BytecodeParameterShape)?;
         if bytes.len() < ids_end {
             return Err(DumpError::ImageFormatError(
                 "bytecode extras param ids exceed the region".into(),
             ));
         }
-        let extra_start = (ids_end + 7) & !7;
-        let extra_end = extra_start + header.n_extra_slots as usize * 8;
+        let extra_start = ids_end
+            .checked_add(7)
+            .ok_or(DumpError::BytecodeParameterShape)?
+            & !7;
+        let extra_end = (header.n_extra_slots as usize)
+            .checked_mul(8)
+            .and_then(|len| extra_start.checked_add(len))
+            .ok_or(DumpError::BytecodeParameterShape)?;
         if bytes.len() < extra_end {
             return Err(DumpError::ImageFormatError(
                 "bytecode extras slot words exceed the region".into(),
@@ -1992,7 +2008,10 @@ impl<'a> LoadDecoder<'a> {
             } else {
                 header.docstring_size as usize
             };
-            if bytes.len() < extra_end + doc_len {
+            if extra_end
+                .checked_add(doc_len)
+                .is_none_or(|end| bytes.len() < end)
+            {
                 return Err(DumpError::ImageFormatError(
                     "bytecode extras docstring exceeds the region".into(),
                 ));
@@ -2164,12 +2183,12 @@ impl<'a> LoadDecoder<'a> {
                     let restored_obj = restored
                         .as_char_table_obj()
                         .expect("make-char-table returned char-table");
-                    table.defalt = restored_obj.defalt;
-                    table.parent = restored_obj.parent;
-                    table.purpose = restored_obj.purpose;
-                    table.ascii = restored_obj.ascii;
-                    table.contents = restored_obj.contents;
-                    table.extras = restored_obj.extras.clone();
+                    table.set_default(restored_obj.defalt);
+                    table.set_parent(restored_obj.parent);
+                    table.set_purpose(restored_obj.purpose);
+                    table.set_ascii(restored_obj.ascii);
+                    table.copy_contents(&restored_obj.contents);
+                    table.copy_extras(restored_obj.extras.as_slice());
                 });
             }
             DumpHeapObject::SubCharTable {
@@ -2187,9 +2206,9 @@ impl<'a> LoadDecoder<'a> {
                     let restored_obj = restored
                         .as_sub_char_table_obj()
                         .expect("make-sub-char-table returned sub-char-table");
-                    table.depth = restored_obj.depth;
-                    table.min_char = restored_obj.min_char;
-                    table.contents = restored_obj.contents.clone();
+                    // The placeholder already has the dump's depth,
+                    // min_char and slot count. Restore only its value slots.
+                    table.copy_contents(restored_obj.contents.as_slice());
                 });
             }
             DumpHeapObject::HashTable(ht) => {
@@ -2645,12 +2664,19 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
         ])));
     }
     let optional = ids.split_off(header.n_required as usize);
-    let params = LambdaParams {
-        required: ids,
-        optional,
-        rest: (flags & BC_FLAG_HAS_REST != 0)
-            .then_some(crate::emacs_core::intern::SymId(header.rest_sym)),
-    };
+    // SAFETY: stub finalization checked the tag, depth and fixed-up arglist
+    // mode before publishing any stub to the evaluator or GC.
+    let params = header
+        .unnamed_params()
+        .expect("load-validated parameter metadata")
+        .unwrap_or_else(|| {
+            FunctionParams::Named(LambdaParams {
+                required: ids,
+                optional,
+                rest: (flags & BC_FLAG_HAS_REST != 0)
+                    .then_some(crate::emacs_core::intern::SymId(header.rest_sym)),
+            })
+        });
 
     let mut cursor = (ids_end + 7) & !7;
     let n_extra = header.n_extra_slots as usize;
@@ -2700,7 +2726,11 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
         // Fresh allocation at materialization time: born live under any
         // in-progress cycle (allocation coloring), so the stub walker's
         // "no synthesized child" stance is correct by construction.
-        crate::emacs_core::builtins::lambda_params_to_value(&params)
+        crate::emacs_core::builtins::lambda_params_to_value(
+            params
+                .named()
+                .expect("only Named metadata can omit the original arglist"),
+        )
     };
 
     let mut function = ByteCodeFunction {
@@ -2708,7 +2738,7 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
         ops: Vec::new(),
         stack_verified: false,
         constants,
-        max_stack: header.max_stack,
+        max_stack: StackDepth::try_from(header.max_stack).expect("load-validated stack depth"),
         params,
         arglist,
         lexical: flags & BC_FLAG_LEXICAL != 0,
@@ -2827,7 +2857,13 @@ pub(crate) unsafe fn stub_params_required_only(
     };
     let header: BytecodeExtras =
         unsafe { std::ptr::read_unaligned(extras_ptr.cast::<BytecodeExtras>()) };
-    header.n_optional == 0 && header.flags & BC_FLAG_HAS_REST == 0
+    header
+        .unnamed_params()
+        .expect("load-validated parameter metadata")
+        .map_or(
+            header.n_optional == 0 && header.flags & BC_FLAG_HAS_REST == 0,
+            |params| params.fixed_arity().is_some(),
+        )
 }
 
 /// A LAZY stub's required-parameter count when it takes ONLY required
@@ -2847,8 +2883,14 @@ pub(crate) unsafe fn stub_required_only_arity(
     };
     let header: BytecodeExtras =
         unsafe { std::ptr::read_unaligned(extras_ptr.cast::<BytecodeExtras>()) };
-    (header.n_optional == 0 && header.flags & BC_FLAG_HAS_REST == 0)
-        .then_some(header.n_required as usize)
+    match header
+        .unnamed_params()
+        .expect("load-validated parameter metadata")
+    {
+        Some(params) => params.fixed_arity(),
+        None => (header.n_optional == 0 && header.flags & BC_FLAG_HAS_REST == 0)
+            .then_some(header.n_required as usize),
+    }
 }
 
 pub(super) fn load_lisp_string(dump: &DumpLispString) -> LispString {
@@ -2892,8 +2934,12 @@ pub(crate) fn dump_bytecode(
             .iter()
             .map(|value| encoder.dump_value(value))
             .collect(),
-        max_stack: bc.max_stack,
-        params: dump_lambda_params(&bc.params),
+        max_stack: bc.max_stack.get() as u64,
+        params: match &bc.params {
+            FunctionParams::Stack(template) => DumpFunctionParams::Stack(template.raw()),
+            FunctionParams::Dynamic(_) => DumpFunctionParams::Dynamic,
+            FunctionParams::Named(params) => DumpFunctionParams::Named(dump_lambda_params(params)),
+        },
         arglist: Some(encoder.dump_value(&bc.arglist)),
         lexical: bc.lexical,
         env: encoder.dump_opt_value(&bc.env),
@@ -4571,11 +4617,38 @@ fn load_bytecode_owned(
             (Vec::new(), Some(bytes))
         }
     };
-    let params = load_lambda_params_owned(bc.params);
-    let arglist = bc
-        .arglist
-        .map(|value| decoder.load_value_owned(value))
-        .unwrap_or_else(|| crate::emacs_core::builtins::lambda_params_to_value(&params));
+    let original_arglist = bc.arglist.map(|value| decoder.load_value_owned(value));
+    let params = match bc.params {
+        DumpFunctionParams::Stack(raw) => {
+            if !(Value::MOST_NEGATIVE_FIXNUM..=Value::MOST_POSITIVE_FIXNUM).contains(&raw) {
+                return Err(DumpError::BytecodeParameterShape);
+            }
+            if original_arglist.is_some_and(|arglist| arglist.as_fixnum() != Some(raw)) {
+                return Err(DumpError::BytecodeParameterShape);
+            }
+            FunctionParams::Stack(raw.into())
+        }
+        DumpFunctionParams::Dynamic => {
+            match FunctionParams::try_from(
+                original_arglist.ok_or(DumpError::BytecodeParameterShape)?,
+            ) {
+                Ok(FunctionParams::Dynamic(params)) => FunctionParams::Dynamic(params),
+                Ok(FunctionParams::Stack(_) | FunctionParams::Named(_)) | Err(_) => {
+                    return Err(DumpError::BytecodeParameterShape);
+                }
+            }
+        }
+        DumpFunctionParams::Named(params) => {
+            FunctionParams::Named(load_lambda_params_owned(params))
+        }
+    };
+    let arglist = original_arglist.unwrap_or_else(|| match &params {
+        FunctionParams::Stack(template) => Value::fixnum(template.raw()),
+        FunctionParams::Dynamic(params) => params.value(),
+        FunctionParams::Named(params) => {
+            crate::emacs_core::builtins::lambda_params_to_value(params)
+        }
+    });
     let mut function = ByteCodeFunction {
         source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
         ops,
@@ -4589,7 +4662,7 @@ fn load_bytecode_owned(
                 .collect::<Vec<_>>()
                 .into(),
         },
-        max_stack: bc.max_stack,
+        max_stack: StackDepth::try_from(bc.max_stack).map_err(DumpError::BytecodeStackDepth)?,
         params,
         arglist,
         lexical: bc.lexical,

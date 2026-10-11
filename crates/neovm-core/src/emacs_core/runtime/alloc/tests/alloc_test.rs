@@ -2,6 +2,10 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::list_to_vec;
 
+#[cfg(test)]
+#[path = "boundary_numbers.rs"]
+mod boundary_numbers;
+
 #[test]
 fn register_bootstrap_vars_matches_gnu_alloc_defaults() {
     crate::test_utils::init_test_tracing();
@@ -9,7 +13,7 @@ fn register_bootstrap_vars_matches_gnu_alloc_defaults() {
     register_bootstrap_vars(&mut obarray);
 
     assert_eq!(
-        obarray.symbol_value("gc-cons-threshold").copied(),
+        obarray.symbol_value_copied("gc-cons-threshold"),
         Some(Value::fixnum(800_000))
     );
     // `garbage-collection-messages' is a GNU `DEFVAR_BOOL' (`src/alloc.c:7459'),
@@ -17,25 +21,21 @@ fn register_bootstrap_vars_matches_gnu_alloc_defaults() {
     // `every_gnu_defvar_bool_variable_is_bound_and_reads_back_canonically'
     // pins its default.
     assert_eq!(
-        obarray.symbol_value("post-gc-hook").copied(),
+        obarray.symbol_value_copied("post-gc-hook"),
         Some(Value::NIL)
     );
+    assert_eq!(obarray.symbol_value_copied("memory-full"), Some(Value::NIL));
     assert_eq!(
-        obarray.symbol_value("memory-full").copied(),
-        Some(Value::NIL)
-    );
-    assert_eq!(
-        obarray.symbol_value("gcs-done").copied(),
+        obarray.symbol_value_copied("gcs-done"),
         Some(Value::fixnum(0))
     );
     assert_eq!(
-        obarray.symbol_value("pure-bytes-used").copied(),
+        obarray.symbol_value_copied("pure-bytes-used"),
         Some(Value::fixnum(0))
     );
 
     let signal_data = obarray
-        .symbol_value("memory-signal-data")
-        .copied()
+        .symbol_value_copied("memory-signal-data")
         .expect("memory-signal-data");
     let items = list_to_vec(&signal_data).expect("memory-signal-data list");
     assert_eq!(items.len(), 2);
@@ -52,22 +52,18 @@ fn evaluator_binds_alloc_bootstrap_vars() {
     let eval = Context::new();
     let obarray = eval.obarray();
 
+    assert_eq!(obarray.symbol_value_copied("memory-full"), Some(Value::NIL));
     assert_eq!(
-        obarray.symbol_value("memory-full").copied(),
+        obarray.symbol_value_copied("post-gc-hook"),
         Some(Value::NIL)
     );
     assert_eq!(
-        obarray.symbol_value("post-gc-hook").copied(),
-        Some(Value::NIL)
-    );
-    assert_eq!(
-        obarray.symbol_value("pure-bytes-used").copied(),
+        obarray.symbol_value_copied("pure-bytes-used"),
         Some(Value::fixnum(0))
     );
 
     let signal_data = obarray
-        .symbol_value("memory-signal-data")
-        .copied()
+        .symbol_value_copied("memory-signal-data")
         .expect("memory-signal-data");
     let items = list_to_vec(&signal_data).expect("memory-signal-data list");
     assert_eq!(items[0], Value::symbol("error"));

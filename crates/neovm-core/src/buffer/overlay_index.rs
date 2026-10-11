@@ -568,7 +568,10 @@ impl OverlayIndex {
                     .start(),
             )
         });
-        assert!(inserted, "new interval already existed in GNU order mirror");
+        assert!(
+            inserted.is_ok(),
+            "new interval already existed in GNU order mirror"
+        );
         drop(intervals);
         if let Some(endpoints) = self.endpoints.get_mut() {
             assert!(endpoints.insert(range.start(), EndpointKind::Start, overlay));
@@ -606,7 +609,10 @@ impl OverlayIndex {
                         .expect("batch GNU order references an unattached overlay"),
                 )
             });
-            assert!(inserted, "validated batch contains duplicate identity");
+            assert!(
+                inserted.is_ok(),
+                "validated batch contains duplicate identity"
+            );
             starts.insert(identity, range.start());
         };
         match order {
@@ -648,7 +654,7 @@ impl OverlayIndex {
     pub(super) fn detach(&mut self, overlay: Value) -> Option<EmacsByteRange> {
         let (range, _) = self.intervals.write().take(overlay)?;
         assert!(
-            self.gnu_order.remove(OverlayIdentity::of(overlay)),
+            self.gnu_order.remove(OverlayIdentity::of(overlay)).is_ok(),
             "indexed overlay missing from GNU order mirror"
         );
         if let Some(endpoints) = self.endpoints.get_mut() {
@@ -704,7 +710,7 @@ impl OverlayIndex {
                     debug_assert_eq!(taken.0, old_range);
                 }
                 assert!(
-                    self.gnu_order.remove(OverlayIdentity::of(overlay)),
+                    self.gnu_order.remove(OverlayIdentity::of(overlay)).is_ok(),
                     "relocated overlay missing from GNU order mirror"
                 );
                 if let Some(endpoints) = self.endpoints.get_mut() {
@@ -765,7 +771,7 @@ impl OverlayIndex {
                         })
                 };
                 assert!(
-                    order_inserted,
+                    order_inserted.is_ok(),
                     "relocated overlay retained a GNU order node"
                 );
             }
@@ -807,9 +813,13 @@ impl OverlayIndex {
                 if remap.old_begin != remap.new_begin {
                     let identity = OverlayIdentity::of(remap.overlay);
                     current.get_mut(&identity).expect("snapshot identity").0 = remap.new_begin;
-                    assert!(self.gnu_order.reinsert_by(identity, |existing| {
-                        remap.new_begin.cmp(&current[&existing].0)
-                    }));
+                    assert!(
+                        self.gnu_order
+                            .reinsert_by(identity, |existing| {
+                                remap.new_begin.cmp(&current[&existing].0)
+                            })
+                            .is_ok()
+                    );
                 }
             }
             self.gnu_order.for_each_inorder(|identity| {
@@ -935,7 +945,7 @@ impl OverlayIndex {
         let front_preorder = self.gnu_order.subset_in_preorder(&front_candidates);
         for identity in &front_preorder {
             assert!(
-                self.gnu_order.remove(*identity),
+                self.gnu_order.remove(*identity).is_ok(),
                 "front-advancing overlay missing from GNU order mirror"
             );
         }
@@ -1153,7 +1163,7 @@ impl OverlayIndex {
         // removal order because red-black topology affects later insertion.
         for identity in evaporated.into_iter().rev() {
             assert!(
-                self.gnu_order.remove(identity),
+                self.gnu_order.remove(identity).is_ok(),
                 "evaporated overlay missing from GNU order mirror"
             );
         }
@@ -1224,7 +1234,7 @@ impl OverlayIndex {
                         )
                     });
             assert!(
-                order_inserted,
+                order_inserted.is_ok(),
                 "reinserted overlay retained a GNU order node"
             );
         }

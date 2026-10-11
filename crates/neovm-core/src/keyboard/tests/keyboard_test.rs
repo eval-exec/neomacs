@@ -22,6 +22,51 @@ fn settled_point(
 use super::*;
 
 #[test]
+fn gc_preserves_parked_keyboard_prompt_interval_plists() {
+    let mut ctx = crate::emacs_core::Context::new();
+    let prompt = ctx
+        .eval_str("(propertize \"Key: \" 'face '(prompt-face))")
+        .unwrap()
+        .as_lisp_string()
+        .unwrap()
+        .clone();
+    let mut plists = Vec::new();
+    prompt.intervals().for_each_root(|root| plists.push(root));
+    assert!(!plists.is_empty());
+    let original_terminal = ctx.command_loop.keyboard.active_terminal_id;
+    ctx.command_loop.keyboard.kboard.key_echo_state = KeyEchoState::Immediate {
+        prompt: Some(prompt),
+    };
+    ctx.command_loop
+        .keyboard
+        .select_terminal(original_terminal + 1);
+    for _ in 0..3 {
+        ctx.gc_collect_exact();
+        for &plist in &plists {
+            assert!(
+                ctx.tagged_heap.owns_heap_value_for_test(plist),
+                "parked keyboard retained a reclaimed prompt interval plist"
+            );
+        }
+    }
+    ctx.command_loop.keyboard.select_terminal(original_terminal);
+    let KeyEchoState::Immediate {
+        prompt: Some(prompt),
+    } = &ctx.command_loop.keyboard.kboard.key_echo_state
+    else {
+        panic!("restoring the keyboard lost its prompt");
+    };
+    let face = prompt
+        .intervals()
+        .get_property_at_char_pos(crate::buffer::CharPos0::ZERO, Value::symbol("face"))
+        .unwrap();
+    assert_eq!(
+        crate::emacs_core::print::print_value(&face),
+        "(prompt-face)"
+    );
+}
+
+#[test]
 fn discrete_scroll_preserves_horizontal_direction_and_multiple_steps() {
     let mut eval = crate::emacs_core::Context::new();
     let buffer = eval.buffer_manager_mut().create_buffer("wheel-steps");

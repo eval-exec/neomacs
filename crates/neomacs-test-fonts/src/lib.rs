@@ -38,6 +38,17 @@ const NOTO_COLOR_EMOJI_NAME: &str = "noto-color-emoji-2.051.ttf";
 const NOTO_COLOR_EMOJI_URL: &str = "https://raw.githubusercontent.com/googlefonts/noto-emoji/8998f5dd683424a73e2314a8c1f1e359c19e8742/fonts/NotoColorEmoji.ttf";
 const NOTO_COLOR_EMOJI_SHA256: &str =
     "72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b";
+// The layered-color build of the same family, as Google Fonts ships it. It
+// carries COLR version 1 (`BaseGlyphList` paint graphs), CPAL, an `SVG `
+// fallback table and a `glyf` table whose emoji outlines are empty — the
+// combination that makes a COLRv0-only rasterizer draw nothing.
+const NOTO_COLOR_EMOJI_COLRV1_NAME: &str = "noto-color-emoji-colrv1.ttf";
+const NOTO_COLOR_EMOJI_COLRV1_URL: &str = "https://raw.githubusercontent.com/google/fonts/142c8963e7606b510c93a644c82a4c4cdeae6ef9/ofl/notocoloremoji/NotoColorEmoji-Regular.ttf";
+const NOTO_COLOR_EMOJI_COLRV1_SHA256: &str =
+    "4d82a18d8d95f60ba883ce242bbadbf84a576e987745dd7ba38d71c67cff2d73";
+const NABLA_NAME: &str = "nabla.ttf";
+const NABLA_URL: &str = "https://raw.githubusercontent.com/google/fonts/34a2c3daeeb2715576af0786ae4e9dc6c7d8ca2a/ofl/nabla/Nabla%5BEDPT,EHLT%5D.ttf";
+const NABLA_SHA256: &str = "e45cec60eb2099b4b4ffee8ebe005d1d3060771071ede1caeeeb12e37a2c00ae";
 const MPLUS_1_CODE_THIN_NAME: &str = "MPLUS1Code-Thin.ttf";
 const MPLUS_1_CODE_THIN_URL: &str = "https://raw.githubusercontent.com/coz-m/MPLUS_FONTS/9e2b62ba986047127eb0a73b3ca70d75a50114bd/fonts/MPLUS1Code/ttf/MPLUS1Code-Thin.ttf";
 const MPLUS_1_CODE_THIN_SHA256: &str =
@@ -86,6 +97,8 @@ static WOFF2_COLLECTION_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static LXGW_NERD_REGULAR_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static MPLUS_1_CODE_THIN_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static NOTO_COLOR_EMOJI_COLRV1_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static NABLA_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 
 /// The reported dual-width fixed-pitch font from issue #516, pinned to v3.1.0.
 #[must_use]
@@ -250,6 +263,44 @@ pub fn noto_color_emoji_2_051() -> &'static Path {
             .unwrap_or_else(|error| {
                 panic!("failed to prepare pinned Noto Color Emoji test font: {error}")
             })
+        })
+        .as_path()
+}
+
+/// Download and verify the COLRv1 build of Noto Color Emoji.
+///
+/// Its emoji glyphs are painted by COLR version 1 paint graphs and their
+/// `glyf` outlines are empty, so it draws nothing unless the rasterizer
+/// traverses `BaseGlyphList`.  Unlike the bitmap build, this face also gives
+/// the monochrome-outline fallback nothing to show.
+#[must_use]
+pub fn noto_color_emoji_colrv1() -> &'static Path {
+    NOTO_COLOR_EMOJI_COLRV1_FIXTURE
+        .get_or_init(|| {
+            prepare_pinned_file(
+                NOTO_COLOR_EMOJI_COLRV1_NAME,
+                NOTO_COLOR_EMOJI_COLRV1_URL,
+                NOTO_COLOR_EMOJI_COLRV1_SHA256,
+            )
+            .unwrap_or_else(|error| {
+                panic!("failed to prepare pinned COLRv1 Noto Color Emoji test font: {error}")
+            })
+        })
+        .as_path()
+}
+
+/// Nabla: a variable COLRv1 display face (axes `EDPT` and `EHLT`).
+///
+/// Its paint graph varies — the `EDPT` axis drives which of the P0..P3
+/// isometric layers render — so it is the fixture for color glyphs that must
+/// follow a resolved variable-font instance.  It also carries an `SVG `
+/// table, giving a second real document to render.
+#[must_use]
+pub fn nabla_color_colrv1() -> &'static Path {
+    NABLA_FIXTURE
+        .get_or_init(|| {
+            prepare_pinned_file(NABLA_NAME, NABLA_URL, NABLA_SHA256)
+                .unwrap_or_else(|error| panic!("failed to prepare pinned Nabla test font: {error}"))
         })
         .as_path()
 }

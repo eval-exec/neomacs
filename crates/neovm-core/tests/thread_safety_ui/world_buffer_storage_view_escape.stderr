@@ -1,0 +1,5 @@
+error[E0515]: cannot return reference to local variable `manager`
+ --> tests/thread_safety_ui/world_buffer_storage_view_escape.rs:5:5
+  |
+5 |     &manager
+  |     ^^^^^^^^ returns a reference to data owned by the current function

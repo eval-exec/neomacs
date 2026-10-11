@@ -9,8 +9,8 @@ use super::syntax::{SyntaxClass, SyntaxTable};
 use super::textprop::{buffer_overlay_property_at_byte_pos, lookup_buffer_text_property};
 use super::value::{Value, ValueKind, VecLikeType, lexenv_lookup};
 use crate::buffer::{
-    AccessibleEmacsByteRange, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange,
-    LispCharPos1,
+    AccessibleEmacsByteRange, BufferLispPos, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos,
+    EmacsByteRange, LispCharPos1,
 };
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
@@ -139,7 +139,7 @@ fn dynamic_or_global_symbol_value(eval: &super::eval::Context, name: &str) -> Op
         return Some(v);
     }
 
-    eval.obarray.symbol_value(name).cloned()
+    eval.obarray.symbol_value_copied(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -261,8 +261,7 @@ pub(crate) fn check_point_motion_hooks(
     }
     let inhibit = eval
         .obarray
-        .symbol_value_id(inhibit_point_motion_hooks_sym())
-        .cloned()
+        .symbol_value_id_copied(inhibit_point_motion_hooks_sym())
         .unwrap_or(Value::NIL);
     if inhibit.is_truthy() {
         return Ok(());
@@ -437,8 +436,7 @@ pub(crate) fn adjust_for_intangible(
 ) -> EmacsBytePos {
     let inhibit = eval
         .obarray
-        .symbol_value_id(inhibit_point_motion_hooks_sym())
-        .cloned()
+        .symbol_value_id_copied(inhibit_point_motion_hooks_sym())
         .unwrap_or(Value::NIL);
     if inhibit.is_truthy() {
         return pos;
@@ -590,7 +588,7 @@ pub(crate) fn builtin_eolp_0(ctx: &mut super::eval::Context) -> EvalResult {
 pub(crate) fn pos_bol_compute(
     ctx: &super::eval::Context,
     scan_count: i64,
-) -> Result<(i64, i64, i64), Flow> {
+) -> Result<(BufferLispPos, BufferLispPos, i64), Flow> {
     let buf = current_buffer_in_manager(&ctx.buffers)?;
     let accessible = buf.accessible_emacs_byte_region();
     let begv = accessible.start().get();
@@ -614,8 +612,8 @@ pub(crate) fn pos_bol_compute(
         line_beginning_byte_narrowed(buf, pos, begv)
     };
     Ok((
-        byte_to_char_pos(buf, EmacsBytePos::new(bol)),
-        byte_to_char_pos(buf, point),
+        buf.emacs_byte_pos_to_position(EmacsBytePos::new(bol)),
+        buf.emacs_byte_pos_to_position(point),
         moved,
     ))
 }
@@ -626,7 +624,7 @@ pub(crate) fn pos_bol_compute(
 pub(crate) fn pos_eol_compute(
     ctx: &super::eval::Context,
     scan_count: i64,
-) -> Result<(i64, i64), Flow> {
+) -> Result<(BufferLispPos, BufferLispPos), Flow> {
     let buf = current_buffer_in_manager(&ctx.buffers)?;
     let accessible = buf.accessible_emacs_byte_region();
     let begv = accessible.start().get();
@@ -646,8 +644,8 @@ pub(crate) fn pos_eol_compute(
         line_end_byte_narrowed(buf, pos, zv)
     };
     Ok((
-        byte_to_char_pos(buf, EmacsBytePos::new(eol)),
-        byte_to_char_pos(buf, point),
+        buf.emacs_byte_pos_to_position(EmacsBytePos::new(eol)),
+        buf.emacs_byte_pos_to_position(point),
     ))
 }
 
@@ -676,8 +674,8 @@ pub(crate) fn builtin_line_beginning_position_1(
     crate::emacs_core::builtins::builtin_constrain_to_field_5(
         ctx,
         &[
-            Value::fixnum(bol_charpos),
-            Value::fixnum(orig_charpos),
+            Value::from_fixnum(bol_charpos.into()),
+            Value::from_fixnum(orig_charpos.into()),
             if count != 0 { Value::T } else { Value::NIL },
             Value::T,
             Value::NIL,
@@ -707,8 +705,8 @@ pub(crate) fn builtin_line_end_position_1(ctx: &mut super::eval::Context, n: Val
     crate::emacs_core::builtins::builtin_constrain_to_field_5(
         ctx,
         &[
-            Value::fixnum(eol_charpos),
-            Value::fixnum(orig_charpos),
+            Value::from_fixnum(eol_charpos.into()),
+            Value::from_fixnum(orig_charpos.into()),
             Value::NIL,
             Value::T,
             Value::NIL,
@@ -962,23 +960,42 @@ pub(crate) fn builtin_end_of_line_1(eval: &mut super::eval::Context, n: Value) -
 /// `BEGV` / `ZV` (the narrowing region), not the absolute buffer
 /// extents — `forward-char` must clamp to and signal against those
 /// fields, otherwise narrowing is silently ignored (audit §7.1).
-pub(crate) fn builtin_forward_char(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    crate::emacs_core::error::expect_args_range("forward-char", &args, 0, 1)?;
-    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_forward_char_1(eval, arg(0))
-}
-/// `forward-char` as registered: fixed arity 1, called straight off the bytecode
-/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-/// The `Vec` entry point above serves Rust callers.
+///
+/// Registered with fixed arity 1, called straight off the bytecode stack like
+/// GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 pub(crate) fn builtin_forward_char_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
-    let args: [Value; 1] = [n];
-    let n = if args.is_empty() || args[0].is_nil() {
+    move_characters(eval, n, CharacterMotion::Forward)
+}
+
+/// Direction of a character-count request. Counts remain integers through
+/// movement: negating the most-negative Lisp fixnum never re-tags it.
+/// This scalar request has no mutable state or mutator affinity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CharacterMotion {
+    Forward,
+    Backward,
+}
+
+static_assertions::assert_impl_all!(CharacterMotion: Send, Sync);
+
+fn move_characters(
+    eval: &mut super::eval::Context,
+    count: Value,
+    motion: CharacterMotion,
+) -> EvalResult {
+    let count = crate::tagged::value::Fixnum::try_from(if count.is_nil() {
         1
     } else {
-        expect_fixnum(&args[0])?
+        expect_fixnum(&count)?
+    })
+    .map_err(|error| match error {
+        crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+            signal(LispCondition::OverflowError, vec![])
+        }
+    })?;
+    let displacement = match motion {
+        CharacterMotion::Forward => i64::from(count),
+        CharacterMotion::Backward => -i64::from(count),
     };
     let current_id = eval.buffers.current_buffer_id().ok_or_else(no_buffer)?;
     let (old_byte, cur_char, begv_char, zv_char, new_byte) = {
@@ -987,7 +1004,7 @@ pub(crate) fn builtin_forward_char_1(eval: &mut super::eval::Context, n: Value) 
         let cur_char = buf.point_char_pos().get();
         let begv_char = buf.point_min_char_pos().get();
         let zv_char = buf.point_max_char_pos().get();
-        let desired = cur_char as i64 + n;
+        let desired = cur_char as i64 + displacement;
         let clamped_char = desired.clamp(begv_char as i64, zv_char as i64) as usize;
         (
             old_byte,
@@ -997,14 +1014,14 @@ pub(crate) fn builtin_forward_char_1(eval: &mut super::eval::Context, n: Value) 
             buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(clamped_char)),
         )
     };
-    let direction = if n >= 0 { 1 } else { -1 };
+    let direction = if displacement >= 0 { 1 } else { -1 };
     let adjusted = adjust_for_intangible(eval, new_byte, direction);
     let _ = eval
         .buffers
         .goto_buffer_emacs_byte_pos(current_id, adjusted);
     // GNU `move_point`: signal beginning-of-buffer / end-of-buffer when
     // the requested position falls outside the accessible portion.
-    let desired = cur_char as i64 + n;
+    let desired = cur_char as i64 + displacement;
     if desired < begv_char as i64 {
         return Err(signal(LispCondition::BeginningOfBuffer, vec![]));
     }
@@ -1020,13 +1037,12 @@ pub(crate) fn builtin_backward_char(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let n = if args.is_empty() || args[0].is_nil() {
-        1
-    } else {
-        expect_fixnum(&args[0])?
-    };
-    // backward-char N == forward-char (- N)
-    builtin_forward_char(eval, vec![Value::fixnum(-n)])
+    crate::emacs_core::error::expect_args_range("backward-char", &args, 0, 1)?;
+    move_characters(
+        eval,
+        args.first().copied().unwrap_or(Value::NIL),
+        CharacterMotion::Backward,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, IntoPrimitive, TryFromPrimitive)]

@@ -80,10 +80,7 @@ fn sub_char_table_contents(value: Value) -> Option<&'static [Value]> {
 
 fn sub_char_table_set_slot(table: Value, idx: usize, value: Value) {
     let _ = table.with_sub_char_table_mut(|obj| {
-        let contents = obj.contents.ensure_owned();
-        if idx < contents.len() {
-            contents[idx] = value;
-        }
+        obj.set_contents(idx, value);
     });
 }
 
@@ -151,15 +148,13 @@ pub(crate) fn bump_char_table_write_tick() {
 
 fn set_char_table_ascii(table: Value, value: Value) {
     bump_char_table_write_tick();
-    let _ = table.with_char_table_mut(|obj| obj.ascii = value);
+    let _ = table.with_char_table_mut(|obj| obj.set_ascii(value));
 }
 
 fn set_char_table_contents(table: Value, idx: usize, value: Value) {
     bump_char_table_write_tick();
     let _ = table.with_char_table_mut(|obj| {
-        if idx < obj.contents.len() {
-            obj.contents[idx] = value;
-        }
+        obj.set_contents(idx, value);
     });
 }
 
@@ -444,9 +439,7 @@ fn char_table_extra_slot_value(table: &Value, idx: usize) -> Option<Value> {
 fn set_char_table_extra_slot(table: &Value, idx: usize, value: Value) {
     bump_char_table_write_tick();
     let _ = table.with_char_table_mut(|obj| {
-        if let Some(slot) = obj.extras.ensure_owned().get_mut(idx) {
-            *slot = value;
-        }
+        obj.set_extra(idx, value);
     });
 }
 
@@ -596,13 +589,15 @@ pub(crate) fn make_char_table_from_external_slots(items: &[Value]) -> Result<Val
     let extra_count = items.len() - GNU_CHAR_TABLE_STANDARD_SLOTS;
     let table = Value::make_char_table(purpose, default, extra_count);
     let _ = table.with_char_table_mut(|obj| {
-        obj.parent = parent;
-        obj.ascii = items[GNU_CHAR_TABLE_ASCII_SLOT];
-        obj.contents
-            .copy_from_slice(&items[GNU_CHAR_TABLE_CONTENT_START..GNU_CHAR_TABLE_STANDARD_SLOTS]);
-        obj.extras
-            .ensure_owned()
-            .clone_from(&items[GNU_CHAR_TABLE_STANDARD_SLOTS..].to_vec());
+        obj.set_parent(parent);
+        obj.set_ascii(items[GNU_CHAR_TABLE_ASCII_SLOT]);
+        for (index, &value) in items[GNU_CHAR_TABLE_CONTENT_START..GNU_CHAR_TABLE_STANDARD_SLOTS]
+            .iter()
+            .enumerate()
+        {
+            obj.set_contents(index, value);
+        }
+        obj.copy_extras(&items[GNU_CHAR_TABLE_STANDARD_SLOTS..]);
     });
     if purpose.as_symbol_id() == Some(char_code_property_table_sym_id()) && extra_count == 5 {
         set_char_table_ascii(table, char_table_ascii(table));
@@ -640,9 +635,9 @@ pub(crate) fn copy_char_table(table: Value) -> Option<Value> {
     });
     let extras = obj.extras.to_vec();
     let _ = copy.with_char_table_mut(|copy_obj| {
-        copy_obj.parent = obj.parent;
-        copy_obj.contents = contents;
-        copy_obj.extras.ensure_owned().clone_from(&extras);
+        copy_obj.set_parent(obj.parent);
+        copy_obj.copy_contents(&contents);
+        copy_obj.copy_extras(&extras);
     });
     set_char_table_ascii(copy, char_table_ascii(copy));
     Some(copy)
@@ -711,9 +706,8 @@ pub(crate) fn builtin_make_char_table(eval: &mut Context, args: Vec<Value>) -> E
     } else {
         0
     };
-    Ok(make_char_table_with_extra_slots(
-        sub_type, default, n_extras,
-    ))
+    let n_extras = crate::emacs_core::alloc::CharTableExtras::try_from(Value::fixnum(n_extras))?;
+    Value::try_char_table(sub_type, default, n_extras)
 }
 
 pub(crate) fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Result<(), Flow> {
@@ -724,8 +718,8 @@ pub(crate) fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Resu
     // GNU `fillarray` rewrites the 64 top-level content slots and the default
     // slot, but it does not rewrite the separate ASCII cache slot.
     let _ = table.with_char_table_mut(|obj| {
-        obj.defalt = item;
-        obj.contents.fill(item);
+        obj.set_default(item);
+        obj.fill_contents(item);
     });
     crate::window::note_char_table_layout_mutation();
     Ok(())
@@ -763,12 +757,12 @@ pub(crate) fn builtin_set_char_table_range(
     match range.kind() {
         // nil -> set default
         ValueKind::Nil => {
-            let _ = table.with_char_table_mut(|obj| obj.defalt = *value);
+            let _ = table.with_char_table_mut(|obj| obj.set_default(*value));
         }
         // t -> set all characters, but not the default slot.
         ValueKind::T => {
             set_char_table_ascii(*table, *value);
-            let _ = table.with_char_table_mut(|obj| obj.contents.fill(*value));
+            let _ = table.with_char_table_mut(|obj| obj.fill_contents(*value));
         }
         // Single character
         ValueKind::Fixnum(_) => {
@@ -1244,7 +1238,7 @@ pub(crate) fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
         }
     }
 
-    let _ = table.with_char_table_mut(|obj| obj.parent = *parent);
+    let _ = table.with_char_table_mut(|obj| obj.set_parent(*parent));
     crate::window::note_char_table_layout_mutation();
     Ok(*parent)
 }
@@ -1806,7 +1800,7 @@ pub(crate) fn builtin_set_char_table_extra_slot(args: Vec<Value>) -> EvalResult 
             vec![args[0], args[1]],
         ));
     }
-    let _ = table.with_char_table_mut(|obj| obj.extras.ensure_owned()[n as usize] = *value);
+    let _ = table.with_char_table_mut(|obj| obj.set_extra(n as usize, *value));
     crate::window::note_char_table_layout_mutation();
     Ok(*value)
 }
@@ -1850,8 +1844,7 @@ fn assq_cell_eq(key: Value, list: Value) -> Result<Value, Flow> {
 fn char_code_property_cell(eval: &Context, prop: Value) -> Result<Value, Flow> {
     let alist = eval
         .obarray
-        .symbol_value("char-code-property-alist")
-        .copied()
+        .symbol_value_copied("char-code-property-alist")
         .unwrap_or(Value::NIL);
     assq_cell_eq(prop, alist)
 }

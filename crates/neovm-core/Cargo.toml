@@ -15,6 +15,7 @@ neovm-host-abi.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
 enumflags2.workspace = true
+bitflags.workspace = true
 crossbeam-channel.workspace = true
 libc.workspace = true
 errno.workspace = true
@@ -36,6 +37,7 @@ md-5.workspace = true
 getrandom.workspace = true
 base64.workspace = true
 num_enum.workspace = true
+typed-index-collections.workspace = true
 thiserror.workspace = true
 static_assertions.workspace = true
 strum.workspace = true
@@ -173,6 +175,8 @@ fuzzing = []
 [dev-dependencies]
 static_assertions.workspace = true
 trybuild = "1.0"
+expect-test.workspace = true
+thiserror.workspace = true
 neomacs-infra.workspace = true
 criterion = { version = "0.8", default-features = false, features = ["plotters", "cargo_bench_support"] }
 proptest.workspace = true
@@ -188,6 +192,14 @@ sha2.workspace = true
 [[test]]
 name = "thread_safety_contracts"
 path = "tests/thread_safety_contracts.rs"
+
+[[test]]
+name = "chartable_write_contracts"
+path = "tests/chartable_write_contracts.rs"
+
+[[test]]
+name = "p0s3_contracts"
+path = "tests/p0s3_contracts.rs"
 
 [[test]]
 name = "compat_all"
@@ -215,6 +227,22 @@ path = "tests/fringe_standard_indicators.rs"
 name = "main_thread_stack"
 path = "tests/main_thread_stack.rs"
 harness = false
+
+[[test]]
+name = "gdm_casing"
+path = "tests/gdm_casing.rs"
+
+[[test]]
+name = "gdm_columns"
+path = "tests/gdm_columns.rs"
+
+[[test]]
+name = "gdm_region"
+path = "tests/gdm_region.rs"
+
+[[test]]
+name = "gdm_widths"
+path = "tests/gdm_widths.rs"
 
 [[bench]]
 name = "buffer_text_backends"

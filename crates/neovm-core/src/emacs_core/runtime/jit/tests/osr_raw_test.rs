@@ -12,7 +12,7 @@ fn raw_loop(ops: Vec<Op>) -> ByteCodeFunction {
     f.lexical = true;
     f.constants = vec![Value::make_int(0), Value::make_int(3), Value::make_int(99)].into();
     f.ops = ops;
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     f
 }
@@ -150,7 +150,7 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
         Op::Switch,
         Op::Return,
     ];
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
     let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
@@ -217,7 +217,7 @@ fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() 
         Op::GotoIfNotNil(1),
         Op::Return,
     ];
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
     let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
@@ -316,7 +316,7 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
             Op::List(2),
             Op::Return,
         ];
-        f.max_stack = 8;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
         f.seal_hand_assembled_ops();
         let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
         let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
@@ -379,7 +379,7 @@ fn osr_raw_varref_type_change_retags_live_slots_for_precise_resume() {
         Op::List(2),
         Op::Return,
     ];
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
     let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);

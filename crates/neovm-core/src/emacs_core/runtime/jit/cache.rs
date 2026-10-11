@@ -17,6 +17,7 @@
 
 use super::compile::lowering::{RegallocChoice, RegallocPolicy, RegallocScope, forced_regalloc};
 use super::compile::{CompileError, CompileRequest, compile_bytecode_function_requested};
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -35,6 +36,9 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::Value;
+
+mod opt_evidence;
+pub(crate) use opt_evidence::has_ready_opt_osr;
 
 /// Why a body is interpreted for now although it is hot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -619,9 +623,9 @@ fn compile_osr_leaf_timed(
         return None;
     }
     let ops = func.executable_ops();
-    let native_arity = func.params.required.len()
-        + func.params.optional.len()
-        + usize::from(func.params.rest.is_some());
+    let params = JitParamShape::try_from(func).ok()?;
+    let optional = params.optional();
+    let native_arity = params.entry_depth();
     let offset_map = func.executable_gnu_byte_offset_map();
     let cfg = match super::compile::analyze_cfg(ops, &func.constants, offset_map, native_arity) {
         Ok(cfg) => cfg,
@@ -725,12 +729,14 @@ fn compile_osr_leaf_timed(
     drop(gate_phase);
     let lower_phase = stats::enter_phase(stats::CompilePhase::Lower);
     let opt_params = (super::compile::jit_opt_mode() == super::compile::OptMode::Opt
-        && func.jit_runtime().reopt_level() < ReoptLevel::BaselineOnly)
-        .then_some(super::opt::ir::ParamShape {
-            required: func.params.required.len(),
-            optional: func.params.optional.len(),
-            has_rest: func.params.rest.is_some(),
-        });
+        && func.jit_runtime().reopt_level() < ReoptLevel::BaselineOnly
+        && super::compile::opt_profit::primitive_osr_source_admitted(func.executable_ops())
+        && super::compile::opt_profit::osr_admitted(ops, constants, func.executable_ops().len()))
+    .then_some(super::opt::ir::ParamShape {
+        required: params.required(),
+        optional,
+        has_rest: params.rest().is_present(),
+    });
     let mut leaf = match super::compile::opt_backend::lower_best(
         ops,
         constants,
@@ -1279,8 +1285,10 @@ fn compile_cache_entry(
         }
         return CacheEntry::Deferred(DeferReason::Backlog);
     }
+    let diagnostic = stats::front_diag::begin(id, request.origin, class);
     let defer = super::bg::DeferScope::enter(class);
     let clock = stats::CompileClock::start(request.origin);
+    let diagnostic_start = diagnostic.as_ref().map(|_| clock.started());
     let cpu_started = spine_upgrade.then(super::tier2::cpu_time_us);
     let result = compile_bytecode_function_requested(func, obarray, request);
     drop(defer);
@@ -1298,6 +1306,9 @@ fn compile_cache_entry(
         super::tier2::charge_compile(charged);
     }
     stats::record_compile(elapsed, func.executable_ops().len(), &result);
+    if let (Some(diagnostic), Some(start)) = (diagnostic, diagnostic_start) {
+        diagnostic.finish(start, elapsed, result.is_ok());
+    }
     if result.is_err()
         && let Some(code) = deferred.take()
     {
@@ -2275,7 +2286,7 @@ fn request_upgrade(
     rt.disarm_leaf_slot();
     unlink_spec_slots_in(cache, Rc::as_ptr(&old));
     // SAFETY: the dormant Context provided by the native dispatch seam.
-    let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
+    let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
     let name_hint = stats::naming_enabled()
         .then(|| callee_name_hint(ctx, id))
         .flatten();
@@ -2595,7 +2606,7 @@ pub fn try_run_compiled(
         // dispatch (see neovm_jit_call's contract); a shared read of its obarray
         // for compile-time speculation. A null ctx (shim-free test bodies) just
         // disables speculation.
-        let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
+        let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
         // A countdown upgrade keeps its T1 live until the replacement
         // really installs. The legacy heat-driven re-tier below is unchanged.
         if super::compile::jit_tier_upgrade_enabled()
@@ -2722,8 +2733,7 @@ pub fn try_run_compiled(
             // leaf speculates exactly as the one that deopted.
             if super::aot::aot_enabled()
                 && super::aot::retier::may_load(func.jit_runtime())
-                && func.params.optional.is_empty()
-                && func.params.rest.is_none()
+                && JitParamShape::try_from(func).is_ok_and(|params| params.fixed_arity().is_some())
                 && func.jit_runtime().patched_prefix() == 0
                 && func.jit_runtime().reopt_count() == 0
             {
@@ -2934,7 +2944,7 @@ pub(crate) fn resolve_compiled_leaf_ptr(
         }
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.
-            let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
+            let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
             let name_hint = stats::naming_enabled()
                 .then(|| callee_name_hint(ctx, id))
                 .flatten();
@@ -3183,12 +3193,19 @@ pub(crate) fn direct_call_cold(
         if shim_panic_pending() {
             return NativeCallOutcome::FlowStashed;
         }
-        // Same panic-fold boundary as the wrapped path: take_pending_flow
-        // owns the panic-wins conversion; the flow goes straight back.
         let flow =
             take_pending_flow().expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
-        stash_pending_flow(flow);
-        return NativeCallOutcome::FlowStashed;
+        // Cleanup can replace the flow, so inspect the actual incoming carrier
+        // at each boundary. A completed search needs only the same take/stash
+        // pair as an ordinary native signal return; first dispatch still runs
+        // with this activation's roots and arguments live.
+        if let Some(sig) = flow.as_signal()
+            && sig.search_complete
+        {
+            stash_pending_flow(flow);
+            return NativeCallOutcome::FlowStashed;
+        }
+        return dispatch_raw_signal(ctx, flow);
     }
     if status == STATUS_DEOPT_AT {
         // Precise deopt: no bind/cond frames exist on the direct path (the
@@ -3198,7 +3215,11 @@ pub(crate) fn direct_call_cold(
                 deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
             }
             // deopt_at_outcome only degrades to plain Deopt with a null vmctx.
-            NativeRun::Signal => NativeCallOutcome::FlowStashed,
+            NativeRun::Signal => {
+                let flow = take_pending_flow()
+                    .expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
+                dispatch_raw_signal(ctx, flow)
+            }
             _ => NativeCallOutcome::Fallback,
         };
     }
@@ -3208,6 +3229,20 @@ pub(crate) fn direct_call_cold(
     leaf.assert_rerunnable();
     super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
     NativeCallOutcome::Fallback
+}
+
+/// GNU signal_or_quit runs the hook, handlers and debugger before unwinding
+/// the signalling activation (eval.c:1974-2066). A raw leaf bypasses
+/// invoke_native's frame exit, so dispatch while its callee frame and the
+/// caller's argument slot are live. Taking the flow first frees the pending
+/// slot for nested Lisp. The native runner supplies its mutator's Context;
+/// no Lisp state is shared or cached here.
+#[cold]
+#[inline(never)]
+fn dispatch_raw_signal(ctx: *mut Context, flow: Flow) -> NativeCallOutcome {
+    // SAFETY: the native call's dormant seam Context, as in the runner.
+    let ctx = unsafe { &mut *ctx };
+    NativeCallOutcome::from_result(ctx.dispatch_signal_flow_cold(flow))
 }
 
 /// Register-sized outcome of a native-to-native call: the hot chain never

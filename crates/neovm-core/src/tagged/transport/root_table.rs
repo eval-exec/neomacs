@@ -22,12 +22,15 @@
 
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 
 use rustc_hash::FxHashMap;
 
 use crate::tagged::gc::HeapIdentity;
+use crate::tagged::gc::TaggedHeap;
 use crate::tagged::value::TaggedValue;
+
+use super::root_batch::BatchSlots;
 
 /// Cells per chunk. Chunks are boxed, so a cell never moves once handed out.
 const CHUNK_CELLS: usize = 64;
@@ -108,6 +111,13 @@ static LIVE_TABLES: LiveTableCount = LiveTableCount::new();
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub(super) struct TracedWord(usize);
+
+static_assertions::assert_impl_all!(TracedWord: Send, Sync, Copy, std::fmt::Debug);
+const _: () = {
+    assert!(std::mem::size_of::<TracedWord>() == std::mem::size_of::<usize>());
+    assert!(std::mem::align_of::<TracedWord>() == std::mem::align_of::<usize>());
+    assert!(std::mem::offset_of!(TracedWord, 0) == 0);
+};
 
 impl TracedWord {
     /// `value`'s word, when the collector traces it from a root.
@@ -194,12 +204,15 @@ struct CellIndex(usize);
 
 /// The cell storage, guarded by the table lock.
 #[derive(Default)]
-struct CellAllocator {
+pub(super) struct CellAllocator {
     chunks: Vec<Box<Chunk>>,
     /// Vacant cells below `used`, ready for reuse.
     free: Vec<CellIndex>,
     /// Cells handed out from chunk space at least once.
     used: usize,
+    /// Grouped roots are dormant until the first explicit batch reservation.
+    /// They share this allocator's lock and collector walk with single cells.
+    pub(super) batches: Option<BatchSlots>,
 }
 
 impl CellAllocator {
@@ -241,7 +254,7 @@ impl CellAllocator {
 
 /// One heap's shared roots.
 pub(super) struct RootTable {
-    heap: HeapIdentity,
+    pub(super) heap: HeapIdentity,
     cells: Mutex<CellAllocator>,
     /// Retirements since the last recycling pass: a hint that one may find
     /// cells, never a count of them.
@@ -263,10 +276,23 @@ impl RootTable {
         }
     }
 
-    /// The cell lock. A panic while it was held (allocation failure) leaves
-    /// at worst one vacant cell outside the free list, so poison is ignored.
-    fn lock(&self) -> MutexGuard<'_, CellAllocator> {
+    /// The cell lock. Single-cell allocation failure leaves at worst a vacant
+    /// cell outside the free list. Batch allocation/checks precede reservation
+    /// installation; installed payloads are immutable and cancellation only
+    /// changes typed atomic metadata. Every intermediate state remains a valid
+    /// root walk, so poison does not justify discarding any registered roots.
+    pub(super) fn lock(&self) -> MutexGuard<'_, CellAllocator> {
         self.cells.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Nonblocking retirement admission. Poison retains the same structurally
+    /// valid storage as `lock`; contention leaves every registration intact.
+    pub(super) fn try_lock(&self) -> Option<MutexGuard<'_, CellAllocator>> {
+        match self.cells.try_lock() {
+            Ok(cells) => Some(cells),
+            Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
     }
 }
 
@@ -348,7 +374,7 @@ fn root_tables() -> MutexGuard<'static, FxHashMap<HeapIdentity, Weak<RootTable>>
     ROOT_TABLES.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn table_for(heap: HeapIdentity) -> Arc<RootTable> {
+pub(super) fn table_for(heap: HeapIdentity) -> Arc<RootTable> {
     let mut tables = root_tables();
     if let Some(table) = tables.get(&heap).and_then(Weak::upgrade) {
         return table;
@@ -365,14 +391,14 @@ fn existing_table(heap: HeapIdentity) -> Option<Arc<RootTable>> {
 
 /// Append every live shared root of `heap` to `out`, for the collector's root
 /// walk on that heap's mutator.
-pub(crate) fn collect_shared_root_gc_roots(heap: HeapIdentity, out: &mut Vec<TaggedValue>) {
+pub(crate) fn collect_shared_root_gc_roots(heap: &TaggedHeap, out: &mut Vec<TaggedValue>) {
     // Completed admission precedes this heap's world-stopped root capture;
     // its table registration keeps the count nonzero. A concurrent admission
     // after this observation is governed by the same start-root/SATB/birth
     // and termination re-seed requirements as admission after the locked
     // scan below. This is an absence check, not a new root snapshot protocol.
     LIVE_TABLES.with_registered_tables(|| {
-        let Some(table) = existing_table(heap) else {
+        let Some(table) = existing_table(heap.heap_identity()) else {
             return;
         };
         let cells = table.lock();
@@ -380,6 +406,9 @@ pub(crate) fn collect_shared_root_gc_roots(heap: HeapIdentity, out: &mut Vec<Tag
             CellState::Live(word) => Some(word.value()),
             CellState::Vacant | CellState::Retired => None,
         }));
+        if let Some(batches) = &cells.batches {
+            batches.collect_roots(heap, out);
+        }
     });
 }
 

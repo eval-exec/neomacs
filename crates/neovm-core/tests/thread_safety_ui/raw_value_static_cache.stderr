@@ -7,9 +7,6 @@ error[E0277]: `*const ()` cannot be shared between threads safely
   = help: within `TaggedValue`, the trait `Sync` is not implemented for `*const ()`
 note: required because it appears within the type `PhantomData<*const ()>`
  --> $RUST/core/src/marker.rs
-  |
-  | pub struct PhantomData<T: PointeeSized>;
-  |            ^^^^^^^^^^^
 note: required because it appears within the type `TaggedValue`
  --> src/tagged/value.rs
   |
@@ -27,9 +24,6 @@ error[E0277]: `*const ()` cannot be sent between threads safely
   = help: within `TaggedValue`, the trait `Send` is not implemented for `*const ()`
 note: required because it appears within the type `PhantomData<*const ()>`
  --> $RUST/core/src/marker.rs
-  |
-  | pub struct PhantomData<T: PointeeSized>;
-  |            ^^^^^^^^^^^
 note: required because it appears within the type `TaggedValue`
  --> src/tagged/value.rs
   |

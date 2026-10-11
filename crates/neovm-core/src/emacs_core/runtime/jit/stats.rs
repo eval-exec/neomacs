@@ -901,6 +901,9 @@ pub(crate) fn naming_enabled() -> bool {
 /// thread-local compile aggregates and caches. Read-only on `ctx`: no
 /// interning, no Lisp allocation, no safepoint.
 pub fn report_at_exit(ctx: &crate::emacs_core::eval::Context) {
+    front_diag::flush_at_exit();
+    exit_snapshot::report_at_exit(&STATS.with(Cell::get));
+    super::compile::opt_report::report_at_exit();
     inline_census::report_at_exit(ctx);
     if !report_requested() {
         return;
@@ -1145,6 +1148,8 @@ pub(crate) fn reset_compile_stats() {
 pub(crate) mod asm_dump;
 pub(crate) mod calls;
 pub(crate) mod epoch;
+pub(crate) mod exit_snapshot;
+pub(crate) mod front_diag;
 pub(crate) mod inline_census;
 pub(crate) mod perf_map;
 pub(crate) mod phases;

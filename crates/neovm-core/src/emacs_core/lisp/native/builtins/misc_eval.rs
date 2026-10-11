@@ -118,7 +118,7 @@ pub(crate) fn builtin_pos_bol_1(eval: &mut super::eval::Context, n: Value) -> Ev
     // position; only `Fline_beginning_position` adds field constraints.
     let scan_count = super::navigation::line_beginning_scan_count_arg(&args)?;
     let (bol_charpos, _orig, _count) = super::navigation::pos_bol_compute(eval, scan_count)?;
-    Ok(Value::fixnum(bol_charpos))
+    Ok(Value::from_fixnum(bol_charpos.into()))
 }
 
 /// `pos-eol` as registered: fixed arity 1, called straight off the bytecode
@@ -130,7 +130,7 @@ pub(crate) fn builtin_pos_eol_1(eval: &mut super::eval::Context, n: Value) -> Ev
     // position; only `Fline_end_position` adds field constraints.
     let scan_count = super::navigation::line_end_scan_count_arg(&args)?;
     let (eol_charpos, _orig) = super::navigation::pos_eol_compute(eval, scan_count)?;
-    Ok(Value::fixnum(eol_charpos))
+    Ok(Value::from_fixnum(eol_charpos.into()))
 }
 
 pub(crate) fn builtin_previous_property_change(
@@ -827,7 +827,7 @@ pub(super) fn dynamic_or_global_symbol_value_in_state(
     _dynamic: &[OrderedRuntimeBindingMap],
     name: &str,
 ) -> Option<Value> {
-    obarray.symbol_value(name).cloned()
+    obarray.symbol_value_copied(name)
 }
 
 pub(crate) fn inherited_text_properties_for_inserted_range_in_state(
@@ -1082,7 +1082,7 @@ pub(super) fn buffer_read_only_active(
 
     if eval
         .obarray
-        .symbol_value("inhibit-read-only")
+        .symbol_value_copied("inhibit-read-only")
         .is_some_and(|value| value.is_truthy())
     {
         return false;
@@ -1097,7 +1097,7 @@ pub(super) fn buffer_read_only_active(
     }
 
     eval.obarray
-        .symbol_value("buffer-read-only")
+        .symbol_value_copied("buffer-read-only")
         .is_some_and(|value| value.is_truthy())
 }
 
@@ -1208,8 +1208,7 @@ pub(crate) fn resolve_print_target_in_state(
         Some(dest) if !dest.is_nil() => *dest,
         _ => ctx
             .obarray
-            .symbol_value("standard-output")
-            .cloned()
+            .symbol_value_copied("standard-output")
             .unwrap_or(Value::T),
     }
 }
@@ -1685,7 +1684,7 @@ fn print_value_princ_bytes_inner(
 ) -> Vec<u8> {
     let print_quoted = ctx
         .obarray
-        .symbol_value("print-quoted")
+        .symbol_value_copied("print-quoted")
         .is_none_or(|v| v.is_truthy());
     let prin1_bytes = |v: &Value| {
         super::error::print_value_bytes_in_state(
@@ -2082,18 +2081,18 @@ pub(crate) fn builtin_princ_impl(
 pub(crate) fn ensure_continuous_print_number_table(ctx: &mut crate::emacs_core::eval::Context) {
     let continuous = ctx
         .obarray
-        .symbol_value("print-continuous-numbering")
+        .symbol_value_copied("print-continuous-numbering")
         .is_some_and(|v| v.is_truthy());
     let circle = ctx
         .obarray
-        .symbol_value("print-circle")
+        .symbol_value_copied("print-circle")
         .is_some_and(|v| v.is_truthy());
     if !(continuous && circle) {
         return;
     }
     let already_table = ctx
         .obarray
-        .symbol_value("print-number-table")
+        .symbol_value_copied("print-number-table")
         .is_some_and(|v| v.is_hash_table());
     if already_table {
         return;

@@ -18,7 +18,10 @@ use super::header::{
 };
 use super::value::{TAG_MASK, TaggedValue};
 
+mod chartable;
 mod string_observed;
+pub use chartable::{CharTableWrite, SubCharTableWrite};
+pub(crate) use chartable::{with_char_table_write, with_sub_char_table_write};
 
 thread_local! {
     static COLLECTION_REVISION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };

@@ -1,0 +1,15 @@
+error[E0382]: use of moved value: `driver`
+  --> src/emacs_core/runtime/eval/tests/sole_owner_ui/reuse_consumed_driver.rs:11:18
+   |
+ 9 |     let driver = vm.driver();
+   |         ------ move occurs because `driver` has type `SoleOwnerDriver`, which does not implement the `Copy` trait
+10 |     let _published = driver.into_published();
+   |                             ---------------- `driver` moved due to this method call
+11 |     let _stale = driver.into_published();
+   |                  ^^^^^^ value used here after move
+   |
+note: `SoleOwnerDriver::into_published` takes ownership of the receiver `self`, which moves `driver`
+  --> src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+   |
+   |     pub(crate) fn into_published(self) -> PublishedSoleOwnerDriver {
+   |                                  ^^^^

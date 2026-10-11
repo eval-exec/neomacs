@@ -223,12 +223,24 @@ impl TaggedHeap {
                 // for the GC thread (`launch_concurrent_mark` moves them
                 // into the job).
                 self.seed_mapped_string_children();
-                self.staged_mapped_veclikes = Some(
-                    self.mapped_veclike_objects
-                        .iter()
-                        .map(|o| o.header as usize)
-                        .collect(),
-                );
+                let mapped_veclikes = {
+                    // SAFETY: this stopped start owns the heap's only writer,
+                    // including its TLS aliases. No Lisp callback or safepoint
+                    // intervenes before launch; the cycle retains captured
+                    // mappings, fixed char-table spans and retired vectors.
+                    let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(self) };
+                    // SAFETY: this heap's mapped registry supplies live headers
+                    // and immutable mappings. Owned vector buffers retire before
+                    // replacement; char-table writers preserve fixed lengths.
+                    // Mutable owned record buffers are deferred by capture.
+                    unsafe {
+                        MappedVeclikeScanSnapshot::capture(
+                            &world,
+                            world.heap().mapped_veclike_objects.iter().map(|o| o.header),
+                        )
+                    }
+                };
+                self.staged_mapped_veclikes = Some(mapped_veclikes);
                 self.staged_mapped_cons_scan = Some(
                     self.mapped_cons_ranges
                         .iter()
@@ -1449,6 +1461,9 @@ impl TaggedHeap {
                         return;
                     }
                     sink.child(data.arglist);
+                    if let Some(child) = data.params.heap_child() {
+                        sink.child(child);
+                    }
                     sink.children(data.constants.iter().copied());
                     if let Some(env) = data.env {
                         sink.child(env);

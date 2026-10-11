@@ -108,24 +108,27 @@ fn test_register_bootstrap_vars_include_tab_bar_display_vars() {
     let mut obarray = crate::emacs_core::symbol::Obarray::new();
     register_bootstrap_vars(&mut obarray);
 
-    assert_eq!(obarray.symbol_value("inhibit-redisplay"), Some(&Value::NIL));
     assert_eq!(
-        obarray.symbol_value("auto-resize-tab-bars"),
-        Some(&Value::T)
+        obarray.symbol_value_copied("inhibit-redisplay"),
+        Some(Value::NIL)
+    );
+    assert_eq!(
+        obarray.symbol_value_copied("auto-resize-tab-bars"),
+        Some(Value::T)
     );
     // `auto-raise-tab-bar-buttons' is a GNU `DEFVAR_BOOL' (`src/xdisp.c:38704'),
     // so it is declared by `defvar_bool::GNU_BOOL_VARIABLES' rather than here.
     assert_eq!(
-        obarray.symbol_value("tab-bar-border"),
-        Some(&Value::symbol("internal-border-width"))
+        obarray.symbol_value_copied("tab-bar-border"),
+        Some(Value::symbol("internal-border-width"))
     );
     assert_eq!(
-        obarray.symbol_value("tab-bar-button-margin"),
-        Some(&Value::fixnum(1))
+        obarray.symbol_value_copied("tab-bar-button-margin"),
+        Some(Value::fixnum(1))
     );
     assert_eq!(
-        obarray.symbol_value("fontification-functions"),
-        Some(&Value::NIL)
+        obarray.symbol_value_copied("fontification-functions"),
+        Some(Value::NIL)
     );
     assert!(obarray.is_special("fontification-functions"));
     let fontification_functions = intern("fontification-functions");
@@ -153,8 +156,8 @@ fn test_register_bootstrap_vars_include_tab_bar_display_vars() {
         );
     }
     assert_eq!(
-        obarray.default_value_id(intern("display-line-numbers-offset")),
-        Some(&Value::fixnum(0))
+        obarray.default_value_id_copied(intern("display-line-numbers-offset")),
+        Some(Value::fixnum(0))
     );
 }
 
@@ -171,8 +174,8 @@ fn display_line_numbers_assignment_is_buffer_local_on_set() {
     );
     assert_eq!(
         eval.obarray()
-            .default_value_id(intern("display-line-numbers")),
-        Some(&Value::NIL)
+            .default_value_id_copied(intern("display-line-numbers")),
+        Some(Value::NIL)
     );
 }
 
@@ -3969,6 +3972,38 @@ fn pos_visible_queries_target_rows_but_last_row_still_queries_the_viewport() {
 }
 
 #[test]
+fn posn_at_point_queries_the_target_instead_of_completing_the_viewport() {
+    use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
+    let mut eval = interactive_context();
+    let buffer = eval.buffers.current_buffer().unwrap().id;
+    eval.buffers
+        .get_mut(buffer)
+        .unwrap()
+        .insert("first\nsecond\nthird\n");
+    let frame = eval
+        .frames
+        .create_frame("point-target-query", 160, 96, buffer);
+    let window = eval.frames.get(frame).unwrap().selected_window;
+    let scopes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = scopes.clone();
+    eval.install_window_layout_query(move |_, _, _, scope| {
+        observed.borrow_mut().push(scope);
+        WindowLayoutQueryOutcome::Unavailable
+    });
+    builtin_posn_at_point(
+        &mut eval,
+        vec![Value::fixnum(3), Value::make_window(window.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        scopes.borrow().as_slice(),
+        &[WindowLayoutQueryScope::Position {
+            target: LispCharPos1::new(3),
+        }]
+    );
+}
+
+#[test]
 fn pos_visible_in_new_live_window_falls_back_when_active_presentation_predates_it() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
@@ -4804,14 +4839,14 @@ fn posn_at_x_y_decodes_frame_or_window_the_way_gnu_dispatches_it() {
     let mut eval = interactive_context();
     let out = eval
         .eval_str_each(
-            "(progn (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil) t)
+            "(progn ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil) t)
          (if (consp (posn-at-x-y 0 0 nil)) 'cons 'other)
          (if (consp (posn-at-x-y 0 0 (selected-window))) 'cons 'other)
          (if (consp (posn-at-x-y 0 0 (minibuffer-window))) 'cons 'other)
          (if (consp (posn-at-x-y 0 0 (selected-frame))) 'cons 'other)
          (condition-case err (posn-at-x-y 0 0 (window-parent (selected-window)))
            (error (car (cdr err))))
-         (let ((doomed (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+         (let ((doomed ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window-internal doomed)
            (condition-case err (posn-at-x-y 0 0 doomed) (error (car (cdr err)))))
          (condition-case err (posn-at-x-y 0 0 'foo) (error (car (cdr err))))

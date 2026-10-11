@@ -112,7 +112,11 @@ fn elb_pcase_mir_build_resolves_the_jump_table_through_the_offset_map() {
     let ops = data.executable_ops();
     let map = data.executable_gnu_byte_offset_map();
     assert!(map.is_some(), "real bytecode carries its offset map");
-    let arity = data.params.required.len();
+    let arity = data
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     assert!(matches!(
         mir::build_mir(ops, &data.constants, map, arity),
         Err(CompileError::UnsupportedOp("mir-unmodelled-control:Switch"))

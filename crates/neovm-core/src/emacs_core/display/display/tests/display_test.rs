@@ -901,6 +901,10 @@ fn eval_internal_show_cursor_tracks_per_window_state() {
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let selected =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+    // GNU's `split-window` stages the old window's new size before calling
+    // the primitive, which rejects an unstaged split.
+    eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 12))")
+        .expect("stage the old window before a valid primitive split");
     let other = crate::emacs_core::builtins::dispatch_builtin(
         &mut eval,
         "split-window-internal",
@@ -2648,7 +2652,7 @@ fn x_popup_menu_position_window_slot_accepts_a_frame_like_gnu() {
     // GNU reaches it through `CHECK_LIVE_WINDOW`.
     let internal = probe(
         &mut eval,
-        "(list (list 0 0) (window-parent (split-window-internal nil (/ (window-pixel-height nil) 2) nil nil)))",
+        "(list (list 0 0) (window-parent ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) nil (/ (window-pixel-height nil) 2) nil nil)))",
     );
     assert!(
         internal.starts_with("(wrong-type-argument (window-live-p "),

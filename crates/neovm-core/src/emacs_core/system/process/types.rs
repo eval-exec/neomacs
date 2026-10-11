@@ -1052,6 +1052,51 @@ pub(crate) enum ProcessWaitBackendInterest {
     NotificationsAndProcesses,
 }
 
+/// A validated monotonic deadline. An overflowing duration denotes an
+/// indefinite wait, which still wakes for process or evaluator notifications.
+/// This immutable clock value contains no mutator-owned state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProcessWaitDeadline {
+    Poll,
+    Until(Instant),
+    Forever,
+}
+
+static_assertions::assert_impl_all!(ProcessWaitDeadline: Send, Sync);
+
+impl From<Duration> for ProcessWaitDeadline {
+    #[inline]
+    fn from(timeout: Duration) -> Self {
+        if timeout.is_zero() {
+            Self::Poll
+        } else {
+            Instant::now()
+                .checked_add(timeout)
+                .map_or(Self::Forever, Self::Until)
+        }
+    }
+}
+
+impl ProcessWaitDeadline {
+    #[inline]
+    pub(super) fn remaining(self, now: Instant) -> Option<Duration> {
+        match self {
+            Self::Poll => Some(Duration::ZERO),
+            Self::Until(deadline) => Some(deadline.saturating_duration_since(now)),
+            Self::Forever => None,
+        }
+    }
+
+    #[inline]
+    pub(super) fn is_expired(self, now: Instant) -> bool {
+        match self {
+            Self::Poll => true,
+            Self::Until(deadline) => now >= deadline,
+            Self::Forever => false,
+        }
+    }
+}
+
 impl ProcessWaitBackendInterest {
     pub(super) fn wants_notifications(self) -> bool {
         matches!(
@@ -1139,16 +1184,12 @@ impl ProcessWaitBackend {
                 }
             }
 
-            let deadline = Instant::now() + timeout;
+            let deadline = ProcessWaitDeadline::from(timeout);
             loop {
                 let now = Instant::now();
-                let wait_time = if timeout.is_zero() {
-                    Duration::ZERO
-                } else {
-                    deadline.saturating_duration_since(now)
-                };
+                let wait_time = deadline.remaining(now);
                 let mut events = polling::Events::new();
-                match poller.wait(&mut events, Some(wait_time)) {
+                match poller.wait(&mut events, wait_time) {
                     Ok(_) => {
                         let mut notification_wakeup = interest.wants_notifications()
                             && self.notification_pending.swap(false, Ordering::AcqRel);
@@ -1200,8 +1241,7 @@ impl ProcessWaitBackend {
                         if backend.has_notification_wakeup()
                             || backend.has_ready_processes()
                             || backend.has_writable_processes()
-                            || timeout.is_zero()
-                            || Instant::now() >= deadline
+                            || deadline.is_expired(Instant::now())
                         {
                             return Some(backend);
                         }
@@ -1229,7 +1269,7 @@ impl ProcessWaitBackend {
                     // non-exhaustive and a future backend may surface it; what
                     // it must NOT be is a mechanism something else relies on.
                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
-                        if timeout.is_zero() || Instant::now() >= deadline {
+                        if deadline.is_expired(Instant::now()) {
                             return Some(ProcessWaitEvents::from_sources_with_writable(
                                 false,
                                 Vec::new(),

@@ -5177,3 +5177,9 @@ impl GcTrace for TextPropertyTable {
 #[cfg(test)]
 #[path = "text_props/tests/text_props_test.rs"]
 mod tests;
+
+#[path = "text_props/casing_insertion.rs"]
+mod casing_insertion;
+pub(crate) use casing_insertion::{
+    CasingPropertyControls, CasingPropertyMode, CasingPropertyRoots,
+};

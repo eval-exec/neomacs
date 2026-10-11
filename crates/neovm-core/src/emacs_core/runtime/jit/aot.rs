@@ -20,6 +20,7 @@
 //!
 //! Only built with the `jit` feature (links Cranelift).
 
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::{Linkage, Module, default_libcall_names};
 use cranelift_object::{ObjectBuilder, ObjectModule};
@@ -127,7 +128,11 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // existing AOT images are invalidated.
 // v32: primitive opcodes bypass function cells; `aset` has a signal-only
 // value-shim contract and no NamedBuiltin variant-2 fallback or epoch guard.
-const ABI_TAG_VERSION: u32 = 32;
+// v45: typed bytecode parameters and full-width stack depth change the
+// ByteCodeFunction layout, moving the baked `runtime` and `constants` offsets.
+// v47: stable World storage views replace inline Obarray/buffer storage;
+// canonical dispatch-cell and selected-buffer pointers have separate offsets.
+const ABI_TAG_VERSION: u32 = 47;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
@@ -180,13 +185,31 @@ const fn compute_abi_tag() -> u32 {
         }};
     }
     mix_u64!(ABI_TAG_VERSION as u64);
-    // The inline `Op::VarRef` read bakes these layout facts into the code.
-    mix_u64!(core::mem::offset_of!(crate::emacs_core::eval::Context, obarray) as u64);
+    // The inline `Op::VarRef` reads a stable World manager pointer. The
+    // canonical pair is a second pointer in the same owned Obarray view, not
+    // an epoch/debugger value snapshot. Salt both address interpretations.
+    mix_u64!(super::compile::jit_layout::CONTEXT_OBARRAY_OFFSET as u64);
+    mix_u64!(super::compile::jit_layout::CONTEXT_DISPATCH_CELLS_OFFSET as u64);
+    mix_u64!(super::compile::jit_layout::DISPATCH_FUNCTION_EPOCH_OFFSET as u64);
+    mix_u64!(super::compile::jit_layout::DISPATCH_DEBUG_FWD_OFFSET as u64);
+    mix_u64!(crate::emacs_core::symbol::OBARRAY_FUNCTION_EPOCH_OFFSET as u64);
+    mix_u64!(crate::emacs_core::symbol::OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET as u64);
     mix_u64!(crate::emacs_core::symbol::OBARRAY_JIT_SPINE_OFFSET as u64);
     mix_u64!(crate::emacs_core::symbol::OBARRAY_JIT_LEN_OFFSET as u64);
     mix_u64!(crate::emacs_core::symbol::LISP_SYMBOL_SIZE as u64);
     mix_u64!(crate::emacs_core::symbol::LISP_SYMBOL_FLAGS_OFFSET as u64);
     mix_u64!(crate::emacs_core::symbol::LISP_SYMBOL_VAL_OFFSET as u64);
+    // Buffer storage and selection have distinct owners. Inline pure reads
+    // use the private validated Buffer pointer; BLV guards retain the raw id.
+    mix_u64!(super::compile::jit_layout::CONTEXT_BUFFERS_OFFSET as u64);
+    mix_u64!(super::compile::jit_layout::CONTEXT_CURRENT_BUFFER_RAW_OFFSET as u64);
+    mix_u64!(crate::buffer::buffer::jit_layout::BUFFER_MANAGER_STORAGE_PTR_OFFSET as u64);
+    mix_u64!(crate::buffer::buffer::jit_layout::BUFFER_STORAGE_BUFFERS_OFFSET as u64);
+    mix_u64!(crate::buffer::buffer::jit_layout::BUFFER_MANAGER_CURRENT_PTR_OFFSET as u64);
+    mix_u64!(crate::buffer::buffer::jit_layout::BUFFER_MANAGER_CURRENT_OFFSET as u64);
+    mix_u64!(crate::buffer::buffer::jit_layout::BUFFER_MANAGER_CURRENT_RAW_OFFSET as u64);
+    // The stable heap projection keeps the original one-hop Box addressing.
+    mix_u64!(super::compile::jit_layout::CONTEXT_TAGGED_HEAP_OFFSET as u64);
     // The entry stack guard (v10) reads the limit and parks its entry
     // parameters in the scratch words.
     mix_u64!(core::mem::offset_of!(crate::emacs_core::eval::Context, jit_stack_limit) as u64);
@@ -2131,10 +2154,12 @@ pub fn enumerate_loadup_leaves(
         };
         // Required-only: matches the MIR pure tier's native-arity seeding (the AOT
         // subset). &optional/&rest functions are not AOT candidates here.
-        if !bc.params.optional.is_empty() || bc.params.rest.is_some() {
+        let Some(arity) = JitParamShape::try_from(bc)
+            .ok()
+            .and_then(JitParamShape::fixed_arity)
+        else {
             continue;
-        }
-        let arity = bc.params.required.len();
+        };
         let ops = bc.executable_ops();
         if d0_filter && !is_d0_aot_candidate(ops, &bc.constants, arity, Some(&ctx.obarray)) {
             continue;
@@ -2196,7 +2221,8 @@ fn testkit_mir_cons_reconstruction_case(dir: &std::path::Path, singleton: bool) 
         rest: None,
     });
     f.lexical = true;
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+        .expect("testkit stack depth is representable");
     f.constants = vec![Value::symbol("aot-rebuild-effect")].into();
     f.ops = vec![
         Op::Constant(0),
@@ -2330,7 +2356,8 @@ pub fn testkit_call_bearing_selftest(dir: &std::path::Path) -> Result<(), String
         f.lexical = true;
         f.ops = ops;
         f.constants = constants.into();
-        f.max_stack = 32;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(32usize)
+            .expect("testkit stack depth is representable");
         f.seal_hand_assembled_ops();
         f
     };
@@ -2497,7 +2524,8 @@ pub fn testkit_baseline_aot_selftest(dir: &std::path::Path) -> Result<(), String
         f.lexical = true;
         f.ops = ops.clone();
         f.constants = constants.clone().into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable");
         f.seal_hand_assembled_ops();
         f
     };
@@ -2641,7 +2669,8 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(dir: &std::path::Path) -> Re
         f.lexical = true;
         f.ops = ops.clone();
         f.constants = constants.clone().into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable");
         f.seal_hand_assembled_ops();
         f
     };
@@ -2785,7 +2814,8 @@ pub fn testkit_callbuiltinsym_aot_selftest(dir: &std::path::Path) -> Result<(), 
         f.lexical = true;
         f.ops = ops.clone();
         f.constants = constants.clone().into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable");
         f.seal_hand_assembled_ops();
         f
     };
@@ -2900,7 +2930,8 @@ fn cbsym_aot_serve_and_check(
         f.lexical = true;
         f.ops = ops.to_vec();
         f.constants = constants.to_vec().into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable");
         f.seal_hand_assembled_ops();
         f
     };
@@ -3177,7 +3208,8 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
             f.lexical = true;
             f.ops = b.ops.clone();
             f.constants = b.constants.clone().into();
-            f.max_stack = 16;
+            f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable");
             f.seal_hand_assembled_ops();
             f
         };
@@ -3341,7 +3373,8 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
         f.lexical = true;
         f.ops = ops;
         f.constants = vec![Value::symbol(intern(alias_name))].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable");
         f.seal_hand_assembled_ops();
         f
     };
@@ -3636,7 +3669,8 @@ pub fn testkit_pgo_roundtrip_selftest(dir: &std::path::Path) -> Result<(), Strin
         f.lexical = true;
         f.ops = ops;
         f.constants = vec![Value::symbol(intern(alias_name))].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable");
         f.seal_hand_assembled_ops();
         f
     };
@@ -3753,7 +3787,8 @@ pub fn testkit_pgo_drain_selftest(dir: &std::path::Path) -> Result<(), String> {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
         f.constants = vec![Value::symbol(intern(callee))].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable");
         f.seal_hand_assembled_ops();
         f
     };
@@ -3900,7 +3935,8 @@ fn ev_alias_and_build(
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
     f.constants = vec![Value::symbol(intern("pgo-off-callee"))].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+        .expect("testkit stack depth is representable");
     c.obarray
         .set_symbol_function("pgo-off-fn", Value::make_bytecode(f));
     c.obarray
@@ -4350,10 +4386,11 @@ pub(crate) fn try_load_leaf_for(
     {
         return None;
     }
+    let arity = JitParamShape::try_from(func).ok()?.fixed_arity()?;
     try_load_leaf(
         func.executable_ops(),
         &func.constants,
-        func.params.required.len(),
+        arity,
         stashed,
         obarray,
     )
@@ -4848,10 +4885,12 @@ pub fn prepopulate_aot_from_preload(ctx: &crate::emacs_core::eval::Context) -> P
             continue;
         };
         // Required-only (matches the producer's enumerate + the MIR pure tier).
-        if !bc.params.optional.is_empty() || bc.params.rest.is_some() {
+        let Some(arity) = JitParamShape::try_from(bc)
+            .ok()
+            .and_then(JitParamShape::fixed_arity)
+        else {
             continue;
-        }
-        let arity = bc.params.required.len();
+        };
         let ops = bc.executable_ops();
         // MANIFEST PRE-FILTER (task #11): skip WITHOUT hashing exactly when the
         // dump-time manifest carries a VERIFIED non-member pre-key for this
@@ -5080,9 +5119,12 @@ pub(crate) fn drain_aot_pgo_to_dir(
             continue;
         };
         // Required-only (matches the producer's enumerate + the MIR pure tier).
-        if !bc.params.optional.is_empty() || bc.params.rest.is_some() {
+        let Some(arity) = JitParamShape::try_from(bc)
+            .ok()
+            .and_then(JitParamShape::fixed_arity)
+        else {
             continue;
-        }
+        };
         // Hot ∩: only leaves this session PROVED hot AND the AOT tier did not already
         // serve. A peek (no id assignment for the never-compiled walked-past majority).
         let Some(id) = bc.jit_runtime().compiled_id() else {
@@ -5091,7 +5133,6 @@ pub(crate) fn drain_aot_pgo_to_dir(
         if !hot.contains(&id) {
             continue;
         }
-        let arity = bc.params.required.len();
         let ops = bc.executable_ops();
         let Some(content_hash) = leaf_content_hash(ops, &bc.constants, arity) else {
             continue; // non-canonical / non-recipe-able → skip (fail-closed).

@@ -18,6 +18,7 @@ struct Settings;
 impl Settings {
     fn enter() -> Self {
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
+        force_opt_profit_for_test(Some(OptProfitMode::Off));
         force_opt_passes_for_test(Some(OptPasses {
             bool_rep: true,
             ..OptPasses::default()
@@ -30,6 +31,7 @@ impl Settings {
 impl Drop for Settings {
     fn drop(&mut self) {
         force_opt_for_test(None, None);
+        force_opt_profit_for_test(None);
         force_opt_passes_for_test(None);
         force_flonum_mode_for_test(None);
         force_deopt_for_test(false);

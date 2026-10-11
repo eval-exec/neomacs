@@ -266,8 +266,8 @@ fn the_image_build_seeds_every_statement_of_loadups_dump_branch() {
 
     for name in LOADUP_DUMP_BRANCH_SEEDED_VARIABLES {
         assert_eq!(
-            eval.obarray().symbol_value(name),
-            Some(&Value::T),
+            eval.obarray().symbol_value_copied(name),
+            Some(Value::T),
             "loadup.el:110-116 sets {name} while building the image, and the \
              dump-mode branch that would do it is dead in this port"
         );
@@ -283,8 +283,8 @@ fn the_image_build_seeds_every_statement_of_loadups_dump_branch() {
     // seeding the temporary is what lets GNU's own Lisp do the restore rather
     // than a Rust copy of it.
     assert_eq!(
-        eval.obarray().symbol_value("load--prefer-newer"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("load--prefer-newer"),
+        Some(Value::NIL),
         "loadup.el:115 saves the pre-dump value so :493 can put it back"
     );
 }
@@ -482,13 +482,11 @@ fn only_the_shipped_editors_main_announces_itself() {
     crate::test_utils::init_test_tracing();
 
     const CALL: &str = "announce_shipped_editor_process()";
-    // The one program allowed to opt out, and the files that may merely name
-    // the function: its definition, and this scan.
+    // The one program allowed to opt out, and the file defining the function.
+    // The scan excludes its own compiler-reported source path below, so a
+    // rename cannot turn its literal and policy test into forbidden callers.
     const ALLOWED_CALLER: &str = "crates/neomacs/src/main.rs";
-    const ALLOWED_MENTIONS: &[&str] = &[
-        "crates/neovm-core/src/emacs_core/lisp/load/mod.rs",
-        "crates/neovm-core/src/emacs_core/lisp/load/tests/stale_bytecode.rs",
-    ];
+    const ALLOWED_MENTIONS: &[&str] = &["crates/neovm-core/src/emacs_core/lisp/load/mod.rs"];
 
     let root = crate::test_utils::workspace_root();
 
@@ -533,7 +531,9 @@ fn only_the_shipped_editors_main_announces_itself() {
                 .expect("scanned under the workspace root")
                 .to_string_lossy()
                 .replace('\\', "/");
-            if ALLOWED_MENTIONS.contains(&relative.as_str()) {
+            if ALLOWED_MENTIONS.contains(&relative.as_str())
+                || std::path::Path::new(file!()).ends_with(&relative)
+            {
                 continue;
             }
             callers.push(relative);

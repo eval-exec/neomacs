@@ -1208,7 +1208,7 @@ fn with_bytecode_literal_slots<R>(value: &Value, f: impl FnOnce(&[Value]) -> R) 
     };
     crate::emacs_core::eval::push_scratch_gc_root(constants);
 
-    let depth = Value::fixnum(bc.max_stack as i64);
+    let depth = bc.max_stack.value();
     let doc = bc
         .doc_form
         .or_else(|| bc.docstring.as_ref().map(|d| Value::heap_string(d.clone())))

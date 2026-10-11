@@ -49,7 +49,7 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         .extend([Op::StackRef(0), Op::Add1, Op::StackSet(1), Op::Goto(4)]);
     f.ops[7] = Op::GotoIfNil(f.ops.len() as u32);
     f.ops.extend([Op::StackRef(1), Op::Unbind(1), Op::Return]);
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -194,7 +194,7 @@ fn osr_binding_deopt_adopts_new_inner_binding_without_replaying_effects() {
             Op::Unbind(1),
             Op::Return,
         ];
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.seal_hand_assembled_ops();
         f
     };
@@ -424,7 +424,7 @@ fn osr_binding_transfer_from_iterative_child_preserves_callers_binding() {
         Op::Unbind(1),
         Op::Return,
     ];
-    caller.max_stack = 8;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     caller.seal_hand_assembled_ops();
     force_osr_for_test(true);
     let before = cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);

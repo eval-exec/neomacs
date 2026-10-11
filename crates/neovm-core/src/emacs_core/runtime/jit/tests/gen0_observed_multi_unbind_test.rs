@@ -54,8 +54,7 @@ fn observe_bound_cells(context: &mut Context) -> EvalResult {
     Ok(bound)
 }
 
-#[test]
-fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
+fn check_multi_blv_unbind() {
     force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
     let _mode = ObservedMode;
     let mut context = context(false);
@@ -109,7 +108,8 @@ fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
     );
     // Bind lower first, so the suffix checks the unobserved higher cell
     // first. The callback observes lower and the retained upper anchor only
-    // after both inline bindings; that makes higher a genuine window hit.
+    // after both bindings; that makes higher a genuine window hit.
+    super::super::inline_vars::reset_inline_var_sites();
     let leaf = compile_blv(
         &context,
         &[
@@ -131,6 +131,14 @@ fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
         ],
         0,
     );
+    assert_eq!(
+        super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Bind),
+        2
+    );
+    assert_eq!(
+        super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Unbind),
+        1
+    );
     let binds = super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get());
     let unbinds = super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get());
     let specpdl_depth = context.specpdl.len();
@@ -146,8 +154,8 @@ fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
         super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get()) - unbinds,
         1
     );
-    // The observed refusal falls back before either restore is written. The
-    // compiled suffix restores both owners, journaling the observed one only.
+    // The observed refusal falls back before either restore is written.
+    // The compiled suffix restores both owners, journaling the observed one only.
     assert_eq!(
         LispCollectionRevision::current().steps_since_for_test(revision),
         1
@@ -165,4 +173,9 @@ fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
         reads.is_none(),
         "the body read preceded restoration of its observed cell"
     );
+}
+
+#[test]
+fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
+    check_multi_blv_unbind();
 }

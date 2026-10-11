@@ -1692,12 +1692,11 @@ impl CompiledLeaf {
                     Err(error) => {
                         tracing::error!(target: "neovm::jit::deopt", ?error,
                             "invalid or unsupported deopt chain metadata");
+                        let result =
+                            ctx.dispatch_signal_flow_cold(signal("invalid-byte-code", Vec::new()));
                         ctx.truncate_condition_stack(cond_base);
                         let flow = ctx
-                            .unbind_to_with_result(
-                                spec_base,
-                                Err(signal("invalid-byte-code", Vec::new())),
-                            )
+                            .unbind_to_with_result(spec_base, result)
                             .expect_err("invalid chain must signal");
                         stash_pending_flow(flow);
                         self.obs.note_signal();
@@ -1720,10 +1719,10 @@ impl CompiledLeaf {
     }
 
     /// Signal / frame-registered exit path of [`Self::invoke_native`],
-    /// outlined (see the call site). Contents and ORDER are exactly the old
-    /// inline tail: park a contained panic, heal against the leaf bases,
-    /// condition-frame truncation, dynamic-binding unwind (result rooted
-    /// across cleanups on OK), then un-park.
+    /// outlined (see the call site). Ordinary signals run GNU's signal-time
+    /// observers before retiring this frame's handlers and dynamic bindings
+    /// (`src/eval.c:1966-2059`). Contained panics retain their separate healing
+    /// and parking protocol across Lisp unwind cleanups.
     #[cold]
     #[inline(never)]
     #[allow(clippy::too_many_arguments)] // mirrors invoke_native's locals
@@ -1778,6 +1777,19 @@ impl CompiledLeaf {
                         .restore_jit_shim_boundary(&b.snap, b.snap.condition_len());
                 }
             }
+        } else if status == STATUS_SIGNAL {
+            // GNU signal_or_quit calls the hook, handler-bind callbacks and
+            // debugger with the signalling frame's dynamic extent still live.
+            // Remove the pending flow while callbacks run: nested native calls
+            // use the same pending slot. Publish their winning nonlocal exit
+            // before this frame starts unwinding.
+            let flow =
+                take_pending_flow().expect("STATUS_SIGNAL frame exit must carry a pending flow");
+            // SAFETY: native code has returned and this seam still owns the
+            // dormant Context. Its bindings, handlers and argument roots live.
+            let flow = unsafe { (*(vmctx as *mut Context)).dispatch_signal_flow_cold(flow) }
+                .expect_err("dispatching a nonlocal exit cannot return a value");
+            stash_pending_flow(flow);
         }
         // cleanup_bytecode_frame parity, same order: condition frames first
         // (the specpdl unwind below can run unwind-protect cleanups — lisp

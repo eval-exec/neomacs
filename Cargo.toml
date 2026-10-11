@@ -177,6 +177,7 @@ num_enum = "0.7.6"
 enum_dispatch = "0.3.13"
 enumset = "1.1.14"
 enum-map = "3.1.0"
+typed-index-collections = "3.5"
 strum = { version = "0.28", features = ["derive"] }
 unicode_names2 = "3.1.0"
 unicode-script = "0.5"
@@ -212,6 +213,12 @@ enumflags2 = "0.7"
 bytemuck = { version = "1.18", features = ["derive"] }
 memmap2 = "0.9"
 image = "0.25"
+# Dev-only, `xpm` feature only: an independent XPM3 decoder that
+# cross-checks neomacs-renderer-wgpu's XPM decoder against the shipped
+# etc/images corpus. GNU stays the specification for that decoder (see
+# crates/neomacs-renderer-wgpu/src/xpm.rs), so this is a smoke check and
+# never a runtime dependency; the restricted feature set adds no codecs.
+image-extras = { version = "0.1", default-features = false, features = ["xpm"] }
 # The renderer decodes PNG rows itself for banded decoding, instead of
 # handing the file to `image` and waiting for the whole frame. Same
 # version `image` itself builds against, so the tree gains no second copy.
@@ -310,6 +317,9 @@ wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }
 ash = "0.38"
 pollster = "1.0"
 resvg = "0.47"
+# Same version resvg 0.47 links, so COLR paint graphs rasterize with the
+# rasterizer already in the tree rather than a second copy of it.
+tiny-skia = "0.12"
 svgtypes = "0.16.1"
 simplecss = "0.2.2"
 cosmic-text = "0.18.2"

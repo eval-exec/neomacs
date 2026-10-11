@@ -18,7 +18,7 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f
 }
 
@@ -214,6 +214,7 @@ fn cons_store_clif(
             refs,
             vmctx_var,
             ptr_ty: types::I64,
+            forward_atomics: crate::emacs_core::jit::compile::ForwardAtomics::for_isa(module.isa()),
             call_args_slot: args_slot,
             call_result_slot: result_slot,
             rootwin: None,
@@ -266,10 +267,12 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
     impl Drop for Settings {
         fn drop(&mut self) {
             force_opt_for_test(None, None);
+            force_opt_passes_for_test(None);
             force_deopt_for_test(false);
         }
     }
     let _settings = Settings;
+    force_opt_passes_for_test(Some(OptPasses::default()));
     force_deopt_for_test(false);
     let lower = |f: &ByteCodeFunction| {
         lower_leaf_full_osr_with_opt(

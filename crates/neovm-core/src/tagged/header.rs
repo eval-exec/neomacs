@@ -1216,8 +1216,29 @@ impl LispValueVec {
 pub(crate) struct VectorScanEntry {
     base: *const TaggedValue,
     len: usize,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     is_mapped: bool,
+}
+
+impl VectorScanEntry {
+    pub(crate) fn is_mapped(&self) -> bool {
+        self.is_mapped
+    }
+
+    /// Read a captured span without rereading the owner's mutable backing
+    /// metadata (in particular, its pdump copy-on-write storage enum).
+    ///
+    /// # Safety
+    /// The initialized span captured at this cycle's stopped handshake is
+    /// retained until marker join. Racing slot stores follow the atomic
+    /// publication contract, and no plain stores or reclamation touch it.
+    pub(crate) unsafe fn scan_values(&self, mut visit: impl FnMut(TaggedValue)) {
+        for index in 0..self.len {
+            // SAFETY: the caller retains this initialized, aligned span;
+            // the bounded index and atomic view satisfy the scan contract.
+            let slot = unsafe { &*self.base.add(index) };
+            visit(load_value_atomic(slot));
+        }
+    }
 }
 
 /// Start-of-cycle snapshot of every OWNED/Mapped vector backing for the Stage 2 Tier
@@ -1349,7 +1370,9 @@ impl VectorScanSnapshot {
 /// PUBLICATION-ORDERING CONTRACT (concurrent GC, task #24 fix A): every store
 /// that can make a heap pointer visible to the GC thread mid-mark (cons
 /// car/cdr, vector slots, symbol value/function/plist cells — this module's
-/// atomic store helpers) is `Release`, and every GC-thread load that can be
+/// atomic store helpers) is `Release`, or is preceded by a Release fence
+/// (the fixed-slot char-table seam uses fence-then-Relaxed publication), and
+/// every GC-thread load that can be
 /// the first acquisition of such a pointer (cons car/cdr, slot/field loads —
 /// this module's atomic load helpers) is `Acquire`. The pairing makes the
 /// mutator's pre-publication writes — the arena `ptr::write` of the whole
@@ -1365,7 +1388,9 @@ impl VectorScanSnapshot {
 /// already-snapshotted cell and read back mid-cycle. The mark bits themselves
 /// (`GcHeader.marked`, cons block bitmaps) stay `Relaxed`: they never
 /// publish field data, and a claim's field reads are ordered by this
-/// contract's pointer chain, not by the bit.
+/// contract's pointer chain, not by the bit. Fence-then-Relaxed publication
+/// likewise compiles to a plain `mov` on x86-64, but uses `dmb` plus `str`
+/// rather than `stlr` on AArch64.
 #[inline]
 pub fn load_value_atomic(slot: &TaggedValue) -> TaggedValue {
     let p = slot as *const TaggedValue as *const AtomicUsize;

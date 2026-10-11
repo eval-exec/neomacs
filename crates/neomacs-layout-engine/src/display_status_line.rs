@@ -1540,8 +1540,7 @@ fn eval_status_line_format_output(
                     // Fall back to the global default
                     evaluator
                         .obarray()
-                        .symbol_value(format_symbol)
-                        .copied()
+                        .symbol_value_copied(format_symbol)
                         .unwrap_or(Value::NIL)
                 })
         });
@@ -2409,8 +2408,7 @@ pub(crate) fn build_tab_bar_display(
 pub(crate) fn max_mini_window_lines(evaluator: &Context, frame_rows: f32) -> f32 {
     let raw = evaluator
         .obarray()
-        .symbol_value("max-mini-window-height")
-        .copied()
+        .symbol_value_copied("max-mini-window-height")
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }
@@ -2424,8 +2422,7 @@ pub(crate) fn max_mini_window_lines_for_buffer<B: LayoutBufferView>(
         .or_else(|| {
             evaluator
                 .obarray()
-                .symbol_value("max-mini-window-height")
-                .copied()
+                .symbol_value_copied("max-mini-window-height")
         })
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)

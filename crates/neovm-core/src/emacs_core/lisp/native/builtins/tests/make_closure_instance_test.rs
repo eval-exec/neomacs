@@ -76,7 +76,7 @@ fn make_closure_is_reachable_through_funcall_apply_and_bytecode() {
         Op::Call(2),
         Op::Return,
     ];
-    caller.max_stack = 3;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
     caller.seal_hand_assembled_ops();
     let closure = {
         let mut vm = crate::emacs_core::bytecode::Vm::from_context(&mut ctx);
@@ -152,9 +152,7 @@ fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
         assert_eq!(i.arglist, p.arglist);
         assert_eq!(i.lexical, p.lexical);
         assert_eq!(i.max_stack, p.max_stack);
-        assert_eq!(i.params.required, p.params.required);
-        assert_eq!(i.params.optional, p.params.optional);
-        assert_eq!(i.params.rest, p.params.rest);
+        assert_eq!(i.params, p.params);
         assert_eq!(i.env, p.env);
         assert_eq!(
             i.gnu_bytecode_bytes.as_deref(),
@@ -275,7 +273,7 @@ fn make_closure_copies_a_mapped_prototype_pool() {
     });
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::Return];
-    f.max_stack = 1;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     // SAFETY: `image` is leaked, so it outlives the function, and nothing
     // writes through a mapped pool.
     f.constants = unsafe { crate::tagged::header::LispValueVec::mapped(image.as_ptr(), 3) };
@@ -311,7 +309,7 @@ fn make_closure_on_an_environment_closure_rebinds_the_environment() {
     });
     f.lexical = true;
     f.ops = vec![Op::Nil, Op::Return];
-    f.max_stack = 1;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     f.constants = vec![Value::symbol("mci-k")].into();
     f.env = Some(env);
     f.seal_hand_assembled_ops();

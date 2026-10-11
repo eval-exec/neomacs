@@ -1535,7 +1535,7 @@ fn dynamic_or_global_symbol_value_in_state(
     _dynamic: &[OrderedRuntimeBindingMap],
     name: &str,
 ) -> Option<Value> {
-    obarray.symbol_value(name).cloned()
+    obarray.symbol_value_copied(name)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1557,7 +1557,7 @@ fn dynamic_buffer_or_global_symbol_value_in_state(
     if let Some(v) = buf.get_buffer_local_by_sym_id_gated(sym, obarray.is_localized(sym)) {
         return Some(v);
     }
-    obarray.symbol_value(name).cloned()
+    obarray.symbol_value_copied(name)
 }
 
 fn prefix_numeric_value(value: &Value) -> i64 {
@@ -2125,13 +2125,22 @@ fn interactive_require_writable_current_buffer_in_state(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn interactive_apply_shift_selection_prefix(eval: &mut Context) {
-    interactive_apply_shift_selection_prefix_in_state(
-        &mut eval.obarray,
-        &mut [],
-        &mut eval.buffers,
-        &eval.custom,
-        eval.specpdl.as_slice(),
-    );
+    let buffers = &mut eval.buffers;
+    let custom = &eval.custom;
+    let specpdl = eval.specpdl.as_slice();
+    // SAFETY: shift-selection updates only runtime values/buffer state;
+    // no Lisp watcher, canonical writer or retained manager reference exists.
+    unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            interactive_apply_shift_selection_prefix_in_state(
+                obarray,
+                &mut [],
+                buffers,
+                custom,
+                specpdl,
+            );
+        });
+    }
 }
 
 fn interactive_apply_shift_selection_prefix_in_state(
@@ -2264,13 +2273,24 @@ fn interactive_apply_prefix_flags(
                 &eval.buffers,
             )?,
             '@' => interactive_select_window_from_prefix_context(eval, context)?,
-            '^' => interactive_apply_shift_selection_prefix_in_state(
-                &mut eval.obarray,
-                &mut [],
-                &mut eval.buffers,
-                &eval.custom,
-                eval.specpdl.as_slice(),
-            ),
+            '^' => {
+                let buffers = &mut eval.buffers;
+                let custom = &eval.custom;
+                let specpdl = eval.specpdl.as_slice();
+                // SAFETY: the shift-selection storage helper changes only
+                // values/buffer state and does not invoke Lisp or dispatch writers.
+                unsafe {
+                    eval.obarray.with_legacy_value_write(|obarray| {
+                        interactive_apply_shift_selection_prefix_in_state(
+                            obarray,
+                            &mut [],
+                            buffers,
+                            custom,
+                            specpdl,
+                        );
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -3257,8 +3277,17 @@ pub(crate) fn builtin_self_insert_command(eval: &mut Context, args: Vec<Value>) 
         return Ok(Value::NIL);
     }
 
-    let repeat_count = repeats as usize;
-    let mut text = String::with_capacity(repeat_count * ch.len_utf8() + spaces_to_insert);
+    let count = crate::emacs_core::alloc::RepeatCount::try_from(repeats).map_err(
+        |crate::emacs_core::alloc::RepeatCountError::OutOfRange| {
+            crate::emacs_core::alloc::memory_exhausted()
+        },
+    )?;
+    let repeat_count = usize::from(count);
+    // GNU internal_self_insert constructs the repeated string before insertion.
+    // A string allocation failure uses memory-signal-data, not buffer_overflow.
+    let length =
+        crate::emacs_core::alloc::StringByteLen::repeated(ch.len_utf8(), count, spaces_to_insert)?;
+    let mut text = length.reserved_text()?;
     for _ in 0..repeat_count {
         text.push(ch);
     }

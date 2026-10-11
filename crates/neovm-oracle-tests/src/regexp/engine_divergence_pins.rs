@@ -8,9 +8,9 @@
 //!
 //! | id | case | status |
 //! |----|------|--------|
-//! | D1 | unibyte buffer, `\w` on raw byte 0xA9 | open |
-//! | D2 | unibyte `"\351\200y"`, backward POSIX `\b\(\w\)` | open |
-//! | D3 | failed `string-match` after a buffer search, `(match-data t)` | open |
+//! | D1 | unibyte buffer, `\w` on raw byte 0xA9 | fixed |
+//! | D2 | unibyte `"\351\200y"`, backward POSIX `\b\(\w\)` | fixed |
+//! | D3 | failed `string-match` after a buffer search, `(match-data t)` | fixed |
 //! | D4 | `[[:upper:]]` on U+01C5 (a titlecase digraph) | open |
 //! | D5 | `\(?:a?\)*?b` never terminates (no `CHECK_INFINITE_LOOP` for `on_failure_jump_nastyloop`) | fixed (U0.5) |
 //! | D6 | `\(a\|\)+?x` signals a spurious "Stack overflow in regexp matcher" | fixed (U0.5) |
@@ -31,7 +31,7 @@ fn oracle_pin_regexp_d1_unibyte_word_on_raw_byte() {
       (goto-char 2)
       (list (looking-at "\\w") (looking-at "\\W")))"#;
     let expect = expect_test::expect![[r#""OK (t nil)""#]];
-    crate::common::assert_oracle_divergence_expect(form, expect);
+    crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn oracle_pin_regexp_d2_posix_backward_word_boundary_on_eight_bit() {
       (list (and (posix-search-backward "\\b\\(\\w\\)" nil t) (point))
             (match-beginning 0) (match-end 0) (match-beginning 1) (match-end 1)))"#;
     let expect = expect_test::expect![[r#""OK (3 3 4 3 4)""#]];
-    crate::common::assert_oracle_divergence_expect(form, expect);
+    crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]
@@ -60,7 +60,63 @@ fn oracle_pin_regexp_d3_failed_string_match_after_buffer_search() {
             (let ((md (match-data t)))
               (list (length md) (bufferp (car (last md)))))))"#;
     let expect = expect_test::expect![[r#""OK (nil (2 nil))""#]];
-    crate::common::assert_oracle_divergence_expect(form, expect);
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_pin_regexp_failed_string_match_preserves_registers_and_inhibition() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU search.c:422-427 changes the source after a failed search, but
+    // retains numeric registers and honors both inhibition mechanisms.
+    let form = r#"(let (out)
+      (dolist (fn '(string-match posix-string-match))
+        (dolist (global '(nil t))
+          (dolist (arg '(nil t))
+            (with-temp-buffer
+              (insert "aébc")
+              (goto-char 1)
+              (re-search-forward "\\(éb\\)")
+              (let ((inhibit-changing-match-data global))
+                (funcall fn "zzz" "q" nil arg))
+              (let ((md (match-data t)))
+                (push (list fn global arg (match-beginning 0) (match-end 0)
+                            (match-beginning 1) (match-end 1)
+                            (bufferp (car (last md)))) out))))))
+      (nreverse out))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((string-match nil nil 2 4 2 4 nil) (string-match nil t 2 4 2 4 t) (string-match t nil 2 4 2 4 t) (string-match t t 2 4 2 4 t) (posix-string-match nil nil 2 4 2 4 nil) (posix-string-match nil t 2 4 2 4 t) (posix-string-match t nil 2 4 2 4 t) (posix-string-match t t 2 4 2 4 t))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_pin_regexp_failed_string_match_retains_indices_for_extraction() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(with-temp-buffer
+      (insert "aébc") (goto-char 1) (re-search-forward "\\(éb\\)")
+      (string-match "zzz" "q")
+      (let ((before (list (match-data t) (match-string 1 "uvwxyz"))))
+        (match-data--translate -2)
+        (list before (match-data t) (match-string 1 "uvwxyz"))))"#;
+    let expect = expect_test::expect![[r#""OK (((2 4 2 4) \"wx\") (0 2 0 2) \"uv\")""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_pin_regexp_replace_match_ampersand_uses_selected_subexpression() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Already agrees with GNU on the lane's base; retain this historical
+    // divergence as a regression guard (search.c:2544-2547, 2685-2686).
+    let form = r#"(with-temp-buffer
+      (insert "xxfooBARyy")
+      (goto-char 1)
+      (re-search-forward "\\(foo\\)\\(BAR\\)")
+      (replace-match "<\\&>" t nil nil 2)
+      (buffer-string))"#;
+    let expect = expect_test::expect![[r#""OK \"xxfoo<BAR>yy\"""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]

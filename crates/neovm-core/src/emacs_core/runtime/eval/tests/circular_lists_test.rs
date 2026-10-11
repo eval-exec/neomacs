@@ -1,5 +1,6 @@
 //! GNU-backed circular traversal regressions. Fixtures are refreshed only
-//! from GNU with UPDATE_EXPECT=1. The binary oracle twin additionally uses
+//! from GNU Emacs 32 with EMACS set explicitly and UPDATE_EXPECT=1.
+//! The binary oracle twin additionally uses
 //! NEOVM_ORACLE_MODE=refresh to refresh its inline GNU expectations.
 use crate::test_utils::runtime_startup_eval_one;
 

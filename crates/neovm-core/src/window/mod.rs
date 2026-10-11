@@ -48,6 +48,11 @@ pub(crate) use posn_object_extent::force_posn_object_extent_for_test;
 pub use posn_object_extent::{PosnObjectExtentMode, posn_object_extent_mode, retained_posn_extent};
 mod scroll_bar;
 mod sibling_layout;
+mod size;
+pub(crate) use size::{
+    HorizontalScroll, NewTotalUpdate, SplitSizeError, SplitSizes, WindowPixelOperation,
+    WindowPixelStage, WindowPixels, WindowSizeError, WindowTotal,
+};
 pub mod split;
 mod string_property_input;
 pub mod window_markers;
@@ -6809,6 +6814,45 @@ impl FrameManager {
         self.selected.and_then(|id| self.frames.get(&id))
     }
 
+    /// Borrow the selected window from the current frame/window storage.
+    ///
+    /// A fresh one-frame, one-window context needs no hashed ID probes. Only
+    /// small singleton tables use iteration: a table reduced after frame or
+    /// window churn can retain a large allocation and must use keyed lookup.
+    /// Exact keys are still checked, including the separate minibuffer leaf.
+    /// Nothing is cached across mutations; the owning mutator's borrow keeps
+    /// the selection and displayed buffer stable for this read.
+    #[inline(always)]
+    pub(crate) fn selected_window(&self) -> Option<&Window> {
+        let selected = self.selected?;
+        let frame = if self.frames.len() == 1 && self.frames.capacity() <= 7 {
+            self.frames
+                .iter()
+                .next()
+                .filter(|(id, _)| **id == selected)
+                .map(|(_, frame)| frame)?
+        } else {
+            self.frames.get(&selected)?
+        };
+        if frame.tree.nodes.len() == 1 && frame.tree.nodes.capacity() <= 7 {
+            frame
+                .tree
+                .nodes
+                .iter()
+                .next()
+                .filter(|(id, _)| **id == frame.selected_window)
+                .map(|(_, window)| window)
+                .or_else(|| {
+                    frame
+                        .minibuffer_leaf
+                        .as_ref()
+                        .filter(|window| window.id() == frame.selected_window)
+                })
+        } else {
+            frame.selected_window()
+        }
+    }
+
     /// Get a mutable reference to the selected frame.
     pub fn selected_frame_mut(&mut self) -> Option<&mut Frame> {
         self.selected.and_then(|id| self.frames.get_mut(&id))
@@ -7852,37 +7896,39 @@ impl FrameManager {
             .unwrap_or(Value::NIL)
     }
 
-    /// Write `w->new_pixel`. When `add` is true, accumulates onto
-    /// the existing slot (mirroring GNU
-    /// `Fset_window_new_pixel` ADD argument).
-    pub fn set_window_new_pixel(&mut self, window_id: WindowId, size: i64, add: bool) -> i64 {
+    /// Store a checked GNU staging result before the window is mutated.
+    /// Live geometry separately requires a validated WindowPixels.
+    pub(crate) fn set_window_new_pixel(
+        &mut self,
+        window_id: WindowId,
+        size: WindowPixelStage,
+    ) -> WindowPixelStage {
         if let Some(window) = self.lookup_window_mut(window_id) {
-            let stored = if add {
-                window.new_pixel().unwrap_or(0) + size
-            } else {
-                size
-            };
-            window.set_new_pixel(Some(stored));
-            stored
-        } else {
-            size
+            window.set_new_pixel(Some(i64::from(size)));
         }
+        size
     }
 
-    /// Write `w->new_total`. ADD semantics match GNU
-    /// `Fset_window_new_total`.
-    pub fn set_window_new_total(&mut self, window_id: WindowId, size: i64, add: bool) -> i64 {
-        if let Some(window) = self.lookup_window_mut(window_id) {
-            let stored = if add {
-                window.new_total().unwrap_or(0) + size
-            } else {
-                size
-            };
-            window.set_new_total(Some(stored));
-            stored
-        } else {
-            size
-        }
+    /// Store the canonical GNU fixnum total, replacing the staged value or
+    /// adding to it (`Fset_window_new_total`). Fails only when a staged total
+    /// outside the fixnum range would have to be added to.
+    pub(crate) fn set_window_new_total(
+        &mut self,
+        window_id: WindowId,
+        size: WindowTotal,
+        update: NewTotalUpdate,
+    ) -> Result<WindowTotal, crate::tagged::value::FixnumRangeError> {
+        let Some(window) = self.lookup_window_mut(window_id) else {
+            return Ok(size);
+        };
+        let stored = match update {
+            NewTotalUpdate::Replace => size,
+            NewTotalUpdate::Add => {
+                WindowTotal::try_from(window.new_total().unwrap_or(0))?.gnu_added(size)
+            }
+        };
+        window.set_new_total(Some(i64::from(stored)));
+        Ok(stored)
     }
 
     /// Write `w->new_normal`. Mirrors GNU `Fset_window_new_normal`.
@@ -8047,17 +8093,6 @@ fn split_window_in_tree(
     placement: SplitPlacement,
     attachment: SplitAttachment,
 ) -> Option<()> {
-    fn split_sizes(total: f32, requested_new_size: Option<i64>) -> (f32, f32) {
-        let total_px = total.round().max(0.0) as i64;
-        let new_size_px = match requested_new_size {
-            Some(n) if n > 0 => n.clamp(1, total_px.saturating_sub(1)),
-            Some(n) if n < 0 => (total_px - (-n)).clamp(1, total_px.saturating_sub(1)),
-            _ => total_px / 2,
-        };
-        let old_size_px = total_px - new_size_px;
-        (old_size_px as f32, new_size_px as f32)
-    }
-
     /// The two halves `old` splits into along `direction`, in layout order.
     fn split_rects(
         old: Rect,
@@ -8114,7 +8149,12 @@ fn split_window_in_tree(
     let inherited_normal_cols = old.normal_cols();
 
     let new_before_target = placement.is_before_target();
-    let (old_size_px, new_size_px) = split_sizes(extent(old_bounds, direction), size);
+    let sizes = match SplitSizes::new(extent(old_bounds, direction), size) {
+        Ok(sizes) => sizes,
+        Err(SplitSizeError::NewTooSmall) => return None,
+        Err(SplitSizeError::OldTooSmall) => return None,
+    };
+    let (old_size_px, new_size_px) = (sizes.old(), sizes.new_size());
     let (first_bounds, second_bounds) = if new_before_target {
         split_rects(old_bounds, direction, new_size_px, old_size_px)
     } else {

@@ -462,6 +462,7 @@ fn tier2_native_use_imports_helpers_only_with_actual_t1_emission() {
                     refs,
                     vmctx_var,
                     ptr_ty,
+                    forward_atomics: super::super::ForwardAtomics::for_isa(module.isa()),
                     call_args_slot: slot,
                     call_result_slot: slot,
                     rootwin: None,

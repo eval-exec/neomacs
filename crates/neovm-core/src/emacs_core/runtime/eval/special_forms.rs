@@ -99,9 +99,6 @@ impl Context {
                 id if id == byte_code_literal_symbol() && surface_id == target_id => {
                     Some(self.sf_byte_code_literal_value(tail))
                 }
-                id if id == byte_code_symbol() && surface_id == target_id => {
-                    Some(self.sf_byte_code_value(tail))
-                }
                 _ => None,
             },
         };
@@ -1100,14 +1097,11 @@ impl Context {
                 if let Some(idx) = success_handler_idx {
                     let handler = handlers_vec[idx];
                     let bind_var = !var.is_nil();
-                    // Mirror the error-handler arm: bind VAR lexically when
-                    // lexical binding is in effect and VAR is not special, else
-                    // dynamically (GNU condition-case binds the :success var the
-                    // same way it binds an error handler's var).
-                    let use_lexical_binding = bind_var
-                        && self.lexical_binding()
-                        && !is_runtime_dynamically_special(&self.obarray, var_id)
-                        && !self.lexenv_declares_special_cached_in(self.lexenv, var_id);
+                    // GNU eval.c:1676-1685 extends the lexical environment
+                    // directly for VAR, even when a special declaration would
+                    // make an ordinary let binding dynamic. Both handler kinds
+                    // use this same rule.
+                    let use_lexical_binding = bind_var && self.lexical_binding();
                     let specpdl_count = self.specpdl.len();
                     if use_lexical_binding {
                         let old_lexenv = self.lexenv;
@@ -1140,10 +1134,9 @@ impl Context {
                     let handler = handlers_vec[handler_index];
                     let bind_var = !var.is_nil();
                     let binding_value = make_signal_binding_value(&sig);
-                    let use_lexical_binding = bind_var
-                        && self.lexical_binding()
-                        && !is_runtime_dynamically_special(&self.obarray, var_id)
-                        && !self.lexenv_declares_special_cached_in(self.lexenv, var_id);
+                    // GNU binds a handler VAR lexically regardless of global
+                    // or local special declarations (eval.c:1676-1685).
+                    let use_lexical_binding = bind_var && self.lexical_binding();
 
                     let specpdl_count = self.specpdl.len();
                     if use_lexical_binding {
@@ -1229,34 +1222,21 @@ impl Context {
     }
 
     pub(super) fn sf_save_excursion_value(&mut self, tail: Value) -> EvalResult {
-        let count = self.specpdl.len();
-        self.record_save_excursion();
-        let result = self.sf_progn_value(tail);
-        self.unbind_to_with_result(count, result)
+        let mut scope = ExcursionScope::enter(self);
+        let result = scope.context().sf_progn_value(tail);
+        scope.finish(result)
     }
 
     pub(super) fn sf_save_current_buffer_value(&mut self, tail: Value) -> EvalResult {
-        // Specpdl-carried like the VM arm and GNU's
-        // record_unwind_current_buffer, so a panic contained at a module/JIT
-        // boundary inside the body restores the buffer via the boundary
-        // unwind (an imperative restore here would be skipped, leaving the
-        // wrong buffer current). PS fix-wave sweep hit.
-        let count = self.specpdl.len();
-        if let Some(buf) = self.buffers.current_buffer() {
-            self.specpdl
-                .push(SpecBinding::SaveCurrentBuffer { buffer_id: buf.id });
-        }
-        let result = self.sf_progn_value(tail);
-        self.unbind_to_with_result(count, result)
+        let mut scope = CurrentBufferScope::enter(self);
+        let result = scope.context().sf_progn_value(tail);
+        scope.finish(result)
     }
 
     pub(super) fn sf_save_restriction_value(&mut self, tail: Value) -> EvalResult {
-        let count = self.specpdl.len();
-        if let Some(state) = self.buffers.save_current_restriction_state() {
-            self.specpdl.push(SpecBinding::save_restriction(state));
-        }
-        let result = self.sf_progn_value(tail);
-        self.unbind_to_with_result(count, result)
+        let mut scope = RestrictionScope::enter(self);
+        let result = scope.context().sf_progn_value(tail);
+        scope.finish(result)
     }
 
     pub(super) fn validate_throw(&self, flow: Flow) -> Flow {
@@ -1269,27 +1249,6 @@ impl Context {
                 }
             }
             _ => flow,
-        }
-    }
-
-    /// Recursively walk a `Value`, treating everything as literal data
-    /// except `(byte-code-literal ...)` cons cells which are converted to
-    /// `Value::ByteCode` via `sf_byte_code_literal_value`.
-    pub(super) fn quote_value_with_bytecode(&mut self, value: Value) -> EvalResult {
-        if value.is_cons() && cons_head_symbol_id(&value) == Some(byte_code_literal_symbol()) {
-            return self.sf_byte_code_literal_value(value.cons_cdr());
-        }
-
-        match value.kind() {
-            ValueKind::Veclike(VecLikeType::Vector) => {
-                let items = value.as_vector_data().unwrap();
-                let mut values = Vec::with_capacity(items.len());
-                for item in items {
-                    values.push(self.quote_value_with_bytecode(*item)?);
-                }
-                Ok(Value::vector(values))
-            }
-            _ => Ok(value),
         }
     }
 
@@ -1306,125 +1265,7 @@ impl Context {
             return Ok(vector);
         }
 
-        let mut values = Vec::with_capacity(items.len());
-        for item in items {
-            values.push(self.quote_value_with_bytecode(*item)?);
-        }
-
-        crate::emacs_core::builtins::make_byte_code_from_slots(&values)
-    }
-
-    pub(super) fn sf_byte_code_value(&mut self, tail: Value) -> EvalResult {
-        let args = list_to_vec(&tail).ok_or_else(|| self.listp_error(tail))?;
-        if args.len() != 3 {
-            return Err(signal(
-                LispCondition::WrongNumberOfArguments,
-                vec![Value::symbol("byte-code"), Value::fixnum(args.len() as i64)],
-            ));
-        }
-        let trace_toplevel_bytecode = std::env::var_os("NEOVM_TRACE_TOPLEVEL_BYTECODE").is_some();
-        let load_file_name = if trace_toplevel_bytecode {
-            self.obarray()
-                .symbol_value("load-file-name")
-                .and_then(|value| {
-                    value
-                        .as_lisp_string()
-                        .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
-                })
-                .unwrap_or_else(|| "<unknown>".to_string())
-        } else {
-            String::new()
-        };
-        let decode_start = trace_toplevel_bytecode.then(std::time::Instant::now);
-
-        let bytecode_str = args[0];
-        let constants_vec = self.quote_value_with_bytecode(args[1])?;
-        let maxdepth = args[2];
-
-        use crate::emacs_core::bytecode::ByteCodeFunction;
-        use crate::emacs_core::bytecode::decode::decode_gnu_bytecode_with_offset_map;
-        use crate::emacs_core::value::LambdaParams;
-
-        // Bytecode strings are unibyte and may contain non-UTF-8 bytes.
-        // Access raw bytes directly, same fix as make_byte_code_from_parts.
-        let raw_bytes = if let Some(ls) = bytecode_str.as_lisp_string() {
-            ls.as_bytes().to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let mut constants: Vec<Value> = match constants_vec.kind() {
-            ValueKind::Veclike(VecLikeType::Vector) => {
-                constants_vec.as_vector_data().unwrap().clone()
-            }
-            _ => Vec::new(),
-        };
-
-        for constant in &mut constants {
-            *constant = crate::emacs_core::builtins::try_convert_nested_compiled_literal(*constant);
-        }
-
-        let (ops, gnu_byte_offset_map) =
-            decode_gnu_bytecode_with_offset_map(&raw_bytes, &mut constants).map_err(|e| {
-                signal(
-                    "error",
-                    vec![Value::string(format!("bytecode decode error: {}", e))],
-                )
-            })?;
-        if let Some(start) = decode_start {
-            tracing::info!(
-                "TOPLEVEL-BYTECODE decode file={} bytes={} consts={} ops={} elapsed={:.2?}",
-                load_file_name,
-                raw_bytes.len(),
-                constants.len(),
-                ops.len(),
-                start.elapsed()
-            );
-        }
-
-        let max_stack = match maxdepth.kind() {
-            ValueKind::Fixnum(n) => n as u16,
-            _ => 16,
-        };
-
-        let bc = ByteCodeFunction {
-            source_id: super::super::bytecode::fresh_bytecode_source_id(),
-            ops,
-            // The instructions above came straight from the sealing decoder;
-            // the stack proof is recomputed below once every shape field
-            // (params/lexical/arglist/env/max_stack) is in place.
-            ops_sealed: true,
-            stack_verified: false,
-            constants: constants.into(),
-            max_stack,
-            params: LambdaParams::simple(vec![]),
-            arglist: Value::NIL,
-            lexical: false,
-            env: None,
-            gnu_byte_offset_map: Some(gnu_byte_offset_map),
-            gnu_bytecode_bytes: None,
-            docstring: None,
-            doc_form: None,
-            interactive: None,
-            closure_slot_count: 4,
-            extra_slots: Vec::new(),
-            #[cfg(feature = "jit")]
-            runtime: Some(crate::emacs_core::jit::Runtime::new()),
-            lazy_gnu_code: None,
-        };
-
-        let mut vm = super::super::bytecode::Vm::from_context(self);
-        let exec_start = trace_toplevel_bytecode.then(std::time::Instant::now);
-        let result = vm.execute(&bc, vec![]);
-        if let Some(start) = exec_start {
-            tracing::info!(
-                "TOPLEVEL-BYTECODE exec   file={} ops={} elapsed={:.2?}",
-                load_file_name,
-                bc.executable_ops().len(),
-                start.elapsed()
-            );
-        }
-        result
+        crate::emacs_core::builtins::make_byte_code_from_slots(items)
     }
 
     pub(crate) fn defalias_value(&mut self, sym: Value, def: Value) -> EvalResult {
@@ -1632,7 +1473,15 @@ impl Context {
         subfeatures: Option<Value>,
     ) -> EvalResult {
         self.note_macro_expansion_mutation();
-        provide_value_in_state(&mut self.obarray, &mut self.features, feature, subfeatures)?;
+        let features = &mut self.features;
+        // SAFETY: provide_value_in_state only publishes feature values and
+        // properties. Its Lisp after-load hooks run below, after this loan;
+        // no canonical function/debugger metadata or storage identity changes.
+        unsafe {
+            self.obarray.with_legacy_value_write(|obarray| {
+                provide_value_in_state(obarray, features, feature, subfeatures)
+            })
+        }?;
         self.record_load_history_entry(LoadHistoryEntry::ProvidedFeature(feature));
         // GNU Emacs Fprovide (fns.c): after adding the feature, run any
         // load-hooks registered in `after-load-alist`.
@@ -1652,8 +1501,7 @@ impl Context {
     pub(super) fn run_after_load_hooks_for_feature(&mut self, feature: Value) -> Result<(), Flow> {
         let after_load_alist = self
             .obarray
-            .symbol_value("after-load-alist")
-            .cloned()
+            .symbol_value_copied("after-load-alist")
             .unwrap_or(Value::NIL);
         if after_load_alist.is_nil() {
             return Ok(());

@@ -1,0 +1,1 @@
+((error "Window sizes don’t fit") t t t (error "Resizing old window failed") t)

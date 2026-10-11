@@ -10,10 +10,16 @@
 //! Collector-internal work queues use their own collector word instead.
 
 mod immediate;
+mod root_batch;
 mod root_table;
 mod shared_root;
 
 pub use immediate::{ImmediateValue, NotImmediate};
+pub use root_batch::{
+    FinalizedRootBatch, PreparedRootBatch, RetiredRootBatch, RootBatchError,
+    RootBatchFinalizeFailure, RootBatchFinishFailure, RootBatchLease, RootBatchPublishFailure,
+    RootBatchReader,
+};
 pub(crate) use root_table::collect_shared_root_gc_roots;
 pub use shared_root::{LocalRoot, SharedRoot, SharedRootError};
 

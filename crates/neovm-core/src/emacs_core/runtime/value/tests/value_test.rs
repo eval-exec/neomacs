@@ -269,17 +269,17 @@ fn internal_equal_compares_char_table_and_sub_char_table_storage() {
         let right = Value::make_char_table(purpose, Value::NIL, 1);
         let left_sub = Value::make_sub_char_table(3, 128, vec![Value::NIL; 128]);
         let right_sub = Value::make_sub_char_table(3, 128, vec![Value::NIL; 128]);
-        left.with_char_table_mut(|table| table.contents[1] = left_sub)
+        left.with_char_table_mut(|table| table.set_contents(1, left_sub))
             .expect("left char-table");
         right
-            .with_char_table_mut(|table| table.contents[1] = right_sub)
+            .with_char_table_mut(|table| table.set_contents(1, right_sub))
             .expect("right char-table");
 
         assert!(equal_value(&left, &right, 0));
 
         right_sub
             .with_sub_char_table_mut(|table| {
-                table.contents.ensure_owned()[17] = Value::T;
+                table.set_contents(17, Value::T);
             })
             .expect("right sub-char-table");
         assert!(!equal_value(&left, &right, 0));
@@ -537,7 +537,7 @@ fn closure_equal_is_structural() {
 
         let make = |env| {
             Value::make_lambda(LambdaData {
-                params: LambdaParams::simple(vec![intern("x")]),
+                params: LambdaParams::simple(vec![intern("x")]).into(),
                 body: vec![Value::list(vec![
                     Value::symbol("+"),
                     Value::symbol("n"),
@@ -572,7 +572,7 @@ fn recursive_closure_equal_and_hash_are_structural() {
             let binding = Value::cons(Value::symbol("f"), Value::NIL);
             let env = Value::list(vec![binding]);
             let closure = Value::make_lambda(LambdaData {
-                params: LambdaParams::simple(vec![]),
+                params: LambdaParams::simple(vec![]).into(),
                 body: vec![Value::symbol("f")],
                 env: Some(env),
                 docstring: None,
@@ -643,7 +643,7 @@ fn closure_slot_mutation_invalidates_cached_params() {
     crate::test_utils::init_test_tracing();
     with_test_heap(|| {
         let closure = Value::make_lambda(LambdaData {
-            params: LambdaParams::simple(vec![intern("x")]),
+            params: LambdaParams::simple(vec![intern("x")]).into(),
             body: vec![Value::symbol("x")],
             env: None,
             docstring: None,
@@ -980,8 +980,8 @@ fn byte_code_probe(
         stack_verified: false,
         ops,
         constants: constants.into(),
-        max_stack: 1,
-        params: LambdaParams::simple(vec![]),
+        max_stack: crate::emacs_core::bytecode::StackDepth::for_test(1),
+        params: LambdaParams::simple(vec![]).into(),
         arglist: Value::fixnum(257),
         lexical: true,
         env,

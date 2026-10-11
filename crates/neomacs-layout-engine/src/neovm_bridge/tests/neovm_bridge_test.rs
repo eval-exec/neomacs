@@ -1948,7 +1948,7 @@ fn buffer_invisible_ellipsis_text_reads_display_table_slot() {
         Value::fixnum(' ' as i64),
     ]);
     table
-        .with_char_table_mut(|obj| obj.extras.ensure_owned()[4] = glyphs)
+        .with_char_table_mut(|obj| obj.set_extra(4, glyphs))
         .expect("char-table");
 
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {

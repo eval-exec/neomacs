@@ -1092,12 +1092,15 @@ fn collection_hooks_wait_for_the_end_of_an_observed_run() {
                 (add-hook 'post-gc-hook
                           (lambda () (gensym) (setq cm-hooks-gc-runs (1+ cm-hooks-gc-runs)))))",
     );
+    // Bootstrap and warm calls can already have drained deferred hooks. Count
+    // the exact additional drain for this forced observed run.
+    let deferrals = count(&eval, CconvMemoEvent::GcHooksDeferred);
     eval.cconv_memo.collect_in_next_observed_run_for_test();
     let closure = printed(&mut eval, "(cm-hooks 1)");
     assert_eq!(closure, "#[nil ((list a)) ((a . 1))]");
     assert_eq!(count(&eval, CconvMemoEvent::VerifyMatch), matches + 1);
     assert_eq!(count(&eval, CconvMemoEvent::VerifyMismatch), 0);
-    assert_eq!(count(&eval, CconvMemoEvent::GcHooksDeferred), 1);
+    assert_eq!(count(&eval, CconvMemoEvent::GcHooksDeferred), deferrals + 1);
     // They ran before the creation returned.
     assert_eq!(
         printed(

@@ -511,7 +511,25 @@ fn generational_worker_first_partition_symbols_survive_in_span_child_drops() {
         let mut harness = WorkerHarness::new(&heap, major);
         harness.job.claims.drop_dump_children = true;
         harness.job.mapped_cons_ranges = Some(vec![(cons.xcons_ptr() as usize, 1)]);
-        harness.job.mapped_veclikes = Some(vec![vector.as_veclike_ptr().unwrap() as usize]);
+        // This fixture specifically tests the mapped vector's child-routing
+        // arm. Its prior writes promoted the fake image's backing to owned;
+        // enable the real vector retirement policy that admits that backing.
+        heap.vec_scan = knobs::VecScanMode::Snapshot;
+        let mapped = {
+            // SAFETY: the fixture admits one stopped writer and retains the
+            // leaked image/header and its owned vector buffer through run().
+            let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
+            // SAFETY: this same-heap registered image header is initialized;
+            // no mutation, callback, collection, or backing replacement occurs
+            // between this stopped capture and the synchronous worker finish.
+            unsafe {
+                super::super::mapped_veclike_scan::MappedVeclikeScanSnapshot::capture(
+                    &world,
+                    [vector.as_veclike_ptr().unwrap().cast_mut()],
+                )
+            }
+        };
+        harness.job.mapped_veclikes = Some(mapped);
         let (result, deferred) = harness.run();
         assert!(result.promo.is_empty());
         assert!(deferred.iter().all(|value| !value.is_heap_object()));

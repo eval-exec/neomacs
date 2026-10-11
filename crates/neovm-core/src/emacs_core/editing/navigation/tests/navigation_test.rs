@@ -1161,3 +1161,7 @@ fn test_forward_char_honors_narrowing_beginning() {
 mod line_index;
 #[path = "selective_display_gnu_test.rs"]
 mod selective_display_gnu;
+
+#[cfg(test)]
+#[path = "tsb_boundary_numbers.rs"]
+mod tsb_boundary_numbers;

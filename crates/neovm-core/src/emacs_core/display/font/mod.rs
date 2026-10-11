@@ -457,10 +457,10 @@ fn frame_font_request_from_value(value: &Value) -> Option<FrameFontRequest> {
 }
 
 fn face_height_from_value(value: Value) -> Option<FaceHeight> {
-    match value.kind() {
-        ValueKind::Fixnum(n) if n > 0 => Some(FaceHeight::Absolute(n as i32)),
-        ValueKind::Float if value.xfloat() > 0.0 => Some(FaceHeight::Relative(value.xfloat())),
-        _ => None,
+    match super::xfaces::height::BackendFaceHeight::try_from(value) {
+        Ok(height) => Some(FaceHeight::from(height)),
+        Err(super::xfaces::height::FaceHeightError::InvalidNumericHeight) => None,
+        Err(super::xfaces::height::FaceHeightError::BackendRange) => None,
     }
 }
 
@@ -2695,7 +2695,7 @@ fn face_remapping_value_for_buffer(eval: &super::eval::Context, buffer: &Buffer)
     // Buffer-local binding takes priority
     buffer
         .get_buffer_local("face-remapping-alist")
-        .or_else(|| eval.obarray().symbol_value("face-remapping-alist").copied())
+        .or_else(|| eval.obarray().symbol_value_copied("face-remapping-alist"))
         .unwrap_or(Value::NIL)
 }
 

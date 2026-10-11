@@ -19,7 +19,7 @@ fn body(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f
 }
 
@@ -280,9 +280,9 @@ fn raw_varref_preserves_integer_values_across_inline_and_fallback_reads() {
             vec![Op::Add1, Op::VarRef(0), Op::List(2), Op::Return],
             vec![Value::symbol(name)],
         );
-        f.params
-            .required
-            .push(crate::emacs_core::intern::intern("x"));
+        let mut params = f.params.named().expect("named fixture parameters").clone();
+        params.required.push(crate::emacs_core::intern::intern("x"));
+        f.params = params.into();
         let leaf = compile_bytecode_function(&f).expect("raw reader compiles");
         for n in [
             Value::MOST_NEGATIVE_FIXNUM,
@@ -324,9 +324,9 @@ fn raw_varref_signal_handler_receives_tagged_residual_values() {
         ],
         vec![Value::symbol("raw-vri-void")],
     );
-    f.params
-        .required
-        .push(crate::emacs_core::intern::intern("x"));
+    let mut params = f.params.named().expect("named fixture parameters").clone();
+    params.required.push(crate::emacs_core::intern::intern("x"));
+    f.params = params.into();
     let leaf = compile_bytecode_function(&f).expect("raw signal reader compiles");
     let result = leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(-1)]);
     let NativeRun::Ok(bits) = result else {
@@ -380,9 +380,9 @@ fn raw_varref_keeps_heap_roots_live_at_a_later_collecting_call() {
                 Value::symbol("raw-vri-collect"),
             ],
         );
-        f.params
-            .required
-            .push(crate::emacs_core::intern::intern("x"));
+        let mut params = f.params.named().expect("named fixture parameters").clone();
+        params.required.push(crate::emacs_core::intern::intern("x"));
+        f.params = params.into();
         let leaf = compile_bytecode_function(&f).expect("raw collecting reader compiles");
         let before = eval.tagged_heap.gc_collections();
         for _ in 0..3 {

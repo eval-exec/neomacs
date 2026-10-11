@@ -114,7 +114,7 @@ fn interpret(ev: &mut Context, prog: &Prog, var: &str, args: &[Value]) -> String
     f.lexical = true;
     f.ops = prog.ops.clone();
     f.constants = constants(var).into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     let mut vm = Vm::from_context(ev);
     match vm.execute(&f, args.to_vec()) {
         Ok(v) => print_value(&v),
@@ -507,17 +507,21 @@ fn type_rules_match_the_interpreter() {
 
 /// While a concurrent mark runs (the barrier window is ALL), stores into a
 /// symbol cell, a forwarder and a BLV cons go to the shims, which bracket
-/// the seqlock and log the pre-image; after it they are inline again.
-#[test]
-fn a_concurrent_mark_sends_every_store_to_the_shim() {
+/// the seqlock and log the pre-image; after it ends stores are inline again.
+fn check_concurrent_mark_store_shims() {
     let mut ev = crate::test_utils::with_legacy_gc(fixture);
     // This test pins the legacy window's shim counts. Generational Stage A
     // keeps ALL until C2.8, including the BLV store guard's marking test.
     warm(&mut ev, &["ivt-loc"]);
     eval_ok(&mut ev, "(setq ivt-plain (list 'old-plain))");
+    reset_inline_var_sites();
     let set_plain = compile(&ev, ALL, &Prog::setq(), "ivt-plain");
     let let_loc = compile(&ev, ALL, &Prog::let_call(), "ivt-loc");
     let set_obj = compile(&ev, ALL, &Prog::setq(), "ivt-obj");
+    assert_eq!(inline_var_sites(InlineVarOp::Set), 2);
+    assert_eq!(inline_var_sites(InlineVarOp::Bind), 1);
+    assert_eq!(inline_var_sites(InlineVarOp::Unbind), 1);
+    let depths = (ev.specpdl.len(), ev.jit_bind_stack.len());
     ev.tagged_heap.set_concurrent_active_for_test(true);
     let (got, called) = run(&mut ev, &set_plain, &[Value::make_int(1)]);
     assert_eq!((got.as_str(), called.varset), ("1", 1));
@@ -525,21 +529,35 @@ fn a_concurrent_mark_sends_every_store_to_the_shim() {
     let (got, called) = run(&mut ev, &let_loc, &[Value::make_int(2)]);
     assert_eq!(got, "(body 11)");
     assert_eq!((called.varbind, called.unbind), (1, 1));
-    let (_, called) = run(&mut ev, &set_obj, &[Value::make_int(3)]);
-    assert_eq!(called.varset, 1);
+    assert_eq!((ev.specpdl.len(), ev.jit_bind_stack.len()), depths);
+    let (got, called) = run(&mut ev, &set_obj, &[Value::make_int(3)]);
+    assert_eq!((got.as_str(), called.varset), ("3", 1));
     ev.tagged_heap.set_concurrent_active_for_test(false);
     assert!(
         logged.iter().any(|v| print_value(v) == "(old-plain)"),
         "the overwritten plain value is logged: {logged:?}"
     );
-    for (leaf, args) in [
-        (&set_plain, vec![Value::make_int(4)]),
-        (&let_loc, vec![Value::make_int(5)]),
-        (&set_obj, vec![Value::make_int(6)]),
+    for (leaf, args, expected, expected_shims) in [
+        (&set_plain, vec![Value::make_int(4)], "4", Shims::default()),
+        (
+            &let_loc,
+            vec![Value::make_int(5)],
+            "(body 11)",
+            Shims::default(),
+        ),
+        (&set_obj, vec![Value::make_int(6)], "6", Shims::default()),
     ] {
-        assert_eq!(run(&mut ev, leaf, &args).1, Shims::default());
+        let (got, called) = run(&mut ev, leaf, &args);
+        assert_eq!((got.as_str(), called), (expected, expected_shims));
+        assert_eq!((ev.specpdl.len(), ev.jit_bind_stack.len()), depths);
     }
     assert!(ev.tagged_heap.take_satb_shared_for_test().is_empty());
+    assert_eq!(eval(&mut ev, "ivt-loc"), "11");
+}
+
+#[test]
+fn a_concurrent_mark_sends_every_store_to_the_shim() {
+    check_concurrent_mark_store_shims();
 }
 
 /// A `let` whose body switches buffers restores the binding in the buffer
@@ -741,7 +759,7 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         .extend([Op::StackRef(0), Op::Add1, Op::StackSet(1), Op::Goto(4)]);
     f.ops[7] = Op::GotoIfNil(f.ops.len() as u32);
     f.ops.extend([Op::StackRef(1), Op::Unbind(1), Op::Return]);
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -863,4 +881,65 @@ fn unbind_sites_meet_across_paths() {
             assert_eq!(eval(&mut ev, "(list ivt-plain ivt-loc)"), "(1 11)");
         }
     }
+}
+
+// Append inside jit/tests/inline_vars_test.rs. This uses its existing fixture,
+// native runner, shim counters and synthetic concurrent-mark test API. Actual
+// execution evaluates Lisp and therefore MUST run through sandbox-run.sh.
+
+#[test]
+fn atomic_forwarder_active_mark_routes_set_bind_and_unbind_through_satb() {
+    let mut ev = fixture();
+    eval_ok(&mut ev, "(setq ivt-obj (list 'old-object))");
+    let before_set = ev
+        .obarray
+        .forwarder(intern("ivt-obj"))
+        .and_then(|descriptor| descriptor.owned_value())
+        .expect("rooted object forwarder");
+    // Archive complete construction CLIF only if the gate runner requests
+    // its own scratch directory. Both bind and unbind live in the let body.
+    let mut leaves = None;
+    let clif = super::compile_pipeline_tests::captured_clif(|| {
+        let set = compile(&ev, ALL, &Prog::setq(), "ivt-obj");
+        let bind_unbind = compile(&ev, ALL, &Prog::let_call(), "ivt-obj");
+        leaves = Some((set, bind_unbind));
+    });
+    assert_eq!(clif.len(), 2);
+    if let Some(directory) = std::env::var_os("NEOVM_P74_CLIF_DIR") {
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).expect("owned CLIF evidence directory");
+        std::fs::write(directory.join("forwarder-varset.clif"), &clif[0])
+            .expect("archive varset CLIF");
+        std::fs::write(directory.join("forwarder-varbind-unbind.clif"), &clif[1])
+            .expect("archive varbind and unbind CLIF");
+    }
+    let (set, bind_unbind) = leaves.expect("both bodies compiled");
+    let replacement = Value::list(vec![Value::symbol("new-object")]);
+    let binding = Value::list(vec![Value::symbol("bound-object")]);
+    ev.tagged_heap.set_concurrent_active_for_test(true);
+    let (set_result, set_calls) = run(&mut ev, &set, &[replacement]);
+    let set_preimages = ev.tagged_heap.take_satb_shared_for_test();
+    let (let_result, let_calls) = run(&mut ev, &bind_unbind, &[binding]);
+    let let_preimages = ev.tagged_heap.take_satb_shared_for_test();
+    ev.tagged_heap.set_concurrent_active_for_test(false);
+    assert_eq!(set_result, "(new-object)");
+    assert_eq!(set_calls.varset, 1, "active mark refuses inline varset");
+    assert!(
+        set_preimages
+            .iter()
+            .any(|value| value.bits() == before_set.bits())
+    );
+    assert_eq!(let_result, "(body (new-object))");
+    assert_eq!(let_calls.varbind, 1, "active mark refuses inline varbind");
+    assert_eq!(let_calls.unbind, 1, "active mark refuses inline unbind");
+    assert!(
+        let_preimages
+            .iter()
+            .any(|value| value.bits() == replacement.bits())
+    );
+    assert!(
+        let_preimages
+            .iter()
+            .any(|value| value.bits() == binding.bits())
+    );
 }

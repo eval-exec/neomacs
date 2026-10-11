@@ -17,7 +17,7 @@ use crate::tagged::value::TaggedValue;
 /// Collect with this heap's shared roots as the only roots.
 fn collect_with_shared_roots(heap: &mut TaggedHeap) {
     let mut roots = Vec::new();
-    collect_shared_root_gc_roots(heap.heap_identity(), &mut roots);
+    collect_shared_root_gc_roots(&heap, &mut roots);
     heap.collect_exact(roots.into_iter());
 }
 

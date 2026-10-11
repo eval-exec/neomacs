@@ -208,6 +208,47 @@ pub struct DumpLambdaParams {
     pub rest: Option<DumpSymId>,
 }
 
+/// Stored bytecode parameter shape. Dynamic contents remain invocation-checked.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum DumpFunctionParams {
+    Stack(i64),
+    Dynamic,
+    Named(DumpLambdaParams),
+}
+
+#[repr(u8)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, num_enum::TryFromPrimitive, num_enum::IntoPrimitive,
+)]
+pub enum DumpFunctionParamsKind {
+    Stack = 0,
+    Dynamic = 1,
+    Named = 2,
+}
+
+impl From<DumpLambdaParams> for DumpFunctionParams {
+    fn from(params: DumpLambdaParams) -> Self {
+        Self::Named(params)
+    }
+}
+
+impl DumpFunctionParams {
+    pub(crate) fn named(&self) -> Option<&DumpLambdaParams> {
+        match self {
+            Self::Named(params) => Some(params),
+            Self::Stack(_) | Self::Dynamic => None,
+        }
+    }
+
+    pub(crate) fn kind(&self) -> DumpFunctionParamsKind {
+        match self {
+            Self::Stack(_) => DumpFunctionParamsKind::Stack,
+            Self::Dynamic => DumpFunctionParamsKind::Dynamic,
+            Self::Named(_) => DumpFunctionParamsKind::Named,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DumpByteCodeFunction {
     /// Executable instruction source for this function.
@@ -219,8 +260,8 @@ pub struct DumpByteCodeFunction {
     /// both the source bytes and redundant derived instructions.
     pub instructions: DumpByteCodeInstructions,
     pub constants: Vec<DumpValue>,
-    pub max_stack: u16,
-    pub params: DumpLambdaParams,
+    pub max_stack: u64,
+    pub params: DumpFunctionParams,
     #[serde(default)]
     pub arglist: Option<DumpValue>,
     #[serde(default)]

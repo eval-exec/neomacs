@@ -115,7 +115,7 @@ fn kill_emacs_inside_condition_case_is_not_caught() {
     assert_eq!(eval.shutdown_request(), Some(expected));
     assert_eq!(
         eval.obarray()
-            .symbol_value("flow-word-shutdown-handler-ran"),
-        Some(&Value::NIL)
+            .symbol_value_copied("flow-word-shutdown-handler-ran"),
+        Some(Value::NIL)
     );
 }

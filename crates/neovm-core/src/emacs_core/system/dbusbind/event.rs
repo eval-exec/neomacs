@@ -185,7 +185,7 @@ fn registered_entries(
     interface: Value,
     member: Value,
 ) -> Result<Vec<Value>, Flow> {
-    let Some(table) = ctx.obarray.symbol_value("dbus-registered-objects-table") else {
+    let Some(table) = ctx.obarray.symbol_value_copied("dbus-registered-objects-table") else {
         return Ok(Vec::new());
     };
     let kind = Value::keyword_by_name(if mtype == 1 { ":method" } else { ":signal" });
@@ -198,7 +198,7 @@ fn registered_entries(
 
     let mut entries = Vec::new();
     for key in keys {
-        let value = crate::emacs_core::builtins::builtin_gethash(vec![key, *table, Value::NIL])?;
+        let value = crate::emacs_core::builtins::builtin_gethash(vec![key, table, Value::NIL])?;
         let mut rest = value;
         while rest.is_cons() {
             entries.push(rest.cons_car());
@@ -210,11 +210,11 @@ fn registered_entries(
 
 /// A registered monitor's handler: the first entry's HANDLER.
 fn monitor_handler(ctx: &mut Context, bus: Value) -> Result<Option<Value>, Flow> {
-    let Some(table) = ctx.obarray.symbol_value("dbus-registered-objects-table") else {
+    let Some(table) = ctx.obarray.symbol_value_copied("dbus-registered-objects-table") else {
         return Ok(None);
     };
     let key = Value::list(vec![Value::keyword_by_name(":monitor"), bus]);
-    let value = crate::emacs_core::builtins::builtin_gethash(vec![key, *table, Value::NIL])?;
+    let value = crate::emacs_core::builtins::builtin_gethash(vec![key, table, Value::NIL])?;
     if !value.is_cons() {
         return Ok(None);
     }
@@ -226,7 +226,7 @@ fn monitor_handler(ctx: &mut Context, bus: Value) -> Result<Option<Value>, Flow>
 
 /// Take the `dbus-message-internal` handler registered for a reply serial.
 fn take_serial_handler(ctx: &mut Context, bus: Value, serial: u32) -> Result<Value, Flow> {
-    let Some(table) = ctx.obarray.symbol_value("dbus-registered-objects-table") else {
+    let Some(table) = ctx.obarray.symbol_value_copied("dbus-registered-objects-table") else {
         return Ok(Value::NIL);
     };
     let key = Value::list(vec![
@@ -234,9 +234,9 @@ fn take_serial_handler(ctx: &mut Context, bus: Value, serial: u32) -> Result<Val
         bus,
         Value::fixnum(serial as i64),
     ]);
-    let handler = crate::emacs_core::builtins::builtin_gethash(vec![key, *table, Value::NIL])?;
+    let handler = crate::emacs_core::builtins::builtin_gethash(vec![key, table, Value::NIL])?;
     if !handler.is_nil() {
-        let _ = crate::emacs_core::builtins::builtin_remhash(vec![key, *table]);
+        let _ = crate::emacs_core::builtins::builtin_remhash(vec![key, table]);
     }
     Ok(if handler.is_cons() {
         handler.cons_car()

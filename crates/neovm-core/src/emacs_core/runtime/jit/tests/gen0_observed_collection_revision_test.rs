@@ -179,8 +179,7 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
     );
 }
 
-#[test]
-fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
+fn check_mapped_blv_binding() {
     let _journal = JournalMode::observed();
     let mut source = blv_context(false);
     let source_owner = blv_cell(&source, false);
@@ -197,9 +196,9 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
     set_tagged_heap(&mut context.tagged_heap);
     context.specpdl.reserve(16);
     context.jit_bind_stack.reserve(16);
-    let owner = *context
+    let owner = context
         .obarray()
-        .symbol_value("fx1-mapped-default-owner")
+        .symbol_value_copied("fx1-mapped-default-owner")
         .expect("mapped owner root");
     let symbol = context
         .obarray()
@@ -226,6 +225,7 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
             .remember_mapped_cons_ahead_of_writes(owner)
     );
     assert!(!is_observed(owner.bits()));
+    super::super::inline_vars::reset_inline_var_sites();
     let leaf = compile_blv(
         &context,
         &[
@@ -238,6 +238,14 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
         &[Value::symbol("u34-inline-blv")],
         1,
     );
+    assert_eq!(
+        super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Bind),
+        1
+    );
+    assert_eq!(
+        super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Unbind),
+        1
+    );
     for _ in 0..3 {
         assert_eq!(native(&mut context, &leaf, &[Value::T]), Value::T);
     }
@@ -247,7 +255,7 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
     assert_eq!(
         super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get()) - binds,
         0,
-        "an unobserved remembered dump cell keeps its inline binding proof",
+        "the remembered binding stays inline",
     );
     assert_eq!(
         super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get()) - unbinds,
@@ -269,6 +277,11 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
         !reads.unchanged(),
         "bind and restore each journal their observed cell"
     );
+}
+
+#[test]
+fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
+    check_mapped_blv_binding();
 }
 
 fn blv_context(local: bool) -> Context {

@@ -13,7 +13,10 @@ fn adoption_reasserts_generated_specialness_on_an_existing_forwarder() {
 
     assert!(!eval.obarray().is_special("data-directory"));
 
-    let counts = adopt(eval.obarray_mut());
+    // SAFETY: this noncalling generated adoption pass preserves manager
+    // identity/generation and uses canonical descriptor reattachment hooks.
+    // A localized Boolean may retarget debugger admission, so it MUST retire.
+    let counts = unsafe { eval.obarray.with_legacy_storage_write(adopt) };
     let id = crate::emacs_core::intern::lookup_interned("data-directory")
         .expect("data-directory should be interned");
 
@@ -47,7 +50,10 @@ fn adoption_reasserts_generated_specialness_on_an_existing_forwarder() {
 fn adoption_is_idempotent_and_leaves_no_alias_rows() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    let counts = adopt(eval.obarray_mut());
+    // SAFETY: this noncalling generated adoption pass preserves manager
+    // identity/generation and uses canonical descriptor reattachment hooks.
+    // A localized Boolean may retarget debugger admission, so it MUST retire.
+    let counts = unsafe { eval.obarray.with_legacy_storage_write(adopt) };
     assert_eq!(
         counts.forwarded, 0,
         "the bootstrap pass ran too early and missed rows: {counts:?}"

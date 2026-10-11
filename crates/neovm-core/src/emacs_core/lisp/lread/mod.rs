@@ -248,8 +248,7 @@ fn record_eval_buffer_load_history(eval: &mut super::eval::Context, filename: &L
     let entry = Value::cons(Value::heap_string(filename.clone()), Value::NIL);
     let history = eval
         .obarray()
-        .symbol_value("load-history")
-        .cloned()
+        .symbol_value_copied("load-history")
         .unwrap_or(Value::NIL);
     let filtered_history = Value::list(
         list_to_vec(&history)
@@ -538,8 +537,7 @@ impl FormReader {
         }
         match eval
             .obarray
-            .symbol_value("load-read-function")
-            .copied()
+            .symbol_value_copied("load-read-function")
             .filter(|hook| !hook.is_nil() && !hook.is_symbol_named("read"))
         {
             Some(hook) => Self::Lisp(hook),

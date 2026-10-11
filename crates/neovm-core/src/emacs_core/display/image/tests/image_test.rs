@@ -1799,8 +1799,7 @@ fn image_types_bootstrap_list_matches_gnu_linux_order() {
     let eval = crate::emacs_core::Context::new();
     let image_types = eval
         .obarray()
-        .symbol_value("image-types")
-        .copied()
+        .symbol_value_copied("image-types")
         .expect("image-types should be bound");
     assert_eq!(
         image_types,

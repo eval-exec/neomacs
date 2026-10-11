@@ -8,6 +8,21 @@ use super::compile_pipeline_tests::{captured_clif, function};
 use super::*;
 use crate::emacs_core::jit::opt::ir::ParamShape;
 
+/// Threading: this passless adapter fixture owns only a scalar compiler-test
+/// mask on the invoking test thread, with no Lisp or shared mutator state.
+struct PassesOff;
+impl PassesOff {
+    fn enter() -> Self {
+        force_opt_passes_for_test(Some(OptPasses::default()));
+        Self
+    }
+}
+impl Drop for PassesOff {
+    fn drop(&mut self) {
+        force_opt_passes_for_test(None);
+    }
+}
+
 fn root_counts(clif: &str) -> (u32, u32) {
     let header = clif.lines().next().expect("the emitted leaf has a header");
     let field = |name: &str| {
@@ -28,7 +43,10 @@ fn lower(f: &ByteCodeFunction, params: Option<ParamShape>) -> (CompiledLeaf, Str
             opt_backend::lower_best(
                 f.executable_ops(),
                 &f.constants,
-                f.params.required.len(),
+                f.params
+                    .stack_shape()
+                    .expect("fixture stack parameters")
+                    .required(),
                 f.executable_gnu_byte_offset_map(),
                 None,
                 None,
@@ -96,6 +114,7 @@ fn assert_native_parity(ctx: &mut Context, f: &ByteCodeFunction, leaf: &Compiled
 #[test]
 fn opt_t1_root_counts_do_not_inherit_the_preceding_leaf() {
     let _mode = opt_mode_scope_for_test(OptMode::Opt);
+    let _passes = PassesOff::enter();
     let mut ctx = Context::new();
     let _rooted = seed_root_stores();
     let f = pure();
@@ -108,6 +127,7 @@ fn opt_t1_root_counts_do_not_inherit_the_preceding_leaf() {
 #[test]
 fn opt_success_root_counts_do_not_inherit_the_preceding_leaf() {
     let _mode = opt_mode_scope_for_test(OptMode::Opt);
+    let _passes = PassesOff::enter();
     let mut ctx = Context::new();
     let _rooted = seed_root_stores();
     let f = pure();
@@ -126,6 +146,7 @@ fn opt_success_root_counts_do_not_inherit_the_preceding_leaf() {
 #[test]
 fn opt_refused_root_counts_do_not_inherit_the_preceding_leaf() {
     let _mode = opt_mode_scope_for_test(OptMode::Opt);
+    let _passes = PassesOff::enter();
     let mut ctx = Context::new();
     let _rooted = seed_root_stores();
     // The real opt operation budget rejects this valid pure body independently

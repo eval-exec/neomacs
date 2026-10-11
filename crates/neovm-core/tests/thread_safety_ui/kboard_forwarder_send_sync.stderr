@@ -1,0 +1,19 @@
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<LispKboardObjFwd>`, but its trait bounds were not satisfied
+ --> tests/thread_safety_ui/kboard_forwarder_send_sync.rs:8:41
+  |
+3 | struct ThreadTransfer<T>(PhantomData<T>);
+  | ------------------------ associated function or constant `transfer` not found for this struct
+...
+8 |     ThreadTransfer::<LispKboardObjFwd>::transfer();
+  |                                         ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<LispKboardObjFwd>` due to unsatisfied trait bounds
+  |
+ ::: src/emacs_core/runtime/forward/mod.rs
+  |
+  | pub struct LispKboardObjFwd {
+  | --------------------------- doesn't satisfy `LispKboardObjFwd: Send` or `LispKboardObjFwd: Sync`
+  |
+  = note: the following trait bounds were not satisfied:
+          `*const (): Send`
+          which is required by `LispKboardObjFwd: Send`
+          `*const (): Sync`
+          which is required by `LispKboardObjFwd: Sync`

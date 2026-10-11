@@ -33,8 +33,7 @@ fn replacing_tail(generational: bool, display: bool) {
     let rendered = if display {
         let format = eval
             .obarray
-            .symbol_value("review-mode-line-live-format")
-            .copied()
+            .symbol_value_copied("review-mode-line-live-format")
             .expect("installed mode-line format");
         format_mode_line_for_display_with_sources(&mut eval, format, Value::NIL, Value::NIL, 80)
             .value()
@@ -140,8 +139,7 @@ fn collecting_checkpoint_format(eval: &mut Context) -> (Value, usize, usize) {
     .expect("install collecting checkpoint format");
     let format = eval
         .obarray
-        .symbol_value("review-mode-line-checkpoint-format")
-        .copied()
+        .symbol_value_copied("review-mode-line-checkpoint-format")
         .expect("installed checkpoint format");
     // GNU's first doubling transition checkpoints C after displaying B.
     // Preserve only bits here, so this test does not itself root that cons.

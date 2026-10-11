@@ -11,9 +11,10 @@ use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::function;
 use crate::emacs_core::jit::compile::lowering::{RegallocChoice, RegallocPolicy};
 use crate::emacs_core::jit::compile::{
-    CompileRequest, OptMode, Tier2Knob, Tier2PolicyKnob, compile_bytecode_function_requested,
-    force_deopt_for_test, force_opt_for_test, force_profit_gate_for_test, force_tier2_for_test,
-    force_tier2_policy_for_test,
+    CompileRequest, OptMode, OptPasses, OptProfitMode, Tier2Knob, Tier2PolicyKnob,
+    compile_bytecode_function_requested, force_deopt_for_test, force_opt_for_test,
+    force_opt_passes_for_test, force_opt_profit_for_test, force_profit_gate_for_test,
+    force_tier2_for_test, force_tier2_policy_for_test,
 };
 use crate::emacs_core::jit::feedback::{FeedbackMode, force_feedback_mode_for_test};
 use crate::emacs_core::jit::inline::force_inline_for_test;
@@ -24,6 +25,8 @@ struct Settings;
 impl Settings {
     fn enter(mode: OptMode) -> Self {
         force_opt_for_test(Some(mode), None);
+        force_opt_profit_for_test(Some(OptProfitMode::Off));
+        force_opt_passes_for_test(Some(OptPasses::default()));
         force_tier2_for_test(Some(Tier2Knob {
             on: true,
             window: 20,
@@ -45,6 +48,8 @@ impl Settings {
 impl Drop for Settings {
     fn drop(&mut self) {
         force_opt_for_test(None, None);
+        force_opt_profit_for_test(None);
+        force_opt_passes_for_test(None);
         force_tier2_for_test(None);
         force_tier2_policy_for_test(None);
         force_mode_for_test(None);

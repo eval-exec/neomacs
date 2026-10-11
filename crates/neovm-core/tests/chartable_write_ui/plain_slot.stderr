@@ -1,0 +1,5 @@
+error[E0609]: no field `defalt` on type `&mut CharTableWrite<'_>`
+ --> tests/chartable_write_ui/plain_slot.rs:5:45
+  |
+5 |     table.with_char_table_mut(|write| write.defalt = Value::T);
+  |                                             ^^^^^^ unknown field

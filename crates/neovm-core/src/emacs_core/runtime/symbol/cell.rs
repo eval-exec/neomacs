@@ -642,25 +642,6 @@ impl LispSymbol {
         }
     }
 
-    /// The value of a `Plainval` cell as a reference into the cell, for the
-    /// legacy `&Value`-returning readers (`Obarray::symbol_value_id`,
-    /// `default_value_id`); `None` for every other redirect. Readers that
-    /// copy ([`Self::plain_value`]) are the ones to use: a reference pins the
-    /// word to plain loads.
-    #[inline]
-    pub(super) fn plain_value_ref(&self) -> Option<&Value> {
-        match self.flags.redirect() {
-            // SAFETY: `Value` is a `repr(transparent)` machine word, and
-            // under this tag the word is a `Value` (`CellWord::plain`).
-            SymbolRedirect::Plainval => {
-                Some(unsafe { &*std::ptr::from_ref(&self.val.0).cast::<Value>() })
-            }
-            SymbolRedirect::Varalias | SymbolRedirect::Localized | SymbolRedirect::Forwarded => {
-                None
-            }
-        }
-    }
-
     /// The target of a `Varalias` cell; `None` for every other redirect.
     #[inline(always)]
     pub(crate) fn alias_target(&self) -> Option<SymId> {
@@ -721,7 +702,10 @@ impl LispSymbol {
 /// ```compile_fail,E0451
 /// use neovm_core::emacs_core::forward::{LispFwd, LispFwdType};
 ///
-/// let _forged = LispFwd { ty: LispFwdType::Int };
+/// let _forged = LispFwd {
+///     ty: LispFwdType::Int,
+///     _thread_confined: Default::default(),
+/// };
 /// ```
 ///
 /// nor copied out of the storage it describes:
@@ -736,7 +720,7 @@ impl LispSymbol {
 ///
 /// and its slot is not lent out as a reference:
 ///
-/// ```compile_fail,E0624
+/// ```compile_fail,E0599
 /// use neovm_core::emacs_core::forward::LispFwd;
 ///
 /// fn peek(fwd: &'static LispFwd) {

@@ -1,5 +1,16 @@
 use super::super::intern::intern;
 use super::*;
+
+fn init_runtime_errors(context: &mut crate::emacs_core::eval::Context) {
+    // SAFETY: standard-error setup only initializes native condition/message
+    // properties. It never calls Lisp, collects, mutates canonical dispatch,
+    // replaces storage or exports a raw manager/interior reference.
+    unsafe {
+        context
+            .obarray
+            .with_legacy_value_write(init_standard_errors);
+    }
+}
 use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::test_utils::{runtime_startup_context, runtime_startup_eval_all};
 
@@ -760,7 +771,7 @@ fn builtin_signal_non_symbol() {
 fn builtin_error_message_string_basic() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     // (error-message-string '(void-variable x))
     let err_data = Value::list(vec![Value::symbol("void-variable"), Value::symbol("x")]);
@@ -777,7 +788,7 @@ fn builtin_error_message_string_basic() {
 fn builtin_error_message_string_no_data() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     // (error-message-string '(arith-error))
     let err_data = Value::list(vec![Value::symbol("arith-error")]);
@@ -791,7 +802,7 @@ fn builtin_error_message_string_no_data() {
 fn builtin_error_message_string_void_function_typography() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![Value::symbol("void-function"), Value::symbol("x")]);
     let result = builtin_error_message_string(&mut evaluator, vec![err_data]);
@@ -833,7 +844,7 @@ fn builtin_error_message_string_unknown() {
 fn builtin_error_message_string_no_payload_specials() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let error_no_payload = Value::list(vec![Value::symbol("error")]);
     let error_result = builtin_error_message_string(&mut evaluator, vec![error_no_payload]);
@@ -850,7 +861,7 @@ fn builtin_error_message_string_no_payload_specials() {
 fn builtin_error_message_string_quit_conditions_are_printable_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let quit_no_payload = Value::list(vec![Value::symbol("quit")]);
     let quit_result = builtin_error_message_string(&mut evaluator, vec![quit_no_payload]);
@@ -895,7 +906,7 @@ fn builtin_error_message_string_message_only_symbol_is_printable_like_gnu() {
 fn builtin_error_message_string_error_with_string_payload() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![Value::symbol("error"), Value::string("abc")]);
     let result = builtin_error_message_string(&mut evaluator, vec![err_data]);
@@ -908,7 +919,7 @@ fn builtin_error_message_string_error_with_string_payload() {
 fn builtin_error_message_string_error_with_string_and_extra() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
         Value::symbol("error"),
@@ -925,13 +936,19 @@ fn builtin_error_message_string_error_with_string_and_extra() {
 fn builtin_error_message_string_ignores_dotted_error_data_tails() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
-    put_error_properties(
-        &mut evaluator.obarray,
-        "iter-end-of-sequence",
-        "Iteration terminated",
-        vec!["iter-end-of-sequence"],
-    );
+    init_runtime_errors(&mut evaluator);
+    // SAFETY: this fixture publishes only error properties using the same
+    // noncalling native property path; neither canonical dispatch word changes.
+    unsafe {
+        evaluator.obarray.with_legacy_value_write(|obarray| {
+            put_error_properties(
+                obarray,
+                "iter-end-of-sequence",
+                "Iteration terminated",
+                vec!["iter-end-of-sequence"],
+            );
+        });
+    }
 
     let generator_eof = Value::cons(Value::symbol("iter-end-of-sequence"), Value::symbol(":eof"));
     let generator_result = builtin_error_message_string(&mut evaluator, vec![generator_eof]);
@@ -977,7 +994,7 @@ fn builtin_error_message_string_ignores_dotted_error_data_tails() {
 fn builtin_error_message_string_user_error_variants() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let with_string = Value::list(vec![
         Value::symbol("user-error"),
@@ -1005,7 +1022,7 @@ fn builtin_error_message_string_user_error_variants() {
 fn builtin_error_message_string_file_error_string_payload() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
         Value::symbol("file-error"),
@@ -1022,7 +1039,7 @@ fn builtin_error_message_string_file_error_string_payload() {
 fn builtin_error_message_string_file_missing_string_payload() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
         Value::symbol("file-missing"),
@@ -1043,7 +1060,7 @@ fn builtin_error_message_string_file_missing_string_payload() {
 fn builtin_error_message_string_escapes_raw_unibyte_payload_in_multibyte_buffer_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
     let err_data = Value::list(vec![Value::symbol("file-error"), raw, Value::string("foo")]);
@@ -1060,7 +1077,7 @@ fn builtin_error_message_string_escapes_raw_unibyte_payload_in_multibyte_buffer_
 fn builtin_error_message_string_peculiar_error_paths() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let error_single = Value::list(vec![Value::symbol("error"), Value::fixnum(1)]);
     let error_single_result = builtin_error_message_string(&mut evaluator, vec![error_single]);
@@ -1161,7 +1178,7 @@ fn builtin_error_message_string_peculiar_error_paths() {
 fn builtin_error_message_string_end_of_file_does_not_quote_string_payload() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
         Value::symbol("end-of-file"),
@@ -1195,7 +1212,7 @@ fn error_message_string_end_of_file_prints_live_buffer_name_like_gnu() {
 fn builtin_error_message_string_args_out_of_range_uses_base_message() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
         Value::symbol("args-out-of-range"),
@@ -1214,7 +1231,7 @@ fn builtin_error_message_string_args_out_of_range_uses_base_message() {
 fn builtin_error_message_string_formats_buffer_handles_with_names() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let live_id = evaluator.buffers.create_buffer("*ems-live*");
     let live_err = Value::list(vec![
@@ -1248,7 +1265,7 @@ fn builtin_error_message_string_formats_buffer_handles_with_names() {
 fn builtin_error_message_string_formats_mutex_and_condvar_handles() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let mutex =
         super::super::threads::builtin_make_mutex(&mut evaluator, vec![Value::string("ems-mutex")])
@@ -1295,7 +1312,7 @@ fn builtin_error_message_string_formats_mutex_and_condvar_handles() {
 fn builtin_error_message_string_formats_thread_handles() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let thread = super::super::threads::builtin_current_thread(&mut evaluator, vec![])
         .expect("current-thread should succeed");
@@ -1319,7 +1336,7 @@ fn builtin_error_message_string_formats_thread_handles() {
 fn builtin_error_message_string_formats_terminal_handles() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let terminals = super::super::terminal::pure::builtin_terminal_list(vec![])
         .expect("terminal-list should succeed");
@@ -1347,7 +1364,7 @@ fn builtin_error_message_string_formats_terminal_handles() {
 fn builtin_error_message_string_formats_frame_and_window_handles() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
-    init_standard_errors(&mut evaluator.obarray);
+    init_runtime_errors(&mut evaluator);
 
     let frame = super::super::frame::builtin_selected_frame(&mut evaluator, vec![])
         .expect("selected-frame should succeed");

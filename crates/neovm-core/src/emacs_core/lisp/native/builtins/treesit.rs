@@ -3207,8 +3207,10 @@ pub(crate) fn builtin_treesit_parse_string(
     let text = args[0].expect_lisp_string_in(&eval.tagged_heap)?;
     let name = format!(" *treesit-parse-string-{}*", eval.treesit.roots().len() + 1);
     let buffer_id = eval.buffers.create_buffer_with_hook_inhibition(&name, true);
-    let saved_current = eval.buffers.current_buffer_id();
-    let _ = eval.buffers.switch_current(buffer_id);
+    // GNU selects the scratch buffer only around `insert1` and selects the
+    // caller's buffer again BEFORE creating the parser (treesit.c:2874-2879),
+    // so a failing parser creation leaves the caller's buffer current. The
+    // insertion here names its buffer, so nothing needs selecting at all.
     let _ = eval.buffers.insert_lisp_string_into_buffer(buffer_id, text);
     let parser = builtin_treesit_parser_create(
         eval,
@@ -3223,9 +3225,6 @@ pub(crate) fn builtin_treesit_parse_string(
         && let Some(entry) = eval.treesit.parser_mut(parser_id)
     {
         entry.need_to_gc_buffer = true;
-    }
-    if let Some(saved) = saved_current {
-        let _ = eval.buffers.switch_current(saved);
     }
     builtin_treesit_parser_root_node(eval, vec![parser])
 }

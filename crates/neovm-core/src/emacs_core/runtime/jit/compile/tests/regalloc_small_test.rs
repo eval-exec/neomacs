@@ -94,9 +94,11 @@ fn regalloc_small_selection_covers_baseline_and_mir() {
         f.lexical = true;
         if baseline {
             // An optional argument keeps this body out of the MIR tier.
-            f.params
+            let mut params = f.params.named().expect("named fixture parameters").clone();
+            params
                 .optional
                 .push(crate::emacs_core::intern::intern("regalloc-small-optional"));
+            f.params = params.into();
         }
         f.ops = vec![
             Op::StackRef(u16::from(baseline)),
@@ -105,7 +107,7 @@ fn regalloc_small_selection_covers_baseline_and_mir() {
             Op::Return,
         ];
         f.constants = vec![Value::make_int(1)].into();
-        f.max_stack = 4;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
         f.seal_hand_assembled_ops();
         let leaf =
             compile_bytecode_function_with(&f, None).expect("small arithmetic body compiles");

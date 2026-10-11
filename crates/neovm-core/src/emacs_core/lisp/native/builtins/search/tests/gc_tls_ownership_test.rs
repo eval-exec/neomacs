@@ -44,7 +44,7 @@ fn gc_tls_ownership_regex_reentry_keeps_evicted_compiled_translation_alive() {
     assert!(lazy_relevant);
     assert!(
         ctx.obarray
-            .symbol_value_id(intern("gc-tls-reentry-ran"))
+            .symbol_value_id_copied(intern("gc-tls-reentry-ran"))
             .is_some_and(|ran| !ran.is_nil())
     );
     assert!(

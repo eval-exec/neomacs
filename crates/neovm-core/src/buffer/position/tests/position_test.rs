@@ -53,3 +53,16 @@ fn text_position_hint_contributes_backend_anchor_without_exposing_storage_shape(
     hint.consider_byte_anchor(&mut byte_bounds, EmacsBytePos::new(10));
     assert_eq!(byte_bounds.above(), TextPositionAnchor::from_usize(8, 12));
 }
+
+#[test]
+fn the_last_position_of_a_maximal_buffer_is_most_positive_fixnum() {
+    use crate::tagged::value::{Fixnum, TaggedValue};
+    let first = BufferLispPos::of_live_buffer(CharPos0::ZERO);
+    let last =
+        BufferLispPos::of_live_buffer(CharPos0::new(super::super::gap_buffer::BUF_BYTES_MAX));
+    assert_eq!(i64::from(Fixnum::from(first)), 1);
+    assert_eq!(
+        i64::from(Fixnum::from(last)),
+        TaggedValue::MOST_POSITIVE_FIXNUM
+    );
+}

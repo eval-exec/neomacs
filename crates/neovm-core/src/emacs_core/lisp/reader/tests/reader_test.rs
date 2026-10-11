@@ -996,8 +996,8 @@ fn read_from_minibuffer_non_character_event_stays_queued_and_signals_end_of_file
         }
     );
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::symbol("foo")]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::symbol("foo")]))
     );
 }
 
@@ -1686,14 +1686,14 @@ fn shared_child_minibuffer_publishes_focus_on_entry_and_unwind() {
         assert!(setup.iter().all(Result::is_ok), "{setup:?}");
         let owner = crate::window::FrameId(
             ev.obarray
-                .symbol_value("test-owner")
+                .symbol_value_copied("test-owner")
                 .unwrap()
                 .as_frame_id()
                 .unwrap(),
         );
         let child = crate::window::FrameId(
             ev.obarray
-                .symbol_value("test-child")
+                .symbol_value_copied("test-child")
                 .unwrap()
                 .as_frame_id()
                 .unwrap(),
@@ -1723,7 +1723,7 @@ fn shared_child_minibuffer_publishes_focus_on_entry_and_unwind() {
         let source = "(progn (setq minibuffer-setup-hook nil minibuffer-exit-hook nil) (setq test-read-map (make-sparse-keymap)) (define-key test-read-map \"\\r\" (lambda () (interactive) (throw 'exit nil))))";
         ev.eval_str(source).unwrap();
         let mut entered = false;
-        let map = *ev.obarray.symbol_value("test-read-map").unwrap();
+        let map = ev.obarray.symbol_value_copied("test-read-map").unwrap();
         let result = finish_read_from_minibuffer_in_eval_with_setup(
             &mut ev,
             &[Value::string("Prompt: "), Value::NIL, map],
@@ -2360,8 +2360,8 @@ fn read_string_non_character_event_stays_queued_and_signals_end_of_file() {
         }
     );
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::symbol("foo")]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::symbol("foo")]))
     );
 }
 
@@ -2791,8 +2791,8 @@ fn completing_read_non_character_event_stays_queued_and_signals_end_of_file() {
         }
     );
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::symbol("foo")]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::symbol("foo")]))
     );
 }
 
@@ -3091,8 +3091,8 @@ fn yes_or_no_p_ignores_unread_events_and_eofs() {
         false
     });
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(89)]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(89)]))
     );
 }
 
@@ -3115,8 +3115,8 @@ fn yes_or_no_p_unread_events_do_not_change() {
         false
     });
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(110)]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(110)]))
     );
 }
 
@@ -3139,8 +3139,8 @@ fn yes_or_no_p_rejects_invalid_character_event() {
         }
     );
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(48)]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(48)]))
     );
 }
 
@@ -3229,8 +3229,8 @@ fn input_pending_p_uses_dynamic_unread_command_events_binding() {
         .unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(97)]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(97)]))
     );
 }
 
@@ -3792,9 +3792,31 @@ fn input_pending_p_reloads_event_filter_after_timer_callbacks() {
 fn input_pending_p_returns_t_when_quit_flag_is_set() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
+    // GNU get_input_pending counts a deferred quit as pending input
+    // (keyboard.c:8052-8059). Inhibit quitting so evaluation/service safe
+    // points can reach that query instead of signaling first.
+    ev.set_variable("inhibit-quit", Value::T);
     ev.set_quit_flag_value(Value::T);
     let result = builtin_input_pending_p(&mut ev, vec![]).unwrap();
     assert_eq!(result, Value::T);
+    assert_eq!(ev.quit_flag_value(), Value::T);
+}
+
+#[test]
+fn input_pending_p_signals_uninhibited_quit_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    // GNU eval_sub checks quit before evaluating a call (eval.c:2601),
+    // and probably_quit honors inhibit-quit (eval.c:1891-1894). The exact
+    // batch form below signals quit, rather than returning pending input.
+    let error = ev
+        .eval_str("(let ((quit-flag t)) (input-pending-p))")
+        .expect_err("GNU signals an uninhibited pending quit");
+    assert!(matches!(
+        error,
+        crate::emacs_core::error::EvalError::Signal { symbol, .. }
+            if symbol == intern("quit")
+    ));
 }
 
 #[test]
@@ -3832,8 +3854,8 @@ fn discard_input_clears_unread_command_events() {
     let result = builtin_discard_input(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::NIL)
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::NIL)
     );
 }
 
@@ -3850,8 +3872,8 @@ fn discard_input_uses_dynamic_unread_command_events_binding() {
         .unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(97)]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(97)]))
     );
 }
 
@@ -4295,8 +4317,8 @@ fn read_char_signals_error_on_non_character_event() {
     });
     assert_eq!(ev.recent_input_events(), &[Value::symbol("foo")]);
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::symbol("foo")]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::symbol("foo")]))
     );
 }
 
@@ -4321,8 +4343,8 @@ fn read_char_non_character_truncates_unread_tail_to_offending_event() {
         false
     });
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::symbol("foo")]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::symbol("foo")]))
     );
     assert_eq!(ev.recent_input_events(), &[Value::symbol("foo")]);
 }
@@ -4338,8 +4360,8 @@ fn read_char_consumes_character_event_and_preserves_tail() {
     let result = builtin_read_char(&mut ev, vec![]).unwrap();
     assert_eq!(result.as_int(), Some(97));
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::symbol("foo")]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::symbol("foo")]))
     );
 }
 
@@ -4452,8 +4474,8 @@ fn read_key_consumes_unread_character_and_keeps_tail() {
     assert_eq!(result, event);
     assert_eq!(ev.read_command_keys(), std::slice::from_ref(&event));
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(97)]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(97)]))
     );
 }
 
@@ -4470,8 +4492,8 @@ fn read_key_consumes_character_event_and_preserves_tail() {
     assert_eq!(result.as_int(), Some(97));
     assert_eq!(ev.read_command_keys(), &[Value::fixnum(97)]);
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![event]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![event]))
     );
 }
 
@@ -4678,8 +4700,8 @@ fn read_key_sequence_consumes_non_character_event_and_preserves_tail() {
     }
     assert_eq!(ev.read_command_keys(), std::slice::from_ref(&event));
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(97)]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(97)]))
     );
 }
 
@@ -4696,8 +4718,8 @@ fn read_key_sequence_consumes_character_and_preserves_tail() {
     assert!(result.is_string() && result.as_utf8_str() == Some("a"));
     assert_eq!(ev.read_command_keys(), &[Value::fixnum(97)]);
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![event]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![event]))
     );
 }
 
@@ -4966,8 +4988,8 @@ fn read_key_sequence_vector_consumes_non_character_event_and_preserves_tail() {
     }
     assert_eq!(ev.read_command_keys(), std::slice::from_ref(&event));
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![Value::fixnum(97)]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![Value::fixnum(97)]))
     );
 }
 
@@ -4991,8 +5013,8 @@ fn read_key_sequence_vector_consumes_character_and_preserves_tail() {
     }
     assert_eq!(ev.read_command_keys(), &[Value::fixnum(97)]);
     assert_eq!(
-        ev.obarray.symbol_value("unread-command-events"),
-        Some(&Value::list(vec![event]))
+        ev.obarray.symbol_value_copied("unread-command-events"),
+        Some(Value::list(vec![event]))
     );
 }
 
@@ -5778,11 +5800,11 @@ fn read_from_buffer_advances_point_across_multiple_forms() {
         "EOF read should consume trailing whitespace like GNU Emacs"
     );
     assert_eq!(
-        ev.obarray.symbol_value("reader-first").cloned(),
+        ev.obarray.symbol_value_copied("reader-first"),
         Some(Value::fixnum(1))
     );
     assert_eq!(
-        ev.obarray.symbol_value("reader-second").cloned(),
+        ev.obarray.symbol_value_copied("reader-second"),
         Some(Value::fixnum(2))
     );
 }

@@ -216,8 +216,8 @@ fn inline_subr_table_mirrors_the_registry() {
 
 /// Registration classifies each builtin the way GNU `exec_byte_code`
 /// treats it: pure buffer reads run without a call, small fixed-arity subrs
-/// are called straight off the stack, `aset`/`fillarray` keep the string
-/// write-back path, and everything else takes the by-symbol dispatch.
+/// are called straight off the stack, and everything else takes the
+/// by-symbol dispatch.
 #[test]
 fn inline_subr_kinds_follow_the_gnu_inline_opcode_shape() {
     use crate::emacs_core::eval::{InlineSubrKind, inline_subr};
@@ -228,8 +228,8 @@ fn inline_subr_kinds_follow_the_gnu_inline_opcode_shape() {
     assert_eq!(kind("point-min"), InlineSubrKind::PointMin);
     assert_eq!(kind("point-max"), InlineSubrKind::PointMax);
     assert_eq!(kind("current-buffer"), InlineSubrKind::CurrentBuffer);
-    assert_eq!(kind("aset"), InlineSubrKind::Writeback);
-    assert_eq!(kind("fillarray"), InlineSubrKind::Writeback);
+    assert_eq!(kind("aset"), InlineSubrKind::Generic);
+    assert_eq!(kind("fillarray"), InlineSubrKind::Generic);
     for name in [
         "car",
         "char-after",
