@@ -806,7 +806,7 @@ pub(crate) struct ChromeReuseContext {
 pub struct RetainedChrome {
     pub rows: Vec<(usize, MatrixRow)>,
     pub row_snapshots: Vec<DisplayRowSnapshot>,
-    pub chrome_strings: Vec<neovm_core::window::PresentedWindowChromeString>,
+    pub chrome_strings: neovm_core::window::PresentedWindowChromeStrings,
     pub(crate) metrics: crate::window_layout::WindowChromeMetrics,
 }
 

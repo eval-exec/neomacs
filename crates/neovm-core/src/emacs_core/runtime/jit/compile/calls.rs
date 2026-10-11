@@ -176,5 +176,5 @@ pub(super) fn cbsym_spec_kind(sym: SymId, _nargs: usize) -> Option<SpecCalleeKin
 }
 
 #[cfg(test)]
-#[path = "../tests/mir_leaf_effects.rs"]
+#[path = "../tests/mir_leaf_effects_test.rs"]
 mod mir_leaf_effects_tests;

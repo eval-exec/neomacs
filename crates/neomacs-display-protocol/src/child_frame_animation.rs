@@ -235,6 +235,7 @@ pub fn default_child_frame_resize() -> ChildFrameAnimation {
 }
 
 #[cfg(test)]
+#[path = "child_frame_animation/tests/child_frame_animation_test.rs"]
 mod tests;
 
 crate::effect_schema!(ChildFrameAnimation {

@@ -100,7 +100,7 @@ fn bytecode(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFu
         rest: None,
     });
     source.lexical = true;
-    source.max_stack = 128;
+    source.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(128);
     source.ops = ops;
     source.constants = constants.into();
     source
@@ -108,7 +108,11 @@ fn bytecode(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFu
 
 fn plan(source: &ByteCodeFunction, cons_args: &[usize]) -> Func {
     let params = ParamShape {
-        required: source.params.required.len(),
+        required: source
+            .params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         ..ParamShape::default()
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
@@ -715,12 +719,8 @@ fn gc_fixture(ctx: &mut Context) -> (LispValue, LispValue) {
                           (setcar opt-gvn-gc-cell opt-gvn-gc-new))))",
     )
     .unwrap();
-    let cell = ctx
-        .obarray
-        .symbol_value("opt-gvn-gc-cell")
-        .copied()
-        .unwrap();
-    let new = ctx.obarray.symbol_value("opt-gvn-gc-new").copied().unwrap();
+    let cell = ctx.obarray.symbol_value_copied("opt-gvn-gc-cell").unwrap();
+    let new = ctx.obarray.symbol_value_copied("opt-gvn-gc-new").unwrap();
     (cell, new)
 }
 
@@ -750,8 +750,8 @@ fn opt_gvn_reference_gc_call_keeps_eliminated_child_alias_live() {
         let _answer = Roots::new(&[answer]);
         assert_eq!(ctx.gc_count - old_gc, 1);
         assert_eq!(
-            ctx.obarray.symbol_value("opt-gvn-gc-count"),
-            Some(&LispValue::fixnum(1))
+            ctx.obarray.symbol_value_copied("opt-gvn-gc-count"),
+            Some(LispValue::fixnum(1))
         );
         assert_eq!(items(answer), vec![old, old, new]);
         assert_eq!(
@@ -768,8 +768,8 @@ fn opt_gvn_reference_gc_call_keeps_eliminated_child_alias_live() {
     let _answer = Roots::new(&[answer]);
     assert_eq!(ctx.gc_count - old_gc, 1);
     assert_eq!(
-        ctx.obarray.symbol_value("opt-gvn-gc-count"),
-        Some(&LispValue::fixnum(1))
+        ctx.obarray.symbol_value_copied("opt-gvn-gc-count"),
+        Some(LispValue::fixnum(1))
     );
     assert_eq!(items(answer), vec![old, old, new]);
     assert_eq!(
@@ -861,8 +861,8 @@ fn opt_gvn_reference_poll_gc_hook_mutation_invalidates_available_load() {
     assert_eq!(crate::emacs_core::eval::bytecode_branch_poll_count(), 1);
     assert_eq!(ctx.gc_count - baseline_gc, 1);
     assert_eq!(
-        ctx.obarray.symbol_value("opt-gvn-gc-count"),
-        Some(&LispValue::fixnum(1))
+        ctx.obarray.symbol_value_copied("opt-gvn-gc-count"),
+        Some(LispValue::fixnum(1))
     );
     let mut candidate = original.clone();
     let stats = gvn::run(&mut candidate).unwrap();
@@ -878,8 +878,8 @@ fn opt_gvn_reference_poll_gc_hook_mutation_invalidates_available_load() {
     let _answer = Roots::new(&[answer]);
     assert_eq!(ctx.gc_count - old_gc, 1);
     assert_eq!(
-        ctx.obarray.symbol_value("opt-gvn-gc-count"),
-        Some(&LispValue::fixnum(1))
+        ctx.obarray.symbol_value_copied("opt-gvn-gc-count"),
+        Some(LispValue::fixnum(1))
     );
     assert_eq!(items(answer), vec![old, new]);
     assert_eq!(crate::emacs_core::eval::bytecode_branch_poll_count(), 1);
@@ -1455,11 +1455,17 @@ fn opt_gvn_reference_guarded_list_read_between_cons_cdr_retains_nil_and_error_or
             let args = [cell, second];
             ctx.eval_str("(setq opt-gvn-list-side nil)").unwrap();
             let expected = list_guard_tier0(&mut ctx, &source, &args);
-            assert_eq!(ctx.obarray.symbol_value("opt-gvn-list-side"), Some(&marker));
+            assert_eq!(
+                ctx.obarray.symbol_value_copied("opt-gvn-list-side"),
+                Some(marker)
+            );
             ctx.eval_str("(setq opt-gvn-list-side nil)").unwrap();
             let baseline = list_guard_reference(&mut ctx, &source, &original, &args);
             assert_eq!(baseline.0, expected);
-            assert_eq!(ctx.obarray.symbol_value("opt-gvn-list-side"), Some(&marker));
+            assert_eq!(
+                ctx.obarray.symbol_value_copied("opt-gvn-list-side"),
+                Some(marker)
+            );
             if second.is_fixnum() {
                 let snapshot = baseline.1.as_ref().expect("original non-cons guard fails");
                 assert_eq!(snapshot.pc, 5);
@@ -1508,7 +1514,10 @@ fn opt_gvn_reference_guarded_list_read_between_cons_cdr_retains_nil_and_error_or
                 list_guard_reference(&mut ctx, &source, &candidate, &[cell, second]),
                 expected
             );
-            assert_eq!(ctx.obarray.symbol_value("opt-gvn-list-side"), Some(&marker));
+            assert_eq!(
+                ctx.obarray.symbol_value_copied("opt-gvn-list-side"),
+                Some(marker)
+            );
             if !second.is_fixnum() {
                 let run = evaluate(
                     &candidate,

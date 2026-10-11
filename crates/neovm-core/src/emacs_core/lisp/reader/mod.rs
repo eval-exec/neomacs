@@ -95,7 +95,7 @@ fn minibuffer_text_properties_enabled_in_buffer(
         // A localized symbol's ordinary value cell may be cached for a
         // different buffer.  The absence of a local binding means its
         // defcell is authoritative, just as GNU's BLV lookup specifies.
-        .or_else(|| obarray.default_value_id(option).copied())
+        .or_else(|| obarray.default_value_id_copied(option))
         .is_some_and(|value| value.is_truthy())
 }
 
@@ -184,7 +184,7 @@ fn initialize_unbound_minibuffer_history(
 fn minibuffer_history_limit(obarray: &Obarray, history_name: SymId) -> Option<usize> {
     let configured = obarray
         .get_property_id(history_name, intern("history-length"))
-        .or_else(|| obarray.symbol_value("history-length").copied());
+        .or_else(|| obarray.symbol_value_copied("history-length"));
 
     match configured {
         Some(value) if value == Value::T => None,
@@ -225,7 +225,7 @@ fn add_to_minibuffer_history_variable(
     }
 
     if obarray
-        .symbol_value("history-delete-duplicates")
+        .symbol_value_copied("history-delete-duplicates")
         .is_some_and(|value| value.is_truthy())
     {
         history_items.retain(|entry| *entry != new_value);
@@ -244,7 +244,7 @@ fn add_to_minibuffer_history_variable(
 
 fn history_add_new_input_enabled(obarray: &Obarray) -> bool {
     obarray
-        .symbol_value("history-add-new-input")
+        .symbol_value_copied("history-add-new-input")
         .is_none_or(|value| value.is_truthy())
 }
 
@@ -943,6 +943,7 @@ pub(crate) fn unwind_minibuffer_session(
             window_restore: MinibufferWindowRestoreEffect::NoBufferRestored,
         }
     };
+    let redirect_result = super::frame::sync_gui_frame_focus_redirects(shared);
     teardown_outcome.window_restore.apply(shared);
     let inactive_mode_result = teardown_outcome.inactive_mode_result;
 
@@ -953,14 +954,16 @@ pub(crate) fn unwind_minibuffer_session(
     }
     // A sizing/inactive-mode transfer skips the remaining read_minibuf_unwind
     // statements. Separate configuration and minibuffer restoration still run.
-    let selection_record_result =
-        if super::eval::gnu_redisplay_hooks_enabled() && inactive_mode_result.is_err() {
-            Ok(Value::NIL)
-        } else {
-            restored_calling_selection
-                .map(|active| record_restored_calling_window_selection(shared, active))
-                .unwrap_or(Ok(Value::NIL))
-        };
+    // A failed focus-redirect sync likewise skips the selection record.
+    let selection_record_result = if redirect_result.is_err()
+        || (super::eval::gnu_redisplay_hooks_enabled() && inactive_mode_result.is_err())
+    {
+        Ok(Value::NIL)
+    } else {
+        restored_calling_selection
+            .map(|active| record_restored_calling_window_selection(shared, active))
+            .unwrap_or(Ok(Value::NIL))
+    };
     shared.obarray.set_symbol_value(
         "minibuffer-depth",
         Value::fixnum(shared.minibuffers.depth() as i64),
@@ -991,6 +994,7 @@ pub(crate) fn unwind_minibuffer_session(
 
     exit_hook_result?;
     inactive_mode_result?;
+    redirect_result?;
     selection_record_result?;
     Ok(Value::NIL)
 }
@@ -1500,8 +1504,7 @@ pub fn builtin_read_impl(
 
     let stream = if args.is_empty() || args[0].is_nil() {
         ctx.obarray
-            .symbol_value("standard-input")
-            .copied()
+            .symbol_value_copied("standard-input")
             .unwrap_or(Value::NIL)
     } else {
         args[0]
@@ -1842,7 +1845,7 @@ impl MinibufferInvocationRestoration {
         self.windows.record(eval);
     }
 
-    fn select_calling_frame(&self, eval: &mut super::eval::Context) {
+    fn select_calling_frame(&self, eval: &mut super::eval::Context) -> EvalResult {
         // GNU `read_minibuf` explicitly reselects the invoking frame after
         // `unbind_to` has restored the owner/caller configuration stack.  The
         // restore options intentionally keep the then-current selected frame,
@@ -1853,6 +1856,7 @@ impl MinibufferInvocationRestoration {
             minibuffer_redisplay::publish_frame_switch(eval, calling_frame.0);
             let _ = eval.frames.select_frame(calling_frame.0);
         }
+        super::frame::sync_gui_frame_focus_redirects(eval)
     }
 }
 
@@ -2114,7 +2118,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     // interactive read is attempted while this variable is non-nil.
     if shared
         .obarray
-        .symbol_value("inhibit-interaction")
+        .symbol_value_copied("inhibit-interaction")
         .is_some_and(|v| v.is_truthy())
     {
         return Err(signal(
@@ -2166,7 +2170,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
 
             let recursive_policy = if shared
                 .obarray
-                .symbol_value("enable-recursive-minibuffers")
+                .symbol_value_copied("enable-recursive-minibuffers")
                 .is_some_and(|value| value.is_truthy())
             {
                 RecursiveMinibufferPolicy::Allow
@@ -2190,8 +2194,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     );
     let saved_current_prefix_arg = shared
         .obarray
-        .symbol_value("current-prefix-arg")
-        .copied()
+        .symbol_value_copied("current-prefix-arg")
         .unwrap_or(Value::NIL);
     // GNU `read_minibuf` also saves `(this-command-keys-vector)` (minibuf.c:
     // 738-739) and `read_minibuf_unwind` restores it (minibuf.c:1144-1146) so
@@ -2205,13 +2208,11 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     let saved_raw_command_keys = shared.read_raw_command_keys().to_vec();
     let saved_minibuffer_history_variable = shared
         .obarray
-        .symbol_value("minibuffer-history-variable")
-        .copied()
+        .symbol_value_copied("minibuffer-history-variable")
         .unwrap_or(Value::from_sym_id(intern("minibuffer-history")));
     let saved_minibuffer_history_position = shared
         .obarray
-        .symbol_value("minibuffer-history-position")
-        .copied()
+        .symbol_value_copied("minibuffer-history-position")
         .unwrap_or(Value::NIL);
     let recursive_depth = shared.recursive_command_loop_depth();
 
@@ -2260,6 +2261,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
             state: Box::new(session_unwind),
         },
     );
+    super::frame::sync_gui_frame_focus_redirects(shared)?;
     if let Some(active_window_state) = active_window_state {
         record_active_minibuffer_selection(shared, active_window_state, minibuf_id)?;
     }
@@ -2278,8 +2280,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
 
     let prompt_properties = shared
         .obarray
-        .symbol_value("minibuffer-prompt-properties")
-        .copied()
+        .symbol_value_copied("minibuffer-prompt-properties")
         .unwrap_or(Value::NIL);
     let mini_source_before = super::eval::gnu_redisplay_hooks_enabled().then(||
         shared.buffers.get(minibuf_id).map(|buffer| (buffer.chars_modified_tick(), buffer.props_modified_tick()))
@@ -2338,8 +2339,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     } else {
         shared
             .obarray
-            .symbol_value("minibuffer-local-map")
-            .copied()
+            .symbol_value_copied("minibuffer-local-map")
             .unwrap_or(Value::NIL)
     };
     let _ = shared.buffers.set_current_local_map(minibuf_keymap);
@@ -2388,11 +2388,12 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         // This is deliberately between the inner lifecycle scope and history:
         // GNU restores both configurations, then reselects the caller, then
         // calls `add-to-history` in the restored buffer-local environment.
-        restoration.select_calling_frame(shared);
+        let redirect_result = restoration.select_calling_frame(shared);
         // `with_unwind_scope` roots the tagged result while exit hooks and
         // window restoration allocate, so string properties cannot retain
         // otherwise-unreachable Lisp objects through an untraced Rust value.
         let result_value = lifecycle_result?;
+        redirect_result?;
         let result_text = result_value
             .as_lisp_string()
             .expect("an accepted minibuffer command must return its contents")
@@ -2501,13 +2502,11 @@ pub(crate) fn completing_read_minibuffer_args(obarray: &Obarray, args: &[Value])
 
     let keymap = if !require_match.is_nil() {
         obarray
-            .symbol_value("minibuffer-local-must-match-map")
-            .copied()
+            .symbol_value_copied("minibuffer-local-must-match-map")
             .unwrap_or(Value::NIL)
     } else {
         obarray
-            .symbol_value("minibuffer-local-completion-map")
-            .copied()
+            .symbol_value_copied("minibuffer-local-completion-map")
             .unwrap_or(Value::NIL)
     };
 
@@ -2708,10 +2707,7 @@ impl KeyboardInputRuntime for super::eval::Context {
     }
 
     fn symbol_value_or_nil(&self, name: &str) -> Value {
-        self.obarray
-            .symbol_value(name)
-            .copied()
-            .unwrap_or(Value::NIL)
+        self.obarray.symbol_value_copied(name).unwrap_or(Value::NIL)
     }
 }
 
@@ -3194,7 +3190,7 @@ fn yes_or_no_p_dialog_result(
 
 fn yes_or_no_p_use_short_answers(eval: &super::eval::Context) -> bool {
     eval.obarray
-        .symbol_value("use-short-answers")
+        .symbol_value_copied("use-short-answers")
         .is_some_and(|v| v.is_truthy())
 }
 
@@ -3389,14 +3385,14 @@ pub(crate) fn finish_read_key_sequence_vector_interactive_in_runtime(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/minibuffer_teardown.rs"]
+#[path = "tests/minibuffer_teardown_test.rs"]
 mod minibuffer_teardown_tests;
 #[cfg(test)]
-#[path = "tests/minibuffer_unwind_order.rs"]
+#[path = "tests/minibuffer_unwind_order_test.rs"]
 mod minibuffer_unwind_order_tests;
 #[cfg(test)]
-#[path = "tests/raw_bytes.rs"]
+#[path = "tests/raw_bytes_test.rs"]
 mod raw_bytes_tests;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/reader_test.rs"]
 mod tests;

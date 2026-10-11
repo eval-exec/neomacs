@@ -48,7 +48,6 @@ use super::{
     fail_stack_overflow_free_span, match_anychar_at, match_categoryspec_at, match_charset_at,
     match_exactn_char_at, match_syntaxspec_at, match_syntaxspecset_at, matcher_overflow_pending,
     opcode_len, posix_class_bits_read_syntax, re_match_candidate_in, re_text_char,
-    regex_syntax_char,
 };
 use crate::emacs_core::emacs_char;
 use crate::emacs_core::syntax::SyntaxClass;
@@ -675,13 +674,12 @@ impl Facts {
             facts |= Self::NEWLINE.0;
         }
         if mask.0 & (Self::WORD.0 | Self::WORD_OR_SYMBOL.0 | Self::WIDE_WORD.0) != 0 {
-            // The matcher's `re_char_and_syntax`: raw bytes read the syntax
-            // of their eight-bit character, at their position.
-            let ch = regex_syntax_char(code);
-            let class = syntax.char_syntax_at(ch, at);
+            // Match the backtracker's full-code syntax and boundary facts.
+            let ch = emacs_char::EmacsChar::from_code_unchecked(code);
+            let class = syntax.emacs_char_syntax_at(ch, at);
             if class == SyntaxClass::Word {
                 facts |= Self::WORD.0 | Self::WORD_OR_SYMBOL.0;
-                if ch as u32 > 0xFF {
+                if ch.code() > 0xFF {
                     facts |= Self::WIDE_WORD.0;
                 }
             } else if class == SyntaxClass::Symbol {
@@ -746,6 +744,22 @@ impl ClassKey {
 pub(crate) struct BaseTableView<'a>(pub(crate) &'a dyn SyntaxLookup);
 
 impl SyntaxLookup for BaseTableView<'_> {
+    fn emacs_char_syntax(&self, c: emacs_char::EmacsChar) -> SyntaxClass {
+        self.0.emacs_char_syntax(c)
+    }
+
+    fn emacs_char_syntax_at(&self, c: emacs_char::EmacsChar, _input_pos: usize) -> SyntaxClass {
+        self.0.emacs_char_syntax(c)
+    }
+
+    fn emacs_word_boundary_between(
+        &self,
+        c1: emacs_char::EmacsChar,
+        c2: emacs_char::EmacsChar,
+    ) -> bool {
+        self.0.emacs_word_boundary_between(c1, c2)
+    }
+
     fn char_syntax(&self, c: char) -> SyntaxClass {
         self.0.char_syntax(c)
     }
@@ -1058,14 +1072,14 @@ impl CharClasses {
     ) -> Result<(u8, usize), TooManyClasses> {
         let (code, len) = re_text_char(text, d, pattern.target_multibyte)
             .expect("a class is asked for a character inside the text");
-        let ch = regex_syntax_char(code);
-        let here = syntax.char_syntax_at(ch, d);
+        let ch = emacs_char::EmacsChar::from_code_unchecked(code);
+        let here = syntax.emacs_char_syntax_at(ch, d);
         let slot_index = (code as usize ^ ((here as usize) << 4)) % POSITIONAL_SLOTS;
         let slot = self.positional[slot_index];
         if slot.0 == code && slot.1 == here as u8 {
             return Ok((slot.2, len));
         }
-        let class = if here == base.char_syntax(ch) {
+        let class = if here == base.emacs_char_syntax(ch) {
             self.class_at(nfa, pattern, text, d, base)?.0
         } else {
             let key = nfa.class_key_at(pattern, text, d, code, len, syntax, self.mask);
@@ -2840,5 +2854,5 @@ impl LiveDfa {
 }
 
 #[cfg(test)]
-#[path = "tests/dfa.rs"]
+#[path = "tests/dfa_test.rs"]
 mod tests;

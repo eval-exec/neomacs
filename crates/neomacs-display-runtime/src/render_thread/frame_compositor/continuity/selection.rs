@@ -44,4 +44,5 @@ pub(in crate::render_thread) fn observe_selection(
 }
 
 #[cfg(test)]
+#[path = "selection/tests/selection_test.rs"]
 mod tests;

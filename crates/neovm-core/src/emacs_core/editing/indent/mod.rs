@@ -19,7 +19,8 @@ use super::value::*;
 use super::xdisp::LineWrap;
 use super::xdisp::line_number_digit_width;
 use crate::buffer::{
-    Buffer, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent,
+    Buffer, CharLen, CharPos0, DisplayColumn, EmacsByteLen, EmacsBytePos, EmacsByteRange,
+    TextExtent,
 };
 use crate::buffer::{BufferId, LispCharPos1};
 use crate::emacs_core::error::LispCondition;
@@ -32,6 +33,7 @@ use crate::heap_types::LispString;
 use crate::window::{Window, WindowId};
 use std::cell::Cell;
 use std::collections::VecDeque;
+use std::sync::OnceLock;
 
 fn next_visible_line_start(
     eval: &mut super::eval::Context,
@@ -1236,6 +1238,99 @@ fn expect_wholenump(val: &Value) -> Result<usize, Flow> {
     }
 }
 
+// Well-known symbol ids for the display/column-scan hot path, interned once.
+//
+// GNU holds these names as staticpro'd statics (`Qinvisible`, `Qdisplay`,
+// `Qcomposition`, `Vstandard_display_table`, ...) and never re-interns them
+// per character. The scans below (`display_advance_at`, `next_display_stop`,
+// their property probes, `scan_for_column`) run once per character or per
+// display stop, so spelling the names out (`Value::symbol("...")`,
+// `Obarray::symbol_value("...")`) re-hashed the same handful of literals on
+// every advance: an ELB `scroll` run made ~4M `intern()` calls this way, and
+// the short-string memcmp inside those lookups then swung with unrelated
+// .rodata layout shifts. Each accessor interns once and caches the `SymId`
+// (a plain index GC cannot invalidate), the same pattern as
+// `cached_symbol_id!` in `runtime/eval` and the `syntax-table` symbol in
+// `text/syntax`.
+//
+// Threading: the id resolves once from the process-global symbol registry
+// through a `OnceLock` and reads lock-free afterwards, so any number of
+// mutator threads share one resolution; no Lisp state is cached.
+
+/// `Vstandard_display_table` (DEFVAR_LISP, src/buffer.c): the global display
+/// table `display_advance_at` and `scan_for_column` fall back to per
+/// character when `buffer-display-table` is nil.
+#[inline(always)]
+fn standard_display_table_sym_id() -> crate::emacs_core::intern::SymId {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("standard-display-table"))
+}
+
+/// `buffer-display-table` (DEFVAR_PER_BUFFER): read through the buffer's slot
+/// by identity each advance.
+#[inline(always)]
+fn buffer_display_table_sym_id() -> crate::emacs_core::intern::SymId {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("buffer-display-table"))
+}
+
+/// `tab-width` (DEFVAR_PER_BUFFER): read through the buffer's slot by
+/// identity on every width computation.
+#[inline(always)]
+fn tab_width_sym_id() -> crate::emacs_core::intern::SymId {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("tab-width"))
+}
+
+/// GNU's staticpro'd `Qinvisible`.
+#[inline(always)]
+fn invisible_prop_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("invisible")))
+}
+
+/// GNU's staticpro'd `Qdisplay`.
+#[inline(always)]
+fn display_prop_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("display")))
+}
+
+/// GNU's staticpro'd `Qcomposition`.
+#[inline(always)]
+fn composition_prop_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("composition")))
+}
+
+/// GNU's staticpro'd `Qspace` (the `(space ...)` display-spec tag).
+#[inline(always)]
+fn space_prop_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("space")))
+}
+
+/// GNU's staticpro'd `QCwidth`.
+#[inline(always)]
+fn width_keyword_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern(":width")))
+}
+
+/// GNU's staticpro'd `QCrelative_width`.
+#[inline(always)]
+fn relative_width_keyword_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern(":relative-width")))
+}
+
+/// GNU's staticpro'd `QCalign_to`.
+#[inline(always)]
+fn align_to_keyword_symbol() -> Value {
+    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern(":align-to")))
+}
+
 pub(crate) fn dynamic_buffer_or_global_symbol_value(
     obarray: &Obarray,
     _dynamic: &[OrderedRuntimeBindingMap],
@@ -1260,34 +1355,45 @@ pub(crate) fn dynamic_buffer_or_global_symbol_value(
     {
         return Some(value);
     }
-    obarray.symbol_value(name).copied()
+    obarray.symbol_value_copied(name)
+}
+
+/// A GNU tab stop width: only 1..=1000 are valid; other Lisp values mean eight.
+/// This immutable value is local to one scan and carries no mutator state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TabWidth(usize);
+
+impl From<Value> for TabWidth {
+    fn from(value: Value) -> Self {
+        Self(match value.as_fixnum() {
+            Some(width @ 1..=1000) => width as usize,
+            _ => 8,
+        })
+    }
+}
+
+impl TabWidth {
+    const fn get(self) -> usize {
+        self.0
+    }
 }
 
 fn tab_width_in_state(
     obarray: &Obarray,
-    dynamic: &[OrderedRuntimeBindingMap],
+    _dynamic: &[OrderedRuntimeBindingMap],
     buf: Option<&Buffer>,
-) -> usize {
-    match dynamic_buffer_or_global_symbol_value(obarray, dynamic, buf, "tab-width") {
-        Some(v) if v.is_fixnum() && v.as_fixnum().unwrap() > 0 => v.as_fixnum().unwrap() as usize,
-        Some(v) if v.is_char() && (v.as_char().unwrap() as u32) > 0 => {
-            v.as_char().unwrap() as usize
-        }
-        _ => 8,
-    }
+) -> TabWidth {
+    // Resolve by identity while retaining GNU's validated tab-width fallback.
+    TabWidth::from(
+        obarray
+            .value_in_buffer_id(buf, tab_width_sym_id())
+            .unwrap_or(Value::NIL),
+    )
 }
 
-/// Current buffer's `tab-width', used by `char-width' for a TAB character.
-///
-/// GNU `CHARACTER_WIDTH` (buffer.h) returns `SANE_TAB_WIDTH (current_buffer)`
-/// for `\t', i.e. the buffer-local `tab-width' clamped to 1..1000.  This is
-/// the column width `char-width' reports for a tab, and what
-/// `internal_self_insert' uses to decide how much to overwrite.
+/// GNU SANE_TAB_WIDTH, shared with char-width and string formatting.
 pub(crate) fn current_buffer_tab_width(ctx: &crate::emacs_core::eval::Context) -> usize {
-    let buf = ctx.buffers.current_buffer();
-    let width = tab_width_in_state(&ctx.obarray, &[], buf);
-    // GNU SANE_TAB_WIDTH clamps to 1..=1000.
-    width.clamp(1, 1000)
+    tab_width_in_state(&ctx.obarray, &[], ctx.buffers.current_buffer()).get()
 }
 
 fn indent_tabs_mode_in_state(
@@ -1302,16 +1408,6 @@ fn indent_tabs_mode_in_state(
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn buffer_read_only_active(eval: &super::eval::Context, buf: &Buffer) -> bool {
     super::editfns::buffer_read_only_active_in_state(&eval.obarray, &[], buf)
-}
-
-#[derive(Clone, Copy)]
-struct DecodedUnit {
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    start: usize,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    end: usize,
-    code: u32,
-    width: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1357,9 +1453,9 @@ fn next_column(column: usize, ch: char, tab_width: usize) -> usize {
     }
 }
 
-fn next_column_for_code(column: usize, code: u32, width: usize, tab_width: usize) -> usize {
+fn next_column_for_code(column: usize, code: u32, width: usize, tab_width: TabWidth) -> usize {
     if code == b'\t' as u32 {
-        let tab = tab_width.max(1);
+        let tab = tab_width.get();
         column + (tab - (column % tab))
     } else {
         column + width
@@ -1449,6 +1545,18 @@ impl DisplayStopProp {
         }
     }
 
+    /// [`Self::key`] as the interned symbol, resolved once (see the cached
+    /// well-known-symbol block above): `next_display_stop` runs per display
+    /// stop and must not re-intern the watched names each time. `key()` stays
+    /// a `&'static str` for diagnostics.
+    fn watched_symbol(self) -> Value {
+        match self {
+            Self::Invisible => invisible_prop_symbol(),
+            Self::Display => display_prop_symbol(),
+            Self::Composition => composition_prop_symbol(),
+        }
+    }
+
     /// Probe this property at `byte`, returning the coalesced run as
     /// `(display_width, run_end_byte)` when it is present and its run ends
     /// strictly after `byte` (run end clamped to `end`); None otherwise.
@@ -1492,7 +1600,7 @@ fn next_display_stop(
     let cap_char = CharPos0::new(char_pos.get().saturating_add(DISPLAY_STOP_CHAR_CAP));
     // Watched keys derive from the SAME source as the probes (DisplayStopProp),
     // so a new probe automatically becomes a watched key here.
-    let watched = DisplayStopProp::ALL.map(|prop| Value::symbol(prop.key()));
+    let watched = DisplayStopProp::ALL.map(|prop| prop.watched_symbol());
     let change_char = buf.next_watched_property_change_at_char_pos(char_pos, cap_char, &watched);
     let mut stop = buf.char_pos_to_emacs_byte_pos_clamped(change_char).get();
     if let Some(overlay_boundary) = buf
@@ -1516,15 +1624,19 @@ pub(crate) fn display_advance_at(
             Some(buf) => buf,
             None => return Ok(None),
         };
-        let display_table = dynamic_buffer_or_global_symbol_value(
-            &ctx.obarray,
-            &[],
-            Some(buf),
-            "buffer-display-table",
-        )
-        .filter(|v| !v.is_nil())
-        .or_else(|| ctx.obarray.symbol_value("standard-display-table").copied())
-        .filter(|v| !v.is_nil());
+        // Read both display tables by cached identity: this runs once per
+        // character advance, and the by-name spellings re-interned
+        // "standard-display-table" on every one of them (the obarray read is
+        // only reached when the buffer-local table is nil -- the common case).
+        let display_table = ctx
+            .obarray
+            .value_in_buffer_id(Some(buf), buffer_display_table_sym_id())
+            .filter(|v| !v.is_nil())
+            .or_else(|| {
+                ctx.obarray
+                    .symbol_value_id_copied(standard_display_table_sym_id())
+            })
+            .filter(|v| !v.is_nil());
         (
             buf.accessible_emacs_byte_region().end().get(),
             tab_width_in_state(&ctx.obarray, &[], Some(buf)),
@@ -1638,9 +1750,9 @@ pub(crate) fn display_advance_at(
 ///   * `:align-to COL` — COL a FIXNUM in [col, col+INT_MAX] -> width COL - col.
 ///   * a FLOAT `:align-to` in [col, ...] -> round(COL) - col.
 fn space_spec_width(plist: Value, col: usize) -> Option<usize> {
-    let qcwidth = Value::symbol(":width");
-    let qcrel = Value::symbol(":relative-width");
-    let qcalign = Value::symbol(":align-to");
+    let qcwidth = width_keyword_symbol();
+    let qcrel = relative_width_keyword_symbol();
+    let qcalign = align_to_keyword_symbol();
 
     // GNU's `align_to_max` upper bound for `:align-to` is `col + INT_MAX`
     // (indent.c:501-504); `:width`/`:relative-width` use plain `INT_MAX`.
@@ -1704,12 +1816,13 @@ fn display_run_at(
 
     // GNU `get_char_property_and_overlay (pos, Qdisplay, ...)`: returns the
     // `display` value and, when it came from an overlay, the overlay itself.
+    let display_sym = display_prop_symbol();
     let (display, overlay) = super::textprop::buffer_overlay_property_at_byte_pos(
         &ctx.obarray,
         &ctx.buffers,
         buf,
         byte,
-        Value::symbol("display"),
+        display_sym,
         None,
     )
     .map(|(v, ov)| (v, Some(ov)))
@@ -1717,13 +1830,13 @@ fn display_run_at(
         let v = super::textprop::builtin_get_text_property_in_state(
             &ctx.obarray,
             &ctx.buffers,
-            &[Value::fixnum(charpos1), Value::symbol("display")],
+            &[Value::fixnum(charpos1), display_sym],
         )
         .ok()?;
         if v.is_nil() { None } else { Some((v, None)) }
     })?;
 
-    let is_space_spec = display.is_cons() && display.cons_car() == Value::symbol("space");
+    let is_space_spec = display.is_cons() && display.cons_car() == space_prop_symbol();
 
     // Compute the spec's column width (GNU `check_display_width`'s `width`).
     let mut width = if let Some(disp_str) = display.as_lisp_string() {
@@ -1747,7 +1860,7 @@ fn display_run_at(
     // `:relative-width` is multiplied by the column width of the covered char
     // (GNU multiplies by `MULTIBYTE_BYTES_WIDTH` of the char at POS).
     if is_space_spec
-        && super::plist::plist_get(display.cons_cdr(), &Value::symbol(":relative-width"))
+        && super::plist::plist_get(display.cons_cdr(), &relative_width_keyword_symbol())
             .is_some_and(|v| !v.is_nil())
     {
         let scan_pos = EmacsBytePos::new(byte);
@@ -1768,7 +1881,7 @@ fn display_run_at(
         let run_end_char1 = super::textprop::builtin_next_single_property_change_in_state(
             &ctx.obarray,
             &ctx.buffers,
-            &[Value::fixnum(charpos1), Value::symbol("display")],
+            &[Value::fixnum(charpos1), display_prop_symbol()],
         )
         .ok()
         .and_then(|v| match v.kind() {
@@ -1877,10 +1990,12 @@ fn current_buffer_line_bounds(
     buffer_id: crate::buffer::BufferId,
     point: EmacsBytePos,
 ) -> Result<EmacsByteRange, Flow> {
-    let buf = ctx
-        .buffers
-        .get(buffer_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
     Ok(line_bounds(buf, point))
 }
 
@@ -1919,17 +2034,235 @@ fn next_char_property_boundary_byte(
     if next > byte { next } else { limit }
 }
 
+/// Closed scan targets prevent combining a point limit with a column goal.
+/// They carry only positions/columns, and are local to the current mutator call.
+#[derive(Clone, Copy, Debug)]
+enum ColumnTarget {
+    Position(EmacsBytePos),
+    Column(DisplayColumn),
+}
+
+/// GNU selective-display recognizes CR as line end only for the symbol t.
+/// This per-scan copy has no Lisp handles or shared mutable state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LineEndPolicy {
+    Newline,
+    NewlineOrCarriageReturn,
+}
+
+impl LineEndPolicy {
+    fn is_line_end(self, code: u32) -> bool {
+        match self {
+            Self::Newline => code == u32::from(b'\n'),
+            Self::NewlineOrCarriageReturn => matches!(code, 10 | 13),
+        }
+    }
+}
+
+/// Per-scan control-character rendering, immutable and safe for any mutator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ControlRendering {
+    Caret,
+    Octal,
+}
+
+impl ControlRendering {
+    fn width(self) -> usize {
+        match self {
+            Self::Caret => 2,
+            Self::Octal => 4,
+        }
+    }
+}
+
+/// Control rendering is read only if a scan encounters a control character.
+/// The answer lives in the scan's OnceCell, never in shared mutator state.
+#[cold]
+fn control_rendering_in_state(buf: &Buffer) -> ControlRendering {
+    if buf.slots[crate::buffer::buffer::BUFFER_SLOT_CTL_ARROW.index()].is_truthy() {
+        ControlRendering::Caret
+    } else {
+        ControlRendering::Octal
+    }
+}
+
+/// A display-vector newline stops inside the vector without consuming its
+/// source character. Non-newline glyphs each occupy one column in indent.c.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColumnAdvance {
+    Continue(DisplayColumn),
+    EndOfLine(DisplayColumn),
+}
+
+fn advance_column_glyphs(
+    column: DisplayColumn,
+    entry: &Value,
+    tab_width: TabWidth,
+    line_end: LineEndPolicy,
+) -> Option<ColumnAdvance> {
+    let glyphs = entry.as_vector_data()?;
+    let mut column = column.get();
+    for glyph in glyphs.iter() {
+        let code = crate::encoding::display_glyph_character(*glyph)
+            .map(|character| character.code())
+            .unwrap_or(u32::from(b' '));
+        if line_end.is_line_end(code) {
+            return Some(ColumnAdvance::EndOfLine(DisplayColumn::new(column)));
+        }
+        column = if code == u32::from(b'\t') {
+            next_column_for_code(column, code, 1, tab_width)
+        } else {
+            column.saturating_add(1)
+        };
+    }
+    Some(ColumnAdvance::Continue(DisplayColumn::new(column)))
+}
+
+/// GNU indent.c:395-462 walks the simple buffer backwards, including each
+/// display vector. Its tab accumulator measures the suffix after the last tab.
+/// This call borrows one mutator's buffer and holds no shared or cached state.
+fn simple_backward_column(
+    buf: &Buffer,
+    point: EmacsBytePos,
+    display_table: Option<&Value>,
+    tab_width: TabWidth,
+    line_end: LineEndPolicy,
+    control: ControlRendering,
+) -> DisplayColumn {
+    let mut scan = point;
+    let start = buf.accessible_emacs_byte_region().start();
+    let mut column = DisplayColumn::ZERO;
+    let mut post_tab = None::<DisplayColumn>;
+    let tab = tab_width.get();
+    'text: while scan > start {
+        scan = scan.saturating_sub_len(EmacsByteLen::new(1));
+        let Some(byte) = buf.emacs_byte_at_pos(scan) else {
+            break;
+        };
+        let entry = display_table.map(|table| super::chartable::ct_ref(table, i64::from(byte)));
+        let glyphs = entry.as_ref().and_then(|entry| entry.as_vector_data());
+        let count = glyphs.as_ref().map_or(1, |glyphs| glyphs.len());
+        for index in (0..count).rev() {
+            let code = match glyphs.as_ref() {
+                Some(glyphs) => crate::encoding::display_glyph_character(glyphs[index])
+                    .map(|character| character.code())
+                    .unwrap_or(u32::from(b' ')),
+                None => u32::from(byte),
+            };
+            if (0o40..0o177).contains(&code) {
+                column = DisplayColumn::new(column.get().saturating_add(1));
+            } else if line_end.is_line_end(code) {
+                break 'text;
+            } else if code == u32::from(b'\t') {
+                let before = match post_tab {
+                    Some(_) => (column.get() + tab) / tab * tab,
+                    None => column.get(),
+                };
+                post_tab = Some(DisplayColumn::new(
+                    post_tab
+                        .map_or(0, DisplayColumn::get)
+                        .saturating_add(before),
+                ));
+                column = DisplayColumn::ZERO;
+            } else {
+                let width = if glyphs.is_some() {
+                    1
+                } else if code < 0x80 {
+                    control.width()
+                } else {
+                    4
+                };
+                column = DisplayColumn::new(column.get().saturating_add(width));
+            }
+        }
+    }
+    match post_tab {
+        Some(following) => {
+            DisplayColumn::new(((column.get() + tab) / tab * tab).saturating_add(following.get()))
+        }
+        None => column,
+    }
+}
+
+/// Display-table vectors are uncommon in ordinary column scans. Keep their
+/// interpretation out of the character loop when no table is installed.
+/// The borrowed table belongs to this scan's mutator and is never retained.
+#[cold]
+#[inline(never)]
+fn display_table_column_advance(
+    table: &Value,
+    code: u32,
+    encoding: super::casefiddle::CaseEncoding,
+    column: DisplayColumn,
+    tab_width: TabWidth,
+    line_end: LineEndPolicy,
+) -> Option<ColumnAdvance> {
+    let entry = super::chartable::ct_ref(table, i64::from(code));
+    // GNU indent.c:283-295 counts a multibyte display vector by length;
+    // :760-788 interprets TAB/newline within single-byte glyph vectors.
+    if matches!(encoding, super::casefiddle::CaseEncoding::Multibyte) && code >= 0x80 {
+        entry.as_vector_data().map(|glyphs| {
+            ColumnAdvance::Continue(DisplayColumn::new(
+                column.get().saturating_add(glyphs.len().min(1000)),
+            ))
+        })
+    } else {
+        advance_column_glyphs(column, &entry, tab_width, line_end)
+    }
+}
+
 fn scan_for_column(
     ctx: &mut super::eval::Context,
     buffer_id: crate::buffer::BufferId,
-    end_byte: Option<EmacsBytePos>,
-    goal_column: Option<usize>,
+    target: ColumnTarget,
 ) -> Result<ColumnScan, Flow> {
-    let (mut scan, line_end, tab_width) = {
-        let buf = ctx
-            .buffers
-            .get(buffer_id)
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    // This memo exists only for this scan. Property probes execute no Lisp;
+    // native composition registration does not modify character widths.
+    // Cache numeric non-ASCII widths, never display vectors or tab positions.
+    #[derive(Clone, Copy, Debug)]
+    struct CachedCharacterWidth {
+        code: u32,
+        width: usize,
+    }
+    #[derive(Debug)]
+    struct ColumnWidthMemo {
+        table: crate::encoding::CharacterWidthTable,
+        entries: [Option<CachedCharacterWidth>; 8],
+    }
+    impl ColumnWidthMemo {
+        fn from_context(ctx: &super::eval::Context) -> Self {
+            Self {
+                table: crate::encoding::CharacterWidthTable::from_context(ctx),
+                entries: [None; 8],
+            }
+        }
+        #[inline(always)]
+        fn width(&mut self, code: u32) -> usize {
+            let slot = ((code ^ (code >> 8)) as usize) % self.entries.len();
+            if let Some(entry) = self.entries[slot]
+                && entry.code == code
+            {
+                return entry.width;
+            }
+            let width = self.table.width(code);
+            self.entries[slot] = Some(CachedCharacterWidth { code, width });
+            width
+        }
+    }
+
+    let (end_byte, goal) = match target {
+        ColumnTarget::Position(pos) => (Some(pos), usize::MAX),
+        ColumnTarget::Column(goal) => (None, goal.get()),
+    };
+    let control_rendering = std::cell::OnceCell::new();
+    let mut character_widths = None;
+    let (mut scan, line_end, tab_width, line_end_policy, encoding) = {
+        let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
         // Anchor the line at the target byte position when one is given so the
         // column is measured from *that* position's beginning-of-line, not the
         // buffer's current point.  For the two in-buffer callers
@@ -1939,17 +2272,32 @@ fn scan_for_column(
         // non-selected window's `pointm`.
         let anchor = end_byte.unwrap_or_else(|| buf.point_emacs_byte_pos());
         let line = line_bounds(buf, anchor);
+        // These BUFFER_OBJFWD slots already contain live local/default
+        // values. GNU reads BVAR directly; avoid resolving fixed slot names.
+        let line_end_policy = if buf.slots
+            [crate::buffer::buffer::BUFFER_SLOT_SELECTIVE_DISPLAY.index()]
+            == Value::T
+        {
+            LineEndPolicy::NewlineOrCarriageReturn
+        } else {
+            LineEndPolicy::Newline
+        };
         (
             line.start().get(),
             line.end().get(),
-            tab_width_in_state(&ctx.obarray, &[], Some(buf)),
+            TabWidth::from(buf.slots[crate::buffer::buffer::BUFFER_SLOT_TAB_WIDTH.index()]),
+            line_end_policy,
+            if buf.get_multibyte() {
+                super::casefiddle::CaseEncoding::Multibyte
+            } else {
+                super::casefiddle::CaseEncoding::Unibyte
+            },
         )
     };
     let end = end_byte
         .map(|pos| pos.get())
         .unwrap_or(line_end)
         .min(line_end);
-    let goal = goal_column.unwrap_or(usize::MAX);
     let mut column = 0usize;
     let mut previous_byte_pos = scan;
     let mut previous_column = 0usize;
@@ -1957,20 +2305,52 @@ fn scan_for_column(
 
     // The active display table (buffer-display-table, else standard-display-table)
     // remaps individual characters to glyph sequences; consulted per char below.
+    // Read by cached identity -- see the well-known-symbol block above.
     let display_table = {
         let buf = ctx.buffers.get(buffer_id);
-        dynamic_buffer_or_global_symbol_value(&ctx.obarray, &[], buf, "buffer-display-table")
+        ctx.obarray
+            .value_in_buffer_id(buf, buffer_display_table_sym_id())
             .filter(|v| !v.is_nil())
-            .or_else(|| ctx.obarray.symbol_value("standard-display-table").copied())
+            .or_else(|| {
+                ctx.obarray
+                    .symbol_value_id_copied(standard_display_table_sym_id())
+            })
             .filter(|v| !v.is_nil())
     };
+
+    // GNU's simple backward scan resolves glyph vectors before deciding that
+    // CR ends a line. A literal-CR prefix reset would ignore table overrides
+    // and choose the wrong side of a line break inside a vector.
+    if let ColumnTarget::Position(point) = target
+        && (line_end_policy == LineEndPolicy::NewlineOrCarriageReturn || display_table.is_some())
+        && let Some(buf) = ctx.buffers.get(buffer_id)
+        && buf.text_props_is_empty()
+        && buf.overlays.is_empty()
+        && buf.total_char_len().get() == buf.total_emacs_byte_len().get()
+    {
+        let column = simple_backward_column(
+            buf,
+            point,
+            display_table.as_ref(),
+            tab_width,
+            line_end_policy,
+            *control_rendering.get_or_init(|| control_rendering_in_state(buf)),
+        );
+        return Ok(ColumnScan {
+            byte_pos: point,
+            column: column.get(),
+            previous_byte_pos: point,
+            previous_column: column.get(),
+            previous_code: None,
+        });
+    }
 
     // Property probes are re-run only at the next change boundary of their
     // property (GNU `skip_invisible`'s `next_boundary`, extended to all
     // three); between boundaries the answer cannot change.
-    let invisible_sym = Value::symbol("invisible");
-    let display_sym = Value::symbol("display");
-    let composition_sym = Value::symbol("composition");
+    let invisible_sym = invisible_prop_symbol();
+    let display_sym = display_prop_symbol();
+    let composition_sym = composition_prop_symbol();
     // `invisible`, `display` and `composition` reach the column scan only
     // through text properties or overlays (`composition_width_at` reads the
     // text property); a buffer with no overlays and a name never assigned
@@ -2061,10 +2441,12 @@ fn scan_for_column(
         }
 
         let (code, char_len, width) = {
-            let buf = ctx
-                .buffers
-                .get(buffer_id)
-                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
+                signal(
+                    LispCondition::Error,
+                    vec![Value::string("No current buffer")],
+                )
+            })?;
             let scan_pos = EmacsBytePos::new(scan);
             let Some(code) = buf.char_code_after_emacs_byte_pos(scan_pos) else {
                 break;
@@ -2073,26 +2455,55 @@ fn scan_for_column(
                 .char_after_emacs_byte_len(scan_pos)
                 .map(|len| len.max(EmacsByteLen::new(1)))
                 .unwrap_or(EmacsByteLen::new(1));
-            let width = buffer_char_display_width(buf, scan_pos, code);
+            // TAB/newline use their own column rules (GNU indent.c:810-821),
+            // so they do not require a ctl-arrow lookup.
+            // Printable ASCII has width one in both buffer encodings.
+            // Avoid decoding the same unibyte position again for its width.
+            let width = if (0o40..0o177).contains(&code) {
+                1
+            } else if matches!(code, 9 | 10) {
+                0
+            } else if code < 0x20 || code == 0x7f {
+                control_rendering
+                    .get_or_init(|| control_rendering_in_state(buf))
+                    .width()
+            } else {
+                match encoding {
+                    super::casefiddle::CaseEncoding::Multibyte => character_widths
+                        .get_or_insert_with(|| ColumnWidthMemo::from_context(ctx))
+                        .width(code),
+                    super::casefiddle::CaseEncoding::Unibyte => 4,
+                }
+            };
             (code, char_len, width)
         };
-
-        if code == b'\n' as u32 {
-            break;
-        }
 
         previous_byte_pos = scan;
         previous_column = column;
         previous_code = Some(code);
-        // A display-table entry remaps the character to a glyph sequence,
-        // overriding its normal width (and tab expansion).
-        column = match display_table
-            .as_ref()
-            .and_then(|dt| display_table_glyph_width(dt, code))
-        {
-            Some(glyph_width) => column.saturating_add(glyph_width),
-            None => next_column_for_code(column, code, width, tab_width),
-        };
+        let glyph_advance = display_table.as_ref().and_then(|table| {
+            display_table_column_advance(
+                table,
+                code,
+                encoding,
+                DisplayColumn::new(column),
+                tab_width,
+                line_end_policy,
+            )
+        });
+        match glyph_advance {
+            Some(ColumnAdvance::Continue(next)) => column = next.get(),
+            Some(ColumnAdvance::EndOfLine(next)) => {
+                column = next.get();
+                break;
+            }
+            None => {
+                if line_end_policy.is_line_end(code) {
+                    break;
+                }
+                column = next_column_for_code(column, code, width, tab_width);
+            }
+        }
         scan += char_len.get();
     }
 
@@ -2103,56 +2514,6 @@ fn scan_for_column(
         previous_column,
         previous_code,
     })
-}
-
-fn decode_lisp_string_units(text: &LispString) -> Vec<DecodedUnit> {
-    let mut out = Vec::new();
-    let bytes = text.as_bytes();
-    if text.is_multibyte() {
-        let mut pos = 0usize;
-        while pos < bytes.len() {
-            let start = pos;
-            let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-            pos += len;
-            let width = if crate::emacs_core::emacs_char::char_byte8_p(code) {
-                4
-            } else if let Some(ch) = char::from_u32(code) {
-                crate::encoding::char_width(ch)
-            } else {
-                1
-            };
-            out.push(DecodedUnit {
-                start,
-                end: pos,
-                code,
-                width,
-            });
-        }
-        return out;
-    }
-
-    for (idx, &byte) in bytes.iter().enumerate() {
-        let width = if byte < 0x80 {
-            crate::encoding::char_width(byte as char)
-        } else {
-            4
-        };
-        out.push(DecodedUnit {
-            start: idx,
-            end: idx + 1,
-            code: byte as u32,
-            width,
-        });
-    }
-    out
-}
-
-fn column_for_lisp_string(prefix: &LispString, tab_width: usize) -> usize {
-    let mut column = 0usize;
-    for unit in decode_lisp_string_units(prefix) {
-        column = next_column_for_code(column, unit.code, unit.width, tab_width);
-    }
-    column
 }
 
 fn spaces_to_column(column: usize, target: usize) -> String {
@@ -2174,10 +2535,12 @@ fn insert_inheriting_indentation(
     }
     debug_assert!(indentation.bytes().all(|byte| matches!(byte, b' ' | b'\t')));
 
-    let current_id = ctx
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let current_id = ctx.buffers.current_buffer_id().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
     let insert_pos = ctx
         .buffers
         .get(current_id)
@@ -2218,21 +2581,60 @@ pub(crate) fn current_indentation(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("current-indentation", &args, 0)?;
-    let Some(buf) = &ctx.buffers.current_buffer() else {
+    let Some(current_id) = ctx.buffers.current_buffer_id() else {
         return Ok(Value::fixnum(0));
     };
-
-    let tabw = tab_width_in_state(&ctx.obarray, &[], Some(buf));
-    let line_range = line_bounds(buf, buf.point_emacs_byte_pos());
-    let line = buf.buffer_substring_lisp_string_range(line_range);
-
+    let (mut scan, end, tabw, invisible_possible) = {
+        let Some(buf) = ctx.buffers.get(current_id) else {
+            return Ok(Value::fixnum(0));
+        };
+        let line = line_bounds(buf, buf.point_emacs_byte_pos());
+        (
+            line.start().get(),
+            buf.accessible_emacs_byte_region().end().get(),
+            tab_width_in_state(&ctx.obarray, &[], Some(buf)),
+            !buf.overlays.is_empty()
+                || buf.text_props_property_name_presence(Value::symbol("invisible"))
+                    != crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent,
+        )
+    };
     let mut column = 0usize;
-    for unit in decode_lisp_string_units(&line) {
-        if unit.code == b' ' as u32 || unit.code == b'\t' as u32 {
-            column = next_column_for_code(column, unit.code, unit.width, tabw);
+    let mut next_invisible_probe = if invisible_possible { scan } else { end };
+    while scan < end {
+        if scan >= next_invisible_probe {
+            if let Some(next_visible) = super::xdisp::invisible_source_run_end_byte(
+                ctx,
+                current_id,
+                scan,
+                super::xdisp::InvisibleRunContext::ColumnScan,
+            )? && next_visible > scan
+            {
+                scan = next_visible.min(end);
+                next_invisible_probe = scan;
+                continue;
+            }
+            next_invisible_probe = next_char_property_boundary_byte(
+                ctx,
+                current_id,
+                scan,
+                Value::symbol("invisible"),
+                end,
+            );
+        }
+        let Some(buf) = ctx.buffers.get(current_id) else {
+            break;
+        };
+        let pos = EmacsBytePos::new(scan);
+        let Some(byte) = buf.emacs_byte_at_pos(pos) else {
+            break;
+        };
+        if byte == b' ' || byte == b'\t' || (byte == 0xa0 && !buf.get_multibyte()) {
+            column = next_column_for_code(column, u32::from(byte), 1, tabw);
         } else {
             break;
         }
+        // Only the single-byte whitespace cases above advance this scan.
+        scan += 1;
     }
 
     Ok(Value::fixnum(column as i64))
@@ -2265,7 +2667,7 @@ pub(crate) fn current_column(
     if let Some(column) = cached_current_column(current_id.0, point, modiff) {
         return Ok(Value::fixnum(column as i64));
     }
-    let scan = scan_for_column(ctx, current_id, Some(point), None)?;
+    let scan = scan_for_column(ctx, current_id, ColumnTarget::Position(point))?;
     set_last_known_column(current_id.0, point, modiff, scan.column);
     Ok(Value::fixnum(scan.column as i64))
 }
@@ -2290,8 +2692,44 @@ pub(crate) fn display_column_at_emacs_byte_pos(
         };
         buf.accessible_emacs_byte_region().clamp(pos)
     };
-    let scan = scan_for_column(ctx, buffer_id, Some(clamped), None)?;
+    let scan = scan_for_column(ctx, buffer_id, ColumnTarget::Position(clamped))?;
     Ok(scan.column)
+}
+
+/// The character after point as a deletion range, clamped like
+/// `del_range_1` to the accessible region; None when point is at ZV.
+fn char_after_point_edit_range(
+    ctx: &crate::emacs_core::eval::Context,
+) -> Option<crate::buffer::TextEditRange> {
+    let buf = ctx.buffers.current_buffer()?;
+    let from = buf.point_char_pos();
+    let to = from
+        .add_len(crate::buffer::CharLen::new(1))
+        .min(buf.point_max_char_pos());
+    (from < to).then(|| buf.edit_range_for_char_range(crate::buffer::CharRange::new(from, to)))
+}
+
+fn current_point_char_pos(
+    ctx: &crate::emacs_core::eval::Context,
+) -> Option<crate::buffer::CharPos0> {
+    ctx.buffers.current_buffer().map(Buffer::point_char_pos)
+}
+
+/// Move point to a character position saved before Lisp ran (GNU
+/// `SET_PT_BOTH (goal_pt, goal_pt_byte)`), measured in the live text so a
+/// stale position can neither reach past it nor split a character.
+fn goto_current_buffer_char_pos(
+    ctx: &mut crate::emacs_core::eval::Context,
+    char_pos: crate::buffer::CharPos0,
+) {
+    let Some((buffer, byte_pos)) = ctx
+        .buffers
+        .current_buffer()
+        .map(|buf| (buf.id, buf.char_pos_to_emacs_byte_pos_clamped(char_pos)))
+    else {
+        return;
+    };
+    let _ = ctx.buffers.goto_buffer_emacs_byte_pos(buffer, byte_pos);
 }
 
 /// (move-to-column COLUMN &optional FORCE) -> COLUMN-REACHED
@@ -2328,7 +2766,11 @@ pub(crate) fn move_to_column(
     }
 
     let mut tab_split: Option<(EmacsBytePos, usize, usize)> = None;
-    let scan = scan_for_column(ctx, current_id, None, Some(target))?;
+    let scan = scan_for_column(
+        ctx,
+        current_id,
+        ColumnTarget::Column(DisplayColumn::new(target)),
+    )?;
     let dest_byte = scan.byte_pos;
     let mut reached = scan.column;
 
@@ -2347,29 +2789,18 @@ pub(crate) fn move_to_column(
         }
         let _ = ctx.buffers.goto_buffer_emacs_byte_pos(current_id, tab_byte);
         let pad = spaces_to_column(col_before_tab, target);
-        let insert_pos = tab_byte;
-        let pad_len = pad.len();
         insert_inheriting_indentation(ctx, pad)?;
-        let tab_after_pad = insert_pos.add_len(EmacsByteLen::new(pad_len));
-        let delete_range = super::editfns::buffer_edit_range_for_byte_range_in_manager(
-            &ctx.buffers,
-            current_id,
-            EmacsByteRange::from_start_len(tab_after_pad, EmacsByteLen::new(1)),
-        )?;
-        let delete_change = crate::buffer::TextChange::deletion(delete_range);
-        super::editfns::signal_before_text_change(ctx, delete_change)?;
-        let _ = ctx
-            .buffers
-            .delete_buffer_measured_region(current_id, delete_range);
-        super::editfns::signal_after_text_change(ctx, delete_change)?;
-        let goal_point = tab_after_pad;
-        let _ = ctx
-            .buffers
-            .goto_buffer_emacs_byte_pos(current_id, goal_point);
+        // GNU Fmove_to_column (indent.c:1163-1168): `del_range (PT, PT + 1)`
+        // at the PT the insertion's callbacks left, then `goal_pt = PT`. Each
+        // step reads the live buffer: any callback may have edited it.
+        if let Some(tab) = char_after_point_edit_range(ctx) {
+            super::editfns::delete_text_range(ctx, tab, super::editfns::DeletedText::Discard)?;
+        }
+        let goal_point = current_point_char_pos(ctx);
         let _ = indent_to(ctx, vec![Value::fixnum(col_after_tab as i64), Value::NIL])?;
-        let _ = ctx
-            .buffers
-            .goto_buffer_emacs_byte_pos(current_id, goal_point);
+        if let Some(goal_point) = goal_point {
+            goto_current_buffer_char_pos(ctx, goal_point);
+        }
         return Ok(Value::fixnum(target as i64));
     }
 
@@ -2407,23 +2838,26 @@ pub(crate) fn indent_to(
         0
     };
 
-    let current_id = ctx
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let buf = ctx
-        .buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let current_id = ctx.buffers.current_buffer_id().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
+    let fromcol = expect_fixnump(&current_column(ctx, vec![])?)? as usize;
+    let buf = ctx.buffers.current_buffer().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
+    let tab_width = tab_width_in_state(&ctx.obarray, &[], Some(buf)).get();
 
-    let pt = buf.point_emacs_byte_pos();
-    let line = line_bounds(buf, pt);
-    let line_prefix = buf.buffer_substring_lisp_string_range(EmacsByteRange::new(line.start(), pt));
-    let tab_width = tab_width_in_state(&ctx.obarray, &[], Some(buf));
-
-    let fromcol = column_for_lisp_string(&line_prefix, tab_width);
-
-    let mincol = column.max(fromcol + minimum);
+    let mincol = column.max(
+        fromcol
+            .checked_add(minimum)
+            .ok_or_else(crate::emacs_core::alloc::buffer_overflow)?,
+    );
     if fromcol >= mincol {
         return Ok(Value::fixnum(mincol as i64));
     }
@@ -2437,28 +2871,43 @@ pub(crate) fn indent_to(
 
     let use_tabs = indent_tabs_mode_in_state(&ctx.obarray, &[], Some(buf));
 
-    let mut indent = String::new();
-    let mut col = fromcol;
+    // Compute the run lengths before allocating or entering a repeat loop.
+    let tab = tab_width.max(1);
+    let tabs = if use_tabs {
+        mincol / tab - fromcol / tab
+    } else {
+        0
+    };
+    let after_tabs = if tabs > 0 {
+        (mincol / tab) * tab
+    } else {
+        fromcol
+    };
+    let spaces = mincol - after_tabs;
+    let count = tabs
+        .checked_add(spaces)
+        .and_then(|count| i64::try_from(count).ok())
+        .ok_or_else(crate::emacs_core::alloc::buffer_overflow)?;
+    let length = crate::emacs_core::alloc::BufferByteLen::repeated(
+        1,
+        crate::emacs_core::alloc::RepeatCount::try_from(count).map_err(
+            |crate::emacs_core::alloc::RepeatCountError::OutOfRange| {
+                crate::emacs_core::alloc::buffer_overflow()
+            },
+        )?,
+        buf.total_emacs_byte_len().get(),
+    )?;
 
-    if use_tabs {
-        let tab = tab_width.max(1);
-        while col < mincol {
-            let next_tab = col + (tab - (col % tab));
-            if next_tab <= mincol {
-                indent.push('\t');
-                col = next_tab;
-            } else {
-                break;
-            }
+    // GNU indent.c:969-982 inserts tabs and spaces separately, exposing
+    // both inheriting edits to the before/after-change hooks.
+    if tabs > 0 {
+        let mut tab_run = length.reserved_text()?;
+        for _ in 0..tabs {
+            tab_run.push('\t');
         }
+        insert_inheriting_indentation(ctx, tab_run)?;
     }
-
-    while col < mincol {
-        indent.push(' ');
-        col += 1;
-    }
-
-    insert_inheriting_indentation(ctx, indent)?;
+    insert_inheriting_indentation(ctx, " ".repeat(spaces))?;
 
     // GNU `Findent_to` caches the resulting column at the new point/MODIFF so a
     // following `current-column' returns it without rescanning (src/indent.c:
@@ -2577,7 +3026,7 @@ pub(crate) fn compute_motion(eval: &mut super::eval::Context, args: Vec<Value>) 
     let tab_width = crate::buffer::buffer::lookup_buffer_slot("tab-width")
         .map(|info| buf.slots[info.offset.index()])
         .or_else(|| buf.get_buffer_local("tab-width"))
-        .or_else(|| obarray.symbol_value("tab-width").copied())
+        .or_else(|| obarray.symbol_value_copied("tab-width"))
         .and_then(|value: Value| match value.kind() {
             ValueKind::Fixnum(n) if n > 0 => Some(n as usize),
             _ => None,
@@ -2733,5 +3182,5 @@ pub(crate) fn line_number_display_width(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/indent_test.rs"]
 mod tests;

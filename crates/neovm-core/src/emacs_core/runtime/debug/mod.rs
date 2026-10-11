@@ -506,7 +506,27 @@ impl HelpFormatter {
             }
             ValueKind::Veclike(VecLikeType::ByteCode) => {
                 if let Some(bc) = value.get_bytecode_data() {
-                    let params = format_param_list(&bc.params);
+                    let params = match &bc.params {
+                        crate::emacs_core::bytecode::FunctionParams::Named(params) => {
+                            format_param_list(params)
+                        }
+                        crate::emacs_core::bytecode::FunctionParams::Stack(template) => {
+                            format!(" {}", template.raw())
+                        }
+                        crate::emacs_core::bytecode::FunctionParams::Dynamic(args) => {
+                            let printed = print_value(&args.value());
+                            if args.value().is_nil() {
+                                String::new()
+                            } else if let Some(formals) = printed
+                                .strip_prefix('(')
+                                .and_then(|text| text.strip_suffix(')'))
+                            {
+                                format!(" {formals}")
+                            } else {
+                                format!(" {printed}")
+                            }
+                        }
+                    };
                     out.push_str(&format!("({}{})\n", name, params));
                 }
             }
@@ -637,5 +657,5 @@ fn format_param_list(params: &super::value::LambdaParams) -> String {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/debug_test.rs"]
 mod tests;

@@ -145,4 +145,5 @@ pub(super) fn focus_transition(
 }
 
 #[cfg(test)]
+#[path = "focus/tests/focus_test.rs"]
 mod tests;

@@ -97,4 +97,5 @@ impl GuiFrameRenderState {
 }
 
 #[cfg(test)]
+#[path = "layout_continuity/tests/layout_continuity_test.rs"]
 mod tests;

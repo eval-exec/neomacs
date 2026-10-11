@@ -495,13 +495,14 @@ impl BufferSourceOutputSetup {
             max_rows,
             walk_setup,
         );
-        if params.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd {
-            setup.begin_request = setup.begin_request.with_growing_rows();
-        }
+        setup.begin_request = setup.begin_request.with_source_extent(params.source_extent);
         setup.row_visibility_limit.allow_partial = params.window_system
             && !params.kind.is_minibuffer()
             && params.measurement_rows.is_none();
-        if setup.row_visibility_limit.allow_partial && params.measurement_pixels.is_none() {
+        if setup.row_visibility_limit.allow_partial
+            && params.measurement_pixels.is_none()
+            && params.source_extent == crate::types::WindowSourceExtent::Viewport
+        {
             setup.row_visibility_limit.bottom_y = layout_box.body().bottom();
         }
         setup
@@ -1021,6 +1022,11 @@ impl BufferSourceOutputSetup {
             return BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
                 query_restart_rows: Vec::new(),
+                query_row_coverage:
+                    crate::buffer_source::render_attempt::QueryRowCoverage::Complete,
+                query_target_prefix_policy: params.wrap_mode
+                    == crate::types::LineWrapMode::Truncate
+                    && !params.word_wrap,
                 window_end_record: publish_request.window_end_record(redisplay_positions),
                 freshness_before_chrome,
                 effective_default_face,
@@ -1088,6 +1094,12 @@ impl BufferSourceOutputSetup {
                 buf_access,
             );
             let post_loop = match post_loop {
+                crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::QueryHorizonExhausted => {
+                    output.output_target().builder().finish_edit_sync();
+                    output.restore_retry_checkpoint(retry_checkpoint);
+                    return BufferSourceRenderAttemptOutcome::QuerySourceHorizonExhausted;
+                }
+
                 crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::Complete(outcome) => outcome,
                 crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::SyncHorizonExhausted => {
                     output.output_target().builder().finish_edit_sync();
@@ -1475,6 +1487,11 @@ impl BufferSourceOutputSetup {
             return BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
                 query_restart_rows: Vec::new(),
+                query_row_coverage:
+                    crate::buffer_source::render_attempt::QueryRowCoverage::Complete,
+                query_target_prefix_policy: params.wrap_mode
+                    == crate::types::LineWrapMode::Truncate
+                    && !params.word_wrap,
                 window_end_record: publish_request.window_end_record(redisplay_positions),
                 freshness_before_chrome,
                 effective_default_face,
@@ -1505,6 +1522,12 @@ impl BufferSourceOutputSetup {
         );
 
         let post_loop = match post_loop {
+                crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::QueryHorizonExhausted => {
+                    output.output_target().builder().finish_edit_sync();
+                    output.restore_retry_checkpoint(retry_checkpoint);
+                    return BufferSourceRenderAttemptOutcome::QuerySourceHorizonExhausted;
+                }
+
             crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::Complete(outcome) => outcome,
             crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::SyncHorizonExhausted => {
                 // A replay-free source has no sync horizon. Retain a complete
@@ -1597,7 +1620,9 @@ impl BufferSourceOutputSetup {
         // row) and before mode-line chrome, with row and pixel boundary guards.
         // A BEGV-to-ZV mini measurement ends at the real source row; the
         // display-only EOB decoration tail must not hold its old allocation.
-        if params.mini_measurement != crate::types::MiniWindowMeasurement::ToEnd {
+        if params.source_extent != crate::types::WindowSourceExtent::AccessibleEnd
+            && !output_emitter.query_target_reached()
+        {
             EndOfBufferRowsFillRequest::new(
                 params,
                 geometry.display_text_row_base,
@@ -1698,6 +1723,11 @@ impl BufferSourceOutputSetup {
             Err(changed) => return changed.into(),
         };
         let query_restart_rows = output_emitter.take_query_restart_rows();
+        let query_row_coverage = if output_emitter.query_target_reached() {
+            crate::buffer_source::render_attempt::QueryRowCoverage::TargetPrefix
+        } else {
+            crate::buffer_source::render_attempt::QueryRowCoverage::Complete
+        };
         tail_context.finish_and_install(
             TextWindowFinishState::new(output, output_emitter, evaluator),
             measured_chrome_heights,
@@ -1706,6 +1736,9 @@ impl BufferSourceOutputSetup {
         BufferSourceRenderAttemptOutcome::Finished {
             redisplay_positions,
             query_restart_rows,
+            query_row_coverage,
+            query_target_prefix_policy: params.wrap_mode == crate::types::LineWrapMode::Truncate
+                && !params.word_wrap,
             window_end_record: publish_request.window_end_record(redisplay_positions),
             freshness_before_chrome,
             effective_default_face,

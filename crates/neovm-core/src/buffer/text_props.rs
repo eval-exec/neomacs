@@ -652,8 +652,9 @@ struct IntervalTree {
     /// the same interval. GNU's `find_interval` re-descends from the root on every
     /// call, so this beats it.
     ///
-    /// Stored as plain atomics (not a `Cell`) because `TextPropertyTable` must be
-    /// `Sync` -- it backs a shared `OnceLock` sentinel. `version` is bumped by the
+    /// Stored as plain atomics (not a `Cell`) because `TextPropertyTable` once
+    /// backed a process-wide empty sentinel; it holds Lisp values and is now
+    /// confined to its mutator thread like them. `version` is bumped by the
     /// three in-place structural/positional mutators (`push_node`,
     /// `add_length_to_ancestors`, `delete_node`); a lookup trusts the memo only
     /// when `cache_gen == gen`, so any such mutation invalidates it. Plist-value
@@ -774,13 +775,7 @@ fn with_watched_prop_demand_mode_for_test<T>(
     mode: WatchedPropDemandMode,
     body: impl FnOnce() -> T,
 ) -> T {
-    struct Restore(Option<WatchedPropDemandMode>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            WATCHED_PROP_DEMAND_OVERRIDE.with(|cell| cell.set(self.0));
-        }
-    }
-    let restore = Restore(WATCHED_PROP_DEMAND_OVERRIDE.with(|cell| cell.replace(Some(mode))));
+    let restore = crate::tls_scope::TlsScope::new(&WATCHED_PROP_DEMAND_OVERRIDE, Some(mode));
     let result = body();
     drop(restore);
     result
@@ -2569,18 +2564,149 @@ pub struct TextPropertyTable {
     /// `((syntax_prop_tick + 1) << 1) | any` — the +1 makes the default `0`
     /// never match, and the answer self-recomputes on first query after a
     /// syntax-relevant mutation. One full-tree bit scan per such mutation,
-    /// zero per-mutation bookkeeping. Atomic (not Cell) only so the table
-    /// stays `Sync` for the shared EMPTY static; ordering is Relaxed — a
-    /// racing recompute is just repeated work.
+    /// zero per-mutation bookkeeping. Atomic (not Cell) from when the table
+    /// backed a shared empty static; ordering is Relaxed — a racing recompute
+    /// is just repeated work.
     syntax_prop_any: std::sync::atomic::AtomicU64,
     /// Lazy sorted list of the bit-set intervals' `[start, end)` bounds,
     /// tagged with the `syntax_prop_tick + 1` it was built at (0 = never).
     /// Sparse in practice (elisp-mode marks ~21 docstring delimiters in a
     /// 50k-interval fontified buffer), so queries binary-search this instead
-    /// of walking thousands of face intervals. Mutex only for `Sync` (the
-    /// shared EMPTY static); the heap is per-thread, so it is uncontended —
-    /// and a failed try_lock just falls back to the cursor walk.
+    /// of walking thousands of face intervals. A Mutex from when the table
+    /// backed a shared empty static; the table is thread-confined, so it is
+    /// uncontended — and a failed try_lock just falls back to the cursor walk.
     syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
+}
+
+/// Absence of string text properties, with no Lisp values or table storage.
+///
+/// This state can be shared between threads. A real interval table remains
+/// borrowed from its string on the mutator that owns it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct EmptyTextProperties {
+    _private: (),
+}
+
+static_assertions::assert_impl_all!(EmptyTextProperties: Send, Sync, Clone, Copy, std::fmt::Debug, Default, Eq, PartialEq, std::hash::Hash);
+const _: () = {
+    assert!(std::mem::size_of::<EmptyTextProperties>() == 0);
+    assert!(std::mem::align_of::<EmptyTextProperties>() == 1);
+};
+
+impl EmptyTextProperties {
+    /// Construct the property-free state without allocating a table.
+    pub const fn new() -> Self {
+        Self { _private: () }
+    }
+
+    /// Read the empty state on the receiving thread.
+    pub const fn view(self) -> TextPropertiesRef<'static> {
+        TextPropertiesRef { table: None }
+    }
+}
+
+/// A read-only string interval view, including the absence of a table.
+///
+/// Copying this view copies its borrow; [`Self::to_owned_table`] explicitly
+/// copies table storage. An attached empty table stays distinguishable from
+/// absence through [`Self::as_table`], including its revision history.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct TextPropertiesRef<'a> {
+    table: Option<&'a TextPropertyTable>,
+}
+
+static_assertions::assert_impl_all!(TextPropertiesRef<'static>: Clone, Copy, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(TextPropertiesRef<'static>: Send, Sync);
+const _: () = {
+    assert!(std::mem::size_of::<TextPropertiesRef<'static>>() == std::mem::size_of::<usize>());
+    assert!(std::mem::align_of::<TextPropertiesRef<'static>>() == std::mem::align_of::<usize>());
+    assert!(std::mem::offset_of!(TextPropertiesRef<'static>, table) == 0);
+};
+
+impl<'a> TextPropertiesRef<'a> {
+    pub(crate) const fn from_table(table: &'a TextPropertyTable) -> Self {
+        Self { table: Some(table) }
+    }
+
+    /// The actual borrowed table, if the string owns one.
+    #[inline]
+    pub const fn as_table(self) -> Option<&'a TextPropertyTable> {
+        self.table
+    }
+
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self.table.is_none_or(TextPropertyTable::is_empty)
+    }
+
+    #[inline]
+    pub fn mutation_tick(self) -> u64 {
+        self.table.map_or(0, TextPropertyTable::mutation_tick)
+    }
+
+    /// Copy a real table, or create an empty owned table for later mutation.
+    #[inline]
+    pub fn to_owned_table(self) -> TextPropertyTable {
+        self.table.map_or_else(TextPropertyTable::new, Clone::clone)
+    }
+
+    #[inline]
+    pub fn get_property_at_char_pos(self, pos: CharPos0, name: Value) -> Option<Value> {
+        self.table
+            .and_then(|table| table.get_property_at_char_pos(pos, name))
+    }
+
+    #[inline]
+    pub fn slice_char_range(self, range: CharRange) -> TextPropertyTable {
+        self.table.map_or_else(TextPropertyTable::new, |table| {
+            table.slice_char_range(range)
+        })
+    }
+
+    #[inline]
+    pub fn object_interval_runs_for_char_len(self, len: CharLen) -> Vec<ObjectIntervalRun> {
+        self.table.map_or_else(Vec::new, |table| {
+            table.object_interval_runs_for_char_len(len)
+        })
+    }
+
+    #[inline]
+    pub fn object_interval_plist_runs_for_char_len(
+        self,
+        len: CharLen,
+    ) -> Vec<ObjectIntervalPlistRun> {
+        self.table.map_or_else(Vec::new, |table| {
+            table.object_interval_plist_runs_for_char_len(len)
+        })
+    }
+
+    #[inline]
+    pub fn for_each_interval_from_char_pos(
+        self,
+        pos: CharPos0,
+        f: impl FnMut(CharPos0, CharPos0, Value) -> bool,
+    ) {
+        if let Some(table) = self.table {
+            table.for_each_interval_from_char_pos(pos, f);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn for_each_root(self, f: impl FnMut(Value)) {
+        if let Some(table) = self.table {
+            table.for_each_root(f);
+        }
+    }
+
+    #[cfg(feature = "gc-memory-telemetry")]
+    #[inline]
+    pub(crate) fn memory_telemetry_storage(self) -> TextPropertyMemoryStorage {
+        self.table.map_or_else(
+            TextPropertyMemoryStorage::default,
+            TextPropertyTable::memory_telemetry_storage,
+        )
+    }
 }
 
 /// Clip a cached-range endpoint for a deletion of `range` (length
@@ -3807,65 +3933,73 @@ impl TextPropertyTable {
     }
 
     fn remove_property_raw(&mut self, range: CharRange, name: Value) -> bool {
-        self.mutation_tick += 1;
-        if Self::name_is_syntax_relevant(name) {
-            self.syntax_prop_tick += 1;
-            // Removal keeps existing entries: an entry only BOUNDS a run —
-            // the value always resolves fresh from the tree, and a stale
-            // presence entry just yields a shorter-than-optimal run. What
-            // must not happen is the full-rebuild scan per propertize flush.
-            self.syntax_ranges_revalidate();
-        }
-        if range.is_empty() {
-            return false;
-        }
-        let mut changed = false;
-
-        let affected = self
-            .intervals
-            .existing_intervals_overlapping_after_splits(range);
-        for (_, id) in affected {
-            if plist_value_remove(&mut self.intervals.nodes[id.0].plist, name) {
-                self.intervals.nodes[id.0].refresh_cache();
-                changed = true;
-            }
-        }
-        changed
+        self.remove_properties_in_char_range(range, &[name])
     }
 
-    /// Strip every property in `names` over `range` in ONE split+collect
-    /// interval walk. The per-name variant repeats that walk (and its
-    /// callers repeat their undo-run walk) per property; font-lock
-    /// unfontify removes several properties per edit.
+    /// Strip every property in `names` over `range` in one interval walk.
+    ///
+    /// GNU `Fremove_text_properties` (textprop.c:1597-1619, 1646-1670) and
+    /// `Fremove_list_of_text_properties` (1723-1745, 1757-1789) check explicit
+    /// plist membership before splitting either range edge. Intervals without
+    /// any requested name retain their boundaries even when another changes.
     pub fn remove_properties_in_char_range(&mut self, range: CharRange, names: &[Value]) -> bool {
-        self.mutation_tick += 1;
-        if names
-            .iter()
-            .any(|name| Self::name_is_syntax_relevant(*name))
-        {
-            self.syntax_prop_tick += 1;
-            // Same policy as the single-name removal: presence entries only
-            // bound runs, so keep them and revalidate the guard.
-            self.syntax_ranges_revalidate();
-        }
         if range.is_empty() || names.is_empty() {
             return false;
         }
+        let Some((mut node_start, mut id)) = self.first_interval_overlapping(range) else {
+            return false;
+        };
         let mut changed = false;
-        let affected = self
-            .intervals
-            .existing_intervals_overlapping_after_splits(range);
-        for (_, id) in affected {
-            let mut node_changed = false;
-            for name in names {
-                if plist_value_remove(&mut self.intervals.nodes[id.0].plist, *name) {
-                    node_changed = true;
+        while node_start < range.end() {
+            let node_end = self.intervals.interval_end(node_start, id);
+            // GNU removes names directly from whole interior intervals
+            // (textprop.c:1677-1679). Probe only while finding the first
+            // change or before splitting the last interval. Inspect the
+            // live plist: Lisp can add names through `text-properties-at`.
+            let visit = (changed && node_end <= range.end())
+                || names
+                    .iter()
+                    .any(|name| plist_value_get(self.intervals.nodes[id.0].plist, *name).is_some());
+            if visit {
+                if !changed {
+                    self.mutation_tick += 1;
+                    if names
+                        .iter()
+                        .any(|name| Self::name_is_syntax_relevant(*name))
+                    {
+                        self.syntax_prop_tick += 1;
+                        // Presence entries only bound runs; keep them and
+                        // revalidate the guard instead of rebuilding.
+                        self.syntax_ranges_revalidate();
+                    }
+                }
+                if node_start < range.start() {
+                    id = self
+                        .intervals
+                        .split_at(range.start())
+                        .expect("the first changed interval contains the range start");
+                }
+                if node_end > range.end() {
+                    self.intervals.split_at(range.end());
+                }
+                let node = &mut self.intervals.nodes[id.0];
+                let mut node_changed = false;
+                for name in names {
+                    node_changed |= plist_value_remove(&mut node.plist, *name);
+                }
+                if node_changed {
+                    node.refresh_cache();
+                    changed = true;
                 }
             }
-            if node_changed {
-                self.intervals.nodes[id.0].refresh_cache();
-                changed = true;
+            if node_end >= range.end() {
+                break;
             }
+            let Some(next_id) = self.intervals.next_id(id) else {
+                break;
+            };
+            node_start = node_end;
+            id = next_id;
         }
         changed
     }
@@ -5041,4 +5175,11 @@ impl GcTrace for TextPropertyTable {
 // ===========================================================================
 
 #[cfg(test)]
+#[path = "text_props/tests/text_props_test.rs"]
 mod tests;
+
+#[path = "text_props/casing_insertion.rs"]
+mod casing_insertion;
+pub(crate) use casing_insertion::{
+    CasingPropertyControls, CasingPropertyMode, CasingPropertyRoots,
+};

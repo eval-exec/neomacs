@@ -17,6 +17,8 @@ thread_local! {
     static IMAGE_SPEC_TEST_CONTEXT: Context = Context::new();
 }
 
+use neomacs_display_protocol::ImageAnimationPolicy;
+
 fn file_request(path: &str) -> ImageResolveRequest {
     let spec = IMAGE_SPEC_TEST_CONTEXT.with(|_| {
         Value::list(vec![
@@ -31,11 +33,12 @@ fn file_request(path: &str) -> ImageResolveRequest {
     ImageResolveRequest {
         spec: ImageSpecIdentity::from_lisp_spec(&spec).expect("test image spec"),
         identity: image_load_identity(&spec, &items),
-        source: ImageResolveSource::File(LispString::from_utf8(path)),
+        source: ImageResolveSource::File(ImageFileName::from_utf8(path)),
         size: ImageSizeSpec::new(AxisSize::AtMost(24), AxisSize::AtMost(24)),
         rotation: Default::default(),
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     }

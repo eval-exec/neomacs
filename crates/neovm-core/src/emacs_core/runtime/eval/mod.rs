@@ -374,7 +374,7 @@ impl EchoAreaMessageText {
             )
         };
         if message.has_intervals() {
-            *converted.intervals_mut() = message.intervals().clone();
+            *converted.intervals_mut() = message.intervals().to_owned_table();
         }
         converted
     }
@@ -725,8 +725,6 @@ pub(crate) enum InlineSubrKind {
     /// A fixed-arity subr of at most three arguments: the VM calls its
     /// function pointer straight from the operand stack.
     Direct,
-    /// `aset`/`fillarray`: keep the string write-back path.
-    Writeback,
     /// Pure reads of the current buffer, executed without any call.
     Point,
     PointMin,
@@ -752,7 +750,6 @@ impl InlineSubr {
             ("point-min", Some(SubrFn::A0(_))) => InlineSubrKind::PointMin,
             ("point-max", Some(SubrFn::A0(_))) => InlineSubrKind::PointMax,
             ("current-buffer", Some(SubrFn::A0(_))) => InlineSubrKind::CurrentBuffer,
-            ("aset" | "fillarray", _) => InlineSubrKind::Writeback,
             (_, Some(SubrFn::A0(_) | SubrFn::A1(_) | SubrFn::A2(_) | SubrFn::A3(_))) => {
                 InlineSubrKind::Direct
             }
@@ -1018,9 +1015,54 @@ impl SavedBufferId {
     }
 }
 
+/// GNU's `unwind_excursion.window` slot (editfns.c:783-786): the selected
+/// window at `save-excursion` capture time when it displayed the current
+/// buffer, `Qnil` otherwise. Window ids start at 1, so 0 is a sentinel that
+/// never names a window and the JIT-pinned `SpecBinding` payload width
+/// (`jit_layout.rs` `ENTRY_WORDS`) is unchanged.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExcursionWindow(u64);
+
+impl ExcursionWindow {
+    /// GNU's `Qnil`: no window was recorded at capture time.
+    pub(crate) const NONE: Self = Self(0);
+
+    /// GNU `save_excursion_save` (editfns.c:783-786): record the selected
+    /// window when it displays BUFFER, `NONE` otherwise. Read-only: unlike
+    /// `ensure_selected_frame_id_in_state` this never synthesizes a frame,
+    /// so a frameless batch context records no window, like a GNU that never
+    /// ran `window-init`.
+    #[inline]
+    pub(crate) fn capture(frames: &FrameManager, buffer: BufferId) -> Self {
+        frames
+            .selected_window()
+            .filter(|window| window.buffer_id() == Some(buffer))
+            .map_or(Self::NONE, |window| Self(window.id().0))
+    }
+
+    /// The recorded window, or `None` for GNU's `Qnil`.
+    #[inline]
+    pub(crate) fn window(self) -> Option<WindowId> {
+        (self.0 != 0).then_some(WindowId(self.0))
+    }
+}
+
+static_assertions::assert_eq_size!(ExcursionWindow, u64);
+static_assertions::assert_eq_align!(ExcursionWindow, u64);
+
+mod specbinding_layout;
+
+specbinding_layout::define! {
 /// A single entry on the specpdl (special binding stack).
 /// Matches GNU Emacs's `union specbinding` SPECPDL_LET / SPECPDL_LET_LOCAL.
-#[derive(Clone, Debug)]
+///
+/// `repr(u8)` fixes each variant as a C-layout record beginning with its tag.
+/// Small fields precede word fields, sharing the first word with the tag;
+/// this keeps every entry at four words on the JIT's 64-bit hosts. The macro
+/// emits the matching record types from this same field list for `offset_of!`.
+/// Entries belong to their owning, thread-confined Context; a JIT push writes
+/// all live fields before publishing the new specpdl length.
 pub(crate) enum SpecBinding {
     /// Plain dynamic let-binding: saves old obarray (global/default) value.
     Let {
@@ -1061,16 +1103,16 @@ pub(crate) enum SpecBinding {
     /// `(nil FUNC FORMS FLAGS)` for these (`backtrace_frame_apply`,
     /// eval.c:3993-3994).
     Backtrace {
+        debug_on_exit: bool,
         function: Value,
         args: BacktraceArgs,
-        debug_on_exit: bool,
     },
     /// Common evaluated one-argument call, stored directly in the specpdl
     /// entry so callback-heavy paths do not clone into the owned side stack.
     Backtrace1 {
+        debug_on_exit: bool,
         function: Value,
         arg: Value,
-        debug_on_exit: bool,
     },
     /// Common evaluated two-argument call. Omitting `debug_on_exit` is a type-
     /// level statement that this compact form is the ordinary non-debug frame;
@@ -1096,18 +1138,23 @@ pub(crate) enum SpecBinding {
     /// (`Context::detach_native_frames_into`). So the stop-the-world root
     /// snapshot and backtrace walks may always read through the pointer.
     BacktraceNative {
+        nargs: u32,
         function: Value,
         args_ptr: *const i64,
-        nargs: u32,
     },
     /// unwind-protect cleanup. Matches GNU SPECPDL_UNWIND.
     /// For interpreter: forms is a cons list, unbind_to calls sf_progn_value.
     /// For VM: forms is a callable (bytecode fn), unbind_to calls apply.
     UnwindProtect { forms: Value, lexenv: Value },
     /// save-excursion state. Matches GNU SPECPDL_UNWIND_EXCURSION.
+    /// The owning evaluator's mutator records the original buffer id for
+    /// diagnostics and retains the payload slot GNU gives to
+    /// `unwind_excursion.window`. Restore follows the traced marker's live
+    /// location (GNU editfns.c:792-803), since buffer-swap-text can move it
+    /// away from the recording-time buffer identity.
     SaveExcursion {
-        buffer_id: crate::buffer::BufferId,
-        marker_id: u64,
+        _saved_buffer_id: crate::buffer::BufferId,
+        saved_window: ExcursionWindow,
         marker: Value,
     },
     /// save-current-buffer state. Matches GNU record_unwind_current_buffer.
@@ -1133,6 +1180,8 @@ pub(crate) enum SpecBinding {
     NativeUnwind { action: NativeUnwindAction },
     /// Placeholder. Matches GNU SPECPDL_NOP.
     Nop,
+}
+
 }
 
 /// Cold, owned payload for a `save-restriction` unwind entry.
@@ -1204,6 +1253,9 @@ impl SpecBinding {
 /// an untyped callback whose captures the GC cannot see.
 #[derive(Clone, Debug)]
 pub(crate) enum NativeUnwindAction {
+    /// Scalar reserve state owned by this Context's mutator; restored on its
+    /// own specpdl, without sharing a limit or a reserve between Contexts.
+    RestoreEvalDepth { old_limit: i64 },
     RestoreWindowConfiguration {
         configuration: super::builtins::SavedWindowConfiguration,
         options: super::builtins::WindowConfigurationRestoreOptions,
@@ -1214,16 +1266,22 @@ pub(crate) enum NativeUnwindAction {
     MinibufferBuffer {
         state: Box<super::reader::MinibufferBufferUnwind>,
     },
+    /// GNU `record_unwind_protect_int (backtrace_eval_unrewind, -distance)`
+    /// (eval.c:4255): re-swap the specpdl suffix a `backtrace-eval` unbound,
+    /// restoring the frames' own bindings before their normal unwind.
+    BacktraceEvalRewind { distance: usize },
 }
 
 impl NativeUnwindAction {
     fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {
         match self {
+            Self::RestoreEvalDepth { .. } => {}
             Self::RestoreWindowConfiguration { configuration, .. } => {
                 visit(configuration.trace_value())
             }
             Self::MinibufferSession { state } => state.trace_roots(visit),
             Self::MinibufferBuffer { .. } => {}
+            Self::BacktraceEvalRewind { .. } => {}
         }
     }
 
@@ -1233,6 +1291,10 @@ impl NativeUnwindAction {
         let root_scope = context.save_vm_roots();
         self.trace_roots(&mut |value| context.push_vm_frame_root(value));
         let result = match self {
+            Self::RestoreEvalDepth { old_limit } => {
+                context.restore_lisp_eval_depth_room(old_limit);
+                Ok(Value::NIL)
+            }
             Self::RestoreWindowConfiguration {
                 configuration,
                 options,
@@ -1243,6 +1305,9 @@ impl NativeUnwindAction {
             Self::MinibufferBuffer { state } => {
                 super::reader::unwind_minibuffer_buffer(context, *state)
             }
+            Self::BacktraceEvalRewind { distance } => context
+                .specpdl_swap_suffix_for_backtrace_eval(distance, false)
+                .map(|()| Value::NIL),
         };
         context.restore_vm_roots(root_scope);
         result
@@ -1272,7 +1337,7 @@ impl BytecodeBacktraceSpan {
     const START_BITS: u32 = BacktraceArgs::PAYLOAD_BITS - Self::LEN_BITS;
     const START_MAX: usize = (1usize << Self::START_BITS) - 1;
 
-    #[inline]
+    #[inline(always)]
     fn try_new(start: usize, len: usize) -> Option<Self> {
         (start <= Self::START_MAX && len <= Self::LEN_MASK)
             .then_some(Self((start << Self::LEN_BITS) | len))
@@ -1365,12 +1430,12 @@ impl BacktraceArgs {
         Self::descriptor(Self::EVALUATED_KIND, index)
     }
 
-    #[inline]
+    #[inline(always)]
     fn evaluated_bc_stack(span: BytecodeBacktraceSpan) -> Self {
         Self::descriptor(Self::BYTECODE_STACK_KIND, span.0)
     }
 
-    #[inline]
+    #[inline(always)]
     fn descriptor(kind: usize, payload: usize) -> Self {
         debug_assert!(kind <= Self::KIND_MASK);
         debug_assert!(payload <= Self::PAYLOAD_MAX);
@@ -1394,7 +1459,7 @@ impl BacktraceArgs {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn owned_index(self) -> Option<usize> {
         let is_descriptor = self.0 & Self::TAG_MASK == Self::DESCRIPTOR_TAG;
         let kind = (self.0 >> Self::KIND_SHIFT) & Self::KIND_MASK;
@@ -1456,7 +1521,7 @@ impl BytecodeBacktraceFrame {
     const OWNED_ARGS_FLAG: usize = 1usize << (usize::BITS - 1);
     const BASE_MASK: usize = !Self::OWNED_ARGS_FLAG;
 
-    #[inline]
+    #[inline(always)]
     fn new(base: usize, owns_args: bool) -> Self {
         debug_assert_eq!(
             base & Self::OWNED_ARGS_FLAG,
@@ -1565,7 +1630,7 @@ enum TrivialSpecBindingPop {
     BacktraceArgs(BacktraceArgs),
 }
 
-#[inline]
+#[inline(always)]
 fn trivial_spec_binding_pop(binding: &SpecBinding) -> Option<TrivialSpecBindingPop> {
     match binding {
         SpecBinding::GcRoot { .. }
@@ -1588,7 +1653,8 @@ fn trivial_spec_binding_pop(binding: &SpecBinding) -> Option<TrivialSpecBindingP
 const _: () = assert!(!std::mem::needs_drop::<TrivialSpecBindingPop>());
 
 /// `pop_simple_specpdl_suffix` retires a `SpecBinding::Let`, `LetLocal`,
-/// `LetDefault` and `LexicalEnv` with `set_len` (GNU's `--specpdl_ptr`);
+/// `LetDefault`, `LexicalEnv`, `SaveCurrentBuffer` and a completed
+/// `SaveExcursion` with `set_len` (GNU's `--specpdl_ptr`);
 /// that is only sound while those variants' payloads own nothing.
 const _: () = assert!(
     !std::mem::needs_drop::<SymId>()
@@ -1596,6 +1662,7 @@ const _: () = assert!(
         && !std::mem::needs_drop::<Value>()
         && !std::mem::needs_drop::<crate::buffer::BufferId>()
         && !std::mem::needs_drop::<SavedBufferId>()
+        && !std::mem::needs_drop::<ExcursionWindow>()
 );
 
 #[derive(Clone, Debug, Default)]
@@ -1626,124 +1693,8 @@ type LetBindingVec = SmallVec<[(SymId, Value); 8]>;
 const _: () =
     assert!(isize::MAX as usize / std::mem::size_of::<LispArgVec>() <= BacktraceArgs::PAYLOAD_MAX);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct GnuTimerTimestamp {
-    pub(crate) high_seconds: i64,
-    pub(crate) low_seconds: i64,
-    pub(crate) usecs: i64,
-    pub(crate) psecs: i64,
-}
-
-impl GnuTimerTimestamp {
-    pub(crate) fn now() -> Self {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let (secs, usecs) = match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(dur) => (dur.as_secs() as i64, dur.subsec_micros() as i64),
-            Err(err) => {
-                let dur = err.duration();
-                (-(dur.as_secs() as i64), -(dur.subsec_micros() as i64))
-            }
-        };
-
-        Self {
-            high_seconds: secs >> 16,
-            low_seconds: secs & 0xFFFF,
-            usecs,
-            psecs: 0,
-        }
-    }
-
-    fn unix_seconds(self) -> i64 {
-        (self.high_seconds << 16) + self.low_seconds
-    }
-
-    pub(crate) fn duration_until(self, now: Self) -> std::time::Duration {
-        use std::time::Duration;
-
-        if self <= now {
-            return Duration::ZERO;
-        }
-
-        let mut secs = self.unix_seconds() - now.unix_seconds();
-        let mut usecs = self.usecs - now.usecs;
-        let mut psecs = self.psecs - now.psecs;
-
-        if psecs < 0 {
-            psecs += 1_000_000;
-            usecs -= 1;
-        }
-        if usecs < 0 {
-            usecs += 1_000_000;
-            secs -= 1;
-        }
-        if secs < 0 {
-            return Duration::ZERO;
-        }
-
-        let mut secs = secs as u64;
-        let mut nanos = (usecs as u32) * 1_000 + (psecs.max(0) as u32).div_ceil(1_000);
-        if nanos >= 1_000_000_000 {
-            secs += 1;
-            nanos -= 1_000_000_000;
-        }
-
-        Duration::new(secs, nanos)
-    }
-
-    pub(crate) fn overdue_duration(self, now: Self) -> std::time::Duration {
-        use std::time::Duration;
-
-        if self >= now {
-            return Duration::ZERO;
-        }
-
-        let mut secs = now.unix_seconds() - self.unix_seconds();
-        let mut usecs = now.usecs - self.usecs;
-        let mut psecs = now.psecs - self.psecs;
-
-        if psecs < 0 {
-            psecs += 1_000_000;
-            usecs -= 1;
-        }
-        if usecs < 0 {
-            usecs += 1_000_000;
-            secs -= 1;
-        }
-
-        let nanos = ((usecs as u32) * 1_000) + (psecs as u32 / 1_000);
-        Duration::new(secs as u64, nanos)
-    }
-
-    pub(crate) fn from_duration(duration: std::time::Duration) -> Self {
-        let secs = duration.as_secs() as i64;
-        let usecs = duration.subsec_micros() as i64;
-        Self {
-            high_seconds: secs >> 16,
-            low_seconds: secs & 0xFFFF,
-            usecs,
-            psecs: 0,
-        }
-    }
-
-    pub(crate) fn add_duration(self, duration: std::time::Duration) -> Self {
-        let mut secs = self.unix_seconds() + duration.as_secs() as i64;
-        let mut usecs = self.usecs + duration.subsec_micros() as i64;
-        let psecs = self.psecs;
-
-        if usecs >= 1_000_000 {
-            secs += usecs / 1_000_000;
-            usecs %= 1_000_000;
-        }
-
-        Self {
-            high_seconds: secs >> 16,
-            low_seconds: secs & 0xFFFF,
-            usecs,
-            psecs,
-        }
-    }
-}
+mod timer_timestamp;
+pub(crate) use timer_timestamp::GnuTimerTimestamp;
 
 #[derive(Clone, Debug)]
 enum NamedCallTarget {
@@ -1997,8 +1948,10 @@ cached_symbol_id!(closure_symbol, "closure");
 cached_symbol_id!(declare_symbol, "declare");
 cached_symbol_id!(macro_symbol, "macro");
 cached_symbol_id!(max_lisp_eval_depth_symbol, "max-lisp-eval-depth");
+// Symbol identity is global and immutable; values remain owned by each Context.
+cached_symbol_id!(lisp_eval_depth_reserve_symbol, "lisp-eval-depth-reserve");
+cached_symbol_id!(frame_alpha_lower_limit_symbol, "frame-alpha-lower-limit");
 cached_symbol_id!(byte_code_literal_symbol, "byte-code-literal");
-cached_symbol_id!(byte_code_symbol, "byte-code");
 cached_symbol_id!(input_decode_map_symbol, "input-decode-map");
 cached_symbol_id!(local_function_key_map_symbol, "local-function-key-map");
 cached_symbol_id!(post_gc_hook_symbol, "post-gc-hook");
@@ -2090,6 +2043,7 @@ fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) 
         print_symbols_bare_symbol,
         max_lisp_eval_depth_symbol(),
         buffer_undo_list_symbol(),
+        frame_alpha_lower_limit_symbol(),
     ] {
         obarray.mark_runtime_projected_id(projected);
     }
@@ -2117,10 +2071,6 @@ fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) 
         symbols_with_pos_enabled_symbol,
         print_symbols_bare_symbol,
     }
-}
-
-fn is_runtime_dynamically_special(obarray: &Obarray, sym_id: SymId) -> bool {
-    obarray.is_special_id(sym_id) && !obarray.is_constant_id(sym_id)
 }
 
 /// The name `(let ((SYM VALUE)) ...)` must report as `(setting-constant SYM)`,
@@ -2151,8 +2101,7 @@ pub(crate) fn refresh_features_from_variable_in_state(
     features: &mut Vec<SymId>,
 ) {
     let current = obarray
-        .symbol_value("features")
-        .cloned()
+        .symbol_value_copied("features")
         .unwrap_or(Value::NIL);
     let mut parsed = Vec::new();
     if let Some(items) = list_to_vec(&current) {
@@ -2188,8 +2137,7 @@ pub(crate) fn add_feature_id_in_state(obarray: &mut Obarray, features: &mut Vec<
         return;
     }
     let current = obarray
-        .symbol_value("features")
-        .cloned()
+        .symbol_value_copied("features")
         .unwrap_or(Value::NIL);
     // Emacs pushes newly-provided features at the front.
     features.insert(0, id);
@@ -2431,6 +2379,9 @@ pub enum FontSpecSelection {
     #[default]
     Enumerate,
     DriverMatch,
+    /// Open a parsed specification: prefer listed entities first, then try
+    /// the driver matcher if the explicit specification has no candidates.
+    OpenBySpec,
 }
 
 /// One exact opened font shared by layout, frame geometry, and Lisp font
@@ -2605,6 +2556,8 @@ impl ResolvedFrameFont {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedFontSpecMatch {
+    /// Exact host selection, retained independently of public font properties.
+    pub coverage_handle: Option<crate::emacs_core::display_host::FontEntityHandle>,
     pub family: crate::heap_types::LispString,
     pub foundry: Option<crate::heap_types::LispString>,
     pub registry: Option<crate::heap_types::LispString>,
@@ -2805,19 +2758,6 @@ pub struct PopupMenuRequest {
     pub selected: usize,
 }
 
-/// The Elisp evaluator.
-///
-/// # Safety: Send
-/// Evaluator is inherently single-threaded (uses thread-local heap and caches).
-/// # Safety: Send
-/// Context is inherently single-threaded (uses thread-local heap and caches).
-/// `neovm-worker` moves the Context to a worker thread inside
-/// `Arc<Mutex<..>>`, which ensures exclusive access.
-// SAFETY: Rc is !Send only because it uses non-atomic refcounting.
-// Since Context is always used single-threaded (guarded by Mutex when
-// transferred between threads), this is safe.
-unsafe impl Send for Context {}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OverlayModificationHook {
     pub(crate) hook_list: Value,
@@ -2851,6 +2791,11 @@ pub(crate) enum ResumeTarget {
     InterpreterCatch,
     InterpreterConditionCase {
         handler_index: usize,
+        condition_stack_base: usize,
+    },
+    /// GNU safe_funcall's Qt barrier. The index identifies a live handler
+    /// on its owning Context's mutator; it is never shared across Contexts.
+    SafeFuncall {
         condition_stack_base: usize,
     },
     VmCatch {
@@ -3034,7 +2979,13 @@ pub(crate) struct DaemonState {
 pub type GuiDisplayInitializer =
     Box<dyn FnMut(&mut Context, Option<&str>) -> Result<(), EvalError>>;
 
+/// The evaluator state owned by the mutator thread that constructs it.
+///
+/// Host hooks, Rc leases and active TLS registry views remain on that thread.
+/// Parallel Lisp creates a Context on each mutator over the shared World.
 pub struct Context {
+    /// Arithmetic policy ownership, reconstructed rather than dumped.
+    pub(crate) integer_width_context: super::builtins::IntegerWidthContext,
     pub(crate) owned_roots: crate::emacs_core::owned_roots::OwnedRootRegistry,
     /// Tagged pointer heap — sole GC and allocator.
     pub(crate) tagged_heap: Box<crate::tagged::gc::TaggedHeap>,
@@ -3302,7 +3253,9 @@ pub struct Context {
     pub(crate) command_loop: crate::keyboard::CommandLoop,
     /// Input event receiver from the display/render thread.
     /// `None` in batch mode (tests, non-interactive evaluation).
-    /// When `Some`, `read_char()` blocks on this channel for interactive input.
+    /// When `Some`, `read_char()` drains this queue but normally blocks on the
+    /// unified process/input poller. Producers must enqueue first, then call
+    /// [`Context::wait_notifier`]'s notifier so input cannot miss that wait.
     pub input_rx: Option<crossbeam_channel::Receiver<crate::keyboard::InputEvent>>,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
@@ -3656,6 +3609,9 @@ pub struct Context {
     pub(crate) in_flight_registry: super::error::InFlightRegistryHandle,
     pub(crate) cached_standard_case_table: Option<Value>,
 }
+
+// A mutex does not make the host hooks, Rc leases or TLS views transferable.
+static_assertions::assert_not_impl_any!(Context: Send, Sync);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShutdownRequest {
@@ -4039,7 +3995,7 @@ pub(crate) fn parse_eval_lexical_arg(arg: Option<Value>) -> Result<(bool, Option
 
 fn lexical_binding_in_obarray(obarray: &Obarray) -> bool {
     obarray
-        .symbol_value_id(lexical_binding_symbol())
+        .symbol_value_id_copied(lexical_binding_symbol())
         .is_some_and(|v| v.is_truthy())
 }
 
@@ -4324,11 +4280,42 @@ fn lisp_frame_manager() -> FrameManager {
 impl Drop for Context {
     fn drop(&mut self) {
         super::dynamic_module::retire_dynamic_module_registry(&self.dynamic_module_registry);
+        // Context is !Send, pinned by thread contracts, so Drop stays on its
+        // owner thread. Retain upstream policy retirement as defence in depth.
+        self.integer_width_context.retire();
         crate::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap);
     }
 }
 
 impl Context {
+    /// Finish the marker and reclaim native resources on this Context's owner
+    /// thread before consuming its stationary allocation.
+    ///
+    /// Module finalizers and SQLite teardown may block or fail. Automatic Drop
+    /// skips those operations; callers use this explicit lifecycle boundary.
+    ///
+    /// # Errors
+    /// Returns an error if marker completion cannot be established. Drop then
+    /// retains marker-readable storage and skips native callbacks.
+    pub fn shutdown(mut self: Box<Self>) -> Result<(), crate::tagged::gc::MarkFinishError> {
+        // SAFETY: this consumes the boxed Context without moving its contents.
+        // The heap remains at its owner-thread address through reclamation,
+        // and this method neither reads Values nor executes Lisp afterward.
+        unsafe { self.tagged_heap.shutdown_owned_resources() }
+    }
+
+    /// Stop and finish this owner's concurrent marker before orderly teardown.
+    ///
+    /// This may wait for the marker. Drop instead retains reader-visible
+    /// storage when no explicit completion has been established.
+    ///
+    /// # Errors
+    /// Returns an error if the worker completion is missing/disconnected or
+    /// collector queues are poisoned. The heap then refuses reclamation.
+    pub fn finish_concurrent_mark(&mut self) -> Result<(), crate::tagged::gc::MarkFinishError> {
+        self.tagged_heap.finish_concurrent_mark()
+    }
+
     pub(crate) fn module_boundary_snapshot(&self) -> ModuleBoundarySnapshot {
         ModuleBoundarySnapshot {
             spec_depth: self.specpdl.len(),
@@ -4621,6 +4608,11 @@ impl Context {
             self.symbols_with_pos_enabled = value.is_truthy();
         } else if sym_id == self.print_symbols_bare_symbol {
             self.print_symbols_bare = value.is_truthy();
+        } else if sym_id == frame_alpha_lower_limit_symbol() {
+            let limit = crate::window::frame_alpha::lower_limit(value);
+            if let Some(host) = self.display_host.as_mut() {
+                host.set_gui_frame_alpha_lower_limit(limit);
+            }
         } else if sym_id == max_lisp_eval_depth_symbol()
             && let Some(depth) = value.as_fixnum()
         {
@@ -4722,13 +4714,11 @@ impl Context {
     pub(crate) fn sync_keyboard_runtime_from_obarray(&mut self) {
         let input_decode_map = self
             .obarray
-            .symbol_value("input-decode-map")
-            .copied()
+            .symbol_value_copied("input-decode-map")
             .unwrap_or(Value::NIL);
         let local_function_key_map = self
             .obarray
-            .symbol_value("local-function-key-map")
-            .copied()
+            .symbol_value_copied("local-function-key-map")
             .unwrap_or(Value::NIL);
         self.command_loop
             .keyboard
@@ -5014,6 +5004,7 @@ impl Context {
     }
 
     /// Access the obarray (for builtins that need it).
+    #[inline(always)]
     pub fn obarray(&self) -> &Obarray {
         &self.obarray
     }
@@ -5059,7 +5050,7 @@ impl Context {
         if let Some(info) = crate::buffer::buffer::lookup_buffer_slot(name) {
             return Some(self.buffers.buffer_defaults[info.offset.index()]);
         }
-        self.obarray.symbol_value(name).copied()
+        self.obarray.symbol_value_copied(name)
     }
 
     /// Seed the 24 GNU standard built-in fringe bitmaps into the registry and
@@ -5882,28 +5873,21 @@ impl Context {
         // update the visible per-buffer slot rather than just the
         // obarray symbol value (which a FORWARDED symbol no longer
         // consults at read time).
-        use super::symbol::SymbolRedirect;
-        if let Some(sym) = self.obarray.get_by_id(sym_id)
-            && sym.flags.redirect() == SymbolRedirect::Forwarded
+        if let Some(buf_fwd) = self
+            .obarray
+            .get_by_id(sym_id)
+            .and_then(|sym| sym.forwarded_descriptor())
+            .and_then(|fwd| fwd.as_buffer_obj_fwd())
             && let Some(buf_id) = self.buffers.current_buffer_id()
         {
-            use super::forward::{LispBufferObjFwd, LispFwdType};
-            // Safety: install_buffer_objfwd leaks a 'static
-            // descriptor; the symbol's redirect tag and val.fwd
-            // pointer are immutable once installed.
-            let fwd_ptr = unsafe { sym.val.fwd };
-            let header = unsafe { &*fwd_ptr };
-            if matches!(header.ty, LispFwdType::BufferObj) {
-                let buf_fwd = unsafe { &*(fwd_ptr as *const LispBufferObjFwd) };
-                let offset = buf_fwd.offset as usize;
-                if let Some(buf) = self.buffers.get_mut(buf_id)
-                    && offset < buf.slots.len()
-                {
-                    buf.slots[offset] = value;
-                    self.refresh_gc_runtime_settings_after_change_by_id(sym_id);
-                    self.mark_redisplay_dirty_if_display_var(sym_id);
-                    return;
-                }
+            let offset = buf_fwd.offset as usize;
+            if let Some(buf) = self.buffers.get_mut(buf_id)
+                && offset < buf.slots.len()
+            {
+                buf.slots[offset] = value;
+                self.refresh_gc_runtime_settings_after_change_by_id(sym_id);
+                self.mark_redisplay_dirty_if_display_var(sym_id);
+                return;
             }
         }
         self.obarray.set_symbol_value(name, value);
@@ -5955,12 +5939,12 @@ impl Context {
         &self,
         sym: &crate::emacs_core::symbol::LispSymbol,
     ) -> Option<Value> {
-        use crate::emacs_core::forward::LispFwdType;
+        use crate::emacs_core::forward::ForwardSlot;
 
-        let fwd = unsafe { &*sym.val.fwd };
-        match fwd.ty {
-            LispFwdType::Int | LispFwdType::Bool | LispFwdType::Obj => fwd.load(),
-            LispFwdType::BufferObj | LispFwdType::KboardObj => None,
+        let fwd = sym.forwarded_descriptor()?;
+        match fwd.slot() {
+            ForwardSlot::Int(_) | ForwardSlot::Bool(_) | ForwardSlot::Obj(_) => fwd.load(),
+            ForwardSlot::BufferObj(_) | ForwardSlot::KboardObj(_) => None,
         }
     }
 
@@ -5969,14 +5953,7 @@ impl Context {
         &self,
         sym: &crate::emacs_core::symbol::LispSymbol,
     ) -> Option<Value> {
-        use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
-
-        let fwd = unsafe { &*sym.val.fwd };
-        if !matches!(fwd.ty, LispFwdType::BufferObj) {
-            return None;
-        }
-
-        let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
+        let buf_fwd = sym.forwarded_descriptor()?.as_buffer_obj_fwd()?;
         let slot = crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)?;
         let off = slot.index();
         if let Some(buf) = self.buffers.current_buffer() {
@@ -6091,9 +6068,8 @@ impl Context {
         if sym_id != buffer_undo_list_symbol()
             && let Some(sym) = self.obarray.get_by_id(sym_id)
         {
-            match sym.redirect() {
-                crate::emacs_core::symbol::SymbolRedirect::Plainval => {
-                    let value = unsafe { sym.val.plain };
+            match sym.value_cell() {
+                crate::emacs_core::symbol::ValueCell::Plain(value) => {
                     if !value.is_unbound() {
                         return Ok(SymbolValueLookup::Bound(value));
                     }
@@ -6104,7 +6080,7 @@ impl Context {
                 // `find_symbol_value` dispatches on the redirect tag
                 // directly). `read_localized`'s same-buffer epoch check makes
                 // the common read one compare + one cdr.
-                crate::emacs_core::symbol::SymbolRedirect::Localized => {
+                crate::emacs_core::symbol::ValueCell::Localized(_) => {
                     if let Some(buf) = self.buffers.current_buffer()
                         && let Some(value) = self.obarray.read_localized_symbol_for_buffer(
                             sym_id,
@@ -6119,7 +6095,7 @@ impl Context {
                         return Ok(SymbolValueLookup::Bound(value));
                     }
                 }
-                crate::emacs_core::symbol::SymbolRedirect::Forwarded => {
+                crate::emacs_core::symbol::ValueCell::Forwarded(_) => {
                     if let Some(value) = self.forwarded_buffer_obj_value(sym) {
                         return Ok(SymbolValueLookup::Bound(value));
                     }
@@ -6133,7 +6109,7 @@ impl Context {
                         return Ok(SymbolValueLookup::Bound(value));
                     }
                 }
-                crate::emacs_core::symbol::SymbolRedirect::Varalias => {}
+                crate::emacs_core::symbol::ValueCell::Alias(_) => {}
             }
         }
 
@@ -6302,6 +6278,7 @@ impl Context {
         }
     }
 
+    #[inline(never)]
     fn apply_symbol_callable_untraced(
         &mut self,
         sym_id: SymId,
@@ -6447,155 +6424,6 @@ impl Context {
                     .is_some_and(|(_, resolved)| self.function_value_is_callable(&resolved))
             }
             _ => false,
-        }
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    fn maybe_writeback_mutating_first_arg(
-        &mut self,
-        called_name: &str,
-        alias_target: Option<&str>,
-        call_args: &[Value],
-        result: &Value,
-    ) {
-        let mutates_fillarray =
-            called_name == "fillarray" || alias_target.is_some_and(|name| name == "fillarray");
-        let mutates_aset = called_name == "aset" || alias_target.is_some_and(|name| name == "aset");
-        if !mutates_fillarray && !mutates_aset {
-            return;
-        }
-        let Some(first_arg) = call_args.first() else {
-            return;
-        };
-        if !first_arg.is_string() {
-            return;
-        }
-
-        let replacement = if mutates_fillarray {
-            if !result.is_string() || eq_value(first_arg, result) {
-                return;
-            }
-            *result
-        } else {
-            if call_args.len() < 3 {
-                return;
-            }
-            let Ok(updated) =
-                super::builtins::aset_string_replacement(first_arg, &call_args[1], &call_args[2])
-            else {
-                return;
-            };
-            if eq_value(first_arg, &updated) {
-                return;
-            }
-            updated
-        };
-
-        if crate::emacs_core::value::equal_value(first_arg, &replacement, 0) {
-            return;
-        }
-
-        let mut visited = HashSet::new();
-        // Walk the lexenv cons alist and replace alias refs in binding values
-        {
-            let mut lexenv_val = self.lexenv;
-            Self::replace_alias_refs_in_value(
-                &mut lexenv_val,
-                first_arg,
-                &replacement,
-                &mut visited,
-            );
-            self.lexenv = lexenv_val;
-        }
-        // Dynamic bindings are now in the obarray (via specbind), so
-        // the obarray iteration below handles them.
-        if let Some(current_id) = self.buffers.current_buffer_id()
-            && let Some(buf) = self.buffers.get_mut(current_id)
-        {
-            for value in buf.bound_buffer_local_values_mut() {
-                Self::replace_alias_refs_in_value(value, first_arg, &replacement, &mut visited);
-            }
-        }
-
-        self.obarray.for_each_value_cell_mut(|value| {
-            Self::replace_alias_refs_in_value(value, first_arg, &replacement, &mut visited);
-        });
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    fn replace_alias_refs_in_value(
-        value: &mut Value,
-        from: &Value,
-        to: &Value,
-        visited: &mut HashSet<usize>,
-    ) {
-        if eq_value(value, from) {
-            *value = *to;
-            return;
-        }
-
-        match value.kind() {
-            ValueKind::Cons => {
-                let key = value.bits() ^ 0x1;
-                if !visited.insert(key) {
-                    return;
-                }
-                let mut new_car = value.cons_car();
-                let mut new_cdr = value.cons_cdr();
-                Self::replace_alias_refs_in_value(&mut new_car, from, to, visited);
-                Self::replace_alias_refs_in_value(&mut new_cdr, from, to, visited);
-                value.set_car(new_car);
-                value.set_cdr(new_cdr);
-            }
-            ValueKind::Veclike(VecLikeType::Vector) => {
-                let key = value.bits() ^ 0x2;
-                if !visited.insert(key) {
-                    return;
-                }
-                let mut values = value.as_vector_data().unwrap().clone();
-                for item in values.iter_mut() {
-                    Self::replace_alias_refs_in_value(item, from, to, visited);
-                }
-                let _ = value.replace_vector_data(values);
-            }
-            ValueKind::Veclike(VecLikeType::Record) => {
-                let key = value.bits() ^ 0x2;
-                if !visited.insert(key) {
-                    return;
-                }
-                let mut values = value.as_record_data().unwrap().clone();
-                for item in values.iter_mut() {
-                    Self::replace_alias_refs_in_value(item, from, to, visited);
-                }
-                let _ = value.replace_record_data(values);
-            }
-            ValueKind::Veclike(VecLikeType::HashTable) => {
-                let key = value.bits() ^ 0x4;
-                if !visited.insert(key) {
-                    return;
-                }
-                let mut ht = value.as_hash_table().unwrap().clone();
-                let old_ptr = if from.is_string() {
-                    Some(from.bits())
-                } else {
-                    None
-                };
-                let new_ptr = if to.is_string() {
-                    Some(to.bits())
-                } else {
-                    None
-                };
-                if matches!(ht.test, HashTableTest::Eq | HashTableTest::Eql)
-                    && let (Some(old_ptr), Some(new_ptr)) = (old_ptr, new_ptr)
-                {
-                    ht.replace_pointer_key(old_ptr, new_ptr, *to);
-                }
-                for item in ht.data.values_mut() {
-                    Self::replace_alias_refs_in_value(item, from, to, visited);
-                }
-                let _ = value.replace_hash_table(ht);
-            }
-            _ => {}
         }
     }
 }
@@ -7024,7 +6852,7 @@ pub(crate) fn check_forwarded_store_at(
     let Some(fwd) = assignment_forwarder(obarray, sym_id) else {
         return Ok(ForwardChecked(value));
     };
-    if fwd.ty == LispFwdType::BufferObj {
+    if fwd.ty() == LispFwdType::BufferObj {
         if site == ForwardStoreSite::SetDefault {
             return Ok(ForwardChecked(value));
         }
@@ -7109,48 +6937,6 @@ pub(crate) fn check_forwarded_unbind(
             crate::emacs_core::intern::resolve_sym(reported.as_symbol_id().unwrap_or(sym_id))
         ))],
     ))
-}
-
-pub(crate) fn makunbound_runtime_binding_in_state(
-    obarray: &mut Obarray,
-    buffers: &mut BufferManager,
-    _custom: &CustomManager,
-    _specpdl: &[SpecBinding],
-    sym_id: SymId,
-) {
-    let symbol_is_canonical = super::builtins::is_canonical_symbol_id(sym_id);
-
-    // specbind writes directly to obarray, so no dynamic frame lookup needed.
-
-    // Non-localized globals are never in any `local_var_alist`; skip the scan.
-    let sym_is_localized = obarray.is_localized(sym_id);
-    if symbol_is_canonical
-        && let Some(current_id) = buffers.current_buffer_id()
-        && let Some(buf) = buffers.get(current_id)
-        && buf.has_buffer_local_by_sym_id_gated(sym_id, sym_is_localized)
-    {
-        let _ = buffers.set_buffer_local_void_property_by_sym_id(current_id, sym_id);
-        return;
-    }
-
-    // Mirrors GNU `set_internal` SYMBOL_LOCALIZED arm with
-    // `unbinding_p = true` (`src/data.c:1687-1762`). The BLV's
-    // `local_if_set` flag determines whether to create a per-buffer
-    // void binding; LOCALIZED symbols carry a BLV so this fires only
-    // for them.
-    let local_if_set = obarray
-        .blv(sym_id)
-        .map(|blv| blv.local_if_set)
-        .unwrap_or(false);
-    if symbol_is_canonical
-        && local_if_set
-        && let Some(current_id) = buffers.current_buffer_id()
-    {
-        let _ = buffers.set_buffer_local_void_property_by_sym_id(current_id, sym_id);
-        return;
-    }
-
-    obarray.makunbound_id(sym_id);
 }
 
 impl Context {
@@ -7354,14 +7140,13 @@ impl Context {
         Ok(locus)
     }
 
+    /// Void the plain cell SYM_ID names, without watchers: what GNU
+    /// `Fmakunbound`'s alias arm (`src/data.c:779-783`) and
+    /// `internal-delete-indirect-variable` leave once the alias is undone.
+    /// Any other arm is voided by `set_internal`'s store,
+    /// [`Self::set_internal_after_watchers`].
     pub(crate) fn makunbound_runtime_binding_by_id(&mut self, sym_id: SymId) {
-        makunbound_runtime_binding_in_state(
-            &mut self.obarray,
-            &mut self.buffers,
-            &self.custom,
-            &[],
-            sym_id,
-        );
+        self.obarray.makunbound_id(sym_id);
         self.sync_cached_runtime_binding_by_id(sym_id, Value::NIL);
         self.sync_keyboard_runtime_binding_by_id(sym_id, Value::NIL);
         self.refresh_gc_runtime_settings_after_change_by_id(sym_id);
@@ -7478,7 +7263,7 @@ impl Context {
             return binding.as_value();
         }
 
-        if let Some(value) = self.obarray.symbol_value_id(resolved).copied() {
+        if let Some(value) = self.obarray.symbol_value_id_copied(resolved) {
             return Some(value);
         }
 
@@ -7593,7 +7378,7 @@ impl Context {
     }
 
     pub(crate) fn variable_watcher_where_for_set_by_id(&self, sym_id: SymId) -> Value {
-        use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
+        use crate::emacs_core::forward::LispFwdType;
         use crate::emacs_core::symbol::SymbolRedirect;
 
         let Some(current_id) = self.buffers.current_buffer_id() else {
@@ -7619,9 +7404,10 @@ impl Context {
                 }
             }
             SymbolRedirect::Forwarded => {
-                let fwd = unsafe { &*sym.val.fwd };
-                if matches!(fwd.ty, LispFwdType::BufferObj) {
-                    let _buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
+                if sym
+                    .forwarded_descriptor()
+                    .is_some_and(|fwd| fwd.ty() == LispFwdType::BufferObj)
+                {
                     return Value::make_buffer(current_id);
                 }
                 Value::NIL
@@ -7665,6 +7451,7 @@ mod pdump_reconstruct;
 mod macroexpand;
 
 mod specpdl;
+pub(crate) use specpdl::{CurrentBufferScope, ExcursionScope, RestrictionScope};
 
 mod builtin_vars;
 pub(crate) use builtin_vars::builtin_frontend_on;
@@ -7724,6 +7511,7 @@ pub use redisplay_hooks::{
 mod vm_shared;
 
 mod signal_dispatch;
+mod signal_room;
 
 mod construct;
 mod form_head_cache;
@@ -7732,90 +7520,101 @@ pub(crate) use form_head_cache::FormHeadCache;
 use form_head_cache::{FormHead, HeadClass};
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/eval_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/saved_state_scope_test.rs"]
+mod saved_state_scope_test;
+
+#[cfg(test)]
+#[path = "tests/gc_context_shutdown.rs"]
+mod gc_context_shutdown_tests;
 
 // task3-jitcrash-diag: diagnostic repros for the pre-existing JIT
 // heap-corruption crash (no fix here).
 #[cfg(test)]
-#[path = "tests/jit_crash_repro.rs"]
+#[path = "tests/jit_crash_repro_test.rs"]
 mod jit_crash_repro_tests;
 
 // JIT call seam slice C1: the interpreter's direct entry into armed leaves.
 #[cfg(test)]
-#[path = "tests/jit_leaf_slot.rs"]
+#[path = "tests/jit_leaf_slot_test.rs"]
 mod jit_leaf_slot_tests;
 
 // Baseline known-fixnum analysis must honour Float feedback (silent-miscompile regression).
 #[cfg(test)]
-#[path = "tests/jit_known_fixnum_float.rs"]
+#[path = "tests/jit_known_fixnum_float_test.rs"]
 mod jit_known_fixnum_float_tests;
 #[cfg(test)]
-#[path = "tests/jit_mir_known_fixnum_float.rs"]
+#[path = "tests/jit_mir_known_fixnum_float_test.rs"]
 mod jit_mir_known_fixnum_float_tests;
 // Unboxed float slots on GNU's own nbody `elb-applyforces` bytecode.
 #[cfg(test)]
-#[path = "tests/jit_flonum_nbody.rs"]
+#[path = "tests/jit_flonum_nbody_test.rs"]
 mod jit_flonum_nbody_tests;
 // `setq` of a special variable: the plain-cell fast path and every shape it must refuse.
 #[cfg(test)]
-#[path = "tests/apply1_bytecode.rs"]
+#[path = "tests/apply1_bytecode_test.rs"]
 mod apply1_bytecode_tests;
 #[cfg(test)]
-#[path = "tests/apply2_bytecode.rs"]
+#[path = "tests/apply2_bytecode_test.rs"]
 mod apply2_bytecode_tests;
 #[cfg(test)]
-#[path = "tests/varset_plain_fast_path.rs"]
+#[path = "tests/varset_plain_fast_path_test.rs"]
 mod varset_plain_fast_path_tests;
 // Every variable shape through bytecode read/setq/let/unbind, both engines.
 #[cfg(test)]
-#[path = "tests/cconv_memo.rs"]
+#[path = "tests/cconv_memo_test.rs"]
 mod cconv_memo_tests;
 #[cfg(test)]
-#[path = "tests/var_fast.rs"]
+#[path = "tests/var_fast_test.rs"]
 mod var_fast_tests;
+#[cfg(test)]
+#[path = "tests/watcher_redispatch_test.rs"]
+mod watcher_redispatch_tests;
 
 #[cfg(test)]
-#[path = "tests/builtin_vars.rs"]
+#[path = "tests/builtin_vars_test.rs"]
 mod builtin_vars_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_sweep_cap.rs"]
+#[path = "tests/gc_sweep_cap_test.rs"]
 mod gc_sweep_cap_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_forced_first_cycle.rs"]
+#[path = "tests/gc_forced_first_cycle_test.rs"]
 mod gc_forced_first_cycle_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_root_ownership.rs"]
+#[path = "tests/gc_root_ownership_test.rs"]
 mod gc_root_ownership_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_migration_proofs.rs"]
+#[path = "tests/gc_tls_migration_proofs_test.rs"]
 mod gc_tls_migration_proof_tests;
 
 // The attention word: every writer of its inputs keeps it derived.
 #[cfg(test)]
-#[path = "tests/attention.rs"]
+#[path = "tests/attention_test.rs"]
 mod attention_word_tests;
 
 #[cfg(test)]
-#[path = "tests/idle_redisplay.rs"]
+#[path = "tests/idle_redisplay_test.rs"]
 mod idle_redisplay_tests;
 
 #[cfg(test)]
-#[path = "tests/redisplay_mode_line_flow.rs"]
+#[path = "tests/redisplay_mode_line_flow_test.rs"]
 mod redisplay_mode_line_flow_tests;
 
 // The debug leaf guard: GC safe points, Lisp entries and binding pushes
 // refuse to run under a leaf builtin, and leaves leave state untouched.
 #[cfg(all(test, debug_assertions))]
-#[path = "tests/leaf_guard.rs"]
+#[path = "tests/leaf_guard_test.rs"]
 mod leaf_guard_tests;
 
 /// Allocator for [`Context::context_instance_id`].

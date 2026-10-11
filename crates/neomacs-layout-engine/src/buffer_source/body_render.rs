@@ -42,7 +42,7 @@ use crate::display_text_window_row_lifecycle::{
 use crate::font::metrics::FontMetricsService;
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{FaceResolver, LayoutBufferView, RustBufferAccess};
-use crate::types::{LineWrapMode, MiniWindowMeasurement, WindowParams};
+use crate::types::{LineWrapMode, WindowParams, WindowSourceExtent};
 use crate::window_output::{
     TextWindowOutputTarget, TextWindowRedisplayPositions, WindowOutputEmitter,
 };
@@ -53,6 +53,7 @@ use neovm_core::emacs_core::image_catalog::ImageScaleEnvironment;
 pub(crate) enum BufferSourceBodyRenderOutcome {
     Complete(BufferSourcePostLoopRenderOutcome),
     SyncHorizonExhausted,
+    QueryHorizonExhausted,
 }
 
 pub(crate) struct BufferSourceWalkSetupRequest<'a> {
@@ -64,7 +65,7 @@ pub(crate) struct BufferSourceWalkSetupRequest<'a> {
     window_top: f32,
     line_number_pixel_width: f32,
     max_rows: usize,
-    mini_measurement: MiniWindowMeasurement,
+    source_extent: WindowSourceExtent,
     metrics: DisplayRowFallbackMetrics,
     measurement_mode: DisplayRowMeasurementMode,
     wrap_mode: LineWrapMode,
@@ -171,7 +172,7 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
             window_top,
             line_number_pixel_width,
             max_rows,
-            mini_measurement: MiniWindowMeasurement::Presentation,
+            source_extent: WindowSourceExtent::Viewport,
             metrics,
             measurement_mode,
             wrap_mode,
@@ -258,7 +259,7 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
             params.right_margin_width,
         )
         .with_image_scale_environment(params.image_scale_environment);
-        request.mini_measurement = params.mini_measurement;
+        request.source_extent = params.source_extent;
         request
     }
 
@@ -273,11 +274,9 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
         // GNU mini resizing measures through ZV before clipping the result.
         // Its logical row limit is not an allocation count. Both stores are
         // numeric state exclusively owned by this window-render attempt.
-        let (row_flags, row_y_capacity) = match self.mini_measurement {
-            MiniWindowMeasurement::Presentation => {
-                (DisplayRowFlags::new(self.max_rows), self.max_rows)
-            }
-            MiniWindowMeasurement::ToEnd => (DisplayRowFlags::growing(), 1),
+        let (row_flags, row_y_capacity) = match self.source_extent {
+            WindowSourceExtent::Viewport => (DisplayRowFlags::new(self.max_rows), self.max_rows),
+            WindowSourceExtent::AccessibleEnd => (DisplayRowFlags::growing(), 1),
         };
 
         BufferSourceWalkSetup {
@@ -360,13 +359,23 @@ impl BufferSourceWalkSetup {
         overlay_text_row_context: BufferOverlayStringTextRowRenderContext<'request>,
         buffer: &B,
     ) -> crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome {
-        let mut source_walk = BufferSourceWalk::new_for_window(
-            loop_context.buffer_id(),
-            buffer,
-            Some(params.window_id as u64),
-            self.charpos,
-            loop_context.text_start_byte(),
-        );
+        let mut source_walk = match loop_context.source_acquisition_end() {
+            Some(end) => BufferSourceWalk::new_for_window_range(
+                loop_context.buffer_id(),
+                buffer,
+                Some(params.window_id as u64),
+                self.charpos,
+                end,
+                loop_context.text_start_byte(),
+            ),
+            None => BufferSourceWalk::new_for_window(
+                loop_context.buffer_id(),
+                buffer,
+                Some(params.window_id as u64),
+                self.charpos,
+                loop_context.text_start_byte(),
+            ),
+        };
 
         BufferSourceLoopMutableState::new(
             &mut self.invisible_text_checkpoint,
@@ -495,6 +504,10 @@ impl BufferSourceWalkSetup {
             return BufferSourceBodyRenderOutcome::SyncHorizonExhausted;
         }
 
+        if loop_outcome == crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::QueryHorizonExhausted {
+            return BufferSourceBodyRenderOutcome::QueryHorizonExhausted;
+        }
+
         BufferSourceBodyRenderOutcome::Complete(self.render_tail_and_decide_retry(
             state.source_render.reborrow(),
             state.face_ids,
@@ -567,5 +580,5 @@ impl BufferSourceWalkSetup {
 }
 
 #[cfg(test)]
-#[path = "body_render/tests/mini_row_storage.rs"]
+#[path = "body_render/tests/mini_row_storage_test.rs"]
 mod mini_row_storage_tests;

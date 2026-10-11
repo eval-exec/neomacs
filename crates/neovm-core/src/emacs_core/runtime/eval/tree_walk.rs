@@ -67,6 +67,7 @@ impl Context {
     /// 1. Symbol → lexenv lookup or symbol-value
     /// 2. Non-cons → self-evaluating (return as-is)
     /// 3. Cons → special form / macro / function call
+    #[inline(never)]
     pub fn eval_sub(&mut self, form: Value) -> EvalResult {
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("eval");
         // 1. Symbol → variable lookup (GNU eval.c:2554-2562)
@@ -158,11 +159,10 @@ impl Context {
         if let Some(buffer_limit) = self.current_max_lisp_eval_depth() {
             if self.depth > buffer_limit {
                 let overflow_depth = self.depth as i64;
-                self.depth -= 1;
-                return Err(signal(
+                return Err(self.finish_lisp_depth_overflow(signal(
                     "excessive-lisp-nesting",
                     vec![Value::fixnum(overflow_depth)],
-                ));
+                )));
             }
             return Ok(());
         }
@@ -171,7 +171,9 @@ impl Context {
         // passes the cached limit -- which is every entry once Lisp raises
         // `max-lisp-eval-depth`, not the rare event the shape suggests.
         if self.depth > self.max_depth
-            && let Some(v) = self.obarray.symbol_value_id(max_lisp_eval_depth_symbol())
+            && let Some(v) = self
+                .obarray
+                .symbol_value_id_copied(max_lisp_eval_depth_symbol())
             && let Some(n) = v.as_fixnum()
         {
             let new_max = n.max(100) as usize;
@@ -181,11 +183,10 @@ impl Context {
         }
         if self.depth > self.max_depth {
             let overflow_depth = self.depth as i64;
-            self.depth -= 1;
-            return Err(signal(
+            return Err(self.finish_lisp_depth_overflow(signal(
                 "excessive-lisp-nesting",
                 vec![Value::fixnum(overflow_depth)],
-            ));
+            )));
         }
         Ok(())
     }
@@ -346,15 +347,11 @@ impl Context {
         // function cell's UNEVALLED subr, so user-visible special forms
         // should flow through the resolved subr surface below.
         //
-        // With overrides active there is no cached head, so the three literal
+        // With overrides active there is no cached head, so the two literal
         // heads are still tested directly.
         if let Some(sym_id) = sym_id
             && head.map_or_else(
-                || {
-                    sym_id == lambda_symbol()
-                        || sym_id == byte_code_literal_symbol()
-                        || sym_id == byte_code_symbol()
-                },
+                || sym_id == lambda_symbol() || sym_id == byte_code_literal_symbol(),
                 |head| head.literal_head,
             )
             && let Some(result) = self.try_special_form_value_id(sym_id, original_args)

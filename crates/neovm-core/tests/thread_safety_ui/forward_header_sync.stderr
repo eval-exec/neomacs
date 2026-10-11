@@ -1,0 +1,17 @@
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<LispFwd>`, but its trait bounds were not satisfied
+ --> tests/thread_safety_ui/forward_header_sync.rs:8:32
+  |
+3 | struct ThreadTransfer<T>(PhantomData<T>);
+  | ------------------------ associated function or constant `transfer` not found for this struct
+...
+8 |     ThreadTransfer::<LispFwd>::transfer();
+  |                                ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<LispFwd>` due to unsatisfied trait bounds
+  |
+ ::: src/emacs_core/runtime/forward/mod.rs
+  |
+  | pub struct LispFwd {
+  | ------------------ doesn't satisfy `LispFwd: Sync`
+  |
+  = note: the following trait bounds were not satisfied:
+          `*const (): Sync`
+          which is required by `LispFwd: Sync`

@@ -217,7 +217,13 @@ thread_local! {
 
 /// Publishes a compile's tier-spine role for its leaf builders, restoring
 /// the outer compile's on drop.
-pub(crate) struct BuildScope(Option<ActiveBuild>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct BuildScope {
+    _scope: crate::tls_scope::TlsScope<Option<ActiveBuild>, RefCell<Option<ActiveBuild>>>,
+}
+
+static_assertions::assert_not_impl_any!(BuildScope: Send, Sync);
 
 impl BuildScope {
     /// The scope of a compile of `source` as `tier`: a T1 compile under
@@ -253,14 +259,9 @@ impl BuildScope {
             }),
             CompileTier::T1 | CompileTier::Plain => None,
         };
-        BuildScope(ACTIVE_BUILD.with(|a| std::mem::replace(&mut *a.borrow_mut(), build)))
-    }
-}
-
-impl Drop for BuildScope {
-    fn drop(&mut self) {
-        let outer = self.0.take();
-        ACTIVE_BUILD.with(|a| *a.borrow_mut() = outer);
+        BuildScope {
+            _scope: crate::tls_scope::TlsScope::new(&ACTIVE_BUILD, build),
+        }
     }
 }
 

@@ -1637,7 +1637,8 @@ impl WgpuRenderer {
         };
 
         let box_spans = self.collect_box_spans(&params);
-        let non_overlay_rect_vertices = self.collect_non_overlay_backgrounds(&params, &box_spans);
+        let (non_overlay_rect_vertices, foreground_rect_vertices) =
+            self.collect_non_overlay_backgrounds(&params, &box_spans);
         let overlay_rect_vertices = self.collect_overlay_backgrounds(&params, &box_spans);
         let chrome = self.collect_chrome_layers(&params);
 
@@ -1676,7 +1677,8 @@ impl WgpuRenderer {
 
         // Render pass - Clear with frame background color since we rebuild
         // the entire frame from current_matrix each time (no incremental updates).
-        let bg = &frame_glyphs.background;
+        let mut bg = frame_glyphs.background;
+        bg.a *= frame_glyphs.background_alpha;
         let load = if load_existing {
             // Preserve already-composited content (the retained static scene)
             // and only overwrite within the scissor rect below.
@@ -1721,7 +1723,13 @@ impl WgpuRenderer {
             };
 
             // === Step 1: non-overlay backgrounds ===
-            self.draw_non_overlay_backgrounds(&mut ctx.pass, &non_overlay_rect_vertices);
+            self.draw_non_overlay_backgrounds(
+                &mut ctx.pass,
+                &non_overlay_rect_vertices,
+                frame_glyphs.background_alpha,
+            );
+
+            self.draw_rect_vertex_layer(&mut ctx.pass, &foreground_rect_vertices);
 
             // Build shared effect context for all effect functions.
             // Clone effect config into a local so we can mutably borrow `self`
@@ -2096,4 +2104,5 @@ impl WgpuRenderer {
 }
 
 #[cfg(test)]
+#[path = "glyphs/tests/glyphs_test.rs"]
 mod tests;

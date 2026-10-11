@@ -102,20 +102,17 @@ impl FeedbackSnapshot {
     /// Make this snapshot the compile's ambient feedback until the returned
     /// scope drops (which restores the one it replaced).
     pub(crate) fn publish(self) -> NumericFeedbackScope {
-        NumericFeedbackScope(
-            Some(
-                ACTIVE_NUMERIC_FEEDBACK
-                    .with(|v| std::mem::replace(&mut *v.borrow_mut(), self.numeric)),
-            ),
-            Some(
-                ACTIVE_NO_INLINE_CALL_SITES
-                    .with(|v| std::mem::replace(&mut *v.borrow_mut(), self.no_inline)),
-            ),
-            Some(super::call_feedback::CallSourceScope::enter(
+        NumericFeedbackScope {
+            _numeric: crate::tls_scope::TlsScope::new(&ACTIVE_NUMERIC_FEEDBACK, self.numeric),
+            _no_inline: Some(crate::tls_scope::TlsScope::new(
+                &ACTIVE_NO_INLINE_CALL_SITES,
+                self.no_inline,
+            )),
+            _call_source: Some(super::call_feedback::CallSourceScope::enter(
                 self.call_source,
                 self.read_call_targets,
             )),
-        )
+        }
     }
 }
 
@@ -184,37 +181,26 @@ pub(crate) fn arith_site_takes_generic(op: &Op, pc: usize) -> bool {
 /// Restores the numeric feedback (and, for a whole-body publish, the
 /// no-inline call sites and the call-feedback source) the compile inside it
 /// replaced.
-pub(crate) struct NumericFeedbackScope(
-    Option<Vec<NumericFeedback>>,
-    Option<Vec<bool>>,
-    #[expect(
-        dead_code,
-        reason = "held for its Drop, which restores the outer source"
-    )]
-    Option<super::call_feedback::CallSourceScope>,
-);
-
-impl Drop for NumericFeedbackScope {
-    fn drop(&mut self) {
-        if let Some(prev) = self.0.take() {
-            ACTIVE_NUMERIC_FEEDBACK.with(|v| *v.borrow_mut() = prev);
-        }
-        if let Some(prev) = self.1.take() {
-            ACTIVE_NO_INLINE_CALL_SITES.with(|v| *v.borrow_mut() = prev);
-        }
-    }
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct NumericFeedbackScope {
+    _numeric:
+        crate::tls_scope::TlsScope<Vec<NumericFeedback>, std::cell::RefCell<Vec<NumericFeedback>>>,
+    _no_inline: Option<crate::tls_scope::TlsScope<Vec<bool>, std::cell::RefCell<Vec<bool>>>>,
+    _call_source: Option<super::call_feedback::CallSourceScope>,
 }
+static_assertions::assert_not_impl_any!(NumericFeedbackScope: Send, Sync);
 
 /// Publish a numeric-feedback vector built elsewhere — the fused body's,
 /// whose spliced slots carry the CALLEE's feedback. The no-inline call sites
 /// stay as published for the original body: they are keyed by original pc,
 /// which [`call_site_inlinable_at`] maps a fused pc back to.
 pub(crate) fn publish_numeric_feedback_vec(seen: Vec<NumericFeedback>) -> NumericFeedbackScope {
-    NumericFeedbackScope(
-        Some(ACTIVE_NUMERIC_FEEDBACK.with(|v| std::mem::replace(&mut *v.borrow_mut(), seen))),
-        None,
-        None,
-    )
+    NumericFeedbackScope {
+        _numeric: crate::tls_scope::TlsScope::new(&ACTIVE_NUMERIC_FEEDBACK, seen),
+        _no_inline: None,
+        _call_source: None,
+    }
 }
 
 /// Take and publish `f`'s feedback snapshot for the compile in progress (see

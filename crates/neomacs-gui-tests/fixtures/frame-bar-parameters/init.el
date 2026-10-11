@@ -1,0 +1,35 @@
+;;; Frame-local chrome regression for issue #519. -*- lexical-binding: t; -*-
+(defvar frame-bars-log nil)
+(defun frame-bars-snapshot (tag)
+  (redisplay t)
+  (let ((path (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON")))
+    (when (and path (fboundp 'neomacs--write-frame-snapshot))
+      (neomacs--write-frame-snapshot (concat path "." tag) nil 'json)))
+  (push (format "{\"tag\":\"%s\",\"menu\":%d,\"tool\":%d,\"mode\":%s,\"top\":%d}"
+                tag (frame-parameter nil 'menu-bar-lines)
+                (frame-parameter nil 'tool-bar-lines)
+                (if menu-bar-mode "true" "false")
+                (window-pixel-top (frame-root-window)))
+        frame-bars-log))
+(add-hook 'window-setup-hook (lambda () (frame-bars-snapshot "setup")))
+(run-with-timer
+ 2 nil
+ (lambda ()
+   (condition-case err
+       (progn
+         (frame-bars-snapshot "idle")
+         (set-frame-parameter nil 'menu-bar-lines 1)
+         (frame-bars-snapshot "shown")
+         (set-frame-parameter nil 'menu-bar-lines 0)
+         (frame-bars-snapshot "hidden")
+         (menu-bar-mode -1)
+         (set-frame-parameter nil 'menu-bar-lines 1)
+         (frame-bars-snapshot "local-enable")
+         (menu-bar-mode 1)
+         (frame-bars-snapshot "global-enable")
+         (menu-bar-mode -1)
+         (frame-bars-snapshot "global-disable")
+         (with-temp-file (getenv "NEOMACS_GUI_STATE_JSON")
+           (insert "[" (mapconcat #'identity (nreverse frame-bars-log) ",") "]\n"))
+         (kill-emacs 0))
+     (error (message "Frame bars regression: %S" err) (kill-emacs 1)))))

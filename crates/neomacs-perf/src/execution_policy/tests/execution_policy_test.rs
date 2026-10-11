@@ -101,7 +101,6 @@ fn regex_dfa_actions_preserve_values_and_validate_provenance() {
         "NEOVM_REGEX_DFA_COLD=on",
         "NEOVM_REGEX_DFA_FIRST_STEP",
         "NEOVM_REGEX_SUFFIX_LITERAL=on",
-        "NEOVM_SORT_CAPTURE=off",
     ]);
     let mut environment = BTreeMap::from([
         ("NEOVM_REGEX_DFA".to_owned(), OsString::from("off")),
@@ -115,7 +114,6 @@ fn regex_dfa_actions_preserve_values_and_validate_provenance() {
     assert_eq!(environment["NEOVM_REGEX_DFA_COLD"], "on");
     assert!(!environment.contains_key("NEOVM_REGEX_DFA_FIRST_STEP"));
     assert_eq!(environment["NEOVM_REGEX_SUFFIX_LITERAL"], "on");
-    assert_eq!(environment["NEOVM_SORT_CAPTURE"], "off");
     let mut recorded = environment
         .into_iter()
         .map(|(key, value)| (key, value.into_string().unwrap()))
@@ -128,7 +126,6 @@ fn regex_dfa_actions_preserve_values_and_validate_provenance() {
         "NEOVM_REGEX_DFA_COLD=verify",
         "NEOVM_REGEX_DFA_FIRST_STEP=verify",
         "NEOVM_REGEX_SUFFIX_LITERAL=verify",
-        "NEOVM_SORT_CAPTURE=true",
     ] {
         assert!(invalid.parse::<ExecutionOverride>().is_err(), "{invalid}");
     }

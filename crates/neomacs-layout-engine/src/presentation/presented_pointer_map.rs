@@ -227,4 +227,5 @@ fn adjacent_rect(left: FrameRect, right: FrameRect) -> Option<FrameRect> {
 }
 
 #[cfg(test)]
+#[path = "presented_pointer_map/tests/presented_pointer_map_test.rs"]
 mod tests;

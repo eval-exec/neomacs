@@ -339,7 +339,7 @@ pub fn find_font_for_spec(
         weight,
         slant,
         width,
-        repertory: None,
+        definition: None,
     };
     let representative = representative_char_for_spec(&spec);
     let query_charset_ranges = query_charset_ranges(&spec, representative);
@@ -458,7 +458,7 @@ fn match_font_for_char_uncached(
         weight: None,
         slant: None,
         width: None,
-        repertory: None,
+        definition: None,
     };
     let matched = match_font_from_spec(
         family,
@@ -1675,4 +1675,5 @@ fn query_default_subpixel_order() -> FontconfigSubpixelOrder {
 }
 
 #[cfg(test)]
+#[path = "fontconfig/tests/fontconfig_test.rs"]
 mod tests;

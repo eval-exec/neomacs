@@ -901,5 +901,5 @@ fn bytecode_payload_with_text_properties(object: &ByteCodeObj) -> PayloadLayout 
 }
 
 #[cfg(test)]
-#[path = "tests/memory_inventory_tests.rs"]
+#[path = "tests/memory_inventory_test.rs"]
 mod tests;

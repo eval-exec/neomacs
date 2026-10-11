@@ -893,7 +893,7 @@ pub(crate) fn plan_positions(
 }
 
 #[cfg(test)]
-#[path = "tests/edit_sync_lazy_proof_policy_aliases.rs"]
+#[path = "tests/edit_sync_lazy_proof_policy_aliases_test.rs"]
 mod lazy_proof_policy_aliases;
 
 #[cfg(test)]
@@ -905,15 +905,15 @@ mod tests;
 mod lazy_proof_selector_tests;
 
 #[cfg(test)]
-#[path = "tests/edit_sync_policy_aliases.rs"]
+#[path = "tests/edit_sync_policy_aliases_test.rs"]
 mod edit_sync_policy_aliases_tests;
 
 #[cfg(test)]
-#[path = "tests/edit_sync_default_policy.rs"]
+#[path = "tests/edit_sync_default_policy_test.rs"]
 mod edit_sync_default_policy_tests;
 
 #[cfg(test)]
-#[path = "tests/edit_sync_lazy_proof_policy_absence.rs"]
+#[path = "tests/edit_sync_lazy_proof_policy_absence_test.rs"]
 mod lazy_proof_policy_absence;
 
 #[cfg(test)]

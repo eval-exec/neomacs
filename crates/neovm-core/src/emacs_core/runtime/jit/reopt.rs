@@ -755,7 +755,7 @@ pub(crate) fn reopt_enabled() -> bool {
 mod tests;
 
 #[cfg(test)]
-#[path = "reopt/tests/end_to_end.rs"]
+#[path = "reopt/tests/end_to_end_test.rs"]
 mod end_to_end;
 
 #[cfg(test)]

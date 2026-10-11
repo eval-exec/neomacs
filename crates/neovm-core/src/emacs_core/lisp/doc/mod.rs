@@ -239,7 +239,7 @@ fn documentation_plan(
 ) -> Result<(DocumentationPlan, Option<String>), Flow> {
     expect_min_max_args("documentation", args, 1, 2)?;
     let obarray = eval.obarray();
-    let lisp_directory = obarray.symbol_value("lisp-directory").and_then(|v| {
+    let lisp_directory = obarray.symbol_value_copied("lisp-directory").and_then(|v| {
         v.as_lisp_string()
             .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
     });
@@ -763,7 +763,7 @@ fn documentation_property_plan(
 ) -> Result<DocumentationPlan, Flow> {
     expect_min_max_args("documentation-property", args, 2, 3)?;
     let obarray = eval.obarray();
-    let lisp_directory = obarray.symbol_value("lisp-directory").and_then(|v| {
+    let lisp_directory = obarray.symbol_value_copied("lisp-directory").and_then(|v| {
         v.as_lisp_string()
             .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
     });
@@ -954,5 +954,5 @@ pub(crate) fn builtin_snarf_documentation(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/doc_test.rs"]
 mod tests;

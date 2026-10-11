@@ -250,6 +250,14 @@ impl RenderApp {
             });
 
         if let Some(state) = self.frame_windows.primary_window()
+            && let Some(window) = state.window()
+        {
+            let frame_id = state.render.emacs_frame_id;
+            let focused = window.has_focus();
+            self.reconcile_native_focus(frame_id, focused);
+        }
+
+        if let Some(state) = self.frame_windows.primary_window()
             && let FrameLifecycle::Active { native, .. } = &state.lifecycle
         {
             // Reconcile native resize/scale changes received while adapter or

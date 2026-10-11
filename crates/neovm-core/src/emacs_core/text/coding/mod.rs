@@ -22,8 +22,10 @@ use super::intern::{SymId, intern, lookup_interned, resolve_sym};
 use super::symbol::Obarray;
 use super::value::*;
 use crate::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
+use crate::emacs_core::emacs_char::EmacsChar;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::heap_types::LispString;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::{HashMap, HashSet};
 use strum::{EnumString, IntoStaticStr};
@@ -514,8 +516,7 @@ impl TextQuotingStyle {
 /// in batch/UTF-8, matching `builtin_text_quoting_style').
 pub(crate) fn effective_text_quoting_style(obarray: &Obarray) -> TextQuotingStyle {
     let var = obarray
-        .symbol_value("text-quoting-style")
-        .copied()
+        .symbol_value_copied("text-quoting-style")
         .unwrap_or(Value::NIL);
     if var.is_nil() {
         return TextQuotingStyle::Curve;
@@ -1868,9 +1869,8 @@ fn coding_docstring_for_base(base: &str) -> Option<&'static str> {
 
 fn coding_charset_list_for_base(base: &str) -> Option<Vec<Value>> {
     match base {
-        "utf-8" | "utf-8-emacs" | "utf-8-auto" | "utf-8-with-signature" | "emacs-internal" => {
-            Some(vec![Value::symbol("unicode")])
-        }
+        "utf-8" | "utf-8-auto" | "utf-8-with-signature" => Some(vec![Value::symbol("unicode")]),
+        "utf-8-emacs" | "emacs-internal" => Some(vec![Value::symbol("emacs")]),
         "latin-1" | "iso-8859-1" | "iso-latin-1" => Some(vec![Value::symbol("iso-8859-1")]),
         "latin-5" | "iso-8859-9" | "iso-latin-5" => Some(vec![Value::symbol("iso-8859-9")]),
         "latin-0" | "latin-9" | "iso-8859-15" | "iso-latin-9" => {
@@ -2830,10 +2830,10 @@ impl CodingRepertoire {
 
     /// GNU `char_encodable_p`: whether `ch` belongs to any charset in this
     /// coding system's effective charset list.
-    fn encodes(&self, ch: i64) -> bool {
-        self.charsets
-            .iter()
-            .any(|&charset| super::charset::charset_encode_char_bytes(charset, ch).is_some())
+    fn encodes(&self, ch: EmacsChar) -> bool {
+        self.charsets.iter().any(|&charset| {
+            super::charset::charset_encode_char_bytes(charset, i64::from(ch.code())).is_some()
+        })
     }
 }
 
@@ -2855,7 +2855,7 @@ fn scan_unencodable_positions(
     while byte < text.len() {
         let (code, len) = super::emacs_char::string_char(&text[byte..]);
         byte += len;
-        let ch = i64::from(code);
+        let ch = EmacsChar::from_code(code).expect("decoded Emacs character");
         let is_ascii = code < 0x80;
         if !(repertoire.encodes(ch) || is_ascii && repertoire.ascii_compatible) {
             positions.push(base_pos + char_index);
@@ -4125,18 +4125,129 @@ fn detect_big5(
     }
 }
 
-/// Port of coding.c `detect_coding_charset` specialised for the bound
-/// `iso-latin-1` coding system (the charset category's coding system at
-/// startup).  iso-latin-1 is a 1-dimension charset covering the whole byte
-/// range; 0x80-0x9F are valid only if `latin-extra-code-table` says so.
-fn detect_charset_latin1(
+/// ISO Latin codings restrict C1 bytes; other charset codings use their own
+/// code space, including GBK lead bytes and Windows-1252 punctuation.
+enum CharsetControlPolicy {
+    CodeSpace,
+    LatinExtra,
+}
+
+/// GNU's charset-valids entry: nil, one charset id, or an ordered id list.
+enum CharsetLead {
+    Invalid,
+    Single(usize),
+    Alternatives(Vec<usize>),
+}
+
+enum CharsetContinuation {
+    Complete,
+    Mismatch,
+    Incomplete,
+}
+
+struct CharsetDetectionPlan {
+    code_spaces: Vec<super::charset::CharsetCodeSpace>,
+    leads: [CharsetLead; 256],
+    ascii_compatible: bool,
+    controls: CharsetControlPolicy,
+}
+
+impl CharsetDetectionPlan {
+    fn for_coding_system(mgr: &CodingSystemManager, name: SymId) -> Option<Self> {
+        let resolved = canonical_runtime_name(mgr, resolve_sym(name))?;
+        let charsets = coding_system_charset_list_syms(mgr, &resolved)?;
+        let ascii_compatible = mgr.is_ascii_compatible(&resolved);
+        let mut code_spaces: Vec<_> = charsets
+            .into_iter()
+            .filter_map(super::charset::charset_code_space)
+            .collect();
+        // GNU's charset-valids candidates are stably ordered by dimension.
+        code_spaces.sort_by_key(super::charset::CharsetCodeSpace::dimension);
+        let leads = std::array::from_fn(|byte| {
+            let mut candidates = code_spaces
+                .iter()
+                .enumerate()
+                .filter_map(|(index, space)| space.accepts(0, byte as i32).then_some(index));
+            let Some(first) = candidates.next() else {
+                return CharsetLead::Invalid;
+            };
+            let Some(second) = candidates.next() else {
+                return CharsetLead::Single(first);
+            };
+            CharsetLead::Alternatives([first, second].into_iter().chain(candidates).collect())
+        });
+        let controls = if resolved.starts_with("iso-latin-") || resolved.starts_with("iso-8859-") {
+            CharsetControlPolicy::LatinExtra
+        } else {
+            CharsetControlPolicy::CodeSpace
+        };
+        Some(Self {
+            code_spaces,
+            leads,
+            ascii_compatible,
+            controls,
+        })
+    }
+
+    fn continue_unit(
+        &self,
+        candidate: usize,
+        src: &mut DetectSrc<'_>,
+        index: &mut usize,
+    ) -> CharsetContinuation {
+        let space = &self.code_spaces[candidate];
+        while *index < space.dimension() {
+            let Some(trail) = src.next() else {
+                return CharsetContinuation::Incomplete;
+            };
+            if !space.accepts(*index, trail) {
+                return CharsetContinuation::Mismatch;
+            }
+            *index += 1;
+        }
+        CharsetContinuation::Complete
+    }
+
+    fn accepts_unit(&self, lead: u8, src: &mut DetectSrc<'_>) -> bool {
+        let mut index = 1;
+        match &self.leads[usize::from(lead)] {
+            CharsetLead::Invalid => false,
+            CharsetLead::Single(candidate) => matches!(
+                self.continue_unit(*candidate, src, &mut index),
+                CharsetContinuation::Complete
+            ),
+            CharsetLead::Alternatives(candidates) => {
+                // GNU shares its cursor/index across candidates: no rewind on
+                // mismatch. Exhausting the list succeeds, but a short source
+                // rejects it. These distinctions are observable in Lisp.
+                for &candidate in candidates {
+                    match self.continue_unit(candidate, src, &mut index) {
+                        CharsetContinuation::Complete => return true,
+                        CharsetContinuation::Mismatch => {}
+                        CharsetContinuation::Incomplete => return false,
+                    }
+                }
+                true
+            }
+        }
+    }
+}
+
+/// GNU `detect_coding_charset`: validate the currently bound coding's byte
+/// grammar, not a startup default or whether its Unicode map has an entry.
+fn detect_charset(
+    plan: &CharsetDetectionPlan,
     bytes: &[u8],
     head_ascii: usize,
     multibytep: bool,
     di: &mut DetectInfo,
 ) -> bool {
     di.checked |= cat_mask(CodingCat::Charset);
-    let mut src = DetectSrc::new(bytes, head_ascii, multibytep);
+    let mut src = DetectSrc::new(
+        bytes,
+        if plan.ascii_compatible { head_ascii } else { 0 },
+        multibytep,
+    );
     let mut found = 0u32;
     loop {
         let src_base = src.pos;
@@ -4149,17 +4260,26 @@ fn detect_charset_latin1(
             return true;
         };
         if c < 0 {
-            // A decoded multibyte char: iso-latin-1's valids only cover bytes,
-            // so a non-eight-bit char means this is not iso-latin-1.
+            continue;
+        }
+        let lead = u8::try_from(c).expect("byte source yielded a nonnegative byte");
+        if matches!(plan.leads[usize::from(lead)], CharsetLead::Invalid) {
             di.rejected |= cat_mask(CodingCat::Charset);
             return false;
         }
         if c >= 0x80 {
-            if c < 0xA0 && !latin_extra_code_p(c as u8) {
+            if c < 0xA0
+                && matches!(plan.controls, CharsetControlPolicy::LatinExtra)
+                && !latin_extra_code_p(lead)
+            {
                 di.rejected |= cat_mask(CodingCat::Charset);
                 return false;
             }
             found = cat_mask(CodingCat::Charset);
+        }
+        if !plan.accepts_unit(lead, &mut src) {
+            di.rejected |= cat_mask(CodingCat::Charset);
+            return false;
         }
     }
 }
@@ -4342,17 +4462,16 @@ fn detect_iso_2022(bytes: &[u8], head_ascii: usize, multibytep: bool, di: &mut D
     false
 }
 
-/// Detect the coding system(s) of unibyte `bytes` (`src_chars` characters),
-/// returning the value `detect-coding-string`/`detect-coding-region` produce.
-/// Direct port of coding.c `detect_coding_system` with `coding_system = nil`
-/// (`undecided`) and no EOL conversion (inputs without CR/LF keep base names).
 /// GNU's two detection globals, `coding_priorities` and `coding_categories`
-/// (src/coding.c:586, :590), read out of the manager that owns them here.  Both
-/// doors need exactly this pair, so it is built in one place rather than in
-/// each.
-fn coding_category_bindings(
-    mgr: &CodingSystemManager,
-) -> (Vec<usize>, [Option<SymId>; CODING_CAT_MAX]) {
+/// (src/coding.c:586, :590), coupled to the bound charset coding's byte grammar.
+/// Reporting and decoding build the same runtime bindings before scanning.
+struct CodingDetectionBindings {
+    priorities: Vec<usize>,
+    systems: [Option<SymId>; CODING_CAT_MAX],
+    charset: Option<CharsetDetectionPlan>,
+}
+
+fn coding_category_bindings(mgr: &CodingSystemManager) -> CodingDetectionBindings {
     let mut cat_system: [Option<SymId>; CODING_CAT_MAX] = [None; CODING_CAT_MAX];
     let mut priorities: Vec<usize> = Vec::with_capacity(CODING_CAT_MAX);
     for &sym in &mgr.priority {
@@ -4370,25 +4489,31 @@ fn coding_category_bindings(
             priorities.push(cat);
         }
     }
-    (priorities, cat_system)
+    let charset = cat_system[CodingCat::Charset as usize]
+        .and_then(|name| CharsetDetectionPlan::for_coding_system(mgr, name));
+    CodingDetectionBindings {
+        priorities,
+        systems: cat_system,
+        charset,
+    }
 }
 
+/// Report the possible codings of original Emacs text, retaining its byte
+/// interpretation and applying detected EOL subsidiaries as GNU does.
 fn detect_coding_systems(
     mgr: &CodingSystemManager,
-    bytes: &[u8],
-    src_chars: usize,
-    multibytep: bool,
+    text: &LispString,
     highest: bool,
     block: SourceBlock,
 ) -> Value {
-    let (priorities, cat_system) = coding_category_bindings(mgr);
+    let bindings = coding_category_bindings(mgr);
+    let bytes = text.as_bytes();
 
     let detected = detect_categories(
-        &priorities,
-        &cat_system,
+        &bindings,
         bytes,
-        src_chars,
-        multibytep,
+        text.schars(),
+        text.is_multibyte(),
         highest,
         block,
     );
@@ -4423,17 +4548,16 @@ pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
     bytes: &[u8],
     block: SourceBlock,
 ) -> Option<SymId> {
-    let (priorities, cat_system) = coding_category_bindings(mgr);
+    let bindings = coding_category_bindings(mgr);
     let scan = scan_undecided(
-        &priorities,
-        &cat_system,
+        &bindings,
         bytes,
         bytes.len(),
         false,
         block,
         WalkStop::AtFirstFound,
     );
-    let base = match detect_coding_found(mgr, &priorities, &cat_system, &scan) {
+    let base = match detect_coding_found(mgr, &bindings.priorities, &bindings.systems, &scan) {
         DetectedBase::Rebase(sym) => Value::symbol(resolve_sym(sym)),
         // GNU leaves `coding` alone; this engine's spelling of that is the name
         // the caller already holds, which for every caller of this function is
@@ -4624,14 +4748,15 @@ struct UndecidedScan {
 /// UTF-16 categories rather than closed (:6614-6618 narrowing, :6683-6684
 /// fallback).
 fn scan_undecided(
-    priorities: &[usize],
-    cat_system: &[Option<SymId>; CODING_CAT_MAX],
+    bindings: &CodingDetectionBindings,
     bytes: &[u8],
     src_chars: usize,
     multibytep: bool,
     block: SourceBlock,
     stop: WalkStop,
 ) -> UndecidedScan {
+    let priorities = &bindings.priorities;
+    let cat_system = &bindings.systems;
     let mut di = DetectInfo::default();
     let mut null_byte_found = false;
     let mut eight_bit_found = false;
@@ -4714,6 +4839,15 @@ fn scan_undecided(
                     // it again and treats the recorded verdict as its return
                     // value (coding.c:6632-6636, :8815-8820).
                     true
+                } else if cat == CodingCat::Charset as usize {
+                    match &bindings.charset {
+                        Some(plan) => detect_charset(plan, bytes, head_ascii, multibytep, &mut di),
+                        None => {
+                            di.checked |= cat_mask(CodingCat::Charset);
+                            di.rejected |= cat_mask(CodingCat::Charset);
+                            false
+                        }
+                    }
                 } else {
                     run_detector(
                         cat, bytes, head_ascii, src_chars, multibytep, block, &mut di,
@@ -4831,21 +4965,21 @@ fn coding_bom_auto_pair(mgr: &CodingSystemManager, name: SymId) -> Option<(SymId
 /// shared scan.  Split out from `detect_coding_systems` so it can be
 /// unit-tested against GNU's bindings without a fully-booted coding manager.
 fn detect_categories(
-    priorities: &[usize],
-    cat_system: &[Option<SymId>; CODING_CAT_MAX],
+    bindings: &CodingDetectionBindings,
     bytes: &[u8],
     src_chars: usize,
     multibytep: bool,
     highest: bool,
     block: SourceBlock,
 ) -> Value {
+    let priorities = &bindings.priorities;
+    let cat_system = &bindings.systems;
     let UndecidedScan {
         di,
         null_byte_found,
         found_at: _,
     } = scan_undecided(
-        priorities,
-        cat_system,
+        bindings,
         bytes,
         src_chars,
         multibytep,
@@ -4935,8 +5069,6 @@ fn run_detector(
         detect_sjis(bytes, head_ascii, multibytep, block, di)
     } else if cat == CodingCat::Big5 as usize {
         detect_big5(bytes, head_ascii, multibytep, block, di)
-    } else if cat == CodingCat::Charset as usize {
-        detect_charset_latin1(bytes, head_ascii, multibytep, di)
     } else if (CodingCat::Iso7 as usize..=CodingCat::Iso8Else as usize).contains(&cat) {
         detect_iso_2022(bytes, head_ascii, multibytep, di)
     } else {
@@ -4959,24 +5091,14 @@ pub(crate) fn builtin_detect_coding_string(
             vec![Value::symbol("stringp"), args[0]],
         ));
     };
-    let bytes = crate::encoding::lisp_string_coding_source_bytes(s);
-    let src_chars = s.schars();
-    let multibytep = s.is_multibyte();
     let highest = args.get(1).is_some_and(|v| v.is_truthy());
     // A string is complete by construction, which is GNU setting
     // `CODING_MODE_LAST_BLOCK` in `Fdetect_coding_string` (src/coding.c:8716).
-    Ok(detect_coding_systems(
-        mgr,
-        &bytes,
-        src_chars,
-        multibytep,
-        highest,
-        SourceBlock::Last,
-    ))
+    Ok(detect_coding_systems(mgr, s, highest, SourceBlock::Last))
 }
 
 /// `(detect-coding-region START END &optional HIGHEST)` -- detect the encoding
-/// of a buffer region. Stub: always returns utf-8.
+/// of a buffer region.
 fn validate_detect_coding_region(buffers: &BufferManager, args: &[Value]) -> Result<(), Flow> {
     let start = crate::emacs_core::position::fix_position_with_buffers(buffers, &args[0])?;
     let end = crate::emacs_core::position::fix_position_with_buffers(buffers, &args[1])?;
@@ -5024,15 +5146,10 @@ pub(crate) fn builtin_detect_coding_region(
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(end)),
     );
     let string = buffer.buffer_substring_lisp_string_range(byte_range);
-    let bytes = crate::encoding::lisp_string_coding_source_bytes(&string);
-    let src_chars = string.schars();
-    let multibytep = string.is_multibyte();
     // Likewise `Fdetect_coding_region` (src/coding.c:8009).
     Ok(detect_coding_systems(
         mgr,
-        &bytes,
-        src_chars,
-        multibytep,
+        &string,
         highest,
         SourceBlock::Last,
     ))
@@ -5509,39 +5626,43 @@ fn raw_coding_candidates(mgr: &CodingSystemManager, exclude: Option<&[Value]>) -
     names
 }
 
+/// Safely represent the original Emacs characters, without a Unicode display
+/// projection. LispString owns both the bytes and their multibyte interpretation.
 fn safe_coding_systems_for_text(
     mgr: &CodingSystemManager,
-    text: &str,
-    multibyte: bool,
+    text: &LispString,
     exclude: Option<Value>,
 ) -> Result<Value, Flow> {
-    if !multibyte || text.is_ascii() {
+    if !text.is_multibyte() || text.as_bytes().is_ascii() {
         return Ok(Value::T);
     }
 
-    if !text.is_ascii() {
-        let exclude = coding_exclude_list(exclude)?;
-        // Each distinct character once, as GNU's `work_table' skips
-        // characters already checked: asking every coding system about every
-        // character made saving a 31KB Cyrillic file cost ~1.1G instructions.
-        let mut chars: Vec<char> = text.chars().filter(|ch| !ch.is_ascii()).collect();
-        chars.sort_unstable();
-        chars.dedup();
-        let mut safe_codings = Vec::new();
-        for coding in raw_coding_candidates(mgr, exclude.as_deref()) {
-            let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, &coding) else {
-                continue;
-            };
-            if chars.iter().all(|&ch| repertoire.encodes(ch as i64)) {
-                safe_codings.push(Value::symbol(coding));
-            }
+    let exclude = coding_exclude_list(exclude)?;
+    // Each distinct character once, as GNU's work_table skips repeated codes.
+    // Preserve charset-only and byte8 identities: neither is a Rust char.
+    let mut chars: Vec<EmacsChar> = Vec::new();
+    let mut byte = 0;
+    while byte < text.sbytes() {
+        let (code, len) = super::emacs_char::string_char(&text.as_bytes()[byte..]);
+        byte += len;
+        if code >= 0x80 {
+            chars.push(EmacsChar::from_code(code).expect("decoded Emacs character"));
         }
-        safe_codings.push(Value::symbol("raw-text"));
-        safe_codings.push(Value::symbol("no-conversion"));
-        return Ok(Value::list(safe_codings));
     }
-
-    Ok(Value::T)
+    chars.sort_unstable();
+    chars.dedup();
+    let mut safe_codings = Vec::new();
+    for coding in raw_coding_candidates(mgr, exclude.as_deref()) {
+        let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, &coding) else {
+            continue;
+        };
+        if chars.iter().all(|&ch| repertoire.encodes(ch)) {
+            safe_codings.push(Value::symbol(coding));
+        }
+    }
+    safe_codings.push(Value::symbol("raw-text"));
+    safe_codings.push(Value::symbol("no-conversion"));
+    Ok(Value::list(safe_codings))
 }
 
 fn marker_or_integer_position(value: &Value) -> Result<i64, Flow> {
@@ -5564,15 +5685,8 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
     expect_min_args("find-coding-systems-region-internal", &args, 2)?;
     expect_max_args("find-coding-systems-region-internal", &args, 3)?;
 
-    if args[0].is_string() {
-        let text = coding_runtime_string(&args[0])?;
-        let multibyte = args[0].string_is_multibyte();
-        return safe_coding_systems_for_text(
-            &eval.coding_systems,
-            &text,
-            multibyte,
-            args.get(2).copied(),
-        );
+    if let Some(text) = args[0].as_lisp_string() {
+        return safe_coding_systems_for_text(&eval.coding_systems, text, args.get(2).copied());
     }
 
     let start = marker_or_integer_position(&args[0])?;
@@ -5599,21 +5713,8 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(start)),
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(end)),
     );
-    // Issue #131: decode the buffer substring with `to_utf8_lossy` so real
-    // Unicode (including genuine Private-Use glyphs) is preserved verbatim;
-    // only true eight-bit raw bytes collapse to U+FFFD, which the per-coding
-    // encode check below rejects anyway (matching GNU's raw-text fallback).
-    // The legacy storage-string form mangled real PUA glyphs into eight-bit.
-    let text = {
-        let string = buffer.buffer_substring_lisp_string_range(byte_range);
-        crate::emacs_core::emacs_char::to_utf8_lossy(string.as_bytes())
-    };
-    safe_coding_systems_for_text(
-        &eval.coding_systems,
-        &text,
-        buffer.get_multibyte(),
-        args.get(2).copied(),
-    )
+    let text = buffer.buffer_substring_lisp_string_range(byte_range);
+    safe_coding_systems_for_text(&eval.coding_systems, &text, args.get(2).copied())
 }
 
 // ===========================================================================
@@ -5715,5 +5816,5 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/coding_test.rs"]
 mod tests;

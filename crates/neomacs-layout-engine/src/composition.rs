@@ -216,4 +216,5 @@ pub(crate) fn needs_complex_shaping(ch: char) -> bool {
 }
 
 #[cfg(test)]
+#[path = "composition/tests/composition_test.rs"]
 mod tests;

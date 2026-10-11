@@ -27,9 +27,10 @@ thread_local! {
 /// reason [`Flow`]'s payloads do: a boundary that holds an `EvalError` while
 /// more Lisp runs is holding Lisp values the precise collector cannot see. An
 /// enum variant cannot have a private FIELD (a variant's fields are as visible
-/// as the enum), so the pin is a field of a type that has no constructor
-/// outside this module — which makes the struct literal unwritable elsewhere
-/// and [`EvalError::signal`] / [`EvalError::uncaught_throw`] the only ways in.
+/// as the enum), so each owning state has no constructor outside this module.
+/// This makes struct literals unwritable elsewhere; [`EvalError::signal`] and
+/// [`EvalError::uncaught_throw`] remain the public constructors. The signal
+/// state also preserves delivery policy and completed handler selection.
 /// Existing `EvalError::Signal { symbol, data, .. }` patterns keep working
 /// unchanged; only construction sites move (DIVERGENCES.md 162).
 #[derive(Clone, Debug)]
@@ -38,8 +39,8 @@ pub enum EvalError {
         symbol: SymId,
         data: Vec<Value>,
         raw_data: Option<Value>,
-        /// Not constructible outside `error.rs`; see the type docs.
-        pin: InFlightRoots,
+        /// Rooted signal state, not constructible outside this module.
+        pin: EvalSignalState,
     },
     UncaughtThrow {
         tag: Value,
@@ -51,20 +52,47 @@ pub enum EvalError {
     Shutdown(super::eval::ShutdownRequest),
 }
 
+/// Opaque signal state crossing the public error boundary. Its owning pin
+/// covers the payload and any original memory-exhaustion descriptor; delivery
+/// and completed handler selection stay with that pin through a roundtrip.
+/// Private fields prevent construction or extraction of unrooted metadata.
+#[derive(Clone, Debug)]
+pub struct EvalSignalState {
+    roots: InFlightRoots,
+    delivery: SignalDelivery,
+    selected_resume: Option<ResumeTarget>,
+    search_complete: bool,
+}
+
 impl EvalError {
-    /// The only way to build a signal error: pins the symbol and payload as GC
-    /// roots for as long as the error (or any clone of it) lives.
+    /// The only public way to build a signal error: pins the symbol and payload
+    /// as GC roots for as long as the error (or any clone of it) lives.
     pub fn signal(symbol: SymId, data: Vec<Value>, raw_data: Option<Value>) -> Self {
-        let pin = InFlightRoots::pin(
-            std::iter::once(Value::from_sym_id(symbol))
-                .chain(data.iter().copied())
-                .chain(raw_data),
-        );
+        Self::from_signal(SignalData::new(symbol, data, raw_data, false))
+    }
+
+    /// Transfer an existing signal without dropping its owning roots or
+    /// restarting delivery after loader cleanups cross this public boundary.
+    fn from_signal(signal: SignalData) -> Self {
+        let SignalData {
+            symbol,
+            data,
+            raw_data,
+            delivery,
+            selected_resume,
+            search_complete,
+            pin,
+        } = signal;
         Self::Signal {
             symbol,
             data,
             raw_data,
-            pin,
+            pin: EvalSignalState {
+                roots: pin,
+                delivery,
+                selected_resume,
+                search_complete,
+            },
         }
     }
 
@@ -119,8 +147,24 @@ pub(crate) fn flow_from_eval_error(err: EvalError) -> Flow {
             symbol,
             data,
             raw_data,
-            ..
-        } => Flow::signal_boxed(Box::new(SignalData::new(symbol, data, raw_data, false))),
+            pin,
+        } => {
+            let EvalSignalState {
+                roots,
+                delivery,
+                selected_resume,
+                search_complete,
+            } = pin;
+            Flow::signal_boxed(Box::new(SignalData {
+                symbol,
+                data,
+                raw_data,
+                delivery,
+                selected_resume,
+                search_complete,
+                pin: roots,
+            }))
+        }
         EvalError::UncaughtThrow { tag, value, .. } => Flow::throw(tag, value),
         EvalError::Shutdown(request) => Flow::shutdown(request),
     }
@@ -424,6 +468,12 @@ pub(crate) trait InFlightPinned {
     fn in_flight_roots(&self) -> &InFlightRoots;
 }
 
+impl InFlightPinned for EvalSignalState {
+    fn in_flight_roots(&self) -> &InFlightRoots {
+        &self.roots
+    }
+}
+
 /// `(throw TAG VALUE)` in flight.
 #[derive(Clone, Debug)]
 pub struct ThrowData {
@@ -476,48 +526,136 @@ impl InFlightPinned for ThreadBlockedData {
     }
 }
 
+/// A validated (SYMBOL . DATA) memory-signal-data object, retained unchanged
+/// through GNU's allocation-exhaustion delivery. This copied witness is
+/// confined to its mutator; SignalData pins the object while it is in flight.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MemorySignalBinding {
+    original: Value,
+    symbol: SymId,
+    tail: Value,
+}
+
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub(crate) enum MemorySignalBindingError {
+    #[error("memory-signal-data is not a cons")]
+    NotCons,
+    #[error("memory-signal-data has a non-symbol condition")]
+    NotSymbol,
+}
+
+impl TryFrom<Value> for MemorySignalBinding {
+    type Error = MemorySignalBindingError;
+
+    fn try_from(original: Value) -> Result<Self, Self::Error> {
+        if !original.is_cons() {
+            return Err(MemorySignalBindingError::NotCons);
+        }
+        let symbol = original
+            .cons_car()
+            .as_symbol_id()
+            .ok_or(MemorySignalBindingError::NotSymbol)?;
+        Ok(Self {
+            original,
+            symbol,
+            tail: original.cons_cdr(),
+        })
+    }
+}
+
+impl MemorySignalBinding {
+    fn from_signal_parts(symbol: SymId, tail: Value) -> Self {
+        Self {
+            original: Value::cons(Value::from_sym_id(symbol), tail),
+            symbol,
+            tail,
+        }
+    }
+
+    pub(crate) fn original(self) -> Value {
+        self.original
+    }
+}
+
+/// GNU eval.c:1948-1953 distinguishes allocation exhaustion from ordinary
+/// signals and hook-suppressed signals. Memory exhaustion retains the original
+/// error object and permits neither hook nor debugger reentry. This delivery
+/// policy travels with its signal; the memory-exhaustion variant retains
+/// mutator-bound Values whose lifetime is covered by SignalData's pin.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SignalDelivery {
+    Ordinary,
+    HookSuppressed,
+    MemoryExhausted(MemorySignalBinding),
+}
+
 #[derive(Clone, Debug)]
 pub struct SignalData {
     pub symbol: SymId,
     pub data: Vec<Value>,
     /// Original cdr payload when a signal uses non-list data.
     pub raw_data: Option<Value>,
-    pub(crate) suppress_signal_hook: bool,
+    delivery: SignalDelivery,
     pub(crate) selected_resume: Option<ResumeTarget>,
     pub(crate) search_complete: bool,
     /// Keeps `data` and `raw_data` reachable for the collector while this
     /// signal is in flight. PRIVATE on purpose: it is what makes an unrooted
     /// signal payload unrepresentable outside this module — a struct with a
     /// private field cannot be built from a literal elsewhere, so every
-    /// construction site has to go through [`SignalData::new`], which pins.
+    /// construction site has to go through the constructors below, which pin.
     /// See [`InFlightRoots`] for why the pin is needed at all.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
     pin: InFlightRoots,
 }
 
 impl SignalData {
-    /// The only way to build a signal payload: pins `data` and `raw_data` as
-    /// GC roots for as long as the returned value (or any clone of it) lives.
+    /// Compatibility constructor for ordinary or hook-suppressed signals.
+    /// Every constructor pins its payload for the lifetime of this value.
     pub(crate) fn new(
         symbol: SymId,
         data: Vec<Value>,
         raw_data: Option<Value>,
         suppress_signal_hook: bool,
     ) -> Self {
+        let delivery = if suppress_signal_hook {
+            SignalDelivery::HookSuppressed
+        } else {
+            SignalDelivery::Ordinary
+        };
+        Self::new_with_delivery(symbol, data, raw_data, delivery)
+    }
+
+    /// Build a signal with its typed delivery policy, pinning both the payload
+    /// and any original memory-exhaustion binding for the entire signal lifetime.
+    pub(crate) fn new_with_delivery(
+        symbol: SymId,
+        data: Vec<Value>,
+        raw_data: Option<Value>,
+        delivery: SignalDelivery,
+    ) -> Self {
+        let binding = match delivery {
+            SignalDelivery::Ordinary | SignalDelivery::HookSuppressed => None,
+            SignalDelivery::MemoryExhausted(binding) => Some(binding.original()),
+        };
         let pin = InFlightRoots::pin(
             std::iter::once(Value::from_sym_id(symbol))
                 .chain(data.iter().copied())
-                .chain(raw_data),
+                .chain(raw_data)
+                .chain(binding),
         );
         Self {
             symbol,
             data,
             raw_data,
-            suppress_signal_hook,
+            delivery,
             selected_resume: None,
             search_complete: false,
             pin,
         }
+    }
+
+    pub(crate) fn delivery(&self) -> SignalDelivery {
+        self.delivery
     }
 
     /// Resolve the signal symbol name via the interner.
@@ -569,13 +707,35 @@ thread_local! {
 #[derive(Default)]
 struct InFlightRootTable {
     /// One entry per live pin; `None` marks a reusable slot.
-    slots: Vec<Option<Vec<Value>>>,
+    slots: Vec<Option<Vec<PinnedWord>>>,
     free: Vec<usize>,
 }
 
-/// Roots retained by flows from one Context, including after it moves threads.
-/// A source thread may keep or drop a public EvalError while a worker collects
-/// its owning Context, so the slot arena uses a mutex rather than RefCell.
+/// The word of one pinned in-flight value.
+///
+/// The registry is shared through a mutex, so it holds words rather than
+/// thread-confined values. Its table roots each word for the registry's heap,
+/// and the word becomes a value again only in that heap's root walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct PinnedWord(usize);
+
+impl PinnedWord {
+    fn of(value: Value) -> Self {
+        Self(value.bits())
+    }
+
+    fn value(self) -> Value {
+        Value::from_bits(self.0)
+    }
+}
+
+static_assertions::assert_impl_all!(InFlightRegistryHandle: Send, Sync);
+
+/// Heap-identified registry storage for one Context's in-flight roots.
+/// The slot arena uses a mutex so root publication and collection may access
+/// registry metadata concurrently. Context and public EvalError stay on their
+/// owner threads; sharing registry storage does not transfer either owner.
 #[derive(Clone)]
 pub(crate) struct InFlightRegistryHandle {
     heap_identity: Option<usize>,
@@ -625,13 +785,13 @@ struct InFlightRootPin {
 
 /// A pin on one in-flight payload's heap values. Owns a slot in its Context's
 /// registry for its whole life; clones take independent slots in that same
-/// registry, and Drop releases the owning slot even after Context activation
-/// changes or the Context moves to another thread.
+/// registry, and Drop releases the owning slot even after local Context
+/// activation changes. The payload and this pin remain on their owner thread.
 pub struct InFlightRoots {
     /// `None` for a payload with no traceable values, avoiding registry traffic.
     pin: Option<InFlightRootPin>,
-    /// Flow payloads remain local to their Rust evaluator call stack. Moving
-    /// the owning Context is allowed; its registry follows it independently.
+    /// Flow payloads and Context remain local to their evaluator call stack.
+    /// Shared registry metadata does not make a payload transferable.
     _not_send: std::marker::PhantomData<*const ()>,
 }
 
@@ -644,7 +804,7 @@ impl InFlightRoots {
     /// and an uninterned symbol's value/function/plist cells survive only
     /// while something marks it. In flight, nothing else does.
     fn pin(payload: impl IntoIterator<Item = Value>) -> Self {
-        let mut values: Vec<Value> = Vec::new();
+        let mut values: Vec<PinnedWord> = Vec::new();
         for value in payload {
             Self::push_if_traceable(&mut values, value);
         }
@@ -662,16 +822,16 @@ impl InFlightRoots {
     /// non-canonical symbol's cells. Fixnums, `nil` and `t` are immediates the
     /// collector never touches.
     #[inline]
-    fn push_if_traceable(values: &mut Vec<Value>, value: Value) {
+    fn push_if_traceable(values: &mut Vec<PinnedWord>, value: Value) {
         if value.is_nil() || value.is_t() {
             return;
         }
         if value.is_heap_object() || value.is_symbol() {
-            values.push(value);
+            values.push(PinnedWord::of(value));
         }
     }
 
-    fn claim(registry: InFlightRegistryHandle, values: Vec<Value>) -> Self {
+    fn claim(registry: InFlightRegistryHandle, values: Vec<PinnedWord>) -> Self {
         let slot = {
             let mut table = registry.lock();
             match table.free.pop() {
@@ -734,7 +894,7 @@ pub(crate) fn collect_in_flight_registry_gc_roots(
     }
     let table = registry.lock();
     for values in table.slots.iter().flatten() {
-        for &value in values {
+        for value in values.iter().map(|word| word.value()) {
             if registry.heap_identity.is_some() || !value.is_heap_object() {
                 out.push(value);
             }
@@ -803,6 +963,14 @@ pub(crate) enum LispCondition {
     InvalidRegexp,
     #[strum(serialize = "malformed-keyword-arg-list")]
     MalformedKeywordArgList,
+    #[strum(serialize = "missing-module-init-function")]
+    MissingModuleInitFunction,
+    #[strum(serialize = "module-init-failed")]
+    ModuleInitFailed,
+    #[strum(serialize = "module-not-gpl-compatible")]
+    ModuleNotGplCompatible,
+    #[strum(serialize = "module-open-failed")]
+    ModuleOpenFailed,
     #[strum(serialize = "no-catch")]
     NoCatch,
     #[strum(serialize = "overflow-error")]
@@ -862,6 +1030,7 @@ pub(crate) trait IntoConditionSym {
 }
 
 impl IntoConditionSym for LispCondition {
+    #[inline(always)]
     fn condition_sym(self) -> SymId {
         intern(self.name())
     }
@@ -878,6 +1047,24 @@ pub(crate) fn signal(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
     signal_internal_id(symbol.condition_sym(), data, None, false)
 }
 
+/// GNU alloc.c:7474-7477's bootstrap memory exhaustion condition.
+/// Context-aware allocation paths use the live `memory-signal-data` instead.
+#[cold]
+pub(crate) fn memory_exhausted_error() -> Flow {
+    let symbol = LispCondition::Error.condition_sym();
+    let data = vec![Value::string(
+        "Memory exhausted--use M-x save-some-buffers then exit and restart Emacs",
+    )];
+    let tail = Value::list_from_slice(&data);
+    let binding = MemorySignalBinding::from_signal_parts(symbol, tail);
+    Flow::signal_boxed(Box::new(SignalData::new_with_delivery(
+        symbol,
+        data,
+        Some(tail),
+        SignalDelivery::MemoryExhausted(binding),
+    )))
+}
+
 /// Create a signal flow without running `signal-hook-function`.
 pub(crate) fn signal_suppressed(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
     signal_internal_id(symbol.condition_sym(), data, None, true)
@@ -889,6 +1076,7 @@ pub(crate) fn signal_suppressed(symbol: impl IntoConditionSym, data: Vec<Value>)
 /// `define-error') keeps its identity all the way to condition matching.
 /// Re-interning by name would resolve to a different symbol with no
 /// `error-conditions' and wrongly canonicalize to "Invalid error symbol".
+#[inline(never)]
 pub(crate) fn signal_internal_id(
     symbol: SymId,
     data: Vec<Value>,
@@ -933,11 +1121,7 @@ pub(crate) fn signal_with_data_id(symbol: SymId, data: Value) -> Flow {
 /// Convert internal flow to public EvalError.
 pub fn map_flow(flow: Flow) -> EvalError {
     match flow.into_kind() {
-        FlowKind::Signal(sig) => {
-            // `sig` (and with it the SignalData pin) stays alive until the new
-            // pin is taken, so the payload is never momentarily unrooted.
-            EvalError::signal(sig.symbol, sig.data.clone(), sig.raw_data)
-        }
+        FlowKind::Signal(sig) => EvalError::from_signal(*sig),
         FlowKind::Throw(thrown) => EvalError::uncaught_throw(thrown.tag, thrown.value),
         FlowKind::Shutdown(request) => EvalError::Shutdown(request),
         FlowKind::ThreadBlocked(blocked) => EvalError::signal(
@@ -953,6 +1137,10 @@ pub fn map_flow(flow: Flow) -> EvalError {
 
 /// Build the binding value for condition-case variable: (symbol . data)
 pub(crate) fn make_signal_binding_value(sig: &SignalData) -> Value {
+    match sig.delivery {
+        SignalDelivery::MemoryExhausted(binding) => return binding.original(),
+        SignalDelivery::Ordinary | SignalDelivery::HookSuppressed => {}
+    }
     if let Some(raw) = &sig.raw_data {
         return Value::cons(Value::symbol(sig.symbol), *raw);
     }
@@ -972,6 +1160,36 @@ pub(crate) fn signal_from_binding_value(value: Value) -> Option<Flow> {
     let tail = pair_cdr;
     let symbol_id = pair_car.as_symbol_id()?;
     Some(signal_with_data_id(symbol_id, tail))
+}
+
+/// Deliver GNU alloc.c:4142's live memory-signal-data, keeping its original
+/// error object (including a dotted cdr) and the OOM delivery policy together.
+#[cold]
+pub(crate) fn memory_signal_from_binding_value(value: Value) -> Flow {
+    let binding = match MemorySignalBinding::try_from(value) {
+        Ok(binding) => binding,
+        // Fsignal turns a nil error symbol and non-cons data into an
+        // ordinary error (GNU eval.c:1924-1925), preserving its raw cdr.
+        Err(MemorySignalBindingError::NotCons) => {
+            return signal_with_data(LispCondition::Error, value);
+        }
+        // For an OOM cons, Fget checks its actual condition designator
+        // (GNU eval.c:1978; fns.c:2653). Validation must not silently replace
+        // an invalid user binding with the bootstrap exhaustion descriptor.
+        Err(MemorySignalBindingError::NotSymbol) => {
+            return signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), value.cons_car()],
+            );
+        }
+    };
+    let data = super::value::list_to_vec(&binding.tail).unwrap_or_else(|| vec![binding.tail]);
+    Flow::signal_boxed(Box::new(SignalData::new_with_delivery(
+        binding.symbol,
+        data,
+        Some(binding.tail),
+        SignalDelivery::MemoryExhausted(binding),
+    )))
 }
 
 /// Format an eval result for the compat test harness (TSV output).
@@ -2090,10 +2308,10 @@ pub fn format_eval_result_bytes_with_eval(
     out
 }
 #[cfg(test)]
-#[path = "tests/flow_kind.rs"]
+#[path = "tests/flow_kind_test.rs"]
 mod flow_kind_tests;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/error_test.rs"]
 mod tests;
 
 /// Signal wrong-number-of-arguments unless `args` has exactly `n` items.
@@ -2288,13 +2506,13 @@ impl super::eval::Context {
 }
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
-#[path = "tests/flow_word.rs"]
+#[path = "tests/flow_word_test.rs"]
 mod flow_word_tests;
 
 #[cfg(test)]
-#[path = "tests/flow_word_gc.rs"]
+#[path = "tests/flow_word_gc_test.rs"]
 mod flow_word_gc_tests;

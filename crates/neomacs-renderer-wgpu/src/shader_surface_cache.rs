@@ -866,4 +866,5 @@ impl CachedShaderSurface {
 }
 
 #[cfg(test)]
+#[path = "shader_surface_cache/tests/shader_surface_cache_test.rs"]
 mod tests;

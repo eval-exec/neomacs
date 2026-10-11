@@ -17,10 +17,7 @@ pub(crate) struct SelectedFeedbackSnapshot {
     pub(crate) array: Vec<ArrayKindMask>,
 }
 
-const _: () = {
-    const fn assert_send<T: Send>() {}
-    assert_send::<SelectedFeedbackSnapshot>();
-};
+static_assertions::assert_impl_all!(SelectedFeedbackSnapshot: Send);
 
 impl SelectedFeedbackSnapshot {
     /// The frontend calls this only for Opt plus Range. Normal T1/Aref profile

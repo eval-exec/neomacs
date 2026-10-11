@@ -222,4 +222,5 @@ impl InteractionProjection {
 }
 
 #[cfg(test)]
+#[path = "interaction_projection/tests/interaction_projection_test.rs"]
 mod tests;

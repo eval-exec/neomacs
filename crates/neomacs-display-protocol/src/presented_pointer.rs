@@ -2617,6 +2617,7 @@ fn rect_has_valid_geometry(rect: FrameRect) -> bool {
 mod scroll;
 
 #[cfg(test)]
+#[path = "presented_pointer/tests/presented_pointer_test.rs"]
 mod tests;
 
 #[cfg(test)]

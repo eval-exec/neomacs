@@ -14,7 +14,7 @@ fn source(tag: i64) -> ByteCodeFunction {
     });
     f.ops = vec![Op::Constant(0), Op::Return];
     f.constants = vec![Value::make_int(tag)].into();
-    f.max_stack = 1;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     f
 }
 
@@ -22,6 +22,7 @@ fn site() -> CallSiteFeedback {
     CallSiteFeedback::new(3, SiteShape::Callee)
 }
 
+#[cfg(feature = "jit")]
 fn sources_of(site: &CallSiteFeedback) -> Vec<*const RuntimeState> {
     match site.target() {
         CallTarget::Sources(v) => v.iter().map(Arc::as_ptr).collect(),
@@ -44,6 +45,7 @@ fn a_symbol_site_is_monomorphic_until_a_second_symbol() {
     assert!(matches!(s.target(), CallTarget::Mega));
 }
 
+#[cfg(feature = "jit")]
 #[test]
 fn instances_of_one_source_are_one_target_and_sources_go_poly_then_mega() {
     let s = site();
@@ -95,6 +97,7 @@ fn mixing_symbols_sources_and_other_callees_is_megamorphic() {
 
 /// The site holds its sources weakly: it keeps no function alive, and a
 /// source that died reads as gone (all gone = megamorphic).
+#[cfg(feature = "jit")]
 #[test]
 fn a_site_holds_its_sources_weakly_and_releases_them() {
     let rt = crate::emacs_core::jit::Runtime::new();

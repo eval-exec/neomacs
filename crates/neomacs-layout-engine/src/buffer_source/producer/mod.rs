@@ -130,6 +130,31 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
         }
     }
 
+    /// Limit ordinary text-run allocation without changing GNU's semantic ZV
+    /// or splitting complete composition/display elements. This allowance is
+    /// owned by one exclusive source attempt and carries no shared Lisp state.
+    pub(crate) fn new_for_window_acquisition(
+        buffer_id: BufferId,
+        buffer: &'request B,
+        window_id: Option<u64>,
+        start_charpos: i64,
+        acquisition_end: CharPos0,
+        text_start_byte: usize,
+    ) -> Self {
+        let mut producer = Self::new_for_window_range(
+            buffer_id,
+            buffer,
+            window_id,
+            start_charpos,
+            CharPos0::new(usize::MAX),
+            text_start_byte,
+        );
+        producer
+            .source_cursor
+            .set_ordinary_run_horizon(acquisition_end);
+        producer
+    }
+
     /// The buffer view the producer walks, for callers that must consult
     /// buffer state directly (the hscroll skip resolving `display` specs).
     pub(crate) fn layout_buffer(&self) -> &B {
@@ -360,6 +385,7 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
 }
 
 #[cfg(test)]
+#[path = "tests/producer_test.rs"]
 mod tests;
 
 #[cfg(test)]

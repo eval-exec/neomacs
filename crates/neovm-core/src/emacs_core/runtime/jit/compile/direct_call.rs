@@ -54,6 +54,7 @@ use super::spec_slot::{
     SPEC_SLOT_LEAF_OFFSET,
 };
 use super::*;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use std::sync::atomic::AtomicU64;
 
 /// Direct sites a leaf may emit (design §3.9); later sites keep the shim.
@@ -100,17 +101,19 @@ pub(crate) fn unbounded_body() -> bool {
 /// `compile_bytecode_function_requested` sets it from the body's shape (a
 /// back edge, a call of itself) and the request (a re-tier of a leaf that
 /// proved hot); the previous one is restored on drop.
-pub(crate) struct UnboundedBodyScope(bool);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct UnboundedBodyScope {
+    _scope: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
+}
+
+static_assertions::assert_not_impl_any!(UnboundedBodyScope: Send, Sync);
 
 impl UnboundedBodyScope {
     pub(crate) fn enter(unbounded: bool) -> Self {
-        Self(UNBOUNDED_BODY.with(|c| c.replace(unbounded)))
-    }
-}
-
-impl Drop for UnboundedBodyScope {
-    fn drop(&mut self) {
-        UNBOUNDED_BODY.with(|c| c.set(self.0));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&UNBOUNDED_BODY, unbounded),
+        }
     }
 }
 
@@ -251,21 +254,20 @@ impl DirectSite {
             return None;
         }
         let bc = Value::from_bits(expected as usize).bytecode_data_if_materialized()?;
+        let params = JitParamShape::try_from(bc).ok()?;
         let self_only = jit_direct_sites() == DirectSitesMode::SelfOnly;
         if self_only {
             let source = rt.self_direct_source?;
             if !self_only::expected_is_source(expected, source)
-                || bc.params.required.len() != nargs
-                || !bc.params.optional.is_empty()
-                || bc.params.rest.is_some()
+                || params.fixed_arity() != Some(nargs)
             {
                 return None;
             }
         }
         let callee = CalleeShape {
-            required: bc.params.required.len(),
-            nonrest: bc.params.required.len() + bc.params.optional.len(),
-            rest: bc.params.rest.is_some(),
+            required: params.required(),
+            nonrest: params.nonrest(),
+            rest: params.rest().is_present(),
         };
         let shapes = jit_direct_shapes();
         let callable = if callee.rest {
@@ -502,13 +504,8 @@ pub(crate) fn emit_direct_bytecode_call(
         vmctx,
         (CONTEXT_OBARRAY_OFFSET + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let debug = fb.ins().uload8(
-        types::I64,
-        flags,
-        cell,
-        crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET as i32,
-    );
-    let armed_debugger = icmp_imm_p(fb, IntCC::NotEqual, debug, 0);
+    let debug = super::atomic_forward::load_bool_byte(fb, cell);
+    let armed_debugger = debug.is_set(fb);
     next(fb, armed_debugger);
     // 5. Depth.
     let depth = fb

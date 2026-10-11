@@ -1010,7 +1010,7 @@ impl TreeSitterManager {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/treesit_test.rs"]
 mod tests;
 
 fn parser_point_at(

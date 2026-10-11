@@ -256,6 +256,10 @@ impl Context {
     /// `val = call_debugger (list2 (Qexit, val))`, so a debugger that returns a
     /// different object *replaces the call's result*.
     pub(crate) fn call_debugger(&mut self, arg: Vec<Value>) -> Result<Value, Flow> {
+        // GNU eval.c:286-291 records the unwind boundary before borrowing
+        // two hundred evaluator frames, ahead of the debugger's bindings.
+        let count = self.specpdl.len();
+        self.ensure_lisp_eval_depth_room(200);
         // eval.c:298, before anything the debugger runs can be dispatched.
         self.disarm_debug_on_next_call();
         // eval.c:299 `when_entered_debugger = num_nonmacro_input_events`.
@@ -270,10 +274,8 @@ impl Context {
             .set_symbol_value_id(when_entered_debugger_symbol(), Value::fixnum(events));
         let debugger = self
             .obarray
-            .symbol_value_id(debugger_symbol())
-            .copied()
+            .symbol_value_id_copied(debugger_symbol())
             .unwrap_or(Value::NIL);
-        let count = self.specpdl.len();
         // GNU's four `specbind`s, in GNU's order (`src/eval.c:306-314`).
         // `debugger-may-continue` is `debug_while_redisplaying ? Qnil : Qt`
         // there; this port has no redisplay re-entry to detect, and in batch
@@ -300,6 +302,7 @@ impl Context {
 
     /// GNU `do_debug_on_call` (`src/eval.c:335-341`) minus its first line,
     /// which the token's constructor already performed.
+    #[inline(never)]
     pub(crate) fn do_debug_on_call(&mut self, arm: DebugOnCallArm) -> Result<(), Flow> {
         let DebugOnCallArm { code, frame } = arm;
         // eval.c:339 -- the same entry also arms the exit debugger.
@@ -338,5 +341,5 @@ impl Context {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/debug_on_call_test.rs"]
 mod tests;

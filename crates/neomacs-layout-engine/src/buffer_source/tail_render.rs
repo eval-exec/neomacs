@@ -344,6 +344,31 @@ pub(crate) fn render_buffer_source_tail_and_decide_retry<
 where
     'surface: 'request,
 {
+    if source_stop
+        == crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::QueryTargetReached
+    {
+        // GNU move_it_to stops at the stable target iterator. Complete the
+        // observed row's metrics, without EOB anchors or after-strings at the
+        // unconsumed position. The final row remains a certified prefix.
+        let finalized = tail_context
+            .tail_finalize_request(text, charpos, false)
+            .finalize_and_apply(TextWindowTailFinalizeState::new(
+                cursor_info,
+                row_geometry,
+                row_y_positions,
+                row_source_start,
+                source_render.output_render(),
+            ));
+        let retry = tail_context
+            .visibility_retry_request(source_render.output_rows(), charpos, false, buf_access)
+            .decide();
+        return BufferSourcePostLoopRenderOutcome {
+            retry,
+            rendered_rows_len: source_render.output_rows_len(),
+            cursor_publish_status: finalized.cursor_publish_status(),
+            eob_cursor_row: BufferSourceEobCursorRow::Unchanged,
+        };
+    }
     let boundary = if text.last() == Some(&b'\n')
         && row_source_start.covers(charpos)
         && !row_source_start.covers(charpos.saturating_sub(1))

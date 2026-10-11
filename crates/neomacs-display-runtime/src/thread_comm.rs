@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 mod frame_mailbox;
+mod frame_opacity;
 pub use frame_mailbox::{FrameReceiver, FrameSender, QueuedPresentation, SupersededPresentation};
+pub use frame_opacity::FrameOpacityState;
 use neomacs_display_protocol::{
     ImageColorContext, ImageId, ImageLoadToken, ImageMaskPolicy, ImageRealization, ImageRotation,
     ImageSizeSpec, SelectionOwner, VideoId,
@@ -329,6 +331,8 @@ pub enum LifecycleCommand {
 /// Window and chrome management commands.
 #[derive(Debug)]
 pub enum WindowCommand {
+    /// Wake presentation after a synchronous CPU opacity control operation.
+    RefreshFrameOpacity,
     /// Paint an evaluator-resolved viewport while canonical layout is pending.
     ScrollPreview(neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent),
     /// Scroll blit pixels within pixel buffer
@@ -489,6 +493,10 @@ pub enum AssetCommand {
         /// Colors used by face-sensitive image formats and image-cache identity.
         colors: ImageColorContext,
         mask: ImageMaskPolicy,
+        /// Whether the renderer may materialize animation this source
+        /// computes itself (SVG SMIL). The disabled default is GNU's
+        /// behavior: one static frame.
+        animation: neomacs_display_protocol::ImageAnimationPolicy,
         frame: neomacs_display_protocol::ImageFrameIndex,
         sequence: neomacs_display_protocol::ImageSequenceId,
         /// The looking frame's resolved GNU `max-image-size`
@@ -513,6 +521,8 @@ pub enum AssetCommand {
         /// Colors used by face-sensitive image formats and image-cache identity.
         colors: ImageColorContext,
         mask: ImageMaskPolicy,
+        /// See [`AssetCommand::ImageLoadFile::animation`].
+        animation: neomacs_display_protocol::ImageAnimationPolicy,
         frame: neomacs_display_protocol::ImageFrameIndex,
         sequence: neomacs_display_protocol::ImageSequenceId,
         /// See [`AssetCommand::ImageLoadFile::limit`].
@@ -998,6 +1008,7 @@ pub struct ThreadComms {
 
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
+    pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
 }
 
 impl ThreadComms {
@@ -1016,6 +1027,7 @@ impl ThreadComms {
             input_rx,
             capabilities,
             tooltip_context: Arc::default(),
+            frame_opacity: Arc::default(),
         }
     }
 
@@ -1023,6 +1035,7 @@ impl ThreadComms {
     pub fn split(self) -> (EmacsComms, RenderComms) {
         let emacs = EmacsComms {
             tooltip_context: self.tooltip_context.clone(),
+            frame_opacity: Arc::clone(&self.frame_opacity),
             frame_tx: self.frame_tx,
             cmd_tx: self.cmd_tx,
             input_rx: self.input_rx,
@@ -1034,6 +1047,7 @@ impl ThreadComms {
             native_window_waits: None,
             input_stream: Default::default(),
             tooltip_context: self.tooltip_context,
+            frame_opacity: self.frame_opacity,
             frame_rx: self.frame_rx,
             cmd_rx: self.cmd_rx,
             input_tx: self.input_tx,
@@ -1057,6 +1071,7 @@ pub struct EmacsComms {
     pub input_rx: Receiver<InputEvent>,
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
+    pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
 }
 
 /// Render thread communication handle
@@ -1070,6 +1085,7 @@ pub struct RenderComms {
     pub input_tx: Sender<InputEvent>,
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
+    pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
 }
 
 impl RenderComms {
@@ -1301,6 +1317,7 @@ impl RenderComms {
 }
 
 #[cfg(test)]
+#[path = "thread_comm/tests/thread_comm_test.rs"]
 mod tests;
 
 #[cfg(test)]

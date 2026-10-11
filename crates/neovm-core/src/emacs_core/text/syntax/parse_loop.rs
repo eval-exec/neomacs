@@ -827,5 +827,5 @@ pub(super) fn run_parse_loop<M: ScanMode>(
 }
 
 #[cfg(test)]
-#[path = "tests/parse_loop_resume.rs"]
+#[path = "tests/parse_loop_resume_test.rs"]
 mod resume_tests;

@@ -1,0 +1,6 @@
+(let ((l (list ?a ?b))) (setcdr (cdr l) l)
+ (list (condition-case e (concat "x" l) (error (list (car e) (car (cadr e)))))
+       (condition-case e (concat l) (error (list (car e) (car (cadr e)))))
+       (condition-case e (seq-into l 'string) (error (list (car e) (car (cadr e)))))
+       (condition-case e (concat (cons 'bad l)) (error (list (car e) (car (cadr e)))))
+       (concat '(97 98) [233]) (concat (string-to-multibyte "ab") '(99))))

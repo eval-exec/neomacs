@@ -37,5 +37,5 @@ pub(super) fn aligned_after_string_start(
 }
 
 #[cfg(test)]
-#[path = "tests/mini_source_start.rs"]
+#[path = "tests/mini_source_start_test.rs"]
 mod tests;

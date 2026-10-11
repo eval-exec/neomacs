@@ -95,6 +95,14 @@ impl<'rows, 'emit, 'surface>
         } = request;
         let buffer = face_resolution_context.buffer();
 
+        // The whole-row route cannot certify a stop inside an ordinary
+        // glyph. Let the canonical element arm capture a truncated query's
+        // target before it reads the physical line's invisible tail.
+        if params.query_target.is_some() && params.wrap_mode == crate::types::LineWrapMode::Truncate
+        {
+            return PlainRowRouteOutcome::NotRouted;
+        }
+
         // Once whole-run admission declined, the canonical producer renders
         // scalar items until the next row or source boundary. Re-entering
         // bulk measurement here changes grapheme advances mid-row.

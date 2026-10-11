@@ -15,8 +15,10 @@
 //!
 //! The parent `process` module keeps the Lisp side (turning a `ProcStatSnapshot`
 //! into the `process-attributes` alist and the time/percentage math); this
-//! module only gathers raw OS data. A native Darwin/BSD `sysctl` backend or a
-//! Windows toolhelp backend would slot in here behind the same functions.
+//! module only gathers raw OS data. Darwin reads process state through its
+//! typed libproc API; the other snapshot fields still use the sparse fallback.
+//! Additional native Darwin/BSD or Windows queries belong behind these same
+//! functions.
 
 use std::ffi::CStr;
 
@@ -49,8 +51,8 @@ pub struct ProcStatSnapshot {
 }
 
 impl ProcStatSnapshot {
-    /// The all-zero snapshot used when `/proc/<pid>/stat` is unreadable but the
-    /// process still exists (matches GNU returning a sparse alist).
+    /// The all-zero snapshot used when native data is unavailable but the
+    /// process still exists. Unsupported fields retain these fallback values.
     pub fn fallback(_pid: i64) -> Self {
         Self {
             comm: String::new(),
@@ -89,11 +91,12 @@ pub fn list_process_ids() -> Vec<i64> {
         .collect()
 }
 
+#[cfg(not(target_os = "macos"))]
 fn parse_stat_i64_field(fields: &[&str], index: usize) -> Option<i64> {
     fields.get(index)?.parse::<i64>().ok()
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn page_size_kb() -> i64 {
     let page_size_bytes = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page_size_bytes <= 0 {
@@ -227,6 +230,7 @@ pub fn total_memory_kb() -> Option<i64> {
 /// Parse `/proc/<pid>/stat`. The `comm` field is delimited by parentheses and
 /// may itself contain spaces, so it is extracted between the first `(` and last
 /// `)` before the remaining space-separated fields are indexed.
+#[cfg(not(target_os = "macos"))]
 pub fn process_stat(pid: i64) -> Option<ProcStatSnapshot> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let open_paren = stat.find('(')?;
@@ -288,6 +292,44 @@ pub fn process_stat(pid: i64) -> Option<ProcStatSnapshot> {
         rss,
         ttname,
     })
+}
+
+/// GNU Darwin's state letters (`sysdep.c:4337-4363`). libproc supplies the same
+/// kernel `p_stat` without duplicating the SDK's `kinfo_proc` layout in Rust.
+#[cfg(target_os = "macos")]
+pub fn process_stat(pid: i64) -> Option<ProcStatSnapshot> {
+    let pid = libc::pid_t::try_from(pid).ok()?;
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>();
+    // SAFETY: info is correctly aligned writable storage for the typed SDK
+    // record. For PROC_PIDTBSDINFO, arg=1 includes unreaped zombies; this is
+    // introspection only, so it leaves the child's wait status available.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            1,
+            info.as_mut_ptr().cast(),
+            size as libc::c_int,
+        )
+    };
+    if read != size as libc::c_int {
+        return None;
+    }
+    // SAFETY: libproc returned the complete record, whose fields are integer
+    // values and byte arrays. No padding is inspected.
+    let info = unsafe { info.assume_init() };
+    let state = match info.pbi_status {
+        libc::SRUN => "R",
+        libc::SSLEEP => "S",
+        libc::SZOMB => "Z",
+        libc::SSTOP => "T",
+        libc::SIDL => "I",
+        _ => "",
+    };
+    let mut snapshot = ProcStatSnapshot::fallback(i64::from(pid));
+    snapshot.state = state.to_owned();
+    Some(snapshot)
 }
 
 /// The process's effective `(uid, gid)` from `/proc/<pid>/status`' `Uid:` /

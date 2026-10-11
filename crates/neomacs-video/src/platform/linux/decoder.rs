@@ -24,8 +24,8 @@ use crate::{
     BiPlanarVideoFormat, FrameImportPolicy, FrameTiming, InitialPlayback, LoopMode, MediaTime,
     MissingVideoPlugin, MissingVideoPlugins, PackedVideoFormat, PixelAspectRatio, PlaybackAction,
     PlaybackEpoch, VideoChromaLocation, VideoColorPrimaries, VideoColorRange, VideoColorimetry,
-    VideoCommand, VideoCommandError, VideoCompositorImport, VideoDecodeResidency, VideoFrameFormat,
-    VideoDecoderIdentity, VideoDecoderKind, VideoGeometry, VideoInstallerHint,
+    VideoCommand, VideoCommandError, VideoCompositorImport, VideoDecodeResidency,
+    VideoDecoderIdentity, VideoDecoderKind, VideoFrameFormat, VideoGeometry, VideoInstallerHint,
     VideoMatrixCoefficients, VideoRotation, VideoSessionState, VideoSource,
     VideoTransferCharacteristic, VideoWake,
 };
@@ -69,9 +69,7 @@ enum WorkerCommand {
     SetRate(f64),
     SetLoop(LoopMode),
     SetPresentation(crate::PresentationVisibility),
-    InstallLinearFallback {
-        generation: DecoderOutputGeneration,
-    },
+    InstallLinearFallback { generation: DecoderOutputGeneration },
     Close,
 }
 
@@ -267,10 +265,8 @@ impl DecoderBackend for GstreamerDecoder {
             .workers
             .get(&id)
             .ok_or_else(|| format!("video {} is not open", id.get()))?;
-        let transition = request_linear_fallback(
-            &worker.linear_fallback_requested,
-            rejection.generation,
-        );
+        let transition =
+            request_linear_fallback(&worker.linear_fallback_requested, rejection.generation);
         if let DecoderReconfiguration::Applied { generation } = transition {
             worker
                 .commands
@@ -544,8 +540,7 @@ fn run_worker_inner(
             let caps = sample
                 .caps()
                 .ok_or_else(|| "decoded video sample has no caps".to_owned())?;
-            if dma_drm_negotiation == DmaDrmNegotiation::LinearFallback
-                && is_modern_dma_drm(caps)?
+            if dma_drm_negotiation == DmaDrmNegotiation::LinearFallback && is_modern_dma_drm(caps)?
             {
                 // AppSink can still contain buffers queued under the old caps
                 // when the RECONFIGURE event is processed. Those buffers are
@@ -555,10 +550,7 @@ fn run_worker_inner(
                 continue;
             }
             if let Some(rejected) = rejected_dma_drm_format(caps, native_formats)? {
-                match request_linear_fallback(
-                    &linear_fallback_requested,
-                    output_generation,
-                ) {
+                match request_linear_fallback(&linear_fallback_requested, output_generation) {
                     DecoderReconfiguration::Applied { generation } => {
                         install_linear_fallback(
                             &appsink,
@@ -961,7 +953,10 @@ fn is_modern_dma_drm(caps: &gst::CapsRef) -> Result<bool, String> {
 /// callback. A downstream-query pad probe gives us the same safe allocation
 /// seam without raising Neomacs's minimum GStreamer ABI.
 fn advertise_required_video_meta(query: &mut gst::query::Allocation) {
-    if query.find_allocation_meta::<gst_video::VideoMeta>().is_none() {
+    if query
+        .find_allocation_meta::<gst_video::VideoMeta>()
+        .is_none()
+    {
         query.add_allocation_meta::<gst_video::VideoMeta>(None);
     }
 }
@@ -1003,11 +998,9 @@ fn decode_sample(
             renderer_drm_device,
             pipeline_drm_topology.decoder,
         ) {
-            (
-                VideoDecoderKind::Hardware,
-                Some(renderer),
-                PipelineDrmIdentity::Single(decoder),
-            ) if renderer == decoder => {
+            (VideoDecoderKind::Hardware, Some(renderer), PipelineDrmIdentity::Single(decoder))
+                if renderer == decoder =>
+            {
                 VideoDecodeResidency::HardwareDecoderReportsRendererDevice
             }
             (VideoDecoderKind::Hardware, _, _) => VideoDecodeResidency::HardwareUnverified,
@@ -1625,4 +1618,5 @@ fn frame_format_from_fourcc(fourcc: u32) -> Result<VideoFrameFormat, String> {
 }
 
 #[cfg(test)]
+#[path = "decoder/tests/decoder_test.rs"]
 mod tests;

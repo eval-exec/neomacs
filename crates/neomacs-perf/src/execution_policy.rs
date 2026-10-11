@@ -33,7 +33,6 @@ impl FromStr for ExecutionOverride {
                 | "NEOVM_REGEX_DFA_COLD"
                 | "NEOVM_REGEX_DFA_FIRST_STEP"
                 | "NEOVM_REGEX_SUFFIX_LITERAL"
-                | "NEOVM_SORT_CAPTURE"
                 | "NEOVM_COMPARE_STRINGS_POS_CACHE"
                 | "NEOVM_REGEX_SHORT_LITERAL"
                 | "NEOVM_EMACS_MULE_PREPARED"
@@ -59,7 +58,6 @@ impl FromStr for ExecutionOverride {
                     )
                 }
                 "NEOVM_REGEX_DFA" => matches!(value, "off" | "on" | "verify"),
-                "NEOVM_SORT_CAPTURE" => matches!(value, "off" | "on"),
                 "NEOVM_EMACS_MULE_PREPARED" => {
                     matches!(value, "0" | "off" | "false" | "no" | "1" | "on" | "true")
                 }
@@ -167,3 +165,7 @@ impl ExecutionOverrides {
 #[cfg(test)]
 #[path = "execution_policy/tests/execution_policy_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "execution_policy/tests/gnu_sort_capture.rs"]
+mod gnu_sort_capture;

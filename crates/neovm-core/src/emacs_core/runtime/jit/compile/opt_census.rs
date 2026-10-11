@@ -222,5 +222,5 @@ impl CompiledLeaf {
 }
 
 #[cfg(test)]
-#[path = "tests/opt_census.rs"]
+#[path = "tests/opt_census_test.rs"]
 mod tests;

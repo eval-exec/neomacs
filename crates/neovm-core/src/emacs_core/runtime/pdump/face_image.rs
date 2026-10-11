@@ -216,8 +216,7 @@ fn write_font_slant(out: &mut Vec<u8>, slant: &DumpFontSlant) {
 
 fn read_font_slant(cursor: &mut Cursor<'_>) -> Result<DumpFontSlant, DumpError> {
     let tag = cursor.read_u8("font slant")?;
-    DumpFontSlant::try_from(tag)
-        .map_err(|_| DumpError::ImageFormatError(format!("unknown font slant tag {tag}")))
+    DumpFontSlant::try_from(tag).map_err(DumpError::from)
 }
 
 fn write_opt_font_slant(out: &mut Vec<u8>, slant: Option<&DumpFontSlant>) {
@@ -238,36 +237,12 @@ fn read_opt_font_slant(cursor: &mut Cursor<'_>) -> Result<Option<DumpFontSlant>,
     }
 }
 
-const UNDERLINE_LINE: u8 = 0;
-const UNDERLINE_WAVE: u8 = 1;
-const UNDERLINE_DOT: u8 = 2;
-const UNDERLINE_DASH: u8 = 3;
-const UNDERLINE_DOUBLE_LINE: u8 = 4;
-
 fn write_underline_style(out: &mut Vec<u8>, style: &DumpUnderlineStyle) {
-    write_u8(
-        out,
-        match style {
-            DumpUnderlineStyle::Line => UNDERLINE_LINE,
-            DumpUnderlineStyle::Wave => UNDERLINE_WAVE,
-            DumpUnderlineStyle::Dot => UNDERLINE_DOT,
-            DumpUnderlineStyle::Dash => UNDERLINE_DASH,
-            DumpUnderlineStyle::DoubleLine => UNDERLINE_DOUBLE_LINE,
-        },
-    );
+    write_u8(out, (*style).into());
 }
 
 fn read_underline_style(cursor: &mut Cursor<'_>) -> Result<DumpUnderlineStyle, DumpError> {
-    match cursor.read_u8("underline style")? {
-        UNDERLINE_LINE => Ok(DumpUnderlineStyle::Line),
-        UNDERLINE_WAVE => Ok(DumpUnderlineStyle::Wave),
-        UNDERLINE_DOT => Ok(DumpUnderlineStyle::Dot),
-        UNDERLINE_DASH => Ok(DumpUnderlineStyle::Dash),
-        UNDERLINE_DOUBLE_LINE => Ok(DumpUnderlineStyle::DoubleLine),
-        other => Err(DumpError::ImageFormatError(format!(
-            "unknown underline style tag {other}"
-        ))),
-    }
+    DumpUnderlineStyle::try_from(cursor.read_u8("underline style")?).map_err(DumpError::from)
 }
 
 fn write_underline(out: &mut Vec<u8>, underline: &DumpUnderline) {
@@ -306,30 +281,12 @@ fn read_opt_underline(cursor: &mut Cursor<'_>) -> Result<Option<DumpUnderline>, 
     }
 }
 
-const BOX_FLAT: u8 = 0;
-const BOX_RAISED: u8 = 1;
-const BOX_PRESSED: u8 = 2;
-
 fn write_box_style(out: &mut Vec<u8>, style: &DumpBoxStyle) {
-    write_u8(
-        out,
-        match style {
-            DumpBoxStyle::Flat => BOX_FLAT,
-            DumpBoxStyle::Raised => BOX_RAISED,
-            DumpBoxStyle::Pressed => BOX_PRESSED,
-        },
-    );
+    write_u8(out, (*style).into());
 }
 
 fn read_box_style(cursor: &mut Cursor<'_>) -> Result<DumpBoxStyle, DumpError> {
-    match cursor.read_u8("box style")? {
-        BOX_FLAT => Ok(DumpBoxStyle::Flat),
-        BOX_RAISED => Ok(DumpBoxStyle::Raised),
-        BOX_PRESSED => Ok(DumpBoxStyle::Pressed),
-        other => Err(DumpError::ImageFormatError(format!(
-            "unknown box style tag {other}"
-        ))),
-    }
+    DumpBoxStyle::try_from(cursor.read_u8("box style")?).map_err(DumpError::from)
 }
 
 fn write_box_border(out: &mut Vec<u8>, border: &DumpBoxBorder) {
@@ -611,3 +568,7 @@ pub(crate) fn empty_face_table() -> DumpFaceTable {
 #[cfg(test)]
 #[path = "face_image/tests/face_image_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "face_image/tests/enum_decode_test.rs"]
+mod enum_decode_tests;

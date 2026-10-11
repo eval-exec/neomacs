@@ -208,33 +208,18 @@ fn read_symbol_data(cursor: &mut Cursor<'_>) -> Result<DumpSymbolData, DumpError
 /// (`src/data.c:2112-2140`), and the descriptor is a process-lifetime pointer,
 /// so the image records the KIND and `load_obarray` rebuilds an equivalent one
 /// from the default it also carries.
-const LOCALIZED_FWD_NONE: u8 = 0;
-const LOCALIZED_FWD_BOOL: u8 = 1;
-const LOCALIZED_FWD_INT: u8 = 2;
-const LOCALIZED_FWD_OBJ: u8 = 3;
-const LOCALIZED_FWD_KBOARD: u8 = 4;
-
+// None occupies byte zero; the enum owns the four nonzero wire codes.
 fn encode_localized_forwarder(kind: Option<DumpLocalizedForwarder>) -> u8 {
-    match kind {
-        None => LOCALIZED_FWD_NONE,
-        Some(DumpLocalizedForwarder::Bool) => LOCALIZED_FWD_BOOL,
-        Some(DumpLocalizedForwarder::Int) => LOCALIZED_FWD_INT,
-        Some(DumpLocalizedForwarder::Obj) => LOCALIZED_FWD_OBJ,
-        Some(DumpLocalizedForwarder::Kboard) => LOCALIZED_FWD_KBOARD,
-    }
+    kind.map_or(0, u8::from)
 }
 
 fn decode_localized_forwarder(tag: u8) -> Result<Option<DumpLocalizedForwarder>, DumpError> {
-    match tag {
-        LOCALIZED_FWD_NONE => Ok(None),
-        LOCALIZED_FWD_BOOL => Ok(Some(DumpLocalizedForwarder::Bool)),
-        LOCALIZED_FWD_INT => Ok(Some(DumpLocalizedForwarder::Int)),
-        LOCALIZED_FWD_OBJ => Ok(Some(DumpLocalizedForwarder::Obj)),
-        LOCALIZED_FWD_KBOARD => Ok(Some(DumpLocalizedForwarder::Kboard)),
-        other => Err(DumpError::ImageFormatError(format!(
-            "unknown localized forwarder tag {other}"
-        ))),
+    if tag == 0 {
+        return Ok(None);
     }
+    DumpLocalizedForwarder::try_from(tag)
+        .map(Some)
+        .map_err(DumpError::from)
 }
 
 fn write_symbol_val(out: &mut Vec<u8>, val: &DumpSymbolVal) -> Result<(), DumpError> {
@@ -305,3 +290,7 @@ fn read_symbol_val(cursor: &mut Cursor<'_>) -> Result<DumpSymbolVal, DumpError> 
 #[cfg(test)]
 #[path = "obarray_image/tests/obarray_image_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "obarray_image/tests/enum_decode_test.rs"]
+mod enum_decode_tests;

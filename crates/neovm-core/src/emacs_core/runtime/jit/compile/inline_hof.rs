@@ -17,7 +17,7 @@ pub(crate) use heap_policy::hoist_callback_heap_ptr;
 mod captures;
 
 #[cfg(test)]
-#[path = "../tests/inline_hof_headers.rs"]
+#[path = "../tests/inline_hof_headers_test.rs"]
 mod tests;
 
 /// Emit one admitted map call, including its internal callback CFG. All

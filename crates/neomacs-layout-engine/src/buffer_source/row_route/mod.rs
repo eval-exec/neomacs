@@ -618,4 +618,5 @@ impl PlainRowPlan {
 }
 
 #[cfg(test)]
+#[path = "tests/row_route_test.rs"]
 mod tests;

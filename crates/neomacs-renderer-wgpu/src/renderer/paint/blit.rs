@@ -35,7 +35,7 @@ impl WgpuRenderer {
                 size.width(),
                 size.height(),
                 wgpu::Color::TRANSPARENT,
-                &self.pipelines.image,
+                &self.pipelines.surface_copy,
             ),
             BlitPlacement::Region { destination, .. } => (
                 destination.x,
@@ -52,18 +52,37 @@ impl WgpuRenderer {
                     target.surface.device_width().get(),
                     target.surface.device_height().get(),
                 );
+                // Native sRGB content stores encoded-premultiplied RGB.
+                // Clears are supplied in linear space before attachment encoding,
+                // so perform the same encode -> multiply -> decode as fs_native.
+                let straight = if self.surface_format.is_srgb() {
+                    bg.linear_to_srgb()
+                } else {
+                    bg
+                };
+                let premultiplied = neomacs_display_protocol::Color::new(
+                    straight.r * bg.a,
+                    straight.g * bg.a,
+                    straight.b * bg.a,
+                    bg.a,
+                );
+                let clear = if self.surface_format.is_srgb() {
+                    premultiplied.srgb_to_linear()
+                } else {
+                    premultiplied
+                };
                 (
                     insets.left as f32 / scale,
                     insets.top as f32 / scale,
                     w as f32 / scale,
                     h as f32 / scale,
                     wgpu::Color {
-                        r: (bg.r * bg.a) as f64,
-                        g: (bg.g * bg.a) as f64,
-                        b: (bg.b * bg.a) as f64,
-                        a: bg.a as f64,
+                        r: clear.r as f64,
+                        g: clear.g as f64,
+                        b: clear.b as f64,
+                        a: clear.a as f64,
                     },
-                    &self.pipelines.surface_copy,
+                    &self.pipelines.native_copy,
                 )
             }
         };

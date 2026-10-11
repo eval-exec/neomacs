@@ -24,7 +24,7 @@ use std::thread::JoinHandle;
 const INOTIFY_KEY: usize = 1;
 
 #[cfg(test)]
-#[path = "tests/worker.rs"]
+#[path = "tests/worker_test.rs"]
 mod worker_test;
 
 #[cfg(test)]

@@ -656,5 +656,5 @@ fn scale_channel(sum: i64, total: i64) -> u8 {
 }
 
 #[cfg(test)]
-#[path = "image_scale/tests.rs"]
+#[path = "image_scale/tests/image_scale_test.rs"]
 mod tests;

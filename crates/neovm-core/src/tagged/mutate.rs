@@ -78,22 +78,21 @@ std::thread_local! {
 }
 
 #[cfg(debug_assertions)]
-pub(crate) struct HeapMutClosureGuard(bool);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct HeapMutClosureGuard {
+    _scope: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
+}
+#[cfg(debug_assertions)]
+static_assertions::assert_not_impl_any!(HeapMutClosureGuard: Send, Sync);
 
 #[cfg(debug_assertions)]
 impl HeapMutClosureGuard {
     #[inline]
     pub(crate) fn enter() -> Self {
-        Self(IN_HEAP_MUT_CLOSURE.with(|active| active.replace(true)))
-    }
-}
-
-#[cfg(debug_assertions)]
-impl Drop for HeapMutClosureGuard {
-    #[inline]
-    fn drop(&mut self) {
-        // Restore the enclosing extent on both a normal return and unwind.
-        IN_HEAP_MUT_CLOSURE.with(|active| active.set(self.0));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&IN_HEAP_MUT_CLOSURE, true),
+        }
     }
 }
 
@@ -200,6 +199,25 @@ pub fn with_vector_data_mut<R>(
     #[cfg(debug_assertions)]
     let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { (*ptr).data.ensure_owned() }))
+}
+
+/// Bulk slot mutation without retaining a Rust reference to the Vec header
+/// or backing across reads of aliased Lisp values. The caller owns exclusive
+/// mutation of this vector; collector snapshots use the existing SATB/COW
+/// protocol. No shared state or assumption of a single global mutator is added.
+///
+/// # Safety
+/// The closure must not collect, replace/reallocate the backing, or retain the
+/// pointer after returning. It may only access slots within the supplied length.
+#[inline]
+pub(crate) unsafe fn with_vector_slots_mut<R>(
+    value: TaggedValue,
+    f: impl FnOnce(*mut TaggedValue, usize) -> R,
+) -> Option<R> {
+    let (slots, len) = with_vector_data_mut(value, |data| (data.as_mut_ptr(), data.len()))?;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
+    Some(f(slots, len))
 }
 
 #[inline]
@@ -398,11 +416,79 @@ pub fn with_hash_table_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
+    if super::gc::concurrent_hash_mutation_active() {
+        return with_hash_table_mut_concurrent(value, f);
+    }
+    // SAFETY: this mutation contains no collector transition. The caller's
+    // closure obeys the ordinary heap-mutation contract, which forbids GC.
+    unsafe { with_hash_table_mut_inactive(value, f) }
+}
+
+/// Base mutation body for a caller that has already rejected Tier-H activation.
+///
+/// # Safety
+/// The installed mutator's Tier-H snapshot must stay inactive from the caller's
+/// mode check until this accessor returns. Do not carry that decision across a
+/// Lisp callback or GC safepoint. The closure must not invoke Lisp or collect.
+#[inline]
+pub(crate) unsafe fn with_hash_table_mut_inactive<R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
+    debug_assert!(!super::gc::concurrent_hash_mutation_active());
     LispCollectionRevision::changed(value);
     if value.veclike_type()? != VecLikeType::HashTable {
         return None;
     }
     note_heap_write(value, HeapWriteKind::HashTableData);
+    let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
+    unsafe {
+        // Lazy dump hydration before the caller sees the table (see
+        // `Value::as_hash_table`).
+        if (*ptr).table.needs_hydration() {
+            (*ptr).table.hydrate_pending();
+        }
+        // Whatever `f` does to the table, a `switch` plan compiled from its
+        // keys no longer describes it. A wholesale replacement (`*table =
+        // other`) installs a table whose cache starts empty.
+        (*ptr).table.data.switch_plan.invalidate();
+    }
+    // Nor does JIT code that answers it inline behind its epoch. The new
+    // epoch is stored before `f`, so even a mutation `f` abandons half way
+    // is covered, and again after it: a wholesale replacement installs
+    // another table's epoch (a fresh table's 0, a copy's), which could
+    // equal one compiled against this object.
+    let epoch = unsafe { (*ptr).table.data.switch_epoch.wrapping_add(1) };
+    unsafe { (*ptr).table.data.switch_epoch = epoch };
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
+    let result = f(unsafe { &mut (*ptr).table });
+    unsafe { (*ptr).table.data.switch_epoch = epoch };
+    Some(result)
+}
+
+/// Keep the snapshot, mutation lease and unwind/drop paths in the active clone.
+/// The caller has already selected an active Tier-H snapshot. The lease covers
+/// preimage enumeration and the mutable borrow, and its Arc lives throughout.
+#[cold]
+#[inline(never)]
+pub(crate) fn with_hash_table_mut_concurrent<R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
+    if value.veclike_type()? != VecLikeType::HashTable {
+        return None;
+    }
+    let snapshot = super::gc::concurrent_hash_snapshot(value);
+    let mut mutation = snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.lock_mutation(value.as_veclike_ptr().unwrap() as usize));
+    // The shared entry mutex must precede even journal/SATB preimage reads.
+    LispCollectionRevision::changed(value);
+    note_heap_write(value, HeapWriteKind::HashTableData);
+    if let Some(guard) = mutation.as_mut() {
+        super::gc::prepare_concurrent_hash_write(value, guard);
+    }
     let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
     unsafe {
         // Lazy dump hydration before the caller sees the table (see
@@ -555,5 +641,5 @@ pub fn with_xwidget_view_mut<R>(
 
 #[cfg(test)]
 #[cfg(debug_assertions)]
-#[path = "gc/tests/heap_mut_closure_tests.rs"]
+#[path = "gc/tests/heap_mut_closure_test.rs"]
 mod gc_heap_mut_closure_tests;

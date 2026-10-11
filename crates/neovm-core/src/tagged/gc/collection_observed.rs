@@ -344,9 +344,9 @@ fn with_collection_observed_registry_locked<R>(f: impl FnOnce() -> R) -> R {
 }
 
 #[cfg(test)]
-#[path = "tests/collection_observed_tests.rs"]
+#[path = "tests/collection_observed_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/collection_observed_registry_tests.rs"]
+#[path = "tests/collection_observed_registry_test.rs"]
 mod registry_tests;

@@ -390,14 +390,22 @@ impl ImageRgb {
         self.0
     }
 
+    /// The three channels, for the consumers GNU treats as opaque -- XPM
+    /// paints an unresolvable color key with the frame foreground pixel and no
+    /// alpha of its own (`src/image.c:6518-6538`), so no alpha travels here.
     #[must_use]
-    pub const fn rgba8(self) -> [u8; 4] {
+    pub const fn rgb8(self) -> [u8; 3] {
         [
             ((self.0 >> 16) & 0xff) as u8,
             ((self.0 >> 8) & 0xff) as u8,
             (self.0 & 0xff) as u8,
-            0xff,
         ]
+    }
+
+    #[must_use]
+    pub const fn rgba8(self) -> [u8; 4] {
+        let [red, green, blue] = self.rgb8();
+        [red, green, blue, 0xff]
     }
 }
 
@@ -410,6 +418,16 @@ impl ImageRgb {
 pub struct ImageColorContext {
     foreground: ImageRgb,
     background: ImageRgb,
+    /// What a decoder paints a pixel whose key resolves to no color with: the
+    /// frame's foreground, which GNU keeps equal to the `default` face's
+    /// foreground (read as `FRAME_FOREGROUND_PIXEL` at src/image.c:6518 and
+    /// used at :6537-6538; the frame-parameter sync is src/xfaces.c:4394-4404).
+    ///
+    /// Deliberately apart from `foreground`: an image is *displayed under* a
+    /// face and may carry a `:foreground` of its own, and GNU reads neither for
+    /// this (issue #550).
+    #[serde(default)]
+    frame_foreground: ImageRgb,
     #[serde(default)]
     background_policy: ImageBackgroundPolicy,
 }
@@ -435,11 +453,15 @@ pub enum ImageBackgroundPolicy {
 }
 
 impl ImageColorContext {
+    /// The face's colors, with the frame foreground defaulted to the face's own:
+    /// callers that know the frame replace it with
+    /// [`Self::with_frame_foreground`].
     #[must_use]
     pub const fn from_pixels(foreground: u32, background: u32) -> Self {
         Self {
             foreground: ImageRgb::from_pixel(foreground),
             background: ImageRgb::from_pixel(background),
+            frame_foreground: ImageRgb::from_pixel(foreground),
             background_policy: ImageBackgroundPolicy::FaceColor,
         }
     }
@@ -452,6 +474,18 @@ impl ImageColorContext {
     #[must_use]
     pub const fn background(self) -> ImageRgb {
         self.background
+    }
+
+    /// GNU's `FRAME_FOREGROUND_PIXEL` for the frame this image belongs to.
+    #[must_use]
+    pub const fn frame_foreground(self) -> ImageRgb {
+        self.frame_foreground
+    }
+
+    #[must_use]
+    pub const fn with_frame_foreground(mut self, frame_foreground: u32) -> Self {
+        self.frame_foreground = ImageRgb::from_pixel(frame_foreground);
+        self
     }
 
     #[must_use]
@@ -638,6 +672,67 @@ impl ImageCacheUsage {
     }
 }
 
+/// Whether the renderer may materialize animation a source computes itself.
+///
+/// GNU rasterizes an SVG through librsvg, which renders one static frame and
+/// has no document clock, so GNU reports no animation for SVG at all. A
+/// port that synthesizes frames from an SMIL timeline therefore changes
+/// observable behavior (`image-multi-frame-p`, `:index` walking) and must be
+/// opt-in: the default stays the GNU-compatible static frame, and enabling
+/// the policy is the documented divergence point.
+///
+/// The optional `fps` is a sampling ceiling that doubles as the memory
+/// bound — it caps the distinct frames one loop can produce
+/// ([`crate::animated_visual::SampleGrid`]).
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize,
+)]
+pub struct ImageAnimationPolicy {
+    enabled: bool,
+    fps: Option<u32>,
+}
+
+impl ImageAnimationPolicy {
+    /// The GNU-compatible default: animation is not materialized.
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            enabled: false,
+            fps: None,
+        }
+    }
+
+    /// Enable computed animation, optionally capping the sampling rate.
+    ///
+    /// A zero or negative rate cap is meaningless; it is dropped rather than
+    /// carried, so the renderer's default ceiling applies.
+    #[must_use]
+    pub const fn enabled(fps: Option<u32>) -> Self {
+        match fps {
+            Some(fps) if fps > 0 => Self {
+                enabled: true,
+                fps: Some(fps),
+            },
+            _ => Self {
+                enabled: true,
+                fps: None,
+            },
+        }
+    }
+
+    /// Whether computed animation may run for this source.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// The sampling ceiling, when one was stated.
+    #[must_use]
+    pub const fn fps(&self) -> Option<u32> {
+        self.fps
+    }
+}
+
 /// GNU-compatible delay for the currently decoded animation frame.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ImageFrameDelay {
@@ -688,12 +783,25 @@ impl ImageFrameDelay {
 pub struct ImageEmbeddedMetadata {
     frame_count: Option<std::num::NonZeroU32>,
     frame_delay: Option<ImageFrameDelay>,
+    /// Neomacs computed sources can have a prefix played only once.
+    #[serde(default)]
+    introduction: Option<ImageSequenceIntroduction>,
+}
+
+/// A prefix and its repeating tail have independently quantized delays.
+/// Keeping these fields together prevents partial playback descriptions.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+struct ImageSequenceIntroduction {
+    loop_start: std::num::NonZeroU32,
+    prefix_delay: ImageFrameDelay,
+    loop_delay: ImageFrameDelay,
 }
 
 impl ImageEmbeddedMetadata {
     pub const EMPTY: Self = Self {
         frame_count: None,
         frame_delay: None,
+        introduction: None,
     };
 
     #[must_use]
@@ -701,6 +809,52 @@ impl ImageEmbeddedMetadata {
         Self {
             frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
             frame_delay: Some(frame_delay),
+            introduction: None,
+        }
+    }
+
+    /// Set the first repeatable frame, validating it against this sequence.
+    #[must_use]
+    pub fn with_introduction(
+        mut self,
+        start: ImageFrameIndex,
+        prefix_delay: ImageFrameDelay,
+        loop_delay: ImageFrameDelay,
+    ) -> Option<Self> {
+        let start = u32::try_from(start.get()).ok()?;
+        if start >= self.frame_count()? {
+            return None;
+        }
+        self.introduction =
+            std::num::NonZeroU32::new(start).map(|loop_start| ImageSequenceIntroduction {
+                loop_start,
+                prefix_delay,
+                loop_delay,
+            });
+        Some(self)
+    }
+
+    #[must_use]
+    pub const fn loop_start(&self) -> Option<u32> {
+        match &self.introduction {
+            Some(intro) => Some(intro.loop_start.get()),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn intro_delay(&self) -> Option<ImageFrameDelay> {
+        match &self.introduction {
+            Some(intro) => Some(intro.prefix_delay),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn loop_delay(&self) -> Option<ImageFrameDelay> {
+        match &self.introduction {
+            Some(intro) => Some(intro.loop_delay),
+            None => None,
         }
     }
 

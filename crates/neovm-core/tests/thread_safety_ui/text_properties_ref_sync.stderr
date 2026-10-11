@@ -1,0 +1,17 @@
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<TextPropertiesRef<'static>>`, but its trait bounds were not satisfied
+  --> tests/thread_safety_ui/text_properties_ref_sync.rs:11:51
+   |
+ 4 | struct ThreadTransfer<T>(PhantomData<T>);
+   | ------------------------ associated function or constant `transfer` not found for this struct
+...
+11 |     ThreadTransfer::<TextPropertiesRef<'static>>::transfer();
+   |                                                   ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<TextPropertiesRef<'static>>` due to unsatisfied trait bounds
+   |
+  ::: src/buffer/text_props.rs
+   |
+   | pub struct TextPropertiesRef<'a> {
+   | -------------------------------- doesn't satisfy `TextPropertiesRef<'static>: Sync`
+   |
+   = note: the following trait bounds were not satisfied:
+           `*const (): Sync`
+           which is required by `TextPropertiesRef<'static>: Sync`

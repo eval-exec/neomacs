@@ -26,10 +26,23 @@ use super::overlay_index::{
     EndpointKind, OverlayBatchOrder, OverlayEditEffect, OverlayEndpoint, OverlayEndpointRecords,
     OverlayIdentity, OverlayIndex, OverlayTextEdit,
 };
-use super::position::{EmacsByteLen, EmacsBytePos, EmacsByteRange};
+use super::position::{CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange};
 use super::text::{TextEditRange, TextInsertion, TextReplacement};
 
 pub type Overlay = OverlayData;
+
+/// A conversion snapshot owned by the buffer's exclusive mutator.
+/// Numeric begins are GNU's old/new character-space numbers, independently
+/// of the byte ranges authoritative in the interval index. No shared cache
+/// or mutable Lisp state is published by these call-local records.
+#[derive(Clone, Copy)]
+pub(crate) struct OverlayPositionRemap {
+    pub overlay: Value,
+    pub old_range: EmacsByteRange,
+    pub range: EmacsByteRange,
+    pub old_begin: CharPos0,
+    pub new_begin: CharPos0,
+}
 
 /// Caller-owned property semantics used by the core overlay precedence and
 /// sweep machinery.
@@ -1017,6 +1030,30 @@ impl OverlayList {
         }
     }
 
+    /// GNU buffer.c:1031-1076 remaps an ascending snapshot using numeric begin
+    /// changes, not byte-start changes. The owning buffer holds exclusive
+    /// access for the complete conversion and publication.
+    pub(crate) fn remap_overlay_positions(&mut self, remaps: &[OverlayPositionRemap]) {
+        // GNU buffer.c:1033 skips ASCII overlay remapping. Numeric equality
+        // alone is insufficient: old/new byte ranges can differ after a text
+        // conversion whose numeric begins stay fixed. A true no-op retains
+        // the current interval tree, endpoint publication and observer cache.
+        if remaps.is_empty()
+            || remaps
+                .iter()
+                .all(|remap| remap.old_begin == remap.new_begin && remap.old_range == remap.range)
+        {
+            return;
+        }
+        self.index_mut().remap_positions(remaps);
+        for remap in remaps {
+            let _ = remap.overlay.with_overlay_data_mut(|data| {
+                data.start = remap.range.start().get();
+                data.end = remap.range.end().get();
+            });
+        }
+    }
+
     pub fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
         self.index.overlays_at(pos)
     }
@@ -1033,14 +1070,16 @@ impl OverlayList {
         self.overlays_in_accessible_emacs_byte_range(range, range.end())
     }
 
-    /// Return every live overlay of this buffer in GNU's `overlay-lists` order.
-    ///
-    /// Mirrors `Foverlay_lists` (buffer.c): the buffer's interval tree is
-    /// walked `BEG..Z` descending and consed, producing all overlays in
-    /// ascending `begin` order. Used to build the `(BEFORE . AFTER)` pair that
-    /// `overlay-lists` returns; since Emacs 29.1 the "overlay center" is gone,
-    /// so every overlay lands in the `BEFORE` (car) list and the `AFTER` (cdr)
-    /// list is always empty.
+    /// GNU overlay-lists intersects the full BEG..Z interval, irrespective
+    /// of narrowing (buffer.c:4012; itree.c:1200-1205). Empty intervals at Z
+    /// are therefore omitted when BEG differs from Z.
+    pub(crate) fn overlays_in_gnu_full_region(&self, range: EmacsByteRange) -> Vec<Value> {
+        self.index.overlays_intersecting(range)
+    }
+
+    /// Enumerate every indexed overlay in structural ascending order.
+    /// Serialization and identity observers include empty end overlays too;
+    /// the Lisp overlay-lists builtin uses the full-region query above.
     pub fn overlays_in_gnu_lists_order(&self) -> Vec<Value> {
         self.index.all_ascending()
     }
@@ -1149,6 +1188,46 @@ impl OverlayList {
         accessible_end: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + '_ {
         self.index.overlays_in_region_iter(range, accessible_end)
+    }
+
+    /// GNU textprop.c:647-663 reduces eligible carriers in ascending tree
+    /// order. The comparator can contain cycles, so sorting or heap selection
+    /// cannot replace this sequential reduction. Winner state is private to
+    /// this lookup under the buffer's existing ownership; nothing is cached
+    /// or published to other mutators.
+    pub(crate) fn property_winner_at_emacs_byte_pos_with(
+        &self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+        value_of: OverlayPropertyLookup,
+    ) -> Option<OverlayPropertyWinner> {
+        let priority_of = |overlay| value_of(overlay, priority_value());
+        let window_filter = window_id.map(|id| (id, Value::from_sym_id(winner_window_symbol_id())));
+        let mut best: Option<(OverlayPropertyWinner, Option<OverlayPrecedence>)> = None;
+        // Consume the complete ascending query directly. The index visitor
+        // preserves GNU's sequential comparison even for cyclic precedence,
+        // without constructing a resumable iterator for this single reduction.
+        self.index.for_each_overlay_at(pos, |overlay| {
+            let Some(value) = value_of(overlay, property).and_then(NonNilPropertyValue::new) else {
+                return;
+            };
+            if let Some((window_id, window_property)) = window_filter
+                && value_of(overlay, window_property)
+                    .and_then(Value::as_window_id)
+                    .is_some_and(|overlay_window| overlay_window != window_id)
+            {
+                return;
+            }
+            let key = overlay_precedence(overlay, &priority_of);
+            if best.is_none_or(|(current, current_key)| {
+                compare_overlay_precedence_keys(current.overlay(), current_key, overlay, key)
+                    == Ordering::Less
+            }) {
+                best = Some((OverlayPropertyWinner::new(overlay, value), key));
+            }
+        });
+        best.map(|(winner, _)| winner)
     }
 
     pub fn highest_priority_overlay_at_emacs_byte_pos(
@@ -1511,9 +1590,8 @@ impl OverlayList {
             .iter()
             .map(|overlay| (*overlay, overlay_precedence(*overlay, priority_of)))
             .collect();
-        keyed.sort_by(|(left, left_key), (right, right_key)| {
-            compare_overlay_precedence_keys(*right, *right_key, *left, *left_key)
-        });
+        gnu_sort_overlay_keys_ascending(&mut keyed);
+        keyed.reverse();
         for (slot, (overlay, _)) in overlay_ids.iter_mut().zip(keyed) {
             *slot = overlay;
         }
@@ -1842,11 +1920,41 @@ fn sort_overlays_by_precedence_ascending(overlays: &mut [Value]) {
             )
         })
         .collect();
-    keyed.sort_by(|(left, left_key), (right, right_key)| {
-        compare_overlay_precedence_keys(*left, *left_key, *right, *right_key)
-    });
+    gnu_sort_overlay_keys_ascending(&mut keyed);
     for (slot, (overlay, _)) in overlays.iter_mut().zip(keyed) {
         *slot = overlay;
+    }
+}
+
+/// GNU buffer.c:3347 calls the host's qsort in ascending order, then
+/// Foverlays_at reverses its result (buffer.c:3917). The comparator is not a
+/// total order: using Rust's sort or reversing the comparator changes cyclic
+/// cases and can panic. Keys are call-local immutable scalar snapshots taken
+/// before sorting, with no Lisp callbacks or state shared between mutators.
+fn gnu_sort_overlay_keys_ascending(keyed: &mut [(Value, Option<OverlayPrecedence>)]) {
+    unsafe extern "C" fn compare(
+        left: *const libc::c_void,
+        right: *const libc::c_void,
+    ) -> libc::c_int {
+        // SAFETY: qsort passes aligned pointers to initialized elements of
+        // the slice below; it only relocates Copy records within that slice.
+        let (left, left_key) = unsafe { *left.cast::<(Value, Option<OverlayPrecedence>)>() };
+        let (right, right_key) = unsafe { *right.cast::<(Value, Option<OverlayPrecedence>)>() };
+        match compare_overlay_precedence_keys(left, left_key, right, right_key) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        }
+    }
+    // SAFETY: the slice contains initialized Copy values, its allocation is
+    // writable for len * size bytes, and the callback cannot run Lisp/panic.
+    unsafe {
+        libc::qsort(
+            keyed.as_mut_ptr().cast(),
+            keyed.len(),
+            std::mem::size_of::<(Value, Option<OverlayPrecedence>)>(),
+            Some(compare),
+        );
     }
 }
 
@@ -1902,10 +2010,9 @@ fn compare_overlay_precedence_keys(
     } else if eq_value(&left, &right) {
         Ordering::Equal
     } else if left_key.identity < right_key.identity {
-        // GNU `compare_overlays` uses raw Lisp object identity as the final
-        // stable tiebreaker for otherwise equal overlays.  Neomacs stores an
-        // overlay allocation serial because Rust heap addresses are not
-        // monotonic like GNU's Lisp object representation in this path.
+        // GNU buffer.c:3281 compares XLI(overlay), not allocation order.
+        // The stored identity preserves that original raw object key when
+        // an immutable observer copies an overlay.
         Ordering::Less
     } else {
         Ordering::Greater
@@ -1924,6 +2031,15 @@ fn overlay_identity_key(overlay: Value) -> u64 {
 fn priority_symbol_id() -> crate::emacs_core::intern::SymId {
     static ID: std::sync::OnceLock<crate::emacs_core::intern::SymId> = std::sync::OnceLock::new();
     *ID.get_or_init(|| crate::emacs_core::intern::intern("priority"))
+}
+
+/// Immutable process-wide symbol ID for this query's window restriction.
+/// OnceLock publishes after initialization; it contains no mutable Lisp state
+/// and is shared safely by every mutator using the global interner.
+#[inline]
+fn winner_window_symbol_id() -> crate::emacs_core::intern::SymId {
+    static ID: std::sync::OnceLock<crate::emacs_core::intern::SymId> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| crate::emacs_core::intern::intern("window"))
 }
 
 /// How the sort reads an overlay's `priority'.
@@ -2036,6 +2152,7 @@ impl GcTrace for OverlayList {
 }
 
 #[cfg(test)]
+#[path = "overlay/tests/overlay_test.rs"]
 mod tests;
 
 /// Fold a Lisp value into `hasher` by CONTENT, following conses and strings.

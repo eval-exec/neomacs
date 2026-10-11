@@ -24,14 +24,13 @@ use neomacs_display_runtime::render_thread::{
 };
 use neomacs_display_runtime::thread_comm::{AssetCommand, RenderCommand};
 use neovm_core::emacs_core::image_catalog::{
-    FailedImage, ImageAnimationInvalidation, ImageCatalog, ImageId, ImageInvalidation,
-    ImageInvalidationResult, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup,
-    ImagePlacement, ImageResolveRequest, ImageResolveSource, ImageSizeLimit, ImageStateEvent,
-    PendingImage, ReadyImage,
+    FailedImage, ImageAnimationInvalidation, ImageCatalog, ImageFileName, ImageId,
+    ImageInvalidation, ImageInvalidationResult, ImageLayoutExtent, ImageLoadAttempt,
+    ImageLoadToken, ImageLookup, ImagePlacement, ImageResolveRequest, ImageResolveSource,
+    ImageSizeLimit, ImageStateEvent, PendingImage, ReadyImage,
 };
 use neovm_core::emacs_core::image_path::ImageFileRequest;
 use neovm_core::emacs_core::load::image_data_directory;
-use neovm_core::heap_types::LispString;
 
 use super::GuiEventLoopWaker;
 
@@ -267,7 +266,7 @@ impl AsyncImageCatalog {
                 self.search_path.clone(),
             );
             return (
-                ImageResolveSource::File(LispString::from_utf8(resolution.cache_key())),
+                ImageResolveSource::File(ImageFileName::from_utf8(resolution.cache_key())),
                 Some(resolution),
             );
         }
@@ -749,6 +748,12 @@ struct HeaderProbeRequest {
     redisplay_waker: Option<RedisplayWaker>,
 }
 
+// Admission to the off-thread header-probe channel requires owned plain data.
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<HeaderProbeRequest>();
+};
+
 fn header_probe_sender() -> &'static crossbeam_channel::Sender<HeaderProbeRequest> {
     static SENDER: OnceLock<crossbeam_channel::Sender<HeaderProbeRequest>> = OnceLock::new();
     SENDER.get_or_init(|| {
@@ -941,6 +946,7 @@ fn image_load_command(
             realization: request.realization,
             colors: request.colors,
             mask: request.mask,
+            animation: request.animation,
             frame: request.frame,
             sequence,
             limit,
@@ -954,6 +960,7 @@ fn image_load_command(
             realization: request.realization,
             colors: request.colors,
             mask: request.mask,
+            animation: request.animation,
             frame: request.frame,
             sequence,
             limit,

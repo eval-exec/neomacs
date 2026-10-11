@@ -23,6 +23,9 @@ pub(crate) enum BufferSourceVisibleLoopOutcome {
     /// GNU move_it_to(ZV) reached a fresh buffer row before EOB strings.
     MiniSourcePositionReached,
     SyncHorizonExhausted,
+    QueryHorizonExhausted,
+    /// A stable ordinary buffer glyph answered the query inside its row.
+    QueryTargetReached,
 }
 
 impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface> {
@@ -140,6 +143,12 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
             }
         }
 
+        // Completion wins over an acquisition boundary even when the target
+        // was the last copied character. Neither boundary is semantic EOB.
+        if self.source_render.output_emitter().query_target_reached() {
+            return BufferSourceVisibleLoopOutcome::QueryTargetReached;
+        }
+
         if loop_context.exhausted_sync_horizon(
             self.progress.byte_idx(),
             text.len(),
@@ -161,11 +170,30 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
             };
         }
 
+        // A query's acquisition limit is not ZV. Do not emit the EOB
+        // prelude or tail while another visible row still needs source.
+        if loop_context.exhausted_window_horizon(
+            self.progress.byte_idx(),
+            text.len(),
+            self.progress.charpos(),
+        ) && (self.progress.byte_idx() == text.len()
+            || self
+                .row_build
+                .row_geometry
+                .current_row_is_visible(loop_context.row_visibility_limit()))
+        {
+            // A physical-line scan that ends exactly at the copied boundary
+            // cannot certify the last row, even if its transition filled the
+            // viewport. Complete display elements may jump beyond that slice;
+            // they need more acquisition only while another row is visible.
+            return BufferSourceVisibleLoopOutcome::QueryHorizonExhausted;
+        }
+
         // GNU move_it_to(ZV) tests Buffer/GET_FROM_BUFFER before fetching
         // the next display element on a new row (xdisp.c:11096). A completed
         // hard newline at ZV therefore stops before its empty-row prefix or
         // EOB overlay strings. Presentation keeps both tails.
-        if params.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd
+        if params.source_extent == crate::types::WindowSourceExtent::AccessibleEnd
             && self.progress.byte_idx() == text.len()
             && self.progress.charpos() == loop_context.accessible_end()
             && text.last() == Some(&b'\n')

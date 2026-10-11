@@ -208,6 +208,47 @@ pub struct DumpLambdaParams {
     pub rest: Option<DumpSymId>,
 }
 
+/// Stored bytecode parameter shape. Dynamic contents remain invocation-checked.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum DumpFunctionParams {
+    Stack(i64),
+    Dynamic,
+    Named(DumpLambdaParams),
+}
+
+#[repr(u8)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, num_enum::TryFromPrimitive, num_enum::IntoPrimitive,
+)]
+pub enum DumpFunctionParamsKind {
+    Stack = 0,
+    Dynamic = 1,
+    Named = 2,
+}
+
+impl From<DumpLambdaParams> for DumpFunctionParams {
+    fn from(params: DumpLambdaParams) -> Self {
+        Self::Named(params)
+    }
+}
+
+impl DumpFunctionParams {
+    pub(crate) fn named(&self) -> Option<&DumpLambdaParams> {
+        match self {
+            Self::Named(params) => Some(params),
+            Self::Stack(_) | Self::Dynamic => None,
+        }
+    }
+
+    pub(crate) fn kind(&self) -> DumpFunctionParamsKind {
+        match self {
+            Self::Stack(_) => DumpFunctionParamsKind::Stack,
+            Self::Dynamic => DumpFunctionParamsKind::Dynamic,
+            Self::Named(_) => DumpFunctionParamsKind::Named,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DumpByteCodeFunction {
     /// Executable instruction source for this function.
@@ -219,8 +260,8 @@ pub struct DumpByteCodeFunction {
     /// both the source bytes and redundant derived instructions.
     pub instructions: DumpByteCodeInstructions,
     pub constants: Vec<DumpValue>,
-    pub max_stack: u16,
-    pub params: DumpLambdaParams,
+    pub max_stack: u64,
+    pub params: DumpFunctionParams,
     #[serde(default)]
     pub arglist: Option<DumpValue>,
     #[serde(default)]
@@ -420,21 +461,24 @@ pub enum DumpSymbolVal {
 /// `Lisp_Fwd_Obj` / `Lisp_Fwd_Buffer_Obj` / `Lisp_Fwd_Kboard_Obj` keep their
 /// value elsewhere, which is the same distinction `LispFwd::clone_stateful`
 /// makes.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive,
+)]
+#[repr(u8)]
 pub enum DumpLocalizedForwarder {
     /// GNU `Lisp_Fwd_Bool` — `*XBOOLVAR (valcontents) = !NILP (newval)`.
-    Bool,
+    Bool = 1,
     /// GNU `Lisp_Fwd_Int` — `CHECK_INTEGER` then `integer_to_intmax`.
-    Int,
+    Int = 2,
     /// GNU `Lisp_Fwd_Obj` — stores anything.  Carries no store rule at all;
     /// what it carries is the symbol's redirect tag, which is what
     /// `set_internal` consults to refuse an unbind through the BLV
     /// (`src/data.c:1723-1727`).
-    Obj,
+    Obj = 3,
     /// GNU `Lisp_Fwd_Kboard_Obj`.  `Fmake_local_variable` refuses to produce a
     /// BLV for one of these (`src/data.c:2286-2288`), so a dump can only reach
     /// this arm from an image older than that refusal.
-    Kboard,
+    Kboard = 4,
 }
 
 /// Serialized per-symbol metadata.  Format v21: all legacy fields
@@ -819,11 +863,12 @@ pub struct DumpLispString {
 }
 
 // Autoload
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
+#[repr(u8)]
 pub enum DumpAutoloadType {
-    Function,
-    Macro,
-    Keymap,
+    Function = 0,
+    Macro = 1,
+    Keymap = 2,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1006,12 +1051,13 @@ pub struct DumpModeRegistry {
 }
 
 // Coding
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
+#[repr(u8)]
 pub enum DumpEolType {
-    Unix,
-    Dos,
-    Mac,
-    Undecided,
+    Unix = 0,
+    Dos = 1,
+    Mac = 2,
+    Undecided = 3,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1166,6 +1212,12 @@ pub enum DumpFontRepertory {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DumpFontDefinitionMetadata {
+    pub encoding: DumpSymId,
+    pub repertory: Option<DumpFontRepertory>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DumpStoredFontSpec {
     #[serde(default)]
     pub family_sym: Option<DumpSymId>,
@@ -1179,7 +1231,7 @@ pub struct DumpStoredFontSpec {
     pub weight: Option<u16>,
     pub slant: Option<DumpFontSlant>,
     pub width: Option<DumpFontWidth>,
-    pub repertory: Option<DumpFontRepertory>,
+    pub definition: Option<DumpFontDefinitionMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1237,13 +1289,14 @@ pub enum DumpFontSlant {
     ReverseOblique = 4,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
+#[repr(u8)]
 pub enum DumpUnderlineStyle {
-    Line,
-    Wave,
-    Dot,
-    Dash,
-    DoubleLine,
+    Line = 0,
+    Wave = 1,
+    Dot = 2,
+    Dash = 3,
+    DoubleLine = 4,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1253,11 +1306,12 @@ pub struct DumpUnderline {
     pub position: Option<i32>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, IntoPrimitive, TryFromPrimitive)]
+#[repr(u8)]
 pub enum DumpBoxStyle {
-    Flat,
-    Raised,
-    Pressed,
+    Flat = 0,
+    Raised = 1,
+    Pressed = 2,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

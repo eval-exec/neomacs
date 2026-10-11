@@ -1124,7 +1124,7 @@ fn alternate_editor_tokens(editor: &str) -> Vec<&str> {
 }
 
 #[cfg(test)]
-#[path = "neomacsclient/tests/timeout_tests.rs"]
+#[path = "neomacsclient/tests/timeout_test.rs"]
 mod timeout_tests;
 
 #[cfg(test)]
@@ -1132,11 +1132,11 @@ mod timeout_tests;
 mod test_support;
 
 #[cfg(test)]
-#[path = "neomacsclient/tests/transport_tests.rs"]
+#[path = "neomacsclient/tests/transport_test.rs"]
 mod transport_tests;
 
 #[cfg(test)]
-#[path = "neomacsclient/tests/alternate_editor_tests.rs"]
+#[path = "neomacsclient/tests/alternate_editor_test.rs"]
 mod alternate_editor_tests;
 
 fn fail_or_alternate(prog: &str, options: &Options, message: &str) -> Result<(), String> {

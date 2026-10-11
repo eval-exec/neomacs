@@ -718,6 +718,42 @@ fn filename_matches_pattern(filename: &str, pattern: &LispString) -> bool {
 // GcTrace
 // ---------------------------------------------------------------------------
 
+impl GcTrace for CustomType {
+    fn trace_roots(&self, roots: &mut Vec<Value>) {
+        self.trace_roots_with(&mut |value| roots.push(value));
+    }
+
+    #[deny(clippy::wildcard_enum_match_arm)]
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        match self {
+            Self::Choice(choices) => {
+                for (_, value) in choices {
+                    visit(*value);
+                }
+            }
+            Self::List(element) => element.trace_roots_with(visit),
+            Self::Alist(key, value) | Self::Plist(key, value) => {
+                key.trace_roots_with(visit);
+                value.trace_roots_with(visit);
+            }
+            Self::Boolean
+            | Self::Integer
+            | Self::Float
+            | Self::String
+            | Self::Symbol
+            | Self::Sexp
+            | Self::Color
+            | Self::Face
+            | Self::File
+            | Self::Directory
+            | Self::Function
+            | Self::Variable
+            | Self::Hook
+            | Self::Coding => {}
+        }
+    }
+}
+
 impl GcTrace for ModeRegistry {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
         for mode in self.major_modes.values() {
@@ -766,11 +802,7 @@ impl GcTrace for ModeRegistry {
             if let Some(get_function) = var.get_function {
                 roots.push(get_function);
             }
-            if let CustomType::Choice(choices) = &var.type_ {
-                for (_, v) in choices {
-                    roots.push(*v);
-                }
-            }
+            var.type_.trace_roots_with(&mut |value| roots.push(value));
         }
         for group in self.custom_groups.values() {
             if let Some(parent) = group.parent {
@@ -785,5 +817,9 @@ impl GcTrace for ModeRegistry {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/mode_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/custom_type_gc_test.rs"]
+mod custom_type_gc;

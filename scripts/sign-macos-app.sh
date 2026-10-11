@@ -66,7 +66,7 @@ fi
 # executable and the dumper/harness builds of it, wherever they are staged.
 needs_entitlements() {
   case "$(basename "$1")" in
-    neomacs|neomacs-temacs|bootstrap-neomacs|mock-display) return 0 ;;
+    neomacs|neomacs-temacs|bootstrap-neomacs) return 0 ;;
     *) return 1 ;;
   esac
 }

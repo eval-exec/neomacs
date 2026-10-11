@@ -1811,8 +1811,7 @@ impl<'a> Reader<'a> {
                 let sym_id = super::intern::intern("load-file-name");
                 Ok(self
                     .obarray
-                    .symbol_value_id(sym_id)
-                    .copied()
+                    .symbol_value_id_copied(sym_id)
                     .unwrap_or(Value::NIL))
             }
             x if x == b'#' as u32 => {
@@ -2460,7 +2459,7 @@ impl<'a> Reader<'a> {
 
     fn read_circle_enabled(&self) -> bool {
         self.obarray
-            .symbol_value("read-circle")
+            .symbol_value_copied("read-circle")
             .is_none_or(|value| !value.is_nil())
     }
 
@@ -3155,5 +3154,5 @@ fn maybe_recombine_latin1_emacs(data: Vec<u8>) -> crate::heap_types::LispString 
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/value_reader_test.rs"]
 mod tests;

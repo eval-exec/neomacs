@@ -289,5 +289,5 @@ pub(super) trait Backend {
 }
 
 #[cfg(test)]
-#[path = "tests/model.rs"]
+#[path = "tests/model_test.rs"]
 mod tests;

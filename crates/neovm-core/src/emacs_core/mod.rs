@@ -373,74 +373,74 @@ pub(crate) mod zlib;
 // Cross-subsystem and externally-shaped regression suites retain the
 // `emacs_core` lexical parent while living beside the subsystem they cover.
 #[cfg(test)]
-#[path = "system/platform/c_features/tests/surface.rs"]
+#[path = "system/platform/c_features/tests/surface_test.rs"]
 mod c_features_test;
 #[cfg(test)]
 #[path = "tests/compat_regressions/mod.rs"]
 pub mod compat_regressions;
 #[cfg(test)]
-#[path = "tests/build_support/compile_main_rule.rs"]
+#[path = "tests/build_support/compile_main_rule_test.rs"]
 mod compile_main_rule_test;
 #[cfg(test)]
-#[path = "tests/build_support/generated_lisp.rs"]
+#[path = "tests/build_support/generated_lisp_test.rs"]
 mod generated_lisp_test;
 #[cfg(test)]
-#[path = "tests/gnu_surface/defvar_special.rs"]
+#[path = "tests/gnu_surface/defvar_special_test.rs"]
 mod gnu_defvar_special_test;
 #[cfg(test)]
-#[path = "tests/gnu_surface/subr.rs"]
+#[path = "tests/gnu_surface/subr_test.rs"]
 mod gnu_subr_surface_test;
 #[cfg(test)]
-#[path = "editing/undo/tests/kill_ring.rs"]
+#[path = "editing/undo/tests/kill_ring_test.rs"]
 mod kill_ring_test;
 #[cfg(test)]
-#[path = "tests/architecture/layout.rs"]
+#[path = "tests/architecture/layout_test.rs"]
 mod layout_test;
 #[cfg(test)]
-#[path = "lisp/provide_coupled_vars/tests/runtime_surface.rs"]
+#[path = "lisp/provide_coupled_vars/tests/runtime_surface_test.rs"]
 mod provide_coupled_vars_test;
 #[cfg(test)]
-#[path = "runtime/eval/tests/quit_regression.rs"]
+#[path = "runtime/eval/tests/quit_regression_test.rs"]
 mod quit_regression_test;
 #[cfg(test)]
-#[path = "tests/architecture/runtime_string_guard.rs"]
+#[path = "tests/architecture/runtime_string_guard_test.rs"]
 mod runtime_string_guard_test;
 
 #[cfg(test)]
-#[path = "display/shader_surface/tests/runtime.rs"]
+#[path = "display/shader_surface/tests/runtime_test.rs"]
 mod shader_surface_test;
 #[cfg(test)]
-#[path = "lisp/load/tests/stale_bytecode.rs"]
+#[path = "lisp/load/tests/stale_bytecode_test.rs"]
 mod stale_bytecode_test;
 #[cfg(test)]
-#[path = "runtime/symbol/tests/function_regression.rs"]
+#[path = "runtime/symbol/tests/function_regression_test.rs"]
 mod symbol_function_regression_test;
 #[cfg(test)]
-#[path = "tests/architecture/symbol_id_guard.rs"]
+#[path = "tests/architecture/symbol_id_guard_test.rs"]
 mod symbol_id_guard_test;
 #[cfg(test)]
-#[path = "runtime/symbol/tests/plist_regression.rs"]
+#[path = "runtime/symbol/tests/plist_regression_test.rs"]
 mod symbol_plist_regression_test;
 #[cfg(test)]
-#[path = "runtime/symbol/tests/redirect_regression.rs"]
+#[path = "runtime/symbol/tests/redirect_regression_test.rs"]
 mod symbol_redirect_regression_test;
 #[cfg(test)]
-#[path = "text/syntax/tests/category_property.rs"]
+#[path = "text/syntax/tests/category_property_test.rs"]
 mod syntax_category_property_test;
 #[cfg(test)]
-#[path = "text/syntax/tests/gnu_parity_regression.rs"]
+#[path = "text/syntax/tests/gnu_parity_regression_test.rs"]
 mod syntax_gnu_parity_regression_test;
 #[cfg(test)]
-#[path = "system/tls/tests/runtime.rs"]
+#[path = "system/tls/tests/runtime_test.rs"]
 mod tls_test;
 #[cfg(test)]
-#[path = "display/video/tests/runtime.rs"]
+#[path = "display/video/tests/runtime_test.rs"]
 mod video_test;
 #[cfg(test)]
-#[path = "display/window_cmds/tests/window_system_preload.rs"]
+#[path = "display/window_cmds/tests/window_system_preload_test.rs"]
 mod window_system_preload_test;
 #[cfg(test)]
-#[path = "display/xwidget/tests/runtime.rs"]
+#[path = "display/xwidget/tests/runtime_test.rs"]
 mod xwidget_test;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -475,3 +475,15 @@ pub fn eval_source(input: &str) -> Result<Value, EvalError> {
     let mut evaluator = Context::new();
     evaluator.eval_str(input)
 }
+
+#[cfg(test)]
+#[path = "tests/architecture/transmute_guard_test.rs"]
+mod architecture_transmute_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/value_ref_guard_test.rs"]
+mod architecture_value_ref_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/inline_boundary_test.rs"]
+mod architecture_inline_boundary_test;

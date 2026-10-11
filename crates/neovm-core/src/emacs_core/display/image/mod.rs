@@ -18,11 +18,11 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::image_catalog::{
-    AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageColorContext, ImageDataSource,
-    ImageFrameIndex, ImageHeuristicMask, ImageInvalidation, ImageLoadIdentity, ImageMaskKind,
-    ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
-    ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity, image_scale_environment,
-    numeric_image_scale,
+    AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageBaseUri,
+    ImageColorContext, ImageDataSource, ImageFileName, ImageFrameIndex, ImageHeuristicMask,
+    ImageInvalidation, ImageLoadIdentity, ImageMaskKind, ImageMaskPolicy, ImageResolveRequest,
+    ImageResolveSource, ImageRotation, ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec,
+    ImageSpecIdentity, image_scale_environment, numeric_image_scale,
 };
 use crate::window::FRAME_ID_BASE;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
@@ -234,6 +234,11 @@ pub enum ImageSpecKey {
     AnimateBuffer,
     AnimateTardiness,
     AnimatePosition,
+    /// Neomacs extension: opt into computed animation for sources that
+    /// have one (SVG SMIL). GNU has no such key — librsvg renders SVG
+    /// statically — so its value is part of this port's documented
+    /// divergence and of the spec's cache identity.
+    Animation,
     Format,
 }
 
@@ -280,7 +285,9 @@ pub fn image_resolve_source_from_items(items: &[Value]) -> Option<ImageResolveSo
     while index + 1 < items.len() {
         let value = items[index + 1];
         match ImageSpecKey::from_lisp_value(items[index]) {
-            Some(ImageSpecKey::File) => file_source = value.as_lisp_string().cloned(),
+            Some(ImageSpecKey::File) => {
+                file_source = value.as_lisp_string().map(ImageFileName::from);
+            }
             Some(ImageSpecKey::Data) => {
                 // The Lisp string's bytes are materialized once, here, and every
                 // consumer of this request — the catalog's key, the load command,
@@ -290,7 +297,9 @@ pub fn image_resolve_source_from_items(items: &[Value]) -> Option<ImageResolveSo
                     .as_lisp_string()
                     .map(|data| EncodedBytes::new(data.as_bytes().to_vec()));
             }
-            Some(ImageSpecKey::BaseUri) => base_uri = value.as_lisp_string().cloned(),
+            Some(ImageSpecKey::BaseUri) => {
+                base_uri = value.as_lisp_string().map(ImageBaseUri::from);
+            }
             _ => {}
         }
         index += 2;
@@ -621,6 +630,7 @@ pub(crate) fn image_resolve_request_from_spec(
     let (mut height, mut max_height) = (None, None);
     let mut rotation = ImageRotation::None;
     let mut frame = ImageFrameIndex::default();
+    let mut animation = ImageAnimationPolicy::disabled();
     // Absent `:scale` is NOT `:scale default` — see ImageScalePolicy.
     let mut scale = ImageScalePolicy::Unspecified;
 
@@ -641,6 +651,17 @@ pub(crate) fn image_resolve_request_from_spec(
                 if let Some(index) = image_frame_index_from_lisp(value) {
                     frame = index;
                 }
+            }
+            Some(ImageSpecKey::Animation) => {
+                animation = if value.is_symbol_named("t") {
+                    ImageAnimationPolicy::enabled(None)
+                } else if let Some(fps) = value.as_int()
+                    && u32::try_from(fps).is_ok_and(|fps| fps > 0)
+                {
+                    ImageAnimationPolicy::enabled(u32::try_from(fps).ok())
+                } else {
+                    ImageAnimationPolicy::disabled()
+                };
             }
             Some(ImageSpecKey::Width) => width = parse_image_dimension(value).or(width),
             Some(ImageSpecKey::MaxWidth) => max_width = parse_image_dimension(value).or(max_width),
@@ -671,6 +692,7 @@ pub(crate) fn image_resolve_request_from_spec(
             AxisSize::resolve(height, max_height),
         ),
         rotation,
+        animation,
         // GNU keys the image cache on the face's colors, and `Fimage_size`
         // resolves through `DEFAULT_FACE_ID` (image.c `lookup_image`). Using
         // zeros here gave the same spec a different key than the one layout
@@ -1464,7 +1486,7 @@ pub(crate) fn builtin_clear_image_cache_in_context(
                 .is_some_and(|catalog| {
                     catalog
                         .invalidate(ImageInvalidation::Dependency(ImageResolveSource::File(
-                            crate::heap_types::LispString::from_utf8(path),
+                            ImageFileName::from_utf8(path),
                         )))
                         .changed()
                 });
@@ -1600,6 +1622,24 @@ fn image_embedded_metadata_to_lisp(
                 Value::make_float(delay.seconds().expect("numeric delay has seconds"))
             }
         });
+    }
+    if let Some(start) = metadata.loop_start() {
+        plist.push(Value::symbol("loop-start"));
+        plist.push(Value::fixnum(i64::from(start)));
+    }
+    for (name, delay) in [
+        ("intro-delay", metadata.intro_delay()),
+        ("loop-delay", metadata.loop_delay()),
+    ] {
+        if let Some(delay) = delay {
+            plist.push(Value::symbol(name));
+            plist.push(match delay {
+                crate::emacs_core::image_catalog::ImageFrameDelay::UseDefault => Value::T,
+                crate::emacs_core::image_catalog::ImageFrameDelay::Milliseconds { .. } => {
+                    Value::make_float(delay.seconds().expect("numeric delay has seconds"))
+                }
+            });
+        }
     }
     Value::list(plist)
 }
@@ -1841,7 +1881,7 @@ pub(crate) fn builtin_image_transforms_p(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/image_test.rs"]
 mod tests;
 
 impl Context {

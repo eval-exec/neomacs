@@ -289,4 +289,5 @@ pub(in crate::render_thread) fn anchors_by_window(
 }
 
 #[cfg(test)]
+#[path = "scroll/tests/scroll_test.rs"]
 mod tests;

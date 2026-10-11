@@ -158,7 +158,7 @@ mkdir -p "$package_dir/bin" "$package_dir/share/neomacs" "$archlib_dir"
 for binary in neomacs neomacsclient; do
   install_binary_if_present "$binary" "$binary_ext" "$package_dir/bin"
 done
-for binary in neomacs-temacs bootstrap-neomacs mock-display; do
+for binary in neomacs-temacs bootstrap-neomacs; do
   install_binary_if_present "$binary" "$binary_ext" "$archlib_dir"
 done
 if [[ "$target_triple" == *-windows-* ]]; then

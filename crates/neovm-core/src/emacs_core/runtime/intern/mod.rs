@@ -13,7 +13,7 @@
 use hashbrown::HashMap;
 use parking_lot::RwLock;
 use rustc_hash::{FxBuildHasher, FxHashMap};
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -228,6 +228,34 @@ pub const UNBOUND_SYM_ID: SymId = SymId(2);
 /// Number of symbol-name atoms stored in each non-moving allocation.
 const NAME_ATOM_CHUNK: usize = 4096;
 
+/// One frozen, property-free name atom in process-lifetime storage.
+///
+/// Only `NameAtomStorage::push` constructs this reference, after stripping
+/// heap-backed text properties and moving the string into a leaked slot.
+/// Hash and equality inspect only its immutable bytes and representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+struct NameAtomRef(&'static LispString);
+
+// SAFETY: construction is confined to `NameAtomStorage::push`. Its referenced
+// string has no interval table, never moves or drops, and is never mutated after
+// publication. Its bytes are owned by that leaked string or are immutable
+// process-lifetime mapped/static storage, so they contain no heap-local Values.
+unsafe impl Send for NameAtomRef {}
+// SAFETY: the same frozen, property-free invariant permits concurrent reads;
+// neither this wrapper nor any published name API exposes mutable access.
+unsafe impl Sync for NameAtomRef {}
+
+static_assertions::assert_impl_all!(NameAtomRef: Send, Sync, Copy, std::fmt::Debug);
+static_assertions::assert_eq_size!(NameAtomRef, &'static LispString);
+static_assertions::assert_eq_align!(NameAtomRef, &'static LispString);
+
+impl Borrow<LispString> for NameAtomRef {
+    fn borrow(&self) -> &LispString {
+        self.0
+    }
+}
+
 /// Append-only, process-lifetime storage for interned symbol names.
 ///
 /// The symbol registry exposes name atoms as `&'static LispString`, so the
@@ -239,11 +267,17 @@ struct NameAtomStorage {
     len: usize,
 }
 
-// SAFETY: chunks are appended and initialized only through `&mut self` while
-// the enclosing `StringInterner` is write-locked. Published `LispString`s are
-// immutable and their leaked backing allocations never move or disappear.
+// SAFETY: chunks are appended and initialized only through `&mut self`.
+// `push` clears interval tables before publication, so no published atom owns
+// heap-local Values. Atoms and their bytes are frozen; the leaked chunks never
+// move or disappear. The enclosing global interner additionally uses its lock
+// when accessing or extending this storage.
 unsafe impl Send for NameAtomStorage {}
+// SAFETY: shared access reads only initialized, frozen, property-free slots.
+// New slots require `&mut self`; no published slot is ever changed or freed.
 unsafe impl Sync for NameAtomStorage {}
+
+static_assertions::assert_impl_all!(NameAtomStorage: Send, Sync);
 
 impl NameAtomStorage {
     fn new() -> Self {
@@ -267,7 +301,7 @@ impl NameAtomStorage {
             .reserve(required_chunks.saturating_sub(self.chunks.len()));
     }
 
-    fn push(&mut self, mut value: LispString) -> &'static LispString {
+    fn push(&mut self, mut value: LispString) -> NameAtomRef {
         // Name atoms outlive every tagged heap. Exact Lisp name objects keep
         // their rooted text properties separately; the atom stores spelling
         // only, so it must never retain property Values from that heap.
@@ -291,9 +325,14 @@ impl NameAtomStorage {
         // initialized value is never mutated, so the returned reference stays
         // valid for the remainder of the process.
         let slot = unsafe { self.chunks[chunk_index].as_ptr().add(slot_index) };
+        // SAFETY: this is the next uninitialized slot in the leaked allocation;
+        // its owner has exclusive access and the incoming string has no table.
         unsafe { slot.write(value) };
         self.len += 1;
-        unsafe { &*slot }
+        // SAFETY: the write initialized the slot. No mutable reference is ever
+        // published, and the string, its property-free state and bytes live for
+        // the process lifetime, establishing `NameAtomRef`'s invariant.
+        NameAtomRef(unsafe { &*slot })
     }
 
     #[inline]
@@ -315,8 +354,10 @@ impl NameAtomStorage {
 /// Append-only string interner used only for symbol names.
 pub struct StringInterner {
     strings: NameAtomStorage,
-    map: HashMap<&'static LispString, NameId, FxBuildHasher>,
+    map: HashMap<NameAtomRef, NameId, FxBuildHasher>,
 }
+
+static_assertions::assert_impl_all!(StringInterner: Send, Sync);
 
 impl Default for StringInterner {
     fn default() -> Self {
@@ -375,7 +416,7 @@ impl StringInterner {
         self.map
             .raw_entry()
             .from_hash(hash, |candidate| {
-                candidate.is_multibyte() == multibyte && candidate.as_bytes() == bytes
+                candidate.0.is_multibyte() == multibyte && candidate.0.as_bytes() == bytes
             })
             .map(|(_, id)| *id)
     }
@@ -446,7 +487,7 @@ impl StringInterner {
         // names per load.
         let hash = self.hash_name_parts(bytes, multibyte);
         match self.map.raw_entry_mut().from_hash(hash, |candidate| {
-            candidate.is_multibyte() == multibyte && candidate.as_bytes() == bytes
+            candidate.0.is_multibyte() == multibyte && candidate.0.as_bytes() == bytes
         }) {
             hashbrown::hash_map::RawEntryMut::Occupied(entry) => *entry.get(),
             hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
@@ -508,15 +549,45 @@ struct SymbolNameHeapId(usize);
 struct SymbolNameObjectId(usize);
 
 impl SymbolNameObjectId {
+    fn of(word: HeapNameWord) -> Self {
+        Self(word.0)
+    }
+}
+
+/// The word of one heap's Lisp-visible symbol name object, as the
+/// process-global registry stores it.
+///
+/// The registry is shared by every thread, so it cannot hold thread-confined
+/// values. Each word is paired with the [`SymbolNameHeapId`] of the heap that
+/// allocated it, is rooted for that heap by [`SymbolNameRootIndex`], and turns
+/// back into a value only for a lookup made for that same heap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+struct HeapNameWord(usize);
+
+impl HeapNameWord {
     fn of(value: TaggedValue) -> Self {
         Self(value.bits())
+    }
+
+    /// The name object. Callers have matched the word's heap with the heap
+    /// the lookup is for.
+    fn value(self) -> TaggedValue {
+        TaggedValue::from_bits(self.0)
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct SymbolNameValue {
-    value: TaggedValue,
+    word: HeapNameWord,
     heap_id: SymbolNameHeapId,
+}
+
+impl SymbolNameValue {
+    /// The name object when it belongs to `heap_id`.
+    fn value_in(self, heap_id: SymbolNameHeapId) -> Option<TaggedValue> {
+        (self.heap_id == heap_id).then(|| self.word.value())
+    }
 }
 
 /// Identity of a lazily materialized atom-backed symbol name.
@@ -537,26 +608,26 @@ struct MaterializedSymbolNameKey {
 /// follows name-object identity, not symbol cardinality.
 #[derive(Debug, Default)]
 struct SymbolNameRootIndex {
-    by_heap: FxHashMap<SymbolNameHeapId, FxHashMap<SymbolNameObjectId, TaggedValue>>,
+    by_heap: FxHashMap<SymbolNameHeapId, FxHashMap<SymbolNameObjectId, HeapNameWord>>,
 }
 
 impl SymbolNameRootIndex {
     fn insert(&mut self, name: SymbolNameValue) {
-        let object_id = SymbolNameObjectId::of(name.value);
+        let object_id = SymbolNameObjectId::of(name.word);
         let old = self
             .by_heap
             .entry(name.heap_id)
             .or_default()
-            .insert(object_id, name.value);
+            .insert(object_id, name.word);
         debug_assert!(
-            old.is_none_or(|old| old.bits() == name.value.bits()),
+            old.is_none_or(|old| old == name.word),
             "one symbol-name object identity mapped to different values"
         );
     }
 
     fn extend_roots(&self, roots: &mut Vec<TaggedValue>, heap_id: SymbolNameHeapId) {
         if let Some(by_object) = self.by_heap.get(&heap_id) {
-            roots.extend(by_object.values().copied());
+            roots.extend(by_object.values().map(|word| word.value()));
         }
     }
 
@@ -650,7 +721,7 @@ impl NewSymbolName {
         let heap_id = crate::tagged::gc::current_tagged_heap_identity()
             .expect("a Lisp symbol name value requires an installed tagged heap");
         Self::LispObject(SymbolNameValue {
-            value,
+            word: HeapNameWord::of(value),
             heap_id: SymbolNameHeapId(heap_id),
         })
     }
@@ -690,7 +761,7 @@ struct SymbolRegistry {
     /// as a Rust/process-lifetime atom.  GNU always stores one Lisp string in
     /// every symbol; this cache supplies the equivalent object without making
     /// every process-global [`SymbolSlot`] carry a heap-local pointer.
-    materialized_name_values: FxHashMap<MaterializedSymbolNameKey, TaggedValue>,
+    materialized_name_values: FxHashMap<MaterializedSymbolNameKey, HeapNameWord>,
     /// Per-heap set of exact Lisp name objects. This is deliberately indexed
     /// by object identity rather than symbol id: many uninterned symbols can
     /// share one name object, and seeding it once is sufficient.
@@ -853,13 +924,12 @@ impl SymbolRegistry {
             .unwrap_or_else(|| panic!("invalid symbol id {:?}", id));
         if slot.name_origin == SymbolNameOrigin::LispObject {
             note_exact_symbol_name_value_probe();
-            if let Some(name_value) = self
+            if let Some(value) = self
                 .name_values
                 .get(&id)
-                .copied()
-                .filter(|name_value| name_value.heap_id == heap_id)
+                .and_then(|name_value| name_value.value_in(heap_id))
             {
-                return Some(name_value.value);
+                return Some(value);
             }
         }
 
@@ -869,7 +939,7 @@ impl SymbolRegistry {
                 heap_id,
                 symbol: id,
             })
-            .copied()
+            .map(|word| word.value())
     }
 
     #[inline]
@@ -1110,7 +1180,7 @@ impl SymbolRegistry {
                 .values()
                 .filter(|name_value| name_value.heap_id == heap_id)
             {
-                unique.insert(SymbolNameObjectId::of(name_value.value), name_value.value);
+                unique.insert(SymbolNameObjectId::of(name_value.word), name_value.word);
             }
             for value in self
                 .materialized_name_values
@@ -1548,13 +1618,15 @@ pub(crate) fn materialize_symbol_name_value(id: SymId) -> TaggedValue {
         heap_id,
         symbol: id,
     };
-    let old = registry.materialized_name_values.insert(key, materialized);
+    let old = registry
+        .materialized_name_values
+        .insert(key, HeapNameWord::of(materialized));
     debug_assert!(
         old.is_none(),
         "materialized symbol name replaced after lookup"
     );
     registry.name_value_roots.insert(SymbolNameValue {
-        value: materialized,
+        word: HeapNameWord::of(materialized),
         heap_id,
     });
     SYMBOL_NAME_MATERIALIZATION_EPOCH.fetch_add(1, Ordering::Release);
@@ -1882,13 +1954,13 @@ pub fn try_resolve_sym_lisp_string(id: SymId) -> Option<&'static LispString> {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/intern_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/seed_prefix.rs"]
+#[path = "tests/seed_prefix_test.rs"]
 mod seed_prefix_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;

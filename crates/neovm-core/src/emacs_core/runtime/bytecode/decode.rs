@@ -15,7 +15,8 @@ use std::fmt;
 
 use super::chunk::GnuByteOffsetMapEntry;
 use super::opcode::Op;
-use crate::emacs_core::value::{Value, ValueKind};
+use crate::emacs_core::intern::intern;
+use crate::emacs_core::value::Value;
 
 /// Errors that can occur during GNU bytecode decoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1141,108 +1142,23 @@ fn buffer_op_info(byte: u8) -> (&'static str, u8) {
 // Arglist descriptor parsing (Phase 2)
 // ---------------------------------------------------------------------------
 
-use crate::emacs_core::intern::intern;
-use crate::emacs_core::value::LambdaParams;
-
-/// Parse a GNU integer arglist descriptor into `LambdaParams`.
-///
-/// GNU encoding:
-/// - bits 0..6: mandatory argument count
-/// - bit 7: `&rest` slot present
-/// - bits 8..14: total non-`&rest` argument count (mandatory + optional)
-///
-/// For lexical bytecode compiled by GNU Emacs, the rest bit describes stack
-/// layout, not just source-level `&rest`.  CL-generated constructors can use a
-/// hidden extra slot even when the original source arglist only shows
-/// `&optional`, so the runtime frame must follow the descriptor exactly.
-pub fn parse_arglist_descriptor(descriptor: i64) -> LambdaParams {
-    let mandatory = (descriptor & 127) as usize;
-    let has_rest = (descriptor & 128) != 0;
-    let nonrest = (descriptor >> 8) as usize;
-    let optional_count = nonrest.saturating_sub(mandatory);
-
-    let mut required = Vec::with_capacity(mandatory);
-    for i in 0..mandatory {
-        required.push(intern(&format!("arg{}", i)));
-    }
-    let mut optional = Vec::with_capacity(optional_count);
-    for i in 0..optional_count {
-        optional.push(intern(&format!("opt{}", i)));
-    }
-
-    LambdaParams {
-        required,
-        optional,
-        rest: has_rest.then(|| intern("rest")),
-    }
+/// Preserve GNU's full signed integer descriptor without allocating names.
+/// Mandatory is bits0..6, rest is bit7, and nonrest is the full signed value
+/// shifted right by8. Host-sized stack shape is checked only when needed.
+pub fn parse_arglist_descriptor(descriptor: i64) -> super::FunctionParams {
+    super::FunctionParams::Stack(descriptor.into())
 }
 
-/// Parse an arglist value which can be either an integer descriptor
-/// or a list of symbols `(x &optional y &rest z)`.
-pub fn parse_arglist_value(arglist: &Value) -> LambdaParams {
-    match arglist.kind() {
-        ValueKind::Fixnum(n) => parse_arglist_descriptor(n),
-        ValueKind::Nil => LambdaParams {
-            required: Vec::new(),
-            optional: Vec::new(),
-            rest: None,
-        },
-        ValueKind::Cons => {
-            // Parse list of symbols
-            let items = crate::emacs_core::value::list_to_vec(arglist).unwrap_or_default();
-            let mut required = Vec::new();
-            let mut optional = Vec::new();
-            let mut rest = None;
-            let mut mode = 0u8; // 0 = required, 1 = optional, 2 = rest
-
-            for item in &items {
-                if let Some(name) = item.as_symbol_name() {
-                    match name {
-                        "&optional" => {
-                            mode = 1;
-                            continue;
-                        }
-                        "&rest" => {
-                            mode = 2;
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-                let sym_id = match item.kind() {
-                    ValueKind::Symbol(id) => id,
-                    _ => intern("_"),
-                };
-                match mode {
-                    0 => required.push(sym_id),
-                    1 => optional.push(sym_id),
-                    2 => {
-                        rest = Some(sym_id);
-                        break; // Only one rest param
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            LambdaParams {
-                required,
-                optional,
-                rest,
-            }
-        }
-        _ => {
-            // Fallback: treat as zero-arg
-            LambdaParams {
-                required: Vec::new(),
-                optional: Vec::new(),
-                rest: None,
-            }
-        }
-    }
+/// Validate the outer slot domain. GNU defers cons contents to invocation.
+pub fn parse_arglist_value(
+    arglist: &Value,
+) -> Result<super::FunctionParams, super::BytecodeSlotError> {
+    super::FunctionParams::try_from(*arglist)
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/decode.rs"]
+#[path = "tests/decode_test.rs"]
 mod tests;

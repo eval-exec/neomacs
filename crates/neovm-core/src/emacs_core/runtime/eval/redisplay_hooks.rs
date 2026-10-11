@@ -1015,17 +1015,25 @@ impl Drop for RedisplayTransaction<'_> {
                 .restore_outermost_restrictions(restrictions);
         }
         self.eval.gnu_redisplay_hooks.active = RedisplayActiveOwner::Idle;
-        // Recovery only: normal Lisp binding exits propagate their Flow.
-        self.eval.unbind_to(self.binding_count);
+        if std::thread::panicking() {
+            // A Rust panic must not evaluate Lisp while unwinding (P4.11):
+            // retire the transaction's bindings storage-only, exactly like a
+            // saved-state scope's Drop. Watchers and unwind forms the
+            // frontend pushed run only on the normal and Flow paths.
+            self.eval.discard_specpdl_to(self.binding_count);
+        } else {
+            // Recovery only: normal Lisp binding exits propagate their Flow.
+            self.eval.unbind_to(self.binding_count);
+        }
     }
 }
 
 #[cfg(test)]
-#[path = "tests/redisplay_hook_ownership.rs"]
+#[path = "tests/redisplay_hook_ownership_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "redisplay_hooks/tests/mode_line_flow.rs"]
+#[path = "redisplay_hooks/tests/mode_line_flow_test.rs"]
 mod mode_line_flow_tests;
 
 /// Temporary echo source, matching with_echo_area_buffer's owned unwind.
@@ -1247,17 +1255,17 @@ impl Drop for CommittedScrollGuard<'_> {
 }
 
 #[cfg(test)]
-#[path = "tests/redisplay_mini_only.rs"]
+#[path = "tests/redisplay_mini_only_test.rs"]
 mod mini_only_tests;
 
 #[cfg(test)]
-#[path = "tests/redisplay_mini_preparer_context.rs"]
+#[path = "tests/redisplay_mini_preparer_context_test.rs"]
 mod mini_preparer_context_tests;
 
 #[cfg(test)]
-#[path = "tests/redisplay_mini_source_eligibility.rs"]
+#[path = "tests/redisplay_mini_source_eligibility_test.rs"]
 mod mini_source_eligibility_tests;
 
 #[cfg(test)]
-#[path = "tests/redisplay_transaction_owner.rs"]
+#[path = "tests/redisplay_transaction_owner_test.rs"]
 mod transaction_owner_tests;

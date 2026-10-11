@@ -501,4 +501,5 @@ impl Default for TerminalManager {
 }
 
 #[cfg(test)]
+#[path = "view/tests/view_test.rs"]
 mod tests;

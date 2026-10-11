@@ -1,0 +1,27 @@
+error[E0277]: `*const ()` cannot be sent between threads safely
+  --> tests/thread_safety_ui/raw_value_send_payload.rs:12:20
+   |
+12 |     require_send::<WorkerPayload>();
+   |                    ^^^^^^^^^^^^^ `*const ()` cannot be sent between threads safely
+   |
+   = help: within `WorkerPayload`, the trait `Send` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `TaggedValue`
+  --> src/tagged/value.rs
+   |
+   | pub struct TaggedValue(pub(crate) usize, ThreadConfined);
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `WorkerPayload`
+  --> tests/thread_safety_ui/raw_value_send_payload.rs:5:8
+   |
+ 5 | struct WorkerPayload {
+   |        ^^^^^^^^^^^^^
+note: required by a bound in `require_send`
+  --> tests/thread_safety_ui/raw_value_send_payload.rs:9:20
+   |
+ 9 | fn require_send<T: Send>() {}
+   |                    ^^^^ required by this bound in `require_send`

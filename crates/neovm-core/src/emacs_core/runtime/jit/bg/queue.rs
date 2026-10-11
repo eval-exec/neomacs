@@ -15,11 +15,15 @@ use std::collections::BinaryHeap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
+mod admission;
+
 use super::{JobCell, JobClass};
 use crate::emacs_core::jit::compile::shared::split::JobPayload;
+use admission::QueueLimits;
 
 /// One job for a backend thread: the payload and where its result goes.
-/// Plain data (see `JobPayload`): nothing here reaches the Lisp heap.
+/// Plain data (see `JobPayload`): nothing here reaches the Lisp heap. With
+/// raw values `!Send`, the pin below also proves the job carries none.
 pub(crate) struct BackendJob {
     pub(crate) payload: JobPayload,
     pub(crate) class: JobClass,
@@ -30,10 +34,7 @@ pub(crate) struct BackendJob {
     pub(crate) insts: u64,
 }
 
-const _: () = {
-    const fn assert_send<T: Send>() {}
-    assert_send::<BackendJob>();
-};
+static_assertions::assert_impl_all!(BackendJob: Send);
 
 /// Heap order: the lowest class first, then the oldest.
 struct Queued(BackendJob);
@@ -116,6 +117,13 @@ impl Pool {
     /// Queue `job` for a worker, starting the workers on first use. `Err`
     /// hands the job back when no worker can run it (a spawn failed).
     pub(crate) fn push(&'static self, job: BackendJob) -> Result<(), BackendJob> {
+        let limits = QueueLimits::configured();
+        // An intrinsically oversized job must not evict useful work, spawn
+        // a worker, or trigger the Err path's synchronous codegen fallback.
+        if !limits.fits(job.insts) {
+            job.cell.publish_dropped();
+            return Ok(());
+        }
         let mut state = self.lock();
         if state.spawn_failed {
             return Err(job);
@@ -139,28 +147,7 @@ impl Pool {
                 }
             }
         }
-        // Make room: drop the lowest-class, newest queued job while that is
-        // not the new one.
-        let (cap, insts_cap) = (super::queue_cap(), super::queue_insts_cap());
-        while !state.jobs.is_empty()
-            && (state.jobs.len() >= cap || state.insts + job.insts > insts_cap)
-        {
-            let victim = state.jobs.iter().map(Queued::key).max().expect("not empty");
-            if victim < (job.class, job.seq) {
-                return Err(job);
-            }
-            let mut jobs = std::mem::take(&mut state.jobs).into_vec();
-            let at = jobs
-                .iter()
-                .position(|queued| queued.key() == victim)
-                .expect("the victim is queued");
-            let Queued(dropped) = jobs.swap_remove(at);
-            state.jobs = BinaryHeap::from(jobs);
-            state.insts -= dropped.insts;
-            dropped.cell.publish_dropped();
-        }
-        state.insts += job.insts;
-        state.jobs.push(Queued(job));
+        state.push_bounded(job, limits)?;
         drop(state);
         self.work.notify_one();
         Ok(())
@@ -192,6 +179,62 @@ impl Pool {
             }
             state = self.work.wait(state).unwrap_or_else(|p| p.into_inner());
         }
+    }
+
+    /// Take an immediately ready job without waiting. A worker with
+    /// unsealed members must flush instead of blocking for more work.
+    pub(crate) fn try_pop(&self) -> Option<BackendJob> {
+        let mut state = self.lock();
+        #[cfg(test)]
+        if state.held {
+            return None;
+        }
+        let Queued(job) = state.jobs.pop()?;
+        state.running += 1;
+        state.insts -= job.insts;
+        Some(job)
+    }
+
+    /// A private preloaded queue for worker protocol tests; no process
+    /// pool, knobs, thread startup or queue push path is involved.
+    #[cfg(test)]
+    pub(super) fn from_jobs_for_worker_test(jobs: Vec<BackendJob>) -> Pool {
+        let insts = jobs.iter().map(|job| job.insts).sum();
+        Pool {
+            state: Mutex::new(PoolState {
+                jobs: jobs.into_iter().map(Queued).collect(),
+                insts,
+                running: 0,
+                workers: 0,
+                spawn_failed: false,
+                held: false,
+            }),
+            work: Condvar::new(),
+            idle: Condvar::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn running_for_worker_test(&self) -> usize {
+        self.lock().running
+    }
+
+    /// Identity only: local protocol tests never consume global fault/log hooks.
+    #[cfg(test)]
+    pub(super) fn is_global_for_worker_test(&self) -> bool {
+        POOL.get().is_some_and(|pool| std::ptr::eq(self, pool))
+    }
+
+    /// Add ready work to an independent local pool without touching admission knobs.
+    #[cfg(test)]
+    pub(super) fn push_ready_for_worker_test(&self, job: BackendJob) {
+        assert!(
+            !self.is_global_for_worker_test(),
+            "only an owned local queue"
+        );
+        let mut state = self.lock();
+        state.insts += job.insts;
+        state.jobs.push(Queued(job));
     }
 
     /// A worker finished (or skipped) the job it popped.

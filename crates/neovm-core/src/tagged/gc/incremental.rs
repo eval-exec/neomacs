@@ -57,6 +57,10 @@ impl TaggedHeap {
         bytes_before: usize,
         _pause_t0: std::time::Instant,
     ) {
+        assert!(
+            !self.concurrent_mark_running,
+            "sweep publication requires an explicit successful marker finish"
+        );
         // Before anything else: the free list is reset below, and a
         // free-list region closed after that would push its cells onto the
         // list the sweep rebuilds, then the sweep would push them again (a
@@ -121,6 +125,10 @@ impl TaggedHeap {
         self.unchain_dead_markers();
         self.reset_generational_remembered_world_stopped();
         self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
+
+        // No reader can remain: join preceded all drains and weak/finalizer
+        // work. Keep originals until this termination boundary, before sweep.
+        self.release_concurrent_hash_storage();
 
         // Begin the deferred sweep. Detach the young non-cons list (new non-cons
         // allocations link onto a fresh `all_objects` and are not swept this
@@ -217,6 +225,12 @@ impl TaggedHeap {
         self.satb_shared.is_poisoned()
             || self.deferred_veclikes.is_poisoned()
             || self.gc_wake.0.is_poisoned()
+            || self
+                .concurrent_hash_snapshot()
+                .is_some_and(|snapshot| snapshot.is_poisoned())
+            || self
+                .concurrent_claims_state()
+                .is_some_and(|state| state.locks_poisoned())
     }
 
     /// Test-only: poison one of the collector's own locks by panicking while
@@ -239,6 +253,10 @@ impl TaggedHeap {
     /// allocated meanwhile are born black (see `alloc_cons`), so an unswept
     /// block never reclaims a live new cell.
     pub(crate) fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
+        assert!(
+            !self.concurrent_mark_running,
+            "sweeping requires an explicit successful marker finish"
+        );
         // Collector code never sees an open allocation region
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();
@@ -324,6 +342,10 @@ impl TaggedHeap {
         let parity = self.mark_parity;
         while processed < noncons_budget && !self.sweep_noncons_pending.is_null() {
             let current = self.sweep_noncons_pending;
+            // SAFETY: the completed mark leaves this stopped mutator with
+            // exclusive ownership of the young sweep list. Each header is
+            // initialized, and a dead object is detached before explicit
+            // resource reclamation; no marker or callback retains its Box.
             unsafe {
                 self.sweep_noncons_pending = (*current).next;
                 if (*current).tenured && !(*current).generation.permanent() {
@@ -345,7 +367,7 @@ impl TaggedHeap {
                 } else {
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
-                    self.free_gc_object(current);
+                    self.free_gc_object(current, ReclamationMode::Explicit);
                     self.current_mutator_gc_mut().allocated_count =
                         self.current_mutator_gc().allocated_count.saturating_sub(1);
                     noncons_freed += 1;
@@ -970,6 +992,9 @@ impl TaggedHeap {
                     return;
                 }
                 self.mark_or_push_child(data.arglist, "bytecode-arglist");
+                if let Some(child) = data.params.heap_child() {
+                    self.mark_or_push_child(child, "bytecode-parameter-arglist");
+                }
                 // Trace constants vector
                 for val in &data.constants {
                     self.mark_or_push_child(*val, "bytecode-constant");
@@ -1290,6 +1315,9 @@ impl TaggedHeap {
         let mut current = self.all_objects;
         let mut live_bytes = 0usize;
         while !current.is_null() {
+            // SAFETY: sweeping is exclusive with every marker and mutator;
+            // current and prev address this heap's initialized owner list.
+            // Unlinking precedes explicit resource teardown of a dead Box.
             unsafe {
                 let next = (*current).next;
                 if (*current).tenured && !(*current).generation.permanent() {
@@ -1309,7 +1337,7 @@ impl TaggedHeap {
                     *prev = next;
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
-                    self.free_gc_object(current);
+                    self.free_gc_object(current, ReclamationMode::Explicit);
                     self.current_mutator_gc_mut().allocated_count =
                         self.current_mutator_gc().allocated_count.saturating_sub(1);
                     current = next;
@@ -1518,9 +1546,12 @@ impl TaggedHeap {
             .sum()
     }
 
-    /// Free a GC object by its header pointer.
-    /// Must determine the actual type to call the correct Drop and dealloc.
-    pub(super) unsafe fn free_gc_object(&mut self, header: *mut GcHeader) {
+    /// Reclaim one detached residual Box according to its caller's lifecycle.
+    ///
+    /// # Safety
+    /// `header` is a live, exclusively owned allocation of its recorded kind,
+    /// detached from collector ownership and inaccessible to every marker.
+    pub(super) unsafe fn free_gc_object(&mut self, header: *mut GcHeader, mode: ReclamationMode) {
         if has_noncons_collection_observations() {
             // No mutator or joined collector can retain this dying owner.
             // Clear only collection history; GC category/liveness is intact.
@@ -1615,24 +1646,52 @@ impl TaggedHeap {
                         // function it queued survives independently.
                         drop(Box::from_raw(ptr as *mut FinalizerObj))
                     },
-                    VecLikeType::Sqlite => unsafe { drop(Box::from_raw(ptr as *mut SqliteObj)) },
+                    VecLikeType::Sqlite => {
+                        if mode == ReclamationMode::Explicit || !cfg!(feature = "sqlite") {
+                            // SAFETY: this detached allocation owns its SQLite
+                            // identity; explicit reclaim permits native close
+                            // and statement-finalization through its destructor.
+                            unsafe { drop(Box::from_raw(ptr as *mut SqliteObj)) };
+                        }
+                        // The enabled SqliteObj destructor borrows runtime
+                        // registries and runs native teardown. Retain its Box
+                        // during automatic Drop instead of invoking it.
+                    }
                     VecLikeType::Thread | VecLikeType::Mutex | VecLikeType::CondVar => unsafe {
                         drop(Box::from_raw(ptr as *mut ThreadingHandleObj))
                     },
                     VecLikeType::UserPtr => {
-                        // Call the finalizer if present before dropping.
                         let up = ptr as *mut UserPtrObj;
-                        if let Some(fin) = unsafe { (*up).finalizer } {
-                            unsafe { fin((*up).ptr) };
+                        if mode == ReclamationMode::Explicit {
+                            // SAFETY: the detached initialized object exclusively
+                            // owns its finalizer field. Remove it before invoking
+                            // the callback so teardown cannot call it twice.
+                            if let Some(fin) = unsafe { (*up).finalizer.take() } {
+                                // SAFETY: module allocation supplied this pointer
+                                // and callback pair; explicit reclamation is its
+                                // ownership-ending invocation.
+                                unsafe { fin((*up).ptr) };
+                            }
                         }
+                        // SAFETY: UserPtrObj has no custom destructor and owns
+                        // no Rust payload through its raw native pointer. The
+                        // fallback leaves that external payload unreclaimed.
                         unsafe { drop(Box::from_raw(up)) };
                     }
                     VecLikeType::ModuleFunction => {
-                        // Call the finalizer if present before dropping.
                         let mf = ptr as *mut ModuleFunctionObj;
-                        if let Some(fin) = unsafe { (*mf).finalizer } {
-                            unsafe { fin((*mf).data) };
+                        if mode == ReclamationMode::Explicit {
+                            // SAFETY: this detached object exclusively owns the
+                            // initialized field. Taking it prevents a second
+                            // invocation during any later destructor fallback.
+                            if let Some(fin) = unsafe { (*mf).finalizer.take() } {
+                                // SAFETY: the module registered the callback for
+                                // this closure data; explicit reclaim ends it.
+                                unsafe { fin((*mf).data) };
+                            }
                         }
+                        // SAFETY: this object only owns its inert Rust identity;
+                        // the raw closure data remains retained in Drop mode.
                         unsafe { drop(Box::from_raw(mf)) };
                     }
                 }

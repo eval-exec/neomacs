@@ -463,12 +463,7 @@ impl Frames {
             (jit_layout::CONTEXT_OBARRAY_OFFSET + jit_layout::OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET)
                 as i32,
         );
-        let debug = fb.ins().uload8(
-            types::I64,
-            flags,
-            debug_ptr,
-            LISP_BOOL_FWD_VALUE_OFFSET as i32,
-        );
+        let debug = super::atomic_forward::load_bool(fb, debug_ptr, LISP_BOOL_FWD_VALUE_OFFSET);
         let attention = fb.ins().bor(attention, asynchronous);
         let attention = fb.ins().bor(attention, debug);
         let clear = lowering::icmp_imm_p(fb, IntCC::Equal, attention, 0);

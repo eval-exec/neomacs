@@ -249,6 +249,86 @@ fn linux_ci_setup_profiles_expose_capabilities_and_reject_unknown_profiles() {
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("unknown profile: typo"));
 }
 
+fn gnu_oracle_ci_action() -> &'static str {
+    include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/.github/actions/setup-gnu-emacs/action.yml"
+    ))
+}
+
+#[test]
+fn gnu_oracle_ci_requires_native_dbus() {
+    let action = gnu_oracle_ci_action();
+    assert!(
+        action.split_whitespace().any(|word| word == "--with-dbus"),
+        "the pinned GNU must require D-Bus at configure time for real notification tests"
+    );
+    assert!(!action.contains("--without-dbus"));
+    let smoke = action
+        .split("- name: Put the oracle on PATH and prove it is the pinned build")
+        .nth(1)
+        .expect("oracle smoke step");
+    let required_features = smoke
+        .split("for want in ")
+        .nth(1)
+        .and_then(|tail| tail.split(';').next())
+        .expect("required GNU configuration features");
+    assert!(
+        required_features
+            .split_whitespace()
+            .any(|word| word == "DBUS")
+    );
+    assert!(smoke.contains("(require 'dbus)"));
+    for primitive in [
+        "dbus-call-method",
+        "dbus-register-method",
+        "dbus-get-unique-name",
+    ] {
+        assert!(smoke.contains(primitive), "smoke must verify {primitive}");
+    }
+    assert!(
+        smoke.contains("fboundp"),
+        "smoke must check native functions exist"
+    );
+    assert!(
+        smoke.contains("subrp"),
+        "smoke must distinguish the native primitive"
+    );
+}
+
+#[test]
+fn gnu_oracle_ci_installs_dbus_dependencies_on_cache_hits() {
+    let action = gnu_oracle_ci_action();
+    let dependency_step = action
+        .split("- name: Install the oracle's build and runtime dependencies")
+        .nth(1)
+        .and_then(|tail| tail.split("- name: Restore the cached oracle build").next())
+        .expect("unconditional dependency step before restoring cache");
+    assert!(
+        !dependency_step
+            .lines()
+            .any(|line| line.trim_start().starts_with("if:"))
+    );
+    for package in ["libdbus-1-dev", "dbus-daemon"] {
+        assert!(
+            dependency_step
+                .split_whitespace()
+                .any(|word| word == package),
+            "cache hits need {package} for the private notification service"
+        );
+    }
+}
+
+#[test]
+fn gnu_oracle_ci_keeps_build_scratch_in_workspace() {
+    let action = gnu_oracle_ci_action();
+    assert!(
+        action.contains("mktemp -d \"$GITHUB_WORKSPACE/tmp/gnu-emacs-oracle.XXXXXX\""),
+        "the GNU source checkout must use workspace tmp, including when TMPDIR is unset"
+    );
+    assert!(action.contains("mkdir -p \"$GITHUB_WORKSPACE/tmp\""));
+}
+
 #[test]
 fn cranelift_dependencies_are_workspace_owned_and_share_one_release_line() {
     let workspace_manifest = include_str!(concat!(env!("CARGO_WORKSPACE_DIR"), "/Cargo.toml"));

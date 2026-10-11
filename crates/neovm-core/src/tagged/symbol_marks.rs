@@ -35,6 +35,22 @@ impl SymbolMarkBits {
         self.words[word] |= bit;
     }
 
+    /// Mark `id`, returning whether this is its first visit this cycle.
+    #[inline]
+    pub(crate) fn insert_if_absent(&mut self, id: SymId) -> bool {
+        let (word, bit) = Self::coordinates(id);
+        if let Some(mark) = self.words.get_mut(word) {
+            if *mark & bit != 0 {
+                return false;
+            }
+            *mark |= bit;
+        } else {
+            self.words.resize(word + 1, 0);
+            self.words[word] = bit;
+        }
+        true
+    }
+
     /// Whether `id` was marked this cycle.
     #[inline]
     pub(crate) fn contains(&self, id: SymId) -> bool {
@@ -54,4 +70,5 @@ impl SymbolMarkBits {
 }
 
 #[cfg(test)]
+#[path = "symbol_marks/tests/symbol_marks_test.rs"]
 mod tests;

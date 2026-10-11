@@ -203,13 +203,62 @@ pub(crate) fn remove_list_equal(args: Vec<Value>) -> EvalResult {
     Ok(Value::list(result))
 }
 
+/// Validated GNU `take`/`ntake` iteration limit (fns.c:1675-1687).
+/// Positive bignums denote all representable list elements; nonpositive
+/// integers denote an empty prefix. This scalar type has no mutator state
+/// or heap references and can be sent/shared between independent mutators.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TakeCount {
+    Empty,
+    Positive(std::num::NonZeroUsize),
+}
+
+static_assertions::assert_impl_all!(TakeCount: Send, Sync);
+
+impl TryFrom<Value> for TakeCount {
+    type Error = Flow;
+
+    #[inline(always)]
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let Some(count) = value.as_fixnum() else {
+            return Self::try_from_non_fixnum(value);
+        };
+        Ok(match std::num::NonZeroUsize::new(count.max(0) as usize) {
+            Some(count) => Self::Positive(count),
+            None => Self::Empty,
+        })
+    }
+}
+
+impl TakeCount {
+    /// Keep heap inspection and condition construction off the fixnum path.
+    #[cold]
+    #[inline(never)]
+    fn try_from_non_fixnum(value: Value) -> Result<Self, Flow> {
+        let integer = value.as_bignum().ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("integerp"), value],
+            )
+        })?;
+        let count = if integer < &0 {
+            0
+        } else {
+            Value::MOST_POSITIVE_FIXNUM as usize
+        };
+        Ok(match std::num::NonZeroUsize::new(count) {
+            Some(count) => Self::Positive(count),
+            None => Self::Empty,
+        })
+    }
+}
+
 /// `(take N LIST)` — first N elements.
 pub(crate) fn builtin_take(args: Vec<Value>) -> EvalResult {
     expect_args("take", &args, 2)?;
-    let n = expect_int(&args[0])?;
-    if n <= 0 {
+    let TakeCount::Positive(n) = TakeCount::try_from(args[0])? else {
         return Ok(Value::NIL);
-    }
+    };
     let list = &args[1];
     if !list.is_nil() && !list.is_cons() {
         return Err(signal(
@@ -220,7 +269,7 @@ pub(crate) fn builtin_take(args: Vec<Value>) -> EvalResult {
 
     let mut result = Vec::new();
     let mut cursor = *list;
-    for _ in 0..(n as usize) {
+    for _ in 0..n.get() {
         match cursor.kind() {
             ValueKind::Nil => break,
             ValueKind::Cons => {
@@ -602,7 +651,7 @@ pub(crate) fn builtin_user_login_name(
 
     if ctx
         .obarray()
-        .symbol_value("user-login-name")
+        .symbol_value_copied("user-login-name")
         .is_none_or(|value| value.is_nil())
     {
         super::runtime_identity::install(ctx);
@@ -619,7 +668,7 @@ pub(crate) fn builtin_user_real_login_name(
     expect_args("user-real-login-name", &args, 0)?;
     if ctx
         .obarray()
-        .symbol_value("user-login-name")
+        .symbol_value_copied("user-login-name")
         .is_none_or(|value| value.is_nil())
     {
         super::runtime_identity::install(ctx);
@@ -910,5 +959,5 @@ pub(crate) fn builtin_neomacs_heap_layout_stats(args: Vec<Value>) -> EvalResult 
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/builtins_extra_test.rs"]
 mod tests;

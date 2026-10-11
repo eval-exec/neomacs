@@ -89,6 +89,15 @@ fn fs_subpixel(in: VertexOutput) -> @location(0) vec4<f32> {
     return composite_coverage(in, textureSample(glyph_texture, glyph_sampler, in.tex_coords).rgb);
 }
 
+// Transparent backgrounds cannot use opaque LCD glyph patches: their
+// precomputed background would become an opaque halo. Grayscale source-over
+// leaves the background alpha intact, with fully covered text still opaque.
+@fragment
+fn fs_transparent(in: VertexOutput) -> @location(0) vec4<f32> {
+    let coverage = textureSample(glyph_texture, glyph_sampler, in.tex_coords).r;
+    return vec4<f32>(in.fg_color.rgb, coverage * in.fg_color.a * uniforms.content_alpha);
+}
+
 @fragment
 fn fs_grayscale(in: VertexOutput) -> @location(0) vec4<f32> {
     return composite_coverage(in, vec3(textureSample(glyph_texture, glyph_sampler, in.tex_coords).r));

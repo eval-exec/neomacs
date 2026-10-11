@@ -84,4 +84,5 @@ impl DisplayCurrentRowMutation for HighlightTrailingWhitespaceMutation {
 }
 
 #[cfg(test)]
+#[path = "trailing_whitespace/tests/trailing_whitespace_test.rs"]
 mod tests;

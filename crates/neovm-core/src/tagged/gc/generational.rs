@@ -166,24 +166,40 @@ impl TaggedHeap {
 
     #[cfg(debug_assertions)]
     pub(super) fn debug_assert_remembered_membership(&self, owner: TaggedValue) {
+        debug_assert!(
+            self.remembered_membership_is_valid(owner),
+            "remembered owner absent from R, R_seed and mapped_remembered: {owner:?}"
+        );
+    }
+
+    /// Exercise the same invariant in tests even when debug assertions are off.
+    #[cfg(test)]
+    pub(super) fn assert_remembered_membership_for_test(&self, owner: TaggedValue) {
+        assert!(
+            self.remembered_membership_is_valid(owner),
+            "remembered owner absent from R, R_seed and mapped_remembered: {owner:?}"
+        );
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn remembered_membership_is_valid(&self, owner: TaggedValue) -> bool {
         if owner.is_cons() || self.owner_is_mapped(owner) {
-            return;
+            return true;
         }
         if let Some(addr) = Self::value_heap_addr(owner) {
             let header = unsafe { &*(addr as *const GcHeader) };
-            debug_assert!(
-                !header.is_remembered()
-                    || self.mapped_remembered.contains(&owner.bits())
-                    || self
-                        .generational
-                        .r_seed
-                        .iter()
-                        .any(|value| value.bits() == owner.bits())
-                    || self
-                        .mutators()
-                        .any(|m| m.remset.iter().any(|value| value.bits() == owner.bits())),
-                "remembered owner absent from R, R_seed and mapped_remembered: {owner:?}"
-            );
+            !header.is_remembered()
+                || self.mapped_remembered.contains(&owner.bits())
+                || self
+                    .generational
+                    .r_seed
+                    .iter()
+                    .any(|value| value.bits() == owner.bits())
+                || self
+                    .mutators()
+                    .any(|m| m.remset.iter().any(|value| value.bits() == owner.bits()))
+        } else {
+            true
         }
     }
 }

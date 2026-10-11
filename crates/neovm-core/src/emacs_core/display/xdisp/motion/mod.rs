@@ -546,5 +546,5 @@ fn vertical_motion_on_rows(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/motion_test.rs"]
 mod tests;

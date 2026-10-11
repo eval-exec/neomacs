@@ -11,6 +11,7 @@
 pub(crate) mod build;
 pub(crate) mod ir;
 pub(crate) mod mem;
+pub(crate) mod pass_fast;
 pub(crate) mod passes;
 pub(crate) mod sink_recipes;
 pub(crate) mod sink_shape;
@@ -21,13 +22,13 @@ pub(crate) mod verify;
 #[path = "tests/reference_eval.rs"]
 pub(crate) mod eval;
 #[cfg(test)]
-#[path = "tests/eval.rs"]
+#[path = "tests/eval_test.rs"]
 mod eval_tests;
 #[cfg(test)]
-#[path = "tests/ir_verify.rs"]
+#[path = "tests/ir_verify_test.rs"]
 mod ir_verify_tests;
 #[cfg(test)]
-#[path = "tests/types.rs"]
+#[path = "tests/types_test.rs"]
 mod type_tests;
 
 #[cfg(test)]
@@ -35,7 +36,7 @@ mod type_tests;
 mod gvn_eval_tests;
 
 #[cfg(test)]
-#[path = "tests/range_licm_eval.rs"]
+#[path = "tests/range_licm_eval_test.rs"]
 mod range_licm_eval_tests;
 
 #[cfg(test)]

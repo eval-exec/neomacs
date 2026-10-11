@@ -32,9 +32,27 @@ pub(crate) struct BoolStats {
 /// original plan. No instruction, observation identity or pinned effect is
 /// removed; semantic Lisp views are inserted at actual tagged consumers.
 pub(crate) fn run(func: &mut Func) -> Result<BoolStats, VerifyError> {
+    run_with_fast(func, super::super::pass_fast::enabled())
+}
+
+/// The flag and scratch belong to this compile invocation. Input verification
+/// still precedes discovery; an empty closed web cannot alter any observer or
+/// representation. Selected transformations retain transactional publication.
+fn run_with_fast(func: &mut Func, fast: bool) -> Result<BoolStats, VerifyError> {
     func.verify()?;
     let canonical = canonical_values(func);
     let analysis = analyze(func, &canonical);
+    if fast && !analysis.selected.iter().any(|&selected| selected) {
+        // Match the old vacuous rewrite's scalar census without cloning its
+        // complete original GNU stacks or rerunning the unchanged verifier.
+        func.census.insts = func.insts.len();
+        func.census.refinements = func
+            .insts
+            .iter()
+            .filter(|inst| matches!(inst.op, Opcode::Refine(_)))
+            .count();
+        return Ok(BoolStats::default());
+    }
     let mut candidate = func.clone();
     let stats = rewrite(&mut candidate, &canonical, &analysis);
     candidate.verify()?;
@@ -461,5 +479,10 @@ fn tagged_view(
 }
 
 #[cfg(test)]
-#[path = "tests/bools.rs"]
+#[path = "tests/bools_test.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn run_fast_for_test(func: &mut Func, fast: bool) -> Result<BoolStats, VerifyError> {
+    run_with_fast(func, fast)
+}

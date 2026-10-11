@@ -417,4 +417,5 @@ pub type PlatformBuffer = DmaBufBuffer;
 pub type PlatformBuffer = SharedMemoryBuffer;
 
 #[cfg(test)]
+#[path = "external_buffer/tests/external_buffer_test.rs"]
 mod tests;

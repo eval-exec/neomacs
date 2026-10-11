@@ -46,57 +46,51 @@ thread_local! {
 }
 
 /// Restores the call-feedback publication the compile inside it replaced.
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
 pub(crate) struct CallSourceScope {
-    prev: Option<Arc<RuntimeState>>,
-    prev_read: bool,
+    _source: crate::tls_scope::TlsScope<
+        Option<Arc<RuntimeState>>,
+        std::cell::RefCell<Option<Arc<RuntimeState>>>,
+    >,
+    _read: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
 }
+static_assertions::assert_not_impl_any!(CallSourceScope: Send, Sync);
 
 impl CallSourceScope {
     /// Publish `source` (whose table exists) as the compile's call-feedback
     /// source; `read` lets the compile read the recorded targets.
     pub(crate) fn enter(source: Option<Arc<RuntimeState>>, read: bool) -> Self {
         CallSourceScope {
-            prev: ACTIVE_CALL_SOURCE.with(|s| std::mem::replace(&mut *s.borrow_mut(), source)),
-            prev_read: ACTIVE_CALL_TARGETS_READ.with(|r| r.replace(read)),
+            _source: crate::tls_scope::TlsScope::new(&ACTIVE_CALL_SOURCE, source),
+            _read: crate::tls_scope::TlsScope::new(&ACTIVE_CALL_TARGETS_READ, read),
         }
-    }
-}
-
-impl Drop for CallSourceScope {
-    fn drop(&mut self) {
-        let prev = self.prev.take();
-        ACTIVE_CALL_SOURCE.with(|s| *s.borrow_mut() = prev);
-        ACTIVE_CALL_TARGETS_READ.with(|r| r.set(self.prev_read));
     }
 }
 
 /// The holds of one leaf build: a build nested inside a lowering keeps its
 /// own, and the outer build's are restored when it ends.
-pub(crate) struct FeedbackHolds(Option<Vec<Arc<RuntimeState>>>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct FeedbackHolds {
+    scope: crate::tls_scope::TlsScope<
+        Vec<Arc<RuntimeState>>,
+        std::cell::RefCell<Vec<Arc<RuntimeState>>>,
+    >,
+}
+static_assertions::assert_not_impl_any!(FeedbackHolds: Send, Sync);
 
 impl FeedbackHolds {
     /// Start collecting the holds of a leaf build.
     pub(crate) fn enter() -> Self {
-        FeedbackHolds(Some(
-            ACTIVE_FEEDBACK_HOLDS.with(|h| std::mem::take(&mut *h.borrow_mut())),
-        ))
+        FeedbackHolds {
+            scope: crate::tls_scope::TlsScope::new(&ACTIVE_FEEDBACK_HOLDS, Vec::new()),
+        }
     }
 
     /// The holds this build collected (the outer build's restored).
-    pub(crate) fn finish(mut self) -> Box<[Arc<RuntimeState>]> {
-        let outer = self.0.take().unwrap_or_default();
-        ACTIVE_FEEDBACK_HOLDS
-            .with(|h| std::mem::replace(&mut *h.borrow_mut(), outer))
-            .into_boxed_slice()
-    }
-}
-
-impl Drop for FeedbackHolds {
-    fn drop(&mut self) {
-        // A build abandoned on an error: its holds go, the outer's return.
-        if let Some(outer) = self.0.take() {
-            ACTIVE_FEEDBACK_HOLDS.with(|h| *h.borrow_mut() = outer);
-        }
+    pub(crate) fn finish(self) -> Box<[Arc<RuntimeState>]> {
+        self.scope.finish().unwrap_or_default().into_boxed_slice()
     }
 }
 

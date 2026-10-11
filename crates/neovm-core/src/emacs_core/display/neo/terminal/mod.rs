@@ -11,7 +11,7 @@ pub(crate) use subrs::SUBRS;
 pub(crate) use subrs::register_subrs;
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/terminal_test.rs"]
 mod tests;
 
 use crate::emacs_core::display_host::{

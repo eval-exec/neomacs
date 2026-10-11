@@ -232,5 +232,5 @@ impl Context {
 }
 
 #[cfg(test)]
-#[path = "tests/native_stack.rs"]
+#[path = "tests/native_stack_test.rs"]
 mod tests;

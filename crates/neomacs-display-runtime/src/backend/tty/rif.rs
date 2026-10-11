@@ -3409,6 +3409,7 @@ fn surface_tty_placeholder(width_cols: usize) -> String {
 }
 
 #[cfg(test)]
+#[path = "rif/tests/rif_test.rs"]
 mod tests;
 
 impl TtyRif {

@@ -310,4 +310,5 @@ fn spring_progress(omega: f32, zeta: f32, v0: f32, t: f32) -> f32 {
 }
 
 #[cfg(test)]
+#[path = "motion/tests/motion_test.rs"]
 mod tests;

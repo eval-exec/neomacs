@@ -43,14 +43,14 @@ std::cfg_select! {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-#[path = "tests/linux.rs"]
+#[path = "tests/linux_test.rs"]
 mod linux_test;
 
 #[cfg(all(
     test,
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
-#[path = "tests/native_runtime.rs"]
+#[path = "tests/native_runtime_test.rs"]
 mod native_runtime_test;
 
 thread_local! {
@@ -144,9 +144,9 @@ pub(crate) fn drain_file_notify_events(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/file_notify_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;

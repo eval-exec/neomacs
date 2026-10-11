@@ -19,7 +19,7 @@
 //! the general reads and the old per-call preparation. Read once per
 //! process, on the first builtin that asks.
 use super::*;
-use crate::emacs_core::symbol::SymbolRedirect;
+use crate::emacs_core::symbol::ValueCell;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 const KNOB_UNREAD: u8 = 0;
@@ -105,14 +105,10 @@ impl Context {
     #[inline(always)]
     fn builtin_var_value_cached(&self, id: SymId) -> Option<Value> {
         let sym = self.obarray.get_by_id(id)?;
-        match sym.redirect() {
-            SymbolRedirect::Plainval => {
-                // SAFETY: redirect=Plainval selects the plain-value arm.
-                let value = unsafe { sym.val.plain };
-                (!value.is_unbound()).then_some(value)
-            }
-            SymbolRedirect::Localized | SymbolRedirect::Forwarded => self.read_var_cached(id),
-            SymbolRedirect::Varalias => None,
+        match sym.value_cell() {
+            ValueCell::Plain(value) => (!value.is_unbound()).then_some(value),
+            ValueCell::Localized(_) | ValueCell::Forwarded(_) => self.read_var_cached(id),
+            ValueCell::Alias(_) => None,
         }
     }
 }

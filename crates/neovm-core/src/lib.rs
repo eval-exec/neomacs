@@ -16,8 +16,9 @@ mod keyboard_input;
 pub mod logging;
 pub mod tagged;
 #[cfg(test)]
-#[path = "tests/test_utils.rs"]
+#[path = "tests/test_utils_test.rs"]
 pub mod test_utils;
+mod tls_scope;
 pub mod window;
 
 // Curated facade: the front door for consumers of the Lisp engine. The

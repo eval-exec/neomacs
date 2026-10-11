@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static CALLBACK_CACHE: LazyLock<bool> =
     LazyLock::new(|| !std::env::var("NEOVM_CALLBACK_CACHE").is_ok_and(|value| value == "off"));
 
-#[inline]
+#[inline(always)]
 pub(crate) fn native_callback_cache_enabled() -> bool {
     #[cfg(not(feature = "vm-profile"))]
     {
@@ -84,7 +84,7 @@ impl Context {
     /// must use a proof resolved for one argument and root the original
     /// designator exactly as for apply1_resolved_subr. No new roots are needed:
     /// the cached body contains no Lisp values and native subrs are static.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn apply1_checked_subr(
         &mut self,
         designator: Value,
@@ -112,7 +112,7 @@ impl Context {
         self.apply_checked_subr(designator, subr, epoch, proof, &[arg0, arg1])
     }
 
-    #[inline]
+    #[inline(never)]
     fn apply_checked_subr(
         &mut self,
         designator: Value,
@@ -174,5 +174,5 @@ impl Context {
 }
 
 #[cfg(test)]
-#[path = "tests/native_callback_cache.rs"]
+#[path = "tests/native_callback_cache_test.rs"]
 mod native_callback_cache;

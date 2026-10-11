@@ -7,6 +7,7 @@
 
 use super::super::jit_layout::runtime_identity_word;
 use super::*;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 
 std::thread_local! {
     /// Scalar source token for the compile in progress, absent for direct
@@ -22,7 +23,13 @@ pub(crate) fn self_only_on() -> bool {
 
 /// Restores the preceding compiler source token when dropped.
 /// Threading: compiler-thread scalar configuration only, as above.
-pub(crate) struct SelfSourceScope(Option<usize>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct SelfSourceScope {
+    _scope: crate::tls_scope::TlsScope<Option<usize>, std::cell::Cell<Option<usize>>>,
+}
+
+static_assertions::assert_not_impl_any!(SelfSourceScope: Send, Sync);
 
 impl SelfSourceScope {
     pub(crate) fn enter_for(f: &ByteCodeFunction, may_call_self: bool, call_heavy: bool) -> Self {
@@ -37,13 +44,9 @@ impl SelfSourceScope {
                 ),
             })
         .then(|| runtime_identity_word(f.jit_runtime()));
-        Self(SELF_SOURCE.with(|current| current.replace(source)))
-    }
-}
-
-impl Drop for SelfSourceScope {
-    fn drop(&mut self) {
-        SELF_SOURCE.with(|current| current.set(self.0));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&SELF_SOURCE, source),
+        }
     }
 }
 
@@ -100,9 +103,10 @@ fn exact_site_of_source(site: &SpecSite, arity: usize, source: usize) -> bool {
         && Value::from_bits(site.expected_bits as usize)
             .bytecode_data_if_materialized()
             .is_some_and(|bc| {
-                bc.params.required.len() == arity
-                    && bc.params.optional.is_empty()
-                    && bc.params.rest.is_none()
+                JitParamShape::try_from(bc)
+                    .ok()
+                    .and_then(JitParamShape::fixed_arity)
+                    == Some(arity)
                     && bc.jit_runtime().patched_prefix() == 0
                     && runtime_identity_word(bc.jit_runtime()) == source
             })

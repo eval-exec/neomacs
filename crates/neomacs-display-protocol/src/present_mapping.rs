@@ -354,4 +354,5 @@ impl PresentMapping {
 }
 
 #[cfg(test)]
+#[path = "present_mapping/tests/present_mapping_test.rs"]
 mod tests;

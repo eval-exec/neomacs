@@ -140,6 +140,9 @@ mod float_nan_misc_edge_semantics;
 mod float_operations_comprehensive;
 mod following_char_operations;
 mod font_otf_availability_semantics;
+#[cfg(test)]
+#[path = "fontset_repertory_test.rs"]
+mod fontset_repertory;
 mod format;
 mod forward;
 mod frame;
@@ -152,6 +155,25 @@ mod function;
 #[cfg(test)]
 mod gc_generational;
 mod gc_scan_strict_edge_semantics;
+#[cfg(test)]
+#[path = "tests/gd_b_backtrace.rs"]
+mod gd_b_backtrace;
+#[cfg(test)]
+#[path = "tests/gd_b_backtrace_raw.rs"]
+mod gd_b_backtrace_raw;
+#[cfg(test)]
+#[path = "tests/gd_b_condition_var.rs"]
+mod gd_b_condition_var;
+#[cfg(test)]
+#[path = "tests/gd_b_safe_call.rs"]
+mod gd_b_safe_call;
+#[cfg(test)]
+#[path = "tests/gd_b_signal_room.rs"]
+mod gd_b_signal_room;
+#[cfg(test)]
+#[path = "tests/gd_b_signals.rs"]
+mod gd_b_signals;
+mod gdh_coding_encode_semantics;
 mod gdh_strconv_semantics;
 mod generator_semantics;
 mod generic_function_comprehensive;
@@ -423,3 +445,11 @@ mod wrapper_hook_semantics;
 mod xml_semantics;
 mod yank_properties_semantics;
 mod zlib_decompress_region_semantics;
+
+#[cfg(test)]
+#[path = "tests/gd_e_overlay_seams.rs"]
+mod gd_e_overlay_seams;
+
+#[cfg(test)]
+#[path = "tests/gd_e_sort.rs"]
+mod gd_e_sort;

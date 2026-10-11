@@ -1056,6 +1056,13 @@ for the animation speed.  A negative value means to animate in reverse."
         ;; FIXME: This doesn't currently support ImageMagick.
         (clear-image-cache nil image)
       (let* ((time (current-time))
+             ;; Computed animations can have a one-time introduction followed
+             ;; by a repeating segment.  Its timing describes the frame we
+             ;; are about to display, independently of the cached frame.
+             (introduction (and (plist-get (cdr image) :animation)
+                                (image-metadata image)))
+             (loop-start (or (plist-get introduction 'loop-start) 0))
+             (displayed-frame n)
              ;; Each animation frame can have its own duration, so
              ;; (re)fetch its `image-metadata'.  Do so before
              ;; `image-show-frame' to avoid an image cache miss per
@@ -1063,8 +1070,17 @@ for the animation speed.  A negative value means to animate in reverse."
              (multi (prog1 (image-multi-frame-p image)
                       (image-show-frame image n t)))
 	     (speed (image-animate-get-speed image))
+             (frame-delay
+              (or (and (> loop-start 0)
+                       (plist-get introduction
+                                  (if (< displayed-frame loop-start)
+                                      'intro-delay
+                                    'loop-delay)))
+                  (cdr multi)))
 	     (stated-delay-time
-              (/ (or (cdr multi) image-default-frame-delay)
+              (/ (if (numberp frame-delay)
+                     frame-delay
+                   image-default-frame-delay)
 	         (float (abs speed))))
              (time-to-load-image (time-since time))
 	     ;; Subtract off the time we took to load the image from the
@@ -1077,8 +1093,11 @@ for the animation speed.  A negative value means to animate in reverse."
 		    (1- n)
 		  (1+ n)))
         (if limit
-	    (cond ((>= n count) (setq n 0))
-		  ((< n 0) (setq n (1- count))))
+	    (cond ((>= n count) (setq n loop-start))
+		  ((or (< n 0)
+                           (and (>= displayed-frame loop-start)
+                                (< n loop-start)))
+                       (setq n (1- count))))
 	  (and (or (>= n count) (< n 0)) (setq done t)))
         (setq time-elapsed (+ delay time-elapsed))
         (if (numberp limit)

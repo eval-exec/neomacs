@@ -162,6 +162,39 @@ impl PropertizeFrontier<'_> {
 }
 
 impl SyntaxLookup for BufferRegexpSyntaxLookup<'_> {
+    fn emacs_char_syntax(
+        &self,
+        c: crate::emacs_core::emacs_char::EmacsChar,
+    ) -> crate::emacs_core::syntax::SyntaxClass {
+        self.base.emacs_char_syntax(c)
+    }
+
+    fn emacs_char_syntax_at(
+        &self,
+        c: crate::emacs_core::emacs_char::EmacsChar,
+        input_pos: usize,
+    ) -> crate::emacs_core::syntax::SyntaxClass {
+        let abs = EmacsBytePos::new(self.input_start.get().saturating_add(input_pos));
+        if let Some(frontier) = self.frontier {
+            frontier.note_read(abs);
+        }
+        crate::emacs_core::syntax::regexp_syntax_class_for_emacs_char_at_buffer_byte(
+            self.buffer,
+            &self.base.syntax_table,
+            c,
+            abs,
+            &self.property_lookup,
+        )
+    }
+
+    fn emacs_word_boundary_between(
+        &self,
+        c1: crate::emacs_core::emacs_char::EmacsChar,
+        c2: crate::emacs_core::emacs_char::EmacsChar,
+    ) -> bool {
+        self.base.emacs_word_boundary_between(c1, c2)
+    }
+
     fn char_syntax(&self, c: char) -> crate::emacs_core::syntax::SyntaxClass {
         self.base.char_syntax(c)
     }
@@ -284,7 +317,7 @@ impl<'a> StringSyntaxLookup<'a> {
             property_lookup: crate::emacs_core::syntax::StringSyntaxPropByteRun::new(
                 syntax_properties,
                 string,
-                Some(intervals),
+                intervals.as_table(),
             ),
             base,
         })
@@ -300,6 +333,34 @@ impl<'a> StringSyntaxLookup<'a> {
 }
 
 impl SyntaxLookup for StringRegexpSyntaxLookup<'_> {
+    fn emacs_char_syntax(
+        &self,
+        c: crate::emacs_core::emacs_char::EmacsChar,
+    ) -> crate::emacs_core::syntax::SyntaxClass {
+        self.base.emacs_char_syntax(c)
+    }
+
+    fn emacs_char_syntax_at(
+        &self,
+        c: crate::emacs_core::emacs_char::EmacsChar,
+        input_pos: usize,
+    ) -> crate::emacs_core::syntax::SyntaxClass {
+        crate::emacs_core::syntax::regexp_syntax_class_for_emacs_char_at_string_byte(
+            &self.base.syntax_table,
+            c,
+            input_pos,
+            &self.property_lookup,
+        )
+    }
+
+    fn emacs_word_boundary_between(
+        &self,
+        c1: crate::emacs_core::emacs_char::EmacsChar,
+        c2: crate::emacs_core::emacs_char::EmacsChar,
+    ) -> bool {
+        self.base.emacs_word_boundary_between(c1, c2)
+    }
+
     fn char_syntax(&self, c: char) -> crate::emacs_core::syntax::SyntaxClass {
         self.base.char_syntax(c)
     }
@@ -697,11 +758,20 @@ enum MatchDataKind {
         groups: smallvec::SmallVec<[Option<CharRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
         searched: Option<SearchedString>,
     },
-    /// Buffer identity and published Lisp-coordinate payload travel together.
-    Buffer {
-        id: BufferId,
+    /// Published Lisp positions retained in place across a failed string
+    /// search. Provenance determines how extraction interprets the numbers.
+    LispRegisters {
+        source: LispRegisterSource,
         groups: smallvec::SmallVec<[Option<LispCharMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
     },
+}
+
+/// GNU retains register numbers when a failed string search changes
+/// `last_thing_searched` from a buffer to `Qt` (search.c:422-427).
+#[derive(Clone, Copy, Debug)]
+enum LispRegisterSource {
+    Buffer(BufferId),
+    RetainedString,
 }
 
 /// Private, zero-based Emacs-byte ranges returned by the regexp engine.
@@ -788,12 +858,13 @@ impl SearchRegisters {
 
     /// Publish these registers, in Lisp character positions of BUF, as the
     /// match data in TARGET, reusing TARGET's register storage when it
-    /// already holds buffer match data.
+    /// already holds Lisp registers, including those retained by a failed
+    /// string search.
     pub(crate) fn publish_buffer_into(&self, buf: &Buffer, target: &mut Option<MatchData>) {
         if let Some(match_data) = target
-            && let MatchDataKind::Buffer { id, groups } = &mut match_data.kind
+            && let MatchDataKind::LispRegisters { source, groups } = &mut match_data.kind
         {
-            *id = buf.id;
+            *source = LispRegisterSource::Buffer(buf.id);
             groups.clear();
             self.fill_buffer_groups(buf, groups);
             #[cfg(debug_assertions)]
@@ -805,7 +876,10 @@ impl SearchRegisters {
         let mut groups = smallvec::SmallVec::new();
         self.fill_buffer_groups(buf, &mut groups);
         *target = Some(MatchData {
-            kind: MatchDataKind::Buffer { id: buf.id, groups },
+            kind: MatchDataKind::LispRegisters {
+                source: LispRegisterSource::Buffer(buf.id),
+                groups,
+            },
             #[cfg(debug_assertions)]
             read_mask: Default::default(),
         });
@@ -1197,8 +1271,8 @@ impl MatchData {
 
     pub(crate) fn buffer_lisp_chars(groups: Vec<Option<MatchGroup>>, buffer_id: BufferId) -> Self {
         Self {
-            kind: MatchDataKind::Buffer {
-                id: buffer_id,
+            kind: MatchDataKind::LispRegisters {
+                source: LispRegisterSource::Buffer(buffer_id),
                 groups: groups
                     .into_iter()
                     .map(|group| group.map(LispCharMatchRange::from_match_group))
@@ -1212,21 +1286,36 @@ impl MatchData {
     pub(crate) fn searched_string(&self) -> Option<&SearchedString> {
         match &self.kind {
             MatchDataKind::StringChars { searched, .. } => searched.as_ref(),
-            _ => None,
+            MatchDataKind::LispRegisters { .. } => None,
         }
     }
 
     pub(crate) fn source(&self) -> MatchDataSource {
         match self.kind {
             MatchDataKind::StringChars { .. } => MatchDataSource::String,
-            MatchDataKind::Buffer { id, .. } => MatchDataSource::Buffer(id),
+            MatchDataKind::LispRegisters { source, .. } => match source {
+                LispRegisterSource::Buffer(id) => MatchDataSource::Buffer(id),
+                LispRegisterSource::RetainedString => MatchDataSource::String,
+            },
+        }
+    }
+
+    /// A failed string search changes GNU's `last_thing_searched` to `Qt`
+    /// while retaining the register numbers (search.c:422-427). The old
+    /// buffer positions now name string indices; do not subtract one.
+    pub(crate) fn record_failed_string_search(&mut self) {
+        match &mut self.kind {
+            MatchDataKind::StringChars { searched, .. } => *searched = None,
+            MatchDataKind::LispRegisters { source, .. } => {
+                *source = LispRegisterSource::RetainedString;
+            }
         }
     }
 
     pub(crate) fn group_count(&self) -> usize {
         match &self.kind {
             MatchDataKind::StringChars { groups, .. } => groups.len(),
-            MatchDataKind::Buffer { groups, .. } => groups.len(),
+            MatchDataKind::LispRegisters { groups, .. } => groups.len(),
         }
     }
 
@@ -1239,7 +1328,7 @@ impl MatchData {
                 .copied()
                 .flatten()
                 .map(MatchGroup::from_char_range),
-            MatchDataKind::Buffer { groups, .. } => groups
+            MatchDataKind::LispRegisters { groups, .. } => groups
                 .get(index)
                 .copied()
                 .flatten()
@@ -1261,11 +1350,16 @@ impl MatchData {
     pub(crate) fn group_zero_based_char_range(&self, index: usize) -> Option<CharRange> {
         match &self.kind {
             MatchDataKind::StringChars { groups, .. } => groups.get(index).copied().flatten(),
-            MatchDataKind::Buffer { groups, .. } => groups
+            MatchDataKind::LispRegisters { source, groups } => groups
                 .get(index)
                 .copied()
                 .flatten()
-                .map(|range| range.zero_based()),
+                .map(|range| match source {
+                    LispRegisterSource::Buffer(_) => range.zero_based(),
+                    LispRegisterSource::RetainedString => {
+                        range.into_match_group().string_char_range()
+                    }
+                }),
         }
     }
 
@@ -1283,7 +1377,7 @@ impl MatchData {
                     *range = map(MatchGroup::from_char_range(*range)).string_char_range();
                 }
             }
-            MatchDataKind::Buffer { groups, .. } => {
+            MatchDataKind::LispRegisters { groups, .. } => {
                 for range in groups.iter_mut().flatten() {
                     *range = LispCharMatchRange::from_match_group(map(range.into_match_group()));
                 }
@@ -1308,7 +1402,7 @@ impl MatchData {
                     *range = map(MatchGroup::from_char_range(*range)).string_char_range();
                 }
             }
-            MatchDataKind::Buffer { groups, .. } => {
+            MatchDataKind::LispRegisters { groups, .. } => {
                 for range in groups.iter_mut().flatten() {
                     *range = LispCharMatchRange::from_match_group(map(range.into_match_group()));
                 }
@@ -1404,7 +1498,10 @@ impl EngineMatchData {
         >::with_capacity(self.groups.len());
         self.fill_buffer_groups(buf, &mut groups);
         MatchData {
-            kind: MatchDataKind::Buffer { id: buf.id, groups },
+            kind: MatchDataKind::LispRegisters {
+                source: LispRegisterSource::Buffer(buf.id),
+                groups,
+            },
             #[cfg(debug_assertions)]
             read_mask: Default::default(),
         }
@@ -4935,21 +5032,21 @@ pub(crate) mod match_stats {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/regex_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_collection_epoch.rs"]
+#[path = "tests/gc_collection_epoch_test.rs"]
 mod gc_collection_epoch_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_collection_epoch_minor.rs"]
+#[path = "tests/gc_collection_epoch_minor_test.rs"]
 mod gc_collection_epoch_minor_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_literal_epoch.rs"]
+#[path = "tests/gc_literal_epoch_test.rs"]
 mod gc_literal_epoch_tests;

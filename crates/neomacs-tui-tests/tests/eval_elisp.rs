@@ -36,6 +36,53 @@ fn expose_structural_bytecode_in_backtraces(gnu: &mut TuiSession, neo: &mut TuiS
 
 // ── Tests ──────────────────────────────────────────────────
 #[test]
+fn integer_width_overflow_returns_to_interactive_evaluation() {
+    let (mut gnu, mut neo) = boot_pair("");
+    support::eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(condition-case e (let ((integer-width 128)) (expt 2 128)) (error e))",
+    );
+    let overflow = |grid: &[String]| {
+        grid.iter()
+            .rev()
+            .take(4)
+            .any(|row| row.contains("(overflow-error)"))
+    };
+    gnu.read_until(Duration::from_secs(6), overflow);
+    neo.read_until(Duration::from_secs(8), overflow);
+    for (label, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        assert!(
+            overflow(&session.text_grid()),
+            "{label}: {}",
+            session.text_grid().join("\n")
+        );
+    }
+    support::eval_expression(&mut gnu, &mut neo, "(list integer-width (+ 40 2))");
+    let restored = |grid: &[String]| {
+        grid.iter()
+            .rev()
+            .take(4)
+            .any(|row| row.contains("(65536 42)"))
+    };
+    gnu.read_until(Duration::from_secs(6), restored);
+    neo.read_until(Duration::from_secs(8), restored);
+    for (label, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        assert!(
+            restored(&session.text_grid()),
+            "{label}: {}",
+            session.text_grid().join("\n")
+        );
+    }
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    assert_pair_exact_display(
+        "integer_width_overflow_returns_to_interactive_evaluation",
+        &gnu,
+        &neo,
+    );
+}
+
+#[test]
 fn eval_last_sexp_via_cx_ce_prints_echo_area_value() {
     let (mut gnu, mut neo) = boot_pair("");
 

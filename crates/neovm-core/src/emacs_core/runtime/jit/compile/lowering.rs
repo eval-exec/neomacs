@@ -14,6 +14,15 @@ pub(crate) use opt_sink_deopt::emit_pending_deopts_with_sink;
 mod array_profile_selected;
 pub(crate) use array_profile_selected::lower_simple_op_with_array_profile;
 
+#[path = "lowering/rootwin_census.rs"]
+mod rootwin_census;
+pub(crate) use rootwin_census::RootWinCounterScope;
+use rootwin_census::RootWinCounts;
+
+#[cfg(test)]
+#[path = "tests/rootwin_census_scope.rs"]
+mod rootwin_census_scope_tests;
+
 /// Emit a speculation guard.
 ///
 /// If `cond` (an `i8` boolean from `icmp`) is false, branch to the shared deopt
@@ -1567,9 +1576,7 @@ fn emit_inline_record_type_of(
         vmctx,
         (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let debug = fb
-        .ins()
-        .uload8(types::I64, flags, cell, LISP_BOOL_FWD_VALUE_OFFSET as i32);
+    let debug = super::atomic_forward::load_bool(fb, cell, LISP_BOOL_FWD_VALUE_OFFSET);
     let object = band_imm_p(fb, arg, !(TAG_MASK as i64));
     let type_tag = fb.ins().uload8(types::I64, flags, object, type_off as i32);
     let not_record = fb.ins().bxor_imm_u(type_tag, record_tag);
@@ -1836,11 +1843,12 @@ pub(crate) fn emit_root_window_stores(
         }
         // Which slots already hold their value (see `RootWinCarry`).
         let (ptr, slot0) = ROOTWIN_CARRY.with(|c| {
-            let mut c = c.borrow_mut();
+            let mut stored = c.stored.borrow_mut();
+            let mut counts = c.counts.get();
             let needs_store = to_root
                 .iter()
                 .enumerate()
-                .any(|(i, &v)| c.stored.get(i).copied().flatten() != Some(v));
+                .any(|(i, &v)| stored.get(i).copied().flatten() != Some(v));
             let addr = needs_store.then(|| {
                 let ptr = fb
                     .ins()
@@ -1848,22 +1856,23 @@ pub(crate) fn emit_root_window_stores(
                 (ptr, fb.ins().iadd(ptr, h.byte_off))
             });
             for (i, &v) in to_root.iter().enumerate() {
-                if c.stored.get(i).copied().flatten() == Some(v) {
-                    c.elided += 1;
+                if stored.get(i).copied().flatten() == Some(v) {
+                    counts.note_elided();
                     continue;
                 }
                 let (_, slot0) = addr.expect("a differing slot implies the address");
                 fb.ins()
                     .store(MemFlagsData::trusted(), v, slot0, (i * 8) as i32);
-                c.emitted += 1;
-                if c.stored.len() <= i {
-                    c.stored.resize(i + 1, None);
+                counts.note_emitted();
+                if stored.len() <= i {
+                    stored.resize(i + 1, None);
                 }
-                c.stored[i] = Some(v);
+                stored[i] = Some(v);
             }
             // Slots at or above this site's count may be clobbered by the
             // nested activation during the call.
-            c.stored.truncate(to_root.len());
+            stored.truncate(to_root.len());
+            c.counts.set(counts);
             addr.unwrap_or((vmctx, vmctx))
         });
         let _ = (ptr, slot0);
@@ -2230,9 +2239,7 @@ pub(crate) fn emit_mir_inline_entry_guard(
         vmctx,
         (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let debug = fb
-        .ins()
-        .uload8(types::I64, flags, cell, LISP_BOOL_FWD_VALUE_OFFSET as i32);
+    let debug = super::atomic_forward::load_bool(fb, cell, LISP_BOOL_FWD_VALUE_OFFSET);
     let depth = fb.ins().load(
         rt.ptr_ty,
         flags,
@@ -3077,17 +3084,19 @@ pub(crate) fn active_regalloc_choice() -> RegallocChoice {
 
 /// RAII scope: every ISA built inside it uses `choice`; the previous choice
 /// is restored on drop (a nested compile restores its parent's).
-pub(crate) struct RegallocScope(RegallocChoice);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct RegallocScope {
+    _scope: crate::tls_scope::TlsScope<RegallocChoice, std::cell::Cell<RegallocChoice>>,
+}
+
+static_assertions::assert_not_impl_any!(RegallocScope: Send, Sync);
 
 impl RegallocScope {
     pub(crate) fn enter(choice: RegallocChoice) -> Self {
-        Self(ACTIVE_REGALLOC.with(|c| c.replace(choice)))
-    }
-}
-
-impl Drop for RegallocScope {
-    fn drop(&mut self) {
-        ACTIVE_REGALLOC.with(|c| c.set(self.0));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&ACTIVE_REGALLOC, choice),
+        }
     }
 }
 
@@ -3225,13 +3234,14 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
     // eligible JIT body when the knob is on.
     abi: super::LeafAbi,
 ) -> Result<cranelift_module::FuncId, CompileError> {
+    let rootwin_census = RootWinCounterScope::enter();
     debug_assert!(
         abi == super::LeafAbi::Memory || !aot,
         "AOT entries keep the memory ABI"
     );
     imm_pool_reset();
     guards_emitted_reset();
-    rootwin_counters_reset();
+    rootwin_carry_reset();
     super::cold_exits::begin_function();
     use mir::{BinKind, CmpKind, MirOp, MirTerm, PredKind as MP, UnaryKind as MU};
 
@@ -3319,6 +3329,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 refs,
                 vmctx_var,
                 ptr_ty,
+                forward_atomics: super::atomic_forward::ForwardAtomics::for_isa(
+                    sink.module().isa(),
+                ),
                 call_args_slot,
                 call_result_slot,
                 rootwin: None,
@@ -4144,7 +4157,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             slots,
         ));
     });
-    let (rw_stores, rw_elided) = rootwin_counters();
+    let rootwin_counts = rootwin_census.snapshot();
+    let rw_stores = rootwin_counts.emitted();
+    let rw_elided = rootwin_counts.elided();
     dump_clif(
         &func,
         &format!(
@@ -4157,7 +4172,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
     );
 
     super::note_clif_size(&func);
-    sink.define_leaf(
+    let id = sink.define_leaf(
         super::LeafEntry {
             name: entry_name,
             linkage: entry_linkage,
@@ -4165,7 +4180,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
         },
         func,
         super::super::stats::asm_dump::want_disasm(aot),
-    )
+    )?;
+    rootwin_census.finish();
+    Ok(id)
 }
 
 /// Per-function runtime-call machinery: shim references plus the vmctx variable
@@ -4178,6 +4195,8 @@ pub(crate) struct RtCtx {
     pub(crate) vmctx_var: Variable,
     /// Pointer type of the target (for `stack_addr`).
     pub(crate) ptr_ty: Type,
+    /// Compiler-only target policy for publishing atomic descriptor slots.
+    pub(crate) forward_atomics: super::ForwardAtomics,
     /// Spill buffer for outgoing call arguments (max `Call` nargs in the body).
     pub(crate) call_args_slot: StackSlot,
     /// 8-byte result slot the call shim writes through.
@@ -4251,8 +4270,13 @@ thread_local! {
     /// Which root-window slots the hoisted sites of the function being
     /// lowered have already stored (see [`RootWinCarry`]). Reset per
     /// function and at every bytecode basic-block leader.
-    static ROOTWIN_CARRY: std::cell::RefCell<RootWinCarry> =
-        const { std::cell::RefCell::new(RootWinCarry { stored: Vec::new(), emitted: 0, elided: 0 }) };
+    static ROOTWIN_CARRY: RootWinCarry = const {
+        RootWinCarry {
+            stored: std::cell::RefCell::new(Vec::new()),
+            counts: std::cell::Cell::new(RootWinCounts::ZERO),
+            _thread: std::marker::PhantomData,
+        }
+    };
 }
 
 /// The per-window-index SSA value the last hoisted site stored.
@@ -4287,12 +4311,19 @@ thread_local! {
 ///    bytecode block but entered from one earlier site's signal edge), and a
 ///    back-edge poll block (a Switch compare chain emits one per backward
 ///    target, as sibling paths) — the record is dropped there.
+///
+/// Threading: compile-thread SSA history only, never Lisp/mutator state. The
+/// vector retains its allocation across compilations. Separate scalar cells
+/// let a diagnostic scope restore its enclosing census without borrowing the
+/// vector, including during unwinding through a live vector borrow.
+#[derive(Debug)]
 struct RootWinCarry {
-    stored: Vec<Option<ClifValue>>,
-    /// Diagnostics: root-window stores emitted / elided in this function.
-    emitted: u32,
-    elided: u32,
+    stored: std::cell::RefCell<Vec<Option<ClifValue>>>,
+    counts: std::cell::Cell<RootWinCounts>,
+    _thread: std::marker::PhantomData<*const ()>,
 }
+
+static_assertions::assert_not_impl_any!(RootWinCarry: Send, Sync);
 
 #[cfg(test)]
 thread_local! {
@@ -4309,13 +4340,13 @@ pub(crate) fn force_spec_guard_miss_for_test(on: bool) {
 /// Forget the carried record: a new function, a bytecode leader, a MIR block
 /// head, or a site that runs a nested activation without storing anything.
 pub(crate) fn rootwin_carry_reset() {
-    ROOTWIN_CARRY.with(|c| c.borrow_mut().stored.clear());
+    ROOTWIN_CARRY.with(|c| c.stored.borrow_mut().clear());
 }
 
 /// The carried record as it stands — taken just before a conditional
 /// fallback roots, i.e. the record on the path that skips the fallback.
 pub(crate) fn rootwin_carry_snapshot() -> Vec<Option<ClifValue>> {
-    ROOTWIN_CARRY.with(|c| c.borrow().stored.clone())
+    ROOTWIN_CARRY.with(|c| c.stored.borrow().clone())
 }
 
 /// Merge a conditional fallback's store history with the path that skipped
@@ -4323,10 +4354,10 @@ pub(crate) fn rootwin_carry_snapshot() -> Vec<Option<ClifValue>> {
 /// in the slot (rule 2 on [`RootWinCarry`]).
 pub(crate) fn rootwin_carry_meet(snapshot: &[Option<ClifValue>]) {
     ROOTWIN_CARRY.with(|c| {
-        let mut c = c.borrow_mut();
-        let n = c.stored.len().min(snapshot.len());
-        c.stored.truncate(n);
-        for (slot, &other) in c.stored.iter_mut().zip(snapshot) {
+        let mut stored = c.stored.borrow_mut();
+        let n = stored.len().min(snapshot.len());
+        stored.truncate(n);
+        for (slot, &other) in stored.iter_mut().zip(snapshot) {
             if *slot != other {
                 *slot = None;
             }
@@ -4338,28 +4369,17 @@ pub(crate) fn rootwin_carry_meet(snapshot: &[Option<ClifValue>]) {
 /// only predecessor had that store history starts from it exactly.
 pub(crate) fn rootwin_carry_restore(snapshot: &[Option<ClifValue>]) {
     ROOTWIN_CARRY.with(|c| {
-        let mut c = c.borrow_mut();
-        c.stored.clear();
-        c.stored.extend_from_slice(snapshot);
+        let mut stored = c.stored.borrow_mut();
+        stored.clear();
+        stored.extend_from_slice(snapshot);
     });
 }
 
-/// Zero the per-function elision counters (at the hoisted prologue).
-pub(crate) fn rootwin_counters_reset() {
-    ROOTWIN_CARRY.with(|c| {
-        let mut c = c.borrow_mut();
-        c.stored.clear();
-        c.emitted = 0;
-        c.elided = 0;
-    });
-}
-
-/// `(root-window stores emitted, elided)` for the function just lowered.
+/// Test observer: `(stores emitted, elided)` for the last successfully defined
+/// leaf. Production headers read their compilation scope's typed snapshot.
+#[cfg(test)]
 pub(crate) fn rootwin_counters() -> (u32, u32) {
-    ROOTWIN_CARRY.with(|c| {
-        let c = c.borrow();
-        (c.emitted, c.elided)
-    })
+    rootwin_census::last_completed_counts().into()
 }
 
 thread_local! {
@@ -4536,7 +4556,7 @@ pub(crate) fn emit_hoisted_root_window_prologue(
     vmctx: ClifValue,
     max_slots: usize,
 ) {
-    rootwin_counters_reset();
+    rootwin_carry_reset();
     let (_off_ptr, off_top, off_cap) = ctx_rootwin_offsets();
     let base = fb
         .ins()
@@ -4877,8 +4897,9 @@ fn lower_bcall_leaf_site(
 /// [`STATUS_DEOPT_AT`]: the failing op's bytecode index, the live operand
 /// stack depth (the values themselves go to the spill buffer), and the number
 /// of condition frames this frame had registered at that point. `Cell` makes
-/// the native interior writes legal; the mutator is single-threaded and the
-/// values are consumed immediately after the native call returns.
+/// the native interior writes legal. The enclosing !Send/!Sync CompiledLeaf
+/// confines its scratch to one mutator, which consumes these values immediately
+/// after the native call returns.
 ///
 /// Two trailing cells carry what a cold block knows beyond the framestate
 /// (P2.0 §3.4; the offsets of the first three never move, so the AOT
@@ -4904,6 +4925,11 @@ pub(crate) struct DeoptCells {
     pub(crate) reason: core::cell::Cell<i64>,
     pub(crate) chain: core::cell::Cell<i64>,
 }
+
+// The unshared allocation may move before publication. Once published to a
+// leaf, generated code writes these cells only on that leaf's owning mutator.
+static_assertions::assert_impl_all!(DeoptCells: Send);
+static_assertions::assert_not_impl_any!(DeoptCells: Sync);
 
 impl DeoptCells {
     /// `reason`'s unset value: the hook classifies the deopt from its op.
@@ -5021,6 +5047,11 @@ thread_local! {
 /// Enter (or leave) an inlined region for the ops lowered next.
 pub(crate) fn set_active_region(region: Option<RegionDeopt>) {
     ACTIVE_REGION.with(|r| *r.borrow_mut() = region);
+}
+
+/// Teardown may run while TLS is borrowed or already being destroyed.
+pub(crate) fn clear_active_region_on_scope_drop() {
+    drop(crate::tls_scope::TlsScope::restore(&ACTIVE_REGION, None));
 }
 
 /// The call site of the region the lowering is inside, if any.

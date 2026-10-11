@@ -26,7 +26,7 @@
 //! `neovm--vm-profile-dump` prints them.
 
 use super::*;
-use crate::emacs_core::forward::{ForwardStore, LispBufferObjFwd, LispFwd, LispFwdType};
+use crate::emacs_core::forward::{ForwardStore, LispFwd, LispFwdType};
 use crate::emacs_core::symbol::{
     BlvCacheHit, LispSymbol, SYMCELL_INLINE_WRITE_MASK, SymbolRedirect, symcell_inline_write_value,
 };
@@ -345,11 +345,8 @@ impl Context {
             return Some(value);
         }
         // `load` answers `None` for exactly the per-buffer slot.
-        debug_assert_eq!(fwd.ty, LispFwdType::BufferObj);
+        let buf_fwd = fwd.as_buffer_obj_fwd()?;
         let buf = self.buffers.current_buffer()?;
-        // SAFETY: a `BufferObj` descriptor is a `LispBufferObjFwd`, whose
-        // first field is the shared header (`#[repr(C)]`).
-        let buf_fwd = unsafe { &*(fwd as *const LispFwd as *const LispBufferObjFwd) };
         let value = buf_fwd.value_in(
             Some(&buf.slots[..]),
             buf.local_flags,
@@ -459,7 +456,7 @@ impl Context {
         };
         // A per-buffer slot has local-flag and default-propagation rules;
         // `store_runtime_binding` writes a slot-named symbol's buffer slot.
-        if fwd.ty == LispFwdType::BufferObj
+        if fwd.ty() == LispFwdType::BufferObj
             || crate::buffer::buffer::lookup_buffer_slot_by_sym_id(id).is_some()
         {
             return false;
@@ -578,7 +575,7 @@ impl Context {
     ) -> bool {
         // A per-buffer slot binds `LetLocal`/`LetDefault` by its local flag;
         // a keyboard variable is GNU's `where.kbd` binding.
-        if matches!(fwd.ty, LispFwdType::BufferObj | LispFwdType::KboardObj) {
+        if matches!(fwd.ty(), LispFwdType::BufferObj | LispFwdType::KboardObj) {
             return false;
         }
         let Some(old) = fwd.load().filter(|old| !old.is_unbound()) else {
@@ -642,7 +639,8 @@ impl Context {
         }
         let popped = match (sym.forwarded_descriptor(), old.get()) {
             (Some(fwd), Some(old))
-                if fwd.ty != LispFwdType::BufferObj && !self.runtime_binding_has_projection(id) =>
+                if fwd.ty() != LispFwdType::BufferObj
+                    && !self.runtime_binding_has_projection(id) =>
             {
                 match fwd.store(old) {
                     Ok(store) => {
@@ -810,7 +808,7 @@ fn read_cached_binding_old<const COMPILED: bool>(cell: Value) -> Value {
 fn forward_rule(fwd: Option<&'static LispFwd>, value: Value) -> Option<Value> {
     match fwd {
         None => Some(value),
-        Some(fwd) if fwd.ty == LispFwdType::BufferObj => None,
+        Some(fwd) if fwd.ty() == LispFwdType::BufferObj => None,
         Some(fwd) => fwd.store(value).ok().map(ForwardStore::canonical_value),
     }
 }

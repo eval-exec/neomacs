@@ -11,10 +11,88 @@ use crate::emacs_core::value::{HashProbe, HashTableMakeKeyword, ValueKind, VecLi
 // Vector operations
 // ===========================================================================
 
+/// Checked backing extent for a Value vector. Nonempty storage has exactly
+/// the size and alignment of `elements` Values; empty storage never reaches
+/// the allocator. Only arithmetic metadata is retained, so this witness is
+/// Send + Sync and independent of any mutator or GC. It grants no permission
+/// to transfer the Lisp Values subsequently stored in the allocation.
+#[derive(Clone, Copy, Debug)]
+enum VectorElementLayout {
+    Empty,
+    Nonempty {
+        elements: std::num::NonZeroUsize,
+        layout: std::alloc::Layout,
+    },
+}
+
+static_assertions::assert_impl_all!(VectorElementLayout: Send, Sync);
+
+impl TryFrom<usize> for VectorElementLayout {
+    type Error = crate::emacs_core::alloc::AllocationFailure;
+
+    #[inline]
+    fn try_from(elements: usize) -> Result<Self, Self::Error> {
+        let Some(elements) = std::num::NonZeroUsize::new(elements) else {
+            return Ok(Self::Empty);
+        };
+        let layout = std::alloc::Layout::array::<Value>(elements.get())?;
+        Ok(Self::Nonempty { elements, layout })
+    }
+}
+
+/// Allocate empty Value backing through Rust's global allocator. GNU
+/// alloc.c:3399-3400 rejects an unrepresentable extent; alloc.c:3353-3383 and
+/// 4142 deliver backing allocation failure through memory-signal-data.
+/// InvalidLayout and NullAllocation remain typed until the invoking mutator
+/// selects its live memory condition. No Lisp allocation or GC occurs here;
+/// Vec immediately owns the storage, while its existing resize initializes
+/// the Values and the existing Value::vector adoption registers the result.
+#[inline]
+#[deny(clippy::wildcard_enum_match_arm)]
+fn allocate_vector_elements(
+    extent: VectorElementLayout,
+) -> Result<Vec<Value>, crate::emacs_core::alloc::AllocationFailure> {
+    match extent {
+        VectorElementLayout::Empty => Ok(Vec::new()),
+        VectorElementLayout::Nonempty { elements, layout } => {
+            // SAFETY: the private witness checked Layout::array::<Value> for
+            // this nonzero capacity, including Value alignment and isize size
+            // limits. alloc uses the Global allocator, and null is handled
+            // before the storage can be adopted or dereferenced.
+            let pointer = unsafe { std::alloc::alloc(layout) };
+            let pointer = std::ptr::NonNull::new(pointer)
+                .ok_or(crate::emacs_core::alloc::AllocationFailure::NullAllocation)?
+                .cast::<Value>();
+            // SAFETY: this unique Global allocation exactly matches the
+            // Vec<Value> capacity's Layout::array::<Value>. Length zero exposes
+            // no uninitialized Values. Immediate adoption has no alias or
+            // intervening fallible step; ordinary Vec growth and Drop use the
+            // same global allocator and matching Value layout. Stored Values
+            // retain their existing invoking-mutator ownership contract.
+            Ok(unsafe { Vec::from_raw_parts(pointer.as_ptr(), 0, elements.get()) })
+        }
+    }
+}
+
 pub(crate) fn builtin_make_vector(args: Vec<Value>) -> EvalResult {
+    make_vector(args).map_err(crate::emacs_core::alloc::AllocationFailure::into_flow)
+}
+
+pub(crate) fn builtin_make_vector_in_context(
+    context: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    make_vector(args).map_err(|failure| failure.into_flow_in_context(context))
+}
+
+fn make_vector(args: Vec<Value>) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
     expect_args("make-vector", &args, 2)?;
     let len = expect_wholenump(&args[0])? as usize;
-    Ok(Value::vector(vec![args[1]; len]))
+    // GNU alloc.c:3399-3400 rejects unrepresentable vector storage and
+    // lisp_malloc reports allocation failure as a Lisp condition.
+    let mut elements = allocate_vector_elements(VectorElementLayout::try_from(len)?)?;
+    elements.resize(len, args[1]);
+    Ok(Value::vector(elements))
 }
 
 pub(crate) fn builtin_vector_slice(_eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
@@ -26,6 +104,7 @@ pub(crate) fn builtin_aref(args: Vec<Value>) -> EvalResult {
     builtin_aref_values(args[0], args[1])
 }
 
+#[inline(always)]
 pub(crate) fn builtin_aref_2(
     _eval: &mut super::eval::Context,
     array: Value,
@@ -34,6 +113,7 @@ pub(crate) fn builtin_aref_2(
     builtin_aref_values(array, index)
 }
 
+#[inline(never)]
 pub(crate) fn builtin_aref_values(array: Value, index: Value) -> EvalResult {
     let idx_fixnum = expect_fixnum(&index)?;
     match array.kind() {
@@ -172,6 +252,7 @@ pub(crate) fn builtin_aset(args: Vec<Value>) -> EvalResult {
 }
 
 /// `aset` reading its arguments in place.
+#[inline(never)]
 pub(crate) fn builtin_aset_args(args: &[Value]) -> EvalResult {
     expect_args("aset", args, 3)?;
     // GNU src/data.c:Faset starts with CHECK_FIXNUM (idx) before checking
@@ -506,16 +587,7 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
         }
     };
 
-    let size = match size_arg.kind() {
-        ValueKind::Nil => 0,
-        ValueKind::Fixnum(n) if n >= 0 => n,
-        _ => {
-            return Err(signal(
-                "error",
-                vec![Value::string("Invalid hash table size"), size_arg],
-            ));
-        }
-    };
+    let size_hint = crate::emacs_core::alloc::HashTableHint::try_from(size_arg)?;
 
     let weakness = match weakness_arg.kind() {
         ValueKind::Nil => None,
@@ -539,7 +611,8 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
         }
     };
 
-    let table = Value::hash_table_with_options(test, size, weakness, 1.5, 0.8125);
+    let size = crate::emacs_core::alloc::HashTableSize::try_from(size_hint)?;
+    let table = Value::try_hash_table_with_options(test, size, weakness)?;
     if table.is_hash_table() {
         let _ = table.with_hash_table_mut(|ht| {
             ht.test_name = test_name;
@@ -962,12 +1035,63 @@ fn builtin_puthash_values(
     table: Value,
     symbols_with_pos_enabled: bool,
 ) -> EvalResult {
+    if crate::tagged::gc::concurrent_hash_mutation_active() {
+        return builtin_puthash_values_concurrent(
+            key_value,
+            value,
+            table,
+            symbols_with_pos_enabled,
+        );
+    }
+    match table.kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(table)?;
+            let test = table.as_hash_table().unwrap().test;
+            // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
+            unsafe {
+                table.with_hash_table_mut_inactive(|ht| -> Result<(), Flow> {
+                    match ht
+                        .data
+                        .try_probe_for_insert(key_value, test, symbols_with_pos_enabled)?
+                    {
+                        HashProbe::Found(slot) => {
+                            if let Some(stored) = ht.data.slot_value_mut(slot) {
+                                *stored = value;
+                            }
+                        }
+                        HashProbe::Absent(hash) => {
+                            maybe_resize_hash_table_for_insert(ht, true);
+                            let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
+                            ht.data.insert_absent(hash, key, key_value, value);
+                        }
+                    }
+                    Ok(())
+                })
+            }
+            .unwrap_or(Ok(()))?;
+            Ok(value)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), table],
+        )),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_puthash_values_concurrent(
+    key_value: Value,
+    value: Value,
+    table: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     match table.kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
             let test = table.as_hash_table().unwrap().test;
             table
-                .with_hash_table_mut(|ht| -> Result<(), Flow> {
+                .with_hash_table_mut_concurrent(|ht| -> Result<(), Flow> {
                     match ht
                         .data
                         .try_probe_for_insert(key_value, test, symbols_with_pos_enabled)?
@@ -1108,12 +1232,44 @@ pub(crate) fn builtin_remhash_values(
     table: Value,
     symbols_with_pos_enabled: bool,
 ) -> EvalResult {
+    if crate::tagged::gc::concurrent_hash_mutation_active() {
+        return builtin_remhash_values_concurrent(key_value, table, symbols_with_pos_enabled);
+    }
+    match table.kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(table)?;
+            let test = table.as_hash_table().unwrap().test;
+            // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
+            unsafe {
+                table.with_hash_table_mut_inactive(|ht| {
+                    ht.data
+                        .try_remove_by_value(key_value, test, symbols_with_pos_enabled)
+                        .map(|_| ())
+                })
+            }
+            .unwrap_or(Ok(()))?;
+            Ok(Value::NIL)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), table],
+        )),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_remhash_values_concurrent(
+    key_value: Value,
+    table: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     match table.kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
             let test = table.as_hash_table().unwrap().test;
             table
-                .with_hash_table_mut(|ht| {
+                .with_hash_table_mut_concurrent(|ht| {
                     ht.data
                         .try_remove_by_value(key_value, test, symbols_with_pos_enabled)
                         .map(|_| ())
@@ -1129,11 +1285,37 @@ pub(crate) fn builtin_remhash_values(
 }
 
 pub(crate) fn builtin_clrhash(args: Vec<Value>) -> EvalResult {
+    if crate::tagged::gc::concurrent_hash_mutation_active() {
+        return builtin_clrhash_concurrent(args);
+    }
     expect_args("clrhash", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(args[0])?;
-            let _ = args[0].with_hash_table_mut(|ht| {
+            // SAFETY: the entry rejected Tier-H; this path calls no Lisp or GC.
+            let _ = unsafe {
+                args[0].with_hash_table_mut_inactive(|ht| {
+                    ht.data.clear();
+                })
+            };
+            // Be compatible with GNU Emacs (and XEmacs): return the table.
+            Ok(args[0])
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("hash-table-p"), args[0]],
+        )),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_clrhash_concurrent(args: Vec<Value>) -> EvalResult {
+    expect_args("clrhash", &args, 1)?;
+    match args[0].kind() {
+        ValueKind::Veclike(VecLikeType::HashTable) => {
+            check_mutable_hash_table(args[0])?;
+            let _ = args[0].with_hash_table_mut_concurrent(|ht| {
                 ht.data.clear();
             });
             // Be compatible with GNU Emacs (and XEmacs): return the table.
@@ -1639,9 +1821,13 @@ pub(crate) fn plist_member_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bo
 }
 
 #[cfg(test)]
-#[path = "tests/aset_string_in_place.rs"]
+#[path = "tests/aset_string_in_place_test.rs"]
 mod aset_string_in_place_test;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_collections.rs"]
+#[path = "tests/gc_tls_collections_test.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/vector_storage_test.rs"]
+mod vector_storage_tests;

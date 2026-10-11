@@ -5,7 +5,7 @@ use neovm_core::emacs_core::Context;
 use neovm_core::face::{Color as NeoColor, Face as NeoFace, FaceTable};
 
 #[cfg(test)]
-#[path = "compiled_collection_mutation.rs"]
+#[path = "compiled_collection_mutation_test.rs"]
 mod compiled_collection_mutation;
 
 fn test_buffer_snapshot() -> LayoutBufferSnapshot {
@@ -475,6 +475,7 @@ fn resolve_display_replacement_returns_direct_xwidget_media() {
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         ImageScaleEnvironment::default(),
         None,
+        0,
     );
 
     assert_eq!(resolved, Some(ResolvedDisplayReplacement::Media(media)));
@@ -493,6 +494,7 @@ fn resolve_display_replacement_uses_media_placeholder_without_host() {
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         ImageScaleEnvironment::default(),
         None,
+        0,
     );
 
     assert_eq!(

@@ -103,7 +103,10 @@ fn runtime_managers_section_round_trips_representative_state() {
                             weight: Some(400),
                             slant: Some(DumpFontSlant::Normal),
                             width: Some(DumpFontWidth::Normal),
-                            repertory: Some(DumpFontRepertory::CharsetSym(DumpSymId(18))),
+                            definition: Some(DumpFontDefinitionMetadata {
+                                encoding: DumpSymId(23),
+                                repertory: Some(DumpFontRepertory::CharsetSym(DumpSymId(18))),
+                            }),
                         })],
                     }],
                     fallback: Some(vec![DumpFontSpecEntry::ExplicitNone]),
@@ -186,6 +189,26 @@ fn runtime_managers_section_round_trips_representative_state() {
     assert_eq!(loaded.custom.auto_buffer_local_syms.len(), 1);
     assert_eq!(loaded.modes.major_modes.len(), 1);
     assert_eq!(loaded.fontset_registry.fontsets_lisp.len(), 1);
+    let DumpFontSpecEntry::Font(spec) =
+        &loaded.fontset_registry.fontsets_lisp[0].1.ranges[0].entries[0]
+    else {
+        panic!("font definition should survive the runtime manager round trip");
+    };
+    let definition = spec.definition.as_ref().expect("font definition metadata");
+    assert_eq!(definition.encoding, DumpSymId(23));
+    assert!(matches!(
+        definition.repertory,
+        Some(DumpFontRepertory::CharsetSym(DumpSymId(18)))
+    ));
+
+    // Old records retained only repertory, so reading them cannot recover
+    // the independent encoding required by `fontset-font`.
+    let mut obsolete = bytes.clone();
+    obsolete[16..20].copy_from_slice(&1u32.to_ne_bytes());
+    assert!(matches!(
+        load_runtime_managers_section(&obsolete),
+        Err(DumpError::UnsupportedVersion(1))
+    ));
     assert_eq!(loaded.abbrevs.tables_syms.len(), 1);
     assert_eq!(loaded.interactive.specs.len(), 1);
     assert_eq!(loaded.rectangle.killed.len(), 1);

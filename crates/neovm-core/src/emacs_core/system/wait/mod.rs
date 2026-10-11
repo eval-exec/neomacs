@@ -183,9 +183,14 @@ impl WaitDeadline {
         duration: Duration,
         timer_deadline: GnuTimerTimestamp,
     ) -> Self {
+        let Some(instant) = Instant::now().checked_add(duration) else {
+            // GNU saturated timespec waits have no representable Rust Instant.
+            // Keep servicing events with the explicit indefinite-wait state.
+            return Self::Forever;
+        };
         Self::until_with_timer_deadline(
-            Instant::now() + duration,
-            monotonic_coarse_now().map(|now| now + duration),
+            instant,
+            monotonic_coarse_now().and_then(|now| now.checked_add(duration)),
             timer_deadline,
         )
     }
@@ -291,6 +296,7 @@ enum ProcessWaitPolicy {
     Any,
     Target(ProcessId),
     TargetOnly(ProcessId),
+    TlsHandshake(ProcessId),
 }
 
 impl ProcessWaitPolicy {
@@ -304,7 +310,7 @@ impl ProcessWaitPolicy {
 
     fn target_process(self) -> Option<ProcessId> {
         match self {
-            Self::Target(id) | Self::TargetOnly(id) => Some(id),
+            Self::Target(id) | Self::TargetOnly(id) | Self::TlsHandshake(id) => Some(id),
             Self::None | Self::ServiceAny | Self::Any => None,
         }
     }
@@ -322,6 +328,7 @@ impl ProcessWaitPolicy {
         match self {
             Self::Any => outcome.has_any_process_activity(),
             Self::Target(_) | Self::TargetOnly(_) => outcome.has_target_process_activity(),
+            Self::TlsHandshake(_) => outcome.handshake_ready,
             Self::None | Self::ServiceAny => false,
         }
     }
@@ -363,6 +370,7 @@ struct WaitRequest {
     timers: TimerWaitPolicy,
     redisplay: bool,
     special_input: SpecialInputWaitPolicy,
+    idle_policy: crate::keyboard::IdleTransitionPolicy,
 }
 
 impl WaitRequest {
@@ -412,6 +420,7 @@ impl WaitRequest {
             timers,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -473,6 +482,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay: true,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -492,6 +502,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -503,6 +514,7 @@ impl WaitRequest {
             timers,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -523,6 +535,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay,
             special_input: SpecialInputWaitPolicy::Suppress,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -535,6 +548,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -549,6 +563,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -560,6 +575,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Suppress,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::CompleteOnResize,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -613,7 +629,9 @@ impl WaitRequest {
             ProcessWaitPolicy::ServiceAny | ProcessWaitPolicy::Any => {
                 ProcessOutputServiceRequest::any(None)
             }
-            ProcessWaitPolicy::Target(target) => ProcessOutputServiceRequest::any(Some(target)),
+            ProcessWaitPolicy::Target(target) | ProcessWaitPolicy::TlsHandshake(target) => {
+                ProcessOutputServiceRequest::any(Some(target))
+            }
             ProcessWaitPolicy::TargetOnly(target) => {
                 ProcessOutputServiceRequest::target_only(target)
             }
@@ -698,8 +716,14 @@ impl WaitRequest {
         // Timer and process callbacks can replace the displayed buffer. Return
         // to read_char so its bounded display maintenance can discover that
         // change even when its previous coverage request had no more work.
-        if matches!(self.keyboard, KeyboardWaitPolicy::ReadCommandInput)
-            && (outcome.has_timer_activity() || outcome.ran_process_callbacks())
+        // Only the command loop's UNBOUNDED read takes this exit: a bounded
+        // read (a Lisp `read-char` timeout, the retirement wait) has a
+        // deadline contract to honor, and GNU's loop keeps blocking until
+        // that deadline when nothing but timers ran.
+        if matches!(
+            (self.keyboard, self.deadline),
+            (KeyboardWaitPolicy::ReadCommandInput, WaitDeadline::Forever)
+        ) && (outcome.has_timer_activity() || outcome.ran_process_callbacks())
         {
             return Some(WaitCompletion::DisplayActivity);
         }
@@ -843,6 +867,7 @@ impl WaitSpecialInputActivity {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct WaitServiceOutcome {
+    handshake_ready: bool,
     process_activity: WaitProcessActivity,
     /// Non-output servicing ran during the wait: a connect completed, a
     /// sentinel/status-notify fired, or an EOF was handled. Kept SEPARATE from
@@ -1030,8 +1055,13 @@ impl super::eval::Context {
         self.service_wait_request_once(&WaitRequest::input_pending_with_timers())
     }
 
-    pub(crate) fn service_input_wait_with_redisplay(&mut self) -> Result<(), Flow> {
-        self.service_wait_request_once(&WaitRequest::service_once(true))
+    pub(crate) fn service_input_wait_with_redisplay(
+        &mut self,
+        idle_policy: crate::keyboard::IdleTransitionPolicy,
+    ) -> Result<(), Flow> {
+        let mut request = WaitRequest::service_once(true);
+        request.idle_policy = idle_policy;
+        self.service_wait_request_once(&request)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1075,7 +1105,20 @@ impl super::eval::Context {
             // the generic notifier independent of its producers.
             let _ = self.stage_next_host_input_event_if_available()?;
         }
-        self.service_wait_request_processes(request, activity.into_process_service(), run_timers)
+        let handshake_ready = match (request.processes, &activity.process_service) {
+            (ProcessWaitPolicy::TlsHandshake(id), WaitProcessService::Ready(events)) => {
+                events.ready_processes_ref().contains(&id)
+                    || events.writable_processes_ref().contains(&id)
+            }
+            _ => false,
+        };
+        let mut outcome = self.service_wait_request_processes(
+            request,
+            activity.into_process_service(),
+            run_timers,
+        )?;
+        outcome.handshake_ready = handshake_ready;
+        Ok(outcome)
     }
 
     fn service_wait_request_processes(
@@ -1086,7 +1129,7 @@ impl super::eval::Context {
     ) -> Result<WaitServiceOutcome, Flow> {
         let mut outcome = WaitServiceOutcome::default();
         let special_input = if request.services_special_input() {
-            self.service_wait_request_special_input_events()?
+            self.service_wait_request_special_input_events_with_idle_policy(request.idle_policy)?
         } else {
             SpecialInputServiceOutcome::default()
         };
@@ -1110,6 +1153,11 @@ impl super::eval::Context {
             // `jsonrpc-request` catch tag completed by a zero-delay timer.
             outcome.record_timer_activity(self.service_pending_timers_with_wait_policy(false)?);
         }
+
+        // A timer may request quit while inhibit-quit is temporarily bound.
+        // Honor it before invoking display hooks or more process callbacks;
+        // the caller's binding still determines whether quitting is allowed.
+        self.maybe_quit()?;
 
         // Drain ready process output (a non-blocking poll of already-readable
         // fds plus filter dispatch) BEFORE yielding to pending command input.
@@ -1155,6 +1203,13 @@ impl super::eval::Context {
     /// running/connecting (process.c drains remaining output, then breaks);
     /// output read during the final drain still wins via `completion_for`.
     fn wait_request_target_terminated(&self, request: &WaitRequest) -> bool {
+        if let ProcessWaitPolicy::TlsHandshake(pid) = request.processes {
+            // Deinitialization retires TLS ownership without changing the
+            // process status. Wake its owner so negotiation can fail cleanly.
+            if !self.processes.has_pending_tls_handshake(pid) {
+                return true;
+            }
+        }
         request.target_pid().is_some_and(|pid| {
             self.processes
                 .get(pid)
@@ -1181,8 +1236,24 @@ impl super::eval::Context {
     fn complete_wait_after_required_minimum_drain(
         &mut self,
         request: &WaitRequest,
-        outcome: WaitServiceOutcome,
+        mut outcome: WaitServiceOutcome,
     ) -> Result<Option<WaitCompletion>, Flow> {
+        // The service pass checks for command input BEFORE its redisplay
+        // step, so input that arrives during that redisplay (a frontend
+        // completing its wake, a config whose echo traffic lands exactly
+        // then) has missed the outcome's recording.  A wait that completes
+        // on command input must not report a lesser completion while the
+        // input is already pending: GNU's loop would keep iterating and
+        // notice the input on the next pass, so the classification the
+        // caller sees ("input pending") holds either way.  Re-stage once
+        // here, after every callback of the pass has run.
+        if request.completes_on_command_input()
+            && !outcome.has_command_input_pending()
+            && let Some(query) = request.keyboard.input_query()
+            && self.stage_pending_command_input_for_wait_request(query)?
+        {
+            outcome.record_command_input_pending();
+        }
         let Some(completion) = request.completion_for(outcome) else {
             return Ok(None);
         };
@@ -1245,7 +1316,39 @@ impl super::eval::Context {
         self.notify_processes_with_unnotified_status_change(target)
     }
 
+    pub(crate) fn wait_for_tls_handshake(&mut self, id: ProcessId) -> Result<(), Flow> {
+        let mut request = WaitRequest::accept_target_process_output_with_timers(
+            ProcessOutputWaitTiming::Forever,
+            id,
+            false,
+        );
+        request.processes = ProcessWaitPolicy::TlsHandshake(id);
+        request.redisplay = true;
+        self.wait_reading_process_output(request).map(|_| ())
+    }
+
     fn wait_reading_process_output(
+        &mut self,
+        request: WaitRequest,
+    ) -> Result<WaitCompletion, Flow> {
+        // A reentrant wait must not repeatedly wake on its suspended caller's
+        // TLS descriptor. Restore only still-live streams on every Flow exit.
+        let candidates = self.processes.tls_handshake_process_ids();
+        let suspended: Vec<_> = candidates
+            .into_iter()
+            .filter(|&id| {
+                request.processes != ProcessWaitPolicy::TlsHandshake(id)
+                    && self.processes.suspend_tls_handshake_polling(id)
+            })
+            .collect();
+        let result = self.wait_reading_process_output_inner(request);
+        for id in suspended {
+            self.processes.resume_tls_handshake_polling(id);
+        }
+        result
+    }
+
+    fn wait_reading_process_output_inner(
         &mut self,
         request: WaitRequest,
     ) -> Result<WaitCompletion, Flow> {
@@ -1360,11 +1463,23 @@ impl super::eval::Context {
         Ok(completion == WaitCompletion::SpecialInputActivity)
     }
 
+    #[cfg(test)]
     pub(crate) fn wait_for_command_input(
         &mut self,
         deadline: Option<Instant>,
     ) -> Result<CommandInputWaitOutcome, Flow> {
-        let request = if let Some(deadline) = deadline {
+        self.wait_for_command_input_with_idle_policy(
+            deadline,
+            crate::keyboard::IdleTransitionPolicy::Manage,
+        )
+    }
+
+    pub(crate) fn wait_for_command_input_with_idle_policy(
+        &mut self,
+        deadline: Option<Instant>,
+        idle_policy: crate::keyboard::IdleTransitionPolicy,
+    ) -> Result<CommandInputWaitOutcome, Flow> {
+        let mut request = if let Some(deadline) = deadline {
             if deadline <= Instant::now() {
                 return Ok(CommandInputWaitOutcome::DeadlineElapsed);
             }
@@ -1372,6 +1487,7 @@ impl super::eval::Context {
         } else {
             WaitRequest::read_command_input_forever()
         };
+        request.idle_policy = idle_policy;
         self.wait_reading_process_output(request)
             .map(CommandInputWaitOutcome::from_completion)
     }

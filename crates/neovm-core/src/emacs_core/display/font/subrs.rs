@@ -86,7 +86,7 @@ crate::emacs_core::subr::define_subrs! {
     ),
     SubrSpec::new(
         "font-has-char-p",
-        NativeFn::NoContextVec(font_has_char_p),
+        NativeFn::ContextVec(font_has_char_p),
         SubrArity::new(2, Some(3)),
     ),
     SubrSpec::new(

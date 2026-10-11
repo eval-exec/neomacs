@@ -167,16 +167,16 @@ fn borrowed_string_owned_observer_runs_once_before_the_byte_write() {
 
 #[test]
 fn owned_string_shared_observers_publish_only_the_atomic_mirror() {
-    let string = std::sync::Arc::new(LispString::from_unibyte(b"abc".to_vec()));
+    let string = LispString::from_unibyte(b"abc".to_vec());
     let capacity = string.owned_capacity();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
     std::thread::scope(|scope| {
         for _ in 0..4 {
-            let string = std::sync::Arc::clone(&string);
+            let capacity_word = &string.storage_capacity;
             let barrier = std::sync::Arc::clone(&barrier);
             scope.spawn(move || {
                 barrier.wait();
-                string.mark_owned_storage_collection_observed();
+                LispString::mark_capacity_collection_observed(capacity_word);
             });
         }
     });

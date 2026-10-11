@@ -61,13 +61,14 @@
 
 #![allow(dead_code)]
 
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// GNU's `$(AWK)`.  `configure` refuses a tree without one, and so does this.
 pub const AWK_PROGRAM: &str = "awk";
 
-/// GNU's `gunzip`, which its one gzipped charset rule pipes into awk.
+/// GNU's equivalent command, shown in logs; decoding runs portably in Rust.
 pub const GUNZIP_PROGRAM: &str = "gunzip";
 
 /// GNU's directory of Unicode inputs and the awk scripts that read them.
@@ -363,7 +364,7 @@ impl CharsetTranslationLisp {
         vec![self.script_path(roots), self.input_path(roots)]
     }
 
-    /// The command line this recipe runs, for a build log or a `--dry-run`.
+    /// The equivalent GNU command line, for a build log or a `--dry-run`.
     pub fn command_line(&self, roots: &GeneratedLispRoots) -> String {
         let source = match self.input {
             CharsetInput::Map { .. } => format!("< {}", self.input_path(roots).display()),
@@ -378,13 +379,12 @@ impl CharsetTranslationLisp {
         )
     }
 
-    /// Run GNU's rule exactly as written, and return what its awk printed.
+    /// Return GNU awk's unmodified output, using GNU's script and input bytes.
     ///
-    /// The gzipped input is decompressed by GNU's own `gunzip -c`, spawned as
-    /// the first process of the pipeline GNU's rule spells; running the same
-    /// pipeline keeps the bytes a function of GNU's tools rather than of a
-    /// Rust decompressor's, which is the doctrine [`AwkGeneratedLisp`] records
-    /// one table up.
+    /// Decode gzip in Rust because Git for Windows ships gunzip as a shell
+    /// script, which a native process cannot spawn directly. All gzip members
+    /// and their checksums are validated before awk runs; decoding changes only
+    /// the transport, leaving GNU's awk as the sole Lisp generator.
     pub fn generate(&self, roots: &GeneratedLispRoots) -> Result<Vec<u8>, String> {
         let script = self.script_path(roots);
         let input = self.input_path(roots);
@@ -398,46 +398,45 @@ impl CharsetTranslationLisp {
             }
         }
 
-        let mut gunzip = match self.input {
-            CharsetInput::Map { .. } => None,
-            CharsetInput::GzippedGlibcCharmap { .. } => Some(
-                Command::new(GUNZIP_PROGRAM)
-                    .arg("-c")
-                    .arg(&input)
-                    .stdout(Stdio::piped())
-                    .spawn()
-                    .map_err(|err| {
-                        format!(
-                            "could not run `{GUNZIP_PROGRAM} -c` for {}: {err}.  GNU's rule \
-                             ({}) pipes gunzip into awk, so its build requires one too",
-                            self.output, self.gnu_rule,
-                        )
-                    })?,
-            ),
-        };
-
         let mut command = Command::new(AWK_PROGRAM);
-        command.arg("-f").arg(&script).stdout(Stdio::piped());
-        match gunzip.as_mut().and_then(|child| child.stdout.take()) {
-            Some(decompressed) => {
-                command.stdin(Stdio::from(decompressed));
-            }
-            None => {
-                let file = std::fs::File::open(&input)
-                    .map_err(|err| format!("open {}: {err}", input.display()))?;
+        command
+            .arg("-f")
+            .arg(&script)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let file = std::fs::File::open(&input)
+            .map_err(|err| format!("open {}: {err}", input.display()))?;
+        let decompressed = match self.input {
+            CharsetInput::Map { .. } => {
                 command.stdin(Stdio::from(file));
+                None
             }
-        }
-
-        let output = command.output().map_err(|err| {
+            CharsetInput::GzippedGlibcCharmap { .. } => {
+                let mut bytes = Vec::new();
+                flate2::read::MultiGzDecoder::new(file)
+                    .read_to_end(&mut bytes)
+                    .map_err(|err| format!("decode gzip {}: {err}", input.display()))?;
+                command.stdin(Stdio::piped());
+                Some(bytes)
+            }
+        };
+        let mut child = command.spawn().map_err(|err| {
             format!(
                 "could not run `{AWK_PROGRAM}` for {}: {err}.  GNU's build \
                  requires awk too ({}); install one (gawk) and rebuild",
                 self.output, self.gnu_rule,
             )
         })?;
-        // awk's status first: when awk dies early, gunzip dies of the broken
-        // pipe behind it, and that SIGPIPE is a consequence, not the cause.
+        // Feed stdin concurrently with draining stdout: GNU's charset output
+        // exceeds pipe capacity, so writing first could deadlock both sides.
+        let writer = decompressed.map(|bytes| {
+            let mut stdin = child.stdin.take().expect("piped awk stdin");
+            std::thread::spawn(move || stdin.write_all(&bytes))
+        });
+        let output = child.wait_with_output();
+        let written = writer.map(|writer| writer.join());
+        let output = output.map_err(|err| format!("waiting for {AWK_PROGRAM}: {err}"))?;
+        // Report awk's failure before any consequential broken stdin pipe.
         if !output.status.success() {
             return Err(format!(
                 "`{AWK_PROGRAM} -f {}` exited {}: {}",
@@ -446,16 +445,10 @@ impl CharsetTranslationLisp {
                 String::from_utf8_lossy(&output.stderr).trim(),
             ));
         }
-        if let Some(mut child) = gunzip {
-            let status = child
-                .wait()
-                .map_err(|err| format!("waiting for {GUNZIP_PROGRAM}: {err}"))?;
-            if !status.success() {
-                return Err(format!(
-                    "`{GUNZIP_PROGRAM} -c {}` exited {status}",
-                    input.display()
-                ));
-            }
+        if let Some(written) = written {
+            written
+                .map_err(|_| format!("feeding {} to awk: writer panicked", input.display()))?
+                .map_err(|err| format!("feeding {} to awk: {err}", input.display()))?;
         }
         if output.stdout.is_empty() {
             return Err(format!(

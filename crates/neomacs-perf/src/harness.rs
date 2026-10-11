@@ -2191,4 +2191,5 @@ fn next_run_id(scenario: ScenarioId, unix_ms: u128) -> String {
 }
 
 #[cfg(test)]
+#[path = "harness/tests/harness_test.rs"]
 mod tests;

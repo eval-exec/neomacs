@@ -764,5 +764,5 @@ pub(super) fn run_configuration(eval: &mut super::eval::Context, frame: FrameId)
 }
 
 #[cfg(test)]
-#[path = "redisplay_gnu/tests/default_read.rs"]
+#[path = "redisplay_gnu/tests/default_read_test.rs"]
 mod default_read_tests;

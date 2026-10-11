@@ -26,8 +26,7 @@ use neovm_core::window::{FrameId, WindowId};
 pub(super) fn inactive_overlay_arrows(evaluator: &neovm_core::emacs_core::Context) -> bool {
     let mut tail = evaluator
         .obarray()
-        .symbol_value("overlay-arrow-variable-list")
-        .copied()
+        .symbol_value_copied("overlay-arrow-variable-list")
         .unwrap_or(Value::NIL);
     for _ in 0..32 {
         if !tail.is_cons() {
@@ -36,7 +35,7 @@ pub(super) fn inactive_overlay_arrows(evaluator: &neovm_core::emacs_core::Contex
         if let Some(sym) = tail.cons_car().as_symbol_id()
             && evaluator
                 .obarray()
-                .symbol_value_id(sym)
+                .symbol_value_id_copied(sym)
                 .is_some_and(|value| !value.is_nil())
         {
             return false;

@@ -28,40 +28,62 @@ use super::value::{Value, ValueKind, VecLikeType};
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::rounding_modes::RoundingMode;
 
+/// A GNU wait request. Finite waits have a normalized, representable timespec;
+/// scalar durations contain no mutator-owned state and can cross threads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WaitTimeout {
+    Poll,
+    For(Duration),
+    Forever,
+}
+
+impl From<f64> for WaitTimeout {
+    fn from(seconds: f64) -> Self {
+        if !(seconds > 0.0) {
+            return Self::Poll;
+        }
+        // GNU lib/dtotimespec.c saturates at TIME_T_MAX with the final ns.
+        if seconds >= i64::MAX as f64 {
+            return Self::For(Duration::new(i64::MAX as u64, 999_999_999));
+        }
+        let whole = seconds.trunc();
+        let nanos = ((seconds - whole) * 1_000_000_000.0).ceil() as u32;
+        Self::For(Duration::new(whole as u64, nanos))
+    }
+}
+
+impl From<Option<f64>> for WaitTimeout {
+    fn from(seconds: Option<f64>) -> Self {
+        seconds.map_or(Self::Forever, Self::from)
+    }
+}
+
+static_assertions::assert_impl_all!(WaitTimeout: Send, Sync);
+
 #[derive(Clone, Copy, Debug)]
 struct PendingGnuTimer {
     when: GnuTimerTimestamp,
 }
 
 fn pending_gnu_timer(timer: Value) -> Option<PendingGnuTimer> {
-    let slots = timer.as_vector_data()?.clone();
+    let slots = timer.as_vector_data()?;
     if slots.len() != 10 || !slots[0].is_nil() || !slots[7].is_nil() {
         return None;
     }
 
     Some(PendingGnuTimer {
-        when: GnuTimerTimestamp {
-            high_seconds: slots[1].as_int()?,
-            low_seconds: slots[2].as_int()?,
-            usecs: slots[3].as_int()?,
-            psecs: slots.get(8).and_then(|value| value.as_int()).unwrap_or(0),
-        },
+        when: GnuTimerTimestamp::from_components(slots[1], slots[2], slots[3], slots[8])?,
     })
 }
 
 fn pending_gnu_idle_timer(timer: Value) -> Option<PendingGnuTimer> {
-    let slots = timer.as_vector_data()?.clone();
+    let slots = timer.as_vector_data()?;
     if slots.len() != 10 || !slots[0].is_nil() || slots[7].is_nil() {
         return None;
     }
 
     Some(PendingGnuTimer {
-        when: GnuTimerTimestamp {
-            high_seconds: slots[1].as_int()?,
-            low_seconds: slots[2].as_int()?,
-            usecs: slots[3].as_int()?,
-            psecs: slots.get(8).and_then(|value| value.as_int()).unwrap_or(0),
-        },
+        when: GnuTimerTimestamp::from_components(slots[1], slots[2], slots[3], slots[8])?,
     })
 }
 
@@ -126,14 +148,14 @@ impl super::eval::Context {
     fn capture_gnu_timer_batch(&self) -> GnuTimerBatch {
         let ordinary = self
             .obarray
-            .symbol_value("timer-list")
-            .and_then(super::value::list_to_vec)
+            .symbol_value_copied("timer-list")
+            .and_then(|value| super::value::list_to_vec(&value))
             .unwrap_or_default();
 
         let idle = if self.current_idle_duration().is_some() {
             self.obarray
-                .symbol_value("timer-idle-list")
-                .and_then(super::value::list_to_vec)
+                .symbol_value_copied("timer-idle-list")
+                .and_then(|value| super::value::list_to_vec(&value))
                 .unwrap_or_default()
         } else {
             Vec::new()
@@ -158,8 +180,8 @@ impl super::eval::Context {
     ) -> Option<Duration> {
         let timers = self
             .obarray
-            .symbol_value("timer-list")
-            .and_then(super::value::list_to_vec)
+            .symbol_value_copied("timer-list")
+            .and_then(|value| super::value::list_to_vec(&value))
             .unwrap_or_default();
         let now = GnuTimerTimestamp::now();
 
@@ -174,8 +196,8 @@ impl super::eval::Context {
     pub(crate) fn next_idle_gnu_timer_timeout(&self) -> Option<Duration> {
         let idle_now = self.current_idle_timer_timestamp()?;
         self.obarray
-            .symbol_value("timer-idle-list")
-            .and_then(super::value::list_to_vec)
+            .symbol_value_copied("timer-idle-list")
+            .and_then(|value| super::value::list_to_vec(&value))
             .unwrap_or_default()
             .into_iter()
             .filter_map(pending_gnu_idle_timer)
@@ -310,17 +332,11 @@ fn expect_fixnum_like(value: &Value) -> Result<i64, Flow> {
 }
 
 fn gnu_sleep_duration_from_secs(seconds: f64) -> Duration {
-    let whole = seconds.trunc();
-    let frac = seconds - whole;
-    let mut secs = whole as u64;
-    let mut nanos = (frac * 1_000_000_000.0).ceil() as u32;
-
-    if nanos >= 1_000_000_000 {
-        secs += u64::from(nanos / 1_000_000_000);
-        nanos %= 1_000_000_000;
+    match WaitTimeout::from(seconds) {
+        WaitTimeout::Poll => Duration::ZERO,
+        WaitTimeout::For(duration) => duration,
+        WaitTimeout::Forever => Duration::MAX,
     }
-
-    Duration::new(secs, nanos)
 }
 
 /// `(sleep-for SECONDS &optional MILLISECONDS)` — GNU `Fsleep_for`
@@ -375,5 +391,5 @@ pub(crate) fn builtin_sleep_for(eval: &mut super::eval::Context, args: Vec<Value
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/timer_test.rs"]
 mod tests;

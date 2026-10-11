@@ -1,6 +1,6 @@
 //! Owned syntactic dependencies of faces on prefix/replacement strings.
 //! This does not resolve faces, evaluate filters or copy arbitrary Lisp graphs.
-use crate::buffer::{CharPos0, text_props::TextPropertyTable};
+use crate::buffer::{CharPos0, text_props::TextPropertiesRef};
 use crate::emacs_core::{
     plist::plist_get,
     value::{Value, list_to_vec},
@@ -50,7 +50,7 @@ enum Work {
 }
 
 impl StringFaceInputs {
-    pub(super) fn capture(properties: &TextPropertyTable) -> Self {
+    pub(super) fn capture(properties: TextPropertiesRef<'_>) -> Self {
         let mut runs = Vec::new();
         let keys = [
             (FaceProperty::Face, Value::symbol("face")),

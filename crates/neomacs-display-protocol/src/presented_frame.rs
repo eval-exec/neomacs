@@ -257,4 +257,5 @@ impl PresentedFrameScene {
 }
 
 #[cfg(test)]
+#[path = "presented_frame/tests/presented_frame_test.rs"]
 mod tests;

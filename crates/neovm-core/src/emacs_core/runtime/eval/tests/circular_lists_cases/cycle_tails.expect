@@ -1,0 +1,1 @@
+OK (((circular-list 1) (circular-list 1) (circular-list 1) (circular-list 1)) ((circular-list 1) (circular-list 1) (circular-list 1) (circular-list 2)) ((circular-list 3) (circular-list 3) (circular-list 3) (circular-list 1)) ((circular-list 3) (circular-list 3) (circular-list 3) (circular-list 4)) ((circular-list 2) (circular-list 2) (circular-list 2) (circular-list 3)))

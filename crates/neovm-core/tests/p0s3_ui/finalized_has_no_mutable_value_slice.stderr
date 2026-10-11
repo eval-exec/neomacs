@@ -1,0 +1,14 @@
+error[E0599]: the method `as_mut` exists for mutable reference `&mut FinalizedRootBatch`, but its trait bounds were not satisfied
+ --> tests/p0s3_ui/finalized_has_no_mutable_value_slice.rs:5:47
+  |
+5 |     let words: &mut [TaggedValue] = finalized.as_mut();
+  |                                               ^^^^^^
+  |
+ ::: src/tagged/transport/root_batch.rs
+  |
+  | pub struct FinalizedRootBatch {
+  | ----------------------------- doesn't satisfy `FinalizedRootBatch: AsMut<_>`
+  |
+  = note: the following trait bounds were not satisfied:
+          `FinalizedRootBatch: AsMut<_>`
+          which is required by `&mut FinalizedRootBatch: AsMut<_>`

@@ -463,5 +463,5 @@ fn narrow_views(func: &mut Func, canonical: &[Value]) {
 }
 
 #[cfg(test)]
-#[path = "tests/reps_lift.rs"]
+#[path = "tests/reps_lift_test.rs"]
 mod tests;

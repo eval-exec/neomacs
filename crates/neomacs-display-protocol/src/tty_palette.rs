@@ -165,4 +165,5 @@ fn off_gray_diagonal(r: u8, g: u8, b: u8) -> f64 {
 }
 
 #[cfg(test)]
+#[path = "tty_palette/tests/tty_palette_test.rs"]
 mod tests;

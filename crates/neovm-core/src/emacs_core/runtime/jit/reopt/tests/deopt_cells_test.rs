@@ -184,7 +184,7 @@ fn note_deopt_prefers_the_stored_cause() {
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::Constant(1), Op::Max, Op::Return];
     f.constants = vec![Value::make_float(1.5), Value::make_int(7)].into();
-    f.max_stack = 4;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     f.seal_hand_assembled_ops();
     let leaf = max_leaf();
     let resume = deopt(&leaf, &mut ev);

@@ -540,6 +540,13 @@ pub(super) fn process_keyword_already_seen(
     }
 }
 
+#[derive(Default, PartialEq, Eq)]
+enum TlsPolling {
+    #[default]
+    Enabled,
+    Suspended,
+}
+
 /// Operating-system resources owned by a live process connection.
 ///
 /// GNU keeps Lisp process identity/status alive after `remove_process`, but
@@ -585,6 +592,7 @@ pub(super) struct LiveProcessIo {
     pub(super) pending_network_connect: Option<PendingNetworkConnect>,
     /// TLS-wrapped stream for encrypted network connections.
     pub(super) tls_stream: Option<TlsStream>,
+    tls_polling: TlsPolling,
     /// The open device behind a serial process.  GNU keeps one descriptor for
     /// both directions (`p->infd = fd; p->outfd = fd`, src/process.c:3216-3217),
     /// so this single slot is the read source AND the write source.
@@ -737,6 +745,13 @@ impl Drop for LiveProcessIo {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum SentinelExecution {
+    #[default]
+    Idle,
+    Running,
+}
+
 /// A tracked process record.
 pub struct Process {
     pub id: ProcessId,
@@ -776,6 +791,7 @@ pub struct Process {
     pub filter: Value,
     /// Process sentinel callback (or default marker symbol).
     pub sentinel: Value,
+    sentinel_execution: SentinelExecution,
     /// Server process log callback.
     pub log: Value,
     /// Process plist state.
@@ -790,6 +806,8 @@ pub struct Process {
     pub coding_state: ProcessCodingState,
     /// Current encoding coding-system.
     pub coding_encode: Value,
+    /// The coding and encoder continuation currently installed on the output fd.
+    pub(crate) encoding_state: ProcessEncodingState,
     /// True once Lisp explicitly changes this process's coding system.
     pub coding_explicitly_set: bool,
     /// True after explicit process coding has deferred one terminal status
@@ -1008,6 +1026,10 @@ impl WaitNotifier {
 }
 
 pub(super) struct ProcessWaitBackend {
+    /// A per-backend, one-shot scheduling gate for input-wakeup regressions.
+    /// Installation and consumption are synchronized; callbacks own no Lisp state.
+    #[cfg(test)]
+    before_next_wait: std::sync::Mutex<Option<Box<dyn FnOnce(Duration) + Send>>>,
     #[cfg(unix)]
     signal_fd: Option<std::os::fd::RawFd>,
     /// I/O multiplexer for process descriptors and cross-thread notifications.
@@ -1028,6 +1050,51 @@ pub(crate) enum ProcessWaitBackendInterest {
     ProcessesOnly,
     NotificationsOnly,
     NotificationsAndProcesses,
+}
+
+/// A validated monotonic deadline. An overflowing duration denotes an
+/// indefinite wait, which still wakes for process or evaluator notifications.
+/// This immutable clock value contains no mutator-owned state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProcessWaitDeadline {
+    Poll,
+    Until(Instant),
+    Forever,
+}
+
+static_assertions::assert_impl_all!(ProcessWaitDeadline: Send, Sync);
+
+impl From<Duration> for ProcessWaitDeadline {
+    #[inline]
+    fn from(timeout: Duration) -> Self {
+        if timeout.is_zero() {
+            Self::Poll
+        } else {
+            Instant::now()
+                .checked_add(timeout)
+                .map_or(Self::Forever, Self::Until)
+        }
+    }
+}
+
+impl ProcessWaitDeadline {
+    #[inline]
+    pub(super) fn remaining(self, now: Instant) -> Option<Duration> {
+        match self {
+            Self::Poll => Some(Duration::ZERO),
+            Self::Until(deadline) => Some(deadline.saturating_duration_since(now)),
+            Self::Forever => None,
+        }
+    }
+
+    #[inline]
+    pub(super) fn is_expired(self, now: Instant) -> bool {
+        match self {
+            Self::Poll => true,
+            Self::Until(deadline) => now >= deadline,
+            Self::Forever => false,
+        }
+    }
 }
 
 impl ProcessWaitBackendInterest {
@@ -1058,6 +1125,8 @@ impl ProcessWaitBackend {
         });
         Self {
             poller,
+            #[cfg(test)]
+            before_next_wait: std::sync::Mutex::new(None),
             #[cfg(unix)]
             signal_fd,
             notification_pending: Arc::new(AtomicBool::new(false)),
@@ -1107,16 +1176,20 @@ impl ProcessWaitBackend {
                 return Some(ProcessWaitEvents::notification_wakeup());
             }
 
-            let deadline = Instant::now() + timeout;
+            #[cfg(test)]
+            {
+                let before_wait = self.before_next_wait.lock().expect("wait gate lock").take();
+                if let Some(before_wait) = before_wait {
+                    before_wait(timeout);
+                }
+            }
+
+            let deadline = ProcessWaitDeadline::from(timeout);
             loop {
                 let now = Instant::now();
-                let wait_time = if timeout.is_zero() {
-                    Duration::ZERO
-                } else {
-                    deadline.saturating_duration_since(now)
-                };
+                let wait_time = deadline.remaining(now);
                 let mut events = polling::Events::new();
-                match poller.wait(&mut events, Some(wait_time)) {
+                match poller.wait(&mut events, wait_time) {
                     Ok(_) => {
                         let mut notification_wakeup = interest.wants_notifications()
                             && self.notification_pending.swap(false, Ordering::AcqRel);
@@ -1138,12 +1211,14 @@ impl ProcessWaitBackend {
                                 };
                                 if event.readable
                                     && (process_has_readable_process_io(process)
+                                        || process_has_pending_tls_handshake_io(process)
                                         || process_has_observable_child_status(process))
                                 {
                                     ready_processes.push(id);
                                 }
                                 if event.writable
                                     && (process.live_io.pending_network_connect.is_some()
+                                        || process_has_pending_tls_handshake_io(process)
                                         || !process.write_queue.is_nil())
                                 {
                                     writable_processes.push(id);
@@ -1166,8 +1241,7 @@ impl ProcessWaitBackend {
                         if backend.has_notification_wakeup()
                             || backend.has_ready_processes()
                             || backend.has_writable_processes()
-                            || timeout.is_zero()
-                            || Instant::now() >= deadline
+                            || deadline.is_expired(Instant::now())
                         {
                             return Some(backend);
                         }
@@ -1195,7 +1269,7 @@ impl ProcessWaitBackend {
                     // non-exhaustive and a future backend may surface it; what
                     // it must NOT be is a mechanism something else relies on.
                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
-                        if timeout.is_zero() || Instant::now() >= deadline {
+                        if deadline.is_expired(Instant::now()) {
                             return Some(ProcessWaitEvents::from_sources_with_writable(
                                 false,
                                 Vec::new(),
@@ -1479,6 +1553,7 @@ pub(super) fn process_coding_name_converts_nothing(name: &str) -> bool {
 /// (src/coding.c:7623-7625) resolves a VECTOR eol_type to `Qunix` before any
 /// encoder sees a character, so `raw-text`'s undecided end-of-line writes bare
 /// LF -- which is what "convert nothing" means on this side.
+#[cfg(test)]
 pub(super) fn process_encode_coding_converts_nothing(coding: Value) -> bool {
     coding.is_nil()
         || matches!(
@@ -2165,12 +2240,138 @@ impl ProcessCodingState {
     }
 }
 
+/// Whether GNU's installed output descriptor invokes an encoding engine.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessEncodingEligibility {
+    Required,
+    Bypass,
+}
+
+/// A descriptor groups its coding identity, setup flags, and continuation.
+/// Fields stay private so changing identity cannot retain another codec's state.
+#[derive(Clone, Debug)]
+pub(crate) struct ProcessEncodingDescriptor {
+    coding: crate::encoding::RuntimeCodingSystem,
+    raw_coding: crate::encoding::RuntimeCodingSystem,
+    eligibility: ProcessEncodingEligibility,
+    encoder: crate::encoding::CodingEncoderState,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) enum ProcessEncodingState {
+    /// Manager-only records have no Context with which to perform GNU setup.
+    #[default]
+    Uninitialized,
+    Active(ProcessEncodingDescriptor),
+}
+
+impl ProcessEncodingState {
+    pub(crate) fn initialized(
+        coding: crate::encoding::RuntimeCodingSystem,
+        systems: &super::super::coding::CodingSystemManager,
+        eol_conversion: super::super::coding::EolConversion,
+    ) -> Result<Self, Flow> {
+        use super::super::coding::{EolConversion, EolType};
+        let metadata = coding.metadata(systems).ok_or_else(|| {
+            signal(
+                LispCondition::CodingSystemError,
+                vec![Value::symbol(coding.symbol())],
+            )
+        })?;
+        let info = metadata.info;
+        // setup_coding_system derives flags from effective EOL, hooks, and
+        // runtime codec type (GNU coding.c:5681-5696, 5719-5870).
+        let character_conversion = !matches!(
+            super::super::intern::resolve_sym(info.coding_type),
+            "raw-text" | "undecided"
+        );
+        let eol_conversion_required = eol_conversion == EolConversion::Enabled
+            && matches!(metadata.eol_type, EolType::Dos | EolType::Mac);
+        let eligibility = if character_conversion
+            || info.pre_write_conversion.is_some()
+            || eol_conversion_required
+        {
+            ProcessEncodingEligibility::Required
+        } else {
+            ProcessEncodingEligibility::Bypass
+        };
+        let raw = match metadata.eol_type {
+            EolType::Dos => "raw-text-dos",
+            EolType::Mac => "raw-text-mac",
+            EolType::Unix => "raw-text-unix",
+            EolType::Undecided => "raw-text",
+        };
+        Ok(Self::Active(ProcessEncodingDescriptor {
+            coding,
+            raw_coding: crate::encoding::RuntimeCodingSystem::from_symbol(
+                super::super::intern::intern(raw),
+            ),
+            eligibility,
+            encoder: crate::encoding::CodingEncoderState::default(),
+        }))
+    }
+
+    pub(crate) fn coding(&self) -> Option<crate::encoding::RuntimeCodingSystem> {
+        match self {
+            Self::Uninitialized => None,
+            Self::Active(descriptor) => Some(descriptor.coding),
+        }
+    }
+
+    pub(crate) fn requires_encoding(&self) -> bool {
+        matches!(
+            self,
+            Self::Active(ProcessEncodingDescriptor {
+                eligibility: ProcessEncodingEligibility::Required,
+                ..
+            })
+        )
+    }
+
+    /// Only send_process's input-mode transition selects another descriptor.
+    /// Codec continuation access after callbacks must never reselect it.
+    pub(crate) fn select_input(
+        &mut self,
+        systems: &super::super::coding::CodingSystemManager,
+        configured: crate::encoding::RuntimeCodingSystem,
+        multibyte: bool,
+        eol_conversion: super::super::coding::EolConversion,
+    ) -> Result<crate::encoding::RuntimeCodingSystem, Flow> {
+        let Self::Active(descriptor) = self else {
+            return Err(signal(
+                "error",
+                vec![Value::string("Process output coding is not initialized")],
+            ));
+        };
+        let reported = descriptor.coding;
+        if multibyte {
+            if descriptor.coding != configured {
+                *self = Self::initialized(configured, systems, eol_conversion)?;
+            }
+            Ok(configured)
+        } else {
+            if descriptor.eligibility == ProcessEncodingEligibility::Required {
+                *self = Self::initialized(descriptor.raw_coding, systems, eol_conversion)?;
+            }
+            Ok(reported)
+        }
+    }
+
+    pub(crate) fn encoder_mut(&mut self) -> Option<&mut crate::encoding::CodingEncoderState> {
+        match self {
+            Self::Uninitialized => None,
+            Self::Active(descriptor) => Some(&mut descriptor.encoder),
+        }
+    }
+}
+
 /// Encode the data passed to `process-send-string`/`process-send-region`
 /// through a process's ENCODE coding system, mirroring GNU `send_process`
 /// (src/process.c).  A `binary`/`raw-text`/`no-conversion`/nil encode coding
 /// (or an unset one) leaves the bytes untouched; every other coding goes through
 /// the shared string encoder, which performs character-code conversion and the
 /// EOL conversion the coding's eol_type requests.
+#[cfg(test)]
 pub(super) fn encode_process_send_input(
     processes: &ProcessManager,
     id: ProcessId,
@@ -3291,14 +3492,16 @@ pub(super) fn create_network_process_record(
     coding: ProcessCodingSystems,
 ) -> Result<ProcessId, Flow> {
     validate_resolved_process_coding_systems(Some(&eval.coding_systems), coding)?;
-    Ok(eval.processes.create_process_with_kind_lisp(
+    let id = eval.processes.create_process_with_kind_lisp(
         name,
         buffer,
         LispString::from_utf8("network"),
         Vec::new(),
         ProcessKindWithoutDevice::Network,
         coding,
-    ))
+    );
+    eval.setup_process_output_descriptor(id)?;
+    Ok(id)
 }
 
 /// GNU `set_network_socket_coding_system`'s resolver, src/process.c:3291-3367.
@@ -4056,6 +4259,12 @@ impl ProcessFilterDispatch {
     }
 }
 
+fn process_has_pending_tls_handshake_io(process: &Process) -> bool {
+    process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+        && process.live_io.tls_stream.is_some()
+        && process.live_io.tls_polling == TlsPolling::Enabled
+}
+
 pub(super) fn process_filter_accepts_output(proc: &Process) -> bool {
     ProcessFilterDispatch::from_lisp(proc.filter).accepts_output()
 }
@@ -4150,6 +4359,16 @@ impl super::super::eval::Context {
     ) -> Result<(), Flow> {
         if !self.processes.queue_input(id, input)? {
             return Err(signal("error", vec![Value::string("Process not found")]));
+        }
+
+        // A reentrant timer/filter cannot drive the suspended TLS handshake.
+        // Retain application data until verification succeeds, then flush it.
+        if self
+            .processes
+            .get(id)
+            .is_some_and(|process| process.gnutls_initstage == GnutlsInitStage::HandshakeTried)
+        {
+            return Ok(());
         }
 
         loop {
@@ -5185,6 +5404,10 @@ impl ProcessManager {
             return;
         };
 
+        if self.refresh_pending_tls_interest(id) {
+            return;
+        }
+
         if let Some(stdout) = proc.live_io.child_stdout.as_ref() {
             if enabled {
                 Self::register_child_stdout_with_poller(poller, stdout, id);
@@ -5604,6 +5827,7 @@ impl ProcessManager {
             exit_query_policy: ExitQueryPolicy::GNU_MAKE_PROCESS,
             filter: Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL),
             sentinel: Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL),
+            sentinel_execution: SentinelExecution::Idle,
             log: Value::NIL,
             plist: Value::NIL,
             stderrproc: Value::NIL,
@@ -5620,6 +5844,7 @@ impl ProcessManager {
             coding_decode: coding.decode,
             coding_state: ProcessCodingState::default(),
             coding_encode: coding.encode,
+            encoding_state: ProcessEncodingState::default(),
             coding_explicitly_set: false,
             explicit_coding_status_deferred_once: false,
             inherit_coding_system_flag: false,
@@ -6365,6 +6590,9 @@ impl ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
+        if proc.gnutls_initstage == GnutlsInitStage::HandshakeTried {
+            return ProcessBytesRead::WouldBlock;
+        }
         let read_len = process_read_buffer_len(proc);
         if let Some(ref mut tls) = proc.live_io.tls_stream {
             let mut buf = vec![0u8; read_len];
@@ -6478,6 +6706,20 @@ impl ProcessManager {
     /// publishing work. `None` if no poller could be created.
     pub(crate) fn wait_notifier(&self) -> Option<WaitNotifier> {
         self.wait_backend.notify_handle()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn before_next_backend_wait_for_test(
+        &mut self,
+        hook: impl FnOnce(Duration) + Send + 'static,
+    ) {
+        let slot = self
+            .wait_backend
+            .before_next_wait
+            .get_mut()
+            .expect("wait gate lock");
+        assert!(slot.is_none(), "wait gate already installed");
+        *slot = Some(Box::new(hook));
     }
 
     /// Block on the unified wait poller (cross-thread notification and/or process
@@ -6959,6 +7201,12 @@ impl ProcessManager {
         &mut self,
         id: ProcessId,
     ) -> Result<ProcessWriteFlush, Flow> {
+        if self
+            .get(id)
+            .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
+        {
+            return Ok(ProcessWriteFlush::Blocked);
+        }
         if self.write_queue_is_empty(id) {
             self.update_process_write_interest(id, ProcessWriteInterest::Readable);
             return Ok(ProcessWriteFlush::Drained);
@@ -7107,10 +7355,107 @@ impl ProcessManager {
         }
     }
 
+    pub(crate) fn has_pending_tls_handshake(&self, id: ProcessId) -> bool {
+        self.get(id).is_some_and(|process| {
+            process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                && process.live_io.tls_stream.is_some()
+        })
+    }
+
+    pub(crate) fn tls_handshake_process_ids(&self) -> Vec<ProcessId> {
+        self.processes
+            .iter()
+            .filter_map(|(&id, proc)| {
+                (proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                    && proc.live_io.tls_stream.is_some())
+                .then_some(id)
+            })
+            .collect()
+    }
+    // Application filters and write queues cannot override a handshake's
+    // readiness requirements or a parent wait's suspension ownership.
+    fn refresh_pending_tls_interest(&self, id: ProcessId) -> bool {
+        let Some(process) = self.get(id) else {
+            return false;
+        };
+        if process.gnutls_initstage != GnutlsInitStage::HandshakeTried {
+            return false;
+        }
+        let Some(tls) = process.live_io.tls_stream.as_ref() else {
+            return false;
+        };
+        self.set_tls_handshake_interest(id, Some(tls.handshake_interest()));
+        true
+    }
+
+    pub(crate) fn suspend_tls_handshake_polling(&mut self, id: ProcessId) -> bool {
+        let Some(process) = self.get_mut(id) else {
+            return false;
+        };
+        if process.live_io.tls_polling == TlsPolling::Suspended {
+            return false;
+        }
+        process.live_io.tls_polling = TlsPolling::Suspended;
+        self.set_tls_handshake_interest(id, None);
+        true
+    }
+
+    pub(crate) fn resume_tls_handshake_polling(&mut self, id: ProcessId) {
+        let Some(process) = self.get_mut(id) else {
+            return;
+        };
+        process.live_io.tls_polling = TlsPolling::Enabled;
+        if process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+            && let Some(tls) = process.live_io.tls_stream.as_ref()
+        {
+            let interest = tls.handshake_interest();
+            self.set_tls_handshake_interest(id, Some(interest));
+        }
+    }
+    pub(crate) fn set_tls_handshake_interest(
+        &self,
+        id: ProcessId,
+        interest: Option<TlsHandshakeInterest>,
+    ) {
+        let Some(poller) = self.wait_backend.poller() else {
+            return;
+        };
+        let Some(tls) = self
+            .get(id)
+            .and_then(|proc| proc.live_io.tls_stream.as_ref())
+        else {
+            return;
+        };
+        let Some(interest) = interest else {
+            let _ = poller.delete(tls.tcp_stream());
+            return;
+        };
+        if self
+            .get(id)
+            .is_some_and(|process| process.live_io.tls_polling == TlsPolling::Suspended)
+        {
+            return;
+        }
+        let (readable, writable) = match interest {
+            TlsHandshakeInterest::Readable => (true, false),
+            TlsHandshakeInterest::Writable => (false, true),
+            TlsHandshakeInterest::ReadableAndWritable => (true, true),
+        };
+        let event = polling::Event::new(id as usize, readable, writable);
+        if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
+            let _ = Self::register_readable_source(poller, tls.tcp_stream(), id);
+            let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
+        }
+    }
+
     /// Register a network socket with the I/O poller so that
     /// `wait_for_output` wakes up when data arrives.
     pub fn register_socket_fd(&self, id: ProcessId) -> Result<(), String> {
         let proc = self.processes.get(&id).ok_or("Process not found")?;
+        if self.refresh_pending_tls_interest(id) {
+            return Ok(());
+        }
+
         if !process_filter_accepts_output(proc) {
             return Ok(());
         }
@@ -7340,10 +7685,14 @@ impl ProcessManager {
             .map(|proc| proc.gnutls_boot_parameters)
             .filter(|parameters| !parameters.is_nil())
             .map(parse_make_network_tls_parameters)
-            .transpose()?
+            .transpose()
+            .map_err(|flow| {
+                self.delete_process(id);
+                flow
+            })?
             .flatten();
         if let Some(parameters) = tls_parameters {
-            upgrade_process_to_tls::<RustlsBackend>(
+            begin_process_tls::<RustlsBackend>(
                 self,
                 id,
                 &parameters.client,
@@ -8013,6 +8362,27 @@ impl AsyncCallbackKind {
 }
 
 impl super::super::eval::Context {
+    pub(super) fn setup_process_output_descriptor(&mut self, id: ProcessId) -> Result<(), Flow> {
+        let coding = self
+            .processes
+            .get_any(id)
+            .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?
+            .coding_encode
+            .as_symbol_id()
+            .filter(|&symbol| symbol != super::super::intern::intern("nil"))
+            .unwrap_or_else(|| super::super::intern::intern("undecided"));
+        let state = ProcessEncodingState::initialized(
+            crate::encoding::RuntimeCodingSystem::from_symbol(coding),
+            &self.coding_systems,
+            self.eol_conversion(),
+        )?;
+        self.processes
+            .get_any_mut(id)
+            .expect("setup does not invoke Lisp")
+            .encoding_state = state;
+        Ok(())
+    }
+
     pub(super) fn visible_process_read_config(&self) -> ProcessReadConfig {
         let readmax = self
             .visible_variable_value_or_nil("read-process-output-max")
@@ -8529,8 +8899,16 @@ impl super::super::eval::Context {
         // "If a coding system for encoding is not yet decided, we set it as the
         // same as coding-system for decoding" (:6431-6433).
         let inherited = crate::encoding::coding_inherit_unix_eol_type(&self.coding_systems, used);
+        let coding = crate::encoding::RuntimeCodingSystem::from_symbol(
+            super::super::intern::intern(&inherited),
+        );
+        // Inheritance was derived from a registered decoder coding above.
+        let state =
+            ProcessEncodingState::initialized(coding, &self.coding_systems, self.eol_conversion())
+                .expect("inherited coding is registered");
         if let Some(proc) = self.processes.get_mut(id) {
             proc.coding_encode = Value::symbol(&inherited);
+            proc.encoding_state = state;
         }
     }
 
@@ -8643,18 +9021,23 @@ impl super::super::eval::Context {
         if sentinel.is_nil() {
             return Ok(());
         }
-
-        let callback = if sentinel.is_symbol_named(DEFAULT_PROCESS_SENTINEL_SYMBOL) {
-            Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL)
-        } else {
-            sentinel
-        };
-
-        self.run_async_process_callback_preserving_state(
-            callback,
+        // A sentinel may enter a wait and delete its own process from a timer.
+        // Keep its recursion guard with the record, including after retirement.
+        if let Some(process) = self.processes.get_any_mut(pid) {
+            if process.sentinel_execution == SentinelExecution::Running {
+                return Ok(());
+            }
+            process.sentinel_execution = SentinelExecution::Running;
+        }
+        let result = self.run_async_process_callback_preserving_state(
+            sentinel,
             vec![Value::make_process(pid), Value::string(message)],
             AsyncCallbackKind::ProcessSentinel,
-        )
+        );
+        if let Some(process) = self.processes.get_any_mut(pid) {
+            process.sentinel_execution = SentinelExecution::Idle;
+        }
+        result
     }
 
     /// GNU `exec_sentinel` (src/process.c:7800), driven from a
@@ -8820,6 +9203,67 @@ impl super::super::eval::Context {
         self.poll_process_output_for_ids(visit, target_process, true)
     }
 
+    pub(super) fn finish_process_tls_handshake(
+        &mut self,
+        id: ProcessId,
+        map_error: fn(TlsBackendError) -> Flow,
+    ) -> Result<(), Flow> {
+        let result = (|| {
+            loop {
+                let proc = self.processes.get_mut(id).ok_or_else(|| {
+                    signal(
+                        "error",
+                        vec![Value::string("Process closed during TLS negotiation")],
+                    )
+                })?;
+                let stream = proc.live_io.tls_stream.as_mut().ok_or_else(|| {
+                    signal(
+                        "error",
+                        vec![Value::string("TLS connection closed during negotiation")],
+                    )
+                })?;
+                match stream.advance_handshake().map_err(map_error)? {
+                    TlsHandshakeProgress::Ready => {
+                        proc.gnutls_initstage = GnutlsInitStage::Ready;
+                        proc.gnutls_boot_parameters = Value::NIL;
+                        self.processes.register_socket_fd(id).ok();
+                        self.processes.flush_process_write_queue(id)?;
+                        return Ok(());
+                    }
+                    TlsHandshakeProgress::Pending(interest) => {
+                        self.processes
+                            .set_tls_handshake_interest(id, Some(interest));
+                        self.wait_for_tls_handshake(id)?;
+                    }
+                }
+            }
+        })();
+        if result.is_err() {
+            self.processes.delete_process(id);
+        }
+        result
+    }
+
+    fn finish_connected_tls_before_sentinel(
+        &mut self,
+        id: ProcessId,
+        sentinel: Value,
+    ) -> Result<(), Flow> {
+        let roots = self.save_specpdl_roots();
+        self.push_specpdl_root(sentinel);
+        let result = if self
+            .processes
+            .get(id)
+            .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
+        {
+            self.finish_process_tls_handshake(id, signal_gnutls_boot_error)
+        } else {
+            Ok(())
+        };
+        self.restore_specpdl_roots(roots);
+        result
+    }
+
     pub(crate) fn poll_ready_process_output_for_service_request(
         &mut self,
         events: ProcessWaitEvents,
@@ -8836,6 +9280,8 @@ impl super::super::eval::Context {
                     outcome.record_serviced();
                 }
                 PendingNetworkConnectCompletion::Connected { sentinel } => {
+                    self.finish_connected_tls_before_sentinel(pid, sentinel)?;
+                    self.setup_process_output_descriptor(pid)?;
                     // GNU services :nowait completion inside the wait and
                     // keeps waiting (only read bytes complete the wait).
                     outcome.record_serviced();
@@ -8906,6 +9352,8 @@ impl super::super::eval::Context {
                         outcome.record_serviced();
                     }
                     PendingNetworkConnectCompletion::Connected { sentinel } => {
+                        self.finish_connected_tls_before_sentinel(pid, sentinel)?;
+                        self.setup_process_output_descriptor(pid)?;
                         outcome.record_serviced();
                         self.run_process_sentinel_callback(pid, sentinel, "open\n")?;
                     }
@@ -9031,6 +9479,9 @@ impl super::super::eval::Context {
             let accepted = self
                 .processes
                 .accept_network_server_connections(&mut self.buffers, pid)?;
+            for event in &accepted {
+                self.setup_process_output_descriptor(event.client_id)?;
+            }
             // The events' log/sentinel closures live only in this Rust Vec
             // while earlier callbacks run arbitrary Lisp; a log function
             // that set-process-sentinel's or delete-process's a connection

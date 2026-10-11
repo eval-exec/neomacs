@@ -108,4 +108,5 @@ impl Default for NeomacsInputEvent {
 }
 
 #[cfg(test)]
+#[path = "events/tests/events_test.rs"]
 mod tests;

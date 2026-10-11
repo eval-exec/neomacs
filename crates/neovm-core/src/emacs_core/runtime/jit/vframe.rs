@@ -9,6 +9,7 @@
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::vm::{ChainBacktrace, ChainLink};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::value::Value;
 
 /// Index of a bytecode object in the leaf's existing, GC-traced relocations.
@@ -290,13 +291,14 @@ impl DeoptChain {
                 .ok_or(ChainReadError::InvalidCallee)?;
             let params_on_stack = code.lexical || code.arglist.as_fixnum().is_some();
             if code.env.is_some()
-                || code.params.rest.is_some()
-                || !code.params.optional.is_empty()
-                || code.params.required.len() != nargs as usize
-                || (!code.params.required.is_empty() && !params_on_stack)
+                || JitParamShape::try_from(code)
+                    .ok()
+                    .and_then(JitParamShape::fixed_arity)
+                    != Some(nargs as usize)
+                || (nargs != 0 && !params_on_stack)
                 || !code.executes_sealed_ops()
                 || !code.executes_verified_ops()
-                || stack.len() > code.max_stack as usize
+                || stack.len() > code.max_stack.get()
                 || meta.pc as usize >= code.executable_ops().len()
             {
                 return Err(ChainReadError::InvalidCallee);
@@ -493,13 +495,14 @@ impl DeoptChain {
             .function
             .get_bytecode_data()
             .ok_or(ChainReadError::InvalidCallee)?;
-        if code.params.required.len() != 1
-            || !code.params.optional.is_empty()
-            || code.params.rest.is_some()
+        if JitParamShape::try_from(code)
+            .ok()
+            .and_then(JitParamShape::fixed_arity)
+            != Some(1)
             || !code.executes_sealed_ops()
             || !code.executes_verified_ops()
             || callback.pc as usize >= code.executable_ops().len()
-            || callback.stack.len as usize > code.max_stack as usize
+            || callback.stack.len as usize > code.max_stack.get()
             || (!callback_entered && callback.pc != 0)
         {
             return Err(ChainReadError::InvalidCallee);
@@ -527,5 +530,5 @@ impl DeoptChain {
 }
 
 #[cfg(test)]
-#[path = "tests/inline_chain_deopt.rs"]
+#[path = "tests/inline_chain_deopt_test.rs"]
 mod tests;

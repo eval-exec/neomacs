@@ -178,21 +178,12 @@ pub(crate) fn builtin_make_local_variable(
     // The slot remains the source of truth — DO NOT replace it with
     // a fresh BLV via make_symbol_localized.
     {
-        use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
-        use crate::emacs_core::symbol::SymbolRedirect;
         let buf_objfwd = ctx
             .obarray
             .get_by_id(resolved)
-            .filter(|s| s.redirect() == SymbolRedirect::Forwarded)
-            .and_then(|s| {
-                let fwd = unsafe { &*s.val.fwd };
-                if matches!(fwd.ty, LispFwdType::BufferObj) {
-                    let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
-                    crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)
-                } else {
-                    None
-                }
-            });
+            .and_then(|s| s.forwarded_descriptor())
+            .and_then(|fwd| fwd.as_buffer_obj_fwd())
+            .and_then(|buf_fwd| crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset));
         if let Some(slot) = buf_objfwd {
             if let Some(buf_id) = ctx.buffers.current_buffer_id()
                 && let Some(buf) = ctx.buffers.get_mut(buf_id)
@@ -565,21 +556,14 @@ pub(crate) fn builtin_kill_local_variable_impl(
     // conditional per-buffer slots clear their local flag and reload the
     // current default value; always-local slots are left alone.
     {
-        use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
-        use crate::emacs_core::symbol::SymbolRedirect;
         let forwarded_slot = ctx
             .obarray
             .get_by_id(resolved)
-            .filter(|s| s.redirect() == SymbolRedirect::Forwarded)
-            .and_then(|s| {
-                let fwd = unsafe { &*s.val.fwd };
-                if matches!(fwd.ty, LispFwdType::BufferObj) {
-                    let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
-                    crate::buffer::buffer::lookup_buffer_slot(resolved_name)
-                        .zip(crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset))
-                } else {
-                    None
-                }
+            .and_then(|s| s.forwarded_descriptor())
+            .and_then(|fwd| fwd.as_buffer_obj_fwd())
+            .and_then(|buf_fwd| {
+                crate::buffer::buffer::lookup_buffer_slot(resolved_name)
+                    .zip(crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset))
             });
         if let Some((info, slot)) = forwarded_slot {
             let offset = slot.index();
@@ -667,5 +651,5 @@ pub(crate) fn builtin_kill_local_variable_impl(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/custom_test.rs"]
 mod tests;

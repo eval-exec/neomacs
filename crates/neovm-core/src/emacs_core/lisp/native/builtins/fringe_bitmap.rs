@@ -277,5 +277,5 @@ pub(crate) fn fit_rows_to_height(rows: Vec<u16>, height: Option<u8>) -> (Vec<u16
 }
 
 #[cfg(test)]
-#[path = "tests/fringe_bitmap.rs"]
+#[path = "tests/fringe_bitmap_test.rs"]
 mod tests;

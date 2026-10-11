@@ -335,4 +335,5 @@ impl DisplayImageOverflowAction {
 }
 
 #[cfg(test)]
+#[path = "display_source_overflow/tests/display_source_overflow_test.rs"]
 mod tests;

@@ -333,4 +333,5 @@ impl XwidgetTextureCoordinates {
 }
 
 #[cfg(test)]
+#[path = "xwidget_extent/tests/xwidget_extent_test.rs"]
 mod tests;

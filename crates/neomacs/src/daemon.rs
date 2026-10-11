@@ -259,5 +259,5 @@ pub(super) fn restart(args: &[OsString], bypass_finalizers: bool) -> ! {
 }
 
 #[cfg(test)]
-#[path = "daemon/tests/mod.rs"]
+#[path = "daemon/tests/daemon_test.rs"]
 mod tests;

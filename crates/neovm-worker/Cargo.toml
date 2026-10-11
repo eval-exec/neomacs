@@ -10,3 +10,5 @@ description = "Worker runtime and scheduler scaffolding for NeoVM"
 [dependencies]
 neovm-core.workspace = true
 neovm-host-abi.workspace = true
+static_assertions.workspace = true
+thiserror.workspace = true

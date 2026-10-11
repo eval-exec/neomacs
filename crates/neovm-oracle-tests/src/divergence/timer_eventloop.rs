@@ -186,3 +186,28 @@ fn divergence_timer_error_is_caught_not_propagated() {
         expect,
     );
 }
+
+#[test]
+fn divergence_timed_read_preserves_idle_callback_epoch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[r#""OK (t nil t nil t)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((timer nil))
+  (unwind-protect
+      (catch 'done
+        (setq timer
+              (run-with-idle-timer
+               0 nil
+               (lambda ()
+                 (throw 'done
+                        (list (not (null (current-idle-time)))
+                              (read-event nil nil 0)
+                              (not (null (current-idle-time)))
+                              (read-event nil nil 0.01)
+                              (not (null (current-idle-time))))))))
+        (read-event))
+    (when timer (cancel-timer timer))))"#,
+        expect,
+    );
+}

@@ -1,9 +1,12 @@
 //! Bytecode virtual machine — stack-based interpreter.
 
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use smallvec::SmallVec;
+
+#[path = "frame_bindings.rs"]
+mod frame_bindings;
+use frame_bindings::BindStack;
 
 use super::arith_kind::ArithGenericKind;
 use super::chunk::ByteCodeFunction;
@@ -460,8 +463,6 @@ enum Handler {
 }
 
 type HandlerStack = SmallVec<[Handler; 4]>;
-type BindStack = SmallVec<[usize; 8]>;
-
 #[cfg(test)]
 thread_local! {
     static RUN_LOOP_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -469,8 +470,6 @@ thread_local! {
     static ITERATIVE_CONTEXT_BC_FRAMES_MAX: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static GENERIC_BYTECODE_CLEANUP_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static OPCODE_DISPATCH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static MUTATING_WRITEBACK_CLASSIFICATION_COUNT: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
     static INLINE_BUILTIN_DIRECT_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static ARITH_INTEGER_FAST_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -551,16 +550,6 @@ fn opcode_dispatch_count() -> usize {
 }
 
 #[cfg(test)]
-fn reset_mutating_writeback_classification_count() {
-    MUTATING_WRITEBACK_CLASSIFICATION_COUNT.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-fn mutating_writeback_classification_count() -> usize {
-    MUTATING_WRITEBACK_CLASSIFICATION_COUNT.with(std::cell::Cell::get)
-}
-
-#[cfg(test)]
 fn reset_inline_builtin_direct_count() {
     INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(0));
 }
@@ -576,6 +565,31 @@ use crate::emacs_core::eval::SpecBinding;
 #[inline(never)]
 fn invalid_bytecode_flow() -> Flow {
     signal("error", vec![Value::string("Invalid byte-code")])
+}
+
+/// GNU bytecode.c:538-541 signals the raw descriptor pair (mandatory .
+/// nonrest), even when the `&rest` bit is set; a frame the host cannot
+/// represent is invalid byte-code.
+#[cold]
+#[inline(never)]
+fn stack_call_shape_flow(
+    template: super::ArgTemplate,
+    nargs: usize,
+    error: super::function_slots::CallShapeError,
+) -> Flow {
+    match error {
+        super::function_slots::CallShapeError::Arity => signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::cons(
+                    Value::fixnum(template.mandatory() as i64),
+                    Value::fixnum(template.nonrest()),
+                ),
+                Value::fixnum(nargs as i64),
+            ],
+        ),
+        super::function_slots::CallShapeError::Shape(_) => invalid_bytecode_flow(),
+    }
 }
 
 #[cold]
@@ -626,7 +640,7 @@ fn trace_invalid_bytecode_site(
         stack_len,
         frame_base,
         frame_limit,
-        max_stack = func.max_stack,
+        max_stack = func.max_stack.get(),
         ops_len = ops.len(),
         constants_len = func.constants.len(),
         lexical = func.lexical,
@@ -1094,7 +1108,7 @@ impl InterpreterFrame {
     /// when it reserved the capacity.
     #[inline(always)]
     fn frame_limit(&self) -> usize {
-        self.frame_base + self.function.code().max_stack as usize
+        self.frame_base + self.function.code().max_stack.get()
     }
 
     #[inline(always)]
@@ -1468,7 +1482,7 @@ fn parse_vm_stack_return_knob(value: Option<&str>) -> bool {
 
 /// An immutable process-wide policy, safely published to all mutators by
 /// OnceLock. No Lisp state or Context-owned storage is retained here.
-#[inline]
+#[inline(always)]
 fn vm_stack_return_after_push_enabled() -> bool {
     #[cfg(test)]
     if let Some(enabled) = VM_STACK_RETURN_TEST_OVERRIDE.with(std::cell::Cell::get) {
@@ -1849,12 +1863,6 @@ fn logxor_sym_id() -> SymId {
     *LOGXOR.get_or_init(|| intern("logxor"))
 }
 
-#[inline]
-fn fillarray_sym_id() -> SymId {
-    static FILLARRAY: OnceLock<SymId> = OnceLock::new();
-    *FILLARRAY.get_or_init(|| intern("fillarray"))
-}
-
 /// A tiny direct-mapped cache for symbol function cells proven to contain
 /// bytecode. It lives only for one [`Vm`] invocation: it is neither a Lisp/GC
 /// root nor persisted in pdump state.
@@ -2091,9 +2099,30 @@ impl BytecodeTierPolicy {
     }
 }
 
+/// The floor-adjusted depth check rejected a call. This scalar decision carries
+/// neither Lisp values nor permission to use a context or collect its roots.
+#[must_use]
+#[derive(Debug, thiserror::Error)]
+enum BytecodeDepthOverflow {
+    #[error("Lisp nesting exceeds ‘max-lisp-eval-depth’")]
+    Confirmed,
+}
+
+impl BytecodeDepthOverflow {
+    #[inline(always)]
+    fn into_flow(self) -> Flow {
+        match self {
+            Self::Confirmed => signal(
+                LispCondition::Error,
+                vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
+            ),
+        }
+    }
+}
+
 /// The bytecode VM execution engine.
 ///
-/// Operates on an Context's obarray and dynamic binding stack.
+/// Operates on a Context's obarray and dynamic binding stack.
 pub struct Vm<'a> {
     ctx: &'a mut crate::emacs_core::eval::Context,
     recent_interpreter_call: RecentInterpreterCall,
@@ -2121,6 +2150,7 @@ impl FrameArgumentCopy {
     /// wins for ordinary Lisp arities because a libc `memmove` dispatch costs
     /// more than a handful of already-capacity-checked stores.  Retain the
     /// bulk path for unusually wide generated functions.
+    #[inline(always)]
     const fn for_count(count: usize) -> Self {
         const SCALAR_COPY_MAX: usize = 8;
         match count {
@@ -2318,7 +2348,7 @@ struct VmProcessKnobs {
 
 #[cfg(feature = "jit")]
 impl VmProcessKnobs {
-    #[inline]
+    #[inline(always)]
     fn get() -> Self {
         static KNOBS: std::sync::OnceLock<VmProcessKnobs> = std::sync::OnceLock::new();
         *KNOBS.get_or_init(|| Self {
@@ -2390,22 +2420,59 @@ impl<'a> Vm<'a> {
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, Flow>,
     ) -> Result<T, Flow> {
-        self.enter_bytecode_call_depth()?;
+        if let Err(flow) = self.enter_published_bytecode_call_depth() {
+            return Err(Self::reject_bytecode_call(f, flow));
+        }
         let result = f(self);
         self.leave_bytecode_call_depth();
         result
     }
 
+    /// Drop the uncalled closure after rejected-depth callbacks have finished.
+    /// Keep its owned argument cleanup out of the interpreter's normal paths;
+    /// successful calls retain the original closure and depth-check code.
+    #[cold]
+    #[inline(never)]
+    fn reject_bytecode_call<T>(f: impl FnOnce(&mut Self) -> Result<T, Flow>, flow: Flow) -> Flow {
+        drop(f);
+        flow
+    }
+
+    /// Check already-counted depth with the caller's operands published.
+    /// Keep rejected-call dispatch and depth retirement inside this cold
+    /// boundary; floor-raised success remains counted for the normal exit.
+    #[cold]
+    #[inline(never)]
+    fn bytecode_depth_exceeded_published(&mut self) -> Result<(), Flow> {
+        match self.check_bytecode_call_depth() {
+            Ok(()) => Ok(()),
+            Err(overflow) => Err(self.ctx.finish_lisp_depth_overflow(overflow.into_flow())),
+        }
+    }
+
+    /// Finish a cached driver's confirmed depth rejection with its cursor live.
+    /// Consume publication before callback Lisp, dispatch at counted depth,
+    /// and retire the rejected call exactly once. Accepted floor raises keep
+    /// the original cursor in the driver and never cross this boundary.
+    #[cold]
+    #[inline(never)]
+    fn finish_live_bytecode_depth_overflow(
+        &mut self,
+        cursor: StackCursor,
+        overflow: BytecodeDepthOverflow,
+    ) -> Flow {
+        cursor.publish(self.ctx);
+        self.ctx.finish_lisp_depth_overflow(overflow.into_flow())
+    }
+
+    /// Enter a bytecode call whose caller has already published its operands.
     #[inline(always)]
-    fn enter_bytecode_call_depth(&mut self) -> Result<(), Flow> {
+    fn enter_published_bytecode_call_depth(&mut self) -> Result<(), Flow> {
         self.ctx.depth += 1;
         if self.ctx.depth > self.ctx.max_depth {
-            // Cold: the floor-raise + error construction stay out of the hot
-            // prologue's codegen; the common shallow call pays one compare.
-            if let Err(flow) = self.bytecode_depth_exceeded() {
-                self.ctx.depth -= 1;
-                return Err(flow);
-            }
+            // Cold: floor raising, error construction, dispatch and rejected
+            // depth retirement stay outside the shallow call's live ranges.
+            self.bytecode_depth_exceeded_published()?;
         }
         Ok(())
     }
@@ -2422,14 +2489,25 @@ impl<'a> Vm<'a> {
     #[cold]
     #[inline(never)]
     pub(crate) fn bytecode_depth_exceeded(&mut self) -> Result<(), Flow> {
+        self.check_bytecode_call_depth()
+            .map_err(BytecodeDepthOverflow::into_flow)
+    }
+
+    /// The cached driver keeps its cursor live through this scalar check.
+    /// Allocate the signal only after confirmed rejection publishes that cursor.
+    #[cold]
+    #[inline(never)]
+    fn check_live_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
+        self.check_bytecode_call_depth()
+    }
+
+    #[inline(always)]
+    fn check_bytecode_call_depth(&mut self) -> Result<(), BytecodeDepthOverflow> {
         if self.ctx.max_depth < 100 {
             self.ctx.max_depth = 100;
         }
         if self.ctx.depth > self.ctx.max_depth {
-            return Err(signal(
-                "error",
-                vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
-            ));
+            return Err(BytecodeDepthOverflow::Confirmed);
         }
         Ok(())
     }
@@ -2445,6 +2523,24 @@ impl<'a> Vm<'a> {
     #[inline(always)]
     fn push_dynamic_vm_root(&mut self, value: Value) {
         self.ctx.push_vm_frame_root(value);
+    }
+
+    /// Bunbind's tail (GNU bytecode.c:843-851): unwind to the frame-owned
+    /// mark `BindStack::consume` selected. Bunbind0 unwinds nothing, and a
+    /// count the frame does not own signals Invalid byte-code instead of
+    /// unwinding the caller's bindings.
+    #[inline(always)]
+    fn unbind_frame_target(
+        &mut self,
+        target: Result<Option<frame_bindings::FrameUnbindTarget>, frame_bindings::FrameUnbindError>,
+    ) -> EvalResult {
+        match target {
+            Ok(Some(target)) => self
+                .ctx
+                .unbind_to_with_result(target.depth(), Ok(Value::NIL)),
+            Ok(None) => Ok(Value::NIL),
+            Err(_) => Err(invalid_bytecode_flow()),
+        }
     }
 
     fn cleanup_bytecode_frame(
@@ -2649,6 +2745,7 @@ impl<'a> Vm<'a> {
     /// call) and truncates back on every exit, preserving the JIT call
     /// shim's push/truncate symmetry. The hot bytecode→bytecode path skips
     /// this wrapper entirely — its args already live on `bc_buf`.
+    #[inline(never)]
     pub(crate) fn execute_with_func_value(
         &mut self,
         func: &ByteCodeFunction,
@@ -2685,8 +2782,8 @@ impl<'a> Vm<'a> {
     ///
     /// Only the direct/manual path (func_value == NIL/non-heap, e.g.
     /// `execute()`) holds nothing else alive, so it keeps a vm-root scope
-    /// rooting each constant individually (trace_roots skips non-heap
-    /// BcFrame.fun).
+    /// rooting the parameter child, original arglist and constants
+    /// individually (trace_roots skips non-heap BcFrame.fun).
     pub(crate) fn execute_from_stack_args(
         &mut self,
         func: &ByteCodeFunction,
@@ -2751,6 +2848,13 @@ impl<'a> Vm<'a> {
             self.run_frame(func, args_start, nargs, func_value)
         } else {
             self.with_dynamic_vm_roots(|vm| {
+                // Manual chunks have no heap function owner. Keep both
+                // parameter fields alive after the invocation cursor ends:
+                // safe Rust callers may assign arglist independently.
+                vm.push_dynamic_vm_root(func.arglist);
+                if let Some(child) = func.params.heap_child() {
+                    vm.push_dynamic_vm_root(child);
+                }
                 for value in func.constants.iter().copied() {
                     vm.push_dynamic_vm_root(value);
                 }
@@ -2832,17 +2936,30 @@ impl<'a> Vm<'a> {
             base: frame_base,
             fun: func_value,
         });
-        let frame_limit = match frame_base.checked_add(func.max_stack as usize) {
+        let frame_limit = match frame_base.checked_add(func.max_stack.get()) {
             Some(limit) => limit,
             None => {
-                self.ctx.bc_frames.pop();
-                return Err(invalid_bytecode_flow());
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::Overflow.into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
             }
         };
         if self.ctx.bc_buf.capacity() < frame_limit {
-            self.ctx
+            if let Err(error) = self
+                .ctx
                 .bc_buf
-                .reserve_exact(frame_limit - self.ctx.bc_buf.len());
+                .try_reserve_exact(frame_limit - self.ctx.bc_buf.len())
+            {
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::from(error).into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
         }
         // Seed the operand stack with the native frame's live values (traced
         // from here on; the caller performed no allocation since reading them
@@ -2897,44 +3014,101 @@ impl<'a> Vm<'a> {
         let specpdl_base = self.ctx.specpdl.len();
         let mut bind_stack = BindStack::new();
 
-        let n_required = func.params.required.len();
-        let n_optional = func.params.optional.len();
-        let has_rest = func.params.rest.is_some();
-        let nonrest = n_required + n_optional;
+        use super::FunctionParams;
+        let params_on_stack = match &func.params {
+            FunctionParams::Stack(_) => true,
+            FunctionParams::Dynamic(_) => false,
+            FunctionParams::Named(_) => {
+                func.lexical
+                    || func.env.is_some()
+                    || matches!(func.arglist.kind(), ValueKind::Fixnum(_))
+            }
+        };
+        let shape = match &func.params {
+            // GNU checks the exact signed descriptor before converting its
+            // nonrest bound into any host stack/allocation count.
+            FunctionParams::Stack(template) => match template.call_shape(nargs) {
+                Ok(shape) => Some(shape),
+                Err(error) => {
+                    return self.cleanup_bytecode_frame(
+                        Err(stack_call_shape_flow(*template, nargs, error)),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+            },
+            FunctionParams::Dynamic(params) => {
+                if let Err(flow) =
+                    self.bind_dynamic_bytecode_formals(*params, args_start, nargs, func_value)
+                {
+                    return self.cleanup_bytecode_frame(
+                        Err(flow),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+                None
+            }
+            FunctionParams::Named(_) => {
+                let Some(shape) = func.params.stack_shape() else {
+                    return self.cleanup_bytecode_frame(
+                        Err(invalid_bytecode_flow()),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                };
+                if !(shape.required() <= nargs
+                    && (shape.rest().is_present() || nargs <= shape.nonrest()))
+                {
+                    let arity = Value::cons(
+                        Value::fixnum(shape.required() as i64),
+                        Value::fixnum(shape.nonrest() as i64),
+                    );
+                    return self.cleanup_bytecode_frame(
+                        Err(signal(
+                            LispCondition::WrongNumberOfArguments,
+                            vec![arity, Value::fixnum(nargs as i64)],
+                        )),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+                Some(shape)
+            }
+        };
+        let n_required = shape.map_or(0, |shape| shape.required());
+        let nonrest = shape.map_or(0, |shape| shape.nonrest());
+        let n_optional = nonrest.saturating_sub(n_required);
+        let has_rest = shape.is_some_and(|shape| shape.rest().is_present());
 
-        // GNU Emacs validates bytecode arity before pushing the frame.
-        // See src/bytecode.c: the VM checks the arg descriptor and signals
-        // wrong-number-of-arguments immediately instead of nil-padding missing
-        // required args.
-        if !(n_required <= nargs && (has_rest || nargs <= nonrest)) {
-            // GNU bytecode.c signals the raw bytecode descriptor pair
-            // (mandatory . nonrest), even when the descriptor has the &rest
-            // bit set.  This differs intentionally from func-arity, which
-            // reports `many` for the same bytecode function.
-            let arity = Value::cons(
-                Value::fixnum(n_required as i64),
-                Value::fixnum(nonrest as i64),
-            );
-            self.ctx.bc_buf.truncate(frame_base);
-            self.ctx.bc_frames.pop();
-            return Err(signal(
-                LispCondition::WrongNumberOfArguments,
-                vec![arity, Value::fixnum(nargs as i64)],
-            ));
-        }
-
-        let frame_limit = match frame_base.checked_add(func.max_stack as usize) {
+        let frame_limit = match frame_base.checked_add(func.max_stack.get()) {
             Some(limit) => limit,
             None => {
-                self.ctx.bc_buf.truncate(frame_base);
-                self.ctx.bc_frames.pop();
-                return Err(invalid_bytecode_flow());
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::Overflow.into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
             }
         };
         if self.ctx.bc_buf.capacity() < frame_limit {
-            self.ctx
+            if let Err(error) = self
+                .ctx
                 .bc_buf
-                .reserve_exact(frame_limit - self.ctx.bc_buf.len());
+                .try_reserve_exact(frame_limit - self.ctx.bc_buf.len())
+            {
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::from(error).into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
         }
 
         // GNU's bytecode stores lexical params at known stack positions; the
@@ -2949,9 +3123,6 @@ impl<'a> Vm<'a> {
         // code did even for the lexical case) is dead work that dominated
         // debug-build batch-byte-compile runtime.
         let has_named_params = nonrest > 0 || has_rest;
-        let params_on_stack = func.lexical
-            || func.env.is_some()
-            || matches!(func.arglist.kind(), ValueKind::Fixnum(_));
         if params_on_stack {
             // Lexical bytecode follows GNU bytecode.c: exec_byte_code receives
             // the encoded arg template and pushes incoming arguments into the
@@ -2959,8 +3130,8 @@ impl<'a> Vm<'a> {
             // slots (nonrest params + optional rest list) must fit the frame:
             // the same bound the old per-push checks enforced, folded into one
             // comparison (the error path truncates any partial seed anyway).
-            let seed_slots = nonrest + usize::from(has_rest);
-            if frame_base + seed_slots > frame_limit {
+            let seed_slots = shape.and_then(|shape| shape.entry_depth().ok());
+            if seed_slots.is_none_or(|slots| slots > func.max_stack.get()) {
                 self.ctx.bc_buf.truncate(frame_base);
                 self.ctx.bc_frames.pop();
                 return Err(invalid_bytecode_flow());
@@ -2975,14 +3146,7 @@ impl<'a> Vm<'a> {
                         panic!(
                             "RUN_FRAME ARG BUG: arg[{}] = {:#x} (ptr {:?}, kind={:?}) is corrupt string. \
                              nargs={}, func has {} required, {} optional, rest={}",
-                            i,
-                            v.0,
-                            ptr,
-                            hdr.kind,
-                            nargs,
-                            func.params.required.len(),
-                            func.params.optional.len(),
-                            func.params.rest.is_some(),
+                            i, v.0, ptr, hdr.kind, nargs, n_required, n_optional, has_rest,
                         );
                     }
                 }
@@ -3066,8 +3230,16 @@ impl<'a> Vm<'a> {
             // bytecode stack slots. The caller's arg span stays live on
             // bc_buf through every specbind (variable watchers can run
             // arbitrary Lisp that captures backtraces reading it).
+            let FunctionParams::Named(named_params) = &func.params else {
+                return self.cleanup_bytecode_frame(
+                    Err(invalid_bytecode_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            };
             let mut arg_idx = 0;
-            for param in &func.params.required {
+            for param in &named_params.required {
                 let val = if arg_idx < nargs {
                     self.ctx.bc_buf[args_start + arg_idx]
                 } else {
@@ -3083,7 +3255,7 @@ impl<'a> Vm<'a> {
                 }
                 arg_idx += 1;
             }
-            for param in &func.params.optional {
+            for param in &named_params.optional {
                 let val = if arg_idx < nargs {
                     self.ctx.bc_buf[args_start + arg_idx]
                 } else {
@@ -3099,7 +3271,7 @@ impl<'a> Vm<'a> {
                 }
                 arg_idx += 1;
             }
-            if let Some(rest_name) = func.params.rest {
+            if let Some(rest_name) = named_params.rest {
                 let rest_list = if arg_idx < nargs {
                     self.ctx
                         .tagged_heap
@@ -3169,6 +3341,100 @@ impl<'a> Vm<'a> {
         self.cleanup_bytecode_frame(result, condition_stack_base, specpdl_base, frame_base)
     }
 
+    /// GNU eval.c:funcall_lambda validates each formal when it is reached,
+    /// including after watcher callbacks mutate the remaining argument list.
+    /// The invocation cursor and caller args stay rooted through every bind.
+    /// The cursor's two live cells sit in scratch slots at the frame base:
+    /// `bc_buf` is traced, a nested call pushes its own frame above them,
+    /// and each step overwrites the pair in place.
+    #[cold]
+    #[inline(never)]
+    fn bind_dynamic_bytecode_formals(
+        &mut self,
+        params: super::DynamicArglist,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> Result<(), Flow> {
+        let cursor = params.invocation();
+        let roots_at = self.ctx.bc_buf.len();
+        debug_assert!(args_start + nargs <= roots_at);
+        self.ctx.bc_buf.extend_from_slice(&cursor.roots());
+        let bound =
+            self.bind_dynamic_formals_rooted(cursor, roots_at, args_start, nargs, func_value);
+        self.ctx.bc_buf.truncate(roots_at);
+        bound
+    }
+
+    fn bind_dynamic_formals_rooted(
+        &mut self,
+        mut cursor: super::function_slots::FormalCursor,
+        roots_at: usize,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> Result<(), Flow> {
+        use super::function_slots::{FormalBinding, FormalStep};
+        let mut arg_index = 0;
+        loop {
+            self.ctx.bc_buf[roots_at..roots_at + 2].copy_from_slice(&cursor.roots());
+            if cursor.has_next_cell() {
+                // GNU eval.c:3397 polls before each cell, including
+                // markers; callbacks/quit handling may run Lisp here.
+                self.ctx.maybe_quit()?;
+            }
+            let step = cursor
+                .next_step()
+                .map_err(|_| signal(LispCondition::InvalidFunction, vec![func_value]))?;
+            let binding = match step {
+                FormalStep::End => break,
+                FormalStep::Marker => continue,
+                FormalStep::Binding(binding) => binding,
+            };
+            let (symbol, value) = match binding {
+                FormalBinding::Required(symbol) => {
+                    if arg_index >= nargs {
+                        return Err(signal(
+                            LispCondition::WrongNumberOfArguments,
+                            vec![func_value, Value::fixnum(nargs as i64)],
+                        ));
+                    }
+                    let value = self.ctx.bc_buf[args_start + arg_index];
+                    arg_index += 1;
+                    (symbol, value)
+                }
+                FormalBinding::Optional(symbol) => {
+                    let value = if arg_index < nargs {
+                        let value = self.ctx.bc_buf[args_start + arg_index];
+                        arg_index += 1;
+                        value
+                    } else {
+                        Value::NIL
+                    };
+                    (symbol, value)
+                }
+                FormalBinding::Rest(symbol) => {
+                    let value = self.ctx.tagged_heap.list_from_slice(
+                        &self.ctx.bc_buf[args_start + arg_index..args_start + nargs],
+                    );
+                    arg_index = nargs;
+                    (symbol, value)
+                }
+            };
+            self.ctx.try_specbind(symbol, value)?;
+            cursor
+                .finish_binding()
+                .map_err(|_| signal(LispCondition::InvalidFunction, vec![func_value]))?;
+        }
+        if arg_index < nargs {
+            return Err(signal(
+                LispCondition::WrongNumberOfArguments,
+                vec![func_value, Value::fixnum(nargs as i64)],
+            ));
+        }
+        Ok(())
+    }
+
     /// Whether this frame can use the first iterative `setup_frame` slice.
     ///
     /// The slice deliberately starts with GNU's common encoded-argument,
@@ -3176,23 +3442,36 @@ impl<'a> Vm<'a> {
     /// environments and `&rest` construction still use the established
     /// recursive path until their unwind transitions are represented in the
     /// frame state as well.
+    #[inline(never)]
     fn can_enter_interpreter_frame_iteratively(
         &self,
         func: &ByteCodeFunction,
         nargs: usize,
     ) -> bool {
-        let required = func.params.required.len();
-        let optional = func.params.optional.len();
-        let nonrest = required + optional;
+        let Some(shape) = func.params.stack_shape() else {
+            return false;
+        };
+        let required = shape.required();
+        let nonrest = shape.nonrest();
         let has_named_params = nonrest > 0;
-        let params_on_stack = func.lexical || matches!(func.arglist.kind(), ValueKind::Fixnum(_));
+        let params_on_stack = match &func.params {
+            super::FunctionParams::Stack(_) => true,
+            super::FunctionParams::Dynamic(_) => false,
+            super::FunctionParams::Named(_) => {
+                func.lexical || matches!(func.arglist.kind(), ValueKind::Fixnum(_))
+            }
+        };
 
         func.env.is_none()
-            && func.params.rest.is_none()
+            && !shape.rest().is_present()
             && (!has_named_params || params_on_stack)
             && required <= nargs
             && nargs <= nonrest
-            && nonrest <= func.max_stack as usize
+            && nonrest <= func.max_stack.get()
+            // The in-place installer grows the operand stack infallibly, as
+            // it always has; deeper frames take `run_frame`, whose fallible
+            // reservation reports failure as a Lisp error.
+            && func.max_stack <= super::StackDepth::ITERATIVE_FRAME_LIMIT
             // Sealed-dispatch safety gate for iterative callees, the twin of
             // the entry gate in `run_loop`: only `seal_ops`-normalized code
             // may enter the unchecked-fetch driver. Evaluated at (cacheable)
@@ -3254,21 +3533,27 @@ impl<'a> Vm<'a> {
         let frame_base = cursor.len;
         debug_assert!(args_start + nargs <= frame_base);
         let frame_limit = frame_base
-            .checked_add(func.max_stack as usize)
+            .checked_add(func.max_stack.get())
             .expect("iterative frame limit prevalidated");
 
         #[cfg(test)]
         observe_iterative_context_bc_frames_len(self.ctx.bc_frames.len());
         if self.ctx.bc_buf.capacity() < frame_limit {
             // Cold growth: sync the live length, let the Vec reallocate,
-            // rearm the base pointer.
+            // rearm the base pointer. The admission gate bounds the depth by
+            // `StackDepth::ITERATIVE_FRAME_LIMIT`, so this reservation is an
+            // ordinary allocation, not a Lisp-controlled size.
             // SAFETY: same initialization argument as `StackCursor::publish`.
             unsafe { self.ctx.bc_buf.set_len(cursor.len) };
             self.ctx.bc_buf.reserve_exact(frame_limit - cursor.len);
             cursor.base = self.ctx.bc_buf.as_mut_ptr();
         }
 
-        let nonrest = func.params.required.len() + func.params.optional.len();
+        let nonrest = func
+            .params
+            .stack_shape()
+            .expect("iterative parameter shape prevalidated")
+            .nonrest();
         // GNU setup_frame's PUSH loop on the live cursor: copy the incoming
         // arguments into the fresh frame, then nil-fill missing optionals.
         // SAFETY: capacity >= frame_limit >= frame_base + nonrest
@@ -3364,6 +3649,7 @@ impl<'a> Vm<'a> {
     /// interpreter driver.  A nonlocal exit is offered to each suspended
     /// caller in turn, exactly as recursive Rust returns used to do, but the
     /// unwind is represented as data rather than host-stack control flow.
+    #[inline(never)]
     fn complete_interpreter_frame_chain(
         &mut self,
         callers: &mut InterpreterCallerStack,
@@ -3698,7 +3984,11 @@ impl<'a> Vm<'a> {
         let entry_spec_depth = self.ctx.specpdl.len();
         let ctx_ptr: *mut crate::emacs_core::eval::Context = &mut *self.ctx;
         let resume = match crate::emacs_core::jit::cache::try_run_osr_probe(
-            ctx_ptr, func, target, &snapshot, bind_stack,
+            ctx_ptr,
+            func,
+            target,
+            &snapshot,
+            bind_stack.as_slice(),
         ) {
             OsrProbe::Ran(NativeRun::Ok(bits)) => {
                 return OsrOutcome::Returned(Value::from_bits(bits));
@@ -3732,7 +4022,7 @@ impl<'a> Vm<'a> {
         if handlers == 0
             && spec_base == entry_spec_depth
             && cond_base == self.ctx.condition_stack_len()
-            && stack.len() <= func.max_stack as usize
+            && stack.len() <= func.max_stack.get()
         {
             bind_stack.clear();
             bind_stack.extend_from_slice(&binds);
@@ -3881,6 +4171,7 @@ impl<'a> Vm<'a> {
         }
     }
 
+    #[inline(never)]
     fn run_loop(
         &mut self,
         entry_func: &ByteCodeFunction,
@@ -4003,7 +4294,7 @@ impl<'a> Vm<'a> {
             // match on the storage kind, where the instruction stream costs a
             // lazy-decode probe.
             let constants: &[Value] = func.constants.as_slice();
-            let frame_limit = frame_base + func.max_stack as usize;
+            let frame_limit = frame_base + func.max_stack.get();
             let ops_len = ops.len();
             let ops_ptr = ops.as_ptr();
             let mut pc_local = callers.active().pc();
@@ -4629,22 +4920,15 @@ impl<'a> Vm<'a> {
                         aux_stack.current_mut().bind_stack.push(bind_depth);
                     }
                     Op::Unbind(n) => {
-                        let n = *n as usize;
-                        let target = {
-                            let aux = aux_stack.current_mut();
-                            if n <= aux.bind_stack.len() {
-                                let depth = aux.bind_stack[aux.bind_stack.len() - n];
-                                aux.bind_stack.truncate(aux.bind_stack.len() - n);
-                                depth
-                            } else {
-                                aux.bind_stack.clear();
-                                0
-                            }
-                        };
-                        // Cleanup watcher/unwind-protect exits supersede normal
-                        // bytecode execution and re-enter the VM's nonlocal
-                        // dispatcher, exactly like any other fallible opcode.
-                        let _ = vm_try!(self.ctx.unbind_to_with_result(target, Ok(Value::NIL)));
+                        let target = aux_stack
+                            .current_mut()
+                            .bind_stack
+                            .consume(*n as usize, self.ctx.specpdl.len());
+                        // Cleanup watcher/unwind-protect exits, and a count the
+                        // frame does not own, supersede normal bytecode
+                        // execution and re-enter the VM's nonlocal dispatcher
+                        // through the one published-cursor path.
+                        let _ = vm_try!(self.unbind_frame_target(target));
                     }
 
                     // -- Function calls --
@@ -4747,9 +5031,13 @@ impl<'a> Vm<'a> {
                             // reacquire, nothing here reaches a GC safe
                             // point. The classify gate already proved the
                             // callee sealed and stack-verified.
-                            if let Err(flow) = self.enter_bytecode_call_depth() {
-                                cursor.publish(self.ctx);
-                                resume_flow!(flow)
+                            self.ctx.depth += 1;
+                            if self.ctx.depth > self.ctx.max_depth {
+                                if let Err(overflow) = self.check_live_bytecode_call_depth() {
+                                    let flow =
+                                        self.finish_live_bytecode_depth_overflow(cursor, overflow);
+                                    resume_flow!(flow);
+                                }
                             }
                             let prepared = call.callee();
                             let callee_code = prepared.code();
@@ -4797,33 +5085,14 @@ impl<'a> Vm<'a> {
                             callers.enter_callee(callee_frame);
                             continue 'frame;
                         }
-                        let writeback_names = if matches!(
-                            target,
-                            ResolvedStackCallTarget::Interpreter { .. }
-                                | ResolvedStackCallTarget::ByteCode { .. }
-                        ) {
-                            // The closed target proof excludes GNU's native
-                            // aset/fillarray implementations.  Bytecode may
-                            // mutate a string through an explicit primitive,
-                            // but the ordinary call itself needs no host-side
-                            // replacement-object writeback.
-                            None
-                        } else if n > 0 && stk!()[args_start].is_string() {
-                            self.writeback_mutating_callable_names(&func_val)
-                        } else {
-                            None
-                        };
-                        let writeback_args = writeback_names
-                            .as_ref()
-                            .map(|_| stk!()[args_start..].iter().copied().collect::<LispArgVec>());
                         let result = if debug_armed {
                             let args: LispArgVec = stk!()[args_start..].iter().copied().collect();
                             vm_try!(self.with_bytecode_call_depth(|vm| {
                                 vm.call_function_debugged(func_val, args)
                             }))
-                        } else if writeback_names.is_none() {
+                        } else {
                             cursor.publish(self.ctx);
-                            if let Err(flow) = self.enter_bytecode_call_depth() {
+                            if let Err(flow) = self.enter_published_bytecode_call_depth() {
                                 resume_flow!(flow)
                             }
                             match self
@@ -4873,28 +5142,7 @@ impl<'a> Vm<'a> {
                                     }
                                 }
                             }
-                        } else {
-                            let args: LispArgVec = stk!()[args_start..].iter().copied().collect();
-                            vm_try!(self.with_bytecode_call_depth(|vm| {
-                                vm.call_function(func_val, args)
-                            }))
                         };
-                        if let (Some((called_name, alias_target)), Some(writeback_args)) =
-                            (writeback_names.as_ref(), writeback_args.as_ref())
-                        {
-                            let root_scope = self.ctx.save_vm_roots();
-                            self.push_dynamic_vm_root(result);
-                            for value in writeback_args.iter().copied() {
-                                self.push_dynamic_vm_root(value);
-                            }
-                            self.maybe_writeback_mutating_first_arg(
-                                called_name,
-                                *alias_target,
-                                writeback_args,
-                                &result,
-                            );
-                            self.ctx.restore_vm_roots(root_scope);
-                        }
                         stk!().truncate(stack_after_call);
                         stk_push!(result);
                     }
@@ -4915,70 +5163,8 @@ impl<'a> Vm<'a> {
                             } else {
                                 Value::NIL
                             };
-                            // Spread the trailing list IN PLACE on the GC-traced
-                            // bc_buf: the explicit args a1..a(n-1) already sit
-                            // contiguously at [args_start, args_start + n - 1);
-                            // replace the list's slot with its elements (GNU
-                            // Fapply builds the same contiguous spread, then
-                            // funcall reads it — eval.c). list_to_vec keeps the
-                            // existing dotted/circular semantics (errors -> empty
-                            // spread) and its Floyd cycle detection. Checked Vec
-                            // ops only: the extension deliberately lives above
-                            // this frame's declared max-stack region, which
-                            // nothing inspects before the call returns (handler
-                            // watermarks below it truncate through it correctly
-                            // on a nonlocal exit).
-                            let last = stk!()[args_start + n - 1];
-                            let spread = list_to_vec(&last).unwrap_or_default();
-                            // The spread grows bc_buf (reserve can realloc), so it
-                            // runs published; reacquire picks up the new base.
-                            cursor.publish(self.ctx);
-                            self.ctx.bc_buf.truncate(args_start + n - 1);
-                            self.ctx.bc_buf.reserve(spread.len());
-                            self.ctx.bc_buf.extend_from_slice(&spread);
-                            cursor = StackCursor::acquire(self.ctx);
-                            let total = n - 1 + spread.len();
-                            // Writeback gate tests the first POST-spread argument
-                            // (for (apply f '("str" ...)) the string comes from
-                            // the spread).
-                            let writeback_names = if total > 0 && stk!()[args_start].is_string() {
-                                self.writeback_mutating_callable_names(&func_val)
-                            } else {
-                                None
-                            };
-                            let writeback_args: Option<LispArgVec> =
-                                writeback_names.as_ref().map(|_| {
-                                    stk!()[args_start..args_start + total]
-                                        .iter()
-                                        .copied()
-                                        .collect()
-                                });
-                            // Same call protocol as before (traced call_function:
-                            // backtrace push + generic dispatch, no depth guard,
-                            // no direct-builtin fast path), in its stack-args
-                            // flavor — the spread args stay rooted on bc_buf for
-                            // the whole call; func_val stays rooted in its own
-                            // caller slot below args_start.
                             let result =
-                                vm_try!(self.call_function_from_stack_args(
-                                    func_val, args_start, total, false,
-                                ));
-                            if let (Some((called_name, alias_target)), Some(writeback_args)) =
-                                (writeback_names.as_ref(), writeback_args.as_ref())
-                            {
-                                let root_scope = self.ctx.save_vm_roots();
-                                self.push_dynamic_vm_root(result);
-                                for value in writeback_args.iter().copied() {
-                                    self.push_dynamic_vm_root(value);
-                                }
-                                self.maybe_writeback_mutating_first_arg(
-                                    called_name,
-                                    *alias_target,
-                                    writeback_args,
-                                    &result,
-                                );
-                                self.ctx.restore_vm_roots(root_scope);
-                            }
+                                vm_try!(self.apply_arguments_from_stack(func_val, args_start, n,));
                             stk!().truncate(stack_after_call);
                             stk_push!(result);
                         }
@@ -5310,16 +5496,9 @@ impl<'a> Vm<'a> {
                         let len = stk!().len();
                         let b = stk!()[len - 1];
                         let a = stk!()[len - 2];
-                        if a.is_fixnum() && b.is_fixnum() {
-                            let av = a.xfixnum();
-                            let bv = b.xfixnum();
-                            // The range check matters: most-negative-fixnum / -1
-                            // exceeds most-positive-fixnum and must promote to a
-                            // bignum via the builtin, like GNU.
-                            if bv != 0 && !(av == Value::MOST_NEGATIVE_FIXNUM && bv == -1) {
-                                // Emacs truncation division (towards zero), matching C semantics
-                                let res = av / bv;
-                                stk!()[len - 2] = Value::fixnum(res);
+                        if let (Some(av), Some(bv)) = (a.as_fixnum_value(), b.as_fixnum_value()) {
+                            if let Some(res) = av.checked_div(bv) {
+                                stk!()[len - 2] = Value::from_fixnum(res);
                                 stk!().pop();
                             } else {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
@@ -5649,7 +5828,7 @@ impl<'a> Vm<'a> {
                         }
                         if top.is_cons() {
                             *top = if observe_collections {
-                                top.cons_car()
+                                Self::cons_car_observed(*top)
                             } else {
                                 top.cons_car_unobserved()
                             };
@@ -5671,7 +5850,7 @@ impl<'a> Vm<'a> {
                         }
                         if top.is_cons() {
                             *top = if observe_collections {
-                                top.cons_cdr()
+                                Self::cons_cdr_observed(*top)
                             } else {
                                 top.cons_cdr_unobserved()
                             };
@@ -5688,7 +5867,7 @@ impl<'a> Vm<'a> {
                         let top = stk!().last_mut().unwrap();
                         *top = if top.is_cons() {
                             if observe_collections {
-                                top.cons_car()
+                                Self::cons_car_observed(*top)
                             } else {
                                 top.cons_car_unobserved()
                             }
@@ -5700,7 +5879,7 @@ impl<'a> Vm<'a> {
                         let top = stk!().last_mut().unwrap();
                         *top = if top.is_cons() {
                             if observe_collections {
-                                top.cons_cdr()
+                                Self::cons_cdr_observed(*top)
                             } else {
                                 top.cons_cdr_unobserved()
                             }
@@ -6092,31 +6271,12 @@ impl<'a> Vm<'a> {
                         vm_profile::bump_entry(name_id, vm_profile::ENTRY_CALLBUILTIN);
                         let n = *n as usize;
                         let args_start = stk!().len().saturating_sub(n);
-                        let writeback_args = (stk!()
-                            .get(args_start)
-                            .is_some_and(|value| value.is_string())
-                            && Self::mutates_first_arg_sym(name_id))
-                        .then(|| stk!()[args_start..].iter().copied().collect::<LispArgVec>());
                         // This is the internal representation of a primitive
                         // opcode, never a Bcall specialization. GNU calls the
                         // primitive directly; genuine calls remain Op::Call.
                         let result = vm_try!(
                             self.dispatch_vm_builtin_by_id_from_stack(func, name_id, args_start, n)
                         );
-                        if let Some(writeback_args) = writeback_args.as_ref() {
-                            let root_scope = self.ctx.save_vm_roots();
-                            self.push_dynamic_vm_root(result);
-                            for value in writeback_args.iter().copied() {
-                                self.push_dynamic_vm_root(value);
-                            }
-                            self.maybe_writeback_mutating_first_arg(
-                                resolve_sym(name_id),
-                                None,
-                                writeback_args,
-                                &result,
-                            );
-                            self.ctx.restore_vm_roots(root_scope);
-                        }
                         stk!().truncate(args_start);
                         stk_push!(result);
                         poll_quit!();
@@ -6148,7 +6308,7 @@ impl<'a> Vm<'a> {
                                 args_start,
                                 n,
                             )),
-                            InlineSubrKind::Generic | InlineSubrKind::Writeback => {
+                            InlineSubrKind::Generic => {
                                 vm_try!(self.dispatch_call_builtin_sym(func, *sym, args_start, n))
                             }
                         };
@@ -6167,199 +6327,12 @@ impl<'a> Vm<'a> {
 
     // -- Helper methods --
 
-    /// Same predicate as [`Self::mutates_first_arg_name`] as one SymId
-    /// compare — the per-call classification below must not resolve and
-    /// string-compare symbol names on the hot path.
-    #[inline(always)]
-    fn mutates_first_arg_sym(id: SymId) -> bool {
-        // `aset` is NOT here: it mutates its array in place and returns the
-        // same object, so no reference to it can go stale. See
-        // `maybe_writeback_mutating_first_arg`.
-        id == fillarray_sym_id()
-    }
-
-    #[inline]
-    fn writeback_mutating_callable_names(
-        &self,
-        func_val: &Value,
-    ) -> Option<(&'static str, Option<&'static str>)> {
-        #[cfg(test)]
-        MUTATING_WRITEBACK_CLASSIFICATION_COUNT.with(|count| count.set(count.get() + 1));
-        match func_val.kind() {
-            ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr)
-                if func_val.as_subr_id().is_some() =>
-            {
-                let id = func_val.as_subr_id().unwrap();
-                Self::mutates_first_arg_sym(id).then(|| (resolve_sym(id), None))
-            }
-            ValueKind::Symbol(id) => {
-                if Self::mutates_first_arg_sym(id) {
-                    return Some((resolve_sym(id), None));
-                }
-                let alias_target =
-                    self.ctx
-                        .obarray
-                        .symbol_function_id(id)
-                        .and_then(|bound| match bound.kind() {
-                            ValueKind::Symbol(tid) => {
-                                Self::mutates_first_arg_sym(tid).then(|| resolve_sym(tid))
-                            }
-                            ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr) => {
-                                let tid = bound.as_subr_id().unwrap();
-                                Self::mutates_first_arg_sym(tid).then(|| resolve_sym(tid))
-                            }
-                            _ => None,
-                        });
-                alias_target.map(|target| (resolve_sym(id), Some(target)))
-            }
-            _ => None,
-        }
-    }
-
     fn builtin_name_id(name: &str) -> SymId {
         lookup_interned(name).unwrap_or_else(|| intern(name))
     }
 
     pub(crate) fn apply_builtin_id() -> SymId {
         Self::cached_builtin_id("apply", &APPLY_ID)
-    }
-
-    /// Patch every reference to a string that a mutating builtin REPLACED
-    /// rather than mutated.
-    ///
-    /// `aset` used to be one of those: it rebuilt the whole string, so the
-    /// caller's variable still pointed at the old object and every reference
-    /// had to be found and rewritten. It stopped doing that — rebuilding made
-    /// byte-at-a-time transforms quadratic, so it mutates the bytes in place
-    /// and returns the SAME object (both of `aset_string_replacement`'s `Ok`
-    /// arms are `Ok(*array)`). The `aset` arm here outlived that change: it
-    /// re-ran `aset_string_replacement` — applying the byte write a second
-    /// time — only to compare the result against the original and always find
-    /// them identical. On `dhrystone` that was a redundant string mutation for
-    /// every one of ~60M `aset`s, and it could not have been otherwise: the
-    /// arm called OUR builtin directly, so no redefinition could make it
-    /// return a different object.
-    ///
-    /// Only `fillarray` remains, and only because it is reached through a
-    /// function CELL a user could have redefined; our own `fillarray` mutates
-    /// in place and returns its argument too.
-    fn maybe_writeback_mutating_first_arg(
-        &mut self,
-        called_name: &str,
-        alias_target: Option<&str>,
-        call_args: &[Value],
-        result: &Value,
-    ) {
-        if called_name != "fillarray" && alias_target != Some("fillarray") {
-            return;
-        }
-
-        let Some(first_arg) = call_args.first() else {
-            return;
-        };
-        if !first_arg.is_string() {
-            return;
-        }
-
-        if !result.is_string() || eq_value(first_arg, result) {
-            return;
-        }
-        let replacement = *result;
-
-        if crate::emacs_core::value::equal_value(first_arg, &replacement, 0) {
-            return;
-        }
-
-        let mut visited = HashSet::new();
-        for value in self.ctx.bc_buf.iter_mut() {
-            Self::replace_alias_refs_in_value(value, first_arg, &replacement, &mut visited);
-        }
-        // Walk the lexenv cons alist and replace alias refs in binding values
-        {
-            let mut lexenv_val = self.ctx.lexenv;
-            Self::replace_alias_refs_in_value(
-                &mut lexenv_val,
-                first_arg,
-                &replacement,
-                &mut visited,
-            );
-            self.ctx.lexenv = lexenv_val;
-        }
-        // dynamic stack removed — specbind writes directly to obarray
-        if let Some(current_id) = self.ctx.buffers.current_buffer_id()
-            && let Some(buf) = self.ctx.buffers.get_mut(current_id)
-        {
-            for value in buf.bound_buffer_local_values_mut() {
-                Self::replace_alias_refs_in_value(value, first_arg, &replacement, &mut visited);
-            }
-        }
-
-        self.ctx.obarray.for_each_value_cell_mut(|value| {
-            Self::replace_alias_refs_in_value(value, first_arg, &replacement, &mut visited);
-        });
-    }
-
-    fn replace_alias_refs_in_value(
-        value: &mut Value,
-        from: &Value,
-        to: &Value,
-        visited: &mut HashSet<usize>,
-    ) {
-        if eq_value(value, from) {
-            *value = *to;
-            return;
-        }
-
-        match value.kind() {
-            ValueKind::Cons => {
-                let key = value.bits() ^ 0x1;
-                if !visited.insert(key) {
-                    return;
-                }
-                let mut new_car = value.cons_car();
-                let mut new_cdr = value.cons_cdr();
-                Self::replace_alias_refs_in_value(&mut new_car, from, to, visited);
-                Self::replace_alias_refs_in_value(&mut new_cdr, from, to, visited);
-                value.set_car(new_car);
-                value.set_cdr(new_cdr);
-            }
-            ValueKind::Veclike(VecLikeType::Vector) => {
-                let key = value.bits() ^ 0x2;
-                if !visited.insert(key) {
-                    return;
-                }
-                let mut data = value.as_vector_data().unwrap().clone();
-                for item in data.iter_mut() {
-                    Self::replace_alias_refs_in_value(item, from, to, visited);
-                }
-                let _ = value.replace_vector_data(data);
-            }
-            ValueKind::Veclike(VecLikeType::HashTable) => {
-                let key = value.bits() ^ 0x4;
-                if !visited.insert(key) {
-                    return;
-                }
-                let old_ptr = match from.kind() {
-                    ValueKind::String => Some(from.bits()),
-                    _ => None,
-                };
-                let new_ptr = match to.kind() {
-                    ValueKind::String => Some(to.bits()),
-                    _ => None,
-                };
-                let _ = value.with_hash_table_mut(|ht| {
-                    if matches!(ht.test, HashTableTest::Eq | HashTableTest::Eql)
-                        && let (Some(old_ptr), Some(new_ptr)) = (old_ptr, new_ptr)
-                    {
-                        ht.replace_pointer_key(old_ptr, new_ptr, *to);
-                    }
-                    for item in ht.data.values_mut() {
-                        Self::replace_alias_refs_in_value(item, from, to, visited);
-                    }
-                });
-            }
-            _ => {}
-        }
     }
 
     /// GNU bytecode `Bvarref` by SymId.
@@ -6370,6 +6343,7 @@ impl<'a> Vm<'a> {
     /// Fast path for variable reads matching GNU bytecode.c:626-647
     /// Bvarref: if the symbol is a plain global with a bound value,
     /// read the value cell directly without full symbolic resolution.
+    #[inline(never)]
     fn fast_path_var_ref(&mut self, name_id: SymId) -> EvalResult {
         let ob = &self.ctx.obarray;
         let sym = ob.get_by_id(name_id).ok_or_else(|| {
@@ -6378,9 +6352,7 @@ impl<'a> Vm<'a> {
                 vec![Value::from_sym_id(name_id)],
             )
         })?;
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval {
-            // SAFETY: redirect() already confirmed Plainval, so val.plain is active
-            let val = unsafe { sym.val.plain };
+        if let Some(val) = sym.plain_value() {
             if !val.is_unbound() {
                 // GNU installs `buffer-undo-list` as a DEFVAR_PER_BUFFER
                 // forwarder. Neomacs keeps its value in SharedUndoState so
@@ -6408,13 +6380,10 @@ impl<'a> Vm<'a> {
         // `None` for exactly the one variant that does need the context
         // (`BufferObj`), and the slow path's own non-`BufferObj` arm ends at
         // the same call, so the two cannot drift.
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Forwarded {
-            // SAFETY: redirect() confirmed Forwarded, so val.fwd is active and
-            // points at a descriptor `install_*fwd` leaked.
-            let fwd = unsafe { &*sym.val.fwd };
-            if let Some(value) = fwd.load() {
-                return Ok(value);
-            }
+        if let Some(fwd) = sym.forwarded_descriptor()
+            && let Some(value) = fwd.load()
+        {
+            return Ok(value);
         }
         self.lookup_var_id(name_id)
     }
@@ -6434,17 +6403,14 @@ impl<'a> Vm<'a> {
                     if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id).is_none()
                         && crate::buffer::buffer::lookup_buffer_slot_by_sym_id(name_id).is_none()
                     {
-                        let target = sym.alias_target();
-                        if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target)
-                            .is_none()
-                            && let Some(target_sym) = ob.get_by_id(target)
-                            && target_sym.redirect() == SymbolRedirect::Plainval
+                        if let Some(target) = sym.alias_target()
+                            && crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target)
+                                .is_none()
+                            && let Some(value) =
+                                ob.get_by_id(target).and_then(|target| target.plain_value())
+                            && !value.is_unbound()
                         {
-                            // SAFETY: the target's redirect selects its plain value cell.
-                            let value = unsafe { target_sym.val.plain };
-                            if !value.is_unbound() {
-                                return Ok(value);
-                            }
+                            return Ok(value);
                         }
                     }
                 }
@@ -6584,6 +6550,7 @@ impl<'a> Vm<'a> {
     ///
     /// Like `Bvarref`, bytecode assignment is dynamic.  Lexical bytecode
     /// locals are stack slots, not `varset` targets.
+    #[inline(never)]
     fn assign_var_id(&mut self, name_id: SymId, value: Value) -> Result<(), Flow> {
         // The general `Bvarset`. Both callers (the `Op::VarSet` arm and the JIT
         // `varset` shim) have already offered the write to
@@ -6649,19 +6616,14 @@ impl<'a> Vm<'a> {
         if matches!(redirect, Some(SymbolRedirect::Forwarded))
             && let Some(buf_id) = self.ctx.buffers.current_buffer_id()
         {
-            use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
-            let fwd_ptr = self
+            let buf_fwd = self
                 .ctx
                 .obarray
                 .get_by_id(resolved)
-                .map(|s| unsafe { s.val.fwd });
-            if let Some(fwd) = fwd_ptr {
-                // Safety: install_buffer_objfwd leaks a 'static
-                // descriptor and the symbol's redirect tag is
-                // immutable once installed.
-                let header = unsafe { &*fwd };
-                if matches!(header.ty, LispFwdType::BufferObj) {
-                    let buf_fwd = unsafe { &*(fwd as *const LispBufferObjFwd) };
+                .and_then(|s| s.forwarded_descriptor())
+                .and_then(|fwd| fwd.as_buffer_obj_fwd());
+            {
+                if let Some(buf_fwd) = buf_fwd {
                     let Some(slot) = crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)
                     else {
                         return Err(signal(
@@ -7013,7 +6975,7 @@ impl<'a> Vm<'a> {
         {
             return binding.as_value().unwrap_or(Value::NIL);
         }
-        if let Some(value) = self.ctx.obarray.symbol_value(name).copied() {
+        if let Some(value) = self.ctx.obarray.symbol_value_copied(name) {
             return value;
         }
         if name == "nil" {
@@ -7055,6 +7017,7 @@ impl<'a> Vm<'a> {
             .pop_bytecode_backtrace_frame_with_result(bt_count, result)
     }
 
+    #[inline(never)]
     fn call_function(&mut self, func_val: Value, args: impl Into<LispArgVec>) -> EvalResult {
         let args = args.into();
         let bt_count = self.ctx.specpdl.len();
@@ -7083,8 +7046,8 @@ impl<'a> Vm<'a> {
         self.assign_var_id(name_id, value)
     }
 
-    /// `Op::CallBuiltin` for JIT code: direct primitive dispatch, mutating
-    /// string writeback and a quit poll. Symbol calls use `call_for_jit` and
+    /// `Op::CallBuiltin` for JIT code: direct primitive dispatch and a quit
+    /// poll. Symbol calls use `call_for_jit` and
     /// retain function-cell/override resolution.
     pub(crate) fn callbuiltin_for_jit(&mut self, name_id: SymId, args: LispArgVec) -> EvalResult {
         self.callbuiltinsym_for_jit(name_id, args)
@@ -7092,35 +7055,42 @@ impl<'a> Vm<'a> {
 
     /// `Op::CallBuiltinSym` for JIT code — ALWAYS the direct named dispatch,
     /// never the function cell (GNU parity: bytecode-inlined primitives
-    /// bypass advice; see the interpreter arm's comment), plus writeback and
-    /// the trailing quit poll.
+    /// bypass advice; see the interpreter arm's comment), plus the trailing
+    /// quit poll.
     pub(crate) fn callbuiltinsym_for_jit(&mut self, sym: SymId, args: LispArgVec) -> EvalResult {
-        // See `callbuiltin_for_jit`: id-keyed, name resolved only for writeback.
-        let writeback_args = (args.first().is_some_and(|value| value.is_string())
-            && Self::mutates_first_arg_sym(sym))
-        .then(|| args.clone());
         let result = self.dispatch_vm_builtin_id(sym, args)?;
-        if let Some(writeback_args) = writeback_args.as_ref() {
-            let root_scope = self.ctx.save_vm_roots();
-            self.push_dynamic_vm_root(result);
-            for value in writeback_args.iter().copied() {
-                self.push_dynamic_vm_root(value);
-            }
-            self.maybe_writeback_mutating_first_arg(
-                resolve_sym(sym),
-                None,
-                writeback_args,
-                &result,
-            );
-            self.ctx.restore_vm_roots(root_scope);
-        }
         self.ctx.maybe_quit()?;
         Ok(result)
     }
 
+    /// Spread an `Op::Apply` suffix after its caller publishes the cursor.
+    /// Explicit arguments stay below the trailing list slot. The callee's
+    /// operand stays below `args_start`; the expanded arguments remain rooted
+    /// on `bc_buf` through the same generic stack-call protocol.
+    /// The synchronous call uses only this VM's owning mutator context.
+    #[inline(never)]
+    fn apply_arguments_from_stack(
+        &mut self,
+        func_val: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        // The opcode calls this helper only for a positive operand count.
+        // Preserve list_to_vec's Floyd check and empty fallback for dotted or
+        // circular lists; this boundary does not change Lisp behavior.
+        let last = self.ctx.bc_buf[args_start + nargs - 1];
+        let spread = list_to_vec(&last).unwrap_or_default();
+        self.ctx.bc_buf.truncate(args_start + nargs - 1);
+        self.ctx.bc_buf.reserve(spread.len());
+        self.ctx.bc_buf.extend_from_slice(&spread);
+        let total = nargs - 1 + spread.len();
+        // No added bytecode-call depth guard or direct-builtin fast path.
+        self.call_function_from_stack_args(func_val, args_start, total, false)
+    }
+
     /// One bytecode-level `apply` with the interpreter's `Op::Apply` semantics:
-    /// spread the last argument as a list, writeback detection + after-call
-    /// writeback, and the plain traced `call_function` path (`Op::Apply` has no
+    /// spread the last argument as a list and use the plain traced
+    /// `call_function` path (`Op::Apply` has no
     /// nesting-depth guard — mirror that exactly). Used by the JIT apply shim;
     /// keep in sync with the `Op::Apply` arm of `run_loop`. The caller polls
     /// `maybe_quit` first and roots `func_val` + `raw_args` (the spread values
@@ -7138,40 +7108,15 @@ impl<'a> Vm<'a> {
             let spread = list_to_vec(&last).unwrap_or_default();
             raw_args.extend(spread);
         }
-        let args = raw_args;
-        let writeback_names = if args.first().is_some_and(|value| value.is_string()) {
-            self.writeback_mutating_callable_names(&func_val)
-        } else {
-            None
-        };
-        let writeback_args = writeback_names.as_ref().map(|_| args.clone());
-        let result = self.call_function(func_val, args)?;
-        if let (Some((called_name, alias_target)), Some(writeback_args)) =
-            (writeback_names.as_ref(), writeback_args.as_ref())
-        {
-            let root_scope = self.ctx.save_vm_roots();
-            self.push_dynamic_vm_root(result);
-            for value in writeback_args.iter().copied() {
-                self.push_dynamic_vm_root(value);
-            }
-            self.maybe_writeback_mutating_first_arg(
-                called_name,
-                *alias_target,
-                writeback_args,
-                &result,
-            );
-            self.ctx.restore_vm_roots(root_scope);
-        }
-        Ok(result)
+        self.call_function(func_val, raw_args)
     }
 
     /// One bytecode-level function call with the interpreter's `Op::Call`
-    /// semantics: mutating-string-arg writeback detection, the lisp-nesting
-    /// depth guard, the traced `call_function` path, and the after-call
-    /// writeback. Used by the JIT call shim (`jit::compile::neovm_jit_call`) so
+    /// semantics: the Lisp nesting-depth guard and traced `call_function`
+    /// path. Used by the JIT call shim (`jit::compile::neovm_jit_call`) so
     /// compiled code re-enters the runtime through exactly the interpreter's
-    /// call path — keep in sync with the `Op::Call` arm of `run_loop` (which
-    /// keeps an in-place stack-args fast path for the no-writeback case).
+    /// call path — keep in sync with the `Op::Call` arm of `run_loop`, which
+    /// keeps arguments rooted on the operand stack.
     ///
     /// The `nargs` arguments are ALREADY on `bc_buf` at `args_start` — the JIT
     /// shim pushed them straight from its native call-args slot, skipping a
@@ -7198,18 +7143,6 @@ impl<'a> Vm<'a> {
                 .collect();
             return self.with_bytecode_call_depth(|vm| vm.call_function_debugged(func_val, args));
         }
-        let first_is_string = nargs > 0 && self.ctx.bc_buf[args_start].is_string();
-        let writeback_names = if first_is_string {
-            self.writeback_mutating_callable_names(&func_val)
-        } else {
-            None
-        };
-        let writeback_args: Option<LispArgVec> = writeback_names.as_ref().map(|_| {
-            self.ctx.bc_buf[args_start..args_start + nargs]
-                .iter()
-                .copied()
-                .collect()
-        });
         // One resolution: the direct-builtin variant of the stack call covers
         // the builtin probe (same resolved callee, same dispatcher) and the
         // bytecode arm (backtrace span + one run_frame copy, as the
@@ -7219,22 +7152,6 @@ impl<'a> Vm<'a> {
         let result = self.with_bytecode_call_depth(|vm| {
             vm.call_function_from_stack_args(func_val, args_start, nargs, true)
         })?;
-        if let (Some((called_name, alias_target)), Some(writeback_args)) =
-            (writeback_names.as_ref(), writeback_args.as_ref())
-        {
-            let root_scope = self.ctx.save_vm_roots();
-            self.push_dynamic_vm_root(result);
-            for value in writeback_args.iter().copied() {
-                self.push_dynamic_vm_root(value);
-            }
-            self.maybe_writeback_mutating_first_arg(
-                called_name,
-                *alias_target,
-                writeback_args,
-                &result,
-            );
-            self.ctx.restore_vm_roots(root_scope);
-        }
         Ok(result)
     }
 
@@ -7268,9 +7185,7 @@ impl<'a> Vm<'a> {
     /// * the debugger dispatch (`dispatch_signal_result_if_needed`) + frame
     ///   pop with result.
     ///
-    /// NOT replicated, by static exclusion at the speculation site: the
-    /// aset/fillarray mutating-first-string-arg writeback (those names are
-    /// never speculated, site or resolved) and the `+`/`logand`/`logior`/
+    /// NOT replicated here: the `+`/`logand`/`logior`/
     /// `logxor` fixnum fast-value paths (all `Many`, never speculated — and
     /// they are pure result-equal shortcuts anyway).
     #[cfg(feature = "jit")]
@@ -7761,13 +7676,22 @@ impl<'a> Vm<'a> {
                 ctx.max_depth = 100;
             }
             if ctx.depth > ctx.max_depth {
-                ctx.depth -= 1;
-                let err = Err(signal(
-                    "error",
-                    vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
-                ));
-                let res = ctx.pop_bytecode_backtrace_frame_with_result(bt_count, err);
-                return Some(crate::emacs_core::jit::cache::NativeCallOutcome::from_result(res));
+                // GNU checks depth before recording the rejected callee's
+                // frame (bytecode.c:779-795). Only the calling frame is live
+                // when the signal hook runs.
+                let flow = ctx
+                    .pop_bytecode_backtrace_frame_with_result(
+                        bt_count,
+                        Err(signal(
+                            "error",
+                            vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
+                        )),
+                    )
+                    .expect_err("a rejected callee has no cleanup or result");
+                let flow = ctx.finish_lisp_depth_overflow(flow);
+                return Some(
+                    crate::emacs_core::jit::cache::NativeCallOutcome::from_result(Err(flow)),
+                );
             }
         }
         use crate::emacs_core::jit::cache::NativeCallOutcome;
@@ -7953,9 +7877,7 @@ impl<'a> Vm<'a> {
     /// so `callee` runs with no second resolution of the symbol, under a
     /// frame recording `called`, as GNU's `Bcall` records `call_fun`
     /// (src/bytecode.c:792-796). The rest is `call_for_jit_stack`'s
-    /// protocol: the entry debugger on `called`, one depth level. (Its
-    /// aset/fillarray first-argument writeback concerns subr callees; a
-    /// bytecode callee takes none, as before the frame named the symbol.)
+    /// protocol: the entry debugger on `called`, one depth level.
     #[cfg(feature = "jit")]
     pub(crate) fn call_resolved_bytecode_for_jit_stack(
         &mut self,
@@ -7977,6 +7899,7 @@ impl<'a> Vm<'a> {
         })
     }
 
+    #[inline(never)]
     fn call_function_from_stack_args(
         &mut self,
         func_val: Value,
@@ -8038,6 +7961,7 @@ impl<'a> Vm<'a> {
     /// one `LispArgVec` and takes the generic owned path — those calls
     /// either already went through `call_resolved_builtin_from_stack_args`
     /// or are cold.
+    #[inline(never)]
     fn call_function_untraced_from_stack(
         &mut self,
         func_val: Value,
@@ -8125,9 +8049,8 @@ impl<'a> Vm<'a> {
     /// gained by them here) and no scratch roots (an interned symbol callee
     /// is obarray-rooted; the arguments are staged on the GC-traced bc_buf).
     /// Returns `None` for anything else — non-symbol callees, bytecode/
-    /// lambda/alias/advice cells, compiler overrides, and the
-    /// fillarray/aset writeback shapes (including alias-to-subr, read off
-    /// the resolved cell) — the caller then takes the full Vm path.
+    /// lambda/alias/advice cells and compiler overrides — the caller then
+    /// takes the full Vm path.
     /// Mirrors the spec shim's stage-2 ctx-level dispatch precedent.
     pub(crate) fn call_builtin_symbol_for_jit(
         ctx: &mut crate::emacs_core::eval::Context,
@@ -8152,12 +8075,6 @@ impl<'a> Vm<'a> {
             }
             None => ResolvedBuiltinCallee::from_static_symbol(sym_id)?,
         };
-        if nargs > 0 && ctx.bc_buf[args_start].is_string() {
-            let target_id = cell.and_then(|value| value.as_subr_id()).unwrap_or(sym_id);
-            if Self::mutates_first_arg_sym(sym_id) || Self::mutates_first_arg_sym(target_id) {
-                return None;
-            }
-        }
         // Inline ctx-level bytecode-call depth protocol (GNU's Bcall depth,
         // floor-raise included) — the spec shim's stage-2 shape.
         ctx.depth += 1;
@@ -8166,11 +8083,10 @@ impl<'a> Vm<'a> {
                 ctx.max_depth = 100;
             }
             if ctx.depth > ctx.max_depth {
-                ctx.depth -= 1;
-                return Some(Err(signal(
+                return Some(Err(ctx.finish_lisp_depth_overflow(signal(
                     "error",
                     vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
-                )));
+                ))));
             }
         }
         let result =
@@ -8179,6 +8095,7 @@ impl<'a> Vm<'a> {
         Some(result)
     }
 
+    #[inline(never)]
     fn call_resolved_builtin_from_stack_args(
         ctx: &mut crate::emacs_core::eval::Context,
         func_val: Value,
@@ -8239,7 +8156,7 @@ impl<'a> Vm<'a> {
     /// Everything else matches the traced twin: the same resolved callee, the
     /// same arity signal, the same `ManySlice` fixnum fast values, the same
     /// signal dispatch on the way out.
-    #[inline]
+    #[inline(never)]
     fn call_arith_builtin_from_stack_args(
         &mut self,
         func: &ByteCodeFunction,
@@ -8768,6 +8685,7 @@ impl<'a> Vm<'a> {
     /// The corollary is the useful part: the way to close the 2.43x gap against
     /// GNU's `exec_byte_code` is not to inline more into this loop. Measure
     /// cycles, not just instructions, for anything that changes its size.
+    #[inline(never)]
     fn resolve_stack_call_target(&mut self, func_val: Value) -> ResolvedStackCallTarget {
         match func_val.kind() {
             ValueKind::Veclike(VecLikeType::ByteCode) => ResolvedStackCallTarget::ByteCode {
@@ -8898,10 +8816,7 @@ impl<'a> Vm<'a> {
         let Some(sym) = ob.get_by_id(name_id) else {
             return (VR_SLOW_OTHER, false);
         };
-        if sym.redirect() == SymbolRedirect::Plainval {
-            // SAFETY: redirect() confirmed Plainval, so val.plain is active
-            // (same contract as fast_path_var_ref).
-            let val = unsafe { sym.val.plain };
+        if let Some(val) = sym.plain_value() {
             if !val.is_unbound() {
                 if !val.is_nil() {
                     return (VR_PLAIN, false);
@@ -9156,8 +9071,8 @@ impl<'a> Vm<'a> {
     /// `run_loop`'s body so the giant dispatch match stays small: a registered
     /// builtin takes GNU's inline-opcode path (direct primitive call, no
     /// backtrace frame, no arity check); everything else keeps the framed
-    /// [`Self::dispatch_vm_builtin_by_id_from_stack`] path with the
-    /// string-mutation writeback. Arguments live in `ctx.bc_buf[args_start..]`;
+    /// [`Self::dispatch_vm_builtin_by_id_from_stack`] path.
+    /// Arguments live in `ctx.bc_buf[args_start..]`;
     /// the caller truncates and pushes the result.
     #[inline(never)]
     fn dispatch_call_builtin_sym(
@@ -9176,36 +9091,7 @@ impl<'a> Vm<'a> {
         if let Some(function) = Self::inline_builtin_function(sym) {
             return self.call_inline_builtin(function, args_start, nargs);
         }
-        let writeback_args = (self
-            .ctx
-            .bc_buf
-            .get(args_start)
-            .is_some_and(|value| value.is_string())
-            && Self::mutates_first_arg_sym(sym))
-        .then(|| {
-            self.ctx.bc_buf[args_start..args_start + nargs]
-                .iter()
-                .copied()
-                .collect::<LispArgVec>()
-        });
-        let result = self.dispatch_vm_builtin_by_id_from_stack(func, sym, args_start, nargs);
-        if let Some(writeback_args) = writeback_args.as_ref() {
-            let result = result?;
-            let root_scope = self.ctx.save_vm_roots();
-            self.push_dynamic_vm_root(result);
-            for value in writeback_args.iter().copied() {
-                self.push_dynamic_vm_root(value);
-            }
-            self.maybe_writeback_mutating_first_arg(
-                crate::emacs_core::intern::resolve_sym(sym),
-                None,
-                writeback_args,
-                &result,
-            );
-            self.ctx.restore_vm_roots(root_scope);
-            return Ok(result);
-        }
-        result
+        self.dispatch_vm_builtin_by_id_from_stack(func, sym, args_start, nargs)
     }
 
     /// The Rust primitive a GNU inline opcode calls directly (bytecode.c
@@ -9218,6 +9104,23 @@ impl<'a> Vm<'a> {
         crate::emacs_core::eval::inline_subr_function(sym)
     }
 
+    /// Called only for an admitted cons when this driver's mutator observes
+    /// collection reads. Capture guards finish before a synchronous callback
+    /// returns; another mutator owns its own capture scopes.
+    /// Keep observation work outside the unobserved opcode's direct tail.
+    #[cold]
+    #[inline(never)]
+    fn cons_car_observed(value: Value) -> Value {
+        value.cons_car()
+    }
+
+    /// Same capture and cons-admission contract as [`Self::cons_car_observed`].
+    #[cold]
+    #[inline(never)]
+    fn cons_cdr_observed(value: Value) -> Value {
+        value.cons_cdr()
+    }
+
     /// GNU inline-opcode semantics: call the primitive on the operand-stack
     /// arguments with no backtrace frame, no arity check and no eval-depth
     /// accounting, then route a signal through the condition handlers exactly
@@ -9228,7 +9131,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         match self.ctx.buffers.current_buffer() {
-            Some(buf) => Ok(Value::fixnum(buf.point_lisp_char_pos().as_i64())),
+            Some(buf) => Ok(Value::from_fixnum(buf.point_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
     }
@@ -9238,7 +9141,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         match self.ctx.buffers.current_buffer() {
-            Some(buf) => Ok(Value::fixnum(buf.point_min_lisp_char_pos().as_i64())),
+            Some(buf) => Ok(Value::from_fixnum(buf.point_min_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
     }
@@ -9248,7 +9151,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         match self.ctx.buffers.current_buffer() {
-            Some(buf) => Ok(Value::fixnum(buf.point_max_lisp_char_pos().as_i64())),
+            Some(buf) => Ok(Value::from_fixnum(buf.point_max_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
     }
@@ -9585,6 +9488,44 @@ impl<'a> crate::emacs_core::builtins::symbols::MacroexpandRuntime for Vm<'a> {
 }
 
 impl crate::emacs_core::builtins::higher_order::SortRuntime for Vm<'_> {
+    type RootScope = crate::emacs_core::builtins::higher_order::SortRootScope;
+    type RootSlot = crate::emacs_core::builtins::higher_order::SortRootSlot;
+    type RootBatch = Vec<Self::RootSlot>;
+
+    fn set_sort_slot(&mut self, slot: &Self::RootSlot, value: Value) {
+        crate::emacs_core::builtins::higher_order::SortRuntime::set_sort_slot(
+            self.ctx, slot, value,
+        );
+    }
+
+    fn save_sort_roots(&self) -> Self::RootScope {
+        crate::emacs_core::builtins::higher_order::SortRuntime::save_sort_roots(self.ctx)
+    }
+
+    fn restore_sort_roots(&mut self, scope: Self::RootScope) {
+        crate::emacs_core::builtins::higher_order::SortRuntime::restore_sort_roots(self.ctx, scope);
+    }
+
+    fn root_sort_slot(&mut self, value: Value) -> Self::RootSlot {
+        crate::emacs_core::builtins::higher_order::SortRuntime::root_sort_slot(self.ctx, value)
+    }
+
+    fn clear_sort_slot(&mut self, slot: &Self::RootSlot) {
+        crate::emacs_core::builtins::higher_order::SortRuntime::clear_sort_slot(self.ctx, slot);
+    }
+
+    #[inline]
+    fn root_sort_batch(&mut self, values: impl Iterator<Item = Value>) -> Self::RootBatch {
+        crate::emacs_core::builtins::higher_order::SortRuntime::root_sort_batch(self.ctx, values)
+    }
+
+    #[inline]
+    fn clear_sort_batch(&mut self, batch: &Self::RootBatch, range: std::ops::Range<usize>) {
+        crate::emacs_core::builtins::higher_order::SortRuntime::clear_sort_batch(
+            self.ctx, batch, range,
+        )
+    }
+
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow> {
         self.with_vm_root_scope(|vm| {
             vm.push_dynamic_vm_root(arg);
@@ -9662,6 +9603,7 @@ fn vm_switch_target(ht: &LispHashTable, dispatch: Value, swp: bool) -> Option<Va
     ht.switch_target(dispatch, swp)
 }
 
+#[inline(never)]
 fn resolve_switch_target(func: &ByteCodeFunction, raw_addr: i64) -> Result<usize, Flow> {
     let raw_addr = usize::try_from(raw_addr).map_err(|_| {
         signal(
@@ -9733,24 +9675,28 @@ pub(crate) mod resumed_chain_probe;
 pub(crate) use vm_leaf::render_vm_leaf_stats;
 
 #[cfg(test)]
-#[path = "tests/vm.rs"]
+#[path = "tests/vm_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/builtin_result_return.rs"]
+#[path = "tests/builtin_result_return_test.rs"]
 mod builtin_result_return_tests;
 
 #[cfg(test)]
-#[path = "tests/arith_integer_fast_path.rs"]
+#[path = "tests/arith_integer_fast_path_test.rs"]
 mod arith_integer_fast_path_tests;
 
 #[cfg(test)]
-#[path = "tests/collection_capture.rs"]
+#[path = "tests/collection_capture_test.rs"]
 mod collection_capture_tests;
 
 #[cfg(test)]
-#[path = "tests/stack_pool.rs"]
+#[path = "tests/stack_pool_test.rs"]
 mod stack_pool_tests;
+
+#[cfg(test)]
+#[path = "tests/frame_bind_stack.rs"]
+mod frame_bind_stack_tests;
 
 impl ArithGenericKind {
     /// The builtin this kind's slow arm calls: the SAME cached symbol ids the
@@ -9802,8 +9748,7 @@ impl crate::emacs_core::eval::Context {
         if self.depth > self.max_depth
             && let Err(flow) = Vm::from_context(self).bytecode_depth_exceeded()
         {
-            self.depth -= 1;
-            return Err(flow);
+            return Err(self.finish_lisp_depth_overflow(flow));
         }
         let func_val = Value::from_sym_id(sym_id);
         let backtrace = self.push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
@@ -9828,3 +9773,6 @@ impl crate::emacs_core::eval::Context {
         result
     }
 }
+#[cfg(test)]
+#[path = "tests/manual_parameter_roots.rs"]
+mod manual_parameter_roots_tests;

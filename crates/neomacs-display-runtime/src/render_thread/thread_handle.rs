@@ -162,4 +162,5 @@ impl RenderThread {
 }
 
 #[cfg(test)]
+#[path = "thread_handle/tests/thread_handle_test.rs"]
 mod tests;

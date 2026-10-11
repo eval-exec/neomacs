@@ -360,5 +360,5 @@ pub(super) fn parse_partial_sexp_propertizing(
 }
 
 #[cfg(test)]
-#[path = "tests/pps_propertize_knob.rs"]
+#[path = "tests/pps_propertize_knob_test.rs"]
 mod knob_tests;

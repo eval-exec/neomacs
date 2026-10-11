@@ -535,5 +535,5 @@ fn resolve_control_char(ch: char) -> Option<i64> {
     None
 }
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/kbd_test.rs"]
 mod tests;

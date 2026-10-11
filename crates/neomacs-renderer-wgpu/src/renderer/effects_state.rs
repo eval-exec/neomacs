@@ -681,4 +681,5 @@ impl RendererFrameEffectsRef<'_> {
 }
 
 #[cfg(test)]
+#[path = "effects_state/tests/effects_state_test.rs"]
 mod tests;

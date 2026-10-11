@@ -317,15 +317,28 @@ pub(crate) enum BandSource {
     Whole,
 }
 
+/// Operations every row-wise image decoder must provide.
+#[enum_dispatch::enum_dispatch]
+pub(crate) trait BandedDecoder: Sized {
+    /// Take the next band, or learn that there are no more.
+    fn next_band(&mut self) -> BandStep;
+
+    /// The completed raster, once every row has been handed out.
+    /// `None` before then, so a caller cannot publish a prefix by accident.
+    #[must_use]
+    fn into_raster(self) -> Option<RasterPixels>;
+}
+
 /// The row-wise decoders, one variant per format that has one.
 ///
 /// This variant set is the compile-time answer to "which formats can band?":
-/// a format added here fails to build in every match over it until its
-/// decoder is written. That property cannot be had from `image::ImageFormat`,
+/// a format added here fails to build until its decoder implements
+/// [`BandedDecoder`]. That property cannot be had from `image::ImageFormat`,
 /// which is `#[non_exhaustive]` and so needs a wildcard arm; the format match
 /// in [`BandSource::open`] names every format `image` reports and falls back
 /// for formats `image` might add, and this enum is where a *banded* addition
 /// is caught.
+#[enum_dispatch::enum_dispatch(BandedDecoder)]
 pub(crate) enum BandedSource {
     /// PNG, whose reader yields one transformed row at a time
     /// (`png-0.18.1` `src/decoder/mod.rs:513` `next_row`).
@@ -335,27 +348,6 @@ pub(crate) enum BandedSource {
     /// `[patch.crates-io]` block pins, since `zune-jpeg` 0.5.15's public
     /// surface is `decode`/`decode_into` and nothing else).
     Jpeg(JpegRows),
-}
-
-impl BandedSource {
-    /// Take the next band, or learn that there are no more.
-    pub(crate) fn next_band(&mut self) -> BandStep {
-        match self {
-            Self::Png(rows) => rows.next_band(),
-            Self::Jpeg(rows) => rows.next_band(),
-        }
-    }
-
-    /// The raster the decode wrote, once every row has been handed out.
-    ///
-    /// `None` before then, so a caller cannot publish a prefix by accident.
-    #[must_use]
-    pub(crate) fn into_raster(self) -> Option<RasterPixels> {
-        match self {
-            Self::Png(rows) => rows.into_raster(),
-            Self::Jpeg(rows) => rows.into_raster(),
-        }
-    }
 }
 
 /// A completed banded decode: the source's extent, and the raster it became.
@@ -591,7 +583,7 @@ impl BandPlan {
 }
 
 #[cfg(test)]
-#[path = "image_bands/tests.rs"]
+#[path = "image_bands/tests/image_bands_test.rs"]
 mod tests;
 
 /// A baseline JPEG's rows, as the decoder hands them over.
@@ -700,6 +692,31 @@ impl JpegRows {
         })
     }
 
+    /// Read one MCU row — several source rows — into the raster.
+    fn read_mcu_row(&mut self) -> Result<(), ()> {
+        // A borrow of one field, so the rest of `self` stays usable inside the
+        // loop below. The band borrows the reader, which is what stops a later
+        // MCU row from being asked for before this one has been written out.
+        let reader = &mut self.reader;
+        let Some(band) = reader.next_row().map_err(|_| ())? else {
+            return Err(());
+        };
+        let stride = band.row_bytes();
+        for source in band.pixels().chunks_exact(stride) {
+            self.format.expand_row(source, &mut self.row).ok_or(())?;
+            // The mask is a property of the source's own pixels, so it is read
+            // from them rather than from the raster they are filtered into.
+            if self.format.may_be_transparent() {
+                self.mask = merge_mask(self.mask, classify_alpha(&self.row));
+            }
+            self.target.push_row(&self.row);
+            self.decoded += 1;
+        }
+        Ok(())
+    }
+}
+
+impl BandedDecoder for JpegRows {
     /// Read the next band's worth of rows into the raster.
     ///
     /// A band is at least one MCU row and at least enough rows to fill a raster
@@ -752,29 +769,6 @@ impl JpegRows {
                 BandStep::Failed
             }
         }
-    }
-
-    /// Read one MCU row — several source rows — into the raster.
-    fn read_mcu_row(&mut self) -> Result<(), ()> {
-        // A borrow of one field, so the rest of `self` stays usable inside the
-        // loop below. The band borrows the reader, which is what stops a later
-        // MCU row from being asked for before this one has been written out.
-        let reader = &mut self.reader;
-        let Some(band) = reader.next_row().map_err(|_| ())? else {
-            return Err(());
-        };
-        let stride = band.row_bytes();
-        for source in band.pixels().chunks_exact(stride) {
-            self.format.expand_row(source, &mut self.row).ok_or(())?;
-            // The mask is a property of the source's own pixels, so it is read
-            // from them rather than from the raster they are filtered into.
-            if self.format.may_be_transparent() {
-                self.mask = merge_mask(self.mask, classify_alpha(&self.row));
-            }
-            self.target.push_row(&self.row);
-            self.decoded += 1;
-        }
-        Ok(())
     }
 
     fn into_raster(self) -> Option<RasterPixels> {
@@ -872,6 +866,37 @@ impl PngRows {
         })
     }
 
+    /// Read one source row, resample it, and average it into the raster.
+    fn read_row(&mut self) -> Result<(), ()> {
+        let Self {
+            reader,
+            format,
+            target,
+            row,
+            mask,
+            ..
+        } = self;
+        let format = *format;
+        let Some(source) = reader.next_row().map_err(|_| ())? else {
+            // The reader ended before the header's height did: a truncated
+            // stream, which is exactly the mid-stream failure the caller has to
+            // be able to recover from.
+            return Err(());
+        };
+        format.expand_row(source.data(), row).ok_or(())?;
+        // The mask is a property of the source's own pixels, so it is read from
+        // them rather than from the raster they are filtered into: the filter
+        // gives a source with only opaque and clear pixels alphas in between,
+        // and asking the raster which mask it has would be asking the filter.
+        if format.may_be_transparent() {
+            *mask = merge_mask(*mask, classify_alpha(row));
+        }
+        target.push_row(row);
+        Ok(())
+    }
+}
+
+impl BandedDecoder for PngRows {
     /// Read the next band's worth of rows into the raster.
     ///
     /// A band is a run of source rows that fills at least one raster row: the
@@ -922,35 +947,6 @@ impl PngRows {
                 BandStep::Failed
             }
         }
-    }
-
-    /// Read one source row, resample it, and average it into the raster.
-    fn read_row(&mut self) -> Result<(), ()> {
-        let Self {
-            reader,
-            format,
-            target,
-            row,
-            mask,
-            ..
-        } = self;
-        let format = *format;
-        let Some(source) = reader.next_row().map_err(|_| ())? else {
-            // The reader ended before the header's height did: a truncated
-            // stream, which is exactly the mid-stream failure the caller has to
-            // be able to recover from.
-            return Err(());
-        };
-        format.expand_row(source.data(), row).ok_or(())?;
-        // The mask is a property of the source's own pixels, so it is read from
-        // them rather than from the raster they are filtered into: the filter
-        // gives a source with only opaque and clear pixels alphas in between,
-        // and asking the raster which mask it has would be asking the filter.
-        if format.may_be_transparent() {
-            *mask = merge_mask(*mask, classify_alpha(row));
-        }
-        target.push_row(row);
-        Ok(())
     }
 
     fn into_raster(self) -> Option<RasterPixels> {

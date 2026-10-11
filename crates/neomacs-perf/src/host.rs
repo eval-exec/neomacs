@@ -119,4 +119,5 @@ fn command_line(program: &str, arguments: &[&str]) -> Option<String> {
 }
 
 #[cfg(test)]
+#[path = "host/tests/host_test.rs"]
 mod tests;

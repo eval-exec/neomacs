@@ -121,7 +121,8 @@ impl WgpuRenderer {
             .map(|cursor| (cursor.window_id.get(), cursor.slot_id.row));
         // These effects mutate vertex colors/positions per frame; cached rows
         // would bake stale values in, so reuse and capture shut off entirely.
-        let global_effects_active = params.has_line_anims
+        let global_effects_active = frame_glyphs.background_alpha != 1.0
+            || params.has_line_anims
             || !self.fx.text_fade.active.is_empty()
             || !self.fx.mode_line_fade.active.is_empty();
         let pointer_invalidated_rows = chunks
@@ -133,7 +134,8 @@ impl WgpuRenderer {
             })
             .map(|chunk| chunk.key)
             .collect::<HashSet<_>>();
-        let enable_subpixel = glyph_atlas.subpixel_enabled();
+        let enable_subpixel =
+            glyph_atlas.subpixel_enabled() && frame_glyphs.background_alpha == 1.0;
         let ctx = row_reuse::ReusePassCtx {
             damage: params.row_damage,
             scale_bits: self.scale_factor.to_bits(),
@@ -741,7 +743,11 @@ impl WgpuRenderer {
         // Draw grayscale coverage with the same foreground/background contract as LCD masks.
         // Batch consecutive glyphs sharing the same atlas page.
         if !mask_data.is_empty() {
-            render_pass.set_pipeline(&self.pipelines.grayscale_glyph);
+            render_pass.set_pipeline(if ctx.params.frame_glyphs.background_alpha == 1.0 {
+                &self.pipelines.grayscale_glyph
+            } else {
+                &self.pipelines.transparent_glyph
+            });
 
             let all_vertices: Vec<CoverageGlyphVertex> = mask_data
                 .iter()

@@ -185,4 +185,5 @@ fn shift_into_viewport(origin: Point, popup: Size, viewport: Rect, padding: f32)
 }
 
 #[cfg(test)]
+#[path = "popup_placement/tests/popup_placement_test.rs"]
 mod tests;

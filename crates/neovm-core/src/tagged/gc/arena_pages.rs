@@ -1979,5 +1979,5 @@ impl HandshakeStats {
 }
 
 #[cfg(test)]
-#[path = "tests/arena_minor_tests.rs"]
+#[path = "tests/arena_minor_test.rs"]
 mod arena_minor_tests;

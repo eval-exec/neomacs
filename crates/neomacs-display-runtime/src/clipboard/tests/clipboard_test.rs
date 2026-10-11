@@ -37,8 +37,11 @@ impl ClipboardBackend for MemoryClipboard {
         Ok(())
     }
 
-    fn text(&mut self, selection: ClipboardSelection) -> Result<Option<String>, String> {
-        Ok(self.selections.get(&selection).cloned())
+    fn text(&mut self, selection: ClipboardSelection) -> Result<text_policy::TextRead, String> {
+        Ok(match self.selections.get(&selection) {
+            Some(text) => text_policy::TextRead::Text(text.clone()),
+            None => text_policy::TextRead::NoSelection,
+        })
     }
 
     fn owner(&mut self, selection: ClipboardSelection) -> Result<SelectionOwner, String> {
@@ -59,10 +62,10 @@ impl ClipboardBackend for BlockingClipboard {
         Ok(())
     }
 
-    fn text(&mut self, _selection: ClipboardSelection) -> Result<Option<String>, String> {
+    fn text(&mut self, _selection: ClipboardSelection) -> Result<text_policy::TextRead, String> {
         self.started.send(()).unwrap();
         self.release.recv().unwrap();
-        Ok(Some("released".to_owned()))
+        Ok(text_policy::TextRead::Text("released".to_owned()))
     }
 
     fn owner(&mut self, _selection: ClipboardSelection) -> Result<SelectionOwner, String> {
@@ -79,8 +82,8 @@ impl ClipboardBackend for BlockingDropClipboard {
         Ok(())
     }
 
-    fn text(&mut self, _selection: ClipboardSelection) -> Result<Option<String>, String> {
-        Ok(None)
+    fn text(&mut self, _selection: ClipboardSelection) -> Result<text_policy::TextRead, String> {
+        Ok(text_policy::TextRead::NoSelection)
     }
 
     fn owner(&mut self, _selection: ClipboardSelection) -> Result<SelectionOwner, String> {
@@ -105,10 +108,10 @@ impl ClipboardBackend for ExpiringClipboard {
         Ok(())
     }
 
-    fn text(&mut self, _selection: ClipboardSelection) -> Result<Option<String>, String> {
+    fn text(&mut self, _selection: ClipboardSelection) -> Result<text_policy::TextRead, String> {
         self.read_started.send(()).unwrap();
         self.release_read.recv().unwrap();
-        Ok(None)
+        Ok(text_policy::TextRead::NoSelection)
     }
 
     fn owner(&mut self, _selection: ClipboardSelection) -> Result<SelectionOwner, String> {
@@ -293,16 +296,22 @@ fn mutation_that_expires_behind_a_slow_read_is_never_executed() {
 #[test]
 fn private_selection_round_trips_owned_and_vacant_states() {
     let mut selection = PrivateSelection::default();
-    assert_eq!(selection.load(), None);
+    assert_eq!(selection.load(), text_policy::TextRead::NoSelection);
 
     selection.store(Some("selected"));
-    assert_eq!(selection.load(), Some("selected".to_owned()));
+    assert_eq!(
+        selection.load(),
+        text_policy::TextRead::Text("selected".to_owned())
+    );
 
     selection.store(Some("reselected"));
-    assert_eq!(selection.load(), Some("reselected".to_owned()));
+    assert_eq!(
+        selection.load(),
+        text_policy::TextRead::Text("reselected".to_owned())
+    );
 
     selection.store(None);
-    assert_eq!(selection.load(), None);
+    assert_eq!(selection.load(), text_policy::TextRead::NoSelection);
 }
 
 /// GNU's NS port keeps PRIMARY in a private pasteboard instead of
@@ -319,82 +328,14 @@ fn arboard_backend_keeps_primary_in_process_local_state() {
         .expect("PRIMARY store must not fail on this platform");
     assert_eq!(
         backend.text(ClipboardSelection::Primary),
-        Ok(Some("selected".to_owned()))
+        Ok(text_policy::TextRead::Text("selected".to_owned()))
     );
 
     backend
         .set_text(ClipboardSelection::Primary, None)
         .expect("PRIMARY disown must not fail on this platform");
-    assert_eq!(backend.text(ClipboardSelection::Primary), Ok(None));
-}
-
-#[cfg(target_os = "linux")]
-mod wayland_fallback {
-    use super::super::smithay_text_or_fallback;
-    use std::cell::Cell;
-    use std::io;
-
-    fn no_offer() -> io::Result<String> {
-        Err(io::Error::other("selection is empty"))
-    }
-
-    #[test]
-    fn smithay_text_is_returned_without_consulting_data_control() {
-        let consulted = Cell::new(false);
-        let result = smithay_text_or_fallback(Ok("native".to_owned()), || {
-            consulted.set(true);
-            Ok(Some("data-control".to_owned()))
-        });
-        assert_eq!(result, Ok(Some("native".to_owned())));
-        assert!(!consulted.get());
-    }
-
-    #[test]
-    fn missing_selection_offer_reads_through_data_control() {
-        // Hyprland delivers the selection only to winit's data device, so
-        // smithay-clipboard's device never holds an offer.
-        let result = smithay_text_or_fallback(no_offer(), || Ok(Some("foreign".to_owned())));
-        assert_eq!(result, Ok(Some("foreign".to_owned())));
-    }
-
-    #[test]
-    fn missing_text_mime_reads_through_data_control() {
-        let result = smithay_text_or_fallback(
-            Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "supported mime-type is not found",
-            )),
-            || Ok(Some("text from data-control".to_owned())),
-        );
-        assert_eq!(result, Ok(Some("text from data-control".to_owned())));
-    }
-
-    #[test]
-    fn empty_transfer_is_text_not_a_missing_selection() {
-        let result = smithay_text_or_fallback(Ok(String::new()), || {
-            panic!("an empty transfer must not consult data-control")
-        });
-        assert_eq!(result, Ok(Some(String::new())));
-    }
-
-    #[test]
-    fn seat_and_focus_errors_are_not_masked_by_data_control() {
-        for message in [
-            "client doesn't have focus",
-            "no events received on any seat",
-        ] {
-            let result = smithay_text_or_fallback(Err(io::Error::other(message)), || {
-                panic!("{message} must not consult data-control")
-            });
-            assert_eq!(result, Err(message.to_owned()));
-        }
-    }
-
-    #[test]
-    fn failed_data_control_read_keeps_the_empty_result() {
-        let result = smithay_text_or_fallback(no_offer(), || {
-            Err("data-control transfer timed out".to_owned())
-        });
-        assert_eq!(result, Ok(None));
-    }
+    assert_eq!(
+        backend.text(ClipboardSelection::Primary),
+        Ok(text_policy::TextRead::NoSelection)
+    );
 }

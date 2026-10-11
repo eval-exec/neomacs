@@ -4,11 +4,37 @@
 //! the synchronous source/front owner and are never dereferenced by IR code.
 
 use super::*;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::jit::opt::{build, ir};
 
 #[cfg(test)]
-#[path = "tests/opt_opcode_transport_effects.rs"]
+#[path = "tests/opt_opcode_transport_effects_test.rs"]
 mod opcode_transport_effects_tests;
+
+#[cfg(test)]
+#[path = "tests/opt_reps_tail.rs"]
+mod reps_tail_tests;
+
+/// Whether Reps is the final transforming pass and may retain its complete
+/// validation through immutable reporting. Sink selection always retains the
+/// original backend check, even when that invocation changes nothing.
+/// Threading: copied compile-time policy only, never IR or runtime state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepsTailPolicy {
+    RepeatBackend,
+    FinishFromReps,
+}
+
+impl RepsTailPolicy {
+    fn for_selected_reps() -> Self {
+        match (jit_opt_fast(), jit_opt_passes().sink) {
+            (true, false) => Self::FinishFromReps,
+            (false, false) | (false, true) | (true, true) => Self::RepeatBackend,
+        }
+    }
+}
+
+static_assertions::assert_impl_all!(RepsTailPolicy: Send, Sync);
 
 /// Honor a Feedback request's explicit Full policy when the verified opt plan
 /// transports at least two parameters simultaneously at an actual join. Entry
@@ -227,16 +253,42 @@ pub(super) fn build_plan_with_sqrt_sites(
         func.census.licm = Some(stats);
     }
     if let Some(lift) = lift {
-        let selection =
-            crate::emacs_core::jit::opt::passes::reps::run(&mut func).map_err(|error| {
+        match RepsTailPolicy::for_selected_reps() {
+            RepsTailPolicy::RepeatBackend => {
+                let selection =
+                    crate::emacs_core::jit::opt::passes::reps::run(&mut func).map_err(|error| {
+                        tracing::debug!(
+                            ?error,
+                            "opt integer representation pass refused a compilation"
+                        );
+                        CompileError::UnsupportedOp("opt-reps:verify")
+                    })?;
+                tracing::debug!(target: "neovm_jit::opt", ?lift, ?selection, "opt integer census");
+                func.census.reps = Some(ir::RepsCensus { lift, selection });
+            }
+            RepsTailPolicy::FinishFromReps => {
+                let verified = crate::emacs_core::jit::opt::passes::reps::run_terminal(func)
+                    .map_err(|error| {
+                        tracing::debug!(
+                            ?error,
+                            "opt integer representation pass refused a compilation"
+                        );
+                        CompileError::UnsupportedOp("opt-reps:verify")
+                    })?;
                 tracing::debug!(
-                    ?error,
-                    "opt integer representation pass refused a compilation"
+                    target: "neovm_jit::opt", ?lift, selection = ?verified.stats(),
+                    "opt integer census"
                 );
-                CompileError::UnsupportedOp("opt-reps:verify")
-            })?;
-        tracing::debug!(target: "neovm_jit::opt", ?lift, ?selection, "opt integer census");
-        func.census.reps = Some(ir::RepsCensus { lift, selection });
+                let completed = verified.finish(lift);
+                record(
+                    Some(completed.as_func()),
+                    "lower",
+                    ops.len(),
+                    cfg.entry_depth.values().sum(),
+                );
+                return Ok(completed.into_func());
+            }
+        }
     }
     if jit_opt_passes().sink {
         let feedback = (0..ops.len())
@@ -294,15 +346,7 @@ pub(super) fn lower_best_requested(
     opt_params: Option<ir::ParamShape>,
     opt_request: Option<CompileRequest>,
 ) -> Result<CompiledLeaf, CompileError> {
-    // The shared baseline only clears root-window counters when it emits a
-    // hoisted prologue. Opt T1 bodies can have no prologue, so reset this
-    // compiler-thread state before each attempt, including the baseline retry.
-    // Legacy emission keeps its original initialization and diagnostics.
-    let reset_opt_counts = jit_opt_mode() == OptMode::Opt;
     if let Some(params) = opt_params {
-        if reset_opt_counts {
-            lowering::rootwin_counters_reset();
-        }
         match lower_leaf_full_osr_with_plan_impl(
             ops,
             constants,
@@ -322,10 +366,42 @@ pub(super) fn lower_best_requested(
             }
         }
     }
-    if reset_opt_counts {
-        lowering::rootwin_counters_reset();
-    }
     lower_leaf_full_osr(ops, constants, arity, offset_map, obarray, osr_pc, prefix)
+}
+
+/// A selected attempt never generates baseline code on failure: its source
+/// owner re-enters the legacy MIR frontend. Threading: request and parameters
+/// are compiler-owned scalars; no runtime or mutator storage is introduced.
+#[cold]
+#[inline(never)]
+pub(super) fn lower_selected_requested(
+    ops: &[Op],
+    constants: &[Value],
+    arity: usize,
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    obarray: Option<&Obarray>,
+    osr_pc: Option<usize>,
+    prefix: usize,
+    params: ir::ParamShape,
+    request: CompileRequest,
+) -> Result<CompiledLeaf, CompileError> {
+    lower_leaf_full_osr_with_plan_impl(
+        ops,
+        constants,
+        arity,
+        offset_map,
+        obarray,
+        osr_pc,
+        prefix,
+        Some(params),
+        None,
+        Some(request),
+    )
+    .inspect_err(|error| {
+        record(None, &format!("opt-bail:{error:?}"), ops.len(), 0);
+        tracing::debug!(target: "neovm_jit::opt", ?error,
+            "selected opt backend declined; restoring legacy frontend");
+    })
 }
 
 fn census_path() -> Option<&'static std::path::Path> {
@@ -343,10 +419,14 @@ pub(super) fn build_census(f: &ByteCodeFunction, fused: Option<&inline::FusedBod
     if census_path().is_none() {
         return;
     }
+    let Ok(shape) = JitParamShape::try_from(f) else {
+        return;
+    };
+    let optional = shape.optional();
     let params = ir::ParamShape {
-        required: f.params.required.len(),
-        optional: f.params.optional.len(),
-        has_rest: f.params.rest.is_some(),
+        required: shape.required(),
+        optional,
+        has_rest: shape.rest().is_present(),
     };
     let prefix = f.jit_runtime().patched_prefix();
     let masked = mask_dynamic_prefix(&f.constants, prefix);

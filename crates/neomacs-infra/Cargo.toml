@@ -22,5 +22,6 @@ fs4.workspace = true
 tempfile.workspace = true
 getrandom.workspace = true
 sha2.workspace = true
+ureq.workspace = true
 wait-timeout.workspace = true
 

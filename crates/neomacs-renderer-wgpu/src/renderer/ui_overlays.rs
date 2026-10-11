@@ -2394,4 +2394,5 @@ impl WgpuRenderer {
 }
 
 #[cfg(test)]
+#[path = "ui_overlays/tests/ui_overlays_test.rs"]
 mod tests;

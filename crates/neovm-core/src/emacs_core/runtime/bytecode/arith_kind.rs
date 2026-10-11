@@ -18,7 +18,7 @@ use crate::emacs_core::builtins::{IntegerBinaryOp, IntegerOp, IntegerUnaryOp, Nu
 
 /// One arithmetic opcode's generic slow arm (see the module doc).
 #[repr(i64)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter, num_enum::TryFromPrimitive)]
 pub(crate) enum ArithGenericKind {
     /// `Bplus` → `+`
     Add = 0,
@@ -81,24 +81,7 @@ impl ArithGenericKind {
     /// no kind has (a corrupted immediate).
     #[inline]
     pub(crate) fn from_raw(raw: i64) -> Option<Self> {
-        Some(match raw {
-            0 => Self::Add,
-            1 => Self::Sub,
-            2 => Self::Mul,
-            3 => Self::Div,
-            4 => Self::Rem,
-            5 => Self::Max,
-            6 => Self::Min,
-            7 => Self::NumEq,
-            8 => Self::Lt,
-            9 => Self::Gt,
-            10 => Self::Le,
-            11 => Self::Ge,
-            12 => Self::Add1,
-            13 => Self::Sub1,
-            14 => Self::Negate,
-            _ => return None,
-        })
+        Self::try_from(raw).ok()
     }
 
     /// Operands the opcode takes off the stack.
@@ -106,7 +89,18 @@ impl ArithGenericKind {
     pub(crate) fn arity(self) -> usize {
         match self {
             Self::Add1 | Self::Sub1 | Self::Negate => 1,
-            _ => 2,
+            Self::Add
+            | Self::Sub
+            | Self::Mul
+            | Self::Div
+            | Self::Rem
+            | Self::Max
+            | Self::Min
+            | Self::NumEq
+            | Self::Lt
+            | Self::Gt
+            | Self::Le
+            | Self::Ge => 2,
         }
     }
 
@@ -132,5 +126,9 @@ impl ArithGenericKind {
 }
 
 #[cfg(test)]
-#[path = "tests/arith_kind.rs"]
+#[path = "tests/arith_kind_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/arith_kind_decode.rs"]
+mod decode_tests;

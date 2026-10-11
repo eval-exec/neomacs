@@ -1,0 +1,7 @@
+(let ((l (list 1 2))) (setcdr (cdr l) l)
+ (mapcar (lambda (f) (condition-case e (funcall f l)
+                      (error (list (car e) (car (cadr e))))))
+  (list (lambda (x) (apply #'+ x)) (lambda (x) (apply #'list x))
+        (lambda (x) (apply #'vector x)) (lambda (x) (apply #'max 0 x))
+        (lambda (x) (funcall #'apply #'list x))
+        (lambda (x) (apply x)))))

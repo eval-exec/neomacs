@@ -290,33 +290,12 @@ fn read_coding_system_info(cursor: &mut Cursor<'_>) -> Result<DumpCodingSystemIn
     })
 }
 
-const EOL_UNIX: u8 = 0;
-const EOL_DOS: u8 = 1;
-const EOL_MAC: u8 = 2;
-const EOL_UNDECIDED: u8 = 3;
-
 fn write_eol_type(out: &mut Vec<u8>, eol: &DumpEolType) {
-    write_u8(
-        out,
-        match eol {
-            DumpEolType::Unix => EOL_UNIX,
-            DumpEolType::Dos => EOL_DOS,
-            DumpEolType::Mac => EOL_MAC,
-            DumpEolType::Undecided => EOL_UNDECIDED,
-        },
-    );
+    write_u8(out, (*eol).into());
 }
 
 fn read_eol_type(cursor: &mut Cursor<'_>) -> Result<DumpEolType, DumpError> {
-    match cursor.read_u8("coding eol type")? {
-        EOL_UNIX => Ok(DumpEolType::Unix),
-        EOL_DOS => Ok(DumpEolType::Dos),
-        EOL_MAC => Ok(DumpEolType::Mac),
-        EOL_UNDECIDED => Ok(DumpEolType::Undecided),
-        other => Err(DumpError::ImageFormatError(format!(
-            "unknown coding eol type tag {other}"
-        ))),
-    }
+    DumpEolType::try_from(cursor.read_u8("coding eol type")?).map_err(DumpError::from)
 }
 
 fn write_sym_vec(out: &mut Vec<u8>, syms: &[DumpSymId]) -> Result<(), DumpError> {
@@ -544,3 +523,7 @@ pub(crate) fn empty_coding_system_manager() -> DumpCodingSystemManager {
 #[cfg(test)]
 #[path = "coding_system_image/tests/coding_system_image_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "coding_system_image/tests/enum_decode_test.rs"]
+mod enum_decode_tests;

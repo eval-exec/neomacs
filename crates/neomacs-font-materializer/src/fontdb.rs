@@ -15,6 +15,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::raster_sources::{SfntFaceRasterSources, classify_sfnt_face, classify_table_directory};
+
 /// The public pin handle carries a static selector. Retain each spelling once,
 /// rather than once per native-cache generation or worker lifetime. The pool
 /// grows with successful selector indices, not cache rebuild count.
@@ -43,18 +45,6 @@ enum FontContainer {
     Sfnt,
     WebFont,
     LegacyBitmap(LegacyBitmapFormat),
-}
-
-/// Raster source carried by one SFNT face, used to select the adapter that
-/// can replay it exactly.  Container shape alone is insufficient: both
-/// fixed monochrome OTB fonts and scalable color emoji fonts are outline-free
-/// SFNTs, but Swash owns the latter while FreeType owns the former.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SfntRasterSource {
-    Outline,
-    ColorBitmap,
-    MonochromeBitmap,
-    Unknown,
 }
 
 struct OpenedFontDbSource {
@@ -133,6 +123,62 @@ impl ExactFaceKey {
     }
 }
 
+/// What a streaming read saw at the head of a font source.
+pub(crate) enum StreamedSfntSource {
+    /// An SFNT face, classified from its table directory alone.  `None` means
+    /// the requested face index does not exist in the collection.
+    Sfnt(Option<SfntFaceRasterSources>),
+    /// Not an SFNT container: the caller must read the payload to decide.
+    NotSfnt,
+}
+
+/// Classify the SFNT face at `source`'s current position from `header` bytes.
+///
+/// Only the header and the selected face's table directory are read, so a
+/// multi-megabyte font costs a few hundred bytes here; a caller that needs the
+/// payload reads it afterwards.  `header` holds what a `take(12)` read
+/// returned, which is shorter than 12 for a truncated file.
+pub(crate) fn classify_sfnt_stream(
+    source: &mut (impl Read + Seek),
+    header: &[u8],
+    face_index: u32,
+) -> std::io::Result<StreamedSfntSource> {
+    if !is_sfnt(header) {
+        return Ok(StreamedSfntSource::NotSfnt);
+    }
+    let raster: std::io::Result<Option<SfntFaceRasterSources>> = (|| {
+        let directory = if header.starts_with(b"ttcf") {
+            if read_be_u32(header, 8).is_none_or(|count| face_index >= count) {
+                return Ok(None);
+            }
+            source.seek(SeekFrom::Start(12 + u64::from(face_index) * 4))?;
+            let mut offset = [0; 4];
+            source.read_exact(&mut offset)?;
+            u64::from(u32::from_be_bytes(offset))
+        } else if face_index == 0 {
+            0
+        } else {
+            return Ok(None);
+        };
+        source.seek(SeekFrom::Start(directory))?;
+        let mut table_directory = vec![0; 12];
+        source.read_exact(&mut table_directory)?;
+        let count = read_be_u16(&table_directory, 4).unwrap() as usize;
+        table_directory.resize(12 + count * 16, 0);
+        source.read_exact(&mut table_directory[12..])?;
+        Ok(classify_table_directory(&table_directory, 0))
+    })();
+    match raster {
+        Ok(raster) => Ok(StreamedSfntSource::Sfnt(raster)),
+        // Preserve the slice classifier's handling of truncated SFNT: fontdb
+        // remains responsible for accepting or rejecting it.
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Ok(StreamedSfntSource::Sfnt(None))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 impl FontContainer {
     fn read_source(
         source: &mut (impl Read + Seek),
@@ -144,38 +190,8 @@ impl FontContainer {
         // instead of copying every preceding font into an evaluator buffer.
         let mut header = Vec::with_capacity(12);
         source.take(12).read_to_end(&mut header)?;
-        if is_sfnt(&header) {
-            let raster: std::io::Result<SfntRasterSource> = (|| {
-                let directory = if header.starts_with(b"ttcf") {
-                    if read_be_u32(&header, 8).is_none_or(|count| face_index >= count) {
-                        return Ok(SfntRasterSource::Unknown);
-                    }
-                    source.seek(SeekFrom::Start(12 + u64::from(face_index) * 4))?;
-                    let mut offset = [0; 4];
-                    source.read_exact(&mut offset)?;
-                    u64::from(u32::from_be_bytes(offset))
-                } else if face_index == 0 {
-                    0
-                } else {
-                    return Ok(SfntRasterSource::Unknown);
-                };
-                source.seek(SeekFrom::Start(directory))?;
-                let mut table_directory = vec![0; 12];
-                source.read_exact(&mut table_directory)?;
-                let count = read_be_u16(&table_directory, 4).unwrap() as usize;
-                table_directory.resize(12 + count * 16, 0);
-                source.read_exact(&mut table_directory[12..])?;
-                Ok(sfnt_raster_directory(&table_directory, 0).unwrap_or(SfntRasterSource::Unknown))
-            })();
-            let raster = match raster {
-                Ok(raster) => raster,
-                // Preserve the slice classifier's handling of truncated SFNT:
-                // fontdb remains responsible for accepting or rejecting it.
-                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    SfntRasterSource::Unknown
-                }
-                Err(error) => return Err(error),
-            };
+        if let StreamedSfntSource::Sfnt(raster) = classify_sfnt_stream(source, &header, face_index)?
+        {
             return Ok((Self::from_raster_source(raster), Vec::new()));
         }
         // Webfont decoding needs the complete payload. Legacy bitmap probing
@@ -186,9 +202,14 @@ impl FontContainer {
         Ok((Self::detect(path, &bytes, face_index), bytes))
     }
 
-    fn from_raster_source(raster: SfntRasterSource) -> Self {
+    /// Select the adapter that can replay this face exactly.
+    ///
+    /// A face with no usable scalable source and nothing but monochrome
+    /// strikes belongs to FreeType; every other SFNT is fontdb/Swash's,
+    /// including the ones whose color source a later stage rasterizes.
+    fn from_raster_source(raster: Option<SfntFaceRasterSources>) -> Self {
         match raster {
-            SfntRasterSource::MonochromeBitmap => {
+            Some(sources) if !sources.swash_owned() && sources.monochrome_bitmap_strikes() => {
                 Self::LegacyBitmap(LegacyBitmapFormat::OpenTypeMonochromeBitmap)
             }
             _ => Self::Sfnt,
@@ -215,7 +236,7 @@ impl FontContainer {
         }
 
         if is_sfnt(bytes) {
-            return Self::from_raster_source(sfnt_raster_source(bytes, face_index));
+            return Self::from_raster_source(classify_sfnt_face(bytes, face_index));
         }
 
         match path.extension().and_then(|extension| extension.to_str()) {
@@ -239,71 +260,6 @@ fn is_sfnt(bytes: &[u8]) -> bool {
         || bytes.starts_with(b"ttcf")
         || bytes.starts_with(b"true")
         || bytes.starts_with(b"typ1")
-}
-
-/// Inspect the selected SFNT face rather than trusting its suffix or
-/// Fontconfig's `FC_SCALABLE` hint.  GNU's Cairo path scales CBDT/CBLC and
-/// `sbix` color strikes at the requested size; Swash provides that same
-/// capability.  Outline-free monochrome strikes remain on the exact FreeType
-/// replay path because fontdb/Swash cannot materialize them.
-fn sfnt_raster_source(bytes: &[u8], face_index: u32) -> SfntRasterSource {
-    sfnt_raster_source_inner(bytes, face_index).unwrap_or(SfntRasterSource::Unknown)
-}
-
-fn sfnt_raster_source_inner(bytes: &[u8], face_index: u32) -> Option<SfntRasterSource> {
-    let directory = if bytes.starts_with(b"ttcf") {
-        let count = read_be_u32(bytes, 8)?;
-        if face_index >= count {
-            return Some(SfntRasterSource::Unknown);
-        }
-        read_be_u32(bytes, 12 + face_index as usize * 4)? as usize
-    } else if face_index == 0 {
-        0
-    } else {
-        return Some(SfntRasterSource::Unknown);
-    };
-    sfnt_raster_directory(bytes, directory)
-}
-
-fn sfnt_raster_directory(bytes: &[u8], directory: usize) -> Option<SfntRasterSource> {
-    let count = read_be_u16(bytes, directory + 4)? as usize;
-    let mut has_monochrome_bitmap_data = false;
-    let mut has_monochrome_bitmap_location = false;
-    let mut has_color_bitmap_data = false;
-    let mut has_color_bitmap_location = false;
-    let mut has_sbix = false;
-    let mut has_outline = false;
-    for index in 0..count {
-        let record = directory + 12 + index * 16;
-        let tag: [u8; 4] = bytes.get(record..record + 4)?.try_into().ok()?;
-        let length = read_be_u32(bytes, record + 12)?;
-        match &tag {
-            b"EBDT" | b"bdat" if length != 0 => {
-                has_monochrome_bitmap_data = true;
-            }
-            b"EBLC" | b"bloc" if length != 0 => {
-                has_monochrome_bitmap_location = true;
-            }
-            b"CBDT" if length != 0 => {
-                has_color_bitmap_data = true;
-            }
-            b"CBLC" if length != 0 => {
-                has_color_bitmap_location = true;
-            }
-            b"sbix" if length != 0 => has_sbix = true,
-            b"glyf" | b"CFF " | b"CFF2" if length != 0 => has_outline = true,
-            _ => {}
-        }
-    }
-    Some(if has_outline {
-        SfntRasterSource::Outline
-    } else if (has_color_bitmap_data && has_color_bitmap_location) || has_sbix {
-        SfntRasterSource::ColorBitmap
-    } else if has_monochrome_bitmap_data && has_monochrome_bitmap_location {
-        SfntRasterSource::MonochromeBitmap
-    } else {
-        SfntRasterSource::Unknown
-    })
 }
 
 fn read_be_u16(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -865,4 +821,5 @@ impl FontFileCache {
 }
 
 #[cfg(test)]
+#[path = "fontdb/tests/fontdb_test.rs"]
 mod tests;

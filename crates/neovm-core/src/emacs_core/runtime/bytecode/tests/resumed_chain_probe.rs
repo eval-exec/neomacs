@@ -310,7 +310,10 @@ impl<'a> Vm<'a> {
                     .map(|suspended| &suspended.state)
             };
             aux.map_or((0, Vec::new()), |aux| {
-                (aux.handlers.len(), aux.bind_stack.iter().copied().collect())
+                (
+                    aux.handlers.len(),
+                    aux.bind_stack.as_slice().iter().copied().collect(),
+                )
             })
         };
         let mut snapshot = Vec::with_capacity(k + 1);

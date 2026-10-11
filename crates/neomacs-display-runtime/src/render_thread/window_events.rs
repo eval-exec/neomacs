@@ -256,10 +256,6 @@ impl RenderApp {
 
             WindowEvent::Focused(focused) => {
                 let emacs_fid = self.emacs_frame_for_window_event(window_id);
-                if let Some(sched_id) = self.frame_windows.event_frame_for_winit(window_id) {
-                    self.frame_coordinator
-                        .set_focused(super::frame_sched::NativeWindowId(sched_id), focused);
-                }
                 if !focused {
                     // Focus left: any modifier-side observation is stale
                     // (the keys are tracked on this window's own key
@@ -287,10 +283,7 @@ impl RenderApp {
                         })
                         .unwrap_or_default()
                 };
-                self.comms.send_input(InputEvent::WindowFocus {
-                    focused,
-                    emacs_frame_id: emacs_fid,
-                });
+                self.reconcile_native_focus(emacs_fid, focused);
                 for presentation in retirements {
                     self.comms
                         .send_input(InputEvent::PresentationRetired { presentation });

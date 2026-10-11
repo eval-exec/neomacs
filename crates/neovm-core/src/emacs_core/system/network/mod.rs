@@ -388,5 +388,5 @@ fn expect_int(value: &Value) -> Result<i64, Flow> {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/network_test.rs"]
 mod tests;

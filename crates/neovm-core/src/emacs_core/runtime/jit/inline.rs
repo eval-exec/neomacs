@@ -42,6 +42,7 @@ use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::NumericFeedback;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::value::Value;
 
 #[path = "compile/inline_census.rs"]
@@ -57,11 +58,11 @@ pub(crate) use v2::{
 };
 
 #[cfg(test)]
-#[path = "tests/inline_named_front.rs"]
+#[path = "tests/inline_named_front_test.rs"]
 mod named_front_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_named_runtime.rs"]
+#[path = "tests/inline_named_runtime_test.rs"]
 mod named_runtime_tests;
 
 /// Ops of a callee body, at most, for one splice.
@@ -149,6 +150,7 @@ impl FusedBody {
 /// a jump table breaks a structural assumption of the splice.
 ///
 /// `feedback` is the CALLEE's for this op's pc.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn op_is_inlinable(op: &Op, feedback: NumericFeedback) -> bool {
     match op {
         // Stack shuffles, constants, control flow inside the body.
@@ -206,7 +208,55 @@ fn op_is_inlinable(op: &Op, feedback: NumericFeedback) -> bool {
         | Op::Geq
         | Op::Max
         | Op::Min => feedback == NumericFeedback::FixnumOnly,
-        _ => false,
+        Op::VarRef(..)
+        | Op::VarSet(..)
+        | Op::VarBind(..)
+        | Op::Unbind(..)
+        | Op::Call(..)
+        | Op::Apply(..)
+        | Op::Switch
+        | Op::Div
+        | Op::Rem
+        | Op::Cons
+        | Op::List(..)
+        | Op::Length
+        | Op::Nth
+        | Op::Nthcdr
+        | Op::Setcar
+        | Op::Setcdr
+        | Op::Elt
+        | Op::Nconc
+        | Op::Nreverse
+        | Op::Member
+        | Op::Memq
+        | Op::Assq
+        | Op::Equal
+        | Op::Concat(..)
+        | Op::Substring
+        | Op::StringEqual
+        | Op::StringLessp
+        | Op::Aref
+        | Op::Aset
+        | Op::SymbolValue
+        | Op::SymbolFunction
+        | Op::Set
+        | Op::Fset
+        | Op::Get
+        | Op::Put
+        | Op::PushConditionCase(..)
+        | Op::PushConditionCaseRaw(..)
+        | Op::PushCatch(..)
+        | Op::PopHandler
+        | Op::UnwindProtectPop
+        | Op::Throw
+        | Op::SaveCurrentBuffer
+        | Op::SaveExcursion
+        | Op::SaveRestriction
+        | Op::SaveWindowExcursion
+        | Op::MakeClosure(..)
+        | Op::CallBuiltin(..)
+        | Op::CallBuiltinSym(..)
+        | Op::TrapOutOfRangeConstant(..) => false,
     }
 }
 
@@ -248,10 +298,11 @@ fn inlinable_verdict(callee: &ByteCodeFunction, nargs: usize) -> Result<(), Stri
     if callee.env.is_some() {
         return Err("env".into());
     }
-    if !callee.params.optional.is_empty() || callee.params.rest.is_some() {
-        return Err("arglist".into());
-    }
-    if callee.params.required.len() != nargs {
+    let arity = JitParamShape::try_from(callee)
+        .ok()
+        .and_then(JitParamShape::fixed_arity)
+        .ok_or_else(|| "arglist".to_string())?;
+    if arity != nargs {
         return Err("arity".into());
     }
     if callee.jit_runtime().patched_prefix() > 0 {
@@ -298,14 +349,12 @@ fn inlinable_verdict(callee: &ByteCodeFunction, nargs: usize) -> Result<(), Stri
 }
 
 /// The branch target of a jump op, if it is one.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn jump_target(op: &Op) -> Option<u32> {
-    match op {
-        Op::Goto(t)
-        | Op::GotoIfNil(t)
-        | Op::GotoIfNotNil(t)
-        | Op::GotoIfNilElsePop(t)
-        | Op::GotoIfNotNilElsePop(t) => Some(*t),
-        _ => None,
+    use crate::emacs_core::bytecode::opcode::BranchTargets;
+    match op.branch_targets() {
+        BranchTargets::Direct(target) => Some(target.get()),
+        BranchTargets::None | BranchTargets::Handler(_) | BranchTargets::SwitchTable => None,
     }
 }
 
@@ -680,19 +729,27 @@ pub(crate) fn active_fused() -> Option<std::rc::Rc<FusedBody>> {
 }
 
 /// RAII scope publishing `fused` for the compile inside it.
-pub(crate) struct FusedScope(Option<std::rc::Rc<FusedBody>>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct FusedScope {
+    _scope: crate::tls_scope::TlsScope<
+        Option<std::rc::Rc<FusedBody>>,
+        std::cell::RefCell<Option<std::rc::Rc<FusedBody>>>,
+    >,
+}
+static_assertions::assert_not_impl_any!(FusedScope: Send, Sync);
 
 impl FusedScope {
     pub(crate) fn enter(fused: std::rc::Rc<FusedBody>) -> Self {
-        Self(ACTIVE_FUSED.with(|f| f.borrow_mut().replace(fused)))
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&ACTIVE_FUSED, Some(fused)),
+        }
     }
 }
 
 impl Drop for FusedScope {
     fn drop(&mut self) {
-        let prev = self.0.take();
-        ACTIVE_FUSED.with(|f| *f.borrow_mut() = prev);
-        super::compile::lowering::set_active_region(None);
+        super::compile::lowering::clear_active_region_on_scope_drop();
     }
 }
 
@@ -726,21 +783,25 @@ pub(crate) fn force_inline_for_test(on: Option<bool>) {
 }
 
 #[cfg(test)]
-#[path = "tests/inline_v2.rs"]
+#[path = "tests/inline_v2_test.rs"]
 mod v2_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_v2_closure.rs"]
+#[path = "tests/inline_v2_closure_test.rs"]
 mod v2_closure_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_v2_hof.rs"]
+#[path = "tests/inline_v2_hof_test.rs"]
 mod v2_hof_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_closure.rs"]
+#[path = "tests/inline_closure_test.rs"]
 mod closure_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_entry_cache.rs"]
+#[path = "tests/inline_entry_cache_test.rs"]
 mod entry_cache_tests;
+
+#[cfg(test)]
+#[path = "tests/branch_target_admission.rs"]
+mod branch_target_admission_tests;

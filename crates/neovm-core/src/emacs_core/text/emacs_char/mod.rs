@@ -1573,5 +1573,5 @@ pub fn utf8_to_emacs(s: &str) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/emacs_char_test.rs"]
 mod tests;

@@ -199,17 +199,17 @@ pub(crate) fn string_byte_to_char(string: Value, s: &LispString, byte_index: usi
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/string_pos_cache_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_collection_epoch.rs"]
+#[path = "tests/gc_collection_epoch_test.rs"]
 mod gc_collection_epoch_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_collection_epoch_minor.rs"]
+#[path = "tests/gc_collection_epoch_minor_test.rs"]
 mod gc_collection_epoch_minor_tests;

@@ -113,5 +113,5 @@ impl Drop for MessageEchoPreparation<'_> {
 }
 
 #[cfg(test)]
-#[path = "tests/echo_message.rs"]
+#[path = "tests/echo_message_test.rs"]
 mod tests;

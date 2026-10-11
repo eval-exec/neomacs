@@ -68,4 +68,5 @@ impl<R> CompositionRing<R> {
 }
 
 #[cfg(test)]
+#[path = "composition_ring/tests/composition_ring_test.rs"]
 mod tests;

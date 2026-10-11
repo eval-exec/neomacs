@@ -163,6 +163,10 @@ pub(crate) struct BufferTextSourceCursor<'a, B: LayoutBufferView + ?Sized> {
     window_id: Option<u64>,
     char_pos: CharPos0,
     end: CharPos0,
+    /// Absolute ordinary-run allocation limit for this exclusive query walk.
+    /// Complete composition/display elements still use the real semantic end.
+    /// No Lisp state or mutable cache is shared between independent mutators.
+    ordinary_run_horizon: Option<CharPos0>,
     // Absolute mappings within this immutable view. Decoding establishes the
     // current and next byte positions; a separate lookup slot keeps distant
     // property boundaries from displacing that sequential pair. Rewinds may
@@ -256,6 +260,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             window_id,
             char_pos: start,
             end,
+            ordinary_run_horizon: None,
             decoded_byte_positions: Cell::new([(start, start_byte); 2]),
             looked_up_byte_position: Cell::new((end, end_byte)),
             char_granularity_end: None,
@@ -297,6 +302,10 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     /// width) without routing through the producer.
     pub(crate) fn layout_buffer(&self) -> &B {
         self.buffer
+    }
+
+    pub(crate) fn set_ordinary_run_horizon(&mut self, end: CharPos0) {
+        self.ordinary_run_horizon = Some(end);
     }
 
     pub(crate) fn current_char_pos(&self) -> CharPos0 {
@@ -822,6 +831,9 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
 
     fn next_text_run_end(&self, start: CharPos0, limit: CharPos0) -> NonEmptyRunEnd {
         let limit = self
+            .ordinary_run_horizon
+            .map_or(limit, |end| limit.min(end));
+        let limit = self
             .buffer
             .layout_next_automatic_composition_start(start, limit)
             .unwrap_or(limit);
@@ -909,7 +921,13 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             .and_then(composition_display_text_for_property)
         {
             let end = start.add_len(CharLen::new(composition.char_len()));
-            if end <= property_end && end <= self.end {
+            if end
+                <= self
+                    .buffer
+                    .layout_measurement_context_end()
+                    .unwrap_or(self.end)
+                && (end <= property_end || property_end == self.end)
+            {
                 self.char_pos = end;
                 return Some(
                     self.bind_box_run_topology(
@@ -942,11 +960,15 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             // span's start position and emitted an EMPTY run — the walk
             // aborted and the row was committed blank (issue #445: ibuffer
             // group headers like "🛠\u{FE0F}\u{FE0F} …" with an underline face
-            // starting on the selector blanked every row below). The
-            // `end <= self.end` bound still refuses spans crossing the
-            // accessible end (a bounded fragment's last cell is plain text,
-            // and the next fragment re-derives the composition).
-            if end <= self.end {
+            // starting on the selector blanked every row below).
+            // Actual narrowing bounds the complete element. A measurement
+            // stop inside it bounds ordinary runs, but must not decompose it.
+            if end
+                <= self
+                    .buffer
+                    .layout_measurement_context_end()
+                    .unwrap_or(self.end)
+            {
                 self.char_pos = end;
                 return Some(
                     self.bind_box_run_topology(

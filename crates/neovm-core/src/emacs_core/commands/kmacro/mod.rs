@@ -461,5 +461,5 @@ fn resolve_macro_events(eval: &super::eval::Context, value: &Value) -> Result<Ve
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/kmacro_test.rs"]
 mod tests;

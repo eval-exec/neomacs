@@ -318,5 +318,5 @@ pub(super) fn observe(heap: &TaggedHeap, phase: Phase) {
 }
 
 #[cfg(test)]
-#[path = "tests/memory_telemetry_tests.rs"]
+#[path = "tests/memory_telemetry_test.rs"]
 mod tests;

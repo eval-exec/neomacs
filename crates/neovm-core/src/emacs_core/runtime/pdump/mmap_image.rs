@@ -42,7 +42,8 @@ const MMAP_MAGIC: [u8; 16] = *b"NEOMMAPDUMP\0\0\0\0\0";
 // v16: `ByteCodeObj` grew the two `aref` slot-object words after `data`
 // (relocated value words, nil when never created), which moves every
 // bytecode extras region by 16 bytes.
-const MMAP_FORMAT_VERSION: u32 = 16;
+// v17: bytecode extras carry full-width depth and explicit parameter kind.
+const MMAP_FORMAT_VERSION: u32 = 17;
 
 /// The address every production image plans to map at. Above the worst-case
 /// mmap_rnd_bits=32 PIE window top (0x6555_5555_4000) and the ASAN shadow
@@ -59,8 +60,10 @@ const RELOCATION_TAG_BITS: u64 = 4;
 const RELOCATION_TAG_MASK: u64 = (1 << RELOCATION_TAG_BITS) - 1;
 
 #[repr(u32)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DumpSectionKind {
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, num_enum::IntoPrimitive, num_enum::TryFromPrimitive,
+)]
+pub enum DumpSectionKind {
     Metadata = 1,
     HeapImage = 2,
     Roots = 3,
@@ -78,33 +81,6 @@ pub(crate) enum DumpSectionKind {
     RuntimeManagers = 16,
     ObjectExtra = 17,
     ValueRelocations = 18,
-}
-
-impl DumpSectionKind {
-    fn from_raw(raw: u32) -> Result<Self, DumpError> {
-        match raw {
-            1 => Ok(Self::Metadata),
-            2 => Ok(Self::HeapImage),
-            3 => Ok(Self::Roots),
-            4 => Ok(Self::Relocations),
-            5 => Ok(Self::ObjectStarts),
-            6 => Ok(Self::EmacsRelocations),
-            7 => Ok(Self::RuntimeState),
-            8 => Ok(Self::SymbolTable),
-            10 => Ok(Self::Obarray),
-            11 => Ok(Self::Autoloads),
-            12 => Ok(Self::CharsetRegistry),
-            13 => Ok(Self::CodingSystems),
-            14 => Ok(Self::FaceTable),
-            15 => Ok(Self::Buffers),
-            16 => Ok(Self::RuntimeManagers),
-            17 => Ok(Self::ObjectExtra),
-            18 => Ok(Self::ValueRelocations),
-            other => Err(DumpError::ImageFormatError(format!(
-                "unknown section kind {other}"
-            ))),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -249,7 +225,7 @@ impl LoadedMmapImage {
         let section = self
             .sections
             .iter()
-            .find(|section| section.kind == kind as u32)?;
+            .find(|section| section.kind == u32::from(kind))?;
         Some(
             &self.mmap.bytes()
                 [section.offset as usize..section.offset as usize + section.len as usize],
@@ -260,7 +236,7 @@ impl LoadedMmapImage {
         let section = self
             .sections
             .iter()
-            .find(|section| section.kind == kind as u32)?;
+            .find(|section| section.kind == u32::from(kind))?;
         let start = section.offset as usize;
         let len = section.len as usize;
         Some((unsafe { self.mmap.as_ptr().cast_mut().add(start) }, len))
@@ -375,7 +351,7 @@ impl LoadedMmapImage {
         let section = self
             .sections
             .iter()
-            .find(|section| section.kind == kind as u32)
+            .find(|section| section.kind == u32::from(kind))
             .ok_or_else(|| DumpError::ImageFormatError(format!("missing {kind:?} section")))?;
         let start = section.offset as usize;
         let end = start + section.len as usize;
@@ -407,7 +383,7 @@ fn bake_relocations_at_planned_base(
     let find = |kind: DumpSectionKind| {
         section_headers
             .iter()
-            .find(|section| section.kind == kind as u32)
+            .find(|section| section.kind == u32::from(kind))
             .map(|section| (section.offset as usize, section.len as usize))
     };
     let Some((reloc_start, reloc_len)) = find(DumpSectionKind::Relocations) else {
@@ -460,7 +436,7 @@ pub(crate) fn write_image(path: &Path, sections: &[ImageSection<'_>]) -> Result<
     for section in sections {
         cursor = align_up(cursor, SECTION_ALIGN);
         section_headers.push(DumpImageSection {
-            kind: section.kind as u32,
+            kind: u32::from(section.kind),
             flags: section.flags,
             offset: cursor,
             len: section.bytes.len() as u64,
@@ -559,7 +535,7 @@ pub(crate) fn corrupt_section_on_disk_for_test(
         let start = table_start + idx * SECTION_SIZE;
         let section =
             *bytemuck::from_bytes::<DumpImageSection>(&bytes[start..start + SECTION_SIZE]);
-        if section.kind == kind as u32 {
+        if section.kind == u32::from(kind) {
             let payload_start = section.offset as usize;
             let payload_end = payload_start + section.len as usize;
             bytes[payload_start..payload_end].fill(0xFF);
@@ -734,7 +710,7 @@ fn validate_image(
         let start = section_table_start + idx * SECTION_SIZE;
         let raw =
             *bytemuck::from_bytes::<DumpImageSection>(&mmap.bytes()[start..start + SECTION_SIZE]);
-        DumpSectionKind::from_raw(raw.kind)?;
+        DumpSectionKind::try_from(raw.kind)?;
         if raw.reserved != 0 {
             return Err(DumpError::ImageFormatError(format!(
                 "section {idx} reserved field is nonzero"
@@ -826,3 +802,7 @@ fn checksum_body(bytes: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 #[path = "mmap_image/tests/mmap_image_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mmap_image/tests/enum_decode_test.rs"]
+mod enum_decode_tests;

@@ -47,7 +47,7 @@ pub struct Flow {
 }
 
 impl Flow {
-    #[inline]
+    #[inline(always)]
     fn tag(&self) -> FlowTag {
         match self.word.addr().get() & TAG_MASK {
             0 => FlowTag::Signal,

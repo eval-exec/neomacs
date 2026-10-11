@@ -2892,5 +2892,5 @@ pub(crate) fn roots_at(
 }
 
 #[cfg(test)]
-#[path = "tests/verify.rs"]
+#[path = "tests/verify_test.rs"]
 mod tests;

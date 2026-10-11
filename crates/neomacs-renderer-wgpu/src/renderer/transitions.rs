@@ -1,12 +1,45 @@
 //! Transitions methods for WgpuRenderer.
 
-use super::super::vertex::GlyphVertex;
+use super::super::vertex::{GlyphVertex, RectVertex};
 use super::WgpuRenderer;
+use neomacs_display_protocol::types::Color;
 use neomacs_display_protocol::{
     AxisMotionTransitionEffect, DirectionlessTransitionEffect, HorizontalTransitionEffect,
     ResolvedTransitionEffect, TransitionAxis, TransitionDirection, TransitionEasing,
     TransitionEdge, VerticalPostProcessTransitionEffect, VerticalTransitionEffect,
 };
+
+/// The frame background a transition shows where its pictures leave the
+/// cleared region uncovered.
+#[derive(Clone, Copy, Debug)]
+struct TransitionBackground {
+    color: Color,
+    alpha: f32,
+}
+
+impl TransitionBackground {
+    fn new(color: Color, background_alpha: f32) -> Self {
+        Self {
+            color,
+            alpha: (color.a * background_alpha).clamp(0.0, 1.0),
+        }
+    }
+
+    /// Premultiplied linear color at `weight` of the background opacity.
+    fn premultiplied(self, weight: f32) -> [f32; 4] {
+        let a = self.alpha * weight;
+        [self.color.r * a, self.color.g * a, self.color.b * a, a]
+    }
+}
+
+/// Complementary fades combine alternative premultiplied pictures. Other
+/// geometries retain source-over ordering (curl, flip, strips and occlusion);
+/// their uncovered geometry shows the frame background.
+#[derive(Clone, Copy)]
+enum TransitionComposition {
+    SourceOver(TransitionBackground),
+    WeightedPictures,
+}
 
 fn slide_offsets(
     axis: TransitionAxis,
@@ -30,7 +63,155 @@ fn axis_offset(axis: TransitionAxis, amount: f32) -> [f32; 2] {
     }
 }
 
+/// Complete only the geometric complement of contracted rectangular pictures.
+/// Each ring carries that picture's weight, so overlapping rings add just like
+/// the snapshots. Never fill underneath covered pixels or infer missing weight
+/// from pixel alpha: transparent content and FadeEdges attenuation are real.
+fn transition_background_vertices(
+    bounds: &neomacs_display_protocol::types::Rect,
+    quads: &[&[GlyphVertex]],
+    background: TransitionBackground,
+) -> Vec<RectVertex> {
+    let mut vertices = Vec::new();
+    let right = bounds.x + bounds.width;
+    let bottom = bounds.y + bounds.height;
+    for quad in quads {
+        // These callers supply one axis-aligned six-vertex quad per picture.
+        let [first, _, opposite, _, _, _] = *quad else {
+            continue;
+        };
+        let [left, top] = first.position;
+        let [r, b] = opposite.position;
+        let color = background.premultiplied(first.color[3]);
+        for [x0, y0, x1, y1] in [
+            [bounds.x, bounds.y, right, top],
+            [bounds.x, b, right, bottom],
+            [bounds.x, top, left, b],
+            [r, top, right, b],
+        ] {
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            for position in [[x0, y0], [x1, y0], [x1, y1], [x0, y0], [x1, y1], [x0, y1]] {
+                vertices.push(RectVertex { position, color });
+            }
+        }
+    }
+    vertices
+}
+
 impl WgpuRenderer {
+    #[allow(clippy::too_many_arguments)]
+    fn fill_transition_quad_gaps(
+        &mut self,
+        view: &wgpu::TextureView,
+        bounds: &neomacs_display_protocol::types::Rect,
+        quads: &[&[GlyphVertex]],
+        background: TransitionBackground,
+        surface_width: u32,
+        surface_height: u32,
+    ) {
+        let Some((sx, sy, sw, sh, w, h, ..)) =
+            self.transition_scissor_and_uv(bounds, surface_width, surface_height)
+        else {
+            return;
+        };
+        let vertices = transition_background_vertices(bounds, quads, background);
+        let Some(upload) = self
+            .arenas
+            .rect
+            .upload(&self.device, &self.queue, &vertices)
+        else {
+            return;
+        };
+        let draw = self.parameters([w, h], 0.0);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Transition Background Complement"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Transition Background Complement"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_scissor_rect(sx, sy, sw, sh);
+            pass.set_pipeline(&self.pipelines.transition_background_add);
+            pass.set_bind_group(0, draw.binding(), &[]);
+            pass.set_vertex_buffer(0, upload.buffer_slice());
+            pass.draw(0..vertices.len() as u32, 0..1);
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
+    // A transition replaces the window picture, not a third source-over layer
+    // over the already-rendered new scene. Clear only its clipped region.
+    fn clear_transition_region(
+        &mut self,
+        view: &wgpu::TextureView,
+        sx: u32,
+        sy: u32,
+        sw: u32,
+        sh: u32,
+        surface_width: u32,
+        surface_height: u32,
+    ) {
+        let w = surface_width as f32 / self.scale_factor;
+        let h = surface_height as f32 / self.scale_factor;
+        let mut vertices = Vec::new();
+        self.add_rect(&mut vertices, 0.0, 0.0, w, h, &Color::BLACK);
+        let Some(upload) = self
+            .arenas
+            .rect
+            .upload(&self.device, &self.queue, &vertices)
+        else {
+            return;
+        };
+        let draw = self.parameters([w, h], 0.0);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Transition Region Clear"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Transition Region Clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_scissor_rect(sx, sy, sw, sh);
+            pass.set_blend_constant(wgpu::Color::TRANSPARENT);
+            pass.set_pipeline(&self.pipelines.background_rect);
+            pass.set_bind_group(0, draw.binding(), &[]);
+            pass.set_vertex_buffer(0, upload.buffer_slice());
+            pass.draw(0..vertices.len() as u32, 0..1);
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
     /// Render a crossfade transition within a scissor region
     /// Uses the image_pipeline to blend old and new textures
     pub fn render_crossfade(
@@ -163,7 +344,8 @@ impl WgpuRenderer {
             });
 
             render_pass.set_scissor_rect(sx, sy, sw, sh);
-            render_pass.set_pipeline(&self.pipelines.image);
+            // Replace the previous scene within this scissor with (1-t)*old.
+            render_pass.set_pipeline(&self.pipelines.surface_copy);
             render_pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
 
             // Draw old with fading alpha
@@ -173,7 +355,8 @@ impl WgpuRenderer {
                 render_pass.draw(0..6, 0..1);
             }
 
-            // Draw new with increasing alpha
+            // Add t*new to the weighted old picture, including its alpha.
+            render_pass.set_pipeline(&self.pipelines.crossfade_add);
             if let Some(ref upload) = new_upload {
                 render_pass.set_bind_group(1, new_bind_group, &[]);
                 render_pass.set_vertex_buffer(0, upload.buffer_slice());
@@ -223,6 +406,7 @@ impl WgpuRenderer {
         let uv_right = (bounds.x + bounds.width) / w;
         let uv_bottom = (bounds.y + bounds.height) / h;
 
+        self.clear_transition_region(surface_view, sx, sy, sw, sh, surface_width, surface_height);
         let (old_offset, new_offset) = slide_offsets(axis, direction, distance, progress);
 
         // Build a content-region quad: position covers the content bounds shifted
@@ -304,7 +488,7 @@ impl WgpuRenderer {
             });
 
             render_pass.set_scissor_rect(sx, sy, sw, sh);
-            render_pass.set_pipeline(&self.pipelines.image);
+            render_pass.set_pipeline(&self.pipelines.composition);
             render_pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
 
             // Draw old texture sliding out
@@ -342,8 +526,11 @@ impl WgpuRenderer {
         easing: TransitionEasing,
         surface_width: u32,
         surface_height: u32,
+        background: Color,
+        background_alpha: f32,
     ) {
         let eased_t = easing.apply(raw_t);
+        let background = TransitionBackground::new(background, background_alpha);
 
         match effect {
             ResolvedTransitionEffect::Directionless(DirectionlessTransitionEffect::Crossfade) => {
@@ -366,6 +553,7 @@ impl WgpuRenderer {
                     bounds,
                     surface_width,
                     surface_height,
+                    background,
                 );
             }
             ResolvedTransitionEffect::AxisMotion {
@@ -404,6 +592,7 @@ impl WgpuRenderer {
                     distance,
                     surface_width,
                     surface_height,
+                    background,
                 );
             }
             ResolvedTransitionEffect::CardFlip { axis } => {
@@ -416,6 +605,7 @@ impl WgpuRenderer {
                     bounds,
                     surface_width,
                     surface_height,
+                    background,
                 );
             }
             ResolvedTransitionEffect::PageCurl { edge } => {
@@ -428,6 +618,7 @@ impl WgpuRenderer {
                     bounds,
                     surface_width,
                     surface_height,
+                    background,
                 );
             }
             ResolvedTransitionEffect::Vertical {
@@ -446,6 +637,7 @@ impl WgpuRenderer {
                 effect,
                 surface_width,
                 surface_height,
+                background,
             ),
             ResolvedTransitionEffect::VerticalPostProcess {
                 effect,
@@ -463,6 +655,7 @@ impl WgpuRenderer {
                 effect,
                 surface_width,
                 surface_height,
+                background,
             ),
             ResolvedTransitionEffect::Horizontal {
                 effect: HorizontalTransitionEffect::TypewriterReveal,
@@ -477,6 +670,7 @@ impl WgpuRenderer {
                     bounds,
                     surface_width,
                     surface_height,
+                    background,
                 );
             }
         }
@@ -496,6 +690,7 @@ impl WgpuRenderer {
         effect: VerticalTransitionEffect,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         match effect {
             VerticalTransitionEffect::FadeEdges => self.render_transition_fade_edges(
@@ -520,6 +715,7 @@ impl WgpuRenderer {
                 distance,
                 surface_width,
                 surface_height,
+                background,
             ),
             VerticalTransitionEffect::Tilt => self.render_transition_tilt(
                 surface_view,
@@ -531,6 +727,7 @@ impl WgpuRenderer {
                 distance,
                 surface_width,
                 surface_height,
+                background,
             ),
             VerticalTransitionEffect::CylinderRoll => self.render_transition_cylinder_roll(
                 surface_view,
@@ -542,6 +739,7 @@ impl WgpuRenderer {
                 distance,
                 surface_width,
                 surface_height,
+                background,
             ),
             VerticalTransitionEffect::Wobbly => self.render_transition_wobbly(
                 surface_view,
@@ -554,6 +752,7 @@ impl WgpuRenderer {
                 distance,
                 surface_width,
                 surface_height,
+                background,
             ),
             VerticalTransitionEffect::Wave => self.render_transition_wave(
                 surface_view,
@@ -566,6 +765,7 @@ impl WgpuRenderer {
                 distance,
                 surface_width,
                 surface_height,
+                background,
             ),
             VerticalTransitionEffect::PerLineSpring => self.render_transition_per_line_spring(
                 surface_view,
@@ -578,6 +778,7 @@ impl WgpuRenderer {
                 distance,
                 surface_width,
                 surface_height,
+                background,
             ),
             VerticalTransitionEffect::Liquid => self.render_transition_liquid(
                 surface_view,
@@ -590,6 +791,7 @@ impl WgpuRenderer {
                 distance,
                 surface_width,
                 surface_height,
+                background,
             ),
         }
     }
@@ -632,6 +834,13 @@ impl WgpuRenderer {
     }
 
     /// Helper: submit a two-quad transition pass (old + new textures).
+    ///
+    /// A source-over transition marks the pixels its pictures rasterize in the
+    /// stencil and then fills only the unmarked remainder with the frame
+    /// background, so flipped, rolled, tilted or displaced geometry never
+    /// leaves the cleared region transparent and covered translucent pixels
+    /// never gain a third background layer.
+    #[allow(clippy::too_many_arguments)]
     fn submit_transition_two_quad_pass(
         &mut self,
         surface_view: &wgpu::TextureView,
@@ -639,13 +848,61 @@ impl WgpuRenderer {
         new_bind_group: &wgpu::BindGroup,
         old_vertices: &[GlyphVertex],
         new_vertices: &[GlyphVertex],
+        composition: TransitionComposition,
         sx: u32,
         sy: u32,
         sw: u32,
         sh: u32,
+        surface_width: u32,
+        surface_height: u32,
     ) {
-        let old_upload = self.create_transition_vb(old_vertices);
-        let new_upload = self.create_transition_vb(new_vertices);
+        // Replace the transitioned region, rather than compositing a third copy
+        // of the already-rendered scene underneath these two snapshots.
+        self.clear_transition_region(surface_view, sx, sy, sw, sh, surface_width, surface_height);
+        let background = match composition {
+            TransitionComposition::SourceOver(background) => Some(background),
+            TransitionComposition::WeightedPictures => None,
+        };
+        // A fully faded picture quad draws nothing, so it must not mark its
+        // pixels covered either (an old picture faded out under a reveal).
+        let visible = |vertices: &[GlyphVertex]| -> Vec<GlyphVertex> {
+            vertices
+                .chunks(6)
+                .filter(|quad| background.is_none() || quad.iter().any(|v| v.color[3] > 0.0))
+                .flatten()
+                .copied()
+                .collect()
+        };
+        let old_vertices = visible(old_vertices);
+        let new_vertices = visible(new_vertices);
+        let old_upload = self.create_transition_vb(&old_vertices);
+        let new_upload = self.create_transition_vb(&new_vertices);
+        let w = surface_width as f32 / self.scale_factor;
+        let h = surface_height as f32 / self.scale_factor;
+        let background_fill = background.and_then(|background| {
+            let color = background.premultiplied(1.0);
+            let vertices: Vec<RectVertex> =
+                [[0.0, 0.0], [w, 0.0], [w, h], [0.0, 0.0], [w, h], [0.0, h]]
+                    .into_iter()
+                    .map(|position| RectVertex { position, color })
+                    .collect();
+            let upload = self
+                .arenas
+                .rect
+                .upload(&self.device, &self.queue, &vertices)?;
+            Some((upload, vertices.len() as u32, self.parameters([w, h], 0.0)))
+        });
+        // The coverage stencil must match the color target, which may be a
+        // composition picture rather than the installed surface.
+        let previous_stencil = (
+            self.stencil.texture.view().texture().width(),
+            self.stencil.texture.view().texture().height(),
+        );
+        let resize_stencil =
+            background_fill.is_some() && previous_stencil != (surface_width, surface_height);
+        if resize_stencil {
+            self.install_stencil_targets(surface_width, surface_height);
+        }
 
         let mut encoder = self
             .device
@@ -664,13 +921,31 @@ impl WgpuRenderer {
                     },
                     depth_slice: None,
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: background_fill.as_ref().map(|_| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view: self.stencil.texture.view(),
+                        depth_ops: None,
+                        stencil_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                    }
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             rp.set_scissor_rect(sx, sy, sw, sh);
-            rp.set_pipeline(&self.pipelines.image);
+            if background_fill.is_some() {
+                // Every rasterized picture fragment marks its pixel covered.
+                rp.set_pipeline(&self.pipelines.transition_composition_marked);
+                rp.set_stencil_reference(1);
+            } else {
+                rp.set_pipeline(match composition {
+                    TransitionComposition::SourceOver(_) => &self.pipelines.composition,
+                    TransitionComposition::WeightedPictures => &self.pipelines.crossfade_add,
+                });
+            }
             rp.set_bind_group(0, self.frame_parameters().binding(), &[]);
 
             if let Some(ref upload) = old_upload {
@@ -684,8 +959,19 @@ impl WgpuRenderer {
                 rp.set_vertex_buffer(0, upload.buffer_slice());
                 rp.draw(0..new_vertices.len() as u32, 0..1);
             }
+
+            if let Some((upload, count, draw)) = &background_fill {
+                rp.set_pipeline(&self.pipelines.transition_uncovered_background);
+                rp.set_stencil_reference(0);
+                rp.set_bind_group(0, draw.binding(), &[]);
+                rp.set_vertex_buffer(0, upload.buffer_slice());
+                rp.draw(0..*count, 0..1);
+            }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
+        if resize_stencil {
+            self.install_stencil_targets(previous_stencil.0, previous_stencil.1);
+        }
     }
 
     /// Crossfade: alpha blend old → new within content bounds.
@@ -699,91 +985,14 @@ impl WgpuRenderer {
         surface_width: u32,
         surface_height: u32,
     ) {
-        let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
-            match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
-                Some(v) => v,
-                None => return,
-            };
-        let x0 = bounds.x;
-        let y0 = bounds.y;
-        let x1 = bounds.x + bounds.width;
-        let y1 = bounds.y + bounds.height;
-        let old_a = 1.0 - t;
-
-        let old_verts = [
-            GlyphVertex {
-                position: [x0, y0],
-                tex_coords: [uv_l, uv_t],
-                color: [1.0, 1.0, 1.0, old_a],
-            },
-            GlyphVertex {
-                position: [x1, y0],
-                tex_coords: [uv_r, uv_t],
-                color: [1.0, 1.0, 1.0, old_a],
-            },
-            GlyphVertex {
-                position: [x1, y1],
-                tex_coords: [uv_r, uv_b],
-                color: [1.0, 1.0, 1.0, old_a],
-            },
-            GlyphVertex {
-                position: [x0, y0],
-                tex_coords: [uv_l, uv_t],
-                color: [1.0, 1.0, 1.0, old_a],
-            },
-            GlyphVertex {
-                position: [x1, y1],
-                tex_coords: [uv_r, uv_b],
-                color: [1.0, 1.0, 1.0, old_a],
-            },
-            GlyphVertex {
-                position: [x0, y1],
-                tex_coords: [uv_l, uv_b],
-                color: [1.0, 1.0, 1.0, old_a],
-            },
-        ];
-        let new_verts = [
-            GlyphVertex {
-                position: [x0, y0],
-                tex_coords: [uv_l, uv_t],
-                color: [1.0, 1.0, 1.0, t],
-            },
-            GlyphVertex {
-                position: [x1, y0],
-                tex_coords: [uv_r, uv_t],
-                color: [1.0, 1.0, 1.0, t],
-            },
-            GlyphVertex {
-                position: [x1, y1],
-                tex_coords: [uv_r, uv_b],
-                color: [1.0, 1.0, 1.0, t],
-            },
-            GlyphVertex {
-                position: [x0, y0],
-                tex_coords: [uv_l, uv_t],
-                color: [1.0, 1.0, 1.0, t],
-            },
-            GlyphVertex {
-                position: [x1, y1],
-                tex_coords: [uv_r, uv_b],
-                color: [1.0, 1.0, 1.0, t],
-            },
-            GlyphVertex {
-                position: [x0, y1],
-                tex_coords: [uv_l, uv_b],
-                color: [1.0, 1.0, 1.0, t],
-            },
-        ];
-        self.submit_transition_two_quad_pass(
+        self.render_crossfade(
             surface_view,
             old_bind_group,
             new_bind_group,
-            &old_verts,
-            &new_verts,
-            sx,
-            sy,
-            sw,
-            sh,
+            t,
+            bounds,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -797,6 +1006,7 @@ impl WgpuRenderer {
         bounds: &neomacs_display_protocol::types::Rect,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -864,10 +1074,21 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::WeightedPictures,
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
+        );
+        self.fill_transition_quad_gaps(
+            surface_view,
+            bounds,
+            &[&old_verts, &new_verts],
+            background,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -959,16 +1180,21 @@ impl WgpuRenderer {
         let new_y_off = dir * (distance - offset);
         let old_verts = make_strips(old_y_off, true);
         let new_verts = make_strips(new_y_off, false);
+        // These are complementary pictures, with intentional edge attenuation,
+        // not ordered occlusion: add their premultiplied weighted samples.
         self.submit_transition_two_quad_pass(
             surface_view,
             old_bind_group,
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::WeightedPictures,
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -985,6 +1211,7 @@ impl WgpuRenderer {
         distance: f32,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -1064,10 +1291,13 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1084,6 +1314,7 @@ impl WgpuRenderer {
         distance: f32,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -1145,10 +1376,22 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::WeightedPictures,
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
+        );
+        // Each offset picture misses its own weight in the band it vacates.
+        self.fill_transition_quad_gaps(
+            surface_view,
+            bounds,
+            &[&old_verts, &new_verts],
+            background,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1164,6 +1407,7 @@ impl WgpuRenderer {
         distance: f32,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -1244,10 +1488,13 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1262,6 +1509,7 @@ impl WgpuRenderer {
         bounds: &neomacs_display_protocol::types::Rect,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         use super::deform::page_curl_transform;
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
@@ -1407,10 +1655,13 @@ impl WgpuRenderer {
             old_bind_group,
             &new_verts,
             &old_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1425,6 +1676,7 @@ impl WgpuRenderer {
         bounds: &neomacs_display_protocol::types::Rect,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -1492,10 +1744,13 @@ impl WgpuRenderer {
             bind_group,
             &verts,
             &empty,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1511,6 +1766,7 @@ impl WgpuRenderer {
         distance: f32,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -1594,10 +1850,13 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1614,6 +1873,7 @@ impl WgpuRenderer {
         distance: f32,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         use super::deform::wobbly_deform;
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
@@ -1684,10 +1944,13 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1704,6 +1967,7 @@ impl WgpuRenderer {
         distance: f32,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -1775,10 +2039,13 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1795,6 +2062,7 @@ impl WgpuRenderer {
         distance: f32,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -1879,10 +2147,13 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1899,6 +2170,7 @@ impl WgpuRenderer {
         distance: f32,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         use super::deform::liquid_deform;
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
@@ -1969,10 +2241,13 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -1993,6 +2268,7 @@ impl WgpuRenderer {
         effect: VerticalPostProcessTransitionEffect,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -2111,10 +2387,13 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 
@@ -2129,6 +2408,7 @@ impl WgpuRenderer {
         bounds: &neomacs_display_protocol::types::Rect,
         surface_width: u32,
         surface_height: u32,
+        background: TransitionBackground,
     ) {
         let (sx, sy, sw, sh, _w, _h, uv_l, uv_t, uv_r, uv_b) =
             match self.transition_scissor_and_uv(bounds, surface_width, surface_height) {
@@ -2253,13 +2533,17 @@ impl WgpuRenderer {
             new_bind_group,
             &old_verts,
             &new_verts,
+            TransitionComposition::SourceOver(background),
             sx,
             sy,
             sw,
             sh,
+            surface_width,
+            surface_height,
         );
     }
 }
 
 #[cfg(test)]
+#[path = "transitions/tests/transitions_test.rs"]
 mod tests;

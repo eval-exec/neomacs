@@ -110,4 +110,5 @@ impl ModifierSides {
 }
 
 #[cfg(test)]
+#[path = "modifier_sides/tests/modifier_sides_test.rs"]
 mod tests;

@@ -10,4 +10,5 @@
 pub mod pure;
 
 #[cfg(test)]
+#[path = "tests/keyboard_test.rs"]
 mod tests;

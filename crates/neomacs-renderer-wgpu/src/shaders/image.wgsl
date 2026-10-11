@@ -62,6 +62,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(tex_color.rgb * in.color.rgb, tex_color.a * in.color.a * uniforms.content_alpha);
 }
 
+// Composed editor textures already contain premultiplied RGB. Copy/fade
+// their RGB and alpha together; ordinary decoded images remain straight alpha.
+@fragment
+fn fs_copy(in: VertexOutput) -> @location(0) vec4<f32> {
+    let tex = textureSample(t_image, s_image, in.tex_coords);
+    let opacity = in.color.a * uniforms.content_alpha;
+    return vec4<f32>(min(tex.rgb * in.color.rgb, vec3<f32>(tex.a)) * opacity, tex.a * opacity);
+}
+
+// Convert linear-premultiplied composition to encoded-premultiplied native RGB.
+// The sRGB attachment encodes our output, so undo that encoding before storage.
+fn to_srgb(v: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(v, vec3<f32>(1.0 / 2.4)) - 0.055, 12.92 * v, v <= vec3<f32>(0.0031308));
+}
+fn from_srgb(v: vec3<f32>) -> vec3<f32> {
+    return select(pow((v + 0.055) / 1.055, vec3<f32>(2.4)), v / 12.92, v <= vec3<f32>(0.04045));
+}
+@fragment
+fn fs_native(in: VertexOutput) -> @location(0) vec4<f32> {
+    let tex = textureSample(t_image, s_image, in.tex_coords);
+    let alpha = tex.a * in.color.a * uniforms.content_alpha;
+    let straight = clamp(tex.rgb / max(tex.a, 0.000001), vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(from_srgb(to_srgb(straight) * alpha), alpha);
+}
+
 @fragment
 fn fs_main_opaque(in: VertexOutput) -> @location(0) vec4<f32> {
     // Sample from texture, force alpha=1.0 (for XRGB/BGRX DMA-BUF textures

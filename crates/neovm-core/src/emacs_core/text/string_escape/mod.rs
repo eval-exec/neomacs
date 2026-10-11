@@ -843,40 +843,6 @@ pub(crate) fn display_width_emacs(data: &[u8], is_multibyte: bool) -> usize {
     }
 }
 
-/// Decode Emacs-encoded bytes to character code + display width pairs.
-pub(crate) fn decode_units_emacs(data: &[u8], is_multibyte: bool) -> Vec<(u32, usize)> {
-    use crate::emacs_core::emacs_char;
-    if is_multibyte {
-        let mut out = Vec::new();
-        let mut pos = 0;
-        while pos < data.len() {
-            let (code, len) = emacs_char::string_char(&data[pos..]);
-            pos += len;
-            let width = if emacs_char::char_byte8_p(code) {
-                4
-            } else if let Some(ch) = char::from_u32(code) {
-                crate::encoding::char_width(ch)
-            } else {
-                1
-            };
-            out.push((code, width));
-        }
-        out
-    } else {
-        data.iter()
-            .map(|&b| {
-                let width = if b < 0x80 {
-                    char::from_u32(b as u32)
-                        .map(crate::encoding::char_width)
-                        .unwrap_or(1)
-                } else {
-                    1
-                };
-                (b as u32, width)
-            })
-            .collect()
-    }
-}
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/string_escape_test.rs"]
 mod tests;

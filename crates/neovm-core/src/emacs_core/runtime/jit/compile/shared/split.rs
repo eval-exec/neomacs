@@ -45,7 +45,9 @@ pub(crate) struct Captured {
 }
 
 /// The backend's whole input (see the module docs). Plain data, `Send`:
-/// it crosses to a worker thread.
+/// it crosses to a worker thread. Raw values are `!Send`, so the pin below
+/// also proves no Lisp value rides along; heap bits the CLIF bakes are integer
+/// immediates whose objects the front's leaf keeps rooted.
 pub(crate) struct JobPayload {
     pub(crate) func: Function,
     /// The declared entry name (the perf-map label under naming).
@@ -67,10 +69,7 @@ pub(crate) struct JobPayload {
     pub(crate) disasm: bool,
 }
 
-const _: () = {
-    const fn assert_send<T: Send>() {}
-    assert_send::<JobPayload>();
-};
+static_assertions::assert_impl_all!(JobPayload: Send);
 
 impl JobPayload {
     /// Name every import of `captured` by the shim `shims` (the front

@@ -152,13 +152,6 @@ impl PerfStatCapture {
         if !cfg!(target_os = "linux") {
             return Err("hardware counter collection requires Linux perf".to_string());
         }
-        if self.scope.main_thread_only() && matches!(route, CaptureRoute::Adapter(_)) {
-            return Err(
-                "main-thread counter scopes need a directly launched editor (batch or native \
-                 GUI); adapter frontends run their own perf stat"
-                    .to_string(),
-            );
-        }
         if self.scope.gated_to_edit_loop() {
             self.gate = Some(ProfileGate::start(
                 self.output
@@ -170,6 +163,16 @@ impl PerfStatCapture {
         if let CaptureRoute::Adapter(prefix) = route {
             command.env(format!("{prefix}_PERF_STAT"), &self.output);
             command.env(format!("{prefix}_PERF_EVENTS"), STANDARD_EVENTS.join(","));
+            // The adapter attaches perf to the editor it launches. Preserve
+            // the same thread selection as the direct capture route.
+            command.env(
+                format!("{prefix}_PERF_THREAD_SCOPE"),
+                if self.scope.main_thread_only() {
+                    "main-thread"
+                } else {
+                    "process"
+                },
+            );
             self.configure_gate_environment(&mut command, Some(prefix));
             return Ok(command);
         }
@@ -286,4 +289,5 @@ impl PerfStatCapture {
 }
 
 #[cfg(test)]
+#[path = "counters/tests/counters_test.rs"]
 mod tests;

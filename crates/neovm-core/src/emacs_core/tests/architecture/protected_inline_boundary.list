@@ -1,0 +1,448 @@
+# Protected inline boundary: pin only the verified protected-neutral attribute subset.
+# Checked by tests/architecture/inline_boundary_test.rs; extending it requires pre-LTO body, inline-tree
+# and level-3 callee-contract comparisons, followed by the lead's fat-build A/B.
+#
+# Columns (TAB separated): kind, file (relative to crates/neovm-core/src), item, reach, # reason
+#   kind   always  inlined into a protected function in the reference build: #[inline(always)]
+#          never   called out of line from a protected function: #[inline(never)]
+#          exempt  reached, but not pinnable without re-tuning other call sites, or
+#                  without code at the protected site (see the reason); must still exist as a fn
+#          generated  a specifically identified macro invocation must generate the item
+#   item   name | Type::name | <Type as Trait>::name, spelled as in the enclosing impl header
+#   reach  protected functions that reach it; `root` marks a protected function itself, `inline`
+#          independently retains body scanning even when its hint is exempt
+#
+# Derived 2026-10-06 from the DWARF inline tree and call targets of the reference fat-LTO build
+# tmp/v10x/b37cand-bin/neomacs (main 3a3ffdfb1c, build-wt.sh: profiling profile, CARGO_INCREMENTAL=0).
+# Not listed: compiler-generated code (derives, closures, drop glue, std/thread-local internals);
+# the binary guard tmp/v10x/protected-codegen-check.sh pins those through the inline tree.
+# When the guard's table is re-pinned for an intended change, re-derive this list from the same build.
+
+never	buffer/buffer.rs	<SavedLabeledRestrictions as Drop>::drop	run_loop
+never	buffer/buffer.rs	BufferManager::save_current_restriction_state	run_loop
+never	emacs_core/lisp/native/builtins/collections.rs	builtin_aref_values	run_loop
+never	emacs_core/lisp/native/builtins/collections.rs	builtin_aset_args	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_assq_values	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_length_value	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_member_values	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_memq_values	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_nconc_slice_values	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_setcar_values	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_setcdr_values	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	bytecode_elt_values	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	bytecode_nth_values	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	nreverse_value	run_loop
+never	emacs_core/lisp/native/builtins/cons_list.rs	nthcdr_impl_scan	run_loop
+never	emacs_core/lisp/native/builtins/hooks.rs	builtin_current_window_configuration	run_loop
+never	emacs_core/lisp/native/builtins/strings.rs	builtin_concat_slice	run_loop
+never	emacs_core/lisp/native/builtins/strings.rs	builtin_string_equal_2	run_loop
+never	emacs_core/lisp/native/builtins/strings.rs	builtin_string_lessp_2	run_loop
+never	emacs_core/lisp/native/builtins/strings.rs	builtin_substring_slice	run_loop
+never	emacs_core/lisp/native/builtins/symbols.rs	builtin_fset_2	run_loop
+never	emacs_core/lisp/native/builtins/symbols.rs	builtin_set_2	run_loop
+never	emacs_core/lisp/native/builtins/symbols.rs	builtin_symbol_value_1	run_loop
+never	emacs_core/lisp/native/builtins/symbols.rs	expect_symbol_id_checked	run_loop
+never	emacs_core/lisp/native/builtins/symbols.rs	put_in_obarray_values	run_loop
+never	emacs_core/lisp/native/builtins/symbols.rs	symbol_function_by_id	run_loop
+never	emacs_core/lisp/native/builtins/symbols.rs	symbol_property_get	run_loop
+never	emacs_core/lisp/native/builtins/types.rs	builtin_equal_2	run_loop
+never	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as Clone>::clone	run_loop
+never	emacs_core/runtime/bytecode/chunk.rs	LazyGnuCode::decode	run_loop,apply1
+never	emacs_core/runtime/bytecode/vm.rs	Vm::assign_var_id	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::bytecode_depth_exceeded	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::call_arith_builtin_from_stack_args	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::call_fixed_builtin_direct	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function_debugged	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function_from_stack_args	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::apply_arguments_from_stack	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function_untraced_from_stack	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::call_resolved_builtin_from_stack_args	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::can_enter_interpreter_frame_iteratively	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::complete_interpreter_frame_chain	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_call_builtin_sym	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_vm_builtin_by_id_from_stack	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::fast_path_var_ref	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::op_current_buffer	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_max	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_min	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::osr_transfer	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_stack_call_target	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::resume_flow_out_of_line	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	invalid_bytecode_flow	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	resolve_switch_target	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	trace_invalid_bytecode_site	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	vm_switch_target	run_loop
+never	emacs_core/runtime/bytecode/vm_leaf.rs	Vm::call_builtin_leaf_from_stack_args	run_loop
+never	emacs_core/runtime/error/mod.rs	signal_internal_id	run_loop,funcall_general_untraced
+never	emacs_core/runtime/eval/apply.rs	Context::dispatch_bytecode_call_from_stack	run_loop
+never	emacs_core/runtime/eval/apply.rs	Context::drain_unwind_to	run_loop
+never	emacs_core/runtime/eval/apply.rs	Context::push_oversized_backtrace_frame_from_bc_stack	run_loop
+never	emacs_core/runtime/eval/apply.rs	Context::record_save_excursion	run_loop
+never	emacs_core/runtime/eval/apply.rs	Context::release_oversized_bytecode_backtrace_frame	run_loop
+never	emacs_core/runtime/eval/apply.rs	Context::release_owned_backtrace_args	run_loop,apply1,MapCallee::call
+never	emacs_core/runtime/eval/apply.rs	Context::unbind_to_with_result_slow	run_loop
+never	emacs_core/runtime/eval/command_loop.rs	Context::bytecode_branch_maybe_gc_and_quit	run_loop
+never	emacs_core/runtime/eval/command_loop.rs	Context::maybe_quit_slow	run_loop,MapCallee::call
+never	emacs_core/runtime/eval/signal_dispatch.rs	Context::dispatch_signal_result_cold	run_loop
+never	emacs_core/runtime/eval/specpdl.rs	grow_specpdl_for_push	run_loop,apply1,MapCallee::call
+never	emacs_core/runtime/eval/tree_walk.rs	Context::eval_sub	run_loop
+never	emacs_core/runtime/eval/var_fast.rs	Context::try_set_var_cached	run_loop
+never	emacs_core/runtime/jit/compile/shims.rs	take_pending_flow	run_loop,run_armed_leaf
+never	emacs_core/runtime/jit/feedback.rs	CallSiteFeedback::transition	run_loop
+never	emacs_core/runtime/jit/feedback.rs	Runtime::record_call_target_first	run_loop
+never	emacs_core/runtime/pdump/convert.rs	materialize_and_publish_stub	run_loop,apply1,funcall_general_untraced
+never	emacs_core/runtime/symbol/mod.rs	Obarray::swap_plain_untrapped_value_id_while_marking	run_loop
+never	emacs_core/runtime/value/mod.rs	TaggedValue::hydrate_hash_table_for_access	run_loop
+never	emacs_core/runtime/value/mod.rs	list_to_vec	run_loop
+never	tagged/collection_reads.rs	observe_active	run_loop,apply1,funcall_general_untraced,builtin_mapcar_2,builtin_mapc_2,mapcar1_with_callee
+never	tagged/gc/alloc_region.rs	TaggedHeap::refill_cons_region	run_loop,builtin_mapcar_2
+never	tagged/gc/allocation.rs	TaggedHeap::alloc_bytecode	run_loop
+always	emacs_core/lisp/native/builtins/collections.rs	builtin_aref_2	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_assq_2	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_elt_2	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_length_1	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_member_2	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_memq_2	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_nreverse_1	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_nthcdr_2	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_nthcdr_values	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_setcar_2	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_setcdr_2	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	nthcdr_impl	run_loop,inline
+always	emacs_core/lisp/native/builtins/cons_list.rs	unobserved_list_scan	run_loop,inline
+always	emacs_core/lisp/native/builtins/symbols.rs	builtin_put_3	run_loop,inline
+always	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::executes_sealed_ops	run_loop,inline
+always	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::is_pdump_stub	run_loop,apply1,funcall_general_untraced,inline
+always	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::jit_runtime	run_loop,apply1,inline
+always	emacs_core/runtime/bytecode/vm.rs	ActiveCodeView::of	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	BytecodeTierPolicy::records_call_feedback	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	ConsumedCallOperandRootSlot::from_args_start	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	ConsumedCallOperandRootSlot::install_exact_callee	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	FrameArgumentCopy::for_count	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::active	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::active_mut	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::enter_callee	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::has_no_suspended_callers	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::leave_callee	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::suspended_len	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterFrame::pc	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterFrame::save_execution_state	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterResumePoint::new	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	InterpreterResumePoint::pc	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	PreparedInterpreterCall::new	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	RecentInterpreterCall::get	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	RecentInterpreterCall::replace	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	ResolvedByteCodeCallee::code	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	StackCursor::acquire	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	StackCursor::pop	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	StackCursor::publish	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	StackCursor::push_unchecked	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	StackCursor::truncate	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	Vm::complete_interpreter_frame_value	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_bytecode_tier	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_interpreter_stack_call	run_loop,inline
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::enter_published_bytecode_call_depth	run_loop,inline	# GNU published-depth entry replaces the old helper; retain its hint pending a new protected census
+always	emacs_core/runtime/bytecode/vm.rs	Vm::install_iterative_interpreter_frame	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	Vm::leave_bytecode_call_depth	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	Vm::push_dynamic_vm_root	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_interpreter_stack_call_target	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	Vm::run_interpreter_driver	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	Vm::uses_interpreter_only_tier	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	Vm::with_dynamic_vm_roots	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	fixnum_ge	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	fixnum_gt	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	fixnum_le	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	fixnum_lt	run_loop,inline
+always	emacs_core/runtime/bytecode/vm.rs	vm_stack_return_after_push_enabled	run_loop,inline
+always	emacs_core/runtime/debug_on_call/mod.rs	Context::debug_on_next_call_is_armed	run_loop,inline
+always	emacs_core/runtime/error/flow_word.rs	Flow::tag	run_loop,inline
+always	emacs_core/runtime/error/mod.rs	<LispCondition as IntoConditionSym>::condition_sym	run_loop,funcall_general_untraced,inline
+always	emacs_core/runtime/eval/apply.rs	Context::pop_fast_bytecode_backtrace_frame_unchecked	run_loop,inline
+always	emacs_core/runtime/eval/apply.rs	Context::push_backtrace_frame_from_bc_stack	run_loop,inline
+always	emacs_core/runtime/eval/apply.rs	Context::release_backtrace_args	run_loop,apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/attention.rs	AsyncAttention::load	run_loop,apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/attention.rs	Context::attention_clear	run_loop,apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/command_loop.rs	Context::maybe_quit	run_loop,MapCallee::call,inline
+always	emacs_core/runtime/eval/command_loop.rs	Context::maybe_quit_hot_ok	run_loop,MapCallee::call,inline
+always	emacs_core/runtime/eval/macroexpand.rs	Context::note_macro_expansion_mutation	run_loop,inline
+always	emacs_core/runtime/eval/mod.rs	BacktraceArgs::descriptor	run_loop,inline
+always	emacs_core/runtime/eval/mod.rs	BacktraceArgs::evaluated_bc_stack	run_loop,inline
+always	emacs_core/runtime/eval/mod.rs	BacktraceArgs::owned_index	run_loop,apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/mod.rs	BytecodeBacktraceFrame::new	run_loop,inline
+always	emacs_core/runtime/eval/mod.rs	BytecodeBacktraceFrame::reclaim_from_frame	run_loop,inline
+always	emacs_core/runtime/eval/mod.rs	BytecodeBacktraceSpan::try_new	run_loop,inline
+always	emacs_core/runtime/eval/mod.rs	Context::compiler_function_overrides_active	run_loop,inline
+always	emacs_core/runtime/eval/mod.rs	Context::obarray	run_loop,inline
+always	emacs_core/runtime/eval/mod.rs	trivial_spec_binding_pop	run_loop,apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/signal_dispatch.rs	Context::allocate_resume_id	run_loop,inline
+always	emacs_core/runtime/eval/signal_dispatch.rs	Context::condition_stack_len	run_loop,inline
+always	emacs_core/runtime/eval/signal_dispatch.rs	Context::dispatch_signal_result_if_needed	run_loop,inline
+always	emacs_core/runtime/eval/signal_dispatch.rs	Context::truncate_condition_stack	run_loop,inline
+always	emacs_core/runtime/eval/specpdl.rs	Context::push_specpdl_with	run_loop,apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/specpdl.rs	push_specpdl_entry_with	run_loop,apply1,MapCallee::call,inline
+always	emacs_core/runtime/jit/feedback.rs	CallSiteFeedback::observe	run_loop,inline
+always	emacs_core/runtime/jit/feedback.rs	CallSiteFeedback::target_of	run_loop,inline
+always	emacs_core/runtime/jit/feedback.rs	CallSites::site_at	run_loop,inline
+always	emacs_core/runtime/jit/feedback.rs	Runtime::record_call_target	run_loop,inline
+always	emacs_core/runtime/jit/feedback.rs	target_key	run_loop,inline
+always	emacs_core/runtime/jit/mod.rs	RuntimeState::is_hot	run_loop,inline
+always	emacs_core/runtime/symbol/cell.rs	LispSymbol::is_present	run_loop,inline
+always	emacs_core/runtime/symbol/mod.rs	Obarray::debug_on_next_call_armed_fast	run_loop,inline
+always	emacs_core/runtime/symbol/mod.rs	Obarray::debug_on_next_call_cell_ref	run_loop,apply1,MapCallee::call,inline
+always	emacs_core/runtime/symbol/mod.rs	Obarray::function_epoch	run_loop,builtin_mapcar_2,builtin_mapc_2,inline
+always	emacs_core/runtime/symbol/mod.rs	Obarray::set_plain_untrapped_value_id	run_loop,inline
+always	emacs_core/runtime/symbol/mod.rs	Obarray::swap_plain_untrapped_value_id	run_loop,inline
+always	emacs_core/runtime/symbol/mod.rs	SymbolChunks::get_mut	run_loop,inline
+always	emacs_core/runtime/value/mod.rs	TaggedValue::bytecode_data_typechecked_by_caller	run_loop,inline
+always	emacs_core/runtime/value/mod.rs	TaggedValue::bytecode_runtime_word	run_loop,inline
+always	emacs_core/runtime/value/mod.rs	TaggedValue::make_cons	run_loop,inline
+always	emacs_core/runtime/value/mod.rs	add_wrapping	run_loop,funcall_general_untraced,inline
+always	tagged/gc/alloc_region.rs	TaggedHeap::take_cons_cell	run_loop,builtin_mapcar_2,inline
+always	tagged/gc/allocation.rs	TaggedHeap::alloc_cons	run_loop,inline
+always	tagged/header.rs	ConsCell::set_car	run_loop,builtin_mapcar_2,inline
+always	tagged/header.rs	ConsCell::set_cdr	run_loop,builtin_mapcar_2,inline
+always	tagged/value.rs	TaggedValue::as_symbol_id	run_loop,funcall_general_untraced,inline
+always	tagged/value.rs	TaggedValue::as_veclike_ptr	run_loop,apply1,funcall_general_untraced,builtin_mapcar_2,builtin_mapc_2,mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::cons_car	run_loop,funcall_general_untraced,mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::cons_cdr	run_loop,mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::fixnum	run_loop,inline
+always	tagged/value.rs	TaggedValue::from_cons_ptr	run_loop,builtin_mapcar_2,inline
+always	tagged/value.rs	TaggedValue::is_bignum	run_loop,inline
+always	tagged/value.rs	TaggedValue::is_cons	run_loop,mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::is_fixnum	run_loop,funcall_general_untraced,mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::is_integer	run_loop,inline
+always	tagged/value.rs	TaggedValue::is_nil	run_loop,inline
+always	tagged/value.rs	TaggedValue::is_string	run_loop,inline
+always	tagged/value.rs	TaggedValue::is_symbol	run_loop,inline
+always	tagged/value.rs	TaggedValue::is_truthy	run_loop,inline
+always	tagged/value.rs	TaggedValue::is_veclike	run_loop,apply1,builtin_mapcar_2,builtin_mapc_2,mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::kind	run_loop,funcall_general_untraced,mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::veclike_type	run_loop,apply1,funcall_general_untraced,builtin_mapcar_2,builtin_mapc_2,inline
+always	tagged/value.rs	TaggedValue::xcons_ptr	run_loop,funcall_general_untraced,mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::xfixnum	run_loop,inline
+exempt	buffer/buffer.rs	BufferManager::current_buffer	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	buffer/buffer.rs	LiveBuffers::get	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/lisp/native/builtins/from_value.rs	<SymId as FromValue>::from_value	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/lisp/native/builtins/hooks.rs	SavedWindowConfiguration::capture	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/lisp/native/builtins/symbols.rs	builtin_get_2	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/lisp/native/builtins/symbols.rs	builtin_symbol_function_1	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::executable_ops	run_loop,apply1	# inlined in apply1, run_loop but called out of line in run_loop: no single attribute matches both
+exempt	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::executes_verified_ops	run_loop	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
+exempt	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::verifier_entry_depth	run_loop,apply1	# called at the protected site, inlined at 2 other sites: never would re-tune them
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerReturn::new	run_loop	# called by Vm::install_iterative_interpreter_frame, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::with_storage	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterDriverDepth::from_suspended_callers	run_loop	# called by Vm::complete_interpreter_frame_value, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAux::empty	run_loop	# called by InterpreterFrameAuxStack::take_entry, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAux::is_empty	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAux::new	run_loop	# called by InterpreterFrameAuxStack::with_suspended, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAuxStack::current_mut	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAuxStack::into_suspended	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAuxStack::restore_current	run_loop	# inlined in run_loop but called out of line in run_loop: no single attribute matches both
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAuxStack::suspend_current	run_loop	# inlined in run_loop but called out of line in run_loop: no single attribute matches both
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAuxStack::take_entry	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFrameAuxStack::with_suspended	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterStackPool::give_back	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterStackPool::give_back_after_push	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterStackPool::take	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	PreparedInterpreterCallee::new	run_loop	# called by Vm::dispatch_interpreter_stack_call, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::execute_from_stack_args	run_loop	# called at the protected site, inlined at 7 other sites: never would re-tune them
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::vm_profile_classify_call	run_loop	# compiled only with the vm-profile diagnostics feature, absent from shipping builds
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::vm_profile_classify_varref	run_loop	# compiled only with the vm-profile diagnostics feature, absent from shipping builds
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::with_bytecode_call_depth	run_loop	# inlined at the protected site, called out of line by 3 other functions: always would re-tune them
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::with_frame_roots	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/bytecode/vm.rs	fixnum_tagged_i64	run_loop	# called by fixnum_ge, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	lexenv_tail_reachable	run_loop	# called by Vm::complete_interpreter_frame_value, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	observe_iterative_context_bc_frames_len	run_loop	# called by Vm::install_iterative_interpreter_frame, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	sym_id_at	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/error/flow_word.rs	Flow::is_signal	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/error/mod.rs	Flow::throw	run_loop	# called at the protected site, inlined at 10 other sites: never would re-tune them
+exempt	emacs_core/runtime/error/mod.rs	LispCondition::name	run_loop,funcall_general_untraced	# called by <LispCondition as IntoConditionSym>::condition_sym, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/error/mod.rs	signal	run_loop,funcall_general_untraced	# inlined at the protected site, called out of line by 133 other functions: always would re-tune them
+exempt	emacs_core/runtime/eval/apply.rs	Context::backtrace_frame_wants_debug_on_exit	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/apply.rs	Context::pop_bytecode_backtrace_token_fast_or_slow	run_loop	# called at the protected site, inlined at 2 other sites: never would re-tune them
+exempt	emacs_core/runtime/eval/apply.rs	Context::pop_vm_root_frame	run_loop,builtin_mapcar_2,builtin_mapc_2	# inlined at the protected site, called out of line by 1 other functions: always would re-tune them
+exempt	emacs_core/runtime/eval/apply.rs	Context::push_vm_frame_root	run_loop,builtin_mapcar_2,builtin_mapc_2,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/apply.rs	Context::push_vm_root_frame	run_loop,builtin_mapcar_2,builtin_mapc_2,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/apply.rs	Context::record_native_unwind	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/apply.rs	Context::restore_vm_frame_roots	run_loop,builtin_mapcar_2,builtin_mapc_2,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/apply.rs	Context::restore_vm_roots	run_loop,builtin_mapcar_2,builtin_mapc_2	# inlined at the protected site, called out of line by 1 other functions: always would re-tune them
+exempt	emacs_core/runtime/eval/apply.rs	Context::save_vm_roots	run_loop,builtin_mapcar_2,builtin_mapc_2	# inlined at the protected site, called out of line by 1 other functions: always would re-tune them
+exempt	emacs_core/runtime/eval/apply.rs	Context::unbind_to_with_result	run_loop	# inlined at the protected site, called out of line by 16 other functions: always would re-tune them
+exempt	emacs_core/runtime/eval/apply.rs	Context::with_unwind_scope	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/attention.rs	Context::assert_attention_is_derived	run_loop,apply1,MapCallee::call	# called by Context::attention_clear, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/eval/mod.rs	Context::try_set_plain_variable	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/mod.rs	SpecBinding::save_restriction	run_loop	# inlined at the protected site, called out of line by 1 other functions: always would re-tune them
+exempt	emacs_core/runtime/eval/mod.rs	inline_subr	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/runtime_projection.rs	Context::runtime_binding_has_projection	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/signal_dispatch.rs	Context::pop_condition_frame	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/signal_dispatch.rs	Context::push_condition_frame	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/specpdl.rs	Context::specbind_resolved	run_loop	# called at the protected site, inlined at 27 other sites: never would re-tune them
+exempt	emacs_core/runtime/eval/specpdl.rs	Context::try_specbind	run_loop	# inlined at the protected site, called out of line by 10 other functions: always would re-tune them
+exempt	emacs_core/runtime/forward/mod.rs	LispBoolFwd::get	run_loop,apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/intern/mod.rs	intern	run_loop,funcall_general_untraced	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/intern/mod.rs	resolve_sym	run_loop	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/mod.rs	<Runtime as Deref>::deref	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/mod.rs	RuntimeState::note_loop_work	run_loop	# inlined in run_loop but called out of line in run_loop: no single attribute matches both
+exempt	emacs_core/runtime/jit/mod.rs	hot_threshold	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/mod.rs	jit_forced_off_for_test	run_loop	# called by jit_runtime_enabled, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/jit/mod.rs	jit_osr_on	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/mod.rs	jit_runtime_enabled	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/mod.rs	loop_heat_per_wrap	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/symbol/mod.rs	Obarray::slot_index	run_loop	# called by Obarray::set_plain_untrapped_value_id, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/symbol/mod.rs	note_plain_value_slot_visit	run_loop	# called by Obarray::set_plain_untrapped_value_id, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/value/mod.rs	<&str as IntoSymbol>::into_symbol	run_loop,funcall_general_untraced	# inlined at the protected site, called out of line by 5 other functions: always would re-tune them
+exempt	emacs_core/runtime/value/mod.rs	HashTableStorage::pending_entries	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/value/mod.rs	LispHashTable::needs_hydration	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/value/mod.rs	TaggedValue::as_hash_table	run_loop	# inlined at the protected site, called out of line by 4 other functions: always would re-tune them
+exempt	emacs_core/runtime/value/mod.rs	TaggedValue::cons	run_loop	# inlined at the protected site, called out of line by 21 other functions: always would re-tune them
+exempt	emacs_core/runtime/value/mod.rs	TaggedValue::get_bytecode_data	run_loop,apply1,funcall_general_untraced	# inlined at the protected site, called out of line by 9 other functions: always would re-tune them
+exempt	emacs_core/runtime/value/mod.rs	TaggedValue::make_bytecode	run_loop	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
+exempt	emacs_core/runtime/value/mod.rs	TaggedValue::symbol	run_loop,funcall_general_untraced	# inlined at the protected site, called out of line by 11 other functions: always would re-tune them
+exempt	emacs_core/runtime/value/mod.rs	eq_value_swp	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	tagged/collection_reads.rs	observe	run_loop,apply1,funcall_general_untraced,builtin_mapcar_2,builtin_mapc_2,mapcar1_with_callee,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	tagged/collection_reads.rs	reads_need_observation	run_loop,builtin_mapcar_2,builtin_mapc_2,mapcar1_with_callee,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	tagged/gc/allocation.rs	TaggedHeap::list_from_slice	run_loop,apply1,builtin_mapcar_2	# inlined in builtin_mapcar_2, run_loop but called out of line in apply1: no single attribute matches both
+exempt	tagged/gc/gc_thread.rs	with_tagged_heap	run_loop,builtin_mapcar_2	# inlined at the protected site, called out of line by 1 other functions: always would re-tune them
+exempt	tagged/header.rs	<LispByteVec as Deref>::deref	run_loop,apply1,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	tagged/header.rs	<LispValueVec as Deref>::deref	run_loop,apply1,run_armed_leaf,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	tagged/header.rs	LispByteVec::as_slice	run_loop,apply1,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	tagged/header.rs	LispValueVec::as_slice	run_loop,apply1,run_armed_leaf,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	tagged/header.rs	store_value_atomic	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	tagged/value.rs	TaggedValue::as_symbol_with_pos	run_loop,funcall_general_untraced	# inlined at the protected site, called out of line by 3 other functions: always would re-tune them
+exempt	tagged/value.rs	TaggedValue::as_symbol_with_pos_sym	run_loop,funcall_general_untraced,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	tagged/value.rs	TaggedValue::is_hash_table	run_loop	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
+exempt	tagged/value.rs	TaggedValue::is_number	run_loop	# inlined at the protected site, called out of line by 1 other functions: always would re-tune them
+exempt	tagged/value.rs	TaggedValue::is_symbol_with_pos	run_loop,funcall_general_untraced	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
+exempt	tagged/value.rs	TaggedValue::is_t	run_loop,funcall_general_untraced,mapcar1_with_callee	# called by TaggedValue::kind, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	tagged/value.rs	TaggedValue::is_unbound	run_loop,funcall_general_untraced,mapcar1_with_callee	# called by TaggedValue::kind, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	tagged/value.rs	TaggedValue::tag	run_loop,funcall_general_untraced,mapcar1_with_callee	# called by TaggedValue::kind, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+never	emacs_core/runtime/jit/cache.rs	run_armed_leaf	root,apply1
+never	emacs_core/runtime/bytecode/vm.rs	Vm::execute_with_func_value	apply1
+never	emacs_core/runtime/debug_on_call/mod.rs	Context::arm_for_specpdl_top	apply1,MapCallee::call
+never	emacs_core/runtime/debug_on_call/mod.rs	Context::do_debug_on_call	apply1,MapCallee::call
+never	emacs_core/runtime/eval/apply.rs	Context::apply1_bytecode_entry_slow	apply1
+never	emacs_core/runtime/eval/apply.rs	Context::apply1_bytecode_probing_stack	apply1
+never	emacs_core/runtime/eval/apply.rs	Context::apply_internal	apply1
+never	emacs_core/runtime/eval/apply.rs	Context::finish_traced_call_slow	apply1,MapCallee::call
+never	emacs_core/runtime/eval/apply.rs	restore_failed_callback_roots	apply1
+never	emacs_core/runtime/eval/command_loop.rs	Context::gc_collect_from_current_roots_body	apply1,MapCallee::call
+never	emacs_core/runtime/eval/command_loop.rs	Context::gc_safe_point_exact_should_collect_slow	apply1,MapCallee::call
+never	emacs_core/runtime/eval/gc_pacing.rs	Context::setup_thread_locals	apply1,MapCallee::call
+never	emacs_core/runtime/eval/tree_walk.rs	Context::enter_interpreted_eval_depth_slow	apply1,MapCallee::call
+never	emacs_core/runtime/jit/cache.rs	resolve_compiled_leaf_ptr	apply1
+never	emacs_core/runtime/jit/cache.rs	try_run_compiled	apply1
+never	emacs_core/runtime/jit/mod.rs	retier_heat_init	apply1
+never	emacs_core/runtime/jit/stats.rs	record_dispatch_enabled	apply1
+never	emacs_core/runtime/jit/stats.rs	summary_enabled_first_read	apply1,run_armed_leaf
+never	emacs_core/runtime/symbol/mod.rs	Obarray::debug_on_next_call_bool_fwd_slow	apply1,MapCallee::call
+never	emacs_core/system/profiler/mod.rs	Context::profiler_gc_finish	apply1,MapCallee::call
+never	emacs_core/system/profiler/mod.rs	Context::profiler_poll_sample	apply1,MapCallee::call
+always	emacs_core/runtime/bytecode/vm.rs	VmProcessKnobs::get	apply1,inline
+always	emacs_core/runtime/eval/apply.rs	Context::execute_bytecode_call_1	apply1,inline
+always	emacs_core/runtime/eval/apply.rs	Context::execute_bytecode_call_dispatched	apply1,inline
+always	emacs_core/runtime/eval/apply.rs	Context::finish_traced_call	apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/apply.rs	Context::push_backtrace_frame	apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/apply.rs	Context::try_unbind_trivial_to	apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/command_loop.rs	Context::gc_safe_point_exact_should_collect	apply1,MapCallee::call,inline
+always	emacs_core/runtime/eval/tree_walk.rs	Context::enter_interpreted_eval_depth	apply1,MapCallee::call,inline
+always	emacs_core/runtime/jit/cache.rs	leaf_slot_epoch	apply1,inline
+always	emacs_core/runtime/jit/compile/leaf.rs	CompiledLeaf::accepts	apply1,inline
+always	emacs_core/runtime/jit/mod.rs	RuntimeState::arm_leaf_slot	apply1,inline
+always	emacs_core/runtime/jit/mod.rs	RuntimeState::bump_heat	apply1,inline
+always	emacs_core/runtime/jit/stats.rs	record_dispatch	apply1,inline
+always	emacs_core/runtime/jit/stats.rs	summary_enabled	apply1,run_armed_leaf,inline
+always	emacs_core/runtime/symbol/mod.rs	Obarray::debug_on_next_call_bool_fwd_cached	apply1,MapCallee::call,inline
+always	tagged/gc.rs	TaggedHeap::bytes_since_gc	apply1,MapCallee::call,inline
+always	tagged/gc.rs	TaggedHeap::should_collect	apply1,MapCallee::call,inline
+always	tagged/gc/gc_thread.rs	tagged_heap_is_current	apply1,MapCallee::call,inline
+exempt	emacs_core/runtime/bytecode/vm.rs	BytecodeTierPolicy::for_process	apply1	# called by VmProcessKnobs::get, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::from_context	apply1,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/debug_on_call/mod.rs	Context::debug_on_next_call_cell	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/debug_on_call/mod.rs	Context::take_debug_on_call_arm	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/debug_on_call/mod.rs	debug_on_next_call_symbol	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/apply.rs	Context::apply	apply1	# inlined at the protected site, called out of line by 10 other functions: always would re-tune them
+exempt	emacs_core/runtime/eval/apply.rs	Context::apply1_bytecode	apply1,mapcar1_with_callee,MapCallee::call	# inlined in apply1 but called out of line in MapCallee::call, mapcar1_with_callee: no single attribute matches both
+exempt	emacs_core/runtime/eval/apply.rs	Context::backtrace_args_from_slice	apply1,MapCallee::call	# called by Context::push_backtrace_frame, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/eval/command_loop.rs	Context::gc_collect_from_current_roots	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/command_loop.rs	Context::gc_collect_from_current_roots_impl	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/mod.rs	push_scratch_gc_root	apply1	# called at the protected site, inlined at 9 other sites: never would re-tune them
+exempt	emacs_core/runtime/eval/mod.rs	restore_scratch_gc_roots	apply1	# inlined at the protected site, called out of line by 5 other functions: always would re-tune them
+exempt	emacs_core/runtime/eval/mod.rs	save_scratch_gc_roots	apply1	# inlined at the protected site, called out of line by 1 other functions: always would re-tune them
+exempt	emacs_core/runtime/forward/mod.rs	LispBoolFwd::is_debug_on_next_call_stand_in	apply1,MapCallee::call	# called by LispBoolFwd::set, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/forward/mod.rs	LispBoolFwd::set	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/cache.rs	arm_leaf_slot	apply1,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/cache.rs	armed_leaf_for_stack_call	apply1,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/cache.rs	note_seam_interp_fallback	apply1,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/mod.rs	RuntimeState::armed_leaf_slot	apply1,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/mod.rs	RuntimeState::dispatch_sized	apply1	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/jit/mod.rs	retier_heat	apply1	# inlined at the protected site, called out of line by 1 other functions: always would re-tune them
+exempt	emacs_core/runtime/symbol/mod.rs	Obarray::debug_on_next_call_bool_fwd	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/system/profiler/mod.rs	Context::profiler_gc_start	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/system/profiler/mod.rs	Context::profiler_poll	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+never	emacs_core/runtime/eval/apply.rs	Context::apply_lambda	funcall_general_untraced
+never	emacs_core/runtime/eval/apply.rs	Context::apply_module_function	funcall_general_untraced
+never	emacs_core/runtime/eval/apply.rs	Context::apply_subr_object	funcall_general_untraced
+never	emacs_core/runtime/eval/apply.rs	Context::execute_bytecode_call	funcall_general_untraced
+never	emacs_core/runtime/eval/mod.rs	Context::apply_symbol_callable_untraced	funcall_general_untraced
+always	emacs_core/lisp/autoload/mod.rs	autoload_symbol_id	funcall_general_untraced,inline
+always	tagged/value.rs	TaggedValue::xsymbol_id	funcall_general_untraced,inline
+exempt	emacs_core/lisp/autoload/mod.rs	is_autoload_value	funcall_general_untraced,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/mod.rs	cons_head_symbol_id	funcall_general_untraced,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+generated	emacs_core/runtime/eval/mod.rs	lambda_symbol	funcall_general_untraced	# generated by cached_symbol_id!(lambda_symbol, ...); checked as a macro invocation
+never	emacs_core/runtime/jit/cache.rs	direct_call_cold	run_armed_leaf
+never	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native_outlined	run_armed_leaf
+never	emacs_core/runtime/jit/stats.rs	record_native_entry_enabled	run_armed_leaf
+always	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::jit_constant_base	run_armed_leaf,inline
+always	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native	run_armed_leaf,inline
+always	emacs_core/runtime/jit/compile/leaf.rs	CompiledLeaf::entry_call_raw_memory	run_armed_leaf,inline
+always	emacs_core/runtime/jit/stats.rs	record_native_entry	run_armed_leaf,inline
+exempt	emacs_core/runtime/jit/cache.rs	count_native_status	run_armed_leaf	# called by run_resolved_leaf_native, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+never	emacs_core/lisp/native/builtins/higher_order.rs	mapcar1_with_callee	root,builtin_mapcar_2,builtin_mapc_2
+never	emacs_core/lisp/native/builtins/higher_order.rs	map_sequence_length	builtin_mapcar_2,builtin_mapc_2
+never	emacs_core/runtime/eval/apply.rs	Context::reserve_vm_frame_root_slots	builtin_mapcar_2
+never	emacs_core/runtime/eval/apply.rs	Context::resolve_mapped_subr_callee	builtin_mapcar_2,builtin_mapc_2
+always	emacs_core/runtime/eval/apply.rs	Context::vm_frame_root_slots	builtin_mapcar_2,inline
+always	emacs_core/runtime/value/mod.rs	TaggedValue::is_bytecode	builtin_mapcar_2,builtin_mapc_2,inline
+exempt	emacs_core/lisp/native/builtins/higher_order.rs	MapCallee::resolve	builtin_mapcar_2,builtin_mapc_2,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/value/mod.rs	TaggedValue::list_from_slice	builtin_mapcar_2,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+never	emacs_core/lisp/native/builtins/higher_order.rs	MapCallee::call	root,mapcar1_with_callee
+never	emacs_core/lisp/native/builtins/higher_order.rs	MapSink::store	mapcar1_with_callee
+never	emacs_core/lisp/native/builtins/higher_order.rs	map_sequence_element	mapcar1_with_callee
+never	emacs_core/runtime/eval/callback.rs	Context::apply_checked_subr	mapcar1_with_callee
+always	emacs_core/runtime/eval/apply.rs	Context::apply1_bytecode_unobserved	mapcar1_with_callee,MapCallee::call,inline
+always	emacs_core/runtime/eval/callback.rs	Context::apply1_checked_subr	mapcar1_with_callee,inline
+always	emacs_core/runtime/eval/callback.rs	native_callback_cache_enabled	mapcar1_with_callee,inline
+always	emacs_core/runtime/eval/mod.rs	subr_call_entry_from_value	mapcar1_with_callee,inline
+always	tagged/header.rs	ConsCell::cdr	mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::cons_car_unobserved	mapcar1_with_callee,inline
+always	tagged/value.rs	TaggedValue::cons_cdr_unobserved	mapcar1_with_callee,inline
+exempt	emacs_core/lisp/native/builtins/higher_order.rs	mapcar1_eval	mapcar1_with_callee,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/lisp/native/builtins/higher_order.rs	mapcar1_eval_from	mapcar1_with_callee,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/lisp/native/builtins/higher_order.rs	mapcar1_eval_from_with_reads	mapcar1_with_callee,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/apply.rs	Context::push_vm_frame_root_slot	mapcar1_with_callee,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/apply.rs	Context::set_vm_frame_root_slot	mapcar1_with_callee,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/callback.rs	CheckedNativeCallback::resolve	mapcar1_with_callee,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+never	emacs_core/runtime/eval/apply.rs	Context::apply1	root,MapCallee::call
+never	emacs_core/runtime/eval/native_stack.rs	grow_tracking_jit_limit	MapCallee::call
+always	emacs_core/lisp/native/builtins/higher_order.rs	apply1	MapCallee::call,inline
+always	emacs_core/runtime/eval/native_stack.rs	maybe_grow_tracking_jit_limit	MapCallee::call,inline
+exempt	emacs_core/runtime/eval/apply.rs	Context::apply1_resolved_subr	MapCallee::call,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/command_loop.rs	Context::maybe_quit_before_gc	MapCallee::call,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/eval/mod.rs	Context::maybe_grow_eval_stack	MapCallee::call	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
+never	emacs_core/lisp/native/builtins/higher_order.rs	builtin_mapc_2	root
+never	emacs_core/lisp/native/builtins/higher_order.rs	builtin_mapcar_2	root
+never	emacs_core/runtime/bytecode/vm.rs	Vm::run_loop	root
+exempt	emacs_core/runtime/eval/apply.rs	Context::funcall_general_untraced	root	# protected function, but also inlined at one other site; #[inline(never)] would change that caller
+exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFunction::new	Vm::run_loop	# called by Vm::run_loop, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	RunLoopDepthGuard::enter	Vm::run_loop	# called by Vm::run_loop, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::cons_car_observed	run_loop	# intentional collection-capture slow path; retain #[cold] and #[inline(never)]; the new boundary awaits the lead's protected fat-build comparison
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::cons_cdr_observed	run_loop	# intentional collection-capture slow path; retain #[cold] and #[inline(never)]; the new boundary awaits the lead's protected fat-build comparison
+exempt	tagged/value.rs	TaggedValue::from_fixnum	run_loop,inline	# validated-domain constructor introduced after the reference census; retain #[inline]; extending the pinned subset requires protected pre-LTO comparisons
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::unbind_frame_target	run_loop,inline	# new frame-owned unbind helper outside the reference protected census; retain existing #[inline(always)]; pinning awaits the lead's protected fat-build comparison
+
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::finish_live_bytecode_depth_overflow	run_loop	# GNU rejected-depth dispatch publishes live operands; cold boundary pending a new protected census
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::bytecode_depth_exceeded_published	run_loop	# GNU depth dispatch with already-published operands; cold boundary pending a new protected census
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::check_live_bytecode_call_depth	run_loop	# Scalar depth rejection precedes signal allocation; cold boundary pending a new protected census
+exempt	window/mod.rs	FrameManager::selected_window	run_loop,inline	# new selected-window capture helper outside the reference census; fuse its bounded singleton read into the recorder; body remains scanned and lead fat comparison is required

@@ -355,4 +355,5 @@ pub struct RunArtifact {
 }
 
 #[cfg(test)]
+#[path = "artifact/tests/artifact_test.rs"]
 mod tests;

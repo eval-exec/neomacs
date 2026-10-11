@@ -1,0 +1,39 @@
+error[E0277]: `*const ()` cannot be shared between threads safely
+ --> tests/thread_safety_ui/raw_value_static_cache.rs:5:15
+  |
+5 | static CACHE: OnceLock<TaggedValue> = OnceLock::new();
+  |               ^^^^^^^^^^^^^^^^^^^^^ `*const ()` cannot be shared between threads safely
+  |
+  = help: within `TaggedValue`, the trait `Sync` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `TaggedValue`
+ --> src/tagged/value.rs
+  |
+  | pub struct TaggedValue(pub(crate) usize, ThreadConfined);
+  |            ^^^^^^^^^^^
+  = note: required for `OnceLock<TaggedValue>` to implement `Sync`
+  = note: shared static variables must have a type that implements `Sync`
+
+error[E0277]: `*const ()` cannot be sent between threads safely
+ --> tests/thread_safety_ui/raw_value_static_cache.rs:5:15
+  |
+5 | static CACHE: OnceLock<TaggedValue> = OnceLock::new();
+  |               ^^^^^^^^^^^^^^^^^^^^^ `*const ()` cannot be sent between threads safely
+  |
+  = help: within `TaggedValue`, the trait `Send` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `TaggedValue`
+ --> src/tagged/value.rs
+  |
+  | pub struct TaggedValue(pub(crate) usize, ThreadConfined);
+  |            ^^^^^^^^^^^
+  = note: required for `OnceLock<TaggedValue>` to implement `Sync`
+  = note: shared static variables must have a type that implements `Sync`

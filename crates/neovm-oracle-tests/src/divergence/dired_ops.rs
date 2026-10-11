@@ -8,6 +8,24 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[cfg(all(test, unix))]
+mod count_nil;
+
+#[cfg(all(test, unix))]
+mod count_zero_open;
+
+#[cfg(all(test, unix))]
+mod directory_error_data;
+
+#[cfg(all(test, unix))]
+mod streaming_quit;
+
+#[cfg(all(test, unix))]
+mod attribute_failures;
+
+#[cfg(all(test, unix))]
+mod readdir_order;
+
 macro_rules! diredt {
     ($name:ident, $body:expr) => {
         #[test]

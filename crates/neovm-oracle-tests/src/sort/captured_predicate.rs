@@ -3,12 +3,8 @@
 //! `NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`.
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-const BOTH: &[&[(&str, &str)]] = &[
-    &[("NEOVM_SORT_CAPTURE", "off")],
-    &[("NEOVM_SORT_CAPTURE", "on")],
-];
-// Off retains pre-existing symbol re-resolution during the current sort.
-const CAPTURED: &[&[(&str, &str)]] = &[&[("NEOVM_SORT_CAPTURE", "on")]];
+const BOTH: &[&[(&str, &str)]] = &[&[("NEOVM_JIT", "0")], &[]];
+const CAPTURED: &[&[(&str, &str)]] = BOTH;
 
 #[test]
 fn oracle_sort_capture_aliases_and_string_representations() {

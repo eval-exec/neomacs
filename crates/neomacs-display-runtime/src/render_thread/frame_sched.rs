@@ -121,98 +121,102 @@ pub(crate) enum Cadence {
     At(EventTime),
 }
 
-/// Declares [`DemandReason`] and everything indexed by it from a single list.
-/// The variant set, `ALL`, `COUNT` and `name` all come from these lines, so a
-/// new reason is one line and cannot leave a hand-maintained table behind.
-macro_rules! demand_reasons {
-    ($(
-        $(#[$variant_meta:meta])*
-        $variant:ident => $name:literal,
-    )+) => {
-        /// Why a frame is wanted. Diagnostic identity, not policy encoded as
-        /// strings. Deadline demands are keyed by this, so each reason holds at
-        /// most one scheduled deadline per window.
-        // Interface variants/fields defined by the scheduling plan; consumed as
-        // later stages migrate effects onto the coordinator.
-        #[allow(dead_code)]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-        pub(crate) enum DemandReason {
-            $($(#[$variant_meta])* $variant,)+
-        }
-
-        impl DemandReason {
-            /// Every reason, in declaration order. The order is the
-            /// counter/report order and matches the derived `Ord`.
-            pub(crate) const ALL: [DemandReason; Self::COUNT] =
-                [$(DemandReason::$variant,)+];
-
-            /// Number of reasons: the width of [`DemandReason::ALL`] and of
-            /// every per-reason counter array.
-            pub(crate) const COUNT: usize = [$(DemandReason::$variant,)+].len();
-
-            /// Stable snake_case name for diagnostics output.
-            pub(crate) const fn name(self) -> &'static str {
-                match self {
-                    $(DemandReason::$variant => $name,)+
-                }
-            }
-        }
-    };
-}
-
-demand_reasons! {
-    EditorCommit => "editor_commit",
-    CursorAnimation => "cursor_animation",
+/// Why a frame is wanted. Diagnostic identity, not policy encoded as
+/// strings. Deadline demands are keyed by this, so each reason holds at
+/// most one scheduled deadline per window.
+// Interface variants/fields defined by the scheduling plan; consumed as
+// later stages migrate effects onto the coordinator.
+#[allow(dead_code)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    enumset::EnumSetType,
+    enum_map::Enum,
+    strum::EnumCount,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[enumset(no_super_impls, no_ops)]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum DemandReason {
+    EditorCommit,
+    CursorAnimation,
     /// Infinite ambient compositor-only demand: the cursor color cycle
     /// (Stage 3 tracer bullet). Distinct from CursorAnimation so its MaxRate
     /// phase anchor cannot collide with the blink deadline.
-    CursorColorCycle => "cursor_color_cycle",
-    FiniteEffect => "finite_effect",
-    Transition => "transition",
+    CursorColorCycle,
+    FiniteEffect,
+    Transition,
     /// Panes travelling between two layouts. Distinct from `Transition`, which
     /// is a cross-presentation content effect: a morph changes where the panes
     /// are drawn, so it needs frames even when the content is unchanged and
     /// nothing else on screen is moving.
-    PaneMotion => "pane_motion",
+    PaneMotion,
     /// A child frame travelling through its lifecycle: a popup fading in or
     /// out, drifting to a new anchor. Distinct from `PaneMotion` (which is
     /// whole-layout tiling morphs) so diagnostics can answer why a popup is
     /// still being redrawn after its parent's layout has settled.
-    ChildFrameMotion => "child_frame_motion",
-    Video => "video",
-    WebKit => "webkit",
+    ChildFrameMotion,
+    Video,
+    Webkit,
     /// Animated shader surfaces visible in a composited frame
     /// (docs/display-engine/SHADER_SURFACES.md).
-    ShaderSurface => "shader_surface",
+    ShaderSurface,
     /// Installed full-frame post shader whose time uniforms require a fresh
     /// composite even when the editor scene is unchanged.
-    FrameShader => "frame_shader",
-    Terminal => "terminal",
-    Expose => "expose",
+    FrameShader,
+    Terminal,
+    Expose,
     /// A tick the coordinator did not ask for: the platform invalidated the
     /// surface (expose, resize, first map) or a runtime recovery path called
     /// request_redraw on the window directly. Distinct from Expose, which
     /// attributes the coordinator's own re-queue of work a present failed to
     /// deliver.
-    PlatformRedraw => "platform_redraw",
-    DebugCapture => "debug_capture",
+    PlatformRedraw,
+    DebugCapture,
     /// New editor content or blink toggle needing a repaint.
-    Redisplay => "redisplay",
+    Redisplay,
     /// Render-effect families (Stage 6). Each names the group animating so
     /// diagnostics can answer "why is this window still rendering?" without
     /// per-effect logging.
-    CursorEffect => "cursor_effect",
-    WindowEffect => "window_effect",
-    TextEffect => "text_effect",
-    ScrollEffect => "scroll_effect",
-    DecorativeEffect => "decorative_effect",
-    TransientEffect => "transient_effect",
+    CursorEffect,
+    WindowEffect,
+    TextEffect,
+    ScrollEffect,
+    DecorativeEffect,
+    TransientEffect,
 }
 
 impl DemandReason {
+    /// Number of reasons: the width of every per-reason counter array.
+    pub(crate) const COUNT: usize = <Self as strum::EnumCount>::COUNT;
+
+    /// Every reason, in declaration order. Preserve the fixed-size array API
+    /// while deriving the variant list from the enum.
+    pub(crate) const ALL: [Self; Self::COUNT] = {
+        let variants = <Self as strum::VariantArray>::VARIANTS;
+        let mut all = [variants[0]; Self::COUNT];
+        let mut i = 0;
+        while i < Self::COUNT {
+            all[i] = variants[i];
+            i += 1;
+        }
+        all
+    };
+
+    /// Stable diagnostic name, available in constant expressions.
+    pub(crate) const fn name(self) -> &'static str {
+        <Self as strum::VariantNames>::VARIANTS[self.index()]
+    }
+
     /// Index into [`DemandReason::ALL`] / the per-reason counter arrays. The
     /// enum is fieldless with default discriminants, so the cast is the
-    /// declaration position, which is `ALL`'s order by construction; density is
+    /// declaration position, matching the derived variant/name order; density is
     /// pinned by `demand_reason_indices_are_dense`.
     pub(crate) const fn index(self) -> usize {
         self as usize
@@ -221,43 +225,8 @@ impl DemandReason {
 
 /// Set of [`DemandReason`]s, carried by value on a [`FramePlan`] so a frame can
 /// be attributed to what asked for it ("why did this present happen?").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct DemandReasonSet(u32);
-
-impl DemandReasonSet {
-    pub(crate) const fn empty() -> Self {
-        DemandReasonSet(0)
-    }
-
-    fn insert(&mut self, reason: DemandReason) {
-        self.0 |= 1 << reason.index();
-    }
-
-    pub(crate) fn contains(self, reason: DemandReason) -> bool {
-        self.0 & (1 << reason.index()) != 0
-    }
-
-    pub(crate) fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-
-    /// Reasons in [`DemandReason::ALL`] order.
-    pub(crate) fn iter(self) -> impl Iterator<Item = DemandReason> {
-        DemandReason::ALL
-            .into_iter()
-            .filter(move |r| self.contains(*r))
-    }
-}
-
-impl FromIterator<DemandReason> for DemandReasonSet {
-    fn from_iter<I: IntoIterator<Item = DemandReason>>(iter: I) -> Self {
-        let mut set = DemandReasonSet::empty();
-        for reason in iter {
-            set.insert(reason);
-        }
-        set
-    }
-}
+/// Iteration follows declaration order, matching [`DemandReason::ALL`].
+pub(crate) type DemandReasonSet = enumset::EnumSet<DemandReason>;
 
 /// A declaration that pixels need to change, with reason, scope, and cadence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

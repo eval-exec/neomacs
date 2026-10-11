@@ -74,13 +74,47 @@ fn oversize_refusal_is_word_for_word_gnu() {
 /// name as a literal, and `native-image` is spelled with a dash.
 #[test]
 fn declared_types_map_to_gnus_spelling() {
-    assert_eq!(ImageFormatName::from_lisp_type("png").as_str(), "PNG");
-    assert_eq!(ImageFormatName::from_lisp_type("jpeg").as_str(), "JPEG");
-    assert_eq!(
-        ImageFormatName::from_lisp_type("native-image").as_str(),
-        "NATIVE-IMAGE"
-    );
-    assert_eq!(ImageFormatName::from_lisp_type("bmp").as_str(), "bmp");
+    for (symbol, format, diagnostic_name) in [
+        ("png", ImageFormatName::Png, "PNG"),
+        ("jpeg", ImageFormatName::Jpeg, "JPEG"),
+        ("gif", ImageFormatName::Gif, "GIF"),
+        ("tiff", ImageFormatName::Tiff, "TIFF"),
+        ("xpm", ImageFormatName::Xpm, "XPM"),
+        ("xbm", ImageFormatName::Xbm, "XBM"),
+        ("pbm", ImageFormatName::Pbm, "PBM"),
+        ("webp", ImageFormatName::Webp, "WEBP"),
+        ("svg", ImageFormatName::Svg, "SVG"),
+        ("imagemagick", ImageFormatName::Imagemagick, "IMAGEMAGICK"),
+        ("postscript", ImageFormatName::Postscript, "POSTSCRIPT"),
+        ("native-image", ImageFormatName::NativeImage, "NATIVE-IMAGE"),
+    ] {
+        assert_eq!(ImageFormatName::from_lisp_type(symbol), format);
+        assert_eq!(ImageFormatName::from(symbol), format);
+        assert_eq!(format.as_str(), diagnostic_name);
+        assert_eq!(format.to_string(), diagnostic_name);
+    }
+}
+
+#[test]
+fn unknown_image_type_names_are_preserved_without_normalization() {
+    for symbol in [
+        "bmp",
+        "PNG",
+        "Png",
+        "NativeImage",
+        "native_image",
+        " png",
+        "png ",
+        "other",
+        "",
+        "未知",
+    ] {
+        let format = ImageFormatName::from_lisp_type(symbol);
+        assert_eq!(format, ImageFormatName::Other(symbol.to_owned()));
+        assert_eq!(ImageFormatName::from(symbol), format);
+        assert_eq!(format.as_str(), symbol);
+        assert_eq!(format.to_string(), symbol);
+    }
 }
 
 /// Only PNG and PBM have a `Not a <TYPE> file:` arm in GNU; a loader that has

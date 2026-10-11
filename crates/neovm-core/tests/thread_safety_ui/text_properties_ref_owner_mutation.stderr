@@ -1,0 +1,9 @@
+error[E0502]: cannot borrow `string` as mutable because it is also borrowed as immutable
+ --> tests/thread_safety_ui/text_properties_ref_owner_mutation.rs:6:5
+  |
+5 |     let properties = string.intervals();
+  |                      ------ immutable borrow occurs here
+6 |     string.clear_intervals();
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+7 |     assert!(properties.is_empty());
+  |             ---------- immutable borrow later used here

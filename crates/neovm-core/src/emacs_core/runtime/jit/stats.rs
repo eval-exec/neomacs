@@ -753,7 +753,7 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
 /// Split gate/body: the gate is called once per JIT call on the direct-entry
 /// seam, so it must inline into the caller as a load and a branch instead of
 /// costing a call frame to discover the counters are off.
-#[inline]
+#[inline(always)]
 pub(crate) fn record_dispatch(said_compiled: bool) {
     if summary_enabled() {
         record_dispatch_enabled(said_compiled);
@@ -805,7 +805,7 @@ pub(crate) fn record_retier() {
 /// Separate from `record_compile` on purpose: a compile is a cost, an entry is
 /// the only thing that can repay it, and the two had no relationship in the
 /// stats until this existed.
-#[inline]
+#[inline(always)]
 pub(crate) fn record_native_entry() {
     if summary_enabled() {
         record_native_entry_enabled();
@@ -901,6 +901,9 @@ pub(crate) fn naming_enabled() -> bool {
 /// thread-local compile aggregates and caches. Read-only on `ctx`: no
 /// interning, no Lisp allocation, no safepoint.
 pub fn report_at_exit(ctx: &crate::emacs_core::eval::Context) {
+    front_diag::flush_at_exit();
+    exit_snapshot::report_at_exit(&STATS.with(Cell::get));
+    super::compile::opt_report::report_at_exit();
     inline_census::report_at_exit(ctx);
     if !report_requested() {
         return;
@@ -1145,6 +1148,8 @@ pub(crate) fn reset_compile_stats() {
 pub(crate) mod asm_dump;
 pub(crate) mod calls;
 pub(crate) mod epoch;
+pub(crate) mod exit_snapshot;
+pub(crate) mod front_diag;
 pub(crate) mod inline_census;
 pub(crate) mod perf_map;
 pub(crate) mod phases;

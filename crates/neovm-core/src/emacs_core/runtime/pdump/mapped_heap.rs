@@ -78,21 +78,30 @@ pub(crate) struct MappedHeapView {
 }
 
 /// See [`MappedHeapView::value_word_batch`].
+///
+/// `max` is the last complete value word's offset, or None when the view
+/// contains no complete word. Raw pointers confine this view to its loading
+/// thread; it cannot be sent to or shared with another mutator.
+#[derive(Debug)]
 pub(crate) struct ValueWordBatch {
     ptr: *mut u8,
-    max: usize,
+    max: Option<usize>,
 }
+static_assertions::assert_not_impl_any!(ValueWordBatch: Send, Sync);
 
 impl ValueWordBatch {
+    /// Return a complete value-word pointer at an aligned offset. Reject short views and
+    /// offsets outside the mapped range before doing pointer arithmetic.
     #[inline]
     pub(crate) fn word_ptr(&self, offset: u64) -> Result<*mut usize, DumpError> {
         let start = usize::try_from(offset).map_err(|_| {
             DumpError::ImageFormatError("mapped value fixup offset overflows usize".into())
         })?;
-        if start > self.max {
+        let max = self.max.ok_or(DumpError::MappedHeapTooShort)?;
+        if start > max {
             return Err(DumpError::ImageFormatError(format!(
                 "mapped value fixup at {start} exceeds heap word limit {}",
-                self.max
+                max
             )));
         }
         if start % std::mem::align_of::<TaggedValue>() != 0 {
@@ -101,6 +110,8 @@ impl ValueWordBatch {
                 std::mem::align_of::<TaggedValue>()
             )));
         }
+        // SAFETY: the checked maximum covers a complete value word in the
+        // live mapped view. Readers and writers use unaligned word access.
         Ok(unsafe { self.ptr.add(start).cast::<usize>() })
     }
 }
@@ -450,7 +461,7 @@ impl MappedHeapView {
         }
         Ok(ValueWordBatch {
             ptr: self.ptr,
-            max: self.len.saturating_sub(std::mem::size_of::<TaggedValue>()),
+            max: self.len.checked_sub(std::mem::size_of::<TaggedValue>()),
         })
     }
 
@@ -463,7 +474,11 @@ impl MappedHeapView {
         let start = usize::try_from(offset).map_err(|_| {
             DumpError::ImageFormatError("mapped value fixup offset overflows usize".into())
         })?;
-        if start > self.len.saturating_sub(std::mem::size_of::<TaggedValue>()) {
+        let max = self
+            .len
+            .checked_sub(std::mem::size_of::<TaggedValue>())
+            .ok_or(DumpError::MappedHeapTooShort)?;
+        if start > max {
             return Err(DumpError::ImageFormatError(format!(
                 "mapped value fixup at {start} exceeds heap section length {}",
                 self.len
@@ -475,6 +490,8 @@ impl MappedHeapView {
                 std::mem::align_of::<TaggedValue>()
             )));
         }
+        // SAFETY: the checked maximum covers a complete value word in the
+        // live mapped view. Readers and writers use unaligned word access.
         Ok(unsafe { self.ptr.add(start).cast::<usize>() })
     }
 }
@@ -621,14 +638,17 @@ pub(crate) fn rebuild_heap_metadata(heap: &mut DumpTaggedHeap) -> Result<(), Dum
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct BytecodeExtras {
-    pub max_stack: u16,
-    pub n_required: u16,
-    pub n_optional: u16,
+    pub max_stack: u64,
+    pub n_required: u64,
+    pub n_optional: u64,
     pub flags: u16,
+    pub params_kind: u8,
+    pub _pad_params: u8,
     pub rest_sym: u32,
     pub closure_slot_count: u32,
     pub n_extra_slots: u32,
     pub docstring_size: u32,
+    pub _pad0: u32,
     pub docstring_size_byte: i64,
     /// v14: GNU byte-span offset RELATIVE to the owning object's veclike
     /// span offset (0 when absent — presence is BC_FLAG_HAS_GNU, not this
@@ -647,7 +667,46 @@ pub(crate) struct BytecodeExtras {
     pub _pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<BytecodeExtras>() == 96);
+impl BytecodeExtras {
+    /// Validates scalar parameter metadata after image word fixups. Named
+    /// parameters additionally require the bounds-checked symbol-id span.
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub(crate) fn unnamed_params(
+        &self,
+    ) -> Result<Option<crate::emacs_core::bytecode::FunctionParams>, super::DumpError> {
+        use super::types::DumpFunctionParamsKind;
+        use crate::emacs_core::bytecode::FunctionParams;
+        let kind = DumpFunctionParamsKind::try_from(self.params_kind)
+            .map_err(super::DumpError::BytecodeParameterKind)?;
+        match kind {
+            DumpFunctionParamsKind::Named => Ok(None),
+            DumpFunctionParamsKind::Stack | DumpFunctionParamsKind::Dynamic => {
+                if self.n_required != 0
+                    || self.n_optional != 0
+                    || self.flags & BC_FLAG_HAS_REST != 0
+                    || self.flags & BC_FLAG_HAS_ARGLIST == 0
+                {
+                    return Err(super::DumpError::BytecodeParameterShape);
+                }
+                let params = FunctionParams::try_from(crate::emacs_core::value::Value::from_bits(
+                    self.arglist_word as usize,
+                ))
+                .map_err(|_| super::DumpError::BytecodeParameterShape)?;
+                if matches!(
+                    (&params, kind),
+                    (FunctionParams::Stack(_), DumpFunctionParamsKind::Stack)
+                        | (FunctionParams::Dynamic(_), DumpFunctionParamsKind::Dynamic)
+                ) {
+                    Ok(Some(params))
+                } else {
+                    Err(super::DumpError::BytecodeParameterShape)
+                }
+            }
+        }
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<BytecodeExtras>() == 120);
 
 /// Walk every heap-reference word a LAZY bytecode stub's mapped regions
 /// carry, WITHOUT materializing and without allocating: the GC's stub legs
@@ -731,14 +790,87 @@ pub(crate) fn bytecode_extras_len(function: &super::types::DumpByteCodeFunction)
     ) {
         return 0;
     }
-    let ids = function.params.required.len() + function.params.optional.len();
+    let ids = function
+        .params
+        .named()
+        .map_or(0, |params| params.required.len() + params.optional.len());
     let ids_bytes = (ids * 4 + 7) & !7;
     let doc_bytes = function.docstring.as_ref().map_or(0, |doc| doc.data.len());
     std::mem::size_of::<BytecodeExtras>() + ids_bytes + function.extra_slots.len() * 8 + doc_bytes
 }
 
+/// Wire header shared by obarray row writer and reader.
+///
+/// The symbol id is always little endian; the other fields occupy separate
+/// bytes. This immutable, pointer-free descriptor can be shared by mutators;
+/// decoding never depends on native integer byte order. Flag and redirect
+/// accessors reject invalid wire codes before constructing runtime enum values.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct ObarrayRowHead {
+    symbol_id_le: [u8; 4],
+    redirect: u8,
+    trapped_write: u8,
+    interned: u8,
+    declared_special: u8,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<ObarrayRowHead>() == 8);
+    assert!(std::mem::align_of::<ObarrayRowHead>() == 1);
+    assert!(std::mem::offset_of!(ObarrayRowHead, symbol_id_le) == 0);
+    assert!(std::mem::offset_of!(ObarrayRowHead, redirect) == 4);
+    assert!(std::mem::offset_of!(ObarrayRowHead, trapped_write) == 5);
+    assert!(std::mem::offset_of!(ObarrayRowHead, interned) == 6);
+    assert!(std::mem::offset_of!(ObarrayRowHead, declared_special) == 7);
+};
+static_assertions::assert_impl_all!(ObarrayRowHead: Send, Sync);
+
+impl ObarrayRowHead {
+    pub(crate) fn new(id: super::types::DumpSymId, data: &super::types::DumpSymbolData) -> Self {
+        Self {
+            symbol_id_le: id.0.to_le_bytes(),
+            redirect: data.redirect,
+            trapped_write: data.trapped_write,
+            interned: data.interned,
+            declared_special: u8::from(data.declared_special),
+        }
+    }
+
+    pub(crate) fn symbol_id(self) -> super::types::DumpSymId {
+        super::types::DumpSymId(u32::from_le_bytes(self.symbol_id_le))
+    }
+
+    pub(crate) fn redirect(self) -> Result<crate::emacs_core::symbol::SymbolRedirect, DumpError> {
+        crate::emacs_core::symbol::SymbolRedirect::try_from(self.redirect).map_err(DumpError::from)
+    }
+
+    pub(crate) fn trapped_write(
+        self,
+    ) -> Result<crate::emacs_core::symbol::SymbolTrappedWrite, DumpError> {
+        crate::emacs_core::symbol::SymbolTrappedWrite::try_from(self.trapped_write)
+            .map_err(DumpError::from)
+    }
+
+    pub(crate) fn interned(self) -> Result<crate::emacs_core::symbol::SymbolInterned, DumpError> {
+        crate::emacs_core::symbol::SymbolInterned::try_from(self.interned).map_err(DumpError::from)
+    }
+
+    pub(crate) fn declared_special(self) -> Result<bool, DumpError> {
+        match self.declared_special {
+            0 => Ok(false),
+            1 => Ok(true),
+            value => Err(DumpError::InvalidObarrayDeclaredSpecial(value)),
+        }
+    }
+}
+
 /// One fixed obarray symbol row (see `DumpObarray::plain_rows`).
 pub(crate) const OBARRAY_ROW_SIZE: usize = 32;
+const _: () = assert!(
+    OBARRAY_ROW_SIZE
+        == std::mem::size_of::<ObarrayRowHead>() + 3 * std::mem::size_of::<TaggedValue>()
+);
 
 /// The canonical bytes of a pdump stub `ByteCodeFunction` whose extras
 /// region holds `extras_len` slots (`ByteCodeFunction::is_pdump_stub`), built
@@ -794,11 +926,19 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         addr_of_mut!((*p).ops).write(Vec::new());
         addr_of_mut!((*p).ops_sealed).write(true);
         addr_of_mut!((*p).constants).write(Vec::new().into());
-        addr_of_mut!((*p).params.required).write(Vec::new());
-        addr_of_mut!((*p).params.optional).write(Vec::new());
+        // SAFETY: FunctionParams has repr(C, u8), with first variant
+        // Stack's tag equal to zero; ArgTemplate is repr(transparent) i64.
+        // All-zero bytes therefore represent the concrete Stack(0) variant.
+        // Only that variant's payload is read; inactive Named Vec bytes are
+        // never interpreted. Writing bytes keeps inactive payload and padding
+        // deterministic without forming a transient invalid enum reference.
+        std::ptr::write_bytes(
+            addr_of_mut!((*p).params).cast::<u8>(),
+            0,
+            std::mem::size_of::<crate::emacs_core::bytecode::FunctionParams>(),
+        );
         addr_of_mut!((*p).closure_slot_count).write(extras_len);
         addr_of_mut!((*p).extra_slots).write(Vec::new());
-        write_canonical_none(addr_of_mut!((*p).params.rest), None, Option::is_none);
         write_canonical_none(addr_of_mut!((*p).env), None, Option::is_none);
         write_canonical_none(
             addr_of_mut!((*p).gnu_byte_offset_map),
@@ -824,9 +964,13 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         assert_eq!(stub.source_id, 0);
         assert!(!stub.stack_verified);
         assert!(stub.constants.as_slice().is_empty());
-        assert_eq!(stub.max_stack, 0);
-        assert!(stub.params.required.is_empty() && stub.params.optional.is_empty());
-        assert!(stub.params.rest.is_none());
+        assert_eq!(
+            stub.max_stack,
+            crate::emacs_core::bytecode::StackDepth::ZERO
+        );
+        assert!(
+            matches!(stub.params, crate::emacs_core::bytecode::FunctionParams::Stack(template) if template.raw() == 0)
+        );
         assert_eq!(
             stub.arglist.bits(),
             crate::emacs_core::value::Value::NIL.bits()
@@ -1152,6 +1296,7 @@ impl MappedHeapBuilder {
 
     /// Write the obarray symbol rows (see `DumpObarray::plain_rows`). Runs
     /// after `populate_raw_heap_payloads` so `self.bytes` is fully sized.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn populate_obarray_rows(
         &mut self,
         base: usize,
@@ -1161,17 +1306,19 @@ impl MappedHeapBuilder {
         use super::types::{DumpSymbolVal, DumpValue};
         for (i, (sym, data)) in rows.iter().enumerate() {
             let offset = base + i * OBARRAY_ROW_SIZE;
-            let mut head = [0u8; 8];
-            head[..4].copy_from_slice(&sym.0.to_le_bytes());
-            head[4] = data.redirect;
-            head[5] = data.trapped_write;
-            head[6] = data.interned;
-            head[7] = u8::from(data.declared_special);
-            self.write_bytes(offset, &head);
+            let head = ObarrayRowHead::new(*sym, data);
+            self.write_bytes(offset, bytemuck::bytes_of(&head));
             let val = match &data.val {
                 DumpSymbolVal::Plain(v) => v.clone(),
                 DumpSymbolVal::Alias(target) => DumpValue::Symbol(*target),
-                _ => unreachable!("row partition admits only Plain and Alias"),
+                DumpSymbolVal::Localized { .. }
+                | DumpSymbolVal::Forwarded
+                | DumpSymbolVal::BoolForwarded(_)
+                | DumpSymbolVal::IntForwarded(_)
+                | DumpSymbolVal::ObjForwarded(_)
+                | DumpSymbolVal::KboardForwarded(_) => {
+                    unreachable!("row partition admits only Plain and Alias")
+                }
             };
             self.write_dump_value_word(offset + 8, &val, heap);
             self.write_dump_value_word(offset + 16, &data.function, heap);
@@ -1617,6 +1764,7 @@ impl MappedHeapBuilder {
         let (const_rel, const_count) = slots_span.map_or((0i64, 0u32), |span| {
             (span.offset as i64 - obj_offset as i64, span.len as u32)
         });
+        let named_params = function.params.named();
         let mut flags = 0u16;
         if has_gnu {
             flags |= BC_FLAG_HAS_GNU;
@@ -1627,7 +1775,7 @@ impl MappedHeapBuilder {
         if function.ops_sealed {
             flags |= BC_FLAG_OPS_SEALED;
         }
-        if function.params.rest.is_some() {
+        if named_params.is_some_and(|params| params.rest.is_some()) {
             flags |= BC_FLAG_HAS_REST;
         }
         if function.docstring.is_some() {
@@ -1647,13 +1795,18 @@ impl MappedHeapBuilder {
         }
         let header = BytecodeExtras {
             max_stack: function.max_stack,
-            n_required: function.params.required.len() as u16,
-            n_optional: function.params.optional.len() as u16,
+            n_required: named_params.map_or(0, |params| params.required.len() as u64),
+            n_optional: named_params.map_or(0, |params| params.optional.len() as u64),
             flags,
-            rest_sym: function.params.rest.as_ref().map_or(0, |s| s.0),
+            params_kind: function.params.kind().into(),
+            _pad_params: 0,
+            rest_sym: named_params
+                .and_then(|params| params.rest.as_ref())
+                .map_or(0, |s| s.0),
             closure_slot_count: function.closure_slot_count as u32,
             n_extra_slots: function.extra_slots.len() as u32,
             docstring_size: function.docstring.as_ref().map_or(0, |doc| doc.size as u32),
+            _pad0: 0,
             docstring_size_byte: function.docstring.as_ref().map_or(0, |doc| doc.size_byte),
             gnu_rel,
             gnu_len,
@@ -1692,11 +1845,9 @@ impl MappedHeapBuilder {
             }
         }
         let mut cursor = base + std::mem::size_of::<BytecodeExtras>();
-        for id in function
-            .params
-            .required
-            .iter()
-            .chain(function.params.optional.iter())
+        for id in named_params
+            .into_iter()
+            .flat_map(|params| params.required.iter().chain(params.optional.iter()))
         {
             self.write_bytes(cursor, &id.0.to_le_bytes());
             cursor += 4;
@@ -1814,9 +1965,7 @@ fn mapped_heap_ref_target(value: &DumpValue, heap: &DumpTaggedHeap) -> Option<(u
 }
 
 fn veclike_type_from_tag(tag: u8) -> Result<VecLikeType, DumpError> {
-    VecLikeType::try_from(tag).map_err(|_| {
-        DumpError::ImageFormatError(format!("unknown mapped vectorlike type tag {tag}"))
-    })
+    VecLikeType::try_from(tag).map_err(DumpError::from)
 }
 
 fn align_padding(value: usize, align: usize) -> usize {

@@ -14,6 +14,7 @@ impl Context {
         self.condition_stack.pop()
     }
 
+    #[inline(always)]
     pub(crate) fn truncate_condition_stack(&mut self, len: usize) {
         self.condition_stack.truncate(len);
     }
@@ -91,10 +92,12 @@ impl Context {
         index
     }
 
+    #[inline(always)]
     pub(crate) fn condition_stack_len(&self) -> usize {
         self.condition_stack.len()
     }
 
+    #[inline(always)]
     pub(crate) fn allocate_resume_id(&mut self) -> u64 {
         let resume_id = self.next_resume_id;
         self.next_resume_id += 1;
@@ -181,7 +184,19 @@ impl Context {
 
     pub(super) fn dispatch_signal(&mut self, mut sig: SignalData) -> Result<SignalData, Flow> {
         self.run_signal_hook(&sig)?;
+        let original_delivery = sig.delivery();
         sig = self.canonicalize_signal_symbol(sig);
+        if matches!(
+            original_delivery,
+            super::super::error::SignalDelivery::MemoryExhausted(_)
+        ) && matches!(
+            sig.delivery(),
+            super::super::error::SignalDelivery::Ordinary
+        ) {
+            // GNU eval.c:1978-1980 signals a fresh ordinary error when an
+            // OOM descriptor names an undefined condition. Its hook runs.
+            self.run_signal_hook(&sig)?;
+        }
 
         let mut idx = self.condition_stack.len();
         let mut seen_condition_entries = 0usize;
@@ -238,11 +253,17 @@ impl Context {
                         self.push_specpdl_root(*raw);
                     }
 
+                    // GNU eval.c:2016-2030 borrows room while this handler
+                    // runs, and restores it before popping SKIP_CONDITIONS.
+                    let count = self.specpdl.len();
+                    self.ensure_lisp_eval_depth_room(200);
                     self.push_condition_frame(ConditionFrame::SkipConditions {
                         remaining: seen_condition_entries + mute_span,
                     });
 
                     let handler_result = self.apply(handler, vec![make_signal_binding_value(&sig)]);
+                    let handler_result = self.dispatch_signal_result_if_needed(handler_result);
+                    let handler_result = self.unbind_to_with_result(count, handler_result);
 
                     match handler_result.kinded() {
                         Ok(_) => {
@@ -326,27 +347,31 @@ impl Context {
     }
 
     pub(super) fn run_signal_hook(&mut self, sig: &SignalData) -> Result<(), Flow> {
-        if sig.suppress_signal_hook {
-            return Ok(());
+        match sig.delivery() {
+            super::super::error::SignalDelivery::Ordinary => {}
+            super::super::error::SignalDelivery::HookSuppressed
+            | super::super::error::SignalDelivery::MemoryExhausted(_) => return Ok(()),
         }
 
         let hook = self
             .obarray
-            .symbol_value("signal-hook-function")
-            .copied()
+            .symbol_value_copied("signal-hook-function")
             .unwrap_or(Value::NIL);
         if hook.is_nil() {
             return Ok(());
         }
 
-        self.apply(
+        // GNU eval.c:1966-1976 reserves twenty evaluator frames for the hook.
+        let count = self.specpdl.len();
+        self.ensure_lisp_eval_depth_room(20);
+        let result = self.apply(
             hook,
             vec![
                 Value::from_sym_id(sig.symbol),
                 signal_hook_payload_value(sig),
             ],
-        )
-        .map(|_| ())
+        );
+        self.unbind_to_with_result(count, result).map(|_| ())
     }
 
     pub(super) fn canonicalize_signal_symbol(&self, sig: SignalData) -> SignalData {
@@ -368,14 +393,23 @@ impl Context {
             return sig;
         }
 
-        SignalData::new(
+        let delivery = match sig.delivery() {
+            super::super::error::SignalDelivery::MemoryExhausted(_)
+            | super::super::error::SignalDelivery::Ordinary => {
+                super::super::error::SignalDelivery::Ordinary
+            }
+            super::super::error::SignalDelivery::HookSuppressed => {
+                super::super::error::SignalDelivery::HookSuppressed
+            }
+        };
+        SignalData::new_with_delivery(
             error_symbol(),
             vec![
                 Value::string("Invalid error symbol"),
                 Value::from_sym_id(sig.symbol),
             ],
             None,
-            sig.suppress_signal_hook,
+            delivery,
         )
     }
 
@@ -384,9 +418,16 @@ impl Context {
         sig: &SignalData,
         matched_clause: Option<&Value>,
     ) -> Result<(), Flow> {
+        // GNU eval.c:2041-2044 never enters the debugger for an OOM error,
+        // even when debug-on-signal and a matched debug clause request it.
+        match sig.delivery() {
+            super::super::error::SignalDelivery::MemoryExhausted(_) => return Ok(()),
+            super::super::error::SignalDelivery::Ordinary
+            | super::super::error::SignalDelivery::HookSuppressed => {}
+        }
         if self
             .obarray
-            .symbol_value("inhibit-debugger")
+            .symbol_value_copied("inhibit-debugger")
             .is_some_and(|value| !value.is_nil())
         {
             return Ok(());
@@ -394,7 +435,7 @@ impl Context {
 
         let debug_on_signal = self
             .obarray
-            .symbol_value("debug-on-signal")
+            .symbol_value_copied("debug-on-signal")
             .is_some_and(|value| !value.is_nil());
         let should_consider_debugger = debug_on_signal
             || matched_clause.is_none()
@@ -410,13 +451,11 @@ impl Context {
             &Value::from_sym_id(quit_symbol()),
         ) {
             self.obarray
-                .symbol_value("debug-on-quit")
-                .copied()
+                .symbol_value_copied("debug-on-quit")
                 .unwrap_or(Value::NIL)
         } else {
             self.obarray
-                .symbol_value("debug-on-error")
-                .copied()
+                .symbol_value_copied("debug-on-error")
                 .unwrap_or(Value::NIL)
         };
         if !wants_debugger(&debug_setting, &conditions) {
@@ -455,8 +494,7 @@ impl Context {
     ) -> Result<bool, Flow> {
         let ignored = self
             .obarray
-            .symbol_value("debug-ignored-errors")
-            .copied()
+            .symbol_value_copied("debug-ignored-errors")
             .unwrap_or(Value::NIL);
         let Some(entries) = list_to_vec(&ignored) else {
             return Ok(false);
@@ -569,11 +607,12 @@ impl Context {
     }
 
     pub(super) fn call_debugger_for_signal(&mut self, sig: &SignalData) -> Result<(), Flow> {
-        let rendered = super::super::error::format_signal_data_with_eval(self, sig);
+        // Render only when this diagnostic is enabled. GNU's debugger entry
+        // does not print the signal before invoking the callback (eval.c:2229).
         tracing::error!(
             "entering Lisp debugger for signal: symbol={} data={}",
             format_symbol_name_for_diagnostic(sig.symbol),
-            rendered
+            super::super::error::format_signal_data_with_eval(self, sig)
         );
         // GNU `call_debugger (list2 (Qdebug, ...))` from `maybe_call_debugger`:
         // one shared entry point with the `debug-on-next-call` and

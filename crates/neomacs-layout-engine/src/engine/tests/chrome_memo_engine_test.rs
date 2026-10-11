@@ -84,7 +84,11 @@ impl MemoFrame {
             .chrome_strings
             .iter()
             .map(|string| {
-                let value = string.value();
+                let value = self
+                    .eval
+                    .materialize(string.object())
+                    .expect("chrome string of this evaluator")
+                    .value();
                 let help = value
                     .as_lisp_string()
                     .map(|lisp| {

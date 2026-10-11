@@ -1446,13 +1446,13 @@ where
 }
 
 #[cfg(test)]
-#[path = "tests/parse_cache_invalidation.rs"]
+#[path = "tests/parse_cache_invalidation_test.rs"]
 mod invalidation_tests;
 
 #[cfg(test)]
-#[path = "tests/parse_cache.rs"]
+#[path = "tests/parse_cache_test.rs"]
 mod memo_tests;
 
 #[cfg(test)]
-#[path = "tests/back_comment_canonical.rs"]
+#[path = "tests/back_comment_canonical_test.rs"]
 mod back_comment_canonical_tests;

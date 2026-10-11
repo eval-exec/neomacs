@@ -151,6 +151,11 @@ pub(crate) trait LayoutBufferView {
     fn layout_point_min_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_char_pos(&self) -> CharPos0;
+    /// Readable context for complete display elements. A measurement stop can
+    /// fall inside a composition; actual buffer narrowing still bounds it.
+    fn layout_measurement_context_end(&self) -> Option<CharPos0> {
+        None
+    }
     fn layout_total_emacs_byte_len(&self) -> EmacsByteLen;
     fn layout_char_pos_to_emacs_byte_pos(&self, charpos: CharPos0) -> EmacsBytePos;
     fn layout_emacs_byte_pos_to_char_pos(&self, bytepos: EmacsBytePos) -> CharPos0;
@@ -453,7 +458,7 @@ pub(crate) fn buffer_local_value<B: LayoutBufferView + ?Sized>(
 fn effective_buffer_value(buffer: &Buffer, obarray: &Obarray, var: LayoutVar) -> Option<Value> {
     buffer
         .buffer_local_value_id(var.sym_id())
-        .or_else(|| obarray.symbol_value_id(var.sym_id()).copied())
+        .or_else(|| obarray.symbol_value_id_copied(var.sym_id()))
 }
 
 fn frame_parameter_int(frame: &Frame, name: &str, default: i64) -> i64 {
@@ -583,7 +588,7 @@ pub(crate) fn window_parameter_by_name(window: &Window, name: &str) -> Option<Va
 
 fn global_bool(obarray: &Obarray, name: &str) -> bool {
     obarray
-        .symbol_value(name)
+        .symbol_value_copied(name)
         .is_some_and(|value| !value.is_nil())
 }
 
@@ -1214,8 +1219,8 @@ fn frame_cursor_foreground_pixel(frame: &Frame, face_table: &FaceTable, obarray:
     // GNU's Vx_cursor_fore_pixel is a color-name string when explicitly set;
     // otherwise x_set_cursor_color uses FRAME_BACKGROUND_PIXEL.
     obarray
-        .symbol_value("x-cursor-fore-pixel")
-        .and_then(parse_color_pixel)
+        .symbol_value_copied("x-cursor-fore-pixel")
+        .and_then(|value| parse_color_pixel(&value))
         .unwrap_or_else(|| frame_background_color_pixel(frame, face_table))
 }
 
@@ -1590,7 +1595,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         effective_buffer_int(buffer, obarray, LayoutVar::ScrollConservatively, 0);
     let scroll_step = effective_buffer_int(buffer, obarray, LayoutVar::ScrollStep, 0);
     let scroll_minibuffer_conservatively = obarray
-        .symbol_value("scroll-minibuffer-conservatively")
+        .symbol_value_copied("scroll-minibuffer-conservatively")
         .is_none_or(|value| !value.is_nil());
     let scroll_margin = effective_buffer_int(buffer, obarray, LayoutVar::ScrollMargin, 0);
 
@@ -1698,7 +1703,8 @@ pub fn window_params_from_neovm_with_font_sizing(
         // Normalize to the layout engine's internal 0-based char positions.
         window_start: lisp_char_pos_to_layout_i64(window_start),
         measurement_rows: None,
-        mini_measurement: crate::types::MiniWindowMeasurement::Presentation,
+        measurement_width: None,
+        source_extent: crate::types::WindowSourceExtent::Viewport,
         measurement_pixels: None,
         query_target: None,
         force_start,
@@ -5060,8 +5066,9 @@ fn box_style_to_u8(style: &NeoBoxStyle) -> u8 {
 }
 
 #[cfg(test)]
+#[path = "neovm_bridge/tests/neovm_bridge_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "neovm_bridge/line_count_test.rs"]
+#[path = "neovm_bridge/tests/line_count_test.rs"]
 mod line_count_test;

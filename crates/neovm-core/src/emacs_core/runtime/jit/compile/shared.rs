@@ -50,6 +50,7 @@ use crate::emacs_core::jit::stats::{self, CompilePhase, enter_phase};
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use super::code_arena::CodeArena;
 
+pub(crate) mod batch;
 pub(crate) mod split;
 
 /// Leaves defined into one module before it is replaced (bounds the
@@ -815,5 +816,5 @@ impl WorkerBackend {
 // END T35 SELECTED SHIM BACKEND
 
 #[cfg(test)]
-#[path = "shared/tests/collection_journal.rs"]
+#[path = "shared/tests/collection_journal_test.rs"]
 mod collection_journal_tests;

@@ -37,4 +37,5 @@ impl CaptureRoute {
 }
 
 #[cfg(test)]
+#[path = "capture/tests/capture_test.rs"]
 mod tests;

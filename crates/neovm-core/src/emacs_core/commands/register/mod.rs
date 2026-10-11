@@ -537,5 +537,5 @@ pub(crate) fn builtin_set_register(
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/register_test.rs"]
 mod tests;

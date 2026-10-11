@@ -170,10 +170,14 @@ fn collect_space_image_operands(
         return;
     }
     if value.cons_car().is_symbol_named("image")
+        // The size path has only the face in hand: nothing is decoded from this
+        // context, it keys the catalog lookup, so the face stands in for the
+        // frame foreground it cannot name.
         && let Some(layout) = crate::display_spec::parse_display_image_layout(
             value,
             inputs.default_fg,
             inputs.default_bg,
+            inputs.default_fg,
         )
         && let Some(catalog) = inputs.catalog.as_ref()
     {
@@ -868,4 +872,5 @@ fn as_f64(v: &Value) -> Option<f64> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[path = "display_pixel_calc/tests/display_pixel_calc_test.rs"]
 mod tests;

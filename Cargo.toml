@@ -86,6 +86,7 @@ unsafe_op_in_unsafe_fn = "warn"
 # at each site with a justification, rather than being escalated or muted here.
 
 [workspace.dependencies]
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 # Internal crates
 neomacs-terminfo = { path = "crates/neomacs-terminfo" }
 neomacs-allocator = { path = "crates/neomacs-allocator" }
@@ -173,6 +174,10 @@ memchr = "2"
 rustc-hash = "2"
 hashbrown = "0.17"
 num_enum = "0.7.6"
+enum_dispatch = "0.3.13"
+enumset = "1.1.14"
+enum-map = "3.1.0"
+typed-index-collections = "3.5"
 strum = { version = "0.28", features = ["derive"] }
 unicode_names2 = "3.1.0"
 unicode-script = "0.5"
@@ -194,6 +199,7 @@ winapi = { version = "0.3", features = ["dwrite"] }
 wio = "0.2.2"
 sys-locale = "0.3.2"
 serde = { version = "1", features = ["derive", "rc"] }
+nutype = { version = "0.8", features = ["serde"] }
 serde_json = "1"
 toml = "1.1"
 clap = { version = "4.5", features = ["derive"] }
@@ -207,6 +213,12 @@ enumflags2 = "0.7"
 bytemuck = { version = "1.18", features = ["derive"] }
 memmap2 = "0.9"
 image = "0.25"
+# Dev-only, `xpm` feature only: an independent XPM3 decoder that
+# cross-checks neomacs-renderer-wgpu's XPM decoder against the shipped
+# etc/images corpus. GNU stays the specification for that decoder (see
+# crates/neomacs-renderer-wgpu/src/xpm.rs), so this is a smoke check and
+# never a runtime dependency; the restricted feature set adds no codecs.
+image-extras = { version = "0.1", default-features = false, features = ["xpm"] }
 # The renderer decodes PNG rows itself for banded decoding, instead of
 # handing the file to `image` and waiting for the whole frame. Same
 # version `image` itself builds against, so the tree gains no second copy.
@@ -305,6 +317,9 @@ wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }
 ash = "0.38"
 pollster = "1.0"
 resvg = "0.47"
+# Same version resvg 0.47 links, so COLR paint graphs rasterize with the
+# rasterizer already in the tree rather than a second copy of it.
+tiny-skia = "0.12"
 svgtypes = "0.16.1"
 simplecss = "0.2.2"
 cosmic-text = "0.18.2"
@@ -419,6 +434,10 @@ debug-assertions = false
 overflow-checks = false
 codegen-units = 16
 incremental = false
+
+# Optimize interpreter-heavy tests without changing ordinary editor debug builds.
+[profile.test.package.neovm-core]
+opt-level = 2
 
 # Optimized build driven by a PGO profile. Same codegen settings as release,
 # but cargo gives it its own target/release-pgo directory, so a PGO build never

@@ -969,4 +969,5 @@ fn merge_compatible_realization(existing: &mut Face, replacement: &Face) -> bool
 }
 
 #[cfg(test)]
+#[path = "frame_face_arena/tests/frame_face_arena_test.rs"]
 mod tests;

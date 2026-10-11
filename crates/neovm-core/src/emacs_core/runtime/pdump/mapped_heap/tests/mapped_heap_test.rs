@@ -38,7 +38,7 @@ fn mapped_veclike_tags_decode_the_full_runtime_domain() {
 
     assert!(matches!(
         veclike_type_from_tag(u8::MAX),
-        Err(DumpError::ImageFormatError(_))
+        Err(DumpError::InvalidVecLikeType(_))
     ));
 }
 

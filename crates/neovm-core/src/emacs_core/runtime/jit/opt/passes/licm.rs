@@ -28,6 +28,12 @@ pub(crate) struct LicmStats {
 /// in the preheader frame. No block splitting, value/frame compaction or Poll
 /// motion occurs. Unsupported/multi-entry/OSR/overlapping loops are unchanged.
 pub(crate) fn run(func: &mut Func) -> Result<LicmStats, VerifyError> {
+    run_with_fast(func, super::super::pass_fast::enabled())
+}
+
+/// Invocation-owned discovery proves the empty-loop case before any candidate
+/// clone. The original input verifier and selected publication verifier remain.
+fn run_with_fast(func: &mut Func, fast: bool) -> Result<LicmStats, VerifyError> {
     func.verify()?;
     if func.osr.is_some() {
         return Ok(LicmStats::default());
@@ -36,6 +42,9 @@ pub(crate) fn run(func: &mut Func) -> Result<LicmStats, VerifyError> {
     let Some(loops) = natural_loops(func, &dom) else {
         return Ok(LicmStats::default());
     };
+    if fast && loops.is_empty() {
+        return Ok(LicmStats::default());
+    }
     let mut candidate = func.clone();
     let mut stats = LicmStats::default();
     for natural in loops {
@@ -180,6 +189,7 @@ fn fixed(ty: TypeSet) -> Option<Range> {
 /// arbitrary narrowing Refine, mutable length/backing/slot-0, Eq/SWP or floating
 /// arithmetic is made speculative. Only a proved live FLOAT payload is an
 /// immutable memory read; its native adapter is a separate implementation seam.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn movable(func: &Func, inst: &InstData, args: &[Value]) -> Option<bool> {
     let result = inst.result?;
     let output = &func.values[result.index()];
@@ -236,7 +246,52 @@ fn movable(func: &Func, inst: &InstData, args: &[Value]) -> Option<bool> {
                     Rep::Tagged | Rep::TaggedFix | Rep::RawInt | Rep::Bool
                 )
         }
-        _ => false,
+        Opcode::Sink(..)
+        | Opcode::EnvConst(..)
+        | Opcode::Arg(..)
+        | Opcode::OsrSlot(..)
+        | Opcode::UnboxF64
+        | Opcode::FixDiv
+        | Opcode::FixRem
+        | Opcode::FixMinMax(..)
+        | Opcode::F64Add
+        | Opcode::F64Sub
+        | Opcode::F64Mul
+        | Opcode::F64Div
+        | Opcode::F64Cmp(..)
+        | Opcode::F64FromFix
+        | Opcode::F64Neg
+        | Opcode::F64Sqrt
+        | Opcode::Eq
+        | Opcode::CheckType(..)
+        | Opcode::CheckNonZero
+        | Opcode::CheckBounds
+        | Opcode::CheckEq(..)
+        | Opcode::CheckNoOverflow
+        | Opcode::LoadCar
+        | Opcode::LoadCdr
+        | Opcode::StoreCar
+        | Opcode::StoreCdr
+        | Opcode::LoadVecLen
+        | Opcode::LoadVecSlots
+        | Opcode::LoadVecElem
+        | Opcode::StoreVecElem
+        | Opcode::LoadRecTag
+        | Opcode::LoadSymValue(..)
+        | Opcode::StoreSymValue(..)
+        | Opcode::LoadF64
+        | Opcode::AllocCons
+        | Opcode::AllocFloat
+        | Opcode::Call { .. }
+        | Opcode::Builtin(..)
+        | Opcode::Opaque(..)
+        | Opcode::OpaqueBool(..)
+        | Opcode::InlineEntry(..)
+        | Opcode::Poll
+        | Opcode::PublishRoot
+        | Opcode::FixAdd { checked: true }
+        | Opcode::FixSub { checked: true }
+        | Opcode::FixMul { checked: true } => false,
     };
     yes.then_some(false)
 }
@@ -421,3 +476,8 @@ fn replace(func: &mut Func, id: Inst, moved: Value) {
 #[cfg(test)]
 #[path = "tests/licm_test.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn run_fast_for_test(func: &mut Func, fast: bool) -> Result<LicmStats, VerifyError> {
+    run_with_fast(func, fast)
+}

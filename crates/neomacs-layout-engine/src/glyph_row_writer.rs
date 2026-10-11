@@ -5,7 +5,7 @@ use neomacs_display_protocol::glyph_matrix::{
 use neomacs_display_protocol::types::FaceId;
 
 #[cfg(test)]
-#[path = "glyph_row_writer/tests.rs"]
+#[path = "glyph_row_writer/tests/glyph_row_writer_test.rs"]
 mod tests;
 
 #[derive(Clone, Copy)]

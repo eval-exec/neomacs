@@ -851,4 +851,5 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
 }
 
 #[cfg(test)]
+#[path = "catalog/tests/catalog_test.rs"]
 mod tests;

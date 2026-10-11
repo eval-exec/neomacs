@@ -290,4 +290,5 @@ fn sort_edges(map: HashMap<&str, u64>) -> Vec<CallEdge> {
 }
 
 #[cfg(test)]
+#[path = "report/tests/report_test.rs"]
 mod tests;

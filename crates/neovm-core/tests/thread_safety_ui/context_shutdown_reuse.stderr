@@ -1,0 +1,19 @@
+error[E0382]: use of moved value: `context`
+ --> tests/thread_safety_ui/context_shutdown_reuse.rs:6:5
+  |
+4 |     let context = Box::new(Context::new());
+  |         ------- move occurs because `context` has type `std::boxed::Box<neovm_core::Context>`, which does not implement the `Copy` trait
+5 |     context.shutdown().unwrap();
+  |             ---------- `context` moved due to this method call
+6 |     context.shutdown().unwrap();
+  |     ^^^^^^^ value used here after move
+  |
+note: `neovm_core::Context::shutdown` takes ownership of the receiver `self`, which moves `context`
+ --> src/emacs_core/runtime/eval/mod.rs
+  |
+  |     pub fn shutdown(mut self: Box<Self>) -> Result<(), crate::tagged::gc::MarkFinishError> {
+  |                         ^^^^
+help: you could `clone` the value and consume it, if the `neovm_core::Context: Clone` trait bound could be satisfied
+  |
+5 |     context.clone().shutdown().unwrap();
+  |            ++++++++

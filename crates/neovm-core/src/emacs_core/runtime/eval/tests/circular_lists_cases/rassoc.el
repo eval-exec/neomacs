@@ -1,0 +1,6 @@
+(let ((l (list (cons 1 2) (cons 3 4))))
+ (setcdr (cdr l) l)
+ (list (car (rassoc 2 l)) (car (rassq 4 l))
+  (mapcar (lambda (key) (condition-case e (rassoc key l)
+                         (error (list (car e) (caar (cadr e))))))
+          (list 'x 9 "x" 1.5))))

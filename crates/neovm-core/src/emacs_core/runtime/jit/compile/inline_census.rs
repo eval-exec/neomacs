@@ -10,6 +10,7 @@
 use super::{analyze_cfg, site_verdict};
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::{Value, ValueKind};
 
@@ -57,10 +58,11 @@ pub(crate) fn census_callee_verdict(f: &ByteCodeFunction, nargs: usize) -> Resul
     if f.env.is_some() {
         return Err("env".into());
     }
-    if !f.params.optional.is_empty() || f.params.rest.is_some() {
-        return Err("arglist".into());
-    }
-    if f.params.required.len() != nargs {
+    let arity = JitParamShape::try_from(f)
+        .ok()
+        .and_then(JitParamShape::fixed_arity)
+        .ok_or_else(|| "arglist".to_string())?;
+    if arity != nargs {
         return Err("arity".into());
     }
     if nargs > 0 && !f.lexical && !matches!(f.arglist.kind(), ValueKind::Fixnum(_)) {
@@ -135,8 +137,10 @@ fn resolve_target(
 /// and MIR's acceptance. Repeated probes are diagnostic only.
 pub(crate) fn census_sites(f: &ByteCodeFunction, obarray: Option<&Obarray>) -> Vec<CensusSite> {
     let ops = f.executable_ops();
-    let nargs =
-        f.params.required.len() + f.params.optional.len() + usize::from(f.params.rest.is_some());
+    let Ok(params) = JitParamShape::try_from(f) else {
+        return Vec::new();
+    };
+    let nargs = params.entry_depth();
     let cfg = analyze_cfg(ops, &f.constants, f.executable_gnu_byte_offset_map(), nargs).ok();
     let entries = cfg
         .as_ref()

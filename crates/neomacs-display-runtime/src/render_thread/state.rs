@@ -1093,6 +1093,7 @@ impl RenderApp {
     ) -> Self {
         let mut frame_windows = GuiFrameWindowManager::new();
         frame_windows.set_primary_pending(GuiFrameWindowState {
+            pending_fullscreen: None,
             pending_scale_factor: None,
             lifecycle: FrameLifecycle::Pending {
                 width,
@@ -1206,4 +1207,5 @@ impl RenderApp {
 }
 
 #[cfg(test)]
+#[path = "state/tests/state_test.rs"]
 mod tests;

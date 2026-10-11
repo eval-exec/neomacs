@@ -8,12 +8,11 @@
 //! of two forms:
 //!
 //! * a **constant** (`offset_of!`, `size_of!`), pinned with const asserts,
-//!   when the type's layout is ours to fix (`repr(C)` or a field the host
-//!   module exports); and
+//!   when the type's layout is ours to fix (`repr(C)`, the specpdl's
+//!   primitive-representation variant records, or an exported field); and
 //! * a **probe**, when std or rustc owns the layout (`Vec`'s field order,
-//!   a `repr(Rust)` enum's tag). A probe measures live values, cross-checks
-//!   two differently shaped samples, round-trips the image the JIT would
-//!   write through a Rust `match`, and answers `None` rather than a guess
+//!   an `Option<Runtime>` niche). A probe measures live values, cross-checks
+//!   two differently shaped samples, and answers `None` rather than a guess
 //!   when anything disagrees. `None` turns the feature that asked off (with
 //!   one `tracing::warn!`); it never miscompiles.
 //!
@@ -29,12 +28,12 @@
 //! The heap's object layouts (the `GcHeader` byte map, the cons-block
 //! trailer, float and vector words) are the [`heap`] submodule.
 
-use crate::buffer::BufferId;
-use crate::emacs_core::eval::{Context, SavedBindingValue, SavedBufferId, SpecBinding};
-use crate::emacs_core::intern::SymId;
+use crate::emacs_core::eval::{
+    Context, SpecBinding, SpecBindingTag, specbinding_records as records,
+};
 use crate::emacs_core::symbol::LispSymbol;
 use crate::emacs_core::value::Value;
-use std::mem::{ManuallyDrop, MaybeUninit, offset_of, size_of};
+use std::mem::{ManuallyDrop, offset_of, size_of};
 use std::sync::OnceLock;
 
 pub(crate) mod heap;
@@ -296,12 +295,12 @@ pub(crate) fn bytecode_constants_offsets() -> Option<(usize, usize)> {
 // ---------------------------------------------------------------------------
 
 const ENTRY_WORDS: usize = size_of::<SpecBinding>() / WORD;
-const _: () = assert!(size_of::<SpecBinding>() == 4 * WORD);
+const _: () = assert!(size_of::<SpecBinding>() == 4 * WORD && ENTRY_WORDS == 4);
 const _: () = assert!(std::mem::align_of::<SpecBinding>() == WORD);
 
 /// How generated code writes and recognizes one `SpecBinding` variant: a
 /// header word holding the variant's tag and its one small field, plus up
-/// to three word-sized fields. Measured by [`probe_template`].
+/// to three word-sized fields. Derived from the C-layout variant records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EntryTemplate {
     /// Byte offset of the header word within the entry.
@@ -340,12 +339,14 @@ impl EntryTemplate {
 
     /// Whether the entry image `words` carries this variant with small
     /// field `small` (the masked compare generated code makes).
+    #[cfg(test)]
     pub(crate) fn matches(&self, words: &[u64; ENTRY_WORDS], small: u32) -> bool {
         words[self.header_offset as usize / WORD] & self.header_mask == self.header_with(small)
     }
 
     /// The image generated code writes: the header word, the fields, and
     /// zero everywhere else.
+    #[cfg(test)]
     pub(crate) fn image(&self, small: u32, fields: &[u64]) -> [u64; ENTRY_WORDS] {
         let mut words = [0u64; ENTRY_WORDS];
         words[self.header_offset as usize / WORD] = self.header_with(small);
@@ -356,272 +357,62 @@ impl EntryTemplate {
     }
 }
 
-type Image = [u64; ENTRY_WORDS];
-
-/// Leave `residue` in the stack below the caller, where the next call's
-/// frame -- [`construct_over`]'s -- will sit.
-#[inline(never)]
-fn smear_stack(residue: u8) {
-    let junk = [residue; 1024];
-    std::hint::black_box(&junk);
-}
-
-/// Build an entry with `make` and write it over a buffer filled with `fill`.
-#[inline(never)]
-fn construct_over(fill: u8, make: &dyn Fn() -> SpecBinding) -> Image {
-    let entry = std::hint::black_box(make());
-    let mut buf = MaybeUninit::<Image>::uninit();
-    // SAFETY: `buf` is `ENTRY_WORDS` aligned words; fill every byte, write
-    // the entry over it, and read the words back as bits.
-    unsafe {
-        std::ptr::write_bytes(buf.as_mut_ptr().cast::<u8>(), fill, size_of::<Image>());
-        buf.as_mut_ptr().cast::<SpecBinding>().write(entry);
-        buf.assume_init()
-    }
-}
-
-/// Images of the entry `make` builds, each built over a different fill and
-/// a different stack residue: rustc copies a variant's padding from its
-/// temporary, which holds whatever the stack held, so a byte the images
-/// agree on is defined by the variant (its tag, a field) or constant
-/// padding, and a byte they disagree on is padding.
-fn images_of(make: impl Fn() -> SpecBinding) -> Vec<Image> {
-    [(0x00u8, 0x11u8), (0xff, 0xee), (0x5a, 0xa5), (0x33, 0xcc)]
-        .into_iter()
-        .map(|(fill, residue)| {
-            smear_stack(residue);
-            construct_over(fill, &make)
-        })
-        .collect()
-}
-
-/// What a variant's `match` arm finds in an entry: each word field's address
-/// and bits, and the small field's address, size and value.
-struct Found {
-    words: [(*const u8, u64); 3],
-    n_words: usize,
-    small: Option<(*const u8, usize, u32)>,
-}
-
-impl Found {
-    fn new(words: &[(*const u8, u64)], small: Option<(*const u8, usize, u32)>) -> Self {
-        let mut all = [(std::ptr::null(), 0); 3];
-        all[..words.len()].copy_from_slice(words);
-        Found {
-            words: all,
-            n_words: words.len(),
-            small,
+/// Build a template from the primitive-representation tag and the C-layout
+/// record's offsets. Padding is never sampled or interpreted as a tag.
+const fn entry_template(
+    tag: SpecBindingTag,
+    small: Option<(usize, usize)>,
+    fields: [u32; 3],
+) -> EntryTemplate {
+    let (small_shift, small_mask) = match small {
+        Some((offset, size)) => {
+            assert!(offset + size <= WORD);
+            let shift = (offset * 8) as u32;
+            (Some(shift), ((1u64 << (size * 8)) - 1) << shift)
         }
-    }
-}
-
-/// The address and bits of a word-sized field.
-fn word_field<T>(field: &T, bits: u64) -> (*const u8, u64) {
-    debug_assert_eq!(size_of::<T>(), WORD);
-    (std::ptr::from_ref(field).cast(), bits)
-}
-
-/// The address, size and value of a small field.
-fn small_field<T>(field: &T, value: u32) -> Option<(*const u8, usize, u32)> {
-    Some((std::ptr::from_ref(field).cast(), size_of::<T>(), value))
-}
-
-/// Look at an image in place, as the `SpecBinding` it holds (borrowed, so
-/// field addresses are the image's own, and never dropped).
-///
-/// # Safety
-///
-/// `words` must be a valid `SpecBinding` (the probe only decodes images
-/// whose tag bytes it copied from real entries of the same variant).
-unsafe fn decode_image<R>(words: &Image, look: impl FnOnce(&SpecBinding) -> R) -> R {
-    // SAFETY: `Image` is `SpecBinding`'s size and alignment (asserted) and,
-    // per the contract, a valid entry.
-    look(unsafe { &*words.as_ptr().cast::<SpecBinding>() })
-}
-
-/// Every probed variant, and two others, with every field zero (nil, null,
-/// id 0): what tells tag bytes from padding.
-fn reference_images() -> Vec<Vec<Image>> {
-    let makes: [fn() -> SpecBinding; 8] = [
-        || SpecBinding::Backtrace1 {
-            function: Value::NIL,
-            arg: Value::NIL,
-            debug_on_exit: false,
-        },
-        || SpecBinding::Backtrace2 {
-            function: Value::NIL,
-            arg0: Value::NIL,
-            arg1: Value::NIL,
-        },
-        || SpecBinding::BacktraceNative {
-            function: Value::NIL,
-            args_ptr: std::ptr::null(),
-            nargs: 0,
-        },
-        || SpecBinding::Let {
-            sym_id: SymId(0),
-            old_value: SavedBindingValue::from_plain(Value::NIL),
-        },
-        || SpecBinding::LetLocal {
-            sym_id: SymId(0),
-            old_value: Value::NIL,
-            buffer_id: BufferId(0),
-        },
-        || SpecBinding::LetDefault {
-            sym_id: SymId(0),
-            old_value: SavedBindingValue::from_plain(Value::NIL),
-            buffer_id: SavedBufferId::from_option(None),
-        },
-        || SpecBinding::GcRoot { value: Value::NIL },
-        || SpecBinding::LexicalEnv {
-            old_lexenv: Value::NIL,
-        },
-    ];
-    makes.iter().map(|make| images_of(make)).collect()
-}
-
-/// The byte at `(word, byte)` of every image, if they all agree.
-fn constant_byte(images: &[Image], w: usize, b: usize) -> Option<u8> {
-    let first = (images[0][w] >> (8 * b)) as u8;
-    images
-        .iter()
-        .all(|image| (image[w] >> (8 * b)) as u8 == first)
-        .then_some(first)
-}
-
-/// Measure the template of one variant. `make(small, fields)` builds it and
-/// `find` is its `match` arm ([`Found`]; `None` for another variant).
-/// `smalls` are two nonzero sample values of the small field (`[0, 0]` when
-/// the variant has none; `[1, 1]` for a bool). `None` when any step cannot
-/// prove its answer.
-///
-/// The fields' offsets come from the `match` itself. The tag bytes are the
-/// bytes outside every field that hold one value in every construction of
-/// this variant and a different one in every construction of some other
-/// variant; padding holds garbage, or the same zero everywhere, so it is
-/// neither. The header word is the one word holding the tag, and it may hold
-/// nothing else but the small field. The template is then round-tripped.
-fn probe_template(
-    n_fields: usize,
-    smalls: [u32; 2],
-    make: impl Fn(u32, &[u64]) -> SpecBinding,
-    find: impl Fn(&SpecBinding) -> Option<Found>,
-) -> Option<EntryTemplate> {
-    const SAMPLES: [[u64; 3]; 2] = [
-        [
-            0x5a5a_0000_0000_1230,
-            0x5a5a_0000_0000_4560,
-            0x5a5a_0000_0000_7890,
-        ],
-        [
-            0x6b6b_0000_0001_0010,
-            0x6b6b_0000_0002_0020,
-            0x6b6b_0000_0003_0030,
-        ],
-    ];
-    const ZERO: [u64; 3] = [0; 3];
-    // The fields' offsets, from the variant's own `match`.
-    let image = images_of(|| make(smalls[0], &SAMPLES[0][..n_fields]))[0];
-    let base = image.as_ptr() as usize;
-    // SAFETY: a real entry of the variant.
-    let found = unsafe { decode_image(&image, &find) }?;
-    if found.n_words != n_fields || found.small.is_some() != (smalls[0] != 0) {
-        return None;
-    }
-    let mut fields = [u32::MAX; 3];
-    let mut field_bytes = [0u64; ENTRY_WORDS];
-    for (i, &(at, bits)) in found.words[..n_fields].iter().enumerate() {
-        let off = (at as usize).checked_sub(base)?;
-        if off % WORD != 0 || off >= size_of::<Image>() || bits != SAMPLES[0][i] {
-            return None;
-        }
-        fields[i] = off as u32;
-        field_bytes[off / WORD] = u64::MAX;
-    }
-    let small_at = match found.small {
-        Some((at, size, value)) => {
-            let off = (at as usize).checked_sub(base)?;
-            let (w, b) = (off / WORD, off % WORD);
-            if value != smalls[0] || size == 0 || b + size > WORD || field_bytes[w] != 0 {
-                return None;
-            }
-            let mask = if size == WORD {
-                u64::MAX
-            } else {
-                ((1u64 << (8 * size)) - 1) << (8 * b)
-            };
-            field_bytes[w] |= mask;
-            Some((w, (8 * b) as u32, mask))
-        }
-        None => None,
+        None => (None, 0),
     };
-    // The tag bytes.
-    let mine = images_of(|| make(0, &ZERO[..n_fields]));
-    let others = reference_images();
-    let mut tag = [0u64; ENTRY_WORDS];
-    for (w, tag_word) in tag.iter_mut().enumerate() {
-        for b in 0..WORD {
-            let byte = 0xffu64 << (8 * b);
-            if field_bytes[w] & byte != 0 {
-                continue;
-            }
-            let Some(value) = constant_byte(&mine, w, b) else {
-                continue;
-            };
-            if others
-                .iter()
-                .any(|other| constant_byte(other, w, b).is_some_and(|o| o != value))
-            {
-                *tag_word |= byte;
-            }
-        }
-    }
-    let mut tag_words = (0..ENTRY_WORDS).filter(|&w| tag[w] != 0);
-    let h = tag_words.next()?;
-    if tag_words.next().is_some() || fields[..n_fields].contains(&((h * WORD) as u32)) {
-        return None;
-    }
-    if small_at.is_some_and(|(w, _, _)| w != h) {
-        return None;
-    }
-    let template = EntryTemplate {
-        header_offset: (h * WORD) as u32,
-        header: mine[0][h] & tag[h],
-        header_mask: tag[h] | small_at.map_or(0, |(_, _, mask)| mask),
-        small_shift: small_at.map(|(_, shift, _)| shift),
+    EntryTemplate {
+        header_offset: 0,
+        header: tag as u64,
+        header_mask: u8::MAX as u64 | small_mask,
+        small_shift,
         fields,
-    };
-    // Round trip: the image generated code would write decodes, through the
-    // variant's `match`, as exactly the values it meant; every real entry of
-    // the variant matches the template, and no other variant's does.
-    for (s, sample) in SAMPLES.iter().enumerate() {
-        let sample = &sample[..n_fields];
-        for small in [0, smalls[s]] {
-            let image = template.image(small, sample);
-            // SAFETY: the tag bytes come from real entries of the variant.
-            let decoded = unsafe { decode_image(&image, &find) }?;
-            let values_ok = decoded.words[..n_fields]
-                .iter()
-                .zip(sample)
-                .all(|(&(_, bits), &want)| bits == want);
-            if !values_ok || decoded.small.map_or(0, |(_, _, v)| v) != small {
-                return None;
-            }
-            if !images_of(|| make(small, sample))
-                .iter()
-                .all(|real| template.matches(real, small))
-            {
-                return None;
-            }
-        }
     }
-    let matched_other = others.iter().flatten().any(|other| {
-        // SAFETY: a real entry (of some variant).
-        let same_variant = unsafe { decode_image(other, &find) }.is_some();
-        !same_variant && template.matches(other, 0)
-    });
-    (!matched_other).then_some(template)
 }
+
+const _: () = {
+    assert!(size_of::<SpecBindingTag>() == 1);
+    assert!(offset_of!(records::Let, tag) == 0);
+    assert!(offset_of!(records::Let, sym_id) == 4);
+    assert!(offset_of!(records::Let, old_value) == 8);
+    assert!(offset_of!(records::LetLocal, tag) == 0);
+    assert!(offset_of!(records::LetLocal, sym_id) == 4);
+    assert!(offset_of!(records::LetLocal, old_value) == 8);
+    assert!(offset_of!(records::LetLocal, buffer_id) == 16);
+    assert!(offset_of!(records::LetDefault, tag) == 0);
+    assert!(offset_of!(records::LetDefault, sym_id) == 4);
+    assert!(offset_of!(records::LetDefault, old_value) == 8);
+    assert!(offset_of!(records::LetDefault, buffer_id) == 16);
+    assert!(offset_of!(records::Backtrace1, tag) == 0);
+    assert!(offset_of!(records::Backtrace1, debug_on_exit) == 1);
+    assert!(offset_of!(records::Backtrace1, function) == 8);
+    assert!(offset_of!(records::Backtrace1, arg) == 16);
+    assert!(offset_of!(records::Backtrace2, tag) == 0);
+    assert!(offset_of!(records::Backtrace2, function) == 8);
+    assert!(offset_of!(records::Backtrace2, arg0) == 16);
+    assert!(offset_of!(records::Backtrace2, arg1) == 24);
+    assert!(offset_of!(records::BacktraceNative, tag) == 0);
+    assert!(offset_of!(records::BacktraceNative, nargs) == 4);
+    assert!(offset_of!(records::BacktraceNative, function) == 8);
+    assert!(offset_of!(records::BacktraceNative, args_ptr) == 16);
+    assert!(size_of::<records::Let>() == 16);
+    assert!(size_of::<records::LetLocal>() == 24);
+    assert!(size_of::<records::LetDefault>() == 24);
+    assert!(size_of::<records::Backtrace1>() == 24);
+    assert!(size_of::<records::Backtrace2>() == 32);
+    assert!(size_of::<records::BacktraceNative>() == 24);
+};
 
 /// The lean backtrace frames a speculated call pushes, the three shapes
 /// `Context::push_backtrace_frame_from_native_args` writes: `Backtrace1`
@@ -650,97 +441,44 @@ impl BacktraceLayout {
     }
 }
 
-/// [`BacktraceLayout`], probed once; `None` turns direct calls off.
-pub(crate) fn backtrace_layout() -> Option<BacktraceLayout> {
-    static LAYOUT: OnceLock<Option<BacktraceLayout>> = OnceLock::new();
-    *LAYOUT.get_or_init(|| {
-        let layout = probe_backtrace_layout();
-        if layout.is_none() {
-            tracing::warn!(
-                target: "neovm_jit",
-                "SpecBinding backtrace layout probe failed; direct calls stay off"
-            );
-        }
-        layout
+/// The lean frame records are fixed by `SpecBinding`'s primitive repr.
+/// Keep the optional interface shared by the direct-call layout admission.
+pub(crate) const fn backtrace_layout() -> Option<BacktraceLayout> {
+    Some(BacktraceLayout {
+        bt1: entry_template(
+            SpecBindingTag::Backtrace1,
+            Some((
+                offset_of!(records::Backtrace1, debug_on_exit),
+                size_of::<bool>(),
+            )),
+            [
+                offset_of!(records::Backtrace1, function) as u32,
+                offset_of!(records::Backtrace1, arg) as u32,
+                u32::MAX,
+            ],
+        ),
+        bt2: entry_template(
+            SpecBindingTag::Backtrace2,
+            None,
+            [
+                offset_of!(records::Backtrace2, function) as u32,
+                offset_of!(records::Backtrace2, arg0) as u32,
+                offset_of!(records::Backtrace2, arg1) as u32,
+            ],
+        ),
+        native: entry_template(
+            SpecBindingTag::BacktraceNative,
+            Some((
+                offset_of!(records::BacktraceNative, nargs),
+                size_of::<u32>(),
+            )),
+            [
+                offset_of!(records::BacktraceNative, function) as u32,
+                offset_of!(records::BacktraceNative, args_ptr) as u32,
+                u32::MAX,
+            ],
+        ),
     })
-}
-
-fn value_of(bits: u64) -> Value {
-    Value::from_bits(bits as usize)
-}
-
-fn probe_backtrace_layout() -> Option<BacktraceLayout> {
-    let bt1 = probe_template(
-        2,
-        [1, 1],
-        |small, f| SpecBinding::Backtrace1 {
-            function: value_of(f[0]),
-            arg: value_of(f[1]),
-            debug_on_exit: small != 0,
-        },
-        |e| match e {
-            SpecBinding::Backtrace1 {
-                function,
-                arg,
-                debug_on_exit,
-            } => Some(Found::new(
-                &[
-                    word_field(function, function.bits() as u64),
-                    word_field(arg, arg.bits() as u64),
-                ],
-                small_field(debug_on_exit, u32::from(*debug_on_exit)),
-            )),
-            _ => None,
-        },
-    )?;
-    let bt2 = probe_template(
-        3,
-        [0, 0],
-        |_, f| SpecBinding::Backtrace2 {
-            function: value_of(f[0]),
-            arg0: value_of(f[1]),
-            arg1: value_of(f[2]),
-        },
-        |e| match e {
-            SpecBinding::Backtrace2 {
-                function,
-                arg0,
-                arg1,
-            } => Some(Found::new(
-                &[
-                    word_field(function, function.bits() as u64),
-                    word_field(arg0, arg0.bits() as u64),
-                    word_field(arg1, arg1.bits() as u64),
-                ],
-                None,
-            )),
-            _ => None,
-        },
-    )?;
-    let native = probe_template(
-        2,
-        [0x0003_0201, 0x7a00_00ff],
-        |small, f| SpecBinding::BacktraceNative {
-            function: value_of(f[0]),
-            args_ptr: f[1] as usize as *const i64,
-            nargs: small,
-        },
-        |e| match e {
-            SpecBinding::BacktraceNative {
-                function,
-                args_ptr,
-                nargs,
-            } => Some(Found::new(
-                &[
-                    word_field(function, function.bits() as u64),
-                    word_field(args_ptr, *args_ptr as usize as u64),
-                ],
-                small_field(nargs, *nargs),
-            )),
-            _ => None,
-        },
-    )?;
-    Some(BacktraceLayout { bt1, bt2, native })
 }
 
 /// The `let` entries P1.4's inline binds would push: `Let` (fields
@@ -753,96 +491,53 @@ pub(crate) struct LetLayout {
     pub(crate) let_default: EntryTemplate,
 }
 
-/// [`LetLayout`], probed once; `None` turns inline binds off.
-pub(crate) fn let_layout() -> Option<LetLayout> {
-    static LAYOUT: OnceLock<Option<LetLayout>> = OnceLock::new();
-    *LAYOUT.get_or_init(|| {
-        let layout = probe_let_layout();
-        if layout.is_none() {
-            tracing::warn!(
-                target: "neovm_jit",
-                "SpecBinding let layout probe failed; inline binds stay off"
-            );
-        }
-        layout
-    })
-}
-
-fn probe_let_layout() -> Option<LetLayout> {
-    const SYMS: [u32; 2] = [0x0012_3457, 0x7654_3211];
-    let let_ = probe_template(
-        1,
-        SYMS,
-        |sym, f| SpecBinding::Let {
-            sym_id: SymId(sym),
-            old_value: SavedBindingValue::from_plain(value_of(f[0])),
-        },
-        |e| match e {
-            SpecBinding::Let { sym_id, old_value } => Some(Found::new(
-                &[word_field(old_value, old_value.as_plain().bits() as u64)],
-                small_field(sym_id, sym_id.0),
+/// The binding records are fixed by `SpecBinding`'s primitive repr: the
+/// symbol and discriminant share the header word on every supported host.
+pub(crate) const fn let_layout() -> LetLayout {
+    LetLayout {
+        let_: entry_template(
+            SpecBindingTag::Let,
+            Some((
+                offset_of!(records::Let, sym_id),
+                size_of::<crate::emacs_core::intern::SymId>(),
             )),
-            _ => None,
-        },
-    )?;
-    let let_local = probe_template(
-        2,
-        SYMS,
-        |sym, f| SpecBinding::LetLocal {
-            sym_id: SymId(sym),
-            old_value: value_of(f[0]),
-            buffer_id: BufferId(f[1]),
-        },
-        |e| match e {
-            SpecBinding::LetLocal {
-                sym_id,
-                old_value,
-                buffer_id,
-            } => Some(Found::new(
-                &[
-                    word_field(old_value, old_value.bits() as u64),
-                    word_field(buffer_id, buffer_id.0),
-                ],
-                small_field(sym_id, sym_id.0),
+            [
+                offset_of!(records::Let, old_value) as u32,
+                u32::MAX,
+                u32::MAX,
+            ],
+        ),
+        let_local: entry_template(
+            SpecBindingTag::LetLocal,
+            Some((
+                offset_of!(records::LetLocal, sym_id),
+                size_of::<crate::emacs_core::intern::SymId>(),
             )),
-            _ => None,
-        },
-    )?;
-    let let_default = probe_template(
-        2,
-        SYMS,
-        |sym, f| SpecBinding::LetDefault {
-            sym_id: SymId(sym),
-            old_value: SavedBindingValue::from_plain(value_of(f[0])),
-            // Id 0 (the tag probe's all-zero entry) is "no buffer".
-            buffer_id: SavedBufferId::from_option((f[1] != 0).then_some(BufferId(f[1]))),
-        },
-        |e| match e {
-            SpecBinding::LetDefault {
-                sym_id,
-                old_value,
-                buffer_id,
-            } => Some(Found::new(
-                &[
-                    word_field(old_value, old_value.as_plain().bits() as u64),
-                    word_field(buffer_id, buffer_id.get().map_or(0, |b| b.0)),
-                ],
-                small_field(sym_id, sym_id.0),
+            [
+                offset_of!(records::LetLocal, old_value) as u32,
+                offset_of!(records::LetLocal, buffer_id) as u32,
+                u32::MAX,
+            ],
+        ),
+        let_default: entry_template(
+            SpecBindingTag::LetDefault,
+            Some((
+                offset_of!(records::LetDefault, sym_id),
+                size_of::<crate::emacs_core::intern::SymId>(),
             )),
-            _ => None,
-        },
-    )?;
-    Some(LetLayout {
-        let_,
-        let_local,
-        let_default,
-    })
+            [
+                offset_of!(records::LetDefault, old_value) as u32,
+                offset_of!(records::LetDefault, buffer_id) as u32,
+                u32::MAX,
+            ],
+        ),
+    }
 }
 
 #[cfg(test)]
-#[path = "jit_layout/tests/golden.rs"]
+#[path = "jit_layout/tests/golden_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "jit_layout/tests/runtime_prefix.rs"]
+#[path = "jit_layout/tests/runtime_prefix_test.rs"]
 mod runtime_prefix_tests;

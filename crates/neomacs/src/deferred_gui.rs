@@ -424,7 +424,7 @@ pub(super) fn install(
         let selected = font.into_selected();
         let font_name = format!("-*-{}-{}-{}-*-*-{}-*-*-*-*-*-*-*",
             selected.resolved.family,
-            startup_font_weight_symbol(FontWeight::from_css_weight(selected.resolved.weight)),
+            FontWeight::from_css_weight(selected.resolved.weight).symbol_name(),
             selected.slant.symbol_name(),
             selected.metrics.pixel_size);
         let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false);
@@ -469,6 +469,8 @@ pub(super) fn install(
         let redisplay_waker = RedisplayWaker::new(input.clone(), eval.wait_notifier());
         eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
             deferred_frame: Some(FrameDefaults { terminal_id, identity: identity.clone(), metrics, font: font_name, frame_id: frame_id.clone(), initial: native.clone(), ready: HashMap::new(), leases: HashMap::new(), visual: RefCell::new(None) }),
+            frame_opacity: Arc::clone(&opened.comms.frame_opacity),
+            font_entities: FontEntityCatalog::default(),
             resources, system_fonts: opened.display.font_defaults.system_fonts(),
             tooltip_client: neomacs_display_protocol::tooltip::TooltipClient::new(opened.comms.tooltip_context.clone()),
             cmd_tx: opened.comms.cmd_tx.clone(), render_waker: Some(opened.waker.clone()),
@@ -490,9 +492,7 @@ pub(super) fn install(
         let waker = opened.waker.clone();
         let ttys = ttys.clone();
         eval.redisplay_fn = Some(Box::new(move |eval| {
-            if !ttys.render_selected(eval) && eval.frame_manager().selected_frame().is_some_and(|frame| frame.effective_window_system().is_some()) {
-                publish_gui_frame(eval, &frame_tx, Some(&waker));
-            }
+            redisplay_attached_frames(eval, &ttys, &frame_tx, Some(&waker));
         }));
         frame_layout::install_frame_snapshot_fn(eval);
         frame_layout::install_window_layout_query_fn(eval);
@@ -509,6 +509,18 @@ pub(super) fn install(
         Ok(())
     }));
     Lifetime(lifetime)
+}
+
+pub(super) fn redisplay_attached_frames(
+    eval: &mut Context,
+    ttys: &secondary_tty::SecondaryTtyRegistry,
+    frame_tx: &neomacs_display_runtime::thread_comm::FrameSender,
+    waker: Option<&GuiEventLoopWaker>,
+) {
+    // A graphical client does not select its frame until focus arrives. TTY
+    // presentation must not suppress independent visible GUI frame trees.
+    ttys.render_selected(eval);
+    publish_gui_frame(eval, frame_tx, waker);
 }
 
 // Publish terminal ownership only after the last fallible preparation phase.

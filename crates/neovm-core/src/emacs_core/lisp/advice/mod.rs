@@ -248,5 +248,5 @@ pub(crate) fn builtin_get_variable_watchers(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/advice_test.rs"]
 mod tests;

@@ -1070,4 +1070,5 @@ fn clip_convex_polygon(
 }
 
 #[cfg(test)]
+#[path = "pointer_override/tests/pointer_override_test.rs"]
 mod tests;

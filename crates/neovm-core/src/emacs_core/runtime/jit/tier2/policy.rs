@@ -436,6 +436,7 @@ fn request_decision_opt(leaf: &CompiledLeaf, source: &RuntimeState) -> Option<T2
             && super::super::compile::jit_opt_mode() == super::super::compile::OptMode::Opt
             && leaf.selected_tier() == super::super::compile::opt_census::SelectedTier::Baseline
             && (1..=OPT_HELPER_MAX_OPS).contains(&p.ops_len)
+            && super::super::compile::jit_opt_profit() == super::super::compile::OptProfitMode::Off
         {
             Some(T2Upgrade::Feedback)
         } else {

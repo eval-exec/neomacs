@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `SingleMutatorWorld::<'h>::from_heap` is unsafe and requires unsafe block
+ --> tests/thread_safety_ui/single_mutator_safe_admission.rs:9:18
+  |
+9 |     let _world = scan_contract::SingleMutatorWorld::from_heap(&mut heap);
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

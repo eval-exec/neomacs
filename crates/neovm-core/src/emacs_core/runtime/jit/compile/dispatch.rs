@@ -353,7 +353,7 @@ fn aref_fast(array: Value, index: Value) -> Option<Value> {
 }
 
 #[cfg(test)]
-#[path = "tests/array_projection_capture.rs"]
+#[path = "tests/array_projection_capture_test.rs"]
 mod array_projection_capture;
 
 /// `Op::Aref` (GNU `Baref`) from compiled code: the element's bits, or
@@ -1891,8 +1891,12 @@ fn call_fixed_builtin_from_native(
     if ctx.depth > ctx.max_depth
         && let Err(flow) = Vm::from_context(ctx).bytecode_depth_exceeded()
     {
-        ctx.depth -= 1;
-        return Some(ctx.pop_bytecode_backtrace_frame_with_result(bt_count, Err(flow)));
+        // GNU checks depth before recording this rejected callee's frame.
+        // Dispatch at the counted depth, with the caller's native roots live.
+        let flow = ctx
+            .pop_bytecode_backtrace_frame_with_result(bt_count, Err(flow))
+            .expect_err("a rejected callee has no cleanup or result");
+        return Some(Err(ctx.finish_lisp_depth_overflow(flow)));
     }
     let result = match function {
         Some(SubrFn::A0(f)) => f(ctx),

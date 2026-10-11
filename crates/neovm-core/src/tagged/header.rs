@@ -46,7 +46,7 @@ impl ConsCell {
     ///
     /// `self` must represent an allocated cons cell, so `cdr_or_next.cdr` is
     /// the active union field rather than `next_free`.
-    #[inline]
+    #[inline(always)]
     pub unsafe fn cdr(&self) -> TaggedValue {
         unsafe { self.cdr_or_next.cdr }
     }
@@ -65,7 +65,9 @@ impl ConsCell {
     #[inline]
     pub unsafe fn load_car(&self) -> TaggedValue {
         let p = &self.car as *const TaggedValue as *const AtomicUsize;
-        TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+        // SAFETY: the caller keeps this cons live and uses atomic slot access.
+        // TaggedValue's pinned word size/alignment admits the AtomicUsize view.
+        TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
     }
 
     /// Atomic (acquire) read of `cdr` (the cdr/next-free union word).
@@ -77,7 +79,9 @@ impl ConsCell {
     #[inline]
     pub unsafe fn load_cdr(&self) -> TaggedValue {
         let p = &self.cdr_or_next as *const ConsCdrOrNext as *const AtomicUsize;
-        TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+        // SAFETY: the caller proves this live union contains `cdr` and all
+        // concurrent writes are atomic. Its word has AtomicUsize alignment.
+        TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
     }
 
     /// Store `car` atomically so a concurrent GC read sees a whole value,
@@ -90,7 +94,7 @@ impl ConsCell {
     ///
     /// `self` must be a live cons cell and the supplied tagged value must obey
     /// the GC publication contract described above.
-    #[inline]
+    #[inline(always)]
     pub unsafe fn set_car(&mut self, value: TaggedValue) {
         let p = &self.car as *const TaggedValue as *const AtomicUsize;
         unsafe { (*p).store(value.0, Ordering::Release) };
@@ -102,7 +106,7 @@ impl ConsCell {
     ///
     /// `self` must be a live cons cell and `value` must be a valid tagged value
     /// whose pointee, if any, has been fully initialized before publication.
-    #[inline]
+    #[inline(always)]
     pub unsafe fn set_cdr(&mut self, value: TaggedValue) {
         let p = &self.cdr_or_next as *const ConsCdrOrNext as *const AtomicUsize;
         unsafe { (*p).store(value.0, Ordering::Release) };
@@ -962,10 +966,11 @@ enum LispValueVecStorage {
     Mapped { ptr: *const TaggedValue, len: usize },
 }
 
-// Mapped slots are read-only through shared references.  Mutation paths use
-// `ensure_owned` before exposing `&mut Vec<TaggedValue>`.
-unsafe impl Send for LispValueVecStorage {}
-unsafe impl Sync for LispValueVecStorage {}
+// Vector payloads hold Lisp values, so they stay on their mutator thread like
+// the values themselves; the collector reads them only through typed scan
+// snapshots. Mapped slots are read-only through shared references, and
+// mutation paths use `ensure_owned` before exposing `&mut Vec<TaggedValue>`.
+static_assertions::assert_not_impl_any!(LispValueVecStorage: Send, Sync);
 
 impl std::fmt::Debug for LispValueVec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1120,7 +1125,9 @@ impl LispValueVec {
     #[inline]
     pub fn load_atomic(&self, i: usize) -> TaggedValue {
         let p = &self.as_slice()[i] as *const TaggedValue as *const AtomicUsize;
-        TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+        // SAFETY: indexing proves a live, aligned slot in the borrowed backing.
+        // TaggedValue is one aligned word; concurrent slot writes use Release.
+        TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
     }
 
     /// Atomic (release) store to element `i` of owned storage. The element must
@@ -1140,7 +1147,9 @@ impl LispValueVec {
     pub fn iter_atomic(&self) -> impl Iterator<Item = TaggedValue> + '_ {
         self.as_slice().iter().map(|slot| {
             let p = slot as *const TaggedValue as *const AtomicUsize;
-            TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+            // SAFETY: the backing borrow retains this aligned word slot, and
+            // its concurrent accesses follow the atomic publication contract.
+            TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
         })
     }
 
@@ -1203,11 +1212,12 @@ impl LispValueVec {
 /// was `Mapped` (immutable pdump span) or `Owned` (a Rust `Vec` buffer kept alive +
 /// immutable for the cycle by the clone-on-write retire path). The scan reads both
 /// kinds identically (both are contiguous `TaggedValue` arrays).
+#[derive(Debug)]
 pub(crate) struct VectorScanEntry {
-    pub(crate) base: *const TaggedValue,
-    pub(crate) len: usize,
+    base: *const TaggedValue,
+    len: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) is_mapped: bool,
+    is_mapped: bool,
 }
 
 /// Start-of-cycle snapshot of every OWNED/Mapped vector backing for the Stage 2 Tier
@@ -1225,28 +1235,55 @@ pub(crate) struct VectorScanEntry {
 /// before any realloc/replace. Vectors allocated mid-cycle are absent (allocate-black).
 pub(crate) struct VectorScanSnapshot {
     entries: Vec<VectorScanEntry>,
+    heap_identity: usize,
+    _exclusive_reader: std::marker::PhantomData<std::cell::Cell<()>>,
 }
 
-// Safety: the snapshot holds raw base pointers into vector backings the heap keeps
-// alive for the whole GC cycle (Mapped = immutable dump; Owned = retired-on-write,
-// so the snapshot pointer always addresses a live, immutable buffer). The GC thread
-// only READS through them via relaxed atomic loads, coordinated with the single
-// mutator by the retire-before-replace clone-on-write hook, so handing the snapshot
-// to the GC thread is sound.
+// SAFETY: construction requires admission to the heap-identified serialized
+// writer protocol. Owned backings retire before replacement, and explicit
+// finish or heap abandonment retains every backing through the marker's last
+// read. The one owning marker reads slots with Acquire; it never mutates them.
 unsafe impl Send for VectorScanSnapshot {}
+static_assertions::assert_impl_all!(VectorScanSnapshot: Send, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(VectorScanSnapshot: Sync);
+static_assertions::assert_not_impl_any!(VectorScanEntry: Send, Sync);
+
+impl std::fmt::Debug for VectorScanSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VectorScanSnapshot")
+            .field("heap_identity", &self.heap_identity)
+            .field("entries", &self.entries.len())
+            .finish()
+    }
+}
 
 impl VectorScanSnapshot {
     /// Build an empty snapshot; entries are pushed during the world-stopped capture.
     #[inline]
-    pub(crate) fn with_capacity(cap: usize) -> Self {
+    pub(crate) fn with_capacity(
+        cap: usize,
+        world: &crate::tagged::gc::scan_contract::SingleMutatorWorld<'_>,
+    ) -> Self {
         Self {
             entries: Vec::with_capacity(cap),
+            heap_identity: world.heap_identity(),
+            _exclusive_reader: std::marker::PhantomData,
         }
     }
 
-    /// Append one captured vector-backing entry.
+    pub(crate) fn heap_identity(&self) -> usize {
+        self.heap_identity
+    }
+
+    /// Append a captured backing after admitting its raw provenance.
+    ///
+    /// # Safety
+    /// The entry belongs to this snapshot's admitted heap. Its initialized
+    /// backing remains immutable or atomically published and retained until
+    /// the marker's last read, through retirement or owner abandonment.
+    /// A temporary or foreign heap backing does not satisfy this contract.
     #[inline]
-    pub(crate) fn push(&mut self, entry: VectorScanEntry) {
+    pub(crate) unsafe fn push(&mut self, entry: VectorScanEntry) {
         self.entries.push(entry);
     }
 
@@ -1268,6 +1305,7 @@ impl VectorScanSnapshot {
     /// must still address a live, immutable backing (guaranteed: Mapped = immutable
     /// dump; Owned = retired-before-replace by `with_vector_data_mut`).
     pub(crate) unsafe fn scan(&self, push: impl FnMut(TaggedValue)) {
+        // SAFETY: the caller supplies this cycle's retained-backing contract.
         unsafe { self.scan_children::<false>(push) };
     }
 
@@ -1277,15 +1315,19 @@ impl VectorScanSnapshot {
     /// # Safety
     /// The start snapshot and its retired backings remain live until join.
     pub(crate) unsafe fn scan_for_major(&self, push: impl FnMut(TaggedValue)) {
+        // SAFETY: the caller supplies the same retained-backing contract.
         unsafe { self.scan_children::<true>(push) };
     }
 
+    /// # Safety
+    /// The admitted cycle retains each backing and its initialized slots until
+    /// this reader finishes; publication follows the atomic slot protocol.
     unsafe fn scan_children<const MAJOR: bool>(&self, mut push: impl FnMut(TaggedValue)) {
         for entry in &self.entries {
             for i in 0..entry.len {
-                // Safety: `base` addresses a contiguous `[TaggedValue; len]` backing
+                // SAFETY: `base` addresses a contiguous `[TaggedValue; len]` backing
                 // kept alive + immutable for the cycle; `i < len` is in bounds. The
-                // read is a relaxed atomic load (pairs with the mutator's atomic slot
+                // read is an Acquire atomic load (pairs with the mutator's Release slot
                 // stores on the live, non-retired backing — never this retired one).
                 let slot = unsafe { &*entry.base.add(i) };
                 let child = load_value_atomic(slot);
@@ -1327,7 +1369,9 @@ impl VectorScanSnapshot {
 #[inline]
 pub fn load_value_atomic(slot: &TaggedValue) -> TaggedValue {
     let p = slot as *const TaggedValue as *const AtomicUsize;
-    TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+    // SAFETY: the borrow identifies a live slot with pinned word alignment.
+    // Concurrent access uses the atomic publication contract documented above.
+    TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
 }
 
 /// Atomic (release) store to a single `TaggedValue` slot in place. See the
@@ -1577,7 +1621,7 @@ impl ByteCodeSlotObjects {
     /// [`load_value_atomic`]).
     #[inline(always)]
     pub fn get(&self, slot: ByteCodeSlotObject) -> TaggedValue {
-        TaggedValue(self.word(slot).load(Ordering::Acquire))
+        TaggedValue::from_bits(self.word(slot).load(Ordering::Acquire))
     }
 
     /// Byte offset of `slot`'s word in this struct (the pdump bakes a

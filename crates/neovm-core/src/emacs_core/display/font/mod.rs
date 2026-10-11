@@ -41,13 +41,64 @@ use crate::emacs_core::SymId;
 use crate::face::{
     Face as RuntimeFace, FaceHeight, FaceRemapping, FontSlant, FontWeight, FontWidth, LFaceAttr,
 };
-use crate::heap_types::LispString;
+use crate::heap_types::{LispString, LispStringStorageKind};
 use crate::tagged::header::{FontObjectData, FontObjectMetrics};
 use crate::window::{FRAME_ID_BASE, FrameId, FrameManager, FrameParam, WindowId};
 use neomacs_display_protocol::font::ResolvedFontIdentity;
 
 type AlternativeFontFamilyAlist = Vec<(SymId, Vec<SymId>)>;
-type AlternativeFontRegistryAlist = Vec<(LispString, Vec<LispString>)>;
+type AlternativeFontRegistryAlist = Vec<(FontNameSpelling, Vec<FontNameSpelling>)>;
+
+/// A font name's spelling, independent of Lisp text properties and heap roots.
+/// Private fields keep cached names from acquiring GC-managed payloads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FontNameSpelling {
+    bytes: Vec<u8>,
+    storage_kind: LispStringStorageKind,
+}
+
+static_assertions::assert_impl_all!(FontNameSpelling: Send, Sync, Clone, std::fmt::Debug);
+static_assertions::assert_impl_all!(AlternativeFontRegistryAlist: Send, Sync);
+
+impl FontNameSpelling {
+    pub(super) fn from_utf8(name: &str) -> Self {
+        Self {
+            bytes: name.as_bytes().to_vec(),
+            storage_kind: LispStringStorageKind::Multibyte,
+        }
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Reconstruct a property-free string on the requesting mutator.
+    pub(crate) fn to_lisp_string(&self) -> LispString {
+        match self.storage_kind {
+            LispStringStorageKind::Multibyte => LispString::from_emacs_bytes(self.bytes.clone()),
+            LispStringStorageKind::Unibyte => LispString::from_unibyte(self.bytes.clone()),
+        }
+    }
+}
+
+impl From<&LispString> for FontNameSpelling {
+    fn from(name: &LispString) -> Self {
+        Self {
+            bytes: name.as_bytes().to_vec(),
+            storage_kind: name.storage_kind(),
+        }
+    }
+}
+
+impl std::hash::Hash for FontNameSpelling {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.bytes, state);
+        state.write_u8(match self.storage_kind {
+            LispStringStorageKind::Unibyte => 0,
+            LispStringStorageKind::Multibyte => 1,
+        });
+    }
+}
 
 const FONT_WEIGHT_STYLE_TABLE: &[(i64, &[&str])] = &[
     (0, &["thin"]),
@@ -154,6 +205,21 @@ pub(crate) fn alternative_font_family_alist() -> &'static RwLock<AlternativeFont
 
 pub(crate) fn alternative_font_registry_alist() -> &'static RwLock<AlternativeFontRegistryAlist> {
     ALTERNATIVE_FONT_REGISTRY_ALIST.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+pub(crate) fn replace_alternative_font_registry_alist(names: Vec<(LispString, Vec<LispString>)>) {
+    let spellings = names
+        .into_iter()
+        .map(|(name, aliases)| {
+            (
+                FontNameSpelling::from(&name),
+                aliases.iter().map(FontNameSpelling::from).collect(),
+            )
+        })
+        .collect();
+    if let Ok(mut state) = alternative_font_registry_alist().write() {
+        *state = spellings;
+    }
 }
 
 fn font_style_table(entries: &[(i64, &[&str])]) -> Value {
@@ -391,10 +457,10 @@ fn frame_font_request_from_value(value: &Value) -> Option<FrameFontRequest> {
 }
 
 fn face_height_from_value(value: Value) -> Option<FaceHeight> {
-    match value.kind() {
-        ValueKind::Fixnum(n) if n > 0 => Some(FaceHeight::Absolute(n as i32)),
-        ValueKind::Float if value.xfloat() > 0.0 => Some(FaceHeight::Relative(value.xfloat())),
-        _ => None,
+    match super::xfaces::height::BackendFaceHeight::try_from(value) {
+        Ok(height) => Some(FaceHeight::from(height)),
+        Err(super::xfaces::height::FaceHeightError::InvalidNumericHeight) => None,
+        Err(super::xfaces::height::FaceHeightError::BackendRange) => None,
     }
 }
 
@@ -406,11 +472,7 @@ fn build_frame_font_object_from_resolution(
     let canonical = &opened.resolved;
     let mut selected = requested_face.clone();
     selected.family = Some(Value::string(canonical.family.clone()));
-    selected.foundry = opened
-        .foundry
-        .clone()
-        .map(Value::heap_string)
-        .or(requested_face.foundry);
+    selected.foundry = opened.foundry.clone().map(Value::heap_string);
     selected.weight = Some(FontWeight::from_css_weight(canonical.weight));
     selected.slant = Some(opened.slant);
     selected.width = Some(opened.width());
@@ -578,7 +640,6 @@ fn frame_minimum_inner_pixels(
 pub(crate) fn sync_live_frame_font_state(
     eval: &mut super::eval::Context,
     frame_id: FrameId,
-    requested: &Value,
     resolution: &LiveFrameFontResolution,
 ) -> Result<(), Flow> {
     let Some(frame) = eval.frames.get(frame_id) else {
@@ -621,7 +682,6 @@ pub(crate) fn sync_live_frame_font_state(
         &mut eval.frames,
         &mut eval.display_host,
         frame_id,
-        requested,
         resolution,
         vertical,
     );
@@ -700,7 +760,6 @@ fn sync_live_frame_font_state_in_state(
     frames: &mut FrameManager,
     display_host: &mut Option<Box<dyn super::eval::DisplayHost>>,
     frame_id: FrameId,
-    requested: &Value,
     resolution: &LiveFrameFontResolution,
     geometry_policy: FontChangeGeometryPolicy,
 ) {
@@ -721,11 +780,10 @@ fn sync_live_frame_font_state_in_state(
         return;
     };
 
-    let public_font_name = if requested.is_string() {
-        *requested
-    } else {
-        font_name_value(&resolution.font_value).unwrap_or(*requested)
-    };
+    // GNU gui_set_font publishes FONT_NAME_INDEX after opening succeeds.
+    // Face and frame APIs must describe the same realized font; retaining a
+    // selector here also forces default-font-height through font-info.
+    let public_font_name = public_frame_font_parameter_value(resolution.font_value);
 
     let font_changed = frame.parameter("font-parameter") != Some(resolution.font_value);
     let new_font_pixel_size = metrics.pixel_size.max(1) as f32;
@@ -779,11 +837,8 @@ fn sync_live_frame_font_state_in_state(
         frame.shrink_mini_window();
     }
     if geometry_changed {
-        frame.sync_menu_bar_height_from_parameters();
-        frame.sync_tool_bar_height_from_parameters();
         frame.sync_tab_bar_height_from_parameters();
-        frame.sync_compact_bar_height_from_parameters();
-        frame.sync_window_area_bounds();
+        frame.sync_bar_heights_from_parameters();
     }
 
     let mut geometry_hints = None;
@@ -822,7 +877,6 @@ pub(crate) fn sync_live_frame_font_parameter_in_state(
         frames,
         display_host,
         frame_id,
-        &requested,
         &resolution,
         FontChangeGeometryPolicy::PreserveCharacterGrid,
     );
@@ -878,7 +932,7 @@ pub(crate) fn sync_live_default_face_font_state(
     let font_value = build_frame_font_object_from_resolution(&requested_face, &realized);
     let resolution = LiveFrameFontResolution { font_value };
 
-    sync_live_frame_font_state(eval, frame_id, &font_value, &resolution)
+    sync_live_frame_font_state(eval, frame_id, &resolution)
 }
 
 fn expect_optional_frame_designator_in_state(
@@ -2641,7 +2695,7 @@ fn face_remapping_value_for_buffer(eval: &super::eval::Context, buffer: &Buffer)
     // Buffer-local binding takes priority
     buffer
         .get_buffer_local("face-remapping-alist")
-        .or_else(|| eval.obarray().symbol_value("face-remapping-alist").copied())
+        .or_else(|| eval.obarray().symbol_value_copied("face-remapping-alist"))
         .unwrap_or(Value::NIL)
 }
 
@@ -2949,6 +3003,12 @@ fn build_font_entity_for_spec_match(matched: &super::eval::ResolvedFontSpecMatch
         elems.push(value);
     };
 
+    if let Some(handle) = matched.coverage_handle {
+        push_field(
+            "neomacs-entity-handle",
+            Value::fixnum(i64::from(handle.get())),
+        );
+    }
     // GNU orders entity fields foundry-first (XLFD order); the foundry is
     // a symbol (e.g. GOOG) read from fontconfig FC_FOUNDRY.
     if let Some(foundry) = &matched.foundry {
@@ -3019,8 +3079,7 @@ pub fn opened_font_from_resolved_match(
     selected.foundry = opened
         .foundry
         .as_ref()
-        .map(|foundry| Value::from_sym_id(intern(foundry.as_utf8_str().unwrap_or_default())))
-        .or(face.foundry);
+        .map(|foundry| Value::from_sym_id(intern(foundry.as_utf8_str().unwrap_or_default())));
     selected.weight = Some(FontWeight::from_css_weight(canonical.weight));
     selected.slant = Some(opened.slant);
     selected.width = Some(opened.width());
@@ -3074,7 +3133,9 @@ pub(crate) fn font_name_value(font_like: &Value) -> Option<Value> {
     }
 }
 
-pub(crate) fn public_frame_font_parameter_value(font_like: Value) -> Value {
+/// Project a font object to GNU's public frame parameter, its canonical
+/// opened name. Startup and subsequent frame changes share this projection.
+pub fn public_frame_font_parameter_value(font_like: Value) -> Value {
     if is_font(&font_like) {
         font_name_value(&font_like).unwrap_or(font_like)
     } else {
@@ -3150,8 +3211,8 @@ pub(crate) fn live_frame_font_attribute_fallback(
         // selected it.  GNU's `internal-get-lisp-face-attribute` consequently
         // exposes a font object here; callers such as `startup.el` rely on
         // that type when passing the result to `font-xlfd-name`/`font-match-p`.
-        // Keep the requested designator separately in the frame's typed
-        // `FrameParam::Font` slot.
+        // The frame's typed `FrameParam::Font` slot exposes this opened
+        // object's canonical name separately.
         return Some(font_value);
     }
 
@@ -3795,13 +3856,12 @@ pub(crate) fn font_info(eval: &mut super::eval::Context, args: Vec<Value>) -> Ev
                 .ok_or_else(|| signal("error", vec![Value::string("Invalid font name"), name]))?;
             let size =
                 named_font_opening_size(spec, eval.frames.get(frame_id).expect("validated frame"));
-            // GNU font_open_by_spec prefers normal styles, independent of
-            // the frame face, but preserves the name's explicit styles.
+            // GNU font_open_by_spec keeps explicit styles as constraints,
+            // ranks listed entities using normal-style preferences, and
+            // falls back to driver matching only when listing finds none.
             let mut request =
                 font_spec_resolve_request(eval, &spec, Some(&Value::make_frame(frame_id.0)))?;
-            request.weight.get_or_insert(FontWeight::NORMAL);
-            request.slant.get_or_insert(FontSlant::Normal);
-            request.width.get_or_insert(FontWidth::Normal);
+            request.selection = super::eval::FontSpecSelection::OpenBySpec;
             let entity = match_font_spec_request(eval, request)?;
             (entity, size)
         }
@@ -3858,7 +3918,12 @@ pub(crate) fn font_get_glyphs(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-pub(crate) fn font_has_char_p(args: Vec<Value>) -> EvalResult {
+pub(crate) fn font_has_char_p(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    use super::display_host::{
+        FontCoverage, FontCoverageRequest, FontCoverageTarget, FontEntityHandle,
+    };
+    use crate::emacs_core::emacs_char::EmacsChar;
+
     expect_args_range("font-has-char-p", &args, 2, 3)?;
     if !is_font(&args[0]) {
         return Err(signal(
@@ -3866,8 +3931,54 @@ pub(crate) fn font_has_char_p(args: Vec<Value>) -> EvalResult {
             vec![Value::symbol("font"), args[0]],
         ));
     }
-    let _ = expect_font_character(args[1])?;
-    Ok(Value::NIL)
+    let character = args[1]
+        .as_int()
+        .and_then(|code| u32::try_from(code).ok())
+        .and_then(EmacsChar::from_code)
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("characterp"), args[1]],
+            )
+        })?;
+    // GNU CHECK_FRAME accepts a frame object, without requiring it to be live.
+    let frame_id = match args.get(2) {
+        None => super::window_cmds::ensure_selected_frame_id(eval),
+        Some(frame) if frame.is_nil() => super::window_cmds::ensure_selected_frame_id(eval),
+        Some(frame) => frame_id_from_designator(frame).ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("framep"), *frame],
+            )
+        })?,
+    };
+    let target = if let Some(opened) = args[0].as_font_data() {
+        FontCoverageTarget::Opened(opened.identity.clone())
+    } else {
+        let handle = font_value_fields(&args[0])
+            .and_then(|fields| font_vector_get_flexible(fields, "neomacs-entity-handle"))
+            .and_then(|value| value.as_int())
+            .and_then(|value| u32::try_from(value).ok())
+            .and_then(FontEntityHandle::new);
+        let Some(handle) = handle else {
+            return Ok(Value::NIL);
+        };
+        FontCoverageTarget::Entity(handle)
+    };
+    let Some(host) = eval.display_host.as_mut() else {
+        return Ok(Value::NIL);
+    };
+    match host
+        .font_character_coverage(FontCoverageRequest {
+            frame_id,
+            target,
+            character,
+        })
+        .map_err(|error| signal("error", vec![Value::string(error)]))?
+    {
+        FontCoverage::Present => Ok(Value::t()),
+        FontCoverage::Absent | FontCoverage::NeedsOpening => Ok(Value::NIL),
+    }
 }
 
 pub(crate) fn font_match_p(args: Vec<Value>) -> EvalResult {
@@ -4153,5 +4264,5 @@ pub(crate) fn font_variation_glyphs(args: Vec<Value>) -> EvalResult {
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/font_test.rs"]
 mod tests;

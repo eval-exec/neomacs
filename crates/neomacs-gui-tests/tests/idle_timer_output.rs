@@ -1,0 +1,106 @@
+//! An idle callback must run and paint despite timer and subprocess wakeups.
+#![cfg(target_os = "linux")]
+
+use neomacs_gui_tests::{
+    DisplayHarness, GuiArtifactSet, GuiBackend, GuiRunOptions, GuiRunStatus, GuiScenario,
+    GuiTestPlan, ProcessGuiCommandRunner,
+};
+use std::{
+    fs, thread,
+    time::{Duration, Instant},
+};
+
+#[test]
+fn idle_timer_preserves_its_epoch_and_paints_amid_background_activity() {
+    let root = neomacs_infra::workspace_root();
+    let run_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let control = root.join(format!("tmp/idle-gui-{}-{run_id}", std::process::id()));
+    fs::create_dir_all(&control).unwrap();
+    let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join("target/release/neomacs"));
+    let backend = match std::env::var("NEOMACS_GUI_TEST_BACKEND").as_deref() {
+        Ok("wayland" | "linux-wayland") => GuiBackend::LinuxWayland,
+        Ok("x11" | "linux-x11") | Err(_) => GuiBackend::LinuxX11,
+        Ok(other) => panic!("unsupported GUI backend {other}"),
+    };
+    let session = DisplayHarness::for_backend(backend)
+        .start_session(&control)
+        .unwrap();
+    let paths = GuiArtifactSet::new(&control, backend, "idle-timer-output");
+    let mut plan = GuiTestPlan::new(
+        backend,
+        &root,
+        &control,
+        GuiScenario::new(
+            "idle-timer-output",
+            root.join("crates/neomacs-gui-tests/fixtures/idle-timer-output.el"),
+        ),
+    )
+    .with_program(binary)
+    .with_env("NEOMACS_DEBUG_SURFACE_READBACK", "10000")
+    .with_env("NEOMACS_IDLE_TEST_CONTROL", control.display().to_string());
+    for (key, value) in session.env() {
+        plan = plan.with_env(key.clone(), value.clone());
+    }
+    let (run, presentation) = thread::scope(|scope| {
+        let run = scope.spawn(|| {
+            plan.run_with(
+                &mut ProcessGuiCommandRunner,
+                GuiRunOptions::with_timeout(Duration::from_secs(30)),
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut presentation = Err("idle callback did not produce a green presentation".to_owned());
+        while !run.is_finished() && Instant::now() < deadline {
+            if control.join("result.json").exists()
+                && let Ok(png) = image::open(&paths.png)
+            {
+                let green = png
+                    .to_rgba8()
+                    .pixels()
+                    .filter(|pixel| {
+                        let [r, g, b, _] = pixel.0;
+                        g > 240 && r < 15 && b < 15
+                    })
+                    .count();
+                if green > 3000 {
+                    fs::write(control.join("painted"), "painted").unwrap();
+                    presentation = Ok(());
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        (run.join().unwrap(), presentation)
+    });
+    assert!(
+        presentation.is_ok(),
+        "{presentation:?}; artifacts {control:?}"
+    );
+    let result = run.unwrap();
+    assert!(!result.timed_out, "{result:#?}");
+    assert_eq!(result.exit_code, Some(0), "{result:#?}");
+    assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(control.join("result.json")).unwrap()).unwrap();
+    assert!(state["ticks"].as_u64().unwrap() > 0, "{state}");
+    assert!(state["output"].as_u64().unwrap() > 0, "{state}");
+    assert_eq!(
+        state["worker-live"], true,
+        "idle must fire while subprocess output continues: {state}"
+    );
+    assert_eq!(state["read-timeout"], true, "{state}");
+    assert_eq!(
+        state["preserved"], true,
+        "timed read must preserve idle epoch: {state}"
+    );
+    let snapshot = fs::read_to_string(control.join("final.json")).unwrap();
+    assert!(
+        snapshot.contains("*idle-timer-output*"),
+        "idle callback must paint its buffer"
+    );
+}

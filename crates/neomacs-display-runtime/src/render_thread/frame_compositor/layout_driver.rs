@@ -99,6 +99,80 @@ impl LayoutDriver {
         matches!(self, Self::Animating { .. })
     }
 
+    /// Borrow-only eligibility for the same pane plan `on_frame` will place.
+    /// A pending first frame uses the ring's current picture, which becomes
+    /// previous on rotation; later ticks use only the picture already pinned.
+    /// Conservatively treat historical pixels as possibly fractional, without
+    /// allocating for enabled-but-idle motion or zero-weight terminal patches.
+    pub(in crate::render_thread) fn needs_native_conversion(
+        &self,
+        frame: FrameSample,
+        grid: PixelGrid,
+        candidate: Option<&SnapshotLease>,
+    ) -> bool {
+        let Self::Animating { outgoing, .. } = self else {
+            return false;
+        };
+        let picture = match outgoing {
+            OutgoingPicture::Unpinned => candidate,
+            OutgoingPicture::Pinned(picture) => picture.as_ref(),
+        };
+        if picture.is_none() {
+            return false;
+        }
+        self.planned_sample(frame, grid).is_some_and(|sample| {
+            sample.pane_blits().iter().any(|pane| {
+                pane.source == neomacs_renderer_wgpu::PaneSource::Previous
+                    && pane.opacity > 0.0
+                    && pane.bounds.width > 0.0
+                    && pane.bounds.height > 0.0
+            })
+        })
+    }
+
+    /// The same borrow-only splice/sample used by eligibility and placement.
+    pub(in crate::render_thread) fn planned_sample(
+        &self,
+        frame: FrameSample,
+        grid: PixelGrid,
+    ) -> Option<super::continuity::pane_layout::LayoutSample> {
+        let Self::Animating { morph, .. } = self else {
+            return None;
+        };
+        let spliced = morph.spliced(frame);
+        let morph = match spliced.as_ref() {
+            Some(spliced) => spliced,
+            None if morph.has_pending_retarget() => return None,
+            None => morph.as_ref(),
+        };
+        Some(morph.sample(frame, grid))
+    }
+
+    /// Retire only a terminal source. Keep the CPU morph for acquired-frame
+    /// settlement, and keep the pin decision so a later tick cannot repin history.
+    pub(in crate::render_thread) fn reclaim_finished_outgoing(
+        &mut self,
+        frame: FrameSample,
+        grid: PixelGrid,
+    ) {
+        if self
+            .planned_sample(frame, grid)
+            .is_none_or(|sample| sample.motion.finished())
+        {
+            if let Self::Animating { outgoing, .. } = self {
+                *outgoing = OutgoingPicture::Pinned(None);
+            }
+        }
+    }
+
+    /// Geometry/device replacement invalidates GPU history, not the CPU morph
+    /// or its last submitted interaction. Do not repin a picture of the motion.
+    pub(in crate::render_thread) fn discard_outgoing_picture(&mut self) {
+        if let Self::Animating { outgoing, .. } = self {
+            *outgoing = OutgoingPicture::Pinned(None);
+        }
+    }
+
     /// Pin the picture this motion fades *from*, if it has not been pinned.
     ///
     /// Called by the render pass on every frame of a motion, with the ring's
@@ -245,4 +319,5 @@ impl LayoutDriver {
 }
 
 #[cfg(test)]
+#[path = "layout_driver/tests/layout_driver_test.rs"]
 mod tests;

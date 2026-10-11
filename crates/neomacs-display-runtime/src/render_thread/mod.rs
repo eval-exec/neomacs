@@ -39,6 +39,7 @@ mod terminal_commands;
 #[cfg(feature = "neo-term")]
 mod terminal_expansion;
 #[cfg(test)]
+#[path = "tests/render_thread_test.rs"]
 mod tests;
 #[cfg(test)]
 #[path = "tests/texture_discipline_test.rs"]

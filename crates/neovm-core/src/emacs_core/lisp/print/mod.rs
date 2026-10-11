@@ -395,26 +395,25 @@ fn active_print_number_table(options: &PrintOptions) -> Option<Value> {
         .filter(|table| table.is_hash_table())
 }
 
-pub(crate) struct PrintNumberingGuard;
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct PrintNumberingGuard {
+    _scope: crate::tls_scope::TlsScope<usize, std::cell::Cell<usize>>,
+}
+static_assertions::assert_not_impl_any!(PrintNumberingGuard: Send, Sync);
 
 pub(crate) fn enter_print_call(options: &PrintOptions) -> PrintNumberingGuard {
-    PRINT_CALL_DEPTH.with(|depth| {
+    let previous = PRINT_CALL_DEPTH.with(|depth| {
         let current = depth.get();
         if current == 0
             && (!options.print_continuous_numbering || active_print_number_table(options).is_none())
         {
             reset_print_number_index();
         }
-        depth.set(current + 1);
+        depth.replace(current.saturating_add(1))
     });
-    PrintNumberingGuard
-}
-
-impl Drop for PrintNumberingGuard {
-    fn drop(&mut self) {
-        PRINT_CALL_DEPTH.with(|depth| {
-            depth.set(depth.get().saturating_sub(1));
-        });
+    PrintNumberingGuard {
+        _scope: crate::tls_scope::TlsScope::restore(&PRINT_CALL_DEPTH, previous),
     }
 }
 
@@ -1209,7 +1208,7 @@ fn with_bytecode_literal_slots<R>(value: &Value, f: impl FnOnce(&[Value]) -> R) 
     };
     crate::emacs_core::eval::push_scratch_gc_root(constants);
 
-    let depth = Value::fixnum(bc.max_stack as i64);
+    let depth = bc.max_stack.value();
     let doc = bc
         .doc_form
         .or_else(|| bc.docstring.as_ref().map(|d| Value::heap_string(d.clone())))
@@ -2761,5 +2760,5 @@ fn threading_handle_print_name(kind: crate::tagged::header::VecLikeType) -> &'st
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/print_test.rs"]
 mod tests;

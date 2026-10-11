@@ -247,6 +247,7 @@ pub(crate) fn candidate_regions(
         .collect()
 }
 
+#[deny(clippy::wildcard_enum_match_arm)]
 fn safe_lowering(fused: &FusedBody, pc: usize) -> bool {
     match fused.ops[pc] {
         Op::Constant(_)
@@ -293,7 +294,57 @@ fn safe_lowering(fused: &FusedBody, pc: usize) -> bool {
         // Only the virtual-frame hook has a guarded no-Lisp store; an
         // ordinary caller store reaches the builtin shim and is rejected.
         Op::Setcar | Op::Setcdr => fused.region_of[pc].is_some(),
-        _ => false,
+        Op::VarRef(..)
+        | Op::VarSet(..)
+        | Op::VarBind(..)
+        | Op::Unbind(..)
+        | Op::Call(..)
+        | Op::Apply(..)
+        | Op::Switch
+        | Op::Div
+        | Op::Rem
+        | Op::Cons
+        | Op::List(..)
+        | Op::Length
+        | Op::Nth
+        | Op::Nthcdr
+        | Op::Elt
+        | Op::Nconc
+        | Op::Nreverse
+        | Op::Member
+        | Op::Memq
+        | Op::Assq
+        | Op::Symbolp
+        | Op::Integerp
+        | Op::Numberp
+        | Op::Eq
+        | Op::Equal
+        | Op::Concat(..)
+        | Op::Substring
+        | Op::StringEqual
+        | Op::StringLessp
+        | Op::Aref
+        | Op::Aset
+        | Op::SymbolValue
+        | Op::SymbolFunction
+        | Op::Set
+        | Op::Fset
+        | Op::Get
+        | Op::Put
+        | Op::PushConditionCase(..)
+        | Op::PushConditionCaseRaw(..)
+        | Op::PushCatch(..)
+        | Op::PopHandler
+        | Op::UnwindProtectPop
+        | Op::Throw
+        | Op::SaveCurrentBuffer
+        | Op::SaveExcursion
+        | Op::SaveRestriction
+        | Op::SaveWindowExcursion
+        | Op::MakeClosure(..)
+        | Op::CallBuiltin(..)
+        | Op::CallBuiltinSym(..)
+        | Op::TrapOutOfRangeConstant(..) => false,
     }
 }
 
@@ -465,5 +516,5 @@ fn constant_states(
 }
 
 #[cfg(test)]
-#[path = "inline_entry_cache/tests/admission.rs"]
+#[path = "inline_entry_cache/tests/admission_test.rs"]
 mod tests;

@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/thread_safety_ui/single_mutator_shared_owner.rs:10:72
+   |
+10 |     let _world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&heap) };
+   |                           -------------------------------------------- ^^^^^ types differ in mutability
+   |                           |
+   |                           arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut TaggedHeap`
+                      found reference `&TaggedHeap`
+note: associated function defined here
+  --> tests/thread_safety_ui/../../src/tagged/gc/scan_contract.rs
+   |
+   |     pub(crate) unsafe fn from_heap(heap: &'h mut TaggedHeap) -> Self {
+   |                          ^^^^^^^^^ ------------------------
