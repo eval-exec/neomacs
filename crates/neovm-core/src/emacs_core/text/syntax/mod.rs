@@ -203,7 +203,7 @@ enum SyntaxPurposeSymbol {
 
 impl SyntaxPurposeSymbol {
     fn from_lisp_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     #[cfg(test)]
@@ -921,6 +921,27 @@ impl SyntaxTable {
         self.char_syntax_code(ch as u32)
     }
 
+    /// Capture the owning evaluator's policy for a temporary table read.
+    pub(crate) fn char_syntax_with_symbols(
+        &self,
+        ch: char,
+        mode: crate::tagged::SymbolMode,
+    ) -> SyntaxClass {
+        if mode == crate::tagged::SymbolMode::Bare {
+            return self.char_syntax(ch);
+        }
+        syntax_entry_at_char_code_with_symbols(&self.chartable, ch as u32, mode).map_or_else(
+            || {
+                if ch as u32 >= 0x80 {
+                    SyntaxClass::Word
+                } else {
+                    SyntaxClass::Whitespace
+                }
+            },
+            |entry| entry.class,
+        )
+    }
+
     /// Return the syntax class for an Emacs character code — GNU
     /// `SYNTAX(c)`.
     pub fn char_syntax_code(&self, code: u32) -> SyntaxClass {
@@ -1489,7 +1510,7 @@ pub fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsByte
 /// Whether `find-word-boundary-function-table` has any binding (i.e. some mode
 /// like subword/superword installed boundary functions). When empty (the
 /// common case) word motion uses the plain syntax scan unchanged.
-fn word_boundary_table_active(table: &Value) -> bool {
+fn word_boundary_table_active(table: &Value, mode: crate::tagged::SymbolMode) -> bool {
     if !super::chartable::is_char_table(table) {
         return false;
     }
@@ -1500,7 +1521,7 @@ fn word_boundary_table_active(table: &Value) -> bool {
     // table, ~6K instructions a probe on every word motion.
     [b'a' as i64, b'A' as i64, b'0' as i64, b'_' as i64]
         .into_iter()
-        .any(|ch| !super::chartable::ct_ref(table, ch).is_nil())
+        .any(|ch| !super::chartable::ct_ref_with_symbols(table, ch, mode).is_nil())
 }
 
 /// Move over `count` words honoring `find-word-boundary-function-table`
@@ -1518,6 +1539,7 @@ fn word_motion_with_table(
     honor: bool,
     wbtable: Value,
 ) -> (EmacsBytePos, bool) {
+    let symbol_mode = eval.symbol_mode();
     let forward = count > 0;
     let n = count.unsigned_abs();
     let mut completed = true;
@@ -1532,7 +1554,12 @@ fn word_motion_with_table(
         // syntax-property cache inside this mutation-free probe: the boundary
         // callback below is arbitrary Lisp and may edit the buffer.
         let probe = {
-            let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+            let props = SyntaxProperties::for_scan_with_symbols(
+                honor,
+                &eval.obarray,
+                &eval.buffers,
+                eval.symbol_mode(),
+            );
             let prop_cache = SyntaxPropRange::new(props);
             let prop_cache = &prop_cache;
             let buf = match eval.buffers.get(current_id) {
@@ -1609,11 +1636,15 @@ fn word_motion_with_table(
         };
 
         // Look the character up in the boundary-function table.
-        let func = super::chartable::char_table_ref_and_range(&wbtable, i64::from(ch.code()))
-            .map(|(v, _, _)| v)
-            .unwrap_or(Value::NIL);
+        let func = super::chartable::char_table_ref_and_range_with_symbols(
+            &wbtable,
+            i64::from(ch.code()),
+            eval.symbol_mode(),
+        )
+        .map(|(v, _, _)| v)
+        .unwrap_or(Value::NIL);
         let mut handled = false;
-        let callable = match func.as_symbol_id() {
+        let callable = match func.as_symbol_id(symbol_mode) {
             Some(id) => eval.obarray.fboundp_id(id),
             None => super::subr_info::subr_is_callable_function_value(&func),
         };
@@ -1641,7 +1672,12 @@ fn word_motion_with_table(
         if !handled {
             // Plain syntax scan of a single word from the current point.
             let (byte, ok) = {
-                let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+                let props = SyntaxProperties::for_scan_with_symbols(
+                    honor,
+                    &eval.obarray,
+                    &eval.buffers,
+                    eval.symbol_mode(),
+                );
                 let buf = eval.buffers.get(current_id).expect("buffer");
                 let table = SyntaxTable::for_buffer(buf);
                 forward_word_with_options(
@@ -1677,7 +1713,7 @@ pub(crate) fn forward_word_destination(
     honor: bool,
 ) -> EmacsBytePos {
     let wbtable = eval.visible_variable_value_or_nil("find-word-boundary-function-table");
-    if word_boundary_table_active(&wbtable) {
+    if word_boundary_table_active(&wbtable, eval.symbol_mode()) {
         let current_id = eval.buffers.current_buffer_id();
         let saved =
             current_id.and_then(|id| eval.buffers.get(id).map(|b| b.point_emacs_byte_pos()));
@@ -1692,7 +1728,12 @@ pub(crate) fn forward_word_destination(
             Some(b) => b,
             None => return EmacsBytePos::new(0),
         };
-        let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+        let props = SyntaxProperties::for_scan_with_symbols(
+            honor,
+            &eval.obarray,
+            &eval.buffers,
+            eval.symbol_mode(),
+        );
         let table = SyntaxTable::for_buffer(buf);
         forward_word_with_options(
             buf,
@@ -2988,38 +3029,7 @@ pub(crate) fn builtin_make_syntax_table(args: Vec<Value>) -> EvalResult {
 
 /// `(copy-syntax-table &optional TABLE)` — return a fresh copy of TABLE.
 pub(crate) fn builtin_copy_syntax_table(args: Vec<Value>) -> EvalResult {
-    if args.len() > 1 {
-        return Err(signal(
-            LispCondition::WrongNumberOfArguments,
-            vec![
-                Value::symbol("copy-syntax-table"),
-                Value::fixnum(args.len() as i64),
-            ],
-        ));
-    }
-
-    let source = if args.is_empty() || args[0].is_nil() {
-        builtin_standard_syntax_table(vec![])?
-    } else {
-        let table = args[0];
-        if builtin_syntax_table_p(vec![table])?.is_nil() {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("syntax-table-p"), table],
-            ));
-        }
-        table
-    };
-
-    let copy = super::builtins::builtin_copy_sequence(vec![source])?;
-    super::chartable::builtin_set_char_table_range(vec![copy, Value::NIL, Value::NIL], None)?;
-    if super::chartable::builtin_char_table_parent(vec![copy])?.is_nil() {
-        super::chartable::builtin_set_char_table_parent(vec![
-            copy,
-            ensure_standard_syntax_table_object()?,
-        ])?;
-    }
-    Ok(copy)
+    builtin_copy_syntax_table_with_symbols(args, crate::tagged::SymbolMode::Bare)
 }
 
 fn ensure_standard_syntax_table_object() -> EvalResult {
@@ -3111,44 +3121,26 @@ fn ensure_standard_syntax_table_object() -> EvalResult {
     })
 }
 
+#[cfg(test)]
 fn current_buffer_syntax_table_object_in_buffers(
     buffers: &mut BufferManager,
 ) -> Result<Value, Flow> {
-    use crate::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
-    let current_id = buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let buf = buffers
-        .get_mut(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-
-    // Mirrors GNU `Fsyntax_table` (`syntax.c:987-993`):
-    //     return BVAR (current_buffer, syntax_table);
-    let value = buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()];
-    if !value.is_nil() && super::chartable::char_table_has_subtype_named(&value, "syntax-table") {
-        return Ok(value);
-    }
-    // Slot invalid: only now is the standard-table fallback needed (its
-    // eager computation sat on every per-scan table fetch).
-    let fallback = ensure_standard_syntax_table_object()?;
-
-    // Slot is unset (fresh buffer or never assigned). Seed it
-    // from the standard syntax table — matches GNU's
-    // `reset_buffer` (`buffer.c:1149-1157`) which copies the
-    // standard tables into a fresh buffer.
-    buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()] = fallback;
-    Ok(fallback)
+    current_buffer_syntax_table_object_in_buffers_with_symbols(
+        buffers,
+        crate::tagged::SymbolMode::Bare,
+    )
 }
 
 pub(crate) fn sync_current_buffer_syntax_table_state(
     ctx: &mut super::eval::Context,
 ) -> Result<(), Flow> {
+    let mode = ctx.symbol_mode();
     // Just ensure the slot is seeded with the standard chartable if
     // it was left `Value::NIL`. No compilation, no cache rebuild —
     // motion/parse code reads `buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()]`
     // directly via `SyntaxTable::for_buffer`. Matches GNU
     // `set_buffer_internal`.
-    let _ = current_buffer_syntax_table_object_in_buffers(&mut ctx.buffers)?;
+    let _ = current_buffer_syntax_table_object_in_buffers_with_symbols(&mut ctx.buffers, mode)?;
     Ok(())
 }
 
@@ -3432,6 +3424,8 @@ pub(crate) enum SyntaxProperties<'a> {
     /// Resolve `syntax-table` per character exactly as `get-char-property`
     /// does, through GNU `textget`'s category/alias/default fallbacks.
     Honor(CharPropertyResolver<'a>),
+    PositionedIgnore,
+    PositionedHonor(CharPropertyResolver<'a>),
 }
 
 impl<'a> SyntaxProperties<'a> {
@@ -3462,7 +3456,7 @@ impl<'a> SyntaxProperties<'a> {
         buf: &Buffer,
         byte_pos: EmacsBytePos,
     ) -> Option<Value> {
-        let Self::Honor(resolver) = self else {
+        let (Self::Honor(resolver) | Self::PositionedHonor(resolver)) = self else {
             return None;
         };
         resolver.resolve_interval_plist(buf.interval_plist_at_emacs_byte_pos(byte_pos)?)
@@ -3540,8 +3534,12 @@ pub(crate) struct SyntaxPropByteRun<'a> {
 impl<'a> SyntaxPropByteRun<'a> {
     pub(crate) fn new(props: SyntaxProperties<'a>) -> Self {
         let run = match props {
-            SyntaxProperties::Ignore => PropRunCells::covering_everything(),
-            SyntaxProperties::Honor(_) => PropRunCells::default(),
+            SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => {
+                PropRunCells::covering_everything()
+            }
+            SyntaxProperties::Honor(_) | SyntaxProperties::PositionedHonor(_) => {
+                PropRunCells::default()
+            }
         };
         Self {
             run,
@@ -3561,7 +3559,10 @@ impl<'a> SyntaxPropByteRun<'a> {
     /// (`parse-sexp-lookup-properties`), so a character's syntax can depend on
     /// its position.
     pub(crate) fn honors_properties(&self) -> bool {
-        matches!(self.props, SyntaxProperties::Honor(_))
+        matches!(
+            self.props,
+            SyntaxProperties::Honor(_) | SyntaxProperties::PositionedHonor(_)
+        )
     }
 
     /// The end (Emacs byte) of the stretch from `byte_pos` that carries no
@@ -3611,7 +3612,9 @@ impl<'a> SyntaxPropByteRun<'a> {
         if let Some(value) = self.run.get(byte_pos.get()) {
             return value;
         }
-        let SyntaxProperties::Honor(resolver) = self.props else {
+        let (SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver)) =
+            self.props
+        else {
             // Unreachable: an ignoring cache covers every position.
             return None;
         };
@@ -3708,7 +3711,10 @@ impl<'a> StringSyntaxPropByteRun<'a> {
         intervals: Option<&'a TextPropertyTable>,
     ) -> Self {
         let source = match (props, intervals) {
-            (SyntaxProperties::Honor(resolver), Some(intervals)) => Some(StringPropSource {
+            (
+                SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver),
+                Some(intervals),
+            ) => Some(StringPropSource {
                 resolver,
                 string,
                 intervals,
@@ -3799,22 +3805,36 @@ pub(crate) fn regexp_syntax_class_for_emacs_char_at_string_byte(
     ch: EmacsChar,
     byte_pos: usize,
     prop_cache: &StringSyntaxPropByteRun<'_>,
+    mode: crate::tagged::SymbolMode,
 ) -> SyntaxClass {
     if let Some(ch) = ch.as_rust_char() {
-        return regexp_syntax_class_at_string_byte(table, ch, byte_pos, prop_cache);
+        return regexp_syntax_class_at_string_byte_with_symbols(
+            table, ch, byte_pos, prop_cache, mode,
+        );
     }
     if let Some(prop) = prop_cache.syntax_table_prop_at_string_byte(byte_pos)
-        && let Some(entry) = syntax_entry_from_emacs_syntax_property(prop, ch)
+        && let Some(entry) = syntax_entry_from_emacs_syntax_property(prop, ch, mode)
     {
         return entry.class;
     }
     record_syntax_table_decode();
-    table.char_syntax_code(ch.code())
+    if mode == crate::tagged::SymbolMode::Bare {
+        return table.char_syntax_code(ch.code());
+    }
+    syntax_entry_at_char_code_with_symbols(&table.chartable(), ch.code(), mode)
+        .map_or_else(|| table.char_syntax_code(ch.code()), |entry| entry.class)
 }
 
-fn syntax_entry_from_emacs_syntax_property(prop: Value, ch: EmacsChar) -> Option<SyntaxEntry> {
-    if builtin_syntax_table_p(vec![prop]).ok()?.is_truthy() {
-        syntax_entry_at_char_code(&prop, ch.code())
+fn syntax_entry_from_emacs_syntax_property(
+    prop: Value,
+    ch: EmacsChar,
+    mode: crate::tagged::SymbolMode,
+) -> Option<SyntaxEntry> {
+    if builtin_syntax_table_p_with_symbols(vec![prop], mode)
+        .ok()?
+        .is_truthy()
+    {
+        syntax_entry_at_char_code_with_symbols(&prop, ch.code(), mode)
     } else {
         syntax_entry_from_chartable_entry(&prop)
     }
@@ -3962,8 +3982,12 @@ impl DescriptorLog {
 impl<'a> SyntaxPropRange<'a> {
     fn new(props: SyntaxProperties<'a>) -> Self {
         let run = match props {
-            SyntaxProperties::Ignore => PropRunCells::covering_everything(),
-            SyntaxProperties::Honor(_) => PropRunCells::default(),
+            SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => {
+                PropRunCells::covering_everything()
+            }
+            SyntaxProperties::Honor(_) | SyntaxProperties::PositionedHonor(_) => {
+                PropRunCells::default()
+            }
         };
         Self {
             run,
@@ -4066,7 +4090,9 @@ impl<'a> SyntaxPropRange<'a> {
         // instead measured +10.6% on a forward-sexp sweep.
         if let Some(value) = self.run.get(pos) {
             #[cfg(debug_assertions)]
-            if let SyntaxProperties::Honor(resolver) = self.props {
+            if let SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver) =
+                self.props
+            {
                 let plist = buf.interval_plist_at_char_pos(offset_char_pos(CharPos0::ZERO, pos));
                 let fresh = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
                 debug_assert!(
@@ -4078,7 +4104,9 @@ impl<'a> SyntaxPropRange<'a> {
             }
             return value;
         }
-        let SyntaxProperties::Honor(resolver) = self.props else {
+        let (SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver)) =
+            self.props
+        else {
             // Unreachable: an ignoring cache covers every position. Keep the
             // total function rather than an unwrap.
             return None;
@@ -4179,16 +4207,23 @@ fn effective_syntax_entry_for_char_at_byte(
     prop_cache: &SyntaxPropByteRun<'_>,
 ) -> SyntaxEntry {
     if let Some(prop) = prop_cache.syntax_table_prop_at_emacs_byte(buf, byte_pos)
-        && let Some(entry) = syntax_entry_from_syntax_property(prop, ch)
+        && let Some(entry) = syntax_entry_from_syntax_property_with_symbols(
+            prop,
+            ch,
+            prop_cache.props().symbol_mode(),
+        )
     {
         return entry;
     }
 
+    // GNU CHAR_TABLE_REF_ASCII (lisp.h:2133-2146) reads stored ASCII,
+    // default and parent slots without testing purpose. Both symbol policies
+    // therefore share this memo after the positional property lookup above.
     if let Some(entry) = prop_cache.ascii_entry(table, ch) {
         return entry;
     }
 
-    syntax_entry_from_table(table, ch)
+    syntax_entry_from_table_with_symbols(table, ch, prop_cache.props().symbol_mode())
 }
 
 /// Syntax class seen by GNU's regexp `SYNTAX` macro at a buffer byte.
@@ -4213,17 +4248,24 @@ pub(crate) fn regexp_syntax_class_for_emacs_char_at_buffer_byte(
     ch: EmacsChar,
     byte_pos: EmacsBytePos,
     prop_cache: &SyntaxPropByteRun<'_>,
+    mode: crate::tagged::SymbolMode,
 ) -> SyntaxClass {
     if let Some(ch) = ch.as_rust_char() {
-        return regexp_syntax_class_at_emacs_byte(buf, table, ch, byte_pos, prop_cache);
+        return regexp_syntax_class_at_emacs_byte_with_symbols(
+            buf, table, ch, byte_pos, prop_cache, mode,
+        );
     }
     if let Some(prop) = prop_cache.syntax_table_prop_at_emacs_byte(buf, byte_pos)
-        && let Some(entry) = syntax_entry_from_emacs_syntax_property(prop, ch)
+        && let Some(entry) = syntax_entry_from_emacs_syntax_property(prop, ch, mode)
     {
         return entry.class;
     }
     record_syntax_table_decode();
-    table.char_syntax_code(ch.code())
+    if mode == crate::tagged::SymbolMode::Bare {
+        return table.char_syntax_code(ch.code());
+    }
+    syntax_entry_at_char_code_with_symbols(&table.chartable(), ch.code(), mode)
+        .map_or_else(|| table.char_syntax_code(ch.code()), |entry| entry.class)
 }
 
 /// Word-only syntax lookup, keeping byte8 and non-Unicode keys intact.
@@ -4252,20 +4294,30 @@ fn word_syntax_entry_for_non_unicode_char(
     prop_cache: &SyntaxPropRange<'_>,
 ) -> SyntaxEntry {
     if let Some(prop) = prop_cache.syntax_table_prop_at_char(buf, abs_char) {
-        let entry = if builtin_syntax_table_p(vec![prop])
-            .ok()
-            .is_some_and(|v| v.is_truthy())
-        {
-            syntax_entry_at_char_code(&prop, ch.code())
-        } else {
-            syntax_entry_from_chartable_entry(&prop)
-        };
+        let entry =
+            if builtin_syntax_table_p_with_symbols(vec![prop], prop_cache.props().symbol_mode())
+                .ok()
+                .is_some_and(|v| v.is_truthy())
+            {
+                syntax_entry_at_char_code_with_symbols(
+                    &prop,
+                    ch.code(),
+                    prop_cache.props().symbol_mode(),
+                )
+            } else {
+                syntax_entry_from_chartable_entry(&prop)
+            };
         if let Some(entry) = entry {
             return entry;
         }
     }
     record_syntax_table_decode();
-    table.get_entry_code(ch.code()).unwrap_or_else(|| {
+    syntax_entry_at_char_code_with_symbols(
+        &table.chartable(),
+        ch.code(),
+        prop_cache.props().symbol_mode(),
+    )
+    .unwrap_or_else(|| {
         // GNU syntax.h:117: an absent descriptor has Swhitespace syntax.
         SyntaxEntry::simple(SyntaxClass::Whitespace)
     })
@@ -4296,19 +4348,26 @@ fn effective_syntax_entry_for_abs_char(
     prop_cache: &SyntaxPropRange<'_>,
 ) -> SyntaxEntry {
     if let Some(prop) = prop_cache.syntax_table_prop_at_char(buf, abs_char)
-        && let Some(entry) = syntax_entry_from_syntax_property(prop, ch)
+        && let Some(entry) = syntax_entry_from_syntax_property_with_symbols(
+            prop,
+            ch,
+            prop_cache.props().symbol_mode(),
+        )
     {
         return entry;
     }
 
+    // ASCII table reads are policy-independent, as on the byte path above.
     if let Some(entry) = prop_cache.ascii_entry(table, ch) {
         return entry;
     }
 
-    if let Some(log) = &prop_cache.descriptors {
+    if prop_cache.props().symbol_mode() == crate::tagged::SymbolMode::Bare
+        && let Some(log) = &prop_cache.descriptors
+    {
         return syntax_entry_from_table_logged(table, ch, abs_char, log);
     }
-    syntax_entry_from_table(table, ch)
+    syntax_entry_from_table_with_symbols(table, ch, prop_cache.props().symbol_mode())
 }
 
 /// [`syntax_entry_from_table`] for a scan the parse cache records: the
@@ -4567,23 +4626,7 @@ pub(crate) fn builtin_standard_syntax_table(args: Vec<Value>) -> EvalResult {
 
 /// `(syntax-table-p OBJECT)` — return t if OBJECT is a syntax table.
 pub(crate) fn builtin_syntax_table_p(args: Vec<Value>) -> EvalResult {
-    if args.len() != 1 {
-        return Err(signal(
-            LispCondition::WrongNumberOfArguments,
-            vec![
-                Value::symbol("syntax-table-p"),
-                Value::fixnum(args.len() as i64),
-            ],
-        ));
-    }
-
-    Ok(
-        if super::chartable::char_table_has_subtype_named(&args[0], "syntax-table") {
-            Value::T
-        } else {
-            Value::NIL
-        },
-    )
+    builtin_syntax_table_p_with_symbols(args, crate::tagged::SymbolMode::Bare)
 }
 
 /// `(syntax-table)` — return the current buffer syntax table.
@@ -4602,21 +4645,9 @@ pub(crate) fn builtin_syntax_table(
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
 pub(crate) fn builtin_syntax_table_0(eval: &mut super::eval::Context) -> EvalResult {
+    let mode = eval.symbol_mode();
     let args: [Value; 0] = [];
-    builtin_syntax_table_in_buffers(&mut eval.buffers, &args)
-}
-
-pub(crate) fn builtin_syntax_table_in_buffers(
-    buffers: &mut BufferManager,
-    args: &[Value],
-) -> EvalResult {
-    if !args.is_empty() {
-        return Err(signal(
-            LispCondition::WrongNumberOfArguments,
-            vec![syntax_table_prop_symbol(), Value::fixnum(args.len() as i64)],
-        ));
-    }
-    current_buffer_syntax_table_object_in_buffers(buffers)
+    builtin_syntax_table_in_buffers_with_symbols(&mut eval.buffers, &args, mode)
 }
 
 /// `(set-syntax-table TABLE)` — install TABLE for current buffer and return it.
@@ -4639,34 +4670,9 @@ pub(crate) fn builtin_set_syntax_table_1(
     eval: &mut super::eval::Context,
     table: Value,
 ) -> EvalResult {
+    let mode = eval.symbol_mode();
     let args: [Value; 1] = [table];
-    builtin_set_syntax_table_in_buffers(&mut eval.buffers, &args)
-}
-
-pub(crate) fn builtin_set_syntax_table_in_buffers(
-    buffers: &mut BufferManager,
-    args: &[Value],
-) -> EvalResult {
-    if args.len() != 1 {
-        return Err(signal(
-            LispCondition::WrongNumberOfArguments,
-            vec![
-                Value::symbol("set-syntax-table"),
-                Value::fixnum(args.len() as i64),
-            ],
-        ));
-    }
-    if builtin_syntax_table_p(vec![args[0]])?.is_nil() {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("syntax-table-p"), args[0]],
-        ));
-    }
-    let table = args[0];
-    // Matches GNU `Fset_syntax_table` — just bset_syntax_table on the
-    // slot. Motion code reads it live via `SyntaxTable::for_buffer`.
-    set_current_buffer_syntax_table_object_in_buffers(buffers, table)?;
-    Ok(table)
+    builtin_set_syntax_table_in_buffers_with_symbols(&mut eval.buffers, &args, mode)
 }
 
 // ===========================================================================
@@ -4678,63 +4684,8 @@ pub(crate) fn builtin_modify_syntax_entry(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    modify_syntax_entry_in_buffers(&mut eval.buffers, &args)
-}
-
-pub(crate) fn modify_syntax_entry_in_buffers(
-    buffers: &mut BufferManager,
-    args: &[Value],
-) -> EvalResult {
-    if args.len() < 2 || args.len() > 3 {
-        return Err(signal(
-            LispCondition::WrongNumberOfArguments,
-            vec![
-                Value::symbol("modify-syntax-entry"),
-                Value::fixnum(args.len() as i64),
-            ],
-        ));
-    }
-    let descriptor = syntax_runtime_string(&args[1])?;
-    let entry =
-        string_to_syntax(&descriptor).map_err(|msg| signal("error", vec![Value::string(&msg)]))?;
-    let target_table = if let Some(table) = args.get(2) {
-        if builtin_syntax_table_p(vec![*table])?.is_nil() {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("syntax-table-p"), *table],
-            ));
-        }
-        *table
-    } else {
-        current_buffer_syntax_table_object_in_buffers(buffers)?
-    };
-    let current_table = current_buffer_syntax_table_object_in_buffers(buffers)?;
-    let update_current_buffer_table = target_table == current_table;
-
-    // Update the exposed syntax-table object.
-    let chartable_entry = if matches!(entry.class, SyntaxClass::InheritStd) {
-        Value::NIL
-    } else {
-        syntax_entry_to_value(&entry)
-    };
-    super::chartable::builtin_set_char_table_range(
-        vec![target_table, args[0], chartable_entry],
-        None,
-    )?;
-    // GNU `Fmodify_syntax_entry` ends with `clear_regexp_cache ()` —
-    // compiled regexps whose fastmap/bitmap baked syntax-table content
-    // must not survive a table mutation.  Our caches key those entries
-    // by (table identity, epoch); bump the epoch.
-    note_syntax_table_mutation();
-
-    if !update_current_buffer_table {
-        return Ok(Value::NIL);
-    }
-    // Current buffer's slot already points at `target_table` (it's the
-    // same chartable we just mutated above via set-char-table-range).
-    // No compiled form to refresh — motion reads the chartable live.
-    let _ = target_table;
-    Ok(Value::NIL)
+    let mode = eval.symbol_mode();
+    modify_syntax_entry_in_buffers_with_symbols(&mut eval.buffers, &args, mode)
 }
 
 /// `(char-syntax CHAR)` — return the syntax class designator char.
@@ -4842,7 +4793,12 @@ pub(crate) fn builtin_syntax_after(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_syntax_after_in_buffers(&eval.obarray, &eval.buffers, args)
+    builtin_syntax_after_in_buffers_with_symbols(
+        &eval.obarray,
+        &eval.buffers,
+        args,
+        eval.symbol_mode(),
+    )
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -4850,6 +4806,20 @@ pub(crate) fn builtin_syntax_after_in_buffers(
     obarray: &Obarray,
     buffers: &BufferManager,
     args: Vec<Value>,
+) -> EvalResult {
+    builtin_syntax_after_in_buffers_with_symbols(
+        obarray,
+        buffers,
+        args,
+        crate::tagged::SymbolMode::Bare,
+    )
+}
+
+pub(crate) fn builtin_syntax_after_in_buffers_with_symbols(
+    obarray: &Obarray,
+    buffers: &BufferManager,
+    args: Vec<Value>,
+    mode: crate::tagged::SymbolMode,
 ) -> EvalResult {
     if args.len() != 1 {
         return Err(signal(
@@ -4891,7 +4861,9 @@ pub(crate) fn builtin_syntax_after_in_buffers(
         &SyntaxTable::for_buffer(buf),
         unit.ch,
         byte_index,
-        &SyntaxPropByteRun::new(SyntaxProperties::for_scan(true, obarray, buffers)),
+        &SyntaxPropByteRun::new(SyntaxProperties::for_scan_with_symbols(
+            true, obarray, buffers, mode,
+        )),
     );
     Ok(syntax_entry_to_value(&entry))
 }
@@ -4958,7 +4930,12 @@ pub(crate) fn builtin_forward_comment(
             // ran arbitrary Lisp and may have changed either the property
             // resolver inputs or buffer-local comment escape policy.
             let policy = SexpScanPolicy::for_context(eval);
-            let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+            let props = SyntaxProperties::for_scan_with_symbols(
+                honor,
+                &eval.obarray,
+                &eval.buffers,
+                eval.symbol_mode(),
+            );
             let (ok, final_pos, final_char) = {
                 let buf = eval
                     .buffers
@@ -4999,7 +4976,12 @@ pub(crate) fn builtin_forward_comment(
     // As above, snapshot all Lisp-visible scan controls only after the last
     // possible syntax-propertize callback.
     let policy = SexpScanPolicy::for_context(eval);
-    let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+    let props = SyntaxProperties::for_scan_with_symbols(
+        honor,
+        &eval.obarray,
+        &eval.buffers,
+        eval.symbol_mode(),
+    );
     forward_comment_in_buffers(&mut eval.buffers, count, props, policy.comment_end_escape)
 }
 
@@ -5566,9 +5548,14 @@ fn back_comment_safe_key(
     if BACK_COMMENT_SAFE_BYPASS.with(|b| b.get()) {
         return None;
     }
+    // The safe-position index does not key symbol policy; do not reuse it
+    // while positioned purposes can change char-table interpretation.
+    if props.symbol_mode() == crate::tagged::SymbolMode::Positioned {
+        return None;
+    }
     let honor_props = match props {
-        SyntaxProperties::Ignore => false,
-        SyntaxProperties::Honor(resolver) => {
+        SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => false,
+        SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver) => {
             if !resolver.supports_presence_coalescing() {
                 return None;
             }
@@ -6090,7 +6077,12 @@ pub(crate) fn builtin_backward_prefix_chars(
     args: Vec<Value>,
 ) -> EvalResult {
     let honor = parse_sexp_lookup_properties_enabled(eval);
-    let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+    let props = SyntaxProperties::for_scan_with_symbols(
+        honor,
+        &eval.obarray,
+        &eval.buffers,
+        eval.symbol_mode(),
+    );
     builtin_backward_prefix_chars_in_buffers(&mut eval.buffers, args, props)
 }
 
@@ -6181,10 +6173,15 @@ pub(crate) fn builtin_forward_word(
     // GNU's scan_words consults it per word; otherwise the plain syntax scan is
     // used unchanged.
     let wbtable = eval.visible_variable_value_or_nil("find-word-boundary-function-table");
-    let (raw_byte, completed) = if word_boundary_table_active(&wbtable) {
+    let (raw_byte, completed) = if word_boundary_table_active(&wbtable, eval.symbol_mode()) {
         word_motion_with_table(eval, count, honor, wbtable)
     } else {
-        let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+        let props = SyntaxProperties::for_scan_with_symbols(
+            honor,
+            &eval.obarray,
+            &eval.buffers,
+            eval.symbol_mode(),
+        );
         let buf = eval.buffers.current_buffer().ok_or_else(|| {
             signal(
                 LispCondition::Error,
@@ -6288,7 +6285,12 @@ fn scan_sexps_lazily(
     honor: bool,
 ) -> Result<Option<usize>, Flow> {
     let run = |eval: &mut super::eval::Context| -> Result<Option<usize>, Flow> {
-        let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+        let props = SyntaxProperties::for_scan_with_symbols(
+            honor,
+            &eval.obarray,
+            &eval.buffers,
+            eval.symbol_mode(),
+        );
         let policy = SexpScanPolicy::for_context(eval);
         let buf = eval
             .buffers
@@ -6524,7 +6526,12 @@ pub(crate) fn builtin_scan_lists_3(
     // Run the scan against whatever text is propertized now, recomputing the
     // resolver inputs first: propertizing ran arbitrary Lisp.
     let mut scan = |ctx: &mut super::eval::Context| {
-        let props = SyntaxProperties::for_scan(honor, &ctx.obarray, &ctx.buffers);
+        let props = SyntaxProperties::for_scan_with_symbols(
+            honor,
+            &ctx.obarray,
+            &ctx.buffers,
+            ctx.symbol_mode(),
+        );
         let policy = SexpScanPolicy::for_context(ctx);
         let buf = ctx
             .buffers
@@ -7504,7 +7511,12 @@ pub(crate) fn builtin_parse_partial_sexp_6(
             );
         }
     }
-    let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+    let props = SyntaxProperties::for_scan_with_symbols(
+        honor,
+        &eval.obarray,
+        &eval.buffers,
+        eval.symbol_mode(),
+    );
     let escape_policy = CommentEndEscapePolicy::for_context(eval);
     let cache_mode = parse_cache::parse_cache_mode();
     // Short misses use the same plain entry point as cache-off queries. Decide
@@ -7633,7 +7645,12 @@ pub(crate) fn builtin_skip_syntax_forward_2(
             maybe_syntax_propertize_for_scan(eval, window_end_char.saturating_add(1))?;
             // Re-snapshot per window: propertizing ran Lisp, which may have
             // changed a category symbol's plist or the control variables.
-            let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+            let props = SyntaxProperties::for_scan_with_symbols(
+                honor,
+                &eval.obarray,
+                &eval.buffers,
+                eval.symbol_mode(),
+            );
             let buf = eval
                 .buffers
                 .get(current_id)
@@ -7714,7 +7731,12 @@ pub(crate) fn builtin_skip_syntax_backward_2(
         }
     }
 
-    let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+    let props = SyntaxProperties::for_scan_with_symbols(
+        honor,
+        &eval.obarray,
+        &eval.buffers,
+        eval.symbol_mode(),
+    );
     let buf = eval
         .buffers
         .current_buffer()
@@ -7809,6 +7831,10 @@ mod tests;
 mod flat_ascii_syntax_entry_cache_tests;
 
 #[cfg(test)]
+#[path = "tests/issue554_ascii_memo_test.rs"]
+mod issue554_ascii_memo_tests;
+
+#[cfg(test)]
 #[path = "tests/scan_error_data_gnu_test.rs"]
 mod scan_error_data_gnu_tests;
 
@@ -7827,3 +7853,6 @@ mod skip_syntax_classes_tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+mod symbol_policy;
+pub(crate) use symbol_policy::*;

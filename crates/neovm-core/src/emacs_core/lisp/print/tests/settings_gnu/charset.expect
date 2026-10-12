@@ -1,0 +1,1 @@
+(default "\"a\"" "#(\"a\" 0 1 (foo bar))" "\"é\"" "#(\"a\" 0 1 (charset ascii))" "#(\"é\" 0 1 (charset ascii))" "\"é\"")

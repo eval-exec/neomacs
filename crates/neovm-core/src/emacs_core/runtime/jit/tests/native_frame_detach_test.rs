@@ -11,6 +11,10 @@ use crate::emacs_core::eval::{Context, SpecBinding};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::LambdaParams;
 
+#[cfg(test)]
+#[path = "native_frame_detach_pending_test.rs"]
+mod pending_tests;
+
 fn function(nargs: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: (1..=nargs).map(|i| SymId(i as u32)).collect(),
@@ -23,6 +27,20 @@ fn function(nargs: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
+}
+
+/// This fixture observes a native frame, rather than worker readiness. Await
+/// the real compile protocol without executing the callee or arming its
+/// caller's spec slot; the first observed call still takes the arming route.
+fn prepare_native_entry(ev: &mut Context, function: Value) {
+    let bc = function.get_bytecode_data().expect("bytecode fixture");
+    crate::emacs_core::jit::cache::prepare_entry_for_test(ev, &bc);
+    let id = bc.jit_runtime().compiled_id().expect("compile requested");
+    assert_eq!(
+        crate::emacs_core::jit::cache::cache_entry_kind_for_test(id),
+        "compiled",
+        "native-frame fixture requires a ready native entry"
+    );
 }
 
 /// How the callee is entered and how its panic comes back.
@@ -150,6 +168,7 @@ fn contained_panic_detaches_native_frames_before_the_caller_exits() {
             let callee = Value::make_bytecode(function(nargs, ops, constants));
             ev.obarray.set_symbol_function_id(intern(&name), callee);
             ev.set_variable("neo-detach-obj", callee);
+            prepare_native_entry(&mut ev, callee);
             // (lambda () (CALLEE 41 42 43 ...)): unframed, so its exit heals
             // the boundary but leaves the specpdl residue to the deferred
             // unwind -- the window this test inspects.
@@ -263,6 +282,7 @@ fn a_leaked_cleanup_after_a_contained_panic_reads_only_detached_frames() {
         ));
         ev.obarray.set_symbol_function_id(intern(&name), callee);
         ev.set_variable("neo-detach-obj", callee);
+        prepare_native_entry(&mut ev, callee);
         let mut caller_ops = vec![Op::Constant(0)];
         let mut caller_consts = vec![callee_sym];
         for i in 0..nargs {
@@ -367,6 +387,8 @@ fn apply_native_callee_frame_owns_its_spread_arguments() {
         let list = ev
             .eval_str(&format!("(list {})", rest.join(" ")))
             .expect("list");
+        prepare_native_entry(&mut ev, callee);
+        prepare_native_entry(&mut ev, caller);
         let want: Vec<String> = (1..=nargs).map(|n| n.to_string()).collect();
         for _ in 0..3 {
             let _ = ev.funcall_general_untraced(caller, vec![callee, list]);

@@ -214,7 +214,7 @@ mod enabled {
 
     impl SqliteReturnType {
         pub(super) fn from_value(value: &Value) -> Option<Self> {
-            value.as_symbol_name()?.parse().ok()
+            value.as_bare_symbol_name()?.parse().ok()
         }
 
         #[cfg(test)]
@@ -231,7 +231,7 @@ mod enabled {
 
     impl SqliteBindSymbol {
         pub(super) fn from_value(value: &Value) -> Option<Self> {
-            value.as_symbol_name()?.parse().ok()
+            value.as_bare_symbol_name()?.parse().ok()
         }
 
         #[cfg(test)]
@@ -256,6 +256,7 @@ mod enabled {
         eval: &mut crate::emacs_core::eval::Context,
         values: &Value,
     ) -> Result<Vec<BindValue>, Flow> {
+        let symbol_mode = eval.symbol_mode();
         if values.is_nil() {
             return Ok(Vec::new());
         }
@@ -297,7 +298,9 @@ mod enabled {
                                 Value::symbol("coding-system"),
                             )
                         });
-                    if coding_system.is_some_and(|coding| coding.is_symbol_named("binary")) {
+                    if coding_system
+                        .is_some_and(|coding| coding.is_symbol_named("binary", symbol_mode))
+                    {
                         if string.is_multibyte() {
                             return Err(sqlite_err("BLOB values must be unibyte"));
                         }

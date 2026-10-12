@@ -85,7 +85,7 @@ fn assert_subr_arity(name: &str, min: i64, max: Option<i64>) {
                 "subr max arity mismatch for {name}"
             ),
             None => assert_eq!(
-                pair_cdr.as_symbol_name(),
+                pair_cdr.as_bare_symbol_name(),
                 Some("many"),
                 "subr max arity mismatch for {name}"
             ),
@@ -155,7 +155,7 @@ fn subr_arity_if_is_unevalled() {
         let pair_car = result.cons_car();
         let pair_cdr = result.cons_cdr();
         assert_eq!(pair_car.as_int(), Some(2));
-        assert_eq!(pair_cdr.as_symbol_name(), Some("unevalled"));
+        assert_eq!(pair_cdr.as_bare_symbol_name(), Some("unevalled"));
     } else {
         panic!("expected cons cell");
     }
@@ -180,7 +180,7 @@ fn subr_arity_core_special_forms_match_oracle_unevalled_shapes() {
             let pair_car = result.cons_car();
             let pair_cdr = result.cons_cdr();
             assert_eq!(pair_car.as_int(), Some(min));
-            assert_eq!(pair_cdr.as_symbol_name(), Some("unevalled"));
+            assert_eq!(pair_cdr.as_bare_symbol_name(), Some("unevalled"));
         } else {
             panic!("expected cons cell for {name}");
         }
@@ -1969,49 +1969,65 @@ fn interpreted_function_p_false_for_subr() {
 #[test]
 fn special_form_p_true_for_if() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_special_form_p(vec![Value::symbol("if")]).unwrap();
+    let result =
+        builtin_special_form_p(vec![Value::symbol("if")], crate::tagged::SymbolMode::Bare).unwrap();
     assert!(result.is_truthy());
 }
 
 #[test]
 fn special_form_p_true_for_quote() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_special_form_p(vec![Value::symbol("quote")]).unwrap();
+    let result = builtin_special_form_p(
+        vec![Value::symbol("quote")],
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(result.is_truthy());
 }
 
 #[test]
 fn special_form_p_true_for_setq() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_special_form_p(vec![Value::symbol("setq")]).unwrap();
+    let result =
+        builtin_special_form_p(vec![Value::symbol("setq")], crate::tagged::SymbolMode::Bare)
+            .unwrap();
     assert!(result.is_truthy());
 }
 
 #[test]
 fn special_form_p_false_for_car() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_special_form_p(vec![Value::symbol("car")]).unwrap();
+    let result =
+        builtin_special_form_p(vec![Value::symbol("car")], crate::tagged::SymbolMode::Bare)
+            .unwrap();
     assert!(result.is_nil());
 }
 
 #[test]
 fn special_form_p_false_for_when() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_special_form_p(vec![Value::symbol("when")]).unwrap();
+    let result =
+        builtin_special_form_p(vec![Value::symbol("when")], crate::tagged::SymbolMode::Bare)
+            .unwrap();
     assert!(result.is_nil());
 }
 
 #[test]
 fn special_form_p_false_for_throw() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_special_form_p(vec![Value::symbol("throw")]).unwrap();
+    let result = builtin_special_form_p(
+        vec![Value::symbol("throw")],
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(result.is_nil());
 }
 
 #[test]
 fn special_form_p_false_for_int() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_special_form_p(vec![Value::fixnum(42)]).unwrap();
+    let result =
+        builtin_special_form_p(vec![Value::fixnum(42)], crate::tagged::SymbolMode::Bare).unwrap();
     assert!(result.is_nil());
 }
 
@@ -2107,7 +2123,7 @@ fn func_arity_lambda_with_rest() {
         let pair_car = result.cons_car();
         let pair_cdr = result.cons_cdr();
         assert_eq!(pair_car.as_int(), Some(1));
-        assert_eq!(pair_cdr.as_symbol_name(), Some("many"));
+        assert_eq!(pair_cdr.as_bare_symbol_name(), Some("many"));
     } else {
         panic!("expected cons cell");
     }
@@ -2122,7 +2138,7 @@ fn func_arity_bytecode() {
         let pair_car = result.cons_car();
         let pair_cdr = result.cons_cdr();
         assert_eq!(pair_car.as_int(), Some(2));
-        assert_eq!(pair_cdr.as_symbol_name(), Some("many"));
+        assert_eq!(pair_cdr.as_bare_symbol_name(), Some("many"));
     } else {
         panic!("expected cons cell");
     }
@@ -2138,7 +2154,7 @@ fn func_arity_subr() {
         let pair_car = result.cons_car();
         let pair_cdr = result.cons_cdr();
         assert_eq!(pair_car.as_int(), Some(0));
-        assert_eq!(pair_cdr.as_symbol_name(), Some("many"));
+        assert_eq!(pair_cdr.as_bare_symbol_name(), Some("many"));
     } else {
         panic!("expected cons cell");
     }
@@ -2154,7 +2170,7 @@ fn func_arity_subr_uses_registered_metadata() {
         let pair_car = message.cons_car();
         let pair_cdr = message.cons_cdr();
         assert_eq!(pair_car.as_int(), Some(1));
-        assert_eq!(pair_cdr.as_symbol_name(), Some("many"));
+        assert_eq!(pair_cdr.as_bare_symbol_name(), Some("many"));
     } else {
         panic!("expected cons cell");
     }

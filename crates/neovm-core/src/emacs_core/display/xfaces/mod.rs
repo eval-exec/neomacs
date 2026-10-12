@@ -55,7 +55,12 @@ pub(crate) fn ensure_startup_compat_variables(eval: &mut crate::emacs_core::eval
     // that every defface has run and all faces are known. This is the startup
     // sync point that fixes `face-id` for bootstrap faces (see
     // stamp_face_id_properties).
-    stamp_face_id_properties(eval.obarray_mut());
+    // SAFETY: stamping registry IDs writes only symbol properties; the helper
+    // neither calls Lisp nor changes canonical function/debugger metadata.
+    unsafe {
+        eval.obarray
+            .with_legacy_value_write(stamp_face_id_properties);
+    }
 
     let defaults = [
         ("face-filters-always-match", Value::NIL),
@@ -880,17 +885,17 @@ fn valid_face_underline_value(value: Value) -> bool {
             Value::NIL
         };
 
-        if key.is_nil() || (val.is_nil() && !key.is_symbol_named(":position")) {
+        if key.is_nil() || (val.is_nil() && !key.is_bare_symbol_named(":position")) {
             return false;
         }
-        if key.is_symbol_named(":color")
-            && !(val.is_symbol_named("foreground-color") || non_empty_lisp_string(val))
+        if key.is_bare_symbol_named(":color")
+            && !(val.is_bare_symbol_named("foreground-color") || non_empty_lisp_string(val))
         {
             return false;
         }
-        if key.is_symbol_named(":style")
+        if key.is_bare_symbol_named(":style")
             && val
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .and_then(UnderlineStyle::from_symbol)
                 .is_none()
         {
@@ -939,18 +944,18 @@ fn valid_face_box_value(value: Value) -> bool {
         let val = list.cons_car();
         list = list.cons_cdr();
 
-        if key.is_symbol_named(":line-width") {
+        if key.is_bare_symbol_named(":line-width") {
             if !valid_box_line_width(val) {
                 return false;
             }
-        } else if key.is_symbol_named(":color") {
+        } else if key.is_bare_symbol_named(":color") {
             if !val.is_nil() && !non_empty_lisp_string(val) {
                 return false;
             }
-        } else if key.is_symbol_named(":style") {
+        } else if key.is_bare_symbol_named(":style") {
             if !val.is_nil()
                 && val
-                    .as_symbol_name()
+                    .as_bare_symbol_name()
                     .and_then(BoxStyle::from_symbol)
                     .is_none()
             {
@@ -1274,7 +1279,9 @@ fn merge_defaults_overrides_into_selected(face_name: &str) {
         if let Some(attrs) = defaults {
             let selected = state.selected_overrides.entry(face).or_default();
             for (attr, value) in attrs {
-                if value.is_symbol_named("unspecified") || value.is_symbol_named("relative") {
+                if value.is_bare_symbol_named("unspecified")
+                    || value.is_bare_symbol_named("relative")
+                {
                     continue;
                 }
                 selected.insert(attr, value);
@@ -1310,7 +1317,7 @@ struct ResolvedFaceName(SymId);
 
 impl ResolvedFaceName {
     fn from_symbol(value: Value) -> Option<Self> {
-        value.as_symbol_id().map(Self)
+        value.as_bare_symbol_id().map(Self)
     }
 
     fn symbol(self) -> Value {
@@ -1383,6 +1390,7 @@ fn resolve_face_designator(
     face: Value,
     cycle_policy: FaceAliasCyclePolicy,
 ) -> Result<ResolvedFaceDesignator, Flow> {
+    let symbol_mode = eval.symbol_mode();
     let (kind, origin) = match face.kind() {
         ValueKind::String => {
             let name = font_string_text(&face).expect("checked string");
@@ -1390,7 +1398,7 @@ fn resolve_face_designator(
                 FaceDesignatorKind::String,
                 ResolvedFaceName(
                     Value::symbol(&name)
-                        .as_symbol_id()
+                        .as_symbol_id(symbol_mode)
                         .expect("interned face name must be a symbol"),
                 ),
             )
@@ -1426,7 +1434,7 @@ fn resolve_face_designator(
                 }
                 FaceAliasCyclePolicy::UseDefault => Ok(kind.resolved(ResolvedFaceName(
                     Value::symbol("default")
-                        .as_symbol_id()
+                        .as_symbol_id(symbol_mode)
                         .expect("default must be an interned symbol"),
                 ))),
             };
@@ -1609,7 +1617,7 @@ fn sync_face_overrides_from_lisp_face_vector(face_name: &str, vector: Value, def
             .get(attr as usize)
             .copied()
             .unwrap_or_else(|| Value::symbol("unspecified"));
-        if !value.is_symbol_named("unspecified") {
+        if !value.is_bare_symbol_named("unspecified") {
             set_face_override(face_name, attr, value, defaults_frame);
         }
     }
@@ -1642,9 +1650,9 @@ fn face_hash_entry_lisp_vector(entry: Value) -> Option<Value> {
 }
 
 fn runtime_unspecified_lisp_face_attr(attr: LFaceAttr, value: Value) -> bool {
-    value.is_symbol_named("unspecified")
-        || value.is_symbol_named(":ignore-defface")
-        || value.is_symbol_named("reset")
+    value.is_bare_symbol_named("unspecified")
+        || value.is_bare_symbol_named(":ignore-defface")
+        || value.is_bare_symbol_named("reset")
         || (attr == LFaceAttr::Foreground && value.as_utf8_str() == Some("unspecified-fg"))
         || (attr == LFaceAttr::Background && value.as_utf8_str() == Some("unspecified-bg"))
 }
@@ -1901,6 +1909,7 @@ fn tty_color_desc_rgb(
 /// funcall per unique name per sync -- face sync runs on face changes, not per
 /// redisplay frame.
 fn build_tty_color_map(eval: &mut super::eval::Context, frame_id: FrameId) -> TtyColorMap {
+    let symbol_mode = eval.symbol_mode();
     let mut names: Vec<String> = Vec::new();
     for (_face_name, _lisp_face_id, vector) in frame_lisp_face_table_entries(eval, frame_id) {
         let note = |s: Option<&str>, names: &mut Vec<String>| {
@@ -1935,11 +1944,11 @@ fn build_tty_color_map(eval: &mut super::eval::Context, frame_id: FrameId) -> Tt
             if let Some(plist) = list_to_vec(&value) {
                 let mut i = 0;
                 while i + 1 < plist.len() {
-                    if plist[i].as_symbol_name() == Some(":color") {
+                    if plist[i].as_symbol_name(symbol_mode) == Some(":color") {
                         note(
                             plist[i + 1]
                                 .as_utf8_str()
-                                .or_else(|| plist[i + 1].as_symbol_name()),
+                                .or_else(|| plist[i + 1].as_symbol_name(symbol_mode)),
                             &mut names,
                         );
                     }
@@ -2195,6 +2204,7 @@ pub(crate) fn invalid_display_face_references(
         face_ref: Value,
         invalid: &mut Vec<Value>,
     ) {
+        let symbol_mode = eval.symbol_mode();
         if face_ref.is_nil() {
             return;
         }
@@ -2206,19 +2216,21 @@ pub(crate) fn invalid_display_face_references(
         }
 
         let first = face_ref.cons_car();
-        if first.is_symbol_named("foreground-color") || first.is_symbol_named("background-color") {
+        if first.is_symbol_named("foreground-color", symbol_mode)
+            || first.is_symbol_named("background-color", symbol_mode)
+        {
             return;
         }
 
         if first
-            .as_symbol_name()
+            .as_symbol_name(symbol_mode)
             .is_some_and(|name| name.starts_with(':'))
         {
             let mut plist = face_ref;
             while plist.is_cons() && plist.cons_cdr().is_cons() {
                 let keyword = plist.cons_car();
                 let value = plist.cons_cdr().cons_car();
-                if keyword.is_symbol_named(":inherit") {
+                if keyword.is_symbol_named(":inherit", symbol_mode) {
                     collect(eval, frame_id, value, invalid);
                 }
                 plist = plist.cons_cdr().cons_cdr();
@@ -2463,7 +2475,7 @@ fn default_face_attribute_value(attr: LFaceAttr) -> Value {
 }
 
 fn is_reset_like_face_attr_value(value: &Value) -> bool {
-    value.as_symbol_id().is_some_and(|id| {
+    value.as_bare_symbol_id().is_some_and(|id| {
         let s = resolve_sym(id);
         s == "unspecified" || s == ":ignore-defface" || s == "reset"
     })
@@ -3120,6 +3132,7 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     // Pure logic (FACE_ATTR_STATE storage + validation)
     expect_min_args("internal-set-lisp-face-attribute", &args, 3)?;
     expect_max_args("internal-set-lisp-face-attribute", &args, 4)?;
@@ -3134,7 +3147,7 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute(
     // of re-interning `face_name` at every registry touch (12,788 calls
     // during a batch startup's defface processing paid 3-5 interns each).
     let face_id = face_symbol
-        .as_symbol_id()
+        .as_symbol_id(symbol_mode)
         .expect("a required symbol face resolves to a symbol");
     let attr_name = normalize_set_face_attribute_name(&args[1])?;
     let value = args[2];
@@ -3181,7 +3194,7 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute(
             // (xfaces.c:3262, Finternal_set_lisp_face_attribute).
             if defaults_frame
                 && is_reset_like_face_attr_value(&canonical_value)
-                && canonical_value.is_symbol_named("unspecified")
+                && canonical_value.is_symbol_named("unspecified", symbol_mode)
             {
                 canonical_value = Value::symbol(":ignore-defface");
             }
@@ -3350,8 +3363,8 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute(
             }
 
             if let Some(parameter) = frame_parameter_for_face_attribute(&face_name, canonical_attr)
-                && !canonical_value.is_symbol_named("unspecified")
-                && !canonical_value.is_symbol_named(":ignore-defface")
+                && !canonical_value.is_symbol_named("unspecified", symbol_mode)
+                && !canonical_value.is_symbol_named(":ignore-defface", symbol_mode)
             {
                 for frame_id in changed_live_frames.iter().copied() {
                     publish_face_attribute_to_frame_parameter(
@@ -3382,7 +3395,7 @@ fn lisp_value_to_face_attr_resolved(
     };
 
     // "unspecified" symbol = reset the attribute
-    if value.is_symbol_named("unspecified") {
+    if value.is_bare_symbol_named("unspecified") {
         return Some(FaceAttrValue::Unspecified);
     }
 
@@ -3390,7 +3403,7 @@ fn lisp_value_to_face_attr_resolved(
         LFaceAttr::Foreground | LFaceAttr::Background | LFaceAttr::DistantForeground => {
             let s = match value.kind() {
                 ValueKind::Cons => value.cons_car().as_utf8_str(),
-                _ => value.as_utf8_str().or_else(|| value.as_symbol_name()),
+                _ => value.as_utf8_str().or_else(|| value.as_bare_symbol_name()),
             };
             let s = s?;
             // Parse the lface string to a spec exactly once; realization —
@@ -3401,15 +3414,15 @@ fn lisp_value_to_face_attr_resolved(
             ))
         }
         LFaceAttr::Weight => {
-            let name = value.as_symbol_name()?;
+            let name = value.as_bare_symbol_name()?;
             Some(FaceAttrValue::Weight(FontWeight::from_symbol(name)?))
         }
         LFaceAttr::Slant => {
-            let name = value.as_symbol_name()?;
+            let name = value.as_bare_symbol_name()?;
             Some(FaceAttrValue::Slant(FontSlant::from_symbol(name)?))
         }
         LFaceAttr::Width => {
-            let name = value.as_symbol_name()?;
+            let name = value.as_bare_symbol_name()?;
             Some(FaceAttrValue::Width(FontWidth::from_symbol(name)?))
         }
         LFaceAttr::Height => match height::BackendFaceHeight::try_from(value) {
@@ -3446,17 +3459,18 @@ fn lisp_value_to_face_attr_resolved(
                 let mut position = UnderlinePosition::FontMetric;
                 let mut i = 0;
                 while i + 1 < plist.len() {
-                    let key = plist[i].as_symbol_name().unwrap_or("");
+                    let key = plist[i].as_bare_symbol_name().unwrap_or("");
                     let val = &plist[i + 1];
                     match key {
                         ":style" => {
                             style = val
-                                .as_symbol_name()
+                                .as_bare_symbol_name()
                                 .and_then(UnderlineStyle::from_symbol)
                                 .unwrap_or(UnderlineStyle::Line);
                         }
                         ":color" => {
-                            if let Some(s) = val.as_utf8_str().or_else(|| val.as_symbol_name()) {
+                            if let Some(s) = val.as_utf8_str().or_else(|| val.as_bare_symbol_name())
+                            {
                                 color = resolver.realize(&SpecifiedColor::parse(s));
                             }
                         }
@@ -3527,7 +3541,7 @@ fn lisp_value_to_face_attr_resolved(
                 };
                 let mut i = 0;
                 while i + 1 < plist.len() {
-                    let key = plist[i].as_symbol_name().unwrap_or("");
+                    let key = plist[i].as_bare_symbol_name().unwrap_or("");
                     let val = &plist[i + 1];
                     match key {
                         ":line-width" => {
@@ -3536,14 +3550,15 @@ fn lisp_value_to_face_attr_resolved(
                             }
                         }
                         ":color" => {
-                            if let Some(s) = val.as_utf8_str().or_else(|| val.as_symbol_name()) {
+                            if let Some(s) = val.as_utf8_str().or_else(|| val.as_bare_symbol_name())
+                            {
                                 border.color =
                                     FaceColorResolver::Standard.realize(&SpecifiedColor::parse(s));
                             }
                         }
                         ":style" => {
                             border.style = val
-                                .as_symbol_name()
+                                .as_bare_symbol_name()
                                 .and_then(BoxStyle::from_symbol)
                                 .unwrap_or(BoxStyle::Flat);
                         }
@@ -3564,7 +3579,7 @@ fn lisp_value_to_face_attr_resolved(
             // Store raw face_ref. Matches GNU's `LFACE_INHERIT_INDEX`
             // slot which holds any face_ref (symbol / list / plist);
             // `merge_face_ref` dispatches on shape at resolution time.
-            if value.is_nil() || value.is_symbol_named("nil") {
+            if value.is_nil() || value.is_bare_symbol_named("nil") {
                 return Some(FaceAttrValue::Inherit(None));
             }
             Some(FaceAttrValue::Inherit(Some(value)))
@@ -3574,7 +3589,7 @@ fn lisp_value_to_face_attr_resolved(
             // string, or a symbol). GNU keeps it in `LFACE_STIPPLE_INDEX` and
             // realizes it to a pixmap at draw time; neomacs realizes it to a
             // `StipplePattern` in the layout bridge (`realize_face`).
-            if value.is_nil() || value.is_symbol_named("nil") {
+            if value.is_nil() || value.is_bare_symbol_named("nil") {
                 Some(FaceAttrValue::Stipple(None))
             } else {
                 Some(FaceAttrValue::Stipple(Some(value)))
@@ -3708,13 +3723,14 @@ pub(crate) fn builtin_internal_lisp_face_empty_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_min_args("internal-lisp-face-empty-p", &args, 1)?;
     expect_max_args("internal-lisp-face-empty-p", &args, 2)?;
     let defaults_frame = frame_defaults_flag(args.get(1))?;
     let face = resolve_known_face_name_for_compare(eval, &args[0], defaults_frame)?;
     for attr in LFACE_ATTRS {
         let v = lisp_face_attribute_value(&face, attr, defaults_frame);
-        if !v.is_symbol_named("unspecified") {
+        if !v.is_symbol_named("unspecified", symbol_mode) {
             return Ok(Value::NIL);
         }
     }
@@ -3725,6 +3741,7 @@ pub(crate) fn builtin_internal_merge_in_global_face(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("internal-merge-in-global-face", &args, 2)?;
     if !frame_device_designator_p(&args[1]) {
         return Err(signal(
@@ -3748,9 +3765,9 @@ pub(crate) fn builtin_internal_merge_in_global_face(
             let Some(global_value) = lisp_face_vector_attr(global_vector, attr) else {
                 continue;
             };
-            if global_value.is_symbol_named(":ignore-defface") {
+            if global_value.is_symbol_named(":ignore-defface", symbol_mode) {
                 set_lisp_face_vector_attr(local_vector, attr, Value::symbol("unspecified"));
-            } else if !global_value.is_symbol_named("unspecified") {
+            } else if !global_value.is_symbol_named("unspecified", symbol_mode) {
                 set_lisp_face_vector_attr(local_vector, attr, global_value);
             }
         }
@@ -3766,8 +3783,8 @@ pub(crate) fn builtin_internal_merge_in_global_face(
 pub(crate) fn builtin_face_attribute_relative_p(args: Vec<Value>) -> EvalResult {
     expect_args("face-attribute-relative-p", &args, 2)?;
     let value_is_relative_reset = args[1]
-        .as_symbol_id()
-        .or_else(|| args[1].as_keyword_id())
+        .as_bare_symbol_id()
+        .or_else(|| args[1].as_bare_keyword_id())
         .is_some_and(|id_| {
             matches!(
                 resolve_sym(id_),
@@ -3812,8 +3829,8 @@ pub(crate) fn builtin_merge_face_attribute_with_eval(
 
 fn merge_face_attribute_impl(eval: Option<&mut super::eval::Context>, args: &[Value]) -> Value {
     let value1_is_relative_reset = args[1]
-        .as_symbol_id()
-        .or_else(|| args[1].as_keyword_id())
+        .as_bare_symbol_id()
+        .or_else(|| args[1].as_bare_keyword_id())
         .is_some_and(|id_| {
             matches!(
                 resolve_sym(id_),
@@ -3825,8 +3842,8 @@ fn merge_face_attribute_impl(eval: Option<&mut super::eval::Context>, args: &[Va
     }
 
     let height_attr = args[0]
-        .as_symbol_id()
-        .or_else(|| args[0].as_keyword_id())
+        .as_bare_symbol_id()
+        .or_else(|| args[0].as_bare_keyword_id())
         .is_some_and(|id_| matches!(resolve_sym(id_), "height" | ":height"));
     if height_attr {
         return merge_face_height_value(eval, args[1], args[2], args[1]);
@@ -4363,6 +4380,7 @@ pub(crate) fn builtin_face_id(args: Vec<Value>) -> EvalResult {
 }
 
 pub(crate) fn builtin_face_font(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_min_args("face-font", &args, 1)?;
     expect_max_args("face-font", &args, 3)?;
 
@@ -4371,12 +4389,12 @@ pub(crate) fn builtin_face_font(eval: &mut super::eval::Context, args: Vec<Value
         let face_name = resolve_face_name_for_domain(eval, &args[0], true)?;
         let mut styles = Vec::new();
         let weight = lisp_face_attribute_value(&face_name, LFaceAttr::Weight, true);
-        if matches!(weight.as_symbol_name(), Some(name) if name != "normal" && name != "unspecified")
+        if matches!(weight.as_symbol_name(symbol_mode), Some(name) if name != "normal" && name != "unspecified")
         {
             styles.push(Value::symbol("bold"));
         }
         let slant = lisp_face_attribute_value(&face_name, LFaceAttr::Slant, true);
-        if matches!(slant.as_symbol_name(), Some(name) if name != "normal" && name != "unspecified")
+        if matches!(slant.as_symbol_name(symbol_mode), Some(name) if name != "normal" && name != "unspecified")
         {
             styles.push(Value::symbol("italic"));
         }
@@ -4488,7 +4506,7 @@ pub(crate) fn builtin_internal_set_font_selection_order(args: Vec<Value>) -> Eva
         if values.len() == valid_keywords.len() {
             let mut seen = HashSet::default();
             values.iter().all(|value| {
-                if let Some(id) = value.as_keyword_id() {
+                if let Some(id) = value.as_bare_keyword_id() {
                     let s = resolve_sym(id);
                     let key = if s.starts_with(':') {
                         s.to_owned()

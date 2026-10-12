@@ -94,7 +94,7 @@ impl LocalExecutor {
         }
     }
 
-    fn finish(self) -> Result<(), neovm_core::tagged::gc::MarkFinishError> {
+    fn finish(self) -> Result<(), neovm_core::emacs_core::eval::ContextShutdownError> {
         match self {
             Self::Shared(_) => Ok(()),
             Self::Elisp(evaluator) => evaluator.shutdown(),

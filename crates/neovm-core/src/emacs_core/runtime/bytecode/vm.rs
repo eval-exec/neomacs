@@ -678,6 +678,82 @@ pub(crate) struct StackCursor {
     len: usize,
 }
 
+/// Sole-owner interpreter phase, coupled to the existing operand cursor.
+///
+/// The witness contains no manager pointer. The closed World builder proves
+/// exactly one Context owns the views; Vm.ctx remains the actual owner borrow.
+/// Publication consumes both parts before synchronous callbacks/GC. Private
+/// driver code must rejoin the original VM; the ZST proves construction policy
+/// and phase consumption, not owner identity. This permits no second facade or yield.
+#[must_use = "publish this phase before an operation that can run Lisp or collect"]
+struct RunLoopCursor {
+    operands: StackCursor,
+    phase: crate::emacs_core::eval::world::SoleOwnerDriver,
+}
+
+/// Published operands have no usable cursor or manager projection.
+#[derive(Debug)]
+#[must_use = "consume this return capability when the original VM rejoins"]
+struct PublishedSolePhase {
+    phase: crate::emacs_core::eval::world::PublishedSoleOwnerDriver,
+}
+static_assertions::assert_not_impl_any!(RunLoopCursor: Send, Sync, Copy, Clone);
+static_assertions::assert_not_impl_any!(PublishedSolePhase: Send, Sync, Copy, Clone);
+static_assertions::assert_eq_size!(RunLoopCursor, StackCursor);
+static_assertions::const_assert_eq!(
+    std::mem::align_of::<RunLoopCursor>(),
+    std::mem::align_of::<StackCursor>()
+);
+static_assertions::const_assert_eq!(std::mem::size_of::<PublishedSolePhase>(), 0);
+
+impl std::fmt::Debug for RunLoopCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunLoopCursor")
+            .field("operand_base", &self.operands.base)
+            .field("operand_len", &self.operands.len)
+            .field("phase", &self.phase)
+            .finish()
+    }
+}
+
+impl RunLoopCursor {
+    #[inline(always)]
+    fn acquire(vm: &mut Vm<'_>, phase: crate::emacs_core::eval::world::SoleOwnerDriver) -> Self {
+        Self {
+            operands: StackCursor::acquire(vm.ctx),
+            phase,
+        }
+    }
+
+    /// The private driver keeps the existing two operand words in locals.
+    /// The affine policy witness must move back with them before every escape.
+    #[inline(always)]
+    fn into_parts(self) -> (StackCursor, crate::emacs_core::eval::world::SoleOwnerDriver) {
+        (self.operands, self.phase)
+    }
+
+    #[inline(always)]
+    fn publish(self, vm: &mut Vm<'_>) -> PublishedSolePhase {
+        self.operands.publish(vm.ctx);
+        PublishedSolePhase {
+            phase: self.phase.into_published(),
+        }
+    }
+}
+
+impl PublishedSolePhase {
+    /// Rejoin through the original VM receiver retained by the private driver.
+    /// No identity is encoded in the ZST; this receiver policy remains audited.
+    #[inline(always)]
+    fn rejoin(self, vm: &mut Vm<'_>) -> RunLoopCursor {
+        RunLoopCursor::acquire(vm, self.phase.into_running())
+    }
+
+    /// Retire a published activation on a normal or nonlocal final exit.
+    #[inline(always)]
+    fn finish(self) {}
+}
+
 #[cfg(debug_assertions)]
 thread_local! {
     static STACK_CURSOR_LIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1163,6 +1239,7 @@ struct InstalledCalleeFrame(InterpreterFrame);
 /// inline storage of two `SmallVec`s. The auxiliary state stays at a stable
 /// logical depth until that frame completes, like GNU's separate handler and
 /// specpdl stacks.
+#[derive(Debug)]
 struct InterpreterFrameAux {
     handlers: HandlerStack,
     bind_stack: BindStack,
@@ -1203,6 +1280,7 @@ impl InterpreterDriverDepth {
     }
 }
 
+#[derive(Debug)]
 struct SuspendedInterpreterFrameAux {
     depth: InterpreterDriverDepth,
     state: InterpreterFrameAux,
@@ -1215,16 +1293,64 @@ struct SuspendedInterpreterFrameAux {
 /// a sparse stack containing only suspended callers whose state is nonempty.
 /// The common Bcall/Breturn path changes only `current`'s empty state and never
 /// pushes the 96-byte pair of inline `SmallVec`s.
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InterpreterFrameAuxOccupancy {
     KnownEmpty,
     MayContainState,
 }
 
+/// Its unique auxiliary allocations are retired out of line on unwinding.
+/// `ManuallyDrop` suppresses field drop glue after that one destructor call;
+/// the consuming pool-return path transfers both fields before retiring only
+/// the current state, as it did before the explicit drop boundary.
+#[derive(Debug)]
 struct InterpreterFrameAuxStack {
-    current: InterpreterFrameAux,
+    current: std::mem::ManuallyDrop<InterpreterFrameAux>,
     current_occupancy: InterpreterFrameAuxOccupancy,
-    suspended: Vec<SuspendedInterpreterFrameAux>,
+    suspended: std::mem::ManuallyDrop<Vec<SuspendedInterpreterFrameAux>>,
+    // The marks describe this executing thread's specpdl/handler frontiers.
+    // Moving their owner to another thread would not transfer those frontiers.
+    _owner: std::marker::PhantomData<*mut ()>,
+}
+
+static_assertions::assert_not_impl_any!(InterpreterFrameAuxStack: Send, Sync, Clone);
+// A future owned handler payload must revisit the destructor's no-user-Drop
+// premise instead of silently introducing a callback or panic during teardown.
+static_assertions::const_assert!(!std::mem::needs_drop::<Handler>());
+static_assertions::assert_eq_size!(
+    std::mem::ManuallyDrop<InterpreterFrameAux>,
+    InterpreterFrameAux
+);
+static_assertions::assert_eq_size!(
+    std::mem::ManuallyDrop<Vec<SuspendedInterpreterFrameAux>>,
+    Vec<SuspendedInterpreterFrameAux>
+);
+static_assertions::const_assert_eq!(
+    std::mem::align_of::<std::mem::ManuallyDrop<InterpreterFrameAux>>(),
+    std::mem::align_of::<InterpreterFrameAux>()
+);
+static_assertions::const_assert_eq!(
+    std::mem::align_of::<std::mem::ManuallyDrop<Vec<SuspendedInterpreterFrameAux>>>(),
+    std::mem::align_of::<Vec<SuspendedInterpreterFrameAux>>()
+);
+static_assertions::const_assert_eq!(std::mem::size_of::<std::marker::PhantomData<*mut ()>>(), 0);
+
+impl Drop for InterpreterFrameAuxStack {
+    // Keep both SmallVecs and the sparse Vec's destruction behind this one
+    // boundary even if run_loop becomes its only caller after fat LTO.
+    #[inline(never)]
+    fn drop(&mut self) {
+        // SAFETY: these private fields stay initialized until this destructor
+        // runs. Only into_suspended takes them, and it suppresses this Drop by
+        // consuming the entire owner through ManuallyDrop. Each field is thus
+        // destroyed exactly once. Their elements are handler markers/binding
+        // depths, with no user destructor, Lisp callback, panic or blocking
+        // teardown. The wrappers prevent a subsequent implicit field drop.
+        unsafe {
+            std::mem::ManuallyDrop::drop(&mut self.current);
+            std::mem::ManuallyDrop::drop(&mut self.suspended);
+        }
+    }
 }
 
 impl InterpreterFrameAuxStack {
@@ -1233,7 +1359,23 @@ impl InterpreterFrameAuxStack {
         Self::with_suspended(handlers, bind_stack, Vec::new())
     }
     fn into_suspended(self) -> Vec<SuspendedInterpreterFrameAux> {
-        self.suspended
+        let mut owner = std::mem::ManuallyDrop::new(self);
+        // SAFETY: consuming self provides sole ownership of both initialized
+        // fields. Take each once, without an intervening call or allocation;
+        // the outer ManuallyDrop prevents the retired owner's destructor from
+        // reading them again. The extracted current state is retired normally
+        // and the extracted Vec becomes the caller's pool-owned allocation.
+        let (current, suspended) = unsafe {
+            (
+                std::mem::ManuallyDrop::take(&mut owner.current),
+                std::mem::ManuallyDrop::take(&mut owner.suspended),
+            )
+        };
+        // run_loop has just called take_entry, which installed fresh empty
+        // current stacks. Keep that retirement visible to the optimizer rather
+        // than adding a routine out-of-line destructor call on pool return.
+        drop(current);
+        suspended
     }
     /// Like the test-only `new` with pooled (emptied) storage for the
     /// suspended frames.
@@ -1250,9 +1392,10 @@ impl InterpreterFrameAuxStack {
             InterpreterFrameAuxOccupancy::MayContainState
         };
         Self {
-            current,
+            current: std::mem::ManuallyDrop::new(current),
             current_occupancy,
-            suspended,
+            suspended: std::mem::ManuallyDrop::new(suspended),
+            _owner: std::marker::PhantomData,
         }
     }
 
@@ -1274,7 +1417,7 @@ impl InterpreterFrameAuxStack {
         }
         self.suspended.push(SuspendedInterpreterFrameAux {
             depth,
-            state: std::mem::replace(&mut self.current, InterpreterFrameAux::empty()),
+            state: std::mem::replace(&mut *self.current, InterpreterFrameAux::empty()),
         });
         self.current_occupancy = InterpreterFrameAuxOccupancy::KnownEmpty;
     }
@@ -1285,7 +1428,7 @@ impl InterpreterFrameAuxStack {
             .last()
             .is_some_and(|suspended| suspended.depth == depth)
         {
-            self.current = self
+            *self.current = self
                 .suspended
                 .pop()
                 .expect("matching sparse auxiliary frame must exist")
@@ -1305,7 +1448,7 @@ impl InterpreterFrameAuxStack {
             // handler or dynamic binding in the same driver frame.
             if self.current_occupancy == InterpreterFrameAuxOccupancy::MayContainState {
                 if !self.current.is_empty() {
-                    self.current = InterpreterFrameAux::empty();
+                    *self.current = InterpreterFrameAux::empty();
                 }
                 self.current_occupancy = InterpreterFrameAuxOccupancy::KnownEmpty;
             }
@@ -1314,7 +1457,7 @@ impl InterpreterFrameAuxStack {
 
     fn take_entry(&mut self) -> (HandlerStack, BindStack) {
         debug_assert!(self.suspended.is_empty());
-        let entry = std::mem::replace(&mut self.current, InterpreterFrameAux::empty());
+        let entry = std::mem::replace(&mut *self.current, InterpreterFrameAux::empty());
         self.current_occupancy = InterpreterFrameAuxOccupancy::KnownEmpty;
         (entry.handlers, entry.bind_stack)
     }
@@ -1464,6 +1607,7 @@ struct InterpreterCallerStack {
 pub(crate) struct InterpreterStackPool {
     free: Vec<InterpreterStacks>,
 }
+static_assertions::assert_not_impl_any!(InterpreterStackPool: Send, Sync, Clone);
 
 #[derive(Default)]
 struct InterpreterStacks {
@@ -1758,7 +1902,7 @@ impl ResolvedBuiltinCallee {
     /// them), or from the static registry for a bare static symbol.
     #[inline(always)]
     fn dispatch_parts(self) -> (SymId, Option<SubrFn>, u16, Option<u16>) {
-        if let Some(sym_id) = self.0.as_symbol_id() {
+        if let Some(sym_id) = self.0.as_bare_symbol_id() {
             let entry = lookup_global_subr_entry(sym_id)
                 .expect("resolved static builtin must retain its registered entry");
             debug_assert_eq!(entry.dispatch_kind, SubrDispatchKind::Builtin);
@@ -1778,7 +1922,7 @@ impl ResolvedBuiltinCallee {
     }
     #[inline]
     fn wrong_arity_value(self) -> Value {
-        if let Some(sym_id) = self.0.as_symbol_id() {
+        if let Some(sym_id) = self.0.as_bare_symbol_id() {
             Value::subr_from_sym_id(sym_id)
         } else {
             self.0
@@ -2125,6 +2269,8 @@ impl BytecodeDepthOverflow {
 /// Operates on a Context's obarray and dynamic binding stack.
 pub struct Vm<'a> {
     ctx: &'a mut crate::emacs_core::eval::Context,
+    /// Pointer-free policy fact; access remains bound by the original ctx borrow.
+    sole_owner: crate::emacs_core::eval::world::SoleOwnerVm,
     recent_interpreter_call: RecentInterpreterCall,
     #[cfg(feature = "jit")]
     bytecode_tier_policy: BytecodeTierPolicy,
@@ -2372,8 +2518,10 @@ impl<'a> Vm<'a> {
             },
             ..knobs
         };
+        let sole_owner = ctx.obarray.sole_owner_registration().into_vm();
         Self {
             ctx,
+            sole_owner,
             recent_interpreter_call: RecentInterpreterCall::EMPTY,
             #[cfg(feature = "jit")]
             bytecode_tier_policy: knobs.tier_policy,
@@ -2458,11 +2606,12 @@ impl<'a> Vm<'a> {
     #[inline(never)]
     fn finish_live_bytecode_depth_overflow(
         &mut self,
-        cursor: StackCursor,
+        cursor: RunLoopCursor,
         overflow: BytecodeDepthOverflow,
-    ) -> Flow {
-        cursor.publish(self.ctx);
-        self.ctx.finish_lisp_depth_overflow(overflow.into_flow())
+    ) -> (Flow, PublishedSolePhase) {
+        let published = cursor.publish(self);
+        let flow = self.ctx.finish_lisp_depth_overflow(overflow.into_flow());
+        (flow, published)
     }
 
     /// Enter a bytecode call whose caller has already published its operands.
@@ -4261,6 +4410,7 @@ impl<'a> Vm<'a> {
         aux_stack: &mut InterpreterFrameAuxStack,
         driver_quitcounter: &mut u8,
     ) -> EvalResult {
+        let phase = self.sole_owner.driver();
         // Capture guards are synchronous and private: callbacks finish their
         // nested scopes before this driver resumes. A reentrant driver checks
         // its own enclosing scope, so this local policy is valid for this call.
@@ -4270,7 +4420,22 @@ impl<'a> Vm<'a> {
         // top/pc in locals across setup_frame/Breturn, bytecode.c). Escapes
         // publish and reacquire; the iterative Bcall/Breturn transitions keep
         // the cursor live.
-        let mut cursor = StackCursor::acquire(self.ctx);
+        let (mut cursor, mut phase) = RunLoopCursor::acquire(self, phase).into_parts();
+        let mut published;
+        macro_rules! publish_phase {
+            () => {
+                published = RunLoopCursor {
+                    operands: cursor,
+                    phase,
+                }
+                .publish(self)
+            };
+        }
+        macro_rules! rejoin_phase {
+            () => {
+                (cursor, phase) = published.rejoin(self).into_parts()
+            };
+        }
         'frame: loop {
             // Unpack the ACTIVE frame into locals and let the borrow end: the
             // body pushes and pops `callers`, so nothing may hold a reference
@@ -4377,14 +4542,17 @@ impl<'a> Vm<'a> {
                         $flow,
                     ) {
                         ResumeFlowOutcome::ResumeOp => {
-                            cursor = StackCursor::acquire(&mut self.ctx);
+                            rejoin_phase!();
                             continue;
                         }
                         ResumeFlowOutcome::ResumeFrame => {
-                            cursor = StackCursor::acquire(self.ctx);
+                            rejoin_phase!();
                             continue 'frame;
                         }
-                        ResumeFlowOutcome::Exit(result) => return result,
+                        ResumeFlowOutcome::Exit(result) => {
+                            published.finish();
+                            return result;
+                        }
                     }
                 }};
             }
@@ -4415,24 +4583,28 @@ impl<'a> Vm<'a> {
                             callers
                                 .active_mut()
                                 .save_execution_state(pc_local, osr_tried);
-                            cursor.publish(self.ctx);
+                            publish_phase!();
+                            published.finish();
                             return Ok(value);
                         }
                         InterpreterValueCompletion::NeedsSlowCleanup(value) => {
                             callers
                                 .active_mut()
                                 .save_execution_state(pc_local, osr_tried);
-                            cursor.publish(self.ctx);
+                            publish_phase!();
                             match self.complete_interpreter_frame_chain(
                                 callers,
                                 aux_stack,
                                 Ok(value),
                             ) {
                                 InterpreterFrameCompletion::Resume => {
-                                    cursor = StackCursor::acquire(self.ctx);
+                                    rejoin_phase!();
                                     continue 'frame;
                                 }
-                                InterpreterFrameCompletion::Exit(result) => return result,
+                                InterpreterFrameCompletion::Exit(result) => {
+                                    published.finish();
+                                    return result;
+                                }
                             }
                         }
                     }
@@ -4455,7 +4627,7 @@ impl<'a> Vm<'a> {
                     if !VERIFIED && cursor.len >= frame_limit {
                         let invalid_pc = pc_local.saturating_sub(1);
                         let stack_len = cursor.len;
-                        cursor.publish(&mut self.ctx);
+                        publish_phase!();
                         trace_invalid_bytecode_site(
                             func,
                             "push-frame-limit",
@@ -4501,13 +4673,13 @@ impl<'a> Vm<'a> {
 
             macro_rules! vm_try {
                 ($expr:expr) => {{
-                    cursor.publish(&mut self.ctx);
+                    publish_phase!();
                     let result = $expr;
-                    cursor = StackCursor::acquire(&mut self.ctx);
+                    rejoin_phase!();
                     match result {
                         Ok(value) => value,
                         Err(flow) => {
-                            cursor.publish(&mut self.ctx);
+                            publish_phase!();
                             resume_flow!(flow)
                         }
                     }
@@ -4525,10 +4697,10 @@ impl<'a> Vm<'a> {
             macro_rules! poll_quit {
                 () => {{
                     if !self.ctx.maybe_quit_hot_ok() {
-                        cursor.publish(self.ctx);
+                        publish_phase!();
                         match self.ctx.maybe_quit() {
                             Ok(()) => {
-                                cursor = StackCursor::acquire(self.ctx);
+                                rejoin_phase!();
                             }
                             Err(flow) => resume_flow!(flow),
                         }
@@ -4541,7 +4713,7 @@ impl<'a> Vm<'a> {
                     match $expr {
                         Ok(value) => value,
                         Err(flow) => {
-                            cursor.publish(&mut self.ctx);
+                            publish_phase!();
                             resume_flow!(flow)
                         }
                     }
@@ -4584,7 +4756,7 @@ impl<'a> Vm<'a> {
                                 && crate::emacs_core::jit::jit_runtime_enabled()
                                 && func.jit_runtime().is_hot()
                             {
-                                cursor.publish(&mut self.ctx);
+                                publish_phase!();
                                 match self.osr_transfer(func, frame_base, target, aux_stack) {
                                     OsrOutcome::Interpret { pc, retry } => {
                                         // Not transferred, a plain deopt, or a precise
@@ -4592,14 +4764,14 @@ impl<'a> Vm<'a> {
                                         // is current. Interpret on from `pc`; retry
                                         // only after an invalidation.
                                         osr_tried = retry == OsrRetry::Latch;
-                                        cursor = StackCursor::acquire(&mut self.ctx);
+                                        rejoin_phase!();
                                         pc_local = pc;
                                     }
                                     OsrOutcome::Returned(value) => {
                                         // Cold OSR exit: the native run left the
                                         // context authoritative; rearm the cursor
                                         // for the shared completion path.
-                                        cursor = StackCursor::acquire(&mut self.ctx);
+                                        rejoin_phase!();
                                         complete_value!(value);
                                     }
                                     OsrOutcome::Exited => {
@@ -4619,7 +4791,7 @@ impl<'a> Vm<'a> {
                 ($reason:expr) => {{
                     let invalid_pc = pc_local.saturating_sub(1);
                     let stack_len = cursor.len;
-                    cursor.publish(&mut self.ctx);
+                    publish_phase!();
                     trace_invalid_bytecode_site(
                         func,
                         $reason,
@@ -4652,14 +4824,14 @@ impl<'a> Vm<'a> {
                 // driver's frames over and finish them as a resumed chain.
                 #[cfg(test)]
                 if resumed_chain_probe::armed() {
-                    cursor.publish(self.ctx);
+                    publish_phase!();
                     callers
                         .active_mut()
                         .save_execution_state(pc_local, osr_tried);
                     if let Some(result) = self.resumed_chain_probe(callers, aux_stack) {
                         return result;
                     }
-                    cursor = StackCursor::acquire(self.ctx);
+                    rejoin_phase!();
                 }
                 let op = unsafe { &*ops_ptr.add(pc_local) };
                 pc_local += 1;
@@ -5019,7 +5191,7 @@ impl<'a> Vm<'a> {
                         // anything (it is a bare `bool`); it only steers the
                         // call off the zero-copy fast paths onto the owned
                         // route below, which takes the arm properly.
-                        let debug_armed = self.ctx.debug_on_next_call_is_armed();
+                        let debug_armed = self.ctx.obarray.debug_on_next_call_armed_fast();
                         let target = self.resolve_interpreter_stack_call_target(func_val, n);
 
                         if !debug_armed
@@ -5034,8 +5206,14 @@ impl<'a> Vm<'a> {
                             self.ctx.depth += 1;
                             if self.ctx.depth > self.ctx.max_depth {
                                 if let Err(overflow) = self.check_live_bytecode_call_depth() {
-                                    let flow =
-                                        self.finish_live_bytecode_depth_overflow(cursor, overflow);
+                                    let (flow, retired) = self.finish_live_bytecode_depth_overflow(
+                                        RunLoopCursor {
+                                            operands: cursor,
+                                            phase,
+                                        },
+                                        overflow,
+                                    );
+                                    published = retired;
                                     resume_flow!(flow);
                                 }
                             }
@@ -5091,7 +5269,7 @@ impl<'a> Vm<'a> {
                                 vm.call_function_debugged(func_val, args)
                             }))
                         } else {
-                            cursor.publish(self.ctx);
+                            publish_phase!();
                             if let Err(flow) = self.enter_published_bytecode_call_depth() {
                                 resume_flow!(flow)
                             }
@@ -5110,7 +5288,7 @@ impl<'a> Vm<'a> {
                                     // was published for that escape, so rearm
                                     // it and take the same live-cursor
                                     // installation as the cached fast path.
-                                    cursor = StackCursor::acquire(self.ctx);
+                                    rejoin_phase!();
                                     callers
                                         .active_mut()
                                         .save_execution_state(pc_local, osr_tried);
@@ -5135,7 +5313,7 @@ impl<'a> Vm<'a> {
                                     self.leave_bytecode_call_depth();
                                     match result {
                                         Ok(value) => {
-                                            cursor = StackCursor::acquire(self.ctx);
+                                            rejoin_phase!();
                                             value
                                         }
                                         Err(flow) => resume_flow!(flow),
@@ -5245,7 +5423,7 @@ impl<'a> Vm<'a> {
                             jump_table.kind(),
                             ValueKind::Veclike(VecLikeType::HashTable)
                         ) {
-                            cursor.publish(self.ctx);
+                            publish_phase!();
                             resume_flow!(signal(
                                 LispCondition::WrongTypeArgument,
                                 vec![Value::symbol("hash-table-p"), jump_table],
@@ -5330,7 +5508,7 @@ impl<'a> Vm<'a> {
                         // the body.  Use the same typed native-unwind action as the
                         // minibuffer lifecycle, so a new Rust `?`/flow path cannot
                         // bypass restoration.
-                        cursor.publish(self.ctx);
+                        publish_phase!();
                         let root_scope = self.ctx.save_vm_roots();
                         self.push_dynamic_vm_root(progn_form);
                         let body_result = self.ctx.with_unwind_scope(|ctx| {
@@ -5343,14 +5521,14 @@ impl<'a> Vm<'a> {
                         ctx.eval_sub(progn_form)
                     });
                         self.ctx.restore_vm_roots(root_scope);
-                        cursor = StackCursor::acquire(self.ctx);
+                        rejoin_phase!();
 
                         match body_result {
                             Ok(result) => {
                                 stk_push!(result);
                             }
                             Err(flow) => {
-                                cursor.publish(self.ctx);
+                                publish_phase!();
                                 resume_flow!(flow)
                             }
                         }
@@ -5999,8 +6177,7 @@ impl<'a> Vm<'a> {
                     // Pure inline tag checks, zero function calls. Matches GNU exactly.
                     Op::Symbolp => {
                         let top = stk!().last_mut().unwrap();
-                        let is_sym = top.is_symbol()
-                            || (self.ctx.symbols_with_pos_enabled && top.is_symbol_with_pos());
+                        let is_sym = top.is_symbol(self.ctx.symbol_mode());
                         *top = if is_sym { Value::T } else { Value::NIL };
                     }
                     Op::Consp => {
@@ -6107,8 +6284,9 @@ impl<'a> Vm<'a> {
                         let len = stk!().len();
                         let array = stk!()[len - 2];
                         let index = stk!()[len - 1];
-                        let result =
-                            vm_try!(builtins::builtin_aref_2(&mut *self.ctx, array, index));
+                        let result = vm_try!(builtins::builtin_aref_values_in_vm_context_slot(
+                            &self.ctx, array, index
+                        ));
                         stk!()[len - 2] = result;
                         stk!().pop();
                     }
@@ -6117,7 +6295,10 @@ impl<'a> Vm<'a> {
                         // of advice or the symbol's function cell. The primitive
                         // may allocate or signal, but cannot run Lisp or collect.
                         let start = stk!().len().saturating_sub(3);
-                        let result = vm_try_pure!(builtins::builtin_aset_args(&stk!()[start..]));
+                        let result = vm_try_pure!(builtins::builtin_aset_args_in_vm_context_slot(
+                            &self.ctx,
+                            &stk!()[start..]
+                        ));
                         stk!().truncate(start);
                         stk_push!(result);
                     }
@@ -6248,8 +6429,8 @@ impl<'a> Vm<'a> {
                     Op::Throw => {
                         let val = stk!().pop().unwrap_or(Value::NIL);
                         let tag = stk!().pop().unwrap_or(Value::NIL);
-                        cursor.publish(self.ctx);
-                        resume_flow!(Flow::throw(tag, val))
+                        publish_phase!();
+                        resume_flow!(Flow::throw_with_symbols(tag, val, self.ctx.symbol_mode()))
                     }
 
                     // -- Closure --
@@ -7328,7 +7509,16 @@ impl<'a> Vm<'a> {
         let bc = if ptr.is_null() {
             let bc = callee.get_bytecode_data()?;
             let ctx_ptr = core::ptr::from_mut(&mut *ctx);
-            ptr = crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(ctx_ptr, bc)?;
+            // SAFETY: ctx_ptr comes from this live owner-thread Context. The
+            // mutable borrow stays dormant until cache resolution completes.
+            match unsafe { crate::emacs_core::jit::cache::resolve_spec_call_leaf(ctx_ptr, bc) }? {
+                crate::emacs_core::jit::cache::SpecCallLeaf::Armable(ready) => ptr = ready,
+                crate::emacs_core::jit::cache::SpecCallLeaf::RetainedUpgrade(leaf) => {
+                    return Self::run_retained_upgrade_from_spec(
+                        ctx, called, callee, bc, &leaf, args_ptr, nargs,
+                    );
+                }
+            }
             // Arm the shim's fast-path key with the leaf: this site's
             // argument count is fixed, so how the leaf takes the call is
             // decided here, once -- as laid out, or normalized into a frame
@@ -7390,6 +7580,38 @@ impl<'a> Vm<'a> {
         // falling back to call_for_jit_stack on every call). Counted here rather
         // than in the shared runner below so it stays a count of SPECULATED
         // calls, not of every native-to-native call.
+        #[cfg(any(test, debug_assertions))]
+        if leaf.accepts(nargs) {
+            crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        Self::run_leaf_native_to_native(
+            ctx,
+            called,
+            callee,
+            bc,
+            leaf,
+            args_ptr,
+            nargs,
+            CalleeFrameArgs::CallerSlot,
+        )
+    }
+
+    /// Pending upgrades retain executable T1 without publishing it into the
+    /// spec slot. Keep this rare route out of the ordinary arming path; the
+    /// owning handle survives any replacement during the activation.
+    #[cfg(feature = "jit")]
+    #[cold]
+    #[inline(never)]
+    fn run_retained_upgrade_from_spec(
+        ctx: &mut crate::emacs_core::eval::Context,
+        called: Value,
+        callee: Value,
+        bc: &ByteCodeFunction,
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+        args_ptr: *const i64,
+        nargs: usize,
+    ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
         #[cfg(any(test, debug_assertions))]
         if leaf.accepts(nargs) {
             crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT
@@ -7491,10 +7713,15 @@ impl<'a> Vm<'a> {
     ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
         use crate::emacs_core::jit::cache::NativeCallOutcome;
         debug_assert!(nargs >= 2);
-        if ctx.debug_on_next_call_is_armed() {
-            return None;
-        }
-        let epoch = ctx.obarray.function_epoch();
+        let epoch = {
+            // One canonical pair projection serves this pure admission phase;
+            // it ends before any callee or allocation-capable path is entered.
+            let projection = ctx.dispatch_projection();
+            if projection.debug_on_next_call_armed_fast() {
+                return None;
+            }
+            projection.function_epoch()
+        };
         if ctx.apply_fast_path_epoch.get() != epoch {
             if !named_builtin_fast_path_allowed_in(ctx, Self::apply_builtin_id()) {
                 return None;
@@ -8058,7 +8285,7 @@ impl<'a> Vm<'a> {
         args_start: usize,
         nargs: usize,
     ) -> Option<EvalResult> {
-        let sym_id = func_val.as_symbol_id()?;
+        let sym_id = func_val.as_bare_symbol_id()?;
         if ctx.compiler_function_overrides_active() {
             return None;
         }
@@ -8620,6 +8847,9 @@ impl<'a> Vm<'a> {
     /// Resolve one ordinary bytecode `Call` and, when possible, prove that it
     /// can enter the current interpreter driver without repeating tier or
     /// `setup_frame` classification in dispatch.
+    ///
+    /// Uses the current owner's main access path. The receiver remains the
+    /// original synchronous VM; no detached World projection is retained.
     #[inline(always)]
     fn resolve_interpreter_stack_call_target(
         &mut self,
@@ -8653,7 +8883,7 @@ impl<'a> Vm<'a> {
         }
 
         let call = PreparedInterpreterCall::new(callee);
-        if !compiler_overrides_active && func_val.as_symbol_id().is_some() {
+        if !compiler_overrides_active && func_val.as_bare_symbol_id().is_some() {
             self.recent_interpreter_call
                 .replace(func_val, nargs, function_epoch, call);
         }
@@ -8908,7 +9138,9 @@ impl<'a> Vm<'a> {
             FlowKind::ThreadBlocked(_) | FlowKind::Shutdown(_) => Err(Flow::from_kind(flow)),
             FlowKind::Throw(thrown) => {
                 let (tag, value) = (thrown.tag, thrown.value);
-                let selected_resume = self.ctx.matching_catch_resume(&tag);
+                let selected_resume = self
+                    .ctx
+                    .matching_catch_resume_with_symbols(&tag, thrown.symbol_mode());
                 if let Some(ResumeTarget::VmCatch {
                     target,
                     stack_len,
@@ -8937,7 +9169,8 @@ impl<'a> Vm<'a> {
                 }
 
                 if selected_resume.is_some() {
-                    return Err(Flow::throw(tag, value));
+                    // Preserve the already selected equality policy and its owned roots.
+                    return Err(Flow::from_kind(FlowKind::Throw(thrown)));
                 }
                 tracing::debug!(
                     target: "neomacs::throw_on_input",
@@ -9262,7 +9495,7 @@ impl<'a> Vm<'a> {
             }
             "%%defvar" => {
                 if args.len() >= 2 {
-                    let sym_name = args[1].as_symbol_name().unwrap_or("nil").to_string();
+                    let sym_name = args[1].as_bare_symbol_name().unwrap_or("nil").to_string();
                     if !self.ctx.obarray.boundp(&sym_name) {
                         self.ctx.obarray.set_symbol_value(&sym_name, args[0]);
                     }
@@ -9274,7 +9507,7 @@ impl<'a> Vm<'a> {
             "%%defconst" => {
                 if args.len() >= 2 {
                     let sym = args[1];
-                    let sym_id = sym.as_symbol_id().unwrap_or_else(|| intern("nil"));
+                    let sym_id = sym.as_bare_symbol_id().unwrap_or_else(|| intern("nil"));
                     crate::emacs_core::data::set_default_internal(
                         &mut *self.ctx,
                         Value::from_sym_id(sym_id),
@@ -9332,6 +9565,7 @@ impl<'a> Vm<'a> {
                     args,
                     interactive_form,
                     command_identity,
+                    vm.ctx.symbol_mode(),
                 )?;
             for value in plan.gc_roots() {
                 vm.push_dynamic_vm_root(value);
@@ -9440,6 +9674,9 @@ impl<'a> Vm<'a> {
 }
 
 impl<'a> crate::emacs_core::builtins::symbols::MacroexpandRuntime for Vm<'a> {
+    fn symbol_mode(&self) -> crate::tagged::SymbolMode {
+        self.ctx.symbol_mode()
+    }
     fn symbol_function_by_id(&self, symbol: SymId) -> Option<Value> {
         crate::emacs_core::builtins::symbols::symbol_function_cell_in_obarray(
             &self.ctx.obarray,
@@ -9639,7 +9876,7 @@ fn resolve_switch_target(func: &ByteCodeFunction, raw_addr: i64) -> Result<usize
 /// `Op::VarRef` / `Op::VarSet` / `Op::VarBind` all reference variables
 /// by index into the function's constants table.  Each constant is
 /// already a `Value::Symbol(SymId)`, so we can extract the SymId via a
-/// pure tag inspection.  Going through `as_symbol_name() -> &str ->
+/// pure tag inspection.  Going through `as_bare_symbol_name() -> &str ->
 /// intern() -> SymId` instead would acquire the global interner
 /// `RwLock` twice per opcode, which dominated debug-build runtime when
 /// the byte-compiler iterated over hot loops.
@@ -9650,9 +9887,9 @@ fn sym_id_at(constants: &[Value], idx: u16) -> SymId {
     constants
         .get(idx as usize)
         .and_then(|v| {
-            v.as_symbol_id().or_else(|| {
+            v.as_bare_symbol_id().or_else(|| {
                 v.as_symbol_with_pos_sym()
-                    .and_then(|sym| sym.as_symbol_id())
+                    .and_then(|sym| sym.as_bare_symbol_id())
             })
         })
         .unwrap_or_else(|| intern("nil"))
@@ -9697,6 +9934,18 @@ mod stack_pool_tests;
 #[cfg(test)]
 #[path = "tests/frame_bind_stack.rs"]
 mod frame_bind_stack_tests;
+
+#[cfg(test)]
+#[path = "tests/world_bases_test.rs"]
+mod world_bases_tests;
+
+#[cfg(test)]
+#[path = "tests/world_bases_admission_test.rs"]
+mod world_bases_admission_tests;
+
+#[cfg(test)]
+#[path = "tests/world_bases_call_reader_test.rs"]
+mod world_bases_call_reader_tests;
 
 impl ArithGenericKind {
     /// The builtin this kind's slow arm calls: the SAME cached symbol ids the
@@ -9776,3 +10025,11 @@ impl crate::emacs_core::eval::Context {
 #[cfg(test)]
 #[path = "tests/manual_parameter_roots.rs"]
 mod manual_parameter_roots_tests;
+
+#[cfg(test)]
+#[path = "tests/sole_owner_cursor_test.rs"]
+mod sole_owner_cursor_tests;
+
+#[cfg(test)]
+#[path = "tests/aux_stack_drop_test.rs"]
+mod aux_stack_drop_tests;

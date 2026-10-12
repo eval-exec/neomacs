@@ -19,6 +19,7 @@ impl Context {
     /// -- this thread's or a suspended one's -- records the symbol.
     #[cfg(feature = "jit")]
     fn trace_jit_redefined_functions(&self, visit: &mut dyn FnMut(Value)) {
+        let symbol_mode = self.symbol_mode();
         use crate::emacs_core::jit::cache;
         if !cache::has_redefined_pins() {
             return;
@@ -35,7 +36,9 @@ impl Context {
                 SpecBinding::Backtrace { function, .. }
                 | SpecBinding::Backtrace1 { function, .. }
                 | SpecBinding::Backtrace2 { function, .. }
-                | SpecBinding::BacktraceNative { function, .. } => function.as_symbol_id(),
+                | SpecBinding::BacktraceNative { function, .. } => {
+                    function.as_symbol_id(symbol_mode)
+                }
                 _ => None,
             })
             .collect();
@@ -734,7 +737,14 @@ impl Context {
         // an image cannot carry get theirs.  See `defvar_object' for what the
         // tag buys and why the store rule -- the thing `DEFVAR_BOOL' and
         // `DEFVAR_INT' are declared for -- is not it.
-        super::super::defvar_object::adopt(&mut self.obarray);
+        // SAFETY: DEFVAR adoption is noncalling and uses canonical install/
+        // reattachment hooks; a dumped localized Boolean may retarget the
+        // debugger descriptor. Storage identity and generation are preserved.
+        unsafe {
+            self.obarray
+                .with_legacy_storage_write(super::super::defvar_object::adopt);
+        }
+        self.obarray.refresh_admission();
     }
 
     pub(crate) fn sync_current_thread_buffer_state(&mut self) {

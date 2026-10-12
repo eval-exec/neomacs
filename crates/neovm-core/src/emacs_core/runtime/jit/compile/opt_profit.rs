@@ -239,48 +239,63 @@ pub(super) fn ready_osr_front(
     source: &super::ByteCodeFunction,
     obarray: Option<&super::Obarray>,
 ) -> FrontChoice {
-    if !matches!(front, FrontChoice::Selected | FrontChoice::SelectedAfterMir)
-        || !super::jit_opt_require_osr()
-    {
+    if !requires_osr_evidence(front) {
         return front;
     }
-    let lists = matches!(
-        jit_opt_profit(),
-        super::OptProfitMode::Lists | super::OptProfitMode::PrimitiveLists
-    );
-    let mut last_list_pc = None;
-    // Query exact original source headers, not fused PCs or the entire cache.
-    // Lists requires evidence at a list-containing backedge; a separate hot
-    // numeric loop must not qualify a cold list loop in the same source.
-    let headers = source
-        .executable_ops()
-        .iter()
-        .enumerate()
-        .filter_map(|(pc, op)| match op {
-            Op::Car | Op::Cdr | Op::CarSafe | Op::CdrSafe | Op::Setcar | Op::Setcdr => {
-                last_list_pc = Some(pc);
-                None
-            }
-            Op::Goto(target)
-            | Op::GotoIfNil(target)
-            | Op::GotoIfNotNil(target)
-            | Op::GotoIfNilElsePop(target)
-            | Op::GotoIfNotNilElsePop(target) => {
-                let target = *target as usize;
-                (target <= pc && (!lists || last_list_pc.is_some_and(|list_pc| list_pc >= target)))
-                    .then_some(target)
-            }
-            _ => None,
-        });
     if crate::emacs_core::jit::cache::has_ready_opt_osr(
         source.jit_runtime(),
         obarray.map(super::Obarray::generation),
-        headers,
+        osr_evidence_headers(source),
     ) {
         front
     } else {
         FrontChoice::Legacy
     }
+}
+
+/// Whether `front` is kept only with installed Opt OSR evidence
+/// ([`ready_osr_front`]). Threading: immutable configuration only.
+pub(super) fn requires_osr_evidence(front: FrontChoice) -> bool {
+    matches!(front, FrontChoice::Selected | FrontChoice::SelectedAfterMir)
+        && super::jit_opt_require_osr()
+}
+
+/// The exact original loop headers whose installed Opt OSR leaf admits a
+/// selected normal frontend, not fused PCs or the entire cache. Lists requires
+/// evidence at a list-containing backedge; a separate hot numeric loop must not
+/// qualify a cold list loop in the same source. Threading: immutable source
+/// operations and configuration only.
+pub(crate) fn osr_evidence_headers(
+    source: &super::ByteCodeFunction,
+) -> impl Iterator<Item = usize> + Clone + '_ {
+    let lists = matches!(
+        jit_opt_profit(),
+        super::OptProfitMode::Lists | super::OptProfitMode::PrimitiveLists
+    );
+    source
+        .executable_ops()
+        .iter()
+        .enumerate()
+        .scan(None, move |last_list_pc, (pc, op)| {
+            Some(match op {
+                Op::Car | Op::Cdr | Op::CarSafe | Op::CdrSafe | Op::Setcar | Op::Setcdr => {
+                    *last_list_pc = Some(pc);
+                    None
+                }
+                Op::Goto(target)
+                | Op::GotoIfNil(target)
+                | Op::GotoIfNotNil(target)
+                | Op::GotoIfNilElsePop(target)
+                | Op::GotoIfNotNilElsePop(target) => {
+                    let target = *target as usize;
+                    (target <= pc
+                        && (!lists || last_list_pc.is_some_and(|list_pc| list_pc >= target)))
+                    .then_some(target)
+                }
+                _ => None,
+            })
+        })
+        .flatten()
 }
 
 /// Preserve original callback evidence even when the OSR slice/fuser omits it.

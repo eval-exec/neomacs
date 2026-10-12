@@ -456,12 +456,12 @@ impl Frames {
             crate::emacs_core::eval::ASYNC_ATTENTION.addr() as i64,
         );
         let asynchronous = fb.ins().uload32(flags, async_ptr, 0);
+        let dispatch = jit_layout::emit_dispatch_cells_base(fb, ctx);
         let debug_ptr = fb.ins().load(
             types::I64,
             flags,
-            ctx,
-            (jit_layout::CONTEXT_OBARRAY_OFFSET + jit_layout::OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET)
-                as i32,
+            dispatch,
+            jit_layout::DISPATCH_DEBUG_FWD_OFFSET as i32,
         );
         let debug = super::atomic_forward::load_bool(fb, debug_ptr, LISP_BOOL_FWD_VALUE_OFFSET);
         let attention = fb.ins().bor(attention, asynchronous);

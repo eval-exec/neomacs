@@ -32,6 +32,7 @@ fn warm_deep(ev: &mut Context) {
         .expect("defun");
     ev.eval_str("(byte-compile 'neovm--sg-deep)")
         .expect("byte-compile");
+    crate::emacs_core::jit::test_support::prepare_named(ev, &["neovm--sg-deep"]);
     ev.eval_str("(dotimes (_ 40) (neovm--sg-deep 100))")
         .expect("warm-up");
 }

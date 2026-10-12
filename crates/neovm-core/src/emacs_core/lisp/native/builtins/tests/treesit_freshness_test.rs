@@ -6,7 +6,9 @@ pub(super) fn eval_with_json_parser(text: &str) -> (super::super::eval::Context,
         .current_buffer_mut()
         .expect("current buffer")
         .insert(text);
-    let language_sym = Value::symbol("json").as_symbol_id().expect("json symbol");
+    let language_sym = Value::symbol("json")
+        .as_bare_symbol_id()
+        .expect("json symbol");
     eval.treesit.cache_loaded_language(
         language_sym,
         runtime::LoadedLanguage {

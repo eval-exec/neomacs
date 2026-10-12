@@ -255,7 +255,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
         &[format],
         |form, _| {
             calls.push(*form);
-            if form.is_symbol_named("d5-state-first") {
+            if form.is_bare_symbol_named("d5-state-first") {
                 let fresh = Value::string("C");
                 set_string_text_properties_for_value(
                     fresh,
@@ -276,7 +276,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
                     ]),
                 ]))
             } else {
-                assert!(form.is_symbol_named("d5-state-second"));
+                assert!(form.is_bare_symbol_named("d5-state-second"));
                 eval.gc_collect_exact();
                 Ok(Value::string("B"))
             }

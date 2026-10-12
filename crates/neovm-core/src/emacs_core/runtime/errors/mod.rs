@@ -17,6 +17,7 @@
 //! symbol.
 
 mod native_message;
+use crate::tagged::SymbolMode;
 pub(crate) use native_message::CErrorMessage;
 
 use super::error::{
@@ -55,7 +56,7 @@ fn build_conditions_from_obarray(obarray: &Obarray, name: &str, parents: &[&str]
     for &parent in parents {
         // Read the parent's error-conditions list from the obarray.
         if let Some(parent_conds) = obarray.get_property(parent, "error-conditions") {
-            for sym in iter_symbol_list(&parent_conds) {
+            for sym in iter_symbol_list(&parent_conds, SymbolMode::Bare) {
                 if !conditions.contains(&sym) {
                     conditions.push(sym);
                 }
@@ -71,11 +72,11 @@ fn build_conditions_from_obarray(obarray: &Obarray, name: &str, parents: &[&str]
 }
 
 /// Iterate over a Value list, yielding symbol names.
-fn iter_symbol_list(value: &Value) -> Vec<String> {
+fn iter_symbol_list(value: &Value, symbol_mode: SymbolMode) -> Vec<String> {
     let mut result = Vec::new();
     if let Some(items) = list_to_vec(value) {
         for item in items {
-            if let Some(name) = item.as_symbol_name() {
+            if let Some(name) = item.as_symbol_name(symbol_mode) {
                 result.push(name.to_string());
             }
         }
@@ -101,6 +102,7 @@ pub fn signal_matches_hierarchical(
     obarray: &Obarray,
     signal_sym: &str,
     condition_sym: &str,
+    symbol_mode: SymbolMode,
 ) -> bool {
     // `t` catches all signals.
     if condition_sym == "t" {
@@ -112,7 +114,7 @@ pub fn signal_matches_hierarchical(
     }
     // Check the error-conditions plist on the signal symbol.
     if let Some(conds) = obarray.get_property(signal_sym, "error-conditions") {
-        for sym_name in iter_symbol_list(&conds) {
+        for sym_name in iter_symbol_list(&conds, symbol_mode) {
             if sym_name == condition_sym {
                 return true;
             }
@@ -127,6 +129,7 @@ pub fn signal_matches_condition_value(
     obarray: &Obarray,
     signal_sym: &str,
     pattern: &Value,
+    symbol_mode: SymbolMode,
 ) -> bool {
     match pattern.kind() {
         ValueKind::T => true,
@@ -134,12 +137,12 @@ pub fn signal_matches_condition_value(
         ValueKind::Cons => list_to_vec(pattern).is_some_and(|items| {
             items
                 .iter()
-                .any(|item| signal_matches_condition_value(obarray, signal_sym, item))
+                .any(|item| signal_matches_condition_value(obarray, signal_sym, item, symbol_mode))
         }),
         _ => {
             // Use symbol_id to handle both bare symbols and symbol-with-pos wrappers.
-            if let Some(id) = super::builtins::symbols::symbol_id(pattern) {
-                signal_matches_hierarchical(obarray, signal_sym, resolve_sym(id))
+            if let Some(id) = super::builtins::symbols::symbol_id(pattern, symbol_mode) {
+                signal_matches_hierarchical(obarray, signal_sym, resolve_sym(id), symbol_mode)
             } else {
                 false
             }
@@ -160,11 +163,12 @@ pub fn signal_matches_condition_value_sym(
     obarray: &Obarray,
     signal_sym: SymId,
     pattern: &Value,
+    symbol_mode: SymbolMode,
 ) -> bool {
     // The signal's own conditions, read by identity (falling back to just the
     // symbol itself, matching `signal_matches_hierarchical`'s exact-match rule).
     let conditions = obarray.get_property_id(signal_sym, intern("error-conditions"));
-    signal_matches_pattern_against_conditions(signal_sym, conditions.as_ref(), pattern)
+    signal_matches_pattern_against_conditions(signal_sym, conditions.as_ref(), pattern, symbol_mode)
 }
 
 /// Identity-aware hierarchical match for one signal and one condition.
@@ -176,29 +180,36 @@ pub fn signal_matches_hierarchical_sym(
     obarray: &Obarray,
     signal_sym: SymId,
     condition_sym: SymId,
+    symbol_mode: SymbolMode,
 ) -> bool {
     let conditions = obarray.get_property_id(signal_sym, intern("error-conditions"));
-    signal_matches_symbol_against_conditions(signal_sym, conditions.as_ref(), condition_sym)
+    signal_matches_symbol_against_conditions(
+        signal_sym,
+        conditions.as_ref(),
+        condition_sym,
+        symbol_mode,
+    )
 }
 
 fn signal_matches_pattern_against_conditions(
     signal_sym: SymId,
     conditions: Option<&Value>,
     pattern: &Value,
+    symbol_mode: SymbolMode,
 ) -> bool {
     match pattern.kind() {
         ValueKind::T => true,
         ValueKind::Nil => false,
         ValueKind::Cons => list_to_vec(pattern).is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| signal_matches_pattern_against_conditions(signal_sym, conditions, item))
+            items.iter().any(|item| {
+                signal_matches_pattern_against_conditions(signal_sym, conditions, item, symbol_mode)
+            })
         }),
         _ => {
-            let Some(cond_id) = super::builtins::symbols::symbol_id(pattern) else {
+            let Some(cond_id) = super::builtins::symbols::symbol_id(pattern, symbol_mode) else {
                 return false;
             };
-            signal_matches_symbol_against_conditions(signal_sym, conditions, cond_id)
+            signal_matches_symbol_against_conditions(signal_sym, conditions, cond_id, symbol_mode)
         }
     }
 }
@@ -207,6 +218,7 @@ fn signal_matches_symbol_against_conditions(
     signal_sym: SymId,
     conditions: Option<&Value>,
     condition_sym: SymId,
+    symbol_mode: SymbolMode,
 ) -> bool {
     if pattern_is_catch_all(condition_sym) || condition_sym == signal_sym {
         return true;
@@ -216,7 +228,7 @@ fn signal_matches_symbol_against_conditions(
     };
     let mut tail = *conditions;
     while tail.is_cons() {
-        if tail.cons_car().as_symbol_id() == Some(condition_sym) {
+        if tail.cons_car().as_symbol_id(symbol_mode) == Some(condition_sym) {
             return true;
         }
         tail = tail.cons_cdr();
@@ -673,6 +685,7 @@ fn build_signal_flow(symbol_name: &str, data: Value) -> Flow {
 }
 
 fn build_peculiar_signal_flow(eval: &super::eval::Context, error_object: Value) -> Flow {
+    let symbol_mode = eval.symbol_mode();
     if !error_object.is_cons() {
         unreachable!("peculiar signal error object must be a cons");
     };
@@ -681,7 +694,7 @@ fn build_peculiar_signal_flow(eval: &super::eval::Context, error_object: Value) 
     let error_symbol = pair_car;
     let data = pair_cdr;
 
-    let Some(symbol_id) = error_symbol.as_symbol_id() else {
+    let Some(symbol_id) = error_symbol.as_symbol_id(symbol_mode) else {
         return signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), error_symbol],
@@ -712,6 +725,7 @@ fn build_signal_flow_id_suppressed(symbol: SymId, data: Value) -> Flow {
 /// Eval-aware `signal`, including GNU's "peculiar error" handling for
 /// `nil` as the public error symbol.
 pub(crate) fn builtin_signal(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     if args.is_empty() || args.len() > 2 {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -748,7 +762,7 @@ pub(crate) fn builtin_signal(eval: &mut super::eval::Context, args: Vec<Value>) 
     // `error-conditions' by `define-error' must keep its SymId so condition
     // matching and `canonicalize_signal_symbol' read the right plist; building
     // the flow from the symbol's name would re-intern to a different symbol.
-    let Some(symbol_id) = args[0].as_symbol_id() else {
+    let Some(symbol_id) = args[0].as_symbol_id(symbol_mode) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],
@@ -771,12 +785,13 @@ fn build_signal_flow_id(symbol: SymId, data: Value) -> Flow {
 /// (which models OOM and suppresses the signal hook), this is a normal
 /// `Fsignal` call, so the signal hook runs.
 fn build_resignal_flow(eval: &super::eval::Context, error_object: Value) -> Flow {
+    let symbol_mode = eval.symbol_mode();
     let error_symbol = error_object.cons_car();
     let data = error_object.cons_cdr();
 
     // `Fget (real_error_symbol, Qerror_conditions)` runs `CHECK_SYMBOL`, so a
     // non-symbol car signals `wrong-type-argument symbolp <car>`.
-    let Some(symbol_id) = error_symbol.as_symbol_id() else {
+    let Some(symbol_id) = error_symbol.as_symbol_id(symbol_mode) else {
         return signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), error_symbol],
@@ -870,12 +885,13 @@ fn error_message_string_rendered(
     eval: &mut super::eval::Context,
     error_data: &Value,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     // Emacs expects ERROR-DATA to be a list (or nil).
     let (symbol, data) = match error_data.kind() {
         ValueKind::Cons => {
             let pair_car = error_data.cons_car();
             let pair_cdr = error_data.cons_cdr();
-            let symbol = match pair_car.as_symbol_id() {
+            let symbol = match pair_car.as_symbol_id(symbol_mode) {
                 Some(symbol) => symbol,
                 None => return Ok(Value::string("peculiar error")),
             };
@@ -999,6 +1015,7 @@ fn error_message_string_rendered(
         &eval.obarray,
         symbol,
         &Value::from_sym_id(intern("file-error")),
+        symbol_mode,
     );
     let is_file_locked = symbol == intern("file-locked");
 

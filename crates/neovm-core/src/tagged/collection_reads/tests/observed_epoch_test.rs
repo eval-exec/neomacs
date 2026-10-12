@@ -145,8 +145,12 @@ fn reclaimed_endpoints_contract(kind: OwnerKind, generational: bool) {
     let (_, middle_reads) = capture(|| kind.read(middle));
     let middle_reads = middle_reads.expect("rooted middle dependency");
     let before = compiled_observation_window();
-    for address in addresses {
-        assert!(before.0 <= address && address < before.1);
+    if matches!(kind, OwnerKind::String) {
+        assert_eq!(before, (usize::MAX, 0));
+    } else {
+        for address in addresses {
+            assert!(before.0 <= address && address < before.1);
+        }
     }
 
     heap.collect_exact(std::iter::once(middle));
@@ -154,11 +158,11 @@ fn reclaimed_endpoints_contract(kind: OwnerKind, generational: bool) {
     assert!(heap.owns_heap_value_for_test(middle));
     assert!(!heap.owns_heap_value_for_test(last));
     let published = heap.jit_barrier_window_for_test();
-    if generational {
+    if generational || matches!(kind, OwnerKind::String) {
         assert_eq!(
             published,
             BarrierWindow::NONE,
-            "GEN1 keeps its ordinary gate"
+            "GEN1 and exact-mark string stores keep their ordinary gate"
         );
     } else {
         assert!(published.covers(addresses[1]));
@@ -174,7 +178,11 @@ fn reclaimed_endpoints_contract(kind: OwnerKind, generational: bool) {
     let after = compiled_observation_window();
     assert_eq!(
         after,
-        (addresses[1], addresses[1] + 1),
+        if matches!(kind, OwnerKind::String) {
+            (usize::MAX, 0)
+        } else {
+            (addresses[1], addresses[1] + 1)
+        },
         "only the rooted observed owner may keep the local envelope wide: {kind:?}"
     );
     assert!(
@@ -287,4 +295,98 @@ fn observed_gen1_record_gc_contracts_reclaimed_envelope_endpoints() {
 #[test]
 fn observed_gen1_string_gc_contracts_reclaimed_envelope_endpoints() {
     reclaimed_endpoints_contract(OwnerKind::String, true);
+}
+
+#[test]
+fn incremental_sweep_without_observed_reclamation_keeps_epoch_and_recent_hits() {
+    crate::test_utils::init_test_tracing();
+    let _mode = ObservedMode::begin();
+    let mut heap = heap_with_generation(false);
+    set_tagged_heap(&mut heap);
+    let owners = [
+        OwnerKind::Cons.allocate(&mut heap),
+        OwnerKind::Vector.allocate(&mut heap),
+        OwnerKind::String.allocate(&mut heap),
+    ];
+    // An unobserved dead allocation may be freed without a mark-clear epoch.
+    let _garbage = OwnerKind::Record.allocate(&mut heap);
+    let (_, reads) = capture(|| {
+        for (kind, owner) in [OwnerKind::Cons, OwnerKind::Vector, OwnerKind::String]
+            .into_iter()
+            .zip(owners)
+        {
+            assert_eq!(kind.read(owner), TaggedValue::make_int(97));
+        }
+    });
+    let reads = reads.expect("rooted owner dependencies");
+    recently_observed(owners[0].bits());
+    let before = super::super::gc::collection_observation_epoch();
+    heap.begin_collection();
+    for owner in owners {
+        heap.seed_root(owner);
+    }
+    heap.incremental_drain_all();
+    let bytes_before = heap.live_bytes();
+    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    loop {
+        let done = heap.incremental_sweep_slice(1);
+        assert_eq!(
+            super::super::gc::collection_observation_epoch(),
+            before,
+            "a slice which clears no observation must leave the epoch stable"
+        );
+        assert!(
+            recently_observed(owners[0].bits()),
+            "no-clear safepoints retain the existing read shortcut"
+        );
+        if done {
+            break;
+        }
+    }
+    assert!(reads.unchanged());
+    for owner in owners {
+        assert!(is_observed(owner.bits()));
+    }
+}
+
+#[test]
+fn recent_reads_reset_on_heap_identity_change_and_preserve_same_heap_installation() {
+    crate::test_utils::init_test_tracing();
+    let _mode = ObservedMode::begin();
+    let mut first = heap_with_generation(false);
+    let mut second = heap_with_generation(false);
+    set_tagged_heap(&mut first);
+    let owner = OwnerKind::Cons.allocate(&mut first);
+    // Scope exit deliberately clears RECENT. Keep these checks inside the
+    // same active capture so only heap installation can invalidate its hit.
+    let (_, reads) = capture(|| {
+        assert!(is_active());
+        owner.cons_car();
+        assert!(recently_observed(owner.bits()));
+        set_tagged_heap(&mut first);
+        assert!(
+            recently_observed(owner.bits()),
+            "same live heap retains its cache"
+        );
+        set_tagged_heap(&mut second);
+        assert!(
+            !recently_observed(owner.bits()),
+            "new heap cannot reuse an old identity hit"
+        );
+        set_tagged_heap(&mut first);
+        assert!(
+            !recently_observed(owner.bits()),
+            "restored or migrated heap starts empty"
+        );
+        crate::tagged::gc::clear_tagged_heap_if_installed(&first);
+        assert!(
+            !recently_observed(owner.bits()),
+            "uninstallation clears before owner destruction"
+        );
+    });
+    assert!(
+        reads
+            .expect("live owner across installation changes")
+            .unchanged()
+    );
 }

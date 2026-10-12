@@ -163,8 +163,10 @@ fn colliding_property_names_keep_public_lisp_queries_exact() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
     let (property, collision) = colliding_properties();
-    let property_name = crate::emacs_core::intern::resolve_sym(property.as_symbol_id().unwrap());
-    let collision_name = crate::emacs_core::intern::resolve_sym(collision.as_symbol_id().unwrap());
+    let property_name =
+        crate::emacs_core::intern::resolve_sym(property.as_bare_symbol_id().unwrap());
+    let collision_name =
+        crate::emacs_core::intern::resolve_sym(collision.as_bare_symbol_id().unwrap());
     let result = eval
         .eval_str(&format!(
             r#"(progn

@@ -467,6 +467,7 @@ fn tier2_native_use_imports_helpers_only_with_actual_t1_emission() {
                     call_result_slot: slot,
                     rootwin: None,
                     heap: None,
+                    cons_store_probe_order: Default::default(),
                     inline_alloc: false,
                     generational: std::cell::Cell::new(Some(false)),
                     direct_sites: std::cell::Cell::new(0),

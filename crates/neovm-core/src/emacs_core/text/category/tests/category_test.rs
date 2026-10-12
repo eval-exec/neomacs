@@ -323,7 +323,7 @@ fn make_category_set_rejects_non_string() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
-                sig.data.first().and_then(|v| v.as_symbol_name()),
+                sig.data.first().and_then(|v| v.as_bare_symbol_name()),
                 Some("stringp")
             );
         }

@@ -1173,6 +1173,70 @@ fn emit_inline_string_aref(
     true
 }
 
+/// Compiler-only operands after the String and fixnum shape guards.
+/// `basic_ok` is the I8 zero/one conjunction of range and owned-storage checks.
+struct StringAsetAdmissionValues {
+    object: ClifValue,
+    size: ClifValue,
+    size_byte: ClifValue,
+    code: ClifValue,
+    basic_ok: ClifValue,
+}
+
+/// Observed GEN0 admission keeps the normal unibyte path separate from the
+/// ASCII-multibyte predicates. Every nonzero atomic owner mark refuses before
+/// the store; no callback or safepoint separates that test from the byte write.
+/// Returns the unsealed common store block, whose caller emits one data load,
+/// byte store and result. Off, Eager and GEN1 retain their existing admission.
+fn emit_observed_string_aset_admission(
+    fb: &mut FunctionBuilder,
+    values: StringAsetAdmissionValues,
+    slow: Block,
+) -> Block {
+    use super::jit_layout::heap::GC_HEADER_COLLECTION_OBSERVED_OFFSET;
+    use crate::heap_types::LispString;
+    let StringAsetAdmissionValues {
+        object,
+        size,
+        size_byte,
+        code,
+        basic_ok,
+    } = values;
+    let flags = MemFlagsData::trusted();
+    let mark_address = iadd_imm_p(fb, object, GC_HEADER_COLLECTION_OBSERVED_OFFSET as i64);
+    let marked = fb.ins().atomic_load(types::I8, flags, mark_address);
+    // I8 comparisons/Boolean operations produce zero or one. Unsigned
+    // comparison therefore admits exactly basic_ok == 1 and marked == 0.
+    let admitted = fb.ins().icmp(IntCC::UnsignedGreaterThan, basic_ok, marked);
+    let classify = fb.create_block();
+    let unibyte = fb.create_block();
+    let multibyte = fb.create_block();
+    fb.set_cold_block(multibyte);
+    let store = fb.create_block();
+    fb.ins().brif(admitted, classify, &[], slow, &[]);
+    fb.switch_to_block(classify);
+    fb.seal_block(classify);
+    let normally_unibyte = icmp_imm_p(
+        fb,
+        IntCC::Equal,
+        size_byte,
+        LispString::JIT_SIZE_BYTE_UNIBYTE,
+    );
+    fb.ins()
+        .brif(normally_unibyte, unibyte, &[], multibyte, &[]);
+    fb.switch_to_block(unibyte);
+    fb.seal_block(unibyte);
+    let byte_fits = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, code, 0xff);
+    fb.ins().brif(byte_fits, store, &[], slow, &[]);
+    fb.switch_to_block(multibyte);
+    fb.seal_block(multibyte);
+    let all_ascii = fb.ins().icmp(IntCC::Equal, size_byte, size);
+    let ascii_fits = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, code, 0x7f);
+    let fits = fb.ins().band(all_ascii, ascii_fits);
+    fb.ins().brif(fits, store, &[], slow, &[]);
+    store
+}
+
 /// I2: `aset` of a character into a string without changing its width,
 /// inline -- exactly `aset_fast`'s string arm where it stores in place:
 /// owned storage (a borrowed or read-only string is copied by the shim
@@ -1230,55 +1294,50 @@ fn emit_inline_string_aset(
     let observed_gen0 = super::jit_gen0_collection_journal_on()
         && !rt.generational_enabled()
         && !super::jit_gen0_collection_journal_eager();
-    let capacity = if observed_gen0 {
-        let at = iadd_imm_p(
-            fb,
-            object,
-            (base + LispString::JIT_STORAGE_CAPACITY_OFFSET) as i64,
-        );
-        fb.ins().atomic_load(types::I64, flags, at)
-    } else {
-        // Preserve the original OFF/GEN1 load and ownership predicate.
-        fb.ins().load(
-            types::I64,
-            flags,
-            object,
-            (base + LispString::JIT_STORAGE_CAPACITY_OFFSET) as i32,
-        )
-    };
+    // Capacity is ordinary exclusive payload state, exactly as in OFF/GEN1.
+    let capacity = fb.ins().load(
+        types::I64,
+        flags,
+        object,
+        (base + LispString::JIT_STORAGE_CAPACITY_OFFSET) as i32,
+    );
     let i = sshr_imm_p(fb, index, FIXNUM_SHIFT as i64);
     let code = sshr_imm_p(fb, value, FIXNUM_SHIFT as i64);
     // Unsigned: a negative index or code is out of range too.
     let in_range = fb.ins().icmp(IntCC::UnsignedLessThan, i, size);
-    // Owned Vec<u8> capacities fit below the sign bit. The sticky observed
-    // mirror occupies that bit, folding its rejection into the existing
-    // ownership check without another hot-path load, test or branch.
-    let owned = icmp_imm_p(
-        fb,
-        if observed_gen0 {
-            IntCC::SignedGreaterThan
-        } else {
-            IntCC::NotEqual
-        },
-        capacity,
-        0,
-    );
-    let unibyte = icmp_imm_p(
-        fb,
-        IntCC::Equal,
-        size_byte,
-        LispString::JIT_SIZE_BYTE_UNIBYTE,
-    );
-    let byte = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, code, 0xff);
-    let unibyte_fits = fb.ins().band(unibyte, byte);
-    let all_ascii = fb.ins().icmp(IntCC::Equal, size_byte, size);
-    let ascii = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, code, 0x7f);
-    let ascii_fits = fb.ins().band(all_ascii, ascii);
-    let fits = fb.ins().bor(unibyte_fits, ascii_fits);
-    let ok = fb.ins().band(in_range, owned);
-    let ok = fb.ins().band(ok, fits);
-    let store = fb.create_block();
-    fb.ins().brif(ok, store, &[], slow, &[]);
+    let owned = icmp_imm_p(fb, IntCC::NotEqual, capacity, 0);
+    let store = if observed_gen0 {
+        let basic_ok = fb.ins().band(in_range, owned);
+        emit_observed_string_aset_admission(
+            fb,
+            StringAsetAdmissionValues {
+                object,
+                size,
+                size_byte,
+                code,
+                basic_ok,
+            },
+            slow,
+        )
+    } else {
+        let unibyte = icmp_imm_p(
+            fb,
+            IntCC::Equal,
+            size_byte,
+            LispString::JIT_SIZE_BYTE_UNIBYTE,
+        );
+        let byte = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, code, 0xff);
+        let unibyte_fits = fb.ins().band(unibyte, byte);
+        let all_ascii = fb.ins().icmp(IntCC::Equal, size_byte, size);
+        let ascii = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, code, 0x7f);
+        let ascii_fits = fb.ins().band(all_ascii, ascii);
+        let fits = fb.ins().bor(unibyte_fits, ascii_fits);
+        let ok = fb.ins().band(in_range, owned);
+        let ok = fb.ins().band(ok, fits);
+        let store = fb.create_block();
+        fb.ins().brif(ok, store, &[], slow, &[]);
+        store
+    };
     fb.switch_to_block(store);
     fb.seal_block(store);
     let data = fb.ins().load(
@@ -1347,8 +1406,8 @@ pub(crate) static STRING_ASET_INLINE_EMITTED: std::sync::atomic::AtomicUsize =
 /// and for any layout probe that could not prove what it found.
 ///
 /// Everything that is not a plain field read bounces to the generic path: no
-/// current buffer, an id outside the slot vector, a freed slot, or the symbol
-/// no longer being a plain builtin.
+/// current buffer or the symbol no longer being a plain builtin. Selection
+/// writers validate the direct Buffer designator and clear it before removal.
 ///
 /// SOUNDNESS: the loads are `MemFlagsData::trusted()`, which is `notrap` and
 /// `aligned` and deliberately NOT `readonly`. `dispatch.rs`'s ANTI-REQUIREMENT
@@ -1400,18 +1459,8 @@ fn emit_inline_cbsym_read(
     else {
         return None;
     };
-    let Some((tag_off, payload_off, none_tag)) = jit_layout::current_option_layout() else {
-        return None;
-    };
-    let Some((ptr_off, len_off)) = jit_layout::slots_vec_offsets() else {
-        return None;
-    };
-
     let flags = MemFlagsData::trusted();
-    let manager = CONTEXT_BUFFERS_OFFSET;
-    let current = manager + jit_layout::BUFFER_MANAGER_CURRENT_OFFSET;
-    let slots =
-        manager + jit_layout::BUFFER_MANAGER_BUFFERS_OFFSET + jit_layout::LIVE_BUFFERS_SLOTS_OFFSET;
+    let current = CONTEXT_BUFFERS_OFFSET + jit_layout::BUFFER_MANAGER_CURRENT_PTR_OFFSET;
 
     let miss = fb.create_block();
     let done = fb.create_block();
@@ -1430,36 +1479,9 @@ fn emit_inline_cbsym_read(
     fb.switch_to_block(has_buffer);
     fb.seal_block(has_buffer);
     let vmctx = fb.use_var(rt.vmctx_var);
-    let tag = fb
-        .ins()
-        .load(types::I64, flags, vmctx, (current + tag_off) as i32);
-    let present = icmp_imm_p(fb, IntCC::NotEqual, tag, none_tag as i64);
-    let in_range = fb.create_block();
-    fb.ins().brif(present, in_range, &[], miss, &[]);
-
-    // Its id must index the slot vector. `LiveBuffers::len` is the live COUNT,
-    // not the vector's length, so the bound has to come from the probed word.
-    fb.switch_to_block(in_range);
-    fb.seal_block(in_range);
-    let id = fb
-        .ins()
-        .load(types::I64, flags, vmctx, (current + payload_off) as i32);
-    let len = fb
-        .ins()
-        .load(types::I64, flags, vmctx, (slots + len_off) as i32);
-    let within = fb.ins().icmp(IntCC::UnsignedLessThan, id, len);
-    let live = fb.create_block();
-    fb.ins().brif(within, live, &[], miss, &[]);
-
-    // Each slot is one niche-optimised pointer word, so a freed slot is null.
-    fb.switch_to_block(live);
-    fb.seal_block(live);
-    let base = fb
-        .ins()
-        .load(rt.ptr_ty, flags, vmctx, (slots + ptr_off) as i32);
-    let byte_index = fb.ins().imul_imm(id, 8);
-    let slot_addr = fb.ins().iadd(base, byte_index);
-    let buffer = fb.ins().load(rt.ptr_ty, flags, slot_addr, 0);
+    // This private pointer changes on buffer switches. Unlike immutable World
+    // allocation bases, it must be reloaded after every callback.
+    let buffer = fb.ins().load(rt.ptr_ty, flags, vmctx, current as i32);
     let read = fb.create_block();
     let occupied = icmp_imm_p(fb, IntCC::NotEqual, buffer, 0);
     fb.ins().brif(occupied, read, &[], miss, &[]);
@@ -1509,14 +1531,13 @@ fn emit_inline_record_type_of(
     arg: ClifValue,
 ) -> Option<(Block, Variable)> {
     use super::jit_layout::CONTEXT_ATTENTION_OFFSET;
-    use super::jit_layout::{OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET};
+    use super::jit_layout::{DISPATCH_DEBUG_FWD_OFFSET, DISPATCH_FUNCTION_EPOCH_OFFSET};
     use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
     use crate::tagged::header::{VecLikeHeader, VecLikeType, VectorObj};
     let (ptr_off, len_off) = super::jit_layout::heap::value_vec_slice_offsets()?;
     const_assert_vector_record_share_layout();
     let data_off = core::mem::offset_of!(VectorObj, data);
     let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
-    let ob = super::jit_layout::CONTEXT_OBARRAY_OFFSET;
     let slot_epoch_off = super::spec_slot::SPEC_SLOT_EPOCH_OFFSET;
     let flags = MemFlagsData::trusted();
     debug_assert_eq!(Value::NIL.bits(), 0, "the clear test ORs nil words");
@@ -1540,11 +1561,12 @@ fn emit_inline_record_type_of(
     fb.switch_to_block(stage2);
     fb.seal_block(stage2);
     let vmctx = fb.use_var(rt.vmctx_var);
+    let dispatch = super::jit_layout::emit_dispatch_cells_base(fb, vmctx);
     let epoch = fb.ins().load(
         types::I64,
         flags,
-        vmctx,
-        (ob + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
+        dispatch,
+        DISPATCH_FUNCTION_EPOCH_OFFSET as i32,
     );
     let armed_epoch = fb
         .ins()
@@ -1570,12 +1592,9 @@ fn emit_inline_record_type_of(
     let async_word = fb.ins().uload32(flags, async_addr, 0);
     // The `debug-on-next-call` cell: never null (an unresolved cell names a
     // stand-in that reads armed).
-    let cell = fb.ins().load(
-        rt.ptr_ty,
-        flags,
-        vmctx,
-        (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
-    );
+    let cell = fb
+        .ins()
+        .load(rt.ptr_ty, flags, dispatch, DISPATCH_DEBUG_FWD_OFFSET as i32);
     let debug = super::atomic_forward::load_bool(fb, cell, LISP_BOOL_FWD_VALUE_OFFSET);
     let object = band_imm_p(fb, arg, !(TAG_MASK as i64));
     let type_tag = fb.ins().uload8(types::I64, flags, object, type_off as i32);
@@ -2204,16 +2223,16 @@ pub(crate) fn emit_mir_inline_entry_guard(
     deopt: Block,
 ) -> Result<(), CompileError> {
     use super::jit_layout::CONTEXT_ATTENTION_OFFSET;
-    use super::jit_layout::{OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET};
+    use super::jit_layout::{DISPATCH_DEBUG_FWD_OFFSET, DISPATCH_FUNCTION_EPOCH_OFFSET};
     use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
-    let ob = super::jit_layout::CONTEXT_OBARRAY_OFFSET;
     let flags = MemFlagsData::trusted();
     let vmctx = fb.use_var(rt.vmctx_var);
+    let dispatch = super::jit_layout::emit_dispatch_cells_base(fb, vmctx);
     let current = fb.ins().load(
         types::I64,
         flags,
-        vmctx,
-        (ob + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
+        dispatch,
+        DISPATCH_FUNCTION_EPOCH_OFFSET as i32,
     );
     let epoch_ok = icmp_imm_p(fb, IntCC::Equal, current, epoch as i64);
     // `quit-flag`, a bound `throw-on-input` and active compiler overrides.
@@ -2233,12 +2252,9 @@ pub(crate) fn emit_mir_inline_entry_guard(
     );
     let async_word = fb.ins().uload32(flags, async_addr, 0);
     // Never null; an unresolved cell names a stand-in that reads armed.
-    let cell = fb.ins().load(
-        rt.ptr_ty,
-        flags,
-        vmctx,
-        (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
-    );
+    let cell = fb
+        .ins()
+        .load(rt.ptr_ty, flags, dispatch, DISPATCH_DEBUG_FWD_OFFSET as i32);
     let debug = super::atomic_forward::load_bool(fb, cell, LISP_BOOL_FWD_VALUE_OFFSET);
     let depth = fb.ins().load(
         rt.ptr_ty,
@@ -3183,7 +3199,7 @@ fn regalloc_checker_enabled() -> bool {
 /// is correct same-session and keeps the JIT byte-identical); the broader symbol
 /// reloc applies ONLY to AOT. (Audit #16.)
 pub(crate) fn const_relocs_for_aot(v: Value) -> bool {
-    v.is_heap_object() || (v.is_symbol() && v != Value::NIL && v != Value::T)
+    v.is_heap_object() || (v.is_bare_symbol() && v != Value::NIL && v != Value::T)
 }
 
 /// Module-generic build seam for [`lower_mir_with_plan`]: sets up the leaf ABI
@@ -3299,13 +3315,15 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             // emitter. AOT plans have no ordinary call slots yet.
             let shapes = jit_direct_shapes();
             let groups = super::ShimGroups {
+                throw_flow:
+                    crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Unavailable,
                 subr_spec: plan.spec_sites.values().any(|s| s.kind.is_round1_subr()),
                 cbsym_spec: plan.has_named_builtin,
                 tier2_profile: emit.t2.is_some(),
                 direct_shapes: !aot && (shapes.optional || shapes.rest),
                 call_census: !aot && jit_call_census_on(),
                 direct_framed: !aot && shapes.framed,
-                collection_journal: !aot && jit_gen0_collection_journal_on(),
+                collection_journal: jit_gen0_collection_journal_on(),
                 collection_observation_gate: !aot
                     && super::shim_refs::collection_observation_gate_enabled(),
                 hof: false,
@@ -3336,6 +3354,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 call_result_slot,
                 rootwin: None,
                 heap: None,
+                cons_store_probe_order: super::heap_inline::ConsStoreProbeOrder::default(),
                 inline_alloc: !aot && super::jit_inline_alloc_on(),
                 generational: std::cell::Cell::new(aot.then_some(false)),
                 direct_sites: std::cell::Cell::new(0),
@@ -4208,6 +4227,9 @@ pub(crate) struct RtCtx {
     /// block for a body whose inline heap sites justify it
     /// (`heap_inline::hoist_heap_ptr`); `None` makes each site load it.
     pub(crate) heap: Option<ClifValue>,
+    /// Compiler-only branch order from decoded explicit Cons store sites.
+    /// This carries no Lisp identity and is not published into native state.
+    pub(crate) cons_store_probe_order: super::heap_inline::ConsStoreProbeOrder,
     /// Allocate conses and box floats inline (`heap_inline`): JIT code with
     /// `NEOVM_JIT_INLINE_ALLOC` on; never AOT, whose leaves keep the shims.
     pub(crate) inline_alloc: bool,
@@ -7468,9 +7490,21 @@ fn lower_simple_op_arms(
                     Some(stack[args_at..].iter().copied().collect())
                 }
                 _ => {
-                    for (i, &v) in stack[args_at..].iter().enumerate() {
-                        fb.ins()
-                            .stack_store(rt.ptr_ty, v, rt.call_args_slot, (i * 8) as i32);
+                    if !aot
+                        && n == 2
+                        && matches!(spec, Some((_, _, _, _, SpecCalleeKind::Bytecode)))
+                    {
+                        // Match the bytecode shim's arity-two payload read.
+                        // The existing stack slot is eight-byte aligned;
+                        // stack_store does not require vector alignment.
+                        let pair = fb.ins().splat(types::I64X2, stack[args_at]);
+                        let pair = fb.ins().insertlane(pair, stack[args_at + 1], 1);
+                        fb.ins().stack_store(rt.ptr_ty, pair, rt.call_args_slot, 0);
+                    } else {
+                        for (i, &v) in stack[args_at..].iter().enumerate() {
+                            fb.ins()
+                                .stack_store(rt.ptr_ty, v, rt.call_args_slot, (i * 8) as i32);
+                        }
                     }
                     None
                 }
@@ -8500,30 +8534,17 @@ fn lower_simple_op_arms(
                     let merge = fb.create_block();
                     let slow = fb.create_block();
                     let res = fb.declare_var(types::I64);
-                    if matches!(cons_proof, super::heap_inline::ConsStoreProof::Dynamic) {
-                        super::heap_inline::emit_inline_cons_store(
-                            fb,
-                            rt,
-                            operands[0],
-                            operands[1],
-                            matches!(other, Op::Setcdr),
-                            slow,
-                            res,
-                            merge,
-                        );
-                    } else {
-                        super::heap_inline::emit_inline_cons_store_with_proof(
-                            fb,
-                            rt,
-                            operands[0],
-                            operands[1],
-                            matches!(other, Op::Setcdr),
-                            slow,
-                            res,
-                            merge,
-                            cons_proof,
-                        );
-                    }
+                    super::heap_inline::emit_explicit_cons_store_with_proof(
+                        fb,
+                        rt,
+                        operands[0],
+                        operands[1],
+                        matches!(other, Op::Setcdr),
+                        slow,
+                        res,
+                        merge,
+                        cons_proof,
+                    );
                     fb.switch_to_block(slow);
                     fb.seal_block(slow);
                     fb.set_cold_block(slow);

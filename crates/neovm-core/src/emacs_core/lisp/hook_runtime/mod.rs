@@ -68,7 +68,7 @@ impl HookRuntime for Context {
 }
 
 pub(crate) fn resolve_hook_symbol(ctx: &Context, hook_symbol: Value) -> Result<SymId, Flow> {
-    let symbol = builtins::expect_symbol_id(&hook_symbol)?;
+    let symbol = builtins::expect_symbol_id(&hook_symbol, ctx.symbol_mode())?;
     builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)
 }
 

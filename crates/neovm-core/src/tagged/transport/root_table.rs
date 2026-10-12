@@ -123,7 +123,7 @@ impl TracedWord {
     /// `value`'s word, when the collector traces it from a root.
     pub(super) fn of(value: TaggedValue) -> Option<Self> {
         let traced =
-            value.is_heap_object() || (value.is_symbol() && !value.is_nil() && !value.is_t());
+            value.is_heap_object() || (value.is_bare_symbol() && !value.is_nil() && !value.is_t());
         traced.then_some(Self(value.bits()))
     }
 

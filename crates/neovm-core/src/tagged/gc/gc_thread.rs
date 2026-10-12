@@ -239,10 +239,10 @@ impl WorkerSymbolMarks for SymbolMarkBits {
     #[inline(always)]
     fn note(&mut self, value: TaggedValue, symbols: &mut Vec<SymId>) -> bool {
         // Exclude identities, never mutable intern membership or namesakes.
-        if !value.is_symbol() || value.bits() <= TaggedValue::UNBOUND.bits() {
+        if !value.is_bare_symbol() || value.bits() <= TaggedValue::UNBOUND.bits() {
             return false;
         }
-        let id = value.xsymbol_id();
+        let id = value.xbare_symbol_id();
         if self.insert_if_absent(id) {
             symbols.push(id);
         }
@@ -1049,7 +1049,7 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
             if addr < job.claims.dump_lo || addr >= job.claims.dump_hi {
                 job.gray.push(child);
             }
-        } else if child.is_symbol() {
+        } else if child.is_bare_symbol() {
             if SYMBOLS {
                 logs.note_symbol(child);
             } else if seen_symbols.insert(child.bits()) {
@@ -1258,7 +1258,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                         if addr < job.claims.dump_lo || addr >= job.claims.dump_hi {
                             job.gray.push(child);
                         }
-                    } else if child.is_symbol() {
+                    } else if child.is_bare_symbol() {
                         // Deduped symbol hand-off: `mark_symbol` is
                         // mutator-only, and an uninterned dumped symbol is
                         // reachable only through image data, so each UNIQUE
@@ -1425,6 +1425,9 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
 
 /// Set the thread-local tagged heap pointer.
 pub fn set_tagged_heap(heap: &mut TaggedHeap) {
+    if !tagged_heap_is_current(heap) {
+        super::super::collection_reads::reset_recent_reads_for_heap_installation();
+    }
     TAGGED_HEAP.with(|h| h.set(heap as *mut TaggedHeap));
     TAGGED_HEAP_ID.with(|identity| identity.set(Some(heap.identity())));
     TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(heap.write_tracking_mode()));
@@ -1443,8 +1446,7 @@ pub fn set_tagged_heap(heap: &mut TaggedHeap) {
     let window = heap.barrier_window();
     let observed =
         super::super::collection_reads::compiled_observation_gate(heap.collection_dump_window());
-    heap.jit
-        .set_barrier_window(heap.compiled_barrier_window(window, observed));
+    heap.set_compiled_barrier_window(window, observed);
     TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(window));
     TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(heap.cons_barrier_window(window)));
     // The remembered cache belongs to this heap's mutator. Reinstallation
@@ -1471,6 +1473,7 @@ pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
     let owned = heap as *const TaggedHeap as *mut TaggedHeap;
     let _ = TAGGED_HEAP.try_with(|h| {
         if h.get() == owned {
+            super::super::collection_reads::reset_recent_reads_for_heap_installation();
             h.set(std::ptr::null_mut());
             let _ = TAGGED_HEAP_ID.try_with(|identity| identity.set(None));
             let _ = TAGGED_HEAP_WRITE_TRACKING_MODE

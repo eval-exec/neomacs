@@ -11,13 +11,36 @@
 use super::*;
 use crate::emacs_core::bytecode::vm::Vm as TestVm;
 use crate::emacs_core::intern::SymId;
-use crate::emacs_core::jit::cache::{
-    cache_entry_kind_for_test, compiled_leaf_ptr_for_test, try_run_compiled,
-};
+use crate::emacs_core::jit::cache::{cache_entry_kind_for_test, compiled_leaf_ptr_for_test};
 use crate::emacs_core::jit::compile::{force_deopt_for_test, force_profit_gate_for_test};
 use crate::emacs_core::jit::stats;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::LambdaParams;
+
+/// Finish only an actual queued compile AFTER its original Lisp call.
+/// A re-profile window, rejection or interpreter-only verdict is untouched.
+fn finish_pending(ev: &mut Context, f: &ByteCodeFunction, result: Value) {
+    if !f
+        .jit_runtime()
+        .compiled_id()
+        .is_some_and(|id| cache_entry_kind_for_test(id) == "pending")
+    {
+        return;
+    }
+    struct Root<'a> {
+        ev: &'a mut Context,
+        scope: crate::emacs_core::eval::SpecpdlRootScopeState,
+    }
+    impl Drop for Root<'_> {
+        fn drop(&mut self) {
+            self.ev.restore_specpdl_roots(self.scope);
+        }
+    }
+    let scope = ev.save_specpdl_roots();
+    let root = Root { ev, scope };
+    root.ev.push_specpdl_root(result);
+    crate::emacs_core::jit::test_support::prepare_entry(root.ev, f);
+}
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -87,13 +110,13 @@ fn caller_of(sym: Value) -> ByteCodeFunction {
 fn install(ev: &mut Context, name: &str, f: ByteCodeFunction) -> Value {
     let sym = Value::symbol(name);
     ev.obarray
-        .set_symbol_function_id(sym.as_symbol_id().unwrap(), Value::make_bytecode(f));
+        .set_symbol_function_id(sym.as_bare_symbol_id().unwrap(), Value::make_bytecode(f));
     sym
 }
 
 fn bytecode_of(ev: &Context, sym: Value) -> &'static ByteCodeFunction {
     ev.obarray
-        .symbol_function_id(sym.as_symbol_id().unwrap())
+        .symbol_function_id(sym.as_bare_symbol_id().unwrap())
         .and_then(Value::get_bytecode_data)
         .expect("bytecode")
 }
@@ -140,11 +163,18 @@ impl Probe {
     fn call(&mut self, x: impl Fn() -> Value) -> Value {
         let want = print_value(&interp_j4(&mut self.ev, x()));
         let ctx = self.ctx();
-        let bits = try_run_compiled(ctx, &self.caller, self.caller_val, &[x()])
-            .expect("no signal")
-            .expect("the caller runs native");
+        let bits = crate::emacs_core::jit::test_support::run_compiled(
+            ctx,
+            &self.caller,
+            self.caller_val,
+            &[x()],
+        )
+        .expect("no signal")
+        .expect("the caller runs native");
         let got = Value::from_bits(bits);
         assert_eq!(print_value(&got), want, "native vs interp");
+        let callee = self.callee();
+        finish_pending(&mut self.ev, callee, got);
         got
     }
 
@@ -357,7 +387,7 @@ fn closure_instances_share_the_reopt_state() {
     );
     f1.jit_runtime().set_hot_for_test();
     let run = |f: &ByteCodeFunction, v: Value, x: Value| {
-        try_run_compiled(ctx, f, v, &[x, x]).expect("no signal")
+        crate::emacs_core::jit::test_support::run_compiled(ctx, f, v, &[x, x]).expect("no signal")
     };
     assert_eq!(
         run(&f1, v1, Value::make_int(3)),
@@ -400,9 +430,14 @@ fn aot_prewarmed_source_honours_the_reopt_deferral() {
     let rt = f.jit_runtime();
     rt.mark_aot_prewarmed();
     assert!(
-        try_run_compiled(ctx, &f, v, &[Value::make_int(3), Value::make_int(3)])
-            .expect("no signal")
-            .is_some()
+        crate::emacs_core::jit::test_support::run_compiled(
+            ctx,
+            &f,
+            v,
+            &[Value::make_int(3), Value::make_int(3)]
+        )
+        .expect("no signal")
+        .is_some()
     );
     let len = f.executable_ops().len();
     assert!(matches!(
@@ -410,7 +445,7 @@ fn aot_prewarmed_source_honours_the_reopt_deferral() {
         crate::emacs_core::jit::Plan::Compiled
     ));
     let fl = Value::make_float(3.0);
-    try_run_compiled(ctx, &f, v, &[fl, fl]).expect("no signal");
+    crate::emacs_core::jit::test_support::run_compiled(ctx, &f, v, &[fl, fl]).expect("no signal");
     assert_eq!(rt.reopt_count(), 1);
     assert!(
         matches!(
@@ -527,6 +562,8 @@ fn osr_transfers() -> u64 {
 /// compiled from the widened feedback, which finishes the loop natively.
 #[test]
 fn osr_float_switch_reenters_native() {
+    // Observe both real-worker installations during this one original loop.
+    let _native = crate::emacs_core::jit::test_support::AwaitOsrScope::enter();
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(5)));
     let mut ev = Context::new();
@@ -544,6 +581,7 @@ fn osr_float_switch_reenters_native() {
     crate::emacs_core::jit::force_osr_for_test(true);
     let f = osr_switch();
     f.jit_runtime().set_hot_for_test();
+    crate::emacs_core::jit::test_support::prepare_osr(&mut ev, &f, OSR_HEADER);
     let before = osr_transfers();
     let got = TestVm::from_context(&mut ev)
         .execute(&f, vec![n, k])
@@ -595,6 +633,7 @@ fn osr_deopt_without_invalidation_latches() {
     let mut ev = Context::new();
     crate::emacs_core::jit::force_osr_for_test(true);
     f.jit_runtime().set_hot_for_test();
+    crate::emacs_core::jit::test_support::prepare_osr(&mut ev, &f, 2);
     let before = osr_transfers();
     let start = Value::make_int(Value::MOST_POSITIVE_FIXNUM - 1500);
     let got = TestVm::from_context(&mut ev)
@@ -636,14 +675,14 @@ fn osr_entry_guard_failures_reprofile_after_limit() {
     );
     let rt = lp.jit_runtime();
     let snapshot = [Value::make_int(10), Value::make_float(1.5)];
-    let transfer = || match crate::emacs_core::jit::cache::try_run_osr(ctx, &lp, 1, &snapshot, &[])
-    {
-        Some(crate::emacs_core::jit::compile::NativeRun::DeoptAt(resume)) => {
-            assert_eq!(resume.pc, 1, "rejected at the header");
-            assert_eq!(resume.stack, snapshot, "with the untouched snapshot");
-        }
-        other => panic!("expected the entry guard's deopt, got {other:?}"),
-    };
+    let transfer =
+        || match crate::emacs_core::jit::test_support::run_osr(ctx, &lp, 1, &snapshot, &[]) {
+            Some(crate::emacs_core::jit::compile::NativeRun::DeoptAt(resume)) => {
+                assert_eq!(resume.pc, 1, "rejected at the header");
+                assert_eq!(resume.stack, snapshot, "with the untouched snapshot");
+            }
+            other => panic!("expected the entry guard's deopt, got {other:?}"),
+        };
     rt.note_numeric_feedback_consumed();
     transfer();
     assert!(
@@ -729,6 +768,7 @@ fn mir_rerun_learns_or_escalates() {
                     .expect("runs"),
             );
             assert_eq!(got, want);
+            finish_pending(&mut ev, callee, Value::NIL);
         };
         call(|| Value::make_int(1));
         let leaf = cached_leaf(callee).expect("compiled");
@@ -839,9 +879,10 @@ fn inline_epoch_moved_recompiles_once() {
     );
     let v = Value::make_bytecode(f.clone());
     let run = |n: i64| {
-        let bits = try_run_compiled(ctx, &f, v, &[Value::make_int(n)])
-            .expect("no signal")
-            .expect("precise: resumed, not rerun");
+        let bits =
+            crate::emacs_core::jit::test_support::run_compiled(ctx, &f, v, &[Value::make_int(n)])
+                .expect("no signal")
+                .expect("precise: resumed, not rerun");
         Value::from_bits(bits)
     };
     assert_eq!(run(4), Value::make_int(14)); // 0 + 1 + 4 + 9
@@ -856,7 +897,7 @@ fn inline_epoch_moved_recompiles_once() {
     // SAFETY: the test owns `ev` and no native frame is live.
     unsafe { &mut *ctx_w }
         .obarray
-        .set_symbol_function_id(zz.as_symbol_id().unwrap(), Value::make_int(0));
+        .set_symbol_function_id(zz.as_bare_symbol_id().unwrap(), Value::make_int(0));
     let now = unsafe { &*ctx_w }.obarray.function_epoch();
     assert_ne!(now, armed);
     assert_eq!(run(4), Value::make_int(14), "the deopt resumes correctly");
@@ -925,7 +966,9 @@ fn backoff_climbs_to_generic_then_interpreter() {
                 .execute(&f, args.to_vec())
                 .expect("interp"),
         );
-        if let Some(bits) = try_run_compiled(ctx, &f, v, &args).expect("no signal") {
+        if let Some(bits) = crate::emacs_core::jit::test_support::run_compiled(ctx, &f, v, &args)
+            .expect("no signal")
+        {
             assert_eq!(print_value(&Value::from_bits(bits)), want);
         }
     };
@@ -954,7 +997,7 @@ fn backoff_climbs_to_generic_then_interpreter() {
     let deopts = stats::compile_stats_snapshot().deopts();
     run([big; 4]);
     // Non-fixnum operands, made right at the native run (see the GC note).
-    let ran = try_run_compiled(
+    let ran = crate::emacs_core::jit::test_support::run_compiled(
         ctx,
         &f,
         v,
@@ -983,7 +1026,8 @@ fn backoff_climbs_to_generic_then_interpreter() {
         crate::emacs_core::jit::Plan::Interpret
     ));
     assert_eq!(
-        try_run_compiled(ctx, &f, v, &[one; 4]).expect("no signal"),
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, v, &[one; 4])
+            .expect("no signal"),
         None
     );
     force_reopt_for_test(None);
@@ -1026,6 +1070,7 @@ fn stress_with_force_deopt_climbs_and_matches_the_interpreter() {
                     .expect("runs"),
             );
             assert_eq!(got, want);
+            finish_pending(&mut ev, callee, Value::NIL);
         }
     }
     let rt = callee.jit_runtime();
@@ -1042,6 +1087,7 @@ fn stress_with_force_deopt_climbs_and_matches_the_interpreter() {
     let (n, k) = (Value::make_int(2_500), Value::make_int(700));
     let f = osr_switch();
     f.jit_runtime().set_hot_for_test();
+    crate::emacs_core::jit::test_support::prepare_osr(&mut ev, &f, OSR_HEADER);
     let got = TestVm::from_context(&mut ev)
         .execute(&f, vec![n, k])
         .expect("OSR run")

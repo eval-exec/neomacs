@@ -173,6 +173,7 @@ fn cons_store_clif(
     );
     let config = module.target_config();
     let groups = ShimGroups {
+        throw_flow: crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Unavailable,
         subr_spec: false,
         cbsym_spec: false,
         tier2_profile: false,
@@ -219,6 +220,7 @@ fn cons_store_clif(
             call_result_slot: result_slot,
             rootwin: None,
             heap: Some(params[0]),
+            cons_store_probe_order: Default::default(),
             inline_alloc: false,
             generational: std::cell::Cell::new(Some(false)),
             direct_sites: std::cell::Cell::new(0),
@@ -1010,7 +1012,7 @@ fn osr_into_a_cons_loop_allocates_inline() {
     let snapshot = [Value::make_int(500), Value::NIL];
     ctx.bc_buf.extend_from_slice(&snapshot);
     let before = conses_counted();
-    let run = crate::emacs_core::jit::cache::try_run_osr(&mut ctx, &f, 1, &snapshot, &[]);
+    let run = crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 1, &snapshot, &[]);
     let Some(NativeRun::Ok(bits)) = run else {
         panic!("the OSR transfer must run the loop natively: {run:?}");
     };

@@ -611,7 +611,8 @@ fn warmed_runtime(knob: InlineVarsKnob, src: &str, legacy_gc: bool) -> Context {
     } else {
         crate::test_utils::runtime_startup_context()
     };
-    ev.eval_str(src).expect("warmed");
+    eval_fixture_program_named(&mut ev, src, &["ivt-r", "ivt-g", "ivt-f", "ivt-h"])
+        .expect("warmed");
     ev
 }
 
@@ -782,6 +783,7 @@ fn osr_into_a_let_unbinds_inline_what_the_interpreter_bound() {
             let mut f = binding_sum(nested);
             f.seal_hand_assembled_ops();
             f.jit_runtime().set_hot_for_test();
+            crate::emacs_core::jit::test_support::prepare_osr(&mut ctx, &f, 4);
             let transfers =
                 crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
             let before = shims();

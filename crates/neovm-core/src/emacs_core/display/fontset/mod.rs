@@ -499,7 +499,7 @@ enum FontsetAddMode {
 
 impl FontsetAddMode {
     fn from_lisp_value(add: Option<&Value>) -> Self {
-        add.and_then(|value| value.as_symbol_name())
+        add.and_then(|value| value.as_bare_symbol_name())
             .and_then(|name| name.parse().ok())
             .unwrap_or(Self::Overwrite)
     }
@@ -1147,7 +1147,7 @@ fn font_encoding_definition(value: &Value) -> Option<FontDefinitionMetadata> {
             })
         }
         ValueKind::Cons => {
-            let encoding = value.cons_car().as_symbol_id()?;
+            let encoding = value.cons_car().as_bare_symbol_id()?;
             if !charset_exists(resolve_sym(encoding)) {
                 return None;
             }

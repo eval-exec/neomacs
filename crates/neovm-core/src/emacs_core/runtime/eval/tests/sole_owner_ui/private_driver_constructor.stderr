@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> src/emacs_core/runtime/eval/tests/sole_owner_ui/private_driver_constructor.rs:5:48
+  |
+5 |     let _forged = sole_owner::SoleOwnerDriver::new();
+  |                                                ^^^ private associated function
+  |
+ ::: src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+  |
+  |     fn new() -> Self {
+  |     ---------------- private associated function defined here

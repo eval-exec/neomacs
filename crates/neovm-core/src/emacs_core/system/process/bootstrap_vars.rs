@@ -260,7 +260,7 @@ pub(super) fn parse_signal_number(value: &Value) -> Result<SignalNumber, Flow> {
         )),
         _ => {
             // Borrow the symbol name before consuming it
-            let sym_name = value.as_symbol_name().map(|s| s.to_owned());
+            let sym_name = value.as_bare_symbol_name().map(|s| s.to_owned());
             if let Some(name) = sym_name {
                 sys::signal_name_number(&name)
                     .map(SignalNumber)
@@ -525,7 +525,7 @@ pub(super) enum NetworkAddressFamily {
 
 impl NetworkAddressFamily {
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     #[cfg(test)]
@@ -576,7 +576,7 @@ pub(super) enum NetworkProcessFamilySymbol {
 
 impl NetworkProcessFamilySymbol {
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     #[cfg(test)]
@@ -592,7 +592,7 @@ pub(super) fn parse_network_host(
     if value.is_nil() {
         return Ok(None);
     }
-    if value.as_symbol_name() == Some("local") {
+    if value.as_bare_symbol_name() == Some("local") {
         return Ok(Some(family.loopback_host().to_string()));
     }
     match value.kind() {
@@ -809,7 +809,7 @@ pub(super) enum NetworkLookupHint {
 
 impl NetworkLookupHint {
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     pub(super) fn addrinfo_flags(self) -> i32 {
@@ -833,7 +833,7 @@ pub(super) enum NumProcessorsQuery {
 
 impl NumProcessorsQuery {
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     #[cfg(test)]
@@ -851,7 +851,7 @@ pub(super) enum NetworkSocketType {
 }
 
 pub(super) fn parse_network_socket_type(value: &Value) -> Result<NetworkSocketType, Flow> {
-    match value.as_symbol_name() {
+    match value.as_bare_symbol_name() {
         _ if value.is_nil() => Ok(NetworkSocketType::Stream),
         Some("datagram") => Ok(NetworkSocketType::Datagram),
         #[cfg(unix)]
@@ -877,7 +877,7 @@ pub(super) enum ProcessConnectionType {
 
 impl ProcessConnectionType {
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     pub(super) fn uses_pty(self) -> bool {

@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
 use crate::emacs_core::eval::{CheckedNativeCallback, LispArgVec, native_callback_cache_enabled};
+use crate::tagged::SymbolMode;
 use smallvec::SmallVec;
 
 mod sort;
@@ -542,6 +543,7 @@ fn identity_symbol_id() -> crate::emacs_core::intern::SymId {
 }
 
 pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args_range("mapconcat", &args, 2, 3)?;
     let func = args[0];
     let sequence = args[1];
@@ -568,7 +570,7 @@ pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value
     // SEQUENCE a list, the elements are concatenated without calling
     // anything -- `string-join' is exactly this call.
     let mapconcat_result =
-        if func.as_symbol_id() == Some(identity_symbol_id()) && sequence.is_cons() {
+        if func.as_symbol_id(symbol_mode) == Some(identity_symbol_id()) && sequence.is_cons() {
             Ok(mapconcat_identity_list(sequence, &mut parts))
         } else {
             if native_callback_cache_enabled() {
@@ -843,8 +845,9 @@ pub(super) fn capture_sort_predicate(
 /// GNU sort.c:1061-1077 resolves symbols and aliases once, retaining void
 /// and autoload symbols for the ordinary call path. Callers root this value.
 fn resolve_sort_function(eval: &super::eval::Context, function: Value) -> Value {
+    let symbol_mode = eval.symbol_mode();
     eval.unwrap_symbol(function)
-        .as_symbol_id()
+        .as_symbol_id(symbol_mode)
         .and_then(|symbol| {
             super::symbols::resolve_indirect_symbol_by_id_in_obarray_checked(
                 eval.obarray(),
@@ -854,7 +857,8 @@ fn resolve_sort_function(eval: &super::eval::Context, function: Value) -> Value 
         })
         .map(|(_, function)| function)
         .filter(|function| {
-            !function.is_nil() && !crate::emacs_core::autoload::is_autoload_value(function)
+            !function.is_nil()
+                && !crate::emacs_core::autoload::is_autoload_value(function, eval.symbol_mode())
         })
         .unwrap_or(function)
 }
@@ -1116,7 +1120,10 @@ impl SortRuntime for super::eval::Context {
     }
 }
 
-pub(crate) fn parse_sort_options(args: &[Value]) -> Result<SortOptions, Flow> {
+pub(crate) fn parse_sort_options(
+    args: &[Value],
+    symbol_mode: SymbolMode,
+) -> Result<SortOptions, Flow> {
     if args.is_empty() {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -1142,11 +1149,11 @@ pub(crate) fn parse_sort_options(args: &[Value]) -> Result<SortOptions, Flow> {
     } else if args.len() > 1 {
         let mut i = 1;
         while i < args.len() - 1 {
-            match args[i].as_symbol_name() {
-                Some(":key") => key_fn = args[i + 1],
-                Some(":lessp") => lessp_fn = args[i + 1],
-                Some(":reverse") => reverse = args[i + 1].into(),
-                Some(":in-place") => in_place = args[i + 1].into(),
+            match args[i].as_symbol_id(symbol_mode) {
+                Some(id) if id == intern(":key") => key_fn = args[i + 1],
+                Some(id) if id == intern(":lessp") => lessp_fn = args[i + 1],
+                Some(id) if id == intern(":reverse") => reverse = args[i + 1].into(),
+                Some(id) if id == intern(":in-place") => in_place = args[i + 1].into(),
                 _ => {
                     return Err(signal(
                         LispCondition::Error,
@@ -1158,10 +1165,10 @@ pub(crate) fn parse_sort_options(args: &[Value]) -> Result<SortOptions, Flow> {
         }
     }
 
-    if matches!(key_fn.as_symbol_name(), Some("identity")) {
+    if !key_fn.is_nil() && key_fn.as_symbol_id(symbol_mode) == Some(intern("identity")) {
         key_fn = Value::NIL;
     }
-    if matches!(lessp_fn.as_symbol_name(), Some("value<")) {
+    if !lessp_fn.is_nil() && lessp_fn.as_symbol_id(symbol_mode) == Some(intern("value<")) {
         lessp_fn = Value::NIL;
     }
 
@@ -1184,7 +1191,7 @@ pub(crate) fn builtin_sort_slice(eval: &mut super::eval::Context, args: &[Value]
         lessp_fn,
         reverse,
         in_place,
-    } = parse_sort_options(args)?;
+    } = parse_sort_options(args, eval.symbol_mode())?;
 
     match args[0].kind() {
         ValueKind::Nil => Ok(Value::NIL),
@@ -1387,3 +1394,7 @@ mod higher_order_callback_policy;
 #[cfg(all(test, feature = "jit"))]
 #[path = "tests/mapcar_activation_test.rs"]
 mod mapcar_activation;
+
+#[cfg(test)]
+#[path = "tests/positioned_final_boundaries_test.rs"]
+mod positioned_final_boundaries_tests;

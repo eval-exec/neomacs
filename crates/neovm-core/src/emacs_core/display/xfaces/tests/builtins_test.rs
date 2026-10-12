@@ -301,7 +301,7 @@ fn font_at_eval_returns_font_object_for_multibyte_buffer_face() {
     assert_eq!(
         font_get(vec![font, Value::keyword("family")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Serif")
     );
 }
@@ -344,7 +344,7 @@ fn font_at_eval_returns_font_object_for_multibyte_string_face() {
     assert_eq!(
         font_get(vec![font, Value::keyword("family")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Serif")
     );
 }
@@ -383,7 +383,7 @@ fn font_at_eval_preserves_raw_unibyte_string_face() {
     assert_eq!(
         font_get(vec![font, Value::keyword("family")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Serif")
     );
 }
@@ -398,7 +398,7 @@ fn internal_lisp_face_p_symbol_returns_face_vector() {
         _ => panic!("expected vector"),
     };
     assert_eq!(values.len(), LISP_FACE_VECTOR_LEN);
-    assert_eq!(values[0].as_symbol_name(), Some("face"));
+    assert_eq!(values[0].as_bare_symbol_name(), Some("face"));
 }
 
 #[test]
@@ -561,13 +561,13 @@ fn internal_lisp_face_p_with_frame_designator_returns_resolved_vector() {
         ValueKind::Veclike(VecLikeType::Vector) => result.as_vector_data().unwrap().clone(),
         _ => panic!("expected vector"),
     };
-    assert_eq!(values[0].as_symbol_name(), Some("face"));
+    assert_eq!(values[0].as_bare_symbol_name(), Some("face"));
     assert_eq!(values[1].as_utf8_str(), Some("default"));
     assert_eq!(values[2].as_utf8_str(), Some("default"));
-    assert_eq!(values[3].as_symbol_name(), Some("normal"));
+    assert_eq!(values[3].as_bare_symbol_name(), Some("normal"));
     assert_eq!(values[4].as_int(), Some(1));
-    assert_eq!(values[5].as_symbol_name(), Some("normal"));
-    assert_eq!(values[8].as_symbol_name(), Some("nil"));
+    assert_eq!(values[5].as_bare_symbol_name(), Some("normal"));
+    assert_eq!(values[8].as_bare_symbol_name(), Some("nil"));
     assert!(values[9].as_utf8_str().is_some());
     assert!(values[10].as_utf8_str().is_some());
 }
@@ -657,8 +657,8 @@ fn internal_lisp_face_p_without_frame_returns_global_lface_attributes() {
         ValueKind::Veclike(VecLikeType::Vector) => result.as_vector_data().unwrap().clone(),
         _ => panic!("expected vector"),
     };
-    assert_eq!(values[5].as_symbol_name(), Some("bold"));
-    assert_eq!(values[6].as_symbol_name(), Some("italic"));
+    assert_eq!(values[5].as_bare_symbol_name(), Some("bold"));
+    assert_eq!(values[6].as_bare_symbol_name(), Some("italic"));
 }
 
 #[test]
@@ -689,9 +689,9 @@ fn internal_set_lisp_face_attribute_accepts_gnu_font_style_aliases() {
 
     let result = builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
     let values = result.as_vector_data().expect("lface vector").clone();
-    assert_eq!(values[3].as_symbol_name(), Some("wide"));
-    assert_eq!(values[5].as_symbol_name(), Some("ultra-heavy"));
-    assert_eq!(values[6].as_symbol_name(), Some("ro"));
+    assert_eq!(values[3].as_bare_symbol_name(), Some("wide"));
+    assert_eq!(values[5].as_bare_symbol_name(), Some("ultra-heavy"));
+    assert_eq!(values[6].as_bare_symbol_name(), Some("ro"));
 }
 
 #[test]
@@ -737,7 +737,7 @@ fn internal_set_lisp_face_attribute_mutates_live_global_lface_vector() {
     .unwrap();
 
     let values = vector.as_vector_data().unwrap().clone();
-    assert_eq!(values[5].as_symbol_name(), Some(":ignore-defface"));
+    assert_eq!(values[5].as_bare_symbol_name(), Some(":ignore-defface"));
 }
 
 #[test]
@@ -766,11 +766,11 @@ fn internal_copy_lisp_face_keeps_global_and_frame_domains_separate() {
     let global_vector =
         builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
     assert_eq!(
-        frame_vector.as_vector_data().unwrap()[5].as_symbol_name(),
+        frame_vector.as_vector_data().unwrap()[5].as_bare_symbol_name(),
         Some("bold")
     );
     assert_eq!(
-        global_vector.as_vector_data().unwrap()[5].as_symbol_name(),
+        global_vector.as_vector_data().unwrap()[5].as_bare_symbol_name(),
         Some("unspecified")
     );
 }
@@ -841,7 +841,7 @@ fn internal_copy_lisp_face_returns_to_when_frame_t() {
         ],
     )
     .unwrap();
-    assert_eq!(result.as_symbol_name(), Some("my-face"));
+    assert_eq!(result.as_bare_symbol_name(), Some("my-face"));
 }
 
 #[test]
@@ -897,7 +897,7 @@ fn internal_copy_lisp_face_copies_frame_spec_without_runtime_realization() {
         ],
     )
     .unwrap();
-    assert_eq!(copied.as_symbol_name(), Some("copied-face"));
+    assert_eq!(copied.as_bare_symbol_name(), Some("copied-face"));
     let vector = lookup_frame_lisp_face_vector(&eval, frame_id, "copied-face")
         .expect("copied frame-local Lisp face vector");
     assert_eq!(
@@ -969,7 +969,7 @@ fn internal_copy_lisp_face_validates_new_frame_when_frame_designator_used() {
         ],
     )
     .unwrap();
-    assert_eq!(ok.as_symbol_name(), Some("my-face"));
+    assert_eq!(ok.as_bare_symbol_name(), Some("my-face"));
 }
 
 #[test]
@@ -1001,7 +1001,7 @@ fn internal_set_lisp_face_attribute_returns_value() {
         ],
     )
     .unwrap();
-    assert_eq!(result.as_symbol_name(), Some(face_name));
+    assert_eq!(result.as_bare_symbol_name(), Some(face_name));
 }
 
 #[test]
@@ -1029,7 +1029,7 @@ fn internal_get_lisp_face_attribute_mode_line_returns_unspecified() {
     // the realized face), so mode-line's unset `:foreground` reports as
     // `unspecified` here rather than the color it happens to realize to on a
     // color-capable display (fixed in a604c3a19; matches this test's own name).
-    assert_eq!(result.as_symbol_name(), Some("unspecified"));
+    assert_eq!(result.as_bare_symbol_name(), Some("unspecified"));
 }
 
 #[test]
@@ -1045,7 +1045,7 @@ fn internal_get_lisp_face_attribute_defaults_frame_returns_unspecified() {
         ],
     )
     .unwrap();
-    assert_eq!(result.as_symbol_name(), Some("unspecified"));
+    assert_eq!(result.as_bare_symbol_name(), Some("unspecified"));
 }
 
 #[test]
@@ -1149,7 +1149,7 @@ fn internal_set_lisp_face_attribute_font_object_derives_font_related_attrs() {
             vec![Value::symbol("default"), Value::keyword(":weight"),]
         )
         .unwrap()
-        .as_symbol_name(),
+        .as_bare_symbol_name(),
         Some("regular")
     );
     assert_eq!(
@@ -1218,7 +1218,7 @@ fn internal_set_lisp_face_attribute_default_font_spec_float_size_derives_absolut
             vec![Value::symbol("default"), Value::keyword(":weight"),]
         )
         .expect("default face weight")
-        .as_symbol_name(),
+        .as_bare_symbol_name(),
         Some("semi-light")
     );
 }
@@ -1276,7 +1276,7 @@ fn internal_set_lisp_face_attribute_eval_uses_live_frame_font_parameter_for_defa
     assert_eq!(
         font_get(vec![internal_font, Value::keyword(":family")])
             .expect("default face font family")
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Hack")
     );
     assert_eq!(
@@ -1416,7 +1416,7 @@ fn internal_set_lisp_face_attribute_eval_realizes_string_font_requests_for_live_
     assert_eq!(
         font_get(vec![opened_font, Value::keyword(":family")])
             .expect("default font family")
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Noto Sans Mono")
     );
     assert_eq!(
@@ -1629,7 +1629,7 @@ fn face_font_eval_returns_font_name_on_live_gui_frame() {
     assert_eq!(
         font_get(vec![spec, Value::keyword("family")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Test Mono")
     );
 }
@@ -1671,7 +1671,7 @@ fn default_face_font_attribute_stays_unspecified_on_live_tty_frame() {
     )
     .expect("default TTY face font attribute");
 
-    assert_eq!(result.as_symbol_name(), Some("unspecified"));
+    assert_eq!(result.as_bare_symbol_name(), Some("unspecified"));
 }
 
 #[test]
@@ -1698,7 +1698,7 @@ fn setting_font_on_a_live_tty_face_is_a_noop() {
     )
     .expect("default TTY face font attribute");
 
-    assert_eq!(result.as_symbol_name(), Some("unspecified"));
+    assert_eq!(result.as_bare_symbol_name(), Some("unspecified"));
 }
 
 #[test]
@@ -1726,7 +1726,7 @@ fn tty_default_face_does_not_expose_transport_font_metadata() {
     .expect("default TTY face font attribute");
 
     assert_eq!(
-        result.as_symbol_name(),
+        result.as_bare_symbol_name(),
         Some("unspecified"),
         "GNU realize_tty_face has no realized font; terminal-cell metadata is not a face font"
     );
@@ -1947,7 +1947,7 @@ fn internal_lisp_face_helpers_accept_frame_handles() {
         ],
     )
     .unwrap();
-    assert_eq!(copied.as_symbol_name(), Some(face_name));
+    assert_eq!(copied.as_bare_symbol_name(), Some(face_name));
 
     let set = builtin_internal_set_lisp_face_attribute(
         &mut eval,
@@ -2119,7 +2119,10 @@ fn face_list_orders_default_last_and_includes_dynamic_faces() {
 
     let result = builtin_face_list(vec![]).unwrap();
     let faces = list_to_vec(&result).unwrap();
-    let names: Vec<&str> = faces.iter().filter_map(|v| v.as_symbol_name()).collect();
+    let names: Vec<&str> = faces
+        .iter()
+        .filter_map(|v| v.as_bare_symbol_name())
+        .collect();
     assert!(names.contains(&"default"));
     assert!(names.contains(&"bold"));
     assert!(names.contains(&"cursor"));
@@ -2672,8 +2675,8 @@ fn internal_set_alternative_font_family_alist_converts_strings_to_symbols() {
     let result = builtin_internal_set_alternative_font_family_alist(vec![input]).unwrap();
     let outer = list_to_vec(&result).expect("outer list");
     let inner = list_to_vec(&outer[0]).expect("inner list");
-    assert_eq!(inner[0].as_symbol_name(), Some("Foo"));
-    assert_eq!(inner[1].as_symbol_name(), Some("Bar"));
+    assert_eq!(inner[0].as_bare_symbol_name(), Some("Foo"));
+    assert_eq!(inner[1].as_bare_symbol_name(), Some("Bar"));
 }
 
 #[test]

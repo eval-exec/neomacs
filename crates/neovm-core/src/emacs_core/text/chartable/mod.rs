@@ -10,10 +10,11 @@
 
 use super::error::{EvalResult, Flow, signal};
 use super::eval::{Context, push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots};
-use super::intern::{NIL_SYM_ID, SymId, T_SYM_ID, intern};
+use super::intern::{SymId, intern};
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::tagged::SymbolMode;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -104,7 +105,7 @@ fn sub_char_table_ref(table: Value, c: i64, is_uniprop: bool) -> Value {
     }
 }
 
-fn char_table_ascii(table: Value) -> Value {
+fn char_table_ascii(table: Value, mode: SymbolMode) -> Value {
     let Some(obj) = table.as_char_table_obj() else {
         return Value::NIL;
     };
@@ -121,7 +122,7 @@ fn char_table_ascii(table: Value) -> Value {
     let val = sub_char_table_contents(sub)
         .and_then(|contents| contents.first().copied())
         .unwrap_or(Value::NIL);
-    if is_char_code_property_table(&table) && uniprop_compressed_string(val).is_some() {
+    if is_char_code_property_table(&table, mode) && uniprop_compressed_string(val).is_some() {
         uniprop_table_uncompress(sub, 0).unwrap_or(val)
     } else {
         val
@@ -187,7 +188,7 @@ fn sub_char_table_set(table: Value, c: i64, value: Value, is_uniprop: bool) {
     sub_char_table_set(child, c, value, is_uniprop);
 }
 
-fn char_table_set_char_direct(table: Value, c: i64, value: Value) {
+fn char_table_set_char_direct(table: Value, c: i64, value: Value, mode: SymbolMode) {
     bump_char_table_write_tick();
     let Some(obj) = table.as_char_table_obj() else {
         return;
@@ -206,9 +207,9 @@ fn char_table_set_char_direct(table: Value, c: i64, value: Value) {
         set_char_table_contents(table, idx, child);
         child
     };
-    sub_char_table_set(child, c, value, is_char_code_property_table(&table));
+    sub_char_table_set(child, c, value, is_char_code_property_table(&table, mode));
     if (0..CT_ASCII_CACHE_LEN as i64).contains(&c) {
-        set_char_table_ascii(table, char_table_ascii(table));
+        set_char_table_ascii(table, char_table_ascii(table, mode));
     }
 }
 
@@ -245,13 +246,13 @@ fn sub_char_table_set_range(table: Value, from: i64, to: i64, value: Value, is_u
     }
 }
 
-fn char_table_set_range_direct(table: Value, from: i64, to: i64, value: Value) {
+fn char_table_set_range_direct(table: Value, from: i64, to: i64, value: Value, mode: SymbolMode) {
     bump_char_table_write_tick();
     if from == to {
-        char_table_set_char_direct(table, from, value);
+        char_table_set_char_direct(table, from, value, mode);
         return;
     }
-    let is_uniprop = is_char_code_property_table(&table);
+    let is_uniprop = is_char_code_property_table(&table, mode);
     let start_idx = chartab_idx(from, 0, 0);
     let end_idx = chartab_idx(to, 0, 0);
     for idx in start_idx..=end_idx {
@@ -277,7 +278,7 @@ fn char_table_set_range_direct(table: Value, from: i64, to: i64, value: Value) {
         }
     }
     if from < CT_ASCII_CACHE_LEN as i64 {
-        set_char_table_ascii(table, char_table_ascii(table));
+        set_char_table_ascii(table, char_table_ascii(table, mode));
     }
 }
 
@@ -349,16 +350,13 @@ fn expect_wholenump(value: &Value) -> Result<i64, Flow> {
     Ok(n)
 }
 
-fn symbol_id_for_check_symbol(value: &Value) -> Result<SymId, Flow> {
-    match value.kind() {
-        ValueKind::Nil => Ok(NIL_SYM_ID),
-        ValueKind::T => Ok(T_SYM_ID),
-        ValueKind::Symbol(id) => Ok(id),
-        _ => value
-            .as_symbol_with_pos_sym()
-            .and_then(|symbol| symbol_id_for_check_symbol(&symbol).ok())
-            .ok_or_else(|| wrong_type("symbolp", value)),
-    }
+fn symbol_id_for_check_symbol(
+    value: &Value,
+    mode: crate::tagged::value::SymbolMode,
+) -> Result<SymId, Flow> {
+    value
+        .as_symbol_id(mode)
+        .ok_or_else(|| wrong_type("symbolp", value))
 }
 
 fn expect_character_code(value: &Value) -> Result<i64, Flow> {
@@ -376,7 +374,11 @@ fn expect_character_code(value: &Value) -> Result<i64, Flow> {
 /// requoting here from the active obarray's `text-quoting-style` rather than
 /// emitting the raw ASCII quotes, so the captured error data matches GNU
 /// byte-for-byte.
-fn invalid_range_error(name: &str, obarray: Option<&super::symbol::Obarray>) -> Flow {
+fn invalid_range_error(
+    name: &str,
+    obarray: Option<&super::symbol::Obarray>,
+    mode: SymbolMode,
+) -> Flow {
     // GNU resolves `text-quoting-style` from the global environment in `doprnt`.
     // When no obarray is threaded in (internal callers that pass valid ranges
     // and never reach this path, plus tests), fall back to the batch/UTF-8
@@ -384,7 +386,7 @@ fn invalid_range_error(name: &str, obarray: Option<&super::symbol::Obarray>) -> 
     // for a nil `text-quoting-style`.
     let style = obarray.map_or(
         crate::emacs_core::coding::TextQuotingStyle::Curve,
-        crate::emacs_core::coding::effective_text_quoting_style,
+        |obarray| crate::emacs_core::coding::effective_text_quoting_style(obarray, mode),
     );
     let message = crate::emacs_core::coding::requote_c_error_message(
         &format!("Invalid RANGE argument to `{name}'"),
@@ -393,9 +395,9 @@ fn invalid_range_error(name: &str, obarray: Option<&super::symbol::Obarray>) -> 
     signal("error", vec![Value::string(message)])
 }
 
-fn prepare_uniprop_ascii_cache(table: &Value) {
-    if is_char_code_property_table(table) {
-        set_char_table_ascii(*table, char_table_ascii(*table));
+fn prepare_uniprop_ascii_cache(table: &Value, mode: SymbolMode) {
+    if is_char_code_property_table(table, mode) {
+        set_char_table_ascii(*table, char_table_ascii(*table, mode));
     }
 }
 
@@ -444,8 +446,8 @@ fn set_char_table_extra_slot(table: &Value, idx: usize, value: Value) {
 }
 
 // GNU checks a char-table purpose with EQ(purpose, Qchar_code_property_table).
-// Comparing by cached SymId matches that and avoids resolving the purpose
-// symbol name + a strcmp on every `ct_lookup`.
+// The typed accessor honors symbols-with-pos-enabled while keeping the
+// cheap bare-tag path and cached SymId comparison for canonical purposes.
 fn char_code_property_table_sym_id() -> SymId {
     static ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
     *ID.get_or_init(|| intern("char-code-property-table"))
@@ -463,9 +465,9 @@ pub(crate) fn inline_vector_tag_shape() -> (u64, u64, usize) {
     )
 }
 
-fn is_char_code_property_table(table: &Value) -> bool {
+fn is_char_code_property_table(table: &Value, mode: SymbolMode) -> bool {
     table.as_char_table_obj().is_some_and(|obj| {
-        obj.purpose.as_symbol_id() == Some(char_code_property_table_sym_id())
+        obj.purpose.as_symbol_id(mode) == Some(char_code_property_table_sym_id())
             && obj.extras.len() == 5
     })
 }
@@ -579,6 +581,13 @@ fn uniprop_compressed_value_at(value: Value, offset: i64) -> Option<Value> {
 /// GNU's external order is:
 /// `DEFAULT PARENT PURPOSE ASCII CONTENTS[64] EXTRAS...`.
 pub(crate) fn make_char_table_from_external_slots(items: &[Value]) -> Result<Value, String> {
+    make_char_table_from_external_slots_with_symbols(items, SymbolMode::Bare)
+}
+
+pub(crate) fn make_char_table_from_external_slots_with_symbols(
+    items: &[Value],
+    mode: SymbolMode,
+) -> Result<Value, String> {
     if items.len() < GNU_CHAR_TABLE_STANDARD_SLOTS {
         return Err("Invalid size char-table".to_string());
     }
@@ -599,8 +608,8 @@ pub(crate) fn make_char_table_from_external_slots(items: &[Value]) -> Result<Val
         }
         obj.copy_extras(&items[GNU_CHAR_TABLE_STANDARD_SLOTS..]);
     });
-    if purpose.as_symbol_id() == Some(char_code_property_table_sym_id()) && extra_count == 5 {
-        set_char_table_ascii(table, char_table_ascii(table));
+    if purpose.as_symbol_id(mode) == Some(char_code_property_table_sym_id()) && extra_count == 5 {
+        set_char_table_ascii(table, char_table_ascii(table, mode));
     }
     Ok(table)
 }
@@ -623,7 +632,12 @@ fn copy_sub_char_table_direct(table: Value) -> Option<Value> {
     Some(Value::make_sub_char_table(depth as i32, min_char, contents))
 }
 
+#[cfg(test)]
 pub(crate) fn copy_char_table(table: Value) -> Option<Value> {
+    copy_char_table_with_symbols(table, SymbolMode::Bare)
+}
+
+pub(crate) fn copy_char_table_with_symbols(table: Value, mode: SymbolMode) -> Option<Value> {
     let obj = table.as_char_table_obj()?;
     let copy = Value::make_char_table(obj.purpose, obj.defalt, obj.extras.len());
     let contents = obj.contents.map(|value| {
@@ -639,7 +653,7 @@ pub(crate) fn copy_char_table(table: Value) -> Option<Value> {
         copy_obj.copy_contents(&contents);
         copy_obj.copy_extras(&extras);
     });
-    set_char_table_ascii(copy, char_table_ascii(copy));
+    set_char_table_ascii(copy, char_table_ascii(copy, mode));
     Some(copy)
 }
 
@@ -665,21 +679,29 @@ pub fn make_char_table_with_extra_slots(sub_type: Value, default: Value, n_extra
 /// per-character display-table glyph vectors.  Returns nil for a non-char-table
 /// or out-of-range char rather than signalling.
 pub fn ct_ref(table: &Value, ch: i64) -> Value {
+    ct_ref_with_symbols(table, ch, SymbolMode::Bare)
+}
+
+pub fn ct_ref_with_symbols(table: &Value, ch: i64, mode: SymbolMode) -> Value {
     if !(0..=MAX_CHAR).contains(&ch) {
         return Value::NIL;
     }
-    ct_lookup(table, ch).unwrap_or(Value::NIL)
+    ct_lookup_with_symbols(table, ch, mode).unwrap_or(Value::NIL)
 }
 
 /// Set a single character entry in a char-table Value (for bootstrap code).
 /// Panics if `table` is not a char-table Vector.
 pub fn ct_set_single(table: &Value, ch: i64, value: Value) {
+    ct_set_single_with_symbols(table, ch, value, SymbolMode::Bare)
+}
+
+pub fn ct_set_single_with_symbols(table: &Value, ch: i64, value: Value, mode: SymbolMode) {
     bump_char_table_write_tick();
     assert!(
         table.is_char_table(),
         "ct_set_single: expected a char-table"
     );
-    char_table_set_char_direct(*table, ch, value);
+    char_table_set_char_direct(*table, ch, value, mode);
 }
 
 /// `(make-char-table SUB-TYPE &optional DEFAULT)` -- create a char-table.
@@ -691,7 +713,7 @@ pub(crate) fn builtin_make_char_table(eval: &mut Context, args: Vec<Value>) -> E
     expect_max_args("make-char-table", &args, 2)?;
     let sub_type = args[0];
     let default = if args.len() > 1 { args[1] } else { Value::NIL };
-    let sub_type_id = symbol_id_for_check_symbol(&sub_type)?;
+    let sub_type_id = symbol_id_for_check_symbol(&sub_type, eval.symbol_mode())?;
     // Read char-table-extra-slots property from the sub-type symbol,
     // matching GNU Emacs chartab.c:Fmake_char_table.
     let n_extras = if let Some(value) = eval
@@ -742,6 +764,21 @@ pub(crate) fn builtin_set_char_table_range(
     args: Vec<Value>,
     obarray: Option<&super::symbol::Obarray>,
 ) -> EvalResult {
+    builtin_set_char_table_range_with_symbols(args, obarray, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_set_char_table_range_in_state(
+    eval: &mut Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_set_char_table_range_with_symbols(args, Some(&eval.obarray), eval.symbol_mode())
+}
+
+pub(crate) fn builtin_set_char_table_range_with_symbols(
+    args: Vec<Value>,
+    obarray: Option<&super::symbol::Obarray>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("set-char-table-range", &args, 3)?;
     // Every branch below writes the table (including the nil-range default,
     // which does not reach the tick-bumping slot primitives).
@@ -754,7 +791,7 @@ pub(crate) fn builtin_set_char_table_range(
         return Err(wrong_type("char-table-p", table));
     }
 
-    match range.kind() {
+    match mode.unwrap(*range).kind() {
         // nil -> set default
         ValueKind::Nil => {
             let _ = table.with_char_table_mut(|obj| obj.set_default(*value));
@@ -768,9 +805,9 @@ pub(crate) fn builtin_set_char_table_range(
         ValueKind::Fixnum(_) => {
             let ch = match expect_character_code(range) {
                 Ok(ch) => ch,
-                Err(_) => return Err(invalid_range_error("set-char-table-range", obarray)),
+                Err(_) => return Err(invalid_range_error("set-char-table-range", obarray, mode)),
             };
-            char_table_set_char_direct(*table, ch, *value);
+            char_table_set_char_direct(*table, ch, *value, mode);
         }
         // Range cons (MIN . MAX)
         ValueKind::Cons => {
@@ -779,10 +816,10 @@ pub(crate) fn builtin_set_char_table_range(
             let min = expect_character_code(&pair_car)?;
             let max = expect_character_code(&pair_cdr)?;
             if min <= max {
-                char_table_set_range_direct(*table, min, max, *value);
+                char_table_set_range_direct(*table, min, max, *value, mode);
             }
         }
-        _ => return Err(invalid_range_error("set-char-table-range", obarray)),
+        _ => return Err(invalid_range_error("set-char-table-range", obarray, mode)),
     }
 
     crate::window::note_char_table_layout_mutation();
@@ -827,6 +864,21 @@ pub(crate) fn builtin_char_table_range(
     args: Vec<Value>,
     obarray: Option<&super::symbol::Obarray>,
 ) -> EvalResult {
+    builtin_char_table_range_with_symbols(args, obarray, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_char_table_range_in_state(
+    eval: &mut Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_char_table_range_with_symbols(args, Some(&eval.obarray), eval.symbol_mode())
+}
+
+pub(crate) fn builtin_char_table_range_with_symbols(
+    args: Vec<Value>,
+    obarray: Option<&super::symbol::Obarray>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("char-table-range", &args, 2)?;
     let table = &args[0];
     let range = &args[1];
@@ -835,25 +887,47 @@ pub(crate) fn builtin_char_table_range(
         return Err(wrong_type("char-table-p", table));
     }
 
-    match range.kind() {
+    match mode.unwrap(*range).kind() {
         // The default value.
         ValueKind::Nil => Ok(char_table_default(table)),
         ValueKind::Fixnum(_) => {
             let ch = match expect_character_code(range) {
                 Ok(ch) => ch,
-                Err(_) => return Err(invalid_range_error("char-table-range", obarray)),
+                Err(_) => return Err(invalid_range_error("char-table-range", obarray, mode)),
             };
-            ct_lookup(table, ch)
+            ct_lookup_with_symbols(table, ch, mode)
         }
         ValueKind::Cons => {
             let pair_car = range.cons_car();
             let pair_cdr = range.cons_cdr();
             let from = expect_character_code(&pair_car)?;
             let _to = expect_character_code(&pair_cdr)?;
-            let (value, _run_from, _run_to) = ct_lookup_and_range(table, from)?;
+            let (value, _run_from, _run_to) = ct_lookup_and_range(table, from, mode)?;
             Ok(value)
         }
-        _ => Err(invalid_range_error("char-table-range", obarray)),
+        _ => Err(invalid_range_error("char-table-range", obarray, mode)),
+    }
+}
+
+// Keep the existing explicit Bare lookup policy zero-sized at the shared
+// lookup seam, so it needs no runtime policy argument. Semantic callers still
+// pass their captured SymbolMode through the same lookup body.
+trait CtLookupPolicy: Copy {
+    fn symbol_mode(self) -> SymbolMode;
+}
+
+impl CtLookupPolicy for SymbolMode {
+    fn symbol_mode(self) -> SymbolMode {
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BareCtLookup;
+
+impl CtLookupPolicy for BareCtLookup {
+    fn symbol_mode(self) -> SymbolMode {
+        SymbolMode::Bare
     }
 }
 
@@ -864,6 +938,14 @@ pub(crate) fn builtin_char_table_range(
 /// 2. If the local entry is nil or absent, use the char-table's default value
 /// 3. If default is nil, recursively check the parent char-table
 pub(crate) fn ct_lookup(table: &Value, ch: i64) -> EvalResult {
+    ct_lookup_impl(table, ch, BareCtLookup)
+}
+
+pub(crate) fn ct_lookup_with_symbols(table: &Value, ch: i64, mode: SymbolMode) -> EvalResult {
+    ct_lookup_impl(table, ch, mode)
+}
+
+fn ct_lookup_impl<P: CtLookupPolicy>(table: &Value, ch: i64, policy: P) -> EvalResult {
     let Some(obj) = table.as_char_table_obj() else {
         return Err(wrong_type("char-table-p", table));
     };
@@ -873,7 +955,8 @@ pub(crate) fn ct_lookup(table: &Value, ch: i64) -> EvalResult {
     let idx = chartab_idx(ch, 0, 0);
     let mut val = obj.contents[idx];
     if is_sub_char_table(val) {
-        let is_uniprop = obj.purpose.as_symbol_id() == Some(char_code_property_table_sym_id())
+        let is_uniprop = obj.purpose.as_symbol_id(policy.symbol_mode())
+            == Some(char_code_property_table_sym_id())
             && obj.extras.len() == 5;
         val = sub_char_table_ref(val, ch, is_uniprop);
     }
@@ -884,7 +967,7 @@ pub(crate) fn ct_lookup(table: &Value, ch: i64) -> EvalResult {
         return Ok(obj.defalt);
     }
     if is_char_table(&obj.parent) {
-        return ct_lookup(&obj.parent, ch);
+        return ct_lookup_impl(&obj.parent, ch, policy);
     }
     Ok(Value::NIL)
 }
@@ -895,9 +978,14 @@ pub(crate) fn ct_lookup(table: &Value, ch: i64) -> EvalResult {
 /// char-table, look up `c`; if the entry is a character, that's the
 /// translation. If `table` is a list, fold left through all tables.
 /// Returns `c` unchanged if no translation applies.
+#[cfg(test)]
 pub(crate) fn translate_char(table: &Value, c: i64) -> i64 {
+    translate_char_with_symbols(table, c, SymbolMode::Bare)
+}
+
+pub(crate) fn translate_char_with_symbols(table: &Value, c: i64, mode: SymbolMode) -> i64 {
     if is_char_table(table) {
-        match ct_lookup(table, c) {
+        match ct_lookup_with_symbols(table, c, mode) {
             Ok(val) => match val.kind() {
                 ValueKind::Fixnum(n)
                     if (0..=crate::emacs_core::emacs_char::MAX_CHAR as i64).contains(&n) =>
@@ -913,7 +1001,7 @@ pub(crate) fn translate_char(table: &Value, c: i64) -> i64 {
         let mut cur = *table;
         while cur.is_cons() {
             let car = cur.cons_car();
-            result = translate_char(&car, result);
+            result = translate_char_with_symbols(&car, result, mode);
             cur = cur.cons_cdr();
         }
         result
@@ -947,11 +1035,11 @@ pub(crate) fn maybe_unify_char(c: i64, val: &Value) -> i64 {
 /// The deepest PLAIN (non-sub-table) cell of `table`'s local tree containing
 /// `ch`: the raw slot value (before defalt/parent resolution) and the cell's
 /// INCLUSIVE character span. O(tree depth); never materializes runs.
-fn ct_local_plain_cell_at(table: &Value, ch: i64) -> (Value, i64, i64) {
+fn ct_local_plain_cell_at(table: &Value, ch: i64, mode: SymbolMode) -> (Value, i64, i64) {
     let Some(obj) = table.as_char_table_obj() else {
         return (Value::NIL, 0, MAX_CHAR);
     };
-    let is_uniprop = is_char_code_property_table(table);
+    let is_uniprop = is_char_code_property_table(table, mode);
     let idx = (ch / GNU_CHARTAB_CHARS[0]) as usize;
     let mut start = idx as i64 * GNU_CHARTAB_CHARS[0];
     let mut end = (start + GNU_CHARTAB_CHARS[0] - 1).min(MAX_CHAR);
@@ -988,11 +1076,11 @@ fn ct_local_plain_cell_at(table: &Value, ch: i64) -> (Value, i64, i64) {
 /// resolution is uniform. A nil local cell that resolves through the parent
 /// intersects the local span with the parent's, mirroring GNU
 /// `char_table_ref_and_range`'s per-level from/to narrowing (chartab.c).
-fn ct_effective_value_span_at(table: &Value, ch: i64) -> (Value, i64, i64) {
+fn ct_effective_value_span_at(table: &Value, ch: i64, mode: SymbolMode) -> (Value, i64, i64) {
     let Some(obj) = table.as_char_table_obj() else {
         return (Value::NIL, 0, MAX_CHAR);
     };
-    let (value, start, end) = ct_local_plain_cell_at(table, ch);
+    let (value, start, end) = ct_local_plain_cell_at(table, ch, mode);
     let resolved = if value.is_nil() && !obj.defalt.is_nil() {
         obj.defalt
     } else {
@@ -1001,18 +1089,23 @@ fn ct_effective_value_span_at(table: &Value, ch: i64) -> (Value, i64, i64) {
     if !resolved.is_nil() || !obj.parent.is_char_table() {
         return (resolved, start, end);
     }
-    let (parent_value, parent_start, parent_end) = ct_effective_value_span_at(&obj.parent, ch);
+    let (parent_value, parent_start, parent_end) =
+        ct_effective_value_span_at(&obj.parent, ch, mode);
     (parent_value, start.max(parent_start), end.min(parent_end))
 }
 
-fn ct_lookup_and_range(table: &Value, ch: i64) -> Result<(Value, i64, i64), Flow> {
+fn ct_lookup_and_range(
+    table: &Value,
+    ch: i64,
+    mode: SymbolMode,
+) -> Result<(Value, i64, i64), Flow> {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
     if !table.is_char_table() {
         // Legacy vector representation: tiny fixed layout, the run
         // materialization is cheap and keeps the old semantics exactly.
-        for run in ct_effective_runs(table) {
+        for run in ct_effective_runs(table, mode) {
             if ch >= run.start && ch <= run.end {
                 return Ok((run.value, run.start, run.end));
             }
@@ -1029,18 +1122,18 @@ fn ct_lookup_and_range(table: &Value, ch: i64) -> Result<(Value, i64, i64), Flow
     // parent chain) per query, which made subword-mode word motion — five
     // queries per word against its whole-range boundary table — unusably
     // slow.
-    let (value, mut from, mut to) = ct_effective_value_span_at(table, ch);
+    let (value, mut from, mut to) = ct_effective_value_span_at(table, ch, mode);
     while from > 0 {
-        let (left_value, left_start, _) = ct_effective_value_span_at(table, from - 1);
-        if eq_value(&left_value, &value) {
+        let (left_value, left_start, _) = ct_effective_value_span_at(table, from - 1, mode);
+        if eq_value_swp(&left_value, &value, mode == SymbolMode::Positioned) {
             from = left_start;
         } else {
             break;
         }
     }
     while to < MAX_CHAR {
-        let (right_value, _, right_end) = ct_effective_value_span_at(table, to + 1);
-        if eq_value(&right_value, &value) {
+        let (right_value, _, right_end) = ct_effective_value_span_at(table, to + 1, mode);
+        if eq_value_swp(&right_value, &value, mode == SymbolMode::Positioned) {
             to = right_end;
         } else {
             break;
@@ -1071,11 +1164,15 @@ fn refine_atomic_boundary(start: i64, end: i64, ch: i64, lo: &mut i64, hi: &mut 
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn ct_lookup_atomic_range(table: &Value, ch: i64) -> Result<(Value, i64, i64), Flow> {
+fn ct_lookup_atomic_range(
+    table: &Value,
+    ch: i64,
+    mode: SymbolMode,
+) -> Result<(Value, i64, i64), Flow> {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    for run in ct_effective_runs(table) {
+    for run in ct_effective_runs(table, mode) {
         if ch >= run.start && ch <= run.end {
             return Ok((run.value, run.start, run.end));
         }
@@ -1101,12 +1198,14 @@ fn ct_local_atomic_runs(
     table: &Value,
     requested_start: i64,
     requested_end: i64,
+    mode: SymbolMode,
 ) -> (Vec<LocalAtomicRun>, Value, Value) {
     let obj = table.as_char_table_obj().unwrap();
     let runs = clipped_runs(
-        ct_local_direct_runs_in_range(table, requested_start, requested_end),
+        ct_local_direct_runs_in_range(table, requested_start, requested_end, mode),
         requested_start,
         requested_end,
+        mode,
     )
     .into_iter()
     .map(|run| LocalAtomicRun {
@@ -1120,8 +1219,12 @@ fn ct_local_atomic_runs(
 
 /// GNU `char-table-ref-and-range`-style helper used by subsystems that need
 /// the effective value together with the maximal contiguous run covering `ch`.
-pub(crate) fn char_table_ref_and_range(table: &Value, ch: i64) -> Result<(Value, i64, i64), Flow> {
-    ct_lookup_and_range(table, ch)
+pub(crate) fn char_table_ref_and_range_with_symbols(
+    table: &Value,
+    ch: i64,
+    mode: SymbolMode,
+) -> Result<(Value, i64, i64), Flow> {
+    ct_lookup_and_range(table, ch, mode)
 }
 
 /// Return the effective value and a contiguous range around `ch` where no local
@@ -1136,7 +1239,15 @@ pub(crate) fn char_table_ref_and_atomic_range(
     table: &Value,
     ch: i64,
 ) -> Result<(Value, i64, i64), Flow> {
-    ct_lookup_atomic_range(table, ch)
+    char_table_ref_and_atomic_range_with_symbols(table, ch, SymbolMode::Bare)
+}
+
+pub(crate) fn char_table_ref_and_atomic_range_with_symbols(
+    table: &Value,
+    ch: i64,
+    mode: SymbolMode,
+) -> Result<(Value, i64, i64), Flow> {
+    ct_lookup_atomic_range(table, ch, mode)
 }
 
 /// Return effective atomic runs for a caller-supplied range.
@@ -1150,6 +1261,15 @@ pub(crate) fn char_table_atomic_runs_in_range(
     start: i64,
     end: i64,
 ) -> Result<Vec<(Value, i64, i64)>, Flow> {
+    char_table_atomic_runs_in_range_with_symbols(table, start, end, SymbolMode::Bare)
+}
+
+pub(crate) fn char_table_atomic_runs_in_range_with_symbols(
+    table: &Value,
+    start: i64,
+    end: i64,
+    mode: SymbolMode,
+) -> Result<Vec<(Value, i64, i64)>, Flow> {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
@@ -1159,7 +1279,7 @@ pub(crate) fn char_table_atomic_runs_in_range(
         return Ok(Vec::new());
     }
 
-    let (local_runs, default, parent) = ct_local_atomic_runs(table, start, end);
+    let (local_runs, default, parent) = ct_local_atomic_runs(table, start, end, mode);
     let mut out = Vec::with_capacity(local_runs.len());
     for run in local_runs {
         if let Some(value) = run.value
@@ -1172,7 +1292,7 @@ pub(crate) fn char_table_atomic_runs_in_range(
             append_atomic_run(&mut out, default, run.start, run.end);
         } else if is_char_table(&parent) {
             for (value, child_start, child_end) in
-                char_table_atomic_runs_in_range(&parent, run.start, run.end)?
+                char_table_atomic_runs_in_range_with_symbols(&parent, run.start, run.end, mode)?
             {
                 append_atomic_run(&mut out, value, child_start, child_end);
             }
@@ -1199,10 +1319,17 @@ pub(crate) fn builtin_char_table_parent(args: Vec<Value>) -> EvalResult {
 /// Parent/default fallback is intentionally not applied here; callers that need
 /// effective values should use `ct_lookup`.
 pub(crate) fn char_table_local_entries(table: &Value) -> Result<Vec<(Value, Value)>, Flow> {
+    char_table_local_entries_with_symbols(table, SymbolMode::Bare)
+}
+
+pub(crate) fn char_table_local_entries_with_symbols(
+    table: &Value,
+    mode: SymbolMode,
+) -> Result<Vec<(Value, Value)>, Flow> {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    Ok(ct_collect_raw_entries_for_table(*table, false)
+    Ok(ct_collect_raw_entries_for_table(*table, false, mode)
         .into_iter()
         .map(|run| (run_key(run.start, run.end), run.value))
         .collect())
@@ -1251,9 +1378,18 @@ pub(crate) fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
 /// retains those keys, later internal mutations are observable.  Mirror that
 /// behavior instead of materializing fresh range objects.
 /// Returns nil.
+#[cfg(test)]
 pub(crate) fn for_each_char_table_mapping(
     table: &Value,
+    f: impl FnMut(Value, Value) -> Result<(), Flow>,
+) -> Result<(), Flow> {
+    for_each_char_table_mapping_with_symbols(table, f, SymbolMode::Bare)
+}
+
+pub(crate) fn for_each_char_table_mapping_with_symbols(
+    table: &Value,
     mut f: impl FnMut(Value, Value) -> Result<(), Flow>,
+    mode: SymbolMode,
 ) -> Result<(), Flow> {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
@@ -1264,7 +1400,7 @@ pub(crate) fn for_each_char_table_mapping(
     push_scratch_gc_root(shared_range);
     let result = (|| {
         let mut last_emitted_end = None;
-        for run in ct_map_char_table_runs(table) {
+        for run in ct_map_char_table_runs(table, mode) {
             shared_range.set_car(Value::fixnum(run.start));
             shared_range.set_cdr(Value::fixnum(run.end));
             if run.value.is_nil() {
@@ -1275,7 +1411,7 @@ pub(crate) fn for_each_char_table_mapping(
             } else {
                 shared_range
             };
-            let value = decode_unicode_property_map_value(*table, run.value);
+            let value = decode_unicode_property_map_value(*table, run.value, mode);
             f(key, value)?;
             last_emitted_end = Some(run.end);
         }
@@ -1299,25 +1435,34 @@ pub(crate) fn builtin_map_char_table(eval: &mut Context, args: Vec<Value>) -> Ev
     expect_args("map-char-table", &args, 2)?;
     let func = args[0];
     let table = args[1];
-    for_each_char_table_mapping(&table, |key, value| {
-        let _ = eval.apply(func, vec![key, value])?;
-        Ok(())
-    })?;
+    let mode = eval.symbol_mode();
+    for_each_char_table_mapping_with_symbols(
+        &table,
+        |key, value| {
+            let _ = eval.apply(func, vec![key, value])?;
+            Ok(())
+        },
+        mode,
+    )?;
     Ok(Value::NIL)
 }
 
 /// Resolve a char-table into non-overlapping effective runs, including nil.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn ct_resolved_entries(table: &Value) -> Vec<(Value, Value)> {
-    ct_effective_runs(table)
+    ct_resolved_entries_with_symbols(table, SymbolMode::Bare)
+}
+
+fn ct_resolved_entries_with_symbols(table: &Value, mode: SymbolMode) -> Vec<(Value, Value)> {
+    ct_effective_runs(table, mode)
         .into_iter()
         .filter(|run| !run.value.is_nil())
         .map(|run| (run_key(run.start, run.end), run.value))
         .collect()
 }
 
-fn ct_local_direct_runs(table: &Value) -> Vec<EffectiveRun> {
-    ct_local_direct_runs_in_range(table, 0, MAX_CHAR)
+fn ct_local_direct_runs(table: &Value, mode: SymbolMode) -> Vec<EffectiveRun> {
+    ct_local_direct_runs_in_range(table, 0, MAX_CHAR, mode)
 }
 
 /// Ranged variant of ct_local_direct_runs: for real char-tables only the
@@ -1325,9 +1470,14 @@ fn ct_local_direct_runs(table: &Value) -> Vec<EffectiveRun> {
 /// may extend past the window at both edges; callers clip). Legacy vector
 /// tables fall back to the full enumeration — they are 128-slot structures
 /// where pruning buys nothing.
-fn ct_local_direct_runs_in_range(table: &Value, win_start: i64, win_end: i64) -> Vec<EffectiveRun> {
+fn ct_local_direct_runs_in_range(
+    table: &Value,
+    win_start: i64,
+    win_end: i64,
+    mode: SymbolMode,
+) -> Vec<EffectiveRun> {
     let obj = table.as_char_table_obj().unwrap();
-    let raws = ct_collect_raw_entries_for_table_in_range(*table, true, win_start, win_end);
+    let raws = ct_collect_raw_entries_for_table_in_range(*table, true, win_start, win_end, mode);
     let mut runs = Vec::new();
     for raw in raws {
         let value = if raw.value.is_nil() && !obj.defalt.is_nil() {
@@ -1335,7 +1485,7 @@ fn ct_local_direct_runs_in_range(table: &Value, win_start: i64, win_end: i64) ->
         } else {
             raw.value
         };
-        push_effective_run(&mut runs, raw.start, raw.end, value);
+        push_effective_run(&mut runs, raw.start, raw.end, value, mode);
     }
     return if runs.is_empty() {
         vec![EffectiveRun {
@@ -1348,13 +1498,19 @@ fn ct_local_direct_runs_in_range(table: &Value, win_start: i64, win_end: i64) ->
     };
 }
 
-fn push_effective_run(runs: &mut Vec<EffectiveRun>, start: i64, end: i64, value: Value) {
+fn push_effective_run(
+    runs: &mut Vec<EffectiveRun>,
+    start: i64,
+    end: i64,
+    value: Value,
+    mode: SymbolMode,
+) {
     if start > end {
         return;
     }
     if let Some(previous) = runs.last_mut()
         && previous.end.saturating_add(1) == start
-        && eq_value(&previous.value, &value)
+        && eq_value_swp(&previous.value, &value, mode == SymbolMode::Positioned)
     {
         previous.end = end;
         return;
@@ -1366,6 +1522,7 @@ fn clipped_runs(
     runs: impl IntoIterator<Item = EffectiveRun>,
     from: i64,
     to: i64,
+    mode: SymbolMode,
 ) -> Vec<EffectiveRun> {
     if from > to {
         return Vec::new();
@@ -1375,7 +1532,7 @@ fn clipped_runs(
         let start = run.start.max(from);
         let end = run.end.min(to);
         if start <= end {
-            push_effective_run(&mut clipped, start, end, run.value);
+            push_effective_run(&mut clipped, start, end, run.value, mode);
         }
     }
     clipped
@@ -1387,6 +1544,7 @@ fn push_clipped_parent_runs_from_slice(
     parent_idx: &mut usize,
     from: i64,
     to: i64,
+    mode: SymbolMode,
 ) {
     if from > to {
         return;
@@ -1403,7 +1561,7 @@ fn push_clipped_parent_runs_from_slice(
         let start = run.start.max(from);
         let end = run.end.min(to);
         if start <= end {
-            push_effective_run(out, start, end, run.value);
+            push_effective_run(out, start, end, run.value, mode);
         }
         if run.end >= to {
             break;
@@ -1418,53 +1576,75 @@ fn push_parent_direct_span_runs(
     from: i64,
     to: i64,
     next_local_value: Value,
+    mode: SymbolMode,
 ) -> bool {
-    let parent_runs = clipped_runs(ct_local_direct_runs_in_range(&parent, from, to), from, to);
+    let parent_runs = clipped_runs(
+        ct_local_direct_runs_in_range(&parent, from, to, mode),
+        from,
+        to,
+        mode,
+    );
     let Some(last) = parent_runs.last().copied() else {
         return true;
     };
-    let suppress_last = eq_value(&last.value, &next_local_value);
+    let suppress_last = eq_value_swp(
+        &last.value,
+        &next_local_value,
+        mode == SymbolMode::Positioned,
+    );
     let emit_len = parent_runs.len() - usize::from(suppress_last);
     for run in parent_runs.into_iter().take(emit_len) {
         if !run.value.is_nil() {
-            push_effective_run(out, run.start, run.end, run.value);
+            push_effective_run(out, run.start, run.end, run.value, mode);
         }
     }
     !suppress_last
 }
 
-fn push_parent_tail_runs(out: &mut Vec<EffectiveRun>, parent: Value, from: i64, to: i64) {
-    for run in clipped_runs(ct_map_char_table_runs(&parent), from, to) {
+fn push_parent_tail_runs(
+    out: &mut Vec<EffectiveRun>,
+    parent: Value,
+    from: i64,
+    to: i64,
+    mode: SymbolMode,
+) {
+    for run in clipped_runs(ct_map_char_table_runs(&parent, mode), from, to, mode) {
         if !run.value.is_nil() {
-            push_effective_run(out, run.start, run.end, run.value);
+            push_effective_run(out, run.start, run.end, run.value, mode);
         }
     }
 }
 
-fn ct_map_char_table_runs(table: &Value) -> Vec<EffectiveRun> {
+fn ct_map_char_table_runs(table: &Value, mode: SymbolMode) -> Vec<EffectiveRun> {
     if !is_char_table(table) {
         return Vec::new();
     }
     let obj = table.as_char_table_obj().unwrap();
     let parent = obj.parent;
-    let local_runs = ct_local_direct_runs(table);
+    let local_runs = ct_local_direct_runs(table, mode);
     let mut out = Vec::new();
     let mut val = obj.ascii;
     let mut from = 0;
 
     for run in local_runs {
-        if eq_value(&val, &run.value) {
+        if eq_value_swp(&val, &run.value, mode == SymbolMode::Positioned) {
             continue;
         }
 
         let mut different_value = true;
         let has_previous_span = from < run.start;
         if val.is_nil() && is_char_table(&parent) && has_previous_span {
-            different_value =
-                push_parent_direct_span_runs(&mut out, parent, from, run.start - 1, run.value);
+            different_value = push_parent_direct_span_runs(
+                &mut out,
+                parent,
+                from,
+                run.start - 1,
+                run.value,
+                mode,
+            );
         }
         if !val.is_nil() && different_value && has_previous_span {
-            push_effective_run(&mut out, from, run.start - 1, val);
+            push_effective_run(&mut out, from, run.start - 1, val, mode);
         }
         val = run.value;
         from = run.start;
@@ -1472,10 +1652,10 @@ fn ct_map_char_table_runs(table: &Value) -> Vec<EffectiveRun> {
 
     if val.is_nil() {
         if is_char_table(&parent) {
-            push_parent_tail_runs(&mut out, parent, from, MAX_CHAR);
+            push_parent_tail_runs(&mut out, parent, from, MAX_CHAR, mode);
         }
     } else {
-        push_effective_run(&mut out, from, MAX_CHAR, val);
+        push_effective_run(&mut out, from, MAX_CHAR, val, mode);
     }
 
     out
@@ -1501,10 +1681,15 @@ pub(crate) enum OptimizeCharTableTest {
     Eq,
 }
 
-fn optimize_values_equal(a: Value, b: Value, test: OptimizeCharTableTest) -> bool {
+fn optimize_values_equal(
+    a: Value,
+    b: Value,
+    test: OptimizeCharTableTest,
+    mode: SymbolMode,
+) -> bool {
     match test {
         OptimizeCharTableTest::Equal => equal_value(&a, &b, 100),
-        OptimizeCharTableTest::Eq => eq_value(&a, &b),
+        OptimizeCharTableTest::Eq => eq_value_swp(&a, &b, mode == SymbolMode::Positioned),
     }
 }
 
@@ -1561,8 +1746,12 @@ fn collect_sub_char_table_raw_entries_in_range(
     }
 }
 
-fn ct_collect_raw_entries_for_table(table: Value, include_nil: bool) -> Vec<RawEntry> {
-    ct_collect_raw_entries_for_table_in_range(table, include_nil, 0, MAX_CHAR)
+fn ct_collect_raw_entries_for_table(
+    table: Value,
+    include_nil: bool,
+    mode: SymbolMode,
+) -> Vec<RawEntry> {
+    ct_collect_raw_entries_for_table_in_range(table, include_nil, 0, MAX_CHAR, mode)
 }
 
 /// Ranged variant of the top-level raw-entry collection; see
@@ -1572,12 +1761,13 @@ fn ct_collect_raw_entries_for_table_in_range(
     include_nil: bool,
     win_start: i64,
     win_end: i64,
+    mode: SymbolMode,
 ) -> Vec<RawEntry> {
     let Some(obj) = table.as_char_table_obj() else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    let is_uniprop = is_char_code_property_table(&table);
+    let is_uniprop = is_char_code_property_table(&table, mode);
     for (idx, value) in obj.contents.iter().copied().enumerate() {
         let start = idx as i64 * GNU_CHARTAB_CHARS[0];
         let end = (start + GNU_CHARTAB_CHARS[0] - 1).min(MAX_CHAR);
@@ -1595,22 +1785,35 @@ fn ct_collect_raw_entries_for_table_in_range(
     out
 }
 
+#[cfg(test)]
 pub(crate) fn optimize_char_table(table: &Value, test: OptimizeCharTableTest) -> Result<(), Flow> {
+    optimize_char_table_with_symbols(table, test, SymbolMode::Bare)
+}
+
+pub(crate) fn optimize_char_table_with_symbols(
+    table: &Value,
+    test: OptimizeCharTableTest,
+    mode: SymbolMode,
+) -> Result<(), Flow> {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
     for idx in 0..GNU_CHARTAB_SIZE[0] {
         let value = table.as_char_table_obj().unwrap().contents[idx];
         if is_sub_char_table(value) {
-            let optimized = optimize_sub_char_table_direct(value, test);
+            let optimized = optimize_sub_char_table_direct(value, test, mode);
             set_char_table_contents(*table, idx, optimized);
         }
     }
-    set_char_table_ascii(*table, char_table_ascii(*table));
+    set_char_table_ascii(*table, char_table_ascii(*table, mode));
     Ok(())
 }
 
-fn optimize_sub_char_table_direct(table: Value, test: OptimizeCharTableTest) -> Value {
+fn optimize_sub_char_table_direct(
+    table: Value,
+    test: OptimizeCharTableTest,
+    mode: SymbolMode,
+) -> Value {
     let Some(obj) = table.as_sub_char_table_obj() else {
         return table;
     };
@@ -1619,7 +1822,7 @@ fn optimize_sub_char_table_direct(table: Value, test: OptimizeCharTableTest) -> 
         return table;
     };
     if is_sub_char_table(first) {
-        first = optimize_sub_char_table_direct(first, test);
+        first = optimize_sub_char_table_direct(first, test, mode);
         sub_char_table_set_slot(table, 0, first);
     }
     let mut optimizable = !is_sub_char_table(first);
@@ -1629,28 +1832,28 @@ fn optimize_sub_char_table_direct(table: Value, test: OptimizeCharTableTest) -> 
             .and_then(|obj| obj.contents.get(idx).copied())
             .unwrap_or(Value::NIL);
         if is_sub_char_table(current) {
-            current = optimize_sub_char_table_direct(current, test);
+            current = optimize_sub_char_table_direct(current, test, mode);
             sub_char_table_set_slot(table, idx, current);
         }
-        if optimizable && !optimize_values_equal(current, first, test) {
+        if optimizable && !optimize_values_equal(current, first, test, mode) {
             optimizable = false;
         }
     }
     if optimizable { first } else { table }
 }
 
-fn ct_effective_runs(table: &Value) -> Vec<EffectiveRun> {
+fn ct_effective_runs(table: &Value, mode: SymbolMode) -> Vec<EffectiveRun> {
     let obj = table.as_char_table_obj().unwrap();
-    let local_runs = ct_local_direct_runs(table);
+    let local_runs = ct_local_direct_runs(table, mode);
     if !is_char_table(&obj.parent) {
         return local_runs;
     }
-    let parent_runs = ct_effective_runs(&obj.parent);
+    let parent_runs = ct_effective_runs(&obj.parent, mode);
     let mut out = Vec::new();
     let mut parent_idx = 0usize;
     for run in local_runs {
         if !run.value.is_nil() {
-            push_effective_run(&mut out, run.start, run.end, run.value);
+            push_effective_run(&mut out, run.start, run.end, run.value, mode);
             continue;
         }
         push_clipped_parent_runs_from_slice(
@@ -1659,6 +1862,7 @@ fn ct_effective_runs(table: &Value) -> Vec<EffectiveRun> {
             &mut parent_idx,
             run.start,
             run.end,
+            mode,
         );
     }
     out
@@ -1683,18 +1887,28 @@ pub(crate) fn char_table_may_hold_value_from(
     from: i64,
     pred: &mut dyn FnMut(Value) -> bool,
 ) -> bool {
-    if !is_char_table(table) || is_char_code_property_table(table) {
+    char_table_may_hold_value_from_with_symbols(table, from, pred, SymbolMode::Bare)
+}
+
+pub(crate) fn char_table_may_hold_value_from_with_symbols(
+    table: &Value,
+    from: i64,
+    pred: &mut dyn FnMut(Value) -> bool,
+    mode: SymbolMode,
+) -> bool {
+    if !is_char_table(table) || is_char_code_property_table(table, mode) {
         return true;
     }
     let Some(obj) = table.as_char_table_obj() else {
-        return ct_effective_runs(table)
+        return ct_effective_runs(table, mode)
             .iter()
             .any(|run| run.end >= from && pred(run.value));
     };
     let fallback = if !obj.defalt.is_nil() {
         pred(obj.defalt)
     } else {
-        is_char_table(&obj.parent) && char_table_may_hold_value_from(&obj.parent, from, pred)
+        is_char_table(&obj.parent)
+            && char_table_may_hold_value_from_with_symbols(&obj.parent, from, pred, mode)
     };
     fallback
         || obj
@@ -1730,15 +1944,25 @@ fn slot_may_hold_value_from(value: Value, from: i64, pred: &mut dyn FnMut(Value)
         })
 }
 
-pub(crate) fn for_each_non_nil_char_table_run<F>(table: &Value, mut f: F)
+pub(crate) fn for_each_non_nil_char_table_run<F>(table: &Value, f: F)
 where
+    F: FnMut(Value, Value),
+{
+    for_each_non_nil_char_table_run_with_symbols(table, f, SymbolMode::Bare)
+}
+
+pub(crate) fn for_each_non_nil_char_table_run_with_symbols<F>(
+    table: &Value,
+    mut f: F,
+    mode: SymbolMode,
+) where
     F: FnMut(Value, Value),
 {
     if !is_char_table(table) {
         return;
     }
 
-    for run in ct_effective_runs(table) {
+    for run in ct_effective_runs(table, mode) {
         if run.value.is_nil() {
             continue;
         }
@@ -1809,10 +2033,14 @@ pub(crate) fn builtin_set_char_table_extra_slot(args: Vec<Value>) -> EvalResult 
 /// `char-table-p` + subtype check against a symbol name, without the
 /// builtin arg plumbing (two Vec allocs) or the purpose symbol's
 /// name-string parse the old callers paid per call.
-pub(crate) fn char_table_has_subtype_named(value: &Value, name: &str) -> bool {
+pub(crate) fn char_table_has_subtype_named_with_symbols(
+    value: &Value,
+    name: &str,
+    mode: SymbolMode,
+) -> bool {
     value
         .as_char_table_obj()
-        .is_some_and(|table| table.purpose.is_symbol_named(name))
+        .is_some_and(|table| table.purpose.is_symbol_named(name, mode))
 }
 
 pub(crate) fn builtin_char_table_subtype(args: Vec<Value>) -> EvalResult {
@@ -1824,14 +2052,16 @@ pub(crate) fn builtin_char_table_subtype(args: Vec<Value>) -> EvalResult {
     Ok(table.as_char_table_obj().unwrap().purpose)
 }
 
-fn assq_cell_eq(key: Value, list: Value) -> Result<Value, Flow> {
+fn assq_cell_eq(key: Value, list: Value, mode: SymbolMode) -> Result<Value, Flow> {
     let mut cursor = list;
     loop {
         match cursor.kind() {
             ValueKind::Nil => return Ok(Value::NIL),
             ValueKind::Cons => {
                 let entry = cursor.cons_car();
-                if entry.is_cons() && eq_value(&entry.cons_car(), &key) {
+                if entry.is_cons()
+                    && eq_value_swp(&entry.cons_car(), &key, mode == SymbolMode::Positioned)
+                {
                     return Ok(entry);
                 }
                 cursor = cursor.cons_cdr();
@@ -1846,7 +2076,7 @@ fn char_code_property_cell(eval: &Context, prop: Value) -> Result<Value, Flow> {
         .obarray
         .symbol_value_copied("char-code-property-alist")
         .unwrap_or(Value::NIL);
-    assq_cell_eq(prop, alist)
+    assq_cell_eq(prop, alist, eval.symbol_mode())
 }
 
 /// `(unicode-property-table-internal PROP)`.
@@ -1887,7 +2117,7 @@ pub(crate) fn builtin_unicode_property_table_internal(
     }
 
     let table = cell.cons_cdr();
-    prepare_uniprop_ascii_cache(&table);
+    prepare_uniprop_ascii_cache(&table, eval.symbol_mode());
     Ok(table)
 }
 
@@ -1927,8 +2157,8 @@ fn decode_uniprop_run_length(table: Value, value: Value) -> Value {
         .unwrap_or(value)
 }
 
-fn decode_unicode_property_map_value(table: Value, value: Value) -> Value {
-    if !is_char_code_property_table(&table) {
+fn decode_unicode_property_map_value(table: Value, value: Value, mode: SymbolMode) -> Value {
+    if !is_char_code_property_table(&table, mode) {
         return value;
     }
 
@@ -1943,7 +2173,22 @@ fn decode_unicode_property_map_value(table: Value, value: Value) -> Value {
 /// This mirrors GNU's C fast path for Unicode property tables: `CHAR-TABLE`
 /// must have purpose `char-code-property-table` and five extra slots; a fixnum
 /// decoder in extra slot 1 selects the built-in run-length decoder.
+#[cfg(test)]
 pub(crate) fn builtin_get_unicode_property_internal(args: Vec<Value>) -> EvalResult {
+    builtin_get_unicode_property_internal_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_get_unicode_property_internal_in_state(
+    eval: &mut Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_get_unicode_property_internal_with_symbols(args, eval.symbol_mode())
+}
+
+pub(crate) fn builtin_get_unicode_property_internal_with_symbols(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("get-unicode-property-internal", &args, 2)?;
     let table = args[0];
     let ch = expect_character(&args[1])?;
@@ -1951,12 +2196,12 @@ pub(crate) fn builtin_get_unicode_property_internal(args: Vec<Value>) -> EvalRes
     if !is_char_table(&table) {
         return Err(wrong_type("char-table-p", &table));
     }
-    if !is_char_code_property_table(&table) {
+    if !is_char_code_property_table(&table, mode) {
         return Err(invalid_unicode_property_table());
     }
 
     let decoder = char_table_extra_slot_value(&table, 1).unwrap_or(Value::NIL);
-    let value = ct_lookup(&table, ch)?;
+    let value = ct_lookup_with_symbols(&table, ch, mode)?;
     match decoder.kind() {
         ValueKind::Fixnum(0) => Ok(decode_uniprop_run_length(table, value)),
         ValueKind::Nil => Ok(value),
@@ -1986,12 +2231,19 @@ fn encode_uniprop_value_character(value: Value) -> Result<Value, Flow> {
 /// already appear in the value vector (extra slot 4); a value not found signals
 /// `(wrong-type-argument "Unicode property value" VALUE)`.  The stored element
 /// is the fixnum index into the value vector.
-fn encode_uniprop_value_run_length(table: Value, value: Value) -> Result<Value, Flow> {
+fn encode_uniprop_value_run_length(
+    table: Value,
+    value: Value,
+    mode: SymbolMode,
+) -> Result<Value, Flow> {
     let value_table = char_table_extra_slot_value(&table, 4)
         .filter(|v| v.is_vector())
         .and_then(|v| v.as_vector_data());
-    let found =
-        value_table.and_then(|values| values.iter().position(|entry| eq_value(entry, &value)));
+    let found = value_table.and_then(|values| {
+        values
+            .iter()
+            .position(|entry| eq_value_swp(entry, &value, mode == SymbolMode::Positioned))
+    });
     match found {
         Some(index) => Ok(Value::fixnum(index as i64)),
         None => Err(signal(
@@ -2008,14 +2260,21 @@ fn encode_uniprop_value_run_length(table: Value, value: Value) -> Result<Value, 
 /// fixnum (`(wrong-type-argument fixnump VALUE)` otherwise); the stored element
 /// is its fixnum index into the value vector (extra slot 4), appending the value
 /// to that vector if it is not already present.
-fn encode_uniprop_value_numeric(table: Value, value: Value) -> Result<Value, Flow> {
+fn encode_uniprop_value_numeric(
+    table: Value,
+    value: Value,
+    mode: SymbolMode,
+) -> Result<Value, Flow> {
     let _ = expect_fixnump(&value)?;
     let mut value_table: Vec<Value> = char_table_extra_slot_value(&table, 4)
         .filter(|v| v.is_vector())
         .and_then(|v| v.as_vector_data())
         .map(|values| values.to_vec())
         .unwrap_or_default();
-    if let Some(index) = value_table.iter().position(|entry| eq_value(entry, &value)) {
+    if let Some(index) = value_table
+        .iter()
+        .position(|entry| eq_value_swp(entry, &value, mode == SymbolMode::Positioned))
+    {
         return Ok(Value::fixnum(index as i64));
     }
     let index = value_table.len();
@@ -2029,7 +2288,22 @@ fn encode_uniprop_value_numeric(table: Value, value: Value) -> Result<Value, Flo
 /// Mirrors GNU's `Fput_unicode_property_internal` (chartab.c): validate and
 /// encode VALUE via the table's encoder (selected by extra slot 2), then store
 /// the encoded element with `CHAR_TABLE_SET`.  Returns nil.
+#[cfg(test)]
 pub(crate) fn builtin_put_unicode_property_internal(args: Vec<Value>) -> EvalResult {
+    builtin_put_unicode_property_internal_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_put_unicode_property_internal_in_state(
+    eval: &mut Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_put_unicode_property_internal_with_symbols(args, eval.symbol_mode())
+}
+
+pub(crate) fn builtin_put_unicode_property_internal_with_symbols(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("put-unicode-property-internal", &args, 3)?;
     let table = args[0];
     let ch = expect_character(&args[1])?;
@@ -2038,7 +2312,7 @@ pub(crate) fn builtin_put_unicode_property_internal(args: Vec<Value>) -> EvalRes
     if !is_char_table(&table) {
         return Err(wrong_type("char-table-p", &table));
     }
-    if !is_char_code_property_table(&table) {
+    if !is_char_code_property_table(&table, mode) {
         return Err(invalid_unicode_property_table());
     }
 
@@ -2046,12 +2320,12 @@ pub(crate) fn builtin_put_unicode_property_internal(args: Vec<Value>) -> EvalRes
     // out-of-range index mean "no encoding" (GNU's `uniprop_get_encoder`).
     let encoded = match char_table_extra_slot_value(&table, 2).map(|v| v.kind()) {
         Some(ValueKind::Fixnum(0)) => encode_uniprop_value_character(value)?,
-        Some(ValueKind::Fixnum(1)) => encode_uniprop_value_run_length(table, value)?,
-        Some(ValueKind::Fixnum(2)) => encode_uniprop_value_numeric(table, value)?,
+        Some(ValueKind::Fixnum(1)) => encode_uniprop_value_run_length(table, value, mode)?,
+        Some(ValueKind::Fixnum(2)) => encode_uniprop_value_numeric(table, value, mode)?,
         _ => value,
     };
 
-    ct_set_single(&table, ch, encoded);
+    ct_set_single_with_symbols(&table, ch, encoded, mode);
     Ok(Value::NIL)
 }
 
@@ -2077,3 +2351,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/collection_lookup_capture_test.rs"]
 mod collection_lookup_capture;
+
+#[cfg(test)]
+#[path = "tests/positioned_purpose_test.rs"]
+mod positioned_purpose;

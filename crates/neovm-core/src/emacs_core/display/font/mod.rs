@@ -1193,7 +1193,7 @@ fn is_tagged_font_vector(val: &Value, tag: &str) -> bool {
             let elems = val.as_vector_data().unwrap().clone();
             elems
                 .first()
-                .and_then(|v| v.as_symbol_name())
+                .and_then(|v| v.as_bare_symbol_name())
                 .is_some_and(|name| name.trim_start_matches(':') == tag)
         }
         _ => false,
@@ -1639,7 +1639,7 @@ fn font_parse_set(elems: &mut Vec<Value>, key: &str, val: Value) {
     let mut i = 1;
     while i + 1 < elems.len() {
         if elems[i]
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .map(|name| name.trim_start_matches(':'))
             == Some(key)
         {
@@ -2173,7 +2173,7 @@ pub(crate) fn font_face_attributes(args: Vec<Value>) -> EvalResult {
             && !val.is_nil()
         {
             let canonical = val
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .and_then(|name| font_style_canonical_for_face(key, name))
                 .map(Value::symbol)
                 .unwrap_or(val);
@@ -2199,11 +2199,11 @@ pub(crate) fn fontp(args: Vec<Value>) -> EvalResult {
     let extra_type = args.get(1).copied().unwrap_or(Value::NIL);
     let value = if extra_type.is_nil() {
         is_font(object)
-    } else if extra_type.is_symbol_named("font-spec") {
+    } else if extra_type.is_bare_symbol_named("font-spec") {
         is_font_spec(object)
-    } else if extra_type.is_symbol_named("font-object") {
+    } else if extra_type.is_bare_symbol_named("font-object") {
         is_font_object(object)
-    } else if extra_type.is_symbol_named("font-entity") {
+    } else if extra_type.is_bare_symbol_named("font-entity") {
         is_font_entity(object)
     } else {
         return Err(signal(
@@ -2228,7 +2228,7 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
         let value = args.get(pair_index + 1);
 
         let Some(value) = value else {
-            if key.is_keyword() || key.is_symbol() || key.is_nil() {
+            if key.is_bare_keyword() || key.is_bare_symbol() || key.is_nil() {
                 let key_name = match key.kind() {
                     ValueKind::Symbol(id) => resolve_sym(id).to_owned(),
                     ValueKind::Nil => "nil".to_string(),
@@ -2255,7 +2255,7 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
             ));
         }
 
-        if !(key.is_keyword() || key.is_symbol()) {
+        if !(key.is_bare_keyword() || key.is_bare_symbol()) {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), *key],
@@ -2266,7 +2266,7 @@ pub(crate) fn font_spec(args: Vec<Value>) -> EvalResult {
         // parsed via `font_parse_name` into the spec's basic slots; the name
         // itself is also recorded under `:name`.
         if key
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .map(|name| name.trim_start_matches(':'))
             == Some("name")
         {
@@ -2302,7 +2302,7 @@ pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
             vec![Value::symbol("font"), args[0]],
         ));
     }
-    if !(args[1].is_keyword() || args[1].is_symbol()) {
+    if !(args[1].is_bare_keyword() || args[1].is_bare_symbol()) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[1]],
@@ -2318,7 +2318,7 @@ pub(crate) fn font_get(args: Vec<Value>) -> EvalResult {
                 return Ok(exact);
             }
 
-            if let Some(id) = args[1].as_keyword_id() {
+            if let Some(id) = args[1].as_bare_keyword_id() {
                 return Ok(font_vector_get_flexible(elems, resolve_sym(id)).unwrap_or(Value::NIL));
             }
 
@@ -2655,7 +2655,7 @@ fn resolve_face_layers_from_value(value: &Value) -> Vec<FaceLayer> {
     match value.kind() {
         ValueKind::Nil => Vec::new(),
         ValueKind::Symbol(_) => value
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .filter(|name| *name != "nil")
             .map(|name| vec![FaceLayer::Named(vec![name.to_string()])])
             .unwrap_or_default(),
@@ -2663,7 +2663,7 @@ fn resolve_face_layers_from_value(value: &Value) -> Vec<FaceLayer> {
             let Some(items) = list_to_vec(value) else {
                 return Vec::new();
             };
-            if items.first().is_some_and(|item| item.is_keyword()) {
+            if items.first().is_some_and(|item| item.is_bare_keyword()) {
                 vec![FaceLayer::Inline(RuntimeFace::from_plist(
                     "--font-at--",
                     &items,
@@ -2672,7 +2672,7 @@ fn resolve_face_layers_from_value(value: &Value) -> Vec<FaceLayer> {
                 let names = items
                     .iter()
                     .filter_map(|item| {
-                        item.as_symbol_name()
+                        item.as_bare_symbol_name()
                             .filter(|name| *name != "nil")
                             .map(|name| name.to_string())
                     })
@@ -3278,6 +3278,7 @@ fn font_info_vector_for_entity(
     entity: &Value,
     requested_size: FontOpeningSize,
 ) -> Option<Value> {
+    let symbol_mode = eval.symbol_mode();
     let elems = entity.as_vector_data()?.clone();
     let size = font_vector_get_flexible(&elems, "size")
         .and_then(|value| match value.kind() {
@@ -3301,8 +3302,11 @@ fn font_info_vector_for_entity(
                 postscript_name: text_field("postscript-name"),
                 weight: font_vector_get_flexible(&elems, "weight").and_then(font_weight_from_value),
                 slant: font_vector_get_flexible(&elems, "slant").and_then(font_slant_from_value),
-                width: font_vector_get_flexible(&elems, "width")
-                    .and_then(|value| value.as_symbol_name().and_then(FontWidth::from_symbol)),
+                width: font_vector_get_flexible(&elems, "width").and_then(|value| {
+                    value
+                        .as_symbol_name(symbol_mode)
+                        .and_then(FontWidth::from_symbol)
+                }),
                 size,
             })
             .ok()
@@ -3385,7 +3389,7 @@ fn font_full_name(fields: &[Value], pixel_size: i64) -> String {
     }
     let style = |key: &str, table: &'static [&'static [&'static str]]| -> Option<&'static str> {
         font_vector_get_flexible(fields, key)
-            .and_then(|value| value.as_symbol_name())
+            .and_then(|value| value.as_bare_symbol_name())
             .and_then(|name| gnu_style_first_name(table, name.trim_start_matches(':')))
     };
     if let Some(name) = style("weight", GNU_WEIGHT_TABLE) {

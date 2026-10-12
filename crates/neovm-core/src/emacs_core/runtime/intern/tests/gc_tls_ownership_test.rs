@@ -7,7 +7,7 @@ fn gc_tls_ownership_symbol_names_are_rooted_only_in_their_heap() {
     let symbol = first
         .eval_str(r#"(make-symbol (copy-sequence "gc-tls-name"))"#)
         .unwrap();
-    let id = symbol.as_symbol_id().unwrap();
+    let id = symbol.as_bare_symbol_id().unwrap();
     let name = materialize_symbol_name_value(id);
     let mut second = Context::new();
     let mut roots = Vec::new();
@@ -28,7 +28,7 @@ fn gc_tls_ownership_visible_name_cache_revalidates_on_context_switch() {
     let symbol = first
         .eval_str(r#"(make-symbol (copy-sequence "gc-tls-cache"))"#)
         .unwrap();
-    let id = symbol.as_symbol_id().unwrap();
+    let id = symbol.as_bare_symbol_id().unwrap();
     let original = materialize_symbol_name_value(id);
     assert!(
         matches!(resolve_lisp_visible_symbol_name(id), LispVisibleSymbolName::LispObject(value) if value.bits() == original.bits())
@@ -55,7 +55,7 @@ fn gc_tls_ownership_visible_name_cache_revalidates_after_heap_drop() {
         let symbol = first
             .eval_str(r#"(make-symbol (copy-sequence "gc-tls-dropped-name"))"#)
             .unwrap();
-        let id = symbol.as_symbol_id().unwrap();
+        let id = symbol.as_bare_symbol_id().unwrap();
         assert!(matches!(
             resolve_lisp_visible_symbol_name(id),
             LispVisibleSymbolName::LispObject(_)
@@ -78,7 +78,7 @@ fn gc_tls_ownership_interned_name_atoms_do_not_carry_heap_properties() {
     let symbol = first
         .eval_str("(make-symbol (propertize \"gc-tls-name-props\" 'gc-tls-property (vector 45)))")
         .unwrap();
-    let id = symbol.as_symbol_id().unwrap();
+    let id = symbol.as_bare_symbol_id().unwrap();
     let exact = materialize_symbol_name_value(id);
     assert!(exact.as_lisp_string().unwrap().has_intervals());
     assert!(

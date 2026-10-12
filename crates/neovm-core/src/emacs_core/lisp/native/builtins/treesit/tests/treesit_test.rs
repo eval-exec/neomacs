@@ -85,7 +85,9 @@ fn treesit_node_property_domain_matches_gnu_symbols() {
 fn treesit_query_compile_malformed_query_signals_query_error() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
-    let language_sym = Value::symbol("json").as_symbol_id().expect("json symbol");
+    let language_sym = Value::symbol("json")
+        .as_bare_symbol_id()
+        .expect("json symbol");
     eval.treesit.cache_loaded_language(
         language_sym,
         runtime::LoadedLanguage {
@@ -109,7 +111,9 @@ fn treesit_query_compile_malformed_query_signals_query_error() {
 fn treesit_query_compile_accepts_emacs_match_predicate_argument_order() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
-    let language_sym = Value::symbol("json").as_symbol_id().expect("json symbol");
+    let language_sym = Value::symbol("json")
+        .as_bare_symbol_id()
+        .expect("json symbol");
     eval.treesit.cache_loaded_language(
         language_sym,
         runtime::LoadedLanguage {
@@ -321,33 +325,54 @@ fn treesit_query_capture_empty_range_at_buffer_start_returns_no_matches() {
 #[test]
 fn treesit_predicate_domain_matches_gnu_symbols() {
     assert_eq!(
-        TreesitBuiltinPredicate::from_symbol_value(Value::symbol("named")),
+        TreesitBuiltinPredicate::from_symbol_value(
+            Value::symbol("named"),
+            crate::tagged::SymbolMode::Bare
+        ),
         Some(TreesitBuiltinPredicate::Named)
     );
     assert_eq!(
-        TreesitBuiltinPredicate::from_symbol_value(Value::symbol("anonymous")),
+        TreesitBuiltinPredicate::from_symbol_value(
+            Value::symbol("anonymous"),
+            crate::tagged::SymbolMode::Bare
+        ),
         Some(TreesitBuiltinPredicate::Anonymous)
     );
     assert_eq!(
-        TreesitBuiltinPredicate::from_symbol_value(Value::symbol("missing")),
+        TreesitBuiltinPredicate::from_symbol_value(
+            Value::symbol("missing"),
+            crate::tagged::SymbolMode::Bare
+        ),
         None
     );
     assert_eq!(TreesitBuiltinPredicate::Anonymous.name(), "anonymous");
 
     assert_eq!(
-        TreesitBooleanPredicate::from_symbol_value(Value::symbol("not")),
+        TreesitBooleanPredicate::from_symbol_value(
+            Value::symbol("not"),
+            crate::tagged::SymbolMode::Bare
+        ),
         Some(TreesitBooleanPredicate::Not)
     );
     assert_eq!(
-        TreesitBooleanPredicate::from_symbol_value(Value::symbol("or")),
+        TreesitBooleanPredicate::from_symbol_value(
+            Value::symbol("or"),
+            crate::tagged::SymbolMode::Bare
+        ),
         Some(TreesitBooleanPredicate::Or)
     );
     assert_eq!(
-        TreesitBooleanPredicate::from_symbol_value(Value::symbol("and")),
+        TreesitBooleanPredicate::from_symbol_value(
+            Value::symbol("and"),
+            crate::tagged::SymbolMode::Bare
+        ),
         Some(TreesitBooleanPredicate::And)
     );
     assert_eq!(
-        TreesitBooleanPredicate::from_symbol_value(Value::symbol("named")),
+        TreesitBooleanPredicate::from_symbol_value(
+            Value::symbol("named"),
+            crate::tagged::SymbolMode::Bare
+        ),
         None
     );
     assert_eq!(TreesitBooleanPredicate::And.name(), "and");

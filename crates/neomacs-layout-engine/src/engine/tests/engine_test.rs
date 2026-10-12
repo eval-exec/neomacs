@@ -2918,7 +2918,7 @@ fn convert_current_buffer_text_backend(eval: &mut Context, kind: BufferTextBacke
     let result = eval
         .eval_str(&form)
         .unwrap_or_else(|err| panic!("convert buffer text backend with {form}: {err}"));
-    assert_eq!(result.as_symbol_name(), Some(kind.symbol_name()));
+    assert_eq!(result.as_bare_symbol_name(), Some(kind.symbol_name()));
 }
 
 fn insert_fragmented_current_buffer_text(eval: &mut Context, text: &str) {
@@ -6420,7 +6420,7 @@ fn layout_frame_rust_display_table_preserves_each_glyph_face() {
     assert_eq!(
         neovm_core::face::LispFaceId::new(left_face_id)
             .and_then(|id| eval.face_table().lisp_face_ref(id))
-            .and_then(|face_ref| face_ref.as_symbol_name()),
+            .and_then(|face_ref| face_ref.as_bare_symbol_name()),
         Some("__display-table-left"),
         "frame face sync must retain the typed Lisp face identity"
     );
@@ -23505,7 +23505,7 @@ fn engine_face_resolver_for_frame(
         crate::neovm_bridge::frame_params_from_neovm(frame, eval.face_table(), eval.obarray());
     let window_system = frame
         .effective_window_system()
-        .and_then(|v| v.as_symbol_name().map(|s| s.to_string()));
+        .and_then(|v| v.as_bare_symbol_name().map(|s| s.to_string()));
     FaceResolver::new(
         eval.face_table(),
         0x00FF_FFFF,
@@ -29993,8 +29993,8 @@ fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
         })
         .collect::<Vec<_>>();
     assert!(semantics.iter().any(|item| {
-        item.first().and_then(|value| value.as_symbol_name()) == Some("add-tab")
-            && item.get(1).and_then(|value| value.as_symbol_name()) == Some("tab-bar-new-tab")
+        item.first().and_then(|value| value.as_bare_symbol_name()) == Some("add-tab")
+            && item.get(1).and_then(|value| value.as_bare_symbol_name()) == Some("tab-bar-new-tab")
     }));
     assert!(semantics.iter().any(|item| item.get(2) == Some(&Value::T)));
 

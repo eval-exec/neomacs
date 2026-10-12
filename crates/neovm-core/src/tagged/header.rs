@@ -433,7 +433,8 @@ impl GcHeader {
             .store(CollectionObservedState::Unobserved as u8, Ordering::Release);
         if cleared {
             // Clear both representations before publishing reclamation to
-            // other mutators' recent-read probes and before freeing/reuse.
+            // cold ledgers and clearing the collecting mutator's recent reads,
+            // before freeing/reuse.
             crate::tagged::gc::advance_collection_observation_epoch();
         }
     }

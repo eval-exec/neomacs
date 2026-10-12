@@ -809,7 +809,7 @@ impl<'a> DisplaySourcePropertyResolver<'a> {
             // performs an exact named-face lookup for the target window.
             DisplayLineSpacingReference::Named(face) if face.is_t() => current().font_line_height,
             DisplayLineSpacingReference::Named(face) => face
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .map(|name| {
                     self.face_scope
                         .resolve_named_face(face_basis.face_resolver(), name)

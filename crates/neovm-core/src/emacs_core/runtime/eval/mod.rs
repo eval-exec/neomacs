@@ -57,7 +57,12 @@ use crate::window::{
     WindowLayoutQueryAdapter,
 };
 
+pub(crate) mod world;
+pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews};
+pub(crate) use world::{ObarrayView, OwnedRootRegistryView, WorldView};
+
 mod callback;
+mod lexical_symbols;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
 mod subrs;
 #[cfg(test)]
@@ -181,8 +186,12 @@ enum TaggedLoadHistoryKind {
 }
 
 impl LoadHistoryEntry {
-    pub(crate) fn function(symbol: Value, definition: Value) -> Self {
-        let definition_kind = if super::autoload::is_autoload_value(&definition) {
+    pub(crate) fn function(
+        symbol: Value,
+        definition: Value,
+        symbol_mode: crate::tagged::SymbolMode,
+    ) -> Self {
+        let definition_kind = if super::autoload::is_autoload_value(&definition, symbol_mode) {
             FunctionDefinitionKind::Autoload
         } else {
             FunctionDefinitionKind::Concrete
@@ -932,13 +941,14 @@ fn internal_make_interpreted_closure_function_symbol() -> SymId {
 pub(crate) fn compiler_function_override_in_obarray(
     obarray: &Obarray,
     sym_id: SymId,
+    mode: crate::tagged::SymbolMode,
 ) -> Option<Value> {
     let overrides_sym = internal_compiler_function_overrides_sym();
     let mut cursor = obarray.symbol_value_id_or_nil(overrides_sym);
     while cursor.is_cons() {
         let entry = cursor.cons_car();
         cursor = cursor.cons_cdr();
-        if entry.is_cons() && entry.cons_car().as_symbol_id() == Some(sym_id) {
+        if entry.is_cons() && entry.cons_car().as_symbol_id(mode) == Some(sym_id) {
             return Some(entry.cons_cdr());
         }
     }
@@ -1968,17 +1978,11 @@ fn is_lambda_like_symbol_id(id: SymId) -> bool {
     id == lambda_symbol() || id == closure_symbol()
 }
 
-fn cons_head_symbol_id(value: &Value) -> Option<SymId> {
-    if value.is_cons() {
-        let car = value.cons_car();
-        // Try bare symbol first, then transparently unwrap symbol-with-pos.
-        car.as_symbol_id().or_else(|| {
-            car.as_symbol_with_pos_sym()
-                .and_then(|sym| sym.as_symbol_id())
-        })
-    } else {
-        None
-    }
+fn cons_head_symbol_id(value: &Value, mode: crate::tagged::SymbolMode) -> Option<SymId> {
+    value
+        .is_cons()
+        .then(|| value.cons_car())
+        .and_then(|head| head.as_symbol_id(mode))
 }
 
 struct CoreEvalSymbols {
@@ -2099,6 +2103,7 @@ pub(crate) fn sync_features_variable_in_state(obarray: &mut Obarray, features: &
 pub(crate) fn refresh_features_from_variable_in_state(
     obarray: &Obarray,
     features: &mut Vec<SymId>,
+    mode: crate::tagged::SymbolMode,
 ) {
     let current = obarray
         .symbol_value_copied("features")
@@ -2106,7 +2111,7 @@ pub(crate) fn refresh_features_from_variable_in_state(
     let mut parsed = Vec::new();
     if let Some(items) = list_to_vec(&current) {
         for item in items {
-            if let Some(id) = item.as_symbol_id() {
+            if let Some(id) = item.as_symbol_id(mode) {
                 parsed.push(id);
             }
         }
@@ -2118,21 +2123,32 @@ pub(crate) fn feature_present_in_state(
     obarray: &Obarray,
     features: &mut Vec<SymId>,
     name: &str,
+    mode: crate::tagged::SymbolMode,
 ) -> bool {
-    refresh_features_from_variable_in_state(obarray, features);
+    refresh_features_from_variable_in_state(obarray, features, mode);
     let id = intern(name);
     features.contains(&id)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn add_feature_in_state(obarray: &mut Obarray, features: &mut Vec<SymId>, name: &str) {
-    refresh_features_from_variable_in_state(obarray, features);
+pub(crate) fn add_feature_in_state(
+    obarray: &mut Obarray,
+    features: &mut Vec<SymId>,
+    name: &str,
+    mode: crate::tagged::SymbolMode,
+) {
+    refresh_features_from_variable_in_state(obarray, features, mode);
     let id = intern(name);
-    add_feature_id_in_state(obarray, features, id);
+    add_feature_id_in_state(obarray, features, id, mode);
 }
 
-pub(crate) fn add_feature_id_in_state(obarray: &mut Obarray, features: &mut Vec<SymId>, id: SymId) {
-    refresh_features_from_variable_in_state(obarray, features);
+pub(crate) fn add_feature_id_in_state(
+    obarray: &mut Obarray,
+    features: &mut Vec<SymId>,
+    id: SymId,
+    mode: crate::tagged::SymbolMode,
+) {
+    refresh_features_from_variable_in_state(obarray, features, mode);
     if features.contains(&id) {
         return;
     }
@@ -2148,8 +2164,9 @@ pub(crate) fn remove_feature_in_state(
     obarray: &mut Obarray,
     features: &mut Vec<SymId>,
     name: &str,
+    mode: crate::tagged::SymbolMode,
 ) {
-    refresh_features_from_variable_in_state(obarray, features);
+    refresh_features_from_variable_in_state(obarray, features, mode);
     let id = intern(name);
     features.retain(|feature| *feature != id);
     sync_features_variable_in_state(obarray, features);
@@ -2160,9 +2177,10 @@ pub(crate) fn provide_value_in_state(
     features: &mut Vec<SymId>,
     feature: Value,
     subfeatures: Option<Value>,
+    mode: crate::tagged::SymbolMode,
 ) -> EvalResult {
     // Use symbol_id to transparently handle symbol-with-pos wrappers.
-    let sym_id = super::builtins::symbols::symbol_id(&feature).ok_or_else(|| {
+    let sym_id = super::builtins::symbols::symbol_id(&feature, mode).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), feature],
@@ -2176,13 +2194,31 @@ pub(crate) fn provide_value_in_state(
             ));
         }
         if value.is_nil() {
-            add_feature_id_in_state(obarray, features, sym_id);
+            add_feature_value_in_state(obarray, features, sym_id, feature, mode);
             return Ok(feature);
         }
         obarray.put_property_id(sym_id, intern("subfeatures"), value)?;
     }
-    add_feature_id_in_state(obarray, features, sym_id);
+    add_feature_value_in_state(obarray, features, sym_id, feature, mode);
     Ok(feature)
+}
+
+// GNU Fprovide stores the original symbol object after EQ membership checking.
+fn add_feature_value_in_state(
+    obarray: &mut Obarray,
+    features: &mut Vec<SymId>,
+    id: SymId,
+    original: Value,
+    mode: crate::tagged::SymbolMode,
+) {
+    refresh_features_from_variable_in_state(obarray, features, mode);
+    if !features.contains(&id) {
+        features.insert(0, id);
+        let current = obarray
+            .symbol_value_copied("features")
+            .unwrap_or(Value::NIL);
+        obarray.set_symbol_value("features", Value::cons(original, current));
+    }
 }
 
 /// Limit for stored recent input events to match GNU Emacs: 300 entries.
@@ -2843,7 +2879,7 @@ pub(crate) enum ConditionControlSymbol {
 
 impl ConditionControlSymbol {
     fn from_lisp_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     #[cfg(test)]
@@ -2864,7 +2900,7 @@ fn condition_value_contains_debug(value: &Value) -> bool {
     }
 }
 
-fn wants_debugger(setting: &Value, conditions: &Value) -> bool {
+fn wants_debugger(setting: &Value, conditions: &Value, mode: crate::tagged::SymbolMode) -> bool {
     if setting.is_nil() {
         return false;
     }
@@ -2872,9 +2908,15 @@ fn wants_debugger(setting: &Value, conditions: &Value) -> bool {
         return true;
     };
     let signal_conditions = list_to_vec(conditions).unwrap_or_else(|| vec![*conditions]);
-    entries
-        .iter()
-        .any(|entry| signal_conditions.iter().any(|condition| condition == entry))
+    entries.iter().any(|entry| {
+        signal_conditions.iter().any(|condition| {
+            crate::emacs_core::value::eq_value_swp(
+                condition,
+                entry,
+                mode == crate::tagged::SymbolMode::Positioned,
+            )
+        })
+    })
 }
 
 fn signal_hook_payload_value(sig: &SignalData) -> Value {
@@ -2982,9 +3024,9 @@ pub(crate) struct DaemonState {
 pub struct Context {
     /// Arithmetic policy ownership, reconstructed rather than dumped.
     pub(crate) integer_width_context: super::builtins::IntegerWidthContext,
-    pub(crate) owned_roots: crate::emacs_core::owned_roots::OwnedRootRegistry,
+    pub(crate) owned_roots: OwnedRootRegistryView,
     /// Tagged pointer heap — sole GC and allocator.
-    pub(crate) tagged_heap: Box<crate::tagged::gc::TaggedHeap>,
+    pub(crate) tagged_heap: WorldView<crate::tagged::gc::TaggedHeap>,
     /// Mmap-backed pdump image that owns any mapped heap payloads borrowed by
     /// this evaluator's Lisp objects.
     /// The loaded pdump mapping, LEAKED to 'static at install: process-global
@@ -3009,7 +3051,7 @@ pub struct Context {
     /// none after it is.
     pub(crate) window_edge_drag: crate::emacs_core::window_edge_drag::WindowEdgeDrag,
     /// The obarray — unified symbol table with value cells, function cells, plists.
-    pub(crate) obarray: Obarray,
+    pub(crate) obarray: ObarrayView,
     /// Specpdl — special binding stack that writes directly to the obarray.
     /// Matches GNU Emacs's specpdl design.
     pub(crate) specpdl: Vec<SpecBinding>,
@@ -3076,7 +3118,7 @@ pub struct Context {
     /// When true, the printer outputs bare symbol names for symbol-with-pos.
     pub(crate) print_symbols_bare: bool,
     /// Features list (for require/provide).
-    pub(crate) features: Vec<SymId>,
+    pub(crate) features: WorldView<Vec<SymId>>,
     /// Features currently being resolved through `require`.
     pub(crate) require_stack: Vec<SymId>,
     /// Files currently being loaded (mirrors `Vloads_in_progress` in lread.c).
@@ -3137,13 +3179,13 @@ pub struct Context {
     pub(crate) processes: ProcessManager,
     /// Network manager — owns network connections, filters, and sentinels.
     /// Variable watcher list — callbacks on variable changes.
-    pub(crate) watchers: VariableWatcherList,
+    pub(crate) watchers: WorldView<VariableWatcherList>,
     /// Symbols whose variable watchers are currently running.
     ///
     /// GNU `notify_variable_watchers` temporarily sets the symbol's trapped
     /// write state to `SYMBOL_UNTRAPPED_WRITE` to suppress recursive watcher
     /// notification while a watcher callback mutates the same symbol.
-    pub(crate) active_variable_watchers: HashSet<SymId>,
+    pub(crate) active_variable_watchers: WorldView<HashSet<SymId>>,
     /// Canonical Lisp object returned by `standard-syntax-table`.
     ///
     /// GNU Emacs stores this in `Vstandard_syntax_table`; NeoVM keeps the
@@ -3181,7 +3223,7 @@ pub struct Context {
     /// Abbreviation manager — text abbreviation expansion.
     pub(crate) abbrevs: AbbrevManager,
     /// Autoload manager — deferred function loading.
-    pub(crate) autoloads: AutoloadManager,
+    pub(crate) autoloads: WorldView<AutoloadManager>,
     /// Custom variable manager — defcustom/defgroup system.
     pub(crate) custom: CustomManager,
     /// Rectangle state — stores the last killed rectangle for yank-rectangle.
@@ -3190,7 +3232,7 @@ pub struct Context {
     pub(crate) interactive: InteractiveRegistry,
     /// Tree-sitter runtime manager — loaded grammars, parser state, node handles,
     /// and compiled queries backing `treesit-*` builtins.
-    pub(crate) treesit: super::treesit::TreeSitterManager,
+    pub(crate) treesit: WorldView<super::treesit::TreeSitterManager>,
     /// Minibuffer runtime state — active minibuffer stack, prompt metadata, and history.
     pub(crate) minibuffers: MinibufferManager,
     /// Count of completed minibuffer reads observed by the evaluator.
@@ -3236,7 +3278,7 @@ pub struct Context {
     /// True while the command loop is blocked waiting for external input.
     pub(crate) waiting_for_user_input: bool,
     /// Frame manager — owns all frames and windows.
-    pub(crate) frames: FrameManager,
+    pub(crate) frames: WorldView<FrameManager>,
     /// Mode registry — major/minor modes.
     pub(crate) modes: ModeRegistry,
     /// Thread manager — cooperative threading primitives.
@@ -3359,7 +3401,7 @@ pub struct Context {
     /// Native anchor for the next Lisp-driven menu-bar popup.
     pub(crate) pending_menu_bar_popup_anchor: Option<super::MenuBarPopupAnchor>,
     /// Coding system manager — encoding/decoding registry.
-    pub(crate) coding_systems: CodingSystemManager,
+    pub(crate) coding_systems: WorldView<CodingSystemManager>,
     /// Reusable scratch-buffer lifecycle shared by code-conversion entry
     /// points. This is transient runtime state, like GNU's
     /// `Vcode_conversion_reused_workbuf` and `reused_workbuf_in_use`.
@@ -3535,8 +3577,9 @@ pub struct Context {
     /// See `SymbolByteCodeCallCache`: what each symbol's function cell resolves
     /// to for a bytecode stack call, epoch-tagged.
     pub(crate) symbol_bytecode_call_cache: crate::emacs_core::bytecode::vm::SymbolByteCodeCallCache,
-    /// Pooled backing stores for the interpreter's per-entry stacks (see
-    /// `vm::InterpreterStackPool`).
+    /// Thread-private backing stores for the interpreter's per-entry stacks
+    /// (see `vm::InterpreterStackPool`). Live frames leave this empty cache
+    /// before execution; parked roots are published separately, never here.
     pub(crate) interpreter_stacks: crate::emacs_core::bytecode::vm::InterpreterStackPool,
     /// specpdl depths of the dynamic bindings generated code has made in
     /// the current native frames (`neovm_jit_varbind` pushes, `Op::Unbind`
@@ -3577,7 +3620,7 @@ pub struct Context {
     pub(crate) macro_expand_total_us: u64,
     /// When true, collect detailed timing counters for macro/eager-load paths.
     macro_perf_enabled: bool,
-    macro_perf_stats: MacroPerfStats,
+    macro_perf_stats: WorldView<MacroPerfStats>,
     /// Bootstrapped standard interpreted-closure filter function object.
     /// Rooted so the dumped startup state's runtime closure hook remains live.
     interpreted_closure_filter_fn: Option<Value>,
@@ -3852,10 +3895,11 @@ pub(crate) fn plan_require_in_state(
     feature: Value,
     filename: Option<Value>,
     noerror: Option<Value>,
+    mode: crate::tagged::SymbolMode,
 ) -> Result<RequirePlan, Flow> {
-    refresh_features_from_variable_in_state(obarray, features);
+    refresh_features_from_variable_in_state(obarray, features, mode);
     // Use symbol_id to transparently handle symbol-with-pos wrappers.
-    let sym_id = super::builtins::symbols::symbol_id(&feature).ok_or_else(|| {
+    let sym_id = super::builtins::symbols::symbol_id(&feature, mode).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), feature],
@@ -3863,7 +3907,7 @@ pub(crate) fn plan_require_in_state(
     })?;
     let name = resolve_sym(sym_id).to_owned();
     if features.contains(&sym_id) {
-        return Ok(RequirePlan::Return(Value::symbol(&name)));
+        return Ok(RequirePlan::Return(feature));
     }
 
     // GNU Emacs fns.c:Frequire tracks recursive requires in
@@ -4012,7 +4056,6 @@ pub(crate) struct ActiveEvalLexicalArgState {
 }
 
 pub(crate) fn begin_eval_with_lexical_arg_in_state(
-    _obarray: &mut Obarray,
     lexenv: &mut Value,
     specpdl: &mut Vec<SpecBinding>,
     lexical_arg: Option<Value>,
@@ -4035,7 +4078,6 @@ pub(crate) fn begin_eval_with_lexical_arg_in_state(
 }
 
 pub(crate) fn finish_eval_with_lexical_arg_in_state(
-    _obarray: &mut Obarray,
     lexenv: &mut Value,
     specpdl: &mut Vec<SpecBinding>,
     state: ActiveEvalLexicalArgState,
@@ -4132,19 +4174,6 @@ fn bind_lexical_value_rooted_in_specpdl(
     match specpdl.pop() {
         Some(SpecBinding::GcRoot { .. }) => {}
         other => panic!("expected temporary specpdl gc root entry, got {other:?}"),
-    }
-}
-
-fn bare_lambda_arg_symbol_id(value: Value) -> Option<SymId> {
-    let value = if value.is_symbol_with_pos() {
-        value.as_symbol_with_pos_sym().unwrap()
-    } else {
-        value
-    };
-    if value.is_nil() {
-        Some(intern("nil"))
-    } else {
-        value.as_symbol_id()
     }
 }
 
@@ -4260,7 +4289,7 @@ fn lisp_frame_manager() -> FrameManager {
     frames
 }
 
-/// The evaluator owns its `TaggedHeap` (a `Box` field) and publishes a raw
+/// The evaluator leases its World-owned `TaggedHeap` allocation and publishes a raw
 /// pointer to it in the thread-local allocation slot (`setup_thread_locals` /
 /// the constructors). That publication has no lifetime tied to the box, so the
 /// owner must retract it: without this hook the slot outlived the storage and
@@ -4288,13 +4317,13 @@ impl Context {
     /// skips those operations; callers use this explicit lifecycle boundary.
     ///
     /// # Errors
-    /// Returns an error if marker completion cannot be established. Drop then
-    /// retains marker-readable storage and skips native callbacks.
-    pub fn shutdown(mut self: Box<Self>) -> Result<(), crate::tagged::gc::MarkFinishError> {
-        // SAFETY: this consumes the boxed Context without moving its contents.
-        // The heap remains at its owner-thread address through reclamation,
-        // and this method neither reads Values nor executes Lisp afterward.
-        unsafe { self.tagged_heap.shutdown_owned_resources() }
+    /// Returns `MarkerFinish` if marker completion cannot be established; Drop
+    /// retains marker-readable storage and skips native callbacks. Returns
+    /// `OutstandingViews` if an extracted storage view prevents exclusive World
+    /// reclamation. Those views remain valid; explicit native finalizers are
+    /// skipped.
+    pub fn shutdown(self: Box<Self>) -> Result<(), ContextShutdownError> {
+        self.shutdown_world()
     }
 
     /// Stop and finish this owner's concurrent marker before orderly teardown.
@@ -4439,9 +4468,10 @@ impl Context {
     /// - `bc_buf` + the root side stacks: owned by Rust frames the panic
     ///   destroyed; nothing else would ever pop them (safe-direction leak,
     ///   but unbounded over repeated contained panics).
-    /// - `backtrace_args_stack`: safe to truncate WITHOUT the specpdl unwind
-    ///   because release is index-based — the later unwind of surviving
-    ///   Backtrace entries above the boundary degrades to a no-op.
+    /// - surviving backtraces first retain arguments whose `bc_buf` or
+    ///   `backtrace_args_stack` storage will be retired. The later cleanup
+    ///   can collect and walk these frames, so their original values must
+    ///   remain rooted until the deferred specpdl unwind releases them.
     /// - `depth` / `macro_expansion_scope_depth`: managed relatively
     ///   (`+= 1` / `-= 1`); skipped decrements would drift them permanently.
     /// - `lexenv` (+ cache clears): the boundary value is authoritative for
@@ -4458,9 +4488,9 @@ impl Context {
         cond_floor: usize,
     ) {
         self.condition_stack.truncate(cond_floor);
+        self.retain_backtrace_args_for_recovery(snap.bc_buf_len, snap.backtrace_args_len);
         self.bc_frames.truncate(snap.bc_frames_len);
         self.bc_buf.truncate(snap.bc_buf_len);
-        self.backtrace_args_stack.truncate(snap.backtrace_args_len);
         self.eval_temp_roots.truncate(snap.eval_temp_roots_len);
         self.eval_call_roots.truncate(snap.eval_call_roots_len);
         self.sequence_temp_root_frames
@@ -4496,7 +4526,7 @@ impl Context {
     }
 
     pub(crate) fn select_global_map(&mut self, keymap: Value) {
-        self.selected_global_map.select(keymap);
+        self.selected_global_map.select(keymap, self.symbol_mode());
     }
 
     #[inline]
@@ -4598,7 +4628,15 @@ impl Context {
         } else if sym_id == self.noninteractive_symbol {
             self.noninteractive = value.is_truthy();
         } else if sym_id == self.symbols_with_pos_enabled_symbol {
-            self.symbols_with_pos_enabled = value.is_truthy();
+            let enabled = value.is_truthy();
+            if enabled != self.symbols_with_pos_enabled {
+                // EQ changes with this dynamic binding. Cache hits remain
+                // branch-free; invalidate both positive and negative answers.
+                self.lexenv_assq_cache.clear();
+                self.lexenv_special_cache.clear();
+                self.coding_systems.invalidate_lookup_cache();
+            }
+            self.symbols_with_pos_enabled = enabled;
         } else if sym_id == self.print_symbols_bare_symbol {
             self.print_symbols_bare = value.is_truthy();
         } else if sym_id == frame_alpha_lower_limit_symbol() {
@@ -4911,20 +4949,11 @@ impl Context {
         form: Value,
         lexical_arg: Option<Value>,
     ) -> EvalResult {
-        let state = begin_eval_with_lexical_arg_in_state(
-            &mut self.obarray,
-            &mut self.lexenv,
-            &mut self.specpdl,
-            lexical_arg,
-        )?;
+        let state =
+            begin_eval_with_lexical_arg_in_state(&mut self.lexenv, &mut self.specpdl, lexical_arg)?;
         let eval_result = self.eval_value(&form);
         let result = self.dispatch_signal_result_if_needed(eval_result);
-        finish_eval_with_lexical_arg_in_state(
-            &mut self.obarray,
-            &mut self.lexenv,
-            &mut self.specpdl,
-            state,
-        );
+        finish_eval_with_lexical_arg_in_state(&mut self.lexenv, &mut self.specpdl, state);
         result
     }
 
@@ -4975,16 +5004,27 @@ impl Context {
     }
 
     pub(crate) fn refresh_features_from_variable(&mut self) {
-        refresh_features_from_variable_in_state(&self.obarray, &mut self.features);
+        let mode = self.symbol_mode();
+        refresh_features_from_variable_in_state(&self.obarray, &mut self.features, mode);
     }
 
     fn has_feature(&mut self, name: &str) -> bool {
-        feature_present_in_state(&self.obarray, &mut self.features, name)
+        {
+            let mode = self.symbol_mode();
+            feature_present_in_state(&self.obarray, &mut self.features, name, mode)
+        }
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(crate) fn add_feature(&mut self, name: &str) {
-        add_feature_in_state(&mut self.obarray, &mut self.features, name);
+        let mode = self.symbol_mode();
+        // SAFETY: this noncalling helper changes only the feature value/list;
+        // it preserves function cells, canonical descriptors and manager identity.
+        unsafe {
+            self.obarray.with_legacy_value_write(|obarray| {
+                add_feature_in_state(obarray, &mut self.features, name, mode);
+            });
+        }
     }
 
     pub(crate) fn feature_present(&mut self, name: &str) -> bool {
@@ -4993,7 +5033,14 @@ impl Context {
 
     /// Remove a feature (used to undo temporary provides during bootstrap).
     pub(crate) fn remove_feature(&mut self, name: &str) {
-        remove_feature_in_state(&mut self.obarray, &mut self.features, name);
+        let mode = self.symbol_mode();
+        // SAFETY: this noncalling helper changes only the feature value/list;
+        // no dispatch metadata or manager authority leaves the phase.
+        unsafe {
+            self.obarray.with_legacy_value_write(|obarray| {
+                remove_feature_in_state(obarray, &mut self.features, name, mode);
+            });
+        }
     }
 
     /// Access the obarray (for builtins that need it).
@@ -5010,7 +5057,8 @@ impl Context {
         &self,
         symbol: Value,
     ) -> Option<(u32, &super::builtins::fringe_bitmap::FringeBitmap)> {
-        let sym = symbol.as_symbol_id()?;
+        let symbol_mode = self.symbol_mode();
+        let sym = symbol.as_symbol_id(symbol_mode)?;
         let index = self.fringe_bitmaps.index_of(sym)?;
         let bitmap = self.fringe_bitmaps.get(sym)?;
         Some((index, bitmap))
@@ -5066,13 +5114,19 @@ impl Context {
             let sym_value = Value::from_sym_id(sym);
             // Ignore the (unreachable) plist error path: these are freshly
             // interned symbols with nil plists.
-            let _ = super::builtins::symbols::put_in_obarray_values(
-                &mut self.obarray,
-                sym_value,
-                fringe_prop,
-                Value::fixnum(i64::from(index)),
-                symbols_with_pos_enabled,
-            );
+            // SAFETY: this noncalling plist operation preserves function cells,
+            // canonical descriptor identity and manager ownership; no loan escapes.
+            let _ = unsafe {
+                self.obarray.with_legacy_value_write(|obarray| {
+                    super::builtins::symbols::put_in_obarray_values(
+                        obarray,
+                        sym_value,
+                        fringe_prop,
+                        Value::fixnum(i64::from(index)),
+                        symbols_with_pos_enabled,
+                    )
+                })
+            };
         }
         self.pre_register_standard_fringe_indicator_alist();
     }
@@ -5120,14 +5174,31 @@ impl Context {
         // from `buffer_defaults` at creation, before this seed ran). GNU buffers
         // read `buffer_defaults` live; neomacs copies, so update the copies that
         // are still nil (no explicit local override).
-        self.buffers.buffer_defaults[offset] = alist;
+        self.buffers.buffer_defaults_mut()[offset] = alist;
         self.buffers
             .seed_default_slot_into_unset_buffers(info.offset, alist);
     }
 
-    /// Access the obarray mutably.
-    pub fn obarray_mut(&mut self) -> &mut Obarray {
-        &mut self.obarray
+    /// Access the opaque manager mutation interface.
+    ///
+    /// Its bounded methods retire publishing writes themselves; this does not
+    /// expose an unrestricted mutable Obarray or a forgettable writer guard.
+    #[inline(always)]
+    pub fn obarray_mut(&mut self) -> ObarrayWriteAccess<'_> {
+        ObarrayWriteAccess::new(&mut self.obarray)
+    }
+
+    /// Run a bounded mutation through the closed manager interface.
+    ///
+    /// The higher-ranked capability cannot escape. Each publishing method
+    /// retires before it returns, including permitted Rust unwinding. The
+    /// capability has no pending Drop obligation that a caller could forget.
+    #[inline(always)]
+    pub fn with_obarray_mut<R>(
+        &mut self,
+        f: impl for<'phase> FnOnce(ObarrayWriteAccess<'phase>) -> R,
+    ) -> R {
+        f(self.obarray_mut())
     }
 
     /// Public read access to the buffer manager.
@@ -5537,7 +5608,7 @@ impl Context {
             let result = self.unbind_to_with_result(specpdl_count, result);
 
             match result {
-                Ok(value) if value.is_symbol_named("dont-clear-message") => {
+                Ok(value) if value.is_symbol_named("dont-clear-message", self.symbol_mode()) => {
                     clear_result = EchoMessageClearResult::PreserveEchoArea;
                 }
                 Ok(_) => {}
@@ -5894,15 +5965,21 @@ impl Context {
         self.noninteractive
     }
 
+    /// Symbol interpretation for this mutator's current dynamic binding.
+    #[inline]
+    pub fn symbol_mode(&self) -> crate::tagged::SymbolMode {
+        if self.symbols_with_pos_enabled {
+            crate::tagged::SymbolMode::Positioned
+        } else {
+            crate::tagged::SymbolMode::Bare
+        }
+    }
+
     /// If `symbols-with-pos-enabled` and `val` is a symbol-with-pos,
     /// return the bare symbol. Otherwise return `val` unchanged.
     #[inline]
     pub fn unwrap_symbol(&self, val: Value) -> Value {
-        if self.symbols_with_pos_enabled && val.is_symbol_with_pos() {
-            val.as_symbol_with_pos_sym().unwrap()
-        } else {
-            val
-        }
+        self.symbol_mode().unwrap(val)
     }
 
     pub(crate) fn sync_thread_runtime_bindings(&mut self) {
@@ -6244,7 +6321,7 @@ impl Context {
         // Handle autoloads for non-canonical symbols the same as canonical
         // ones: trigger autoload-do-load before calling apply, so the raw
         // autoload cons never reaches apply_inner's Value::Cons path.
-        if super::autoload::is_autoload_value(&function) {
+        if super::autoload::is_autoload_value(&function, self.symbol_mode()) {
             let name = resolve_sym(sym_id);
             return self.apply_named_autoload_callable(
                 name,
@@ -6259,6 +6336,7 @@ impl Context {
         match result.kinded_ref() {
             Err(FlowRef::Signal(sig))
                 if sig.symbol == invalid_function_symbol()
+                    && !sig.data.first().is_some_and(|operand| operand.is_subr())
                     && !callable_before
                         .unwrap_or_else(|| self.function_value_is_callable(&function)) =>
             {
@@ -6300,7 +6378,7 @@ impl Context {
             ));
         };
 
-        if super::autoload::is_autoload_value(&function) {
+        if super::autoload::is_autoload_value(&function, self.symbol_mode()) {
             let name = resolve_sym(sym_id);
             return self.apply_named_autoload_callable(
                 name,
@@ -6315,6 +6393,7 @@ impl Context {
         match result.kinded_ref() {
             Err(FlowRef::Signal(sig))
                 if sig.symbol == invalid_function_symbol()
+                    && !sig.data.first().is_some_and(|operand| operand.is_subr())
                     && !callable_before
                         .unwrap_or_else(|| self.function_value_is_callable(&function)) =>
             {
@@ -6335,7 +6414,7 @@ impl Context {
     ) -> EvalResult {
         match self.resolve_named_call_target_by_id(sym_id) {
             NamedCallTarget::Obarray(func) => {
-                if super::autoload::is_autoload_value(&func) {
+                if super::autoload::is_autoload_value(&func, self.symbol_mode()) {
                     return self.apply_named_autoload_callable_by_id(
                         sym_id,
                         func,
@@ -6348,6 +6427,7 @@ impl Context {
                 match result.kinded_ref() {
                     Err(FlowRef::Signal(sig))
                         if sig.symbol == invalid_function_symbol()
+                            && !sig.data.first().is_some_and(|operand| operand.is_subr())
                             && !callable_before
                                 .unwrap_or_else(|| self.function_value_is_callable(&func)) =>
                     {
@@ -6392,31 +6472,73 @@ impl Context {
     /// callability is read out of the obarray and can therefore be changed by
     /// the very call being made; that one is still decided up front.
     fn callable_before_call_snapshot(&self, function: &Value) -> Option<bool> {
-        matches!(function.kind(), ValueKind::Symbol(_))
+        function
+            .as_symbol_id(self.symbol_mode())
+            .is_some()
             .then(|| self.function_value_is_callable(function))
     }
 
+    // Only the callable classifier's symbol arms use this boundary.
+    // Keep resolution setup out of its physical callable-kind dispatch.
+    #[cold]
+    #[inline(never)]
+    fn resolve_callable_snapshot_symbol(&self, symbol: SymId) -> Option<Value> {
+        let resolved = if self.symbols_with_pos_enabled {
+            super::builtins::symbols::resolve_indirect_symbol_by_id(self, symbol)
+        } else {
+            // Delegate to the current checked resolver with constant Bare,
+            // including its physical NILP and capture behavior.
+            super::builtins::symbols::resolve_indirect_symbol_by_id_in_obarray(
+                self.obarray(),
+                symbol,
+            )
+        };
+        resolved.map(|(_, function)| function)
+    }
+
     pub(crate) fn function_value_is_callable(&self, function: &Value) -> bool {
-        match function.kind() {
-            ValueKind::Veclike(VecLikeType::Lambda)
-            | ValueKind::Veclike(VecLikeType::ByteCode)
-            | ValueKind::Veclike(VecLikeType::Macro)
-            | ValueKind::Veclike(VecLikeType::ModuleFunction) => true,
-            ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr) => {
-                super::subr_info::subr_is_callable_function_value(function)
+        // This snapshot follows function cells without running Lisp or crossing
+        // a collecting safe point. Keep the current original Value for the
+        // positioned nil/t rule while avoiding recursive classifier frames.
+        // Dispatch physical kinds once; only the positioned-symbol arm needs
+        // projection before following its function cell.
+        let mut current = *function;
+        loop {
+            match current.kind() {
+                ValueKind::Veclike(VecLikeType::Lambda)
+                | ValueKind::Veclike(VecLikeType::ByteCode)
+                | ValueKind::Veclike(VecLikeType::Macro)
+                | ValueKind::Veclike(VecLikeType::ModuleFunction) => return true,
+                ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr) => {
+                    return super::subr_info::subr_is_callable_function_value(&current);
+                }
+                ValueKind::Cons => {
+                    return super::autoload::is_autoload_value(&current, self.symbol_mode())
+                        || matches!(
+                            cons_head_symbol_id(&current, self.symbol_mode()),
+                            Some(id) if id == lambda_symbol() || id == macro_symbol()
+                        );
+                }
+                ValueKind::Symbol(id) => {
+                    let Some(resolved) = self.resolve_callable_snapshot_symbol(id) else {
+                        return false;
+                    };
+                    current = resolved;
+                }
+                ValueKind::Veclike(VecLikeType::SymbolWithPos) => {
+                    // The typed accessor rejects wrappers when policy is Bare.
+                    // Enabled wrappers, including nil/t, follow their function
+                    // cells; physical nil/t retain the constant false path.
+                    let resolved = current
+                        .as_symbol_id(self.symbol_mode())
+                        .and_then(|id| self.resolve_callable_snapshot_symbol(id));
+                    let Some(resolved) = resolved else {
+                        return false;
+                    };
+                    current = resolved;
+                }
+                _ => return false,
             }
-            ValueKind::Cons => {
-                super::autoload::is_autoload_value(function)
-                    || matches!(
-                        cons_head_symbol_id(function),
-                        Some(id) if id == lambda_symbol() || id == macro_symbol()
-                    )
-            }
-            ValueKind::Symbol(id) => {
-                super::builtins::symbols::resolve_indirect_symbol_by_id(self, id)
-                    .is_some_and(|(_, resolved)| self.function_value_is_callable(&resolved))
-            }
-            _ => false,
         }
     }
 }
@@ -6572,14 +6694,20 @@ pub(crate) fn set_runtime_binding_in_state(
     sym_id: SymId,
     value: Value,
 ) -> Result<Option<crate::buffer::BufferId>, Flow> {
-    let locus = set_runtime_binding(
-        &mut ctx.obarray,
-        &mut ctx.buffers,
-        &ctx.custom,
-        ctx.specpdl.as_slice(),
-        sym_id,
-        value,
-    )?;
+    // SAFETY: this checked, noncalling value/BLV store never changes a function
+    // cell, canonical debugger descriptor or manager identity; no interior escapes.
+    let locus = unsafe {
+        ctx.obarray.with_legacy_value_write(|obarray| {
+            set_runtime_binding(
+                obarray,
+                &mut ctx.buffers,
+                &ctx.custom,
+                ctx.specpdl.as_slice(),
+                sym_id,
+                value,
+            )
+        })
+    }?;
     // The bytecode VM (`assign_var_id`/`assign_var`) and other raw-state
     // callers route writes through this entry point. Mark redisplay dirty for
     // display-affecting vars so byte-compiled assignment repaints exactly like
@@ -6927,7 +7055,7 @@ pub(crate) fn check_forwarded_unbind(
         LispCondition::Error,
         vec![Value::string(format!(
             "Built-in variable may not be unbound : {}",
-            crate::emacs_core::intern::resolve_sym(reported.as_symbol_id().unwrap_or(sym_id))
+            crate::emacs_core::intern::resolve_sym(reported.as_bare_symbol_id().unwrap_or(sym_id))
         ))],
     ))
 }
@@ -6981,7 +7109,11 @@ impl Context {
             return (!cell.is_nil()).then_some(cell);
         }
 
-        let cell = lexenv_assq(lexenv, sym_id);
+        let cell = if self.symbols_with_pos_enabled {
+            lexical_symbols::assq(lexenv, sym_id)
+        } else {
+            lexenv_assq(lexenv, sym_id)
+        };
         cache.push(LexenvAssqCacheEntry {
             lexenv_bits,
             symbol: sym_id,
@@ -7002,7 +7134,7 @@ impl Context {
             return declared_special;
         }
 
-        let declared_special = lexenv_declares_special(lexenv, sym_id);
+        let declared_special = self.lexenv_declares_special_cache_miss(lexenv, sym_id);
         cache.push(LexenvSpecialCacheEntry {
             lexenv_bits,
             symbol: sym_id,
@@ -7011,13 +7143,30 @@ impl Context {
         declared_special
     }
 
+    /// This private boundary is called only after a special-declaration cache
+    /// miss. Keep the two lexical scans out of the small cache probe so the
+    /// existing helper's callers can retain their ordinary compiler shape.
+    #[inline(never)]
+    fn lexenv_declares_special_cache_miss(&self, lexenv: Value, sym_id: SymId) -> bool {
+        if self.symbols_with_pos_enabled {
+            lexical_symbols::declares_special(lexenv, sym_id)
+        } else {
+            lexenv_declares_special(lexenv, sym_id)
+        }
+    }
+
     pub(crate) fn lexbound_p_in_specpdl(&self, sym_id: SymId) -> bool {
         // Mirrors GNU eval.c `lexbound_p`: scan saved
         // `internal-interpreter-environment` values on the specpdl, not the
         // current lexical environment.
         for binding in self.specpdl.iter().rev() {
             if let SpecBinding::LexicalEnv { old_lexenv } = binding
-                && lexenv_assq(*old_lexenv, sym_id).is_some()
+                && (if self.symbols_with_pos_enabled {
+                    lexical_symbols::assq(*old_lexenv, sym_id)
+                } else {
+                    lexenv_assq(*old_lexenv, sym_id)
+                })
+                .is_some()
             {
                 return true;
             }
@@ -7121,14 +7270,21 @@ impl Context {
         // this write has to see what the forwarder accepted, not what the
         // caller passed.
         let value = checked.value();
-        let locus = store_runtime_binding(
-            &mut self.obarray,
-            &mut self.buffers,
-            &self.custom,
-            &self.specpdl,
-            sym_id,
-            checked,
-        );
+        // SAFETY: this noncalling value/BLV store leaves function cells and
+        // canonical descriptor identity untouched; its manager loan cannot escape.
+        // Live forwarded Boolean contents remain canonical and are read afresh.
+        let locus = unsafe {
+            self.obarray.with_legacy_value_write(|obarray| {
+                store_runtime_binding(
+                    obarray,
+                    &mut self.buffers,
+                    &self.custom,
+                    &self.specpdl,
+                    sym_id,
+                    checked,
+                )
+            })
+        };
         self.publish_runtime_binding_write_by_id(sym_id, value);
         Ok(locus)
     }
@@ -7139,7 +7295,13 @@ impl Context {
     /// Any other arm is voided by `set_internal`'s store,
     /// [`Self::set_internal_after_watchers`].
     pub(crate) fn makunbound_runtime_binding_by_id(&mut self, sym_id: SymId) {
-        self.obarray.makunbound_id(sym_id);
+        // SAFETY: this short noncalling phase voids the plain value cell through
+        // Obarray's P6.1 CellWrite seam and its seqlock/SATB protocol. It cannot
+        // change dispatch metadata or leak a manager or symbol reference.
+        unsafe {
+            self.obarray
+                .with_legacy_value_write(|obarray| obarray.makunbound_id(sym_id));
+        }
         self.sync_cached_runtime_binding_by_id(sym_id, Value::NIL);
         self.sync_keyboard_runtime_binding_by_id(sym_id, Value::NIL);
         self.refresh_gc_runtime_settings_after_change_by_id(sym_id);
@@ -7521,6 +7683,10 @@ mod tests;
 mod saved_state_scope_test;
 
 #[cfg(test)]
+#[path = "tests/admission_header_test.rs"]
+mod admission_header_tests;
+
+#[cfg(test)]
 #[path = "tests/gc_context_shutdown.rs"]
 mod gc_context_shutdown_tests;
 
@@ -7610,6 +7776,10 @@ mod redisplay_mode_line_flow_tests;
 #[path = "tests/leaf_guard_test.rs"]
 mod leaf_guard_tests;
 
+#[cfg(test)]
+#[path = "tests/positioned_lexenv_test.rs"]
+mod positioned_lexenv_tests;
+
 /// Allocator for [`Context::context_instance_id`].
 fn next_context_instance_id() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -7670,3 +7840,11 @@ impl CommandLoopDiagnostic {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/positioned_control_test.rs"]
+mod positioned_control_tests;
+
+#[cfg(test)]
+#[path = "tests/issue554_function_policy.rs"]
+mod issue554_function_policy;

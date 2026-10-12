@@ -10,7 +10,7 @@ fn nil_is_zero() {
     crate::test_utils::init_test_tracing();
     assert_eq!(TaggedValue::NIL.bits(), 0);
     assert!(TaggedValue::NIL.is_nil());
-    assert!(TaggedValue::NIL.is_symbol());
+    assert!(TaggedValue::NIL.is_bare_symbol());
     assert!(TaggedValue::NIL.is_list());
     assert!(!TaggedValue::NIL.is_cons());
     assert!(!TaggedValue::NIL.is_fixnum());
@@ -21,9 +21,9 @@ fn t_is_symbol_1() {
     crate::test_utils::init_test_tracing();
     assert_eq!(TaggedValue::T.bits(), 8); // 1 << 3
     assert!(TaggedValue::T.is_t());
-    assert!(TaggedValue::T.is_symbol());
+    assert!(TaggedValue::T.is_bare_symbol());
     assert!(!TaggedValue::T.is_nil());
-    assert_eq!(TaggedValue::T.as_symbol_id(), Some(SymId(1)));
+    assert_eq!(TaggedValue::T.as_bare_symbol_id(), Some(SymId(1)));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn fixnum_not_nil() {
     // Fixnum 0 must NOT be nil (nil is Symbol(0) with tag 000)
     let zero = TaggedValue::fixnum(0);
     assert!(!zero.is_nil());
-    assert!(!zero.is_symbol());
+    assert!(!zero.is_bare_symbol());
     assert!(zero.is_fixnum());
     // GNU low-tag layout: fixnum 0 is (0 << 2) | 2.
     assert_eq!(zero.bits(), 2);
@@ -197,8 +197,8 @@ fn q_unbound_is_not_user_interned_unbound_symbol() {
 fn symbol_encoding() {
     crate::test_utils::init_test_tracing();
     let sym = TaggedValue::from_sym_id(SymId(42));
-    assert!(sym.is_symbol());
-    assert_eq!(sym.as_symbol_id(), Some(SymId(42)));
+    assert!(sym.is_bare_symbol());
+    assert_eq!(sym.as_bare_symbol_id(), Some(SymId(42)));
     assert!(!sym.is_fixnum());
     assert!(!sym.is_nil());
     assert!(!sym.is_cons());
@@ -227,8 +227,8 @@ fn keyword_is_symbol() {
     crate::test_utils::init_test_tracing();
     // In GNU Emacs, keywords are ordinary symbols with : prefix
     let kw = TaggedValue::from_kw_id(SymId(99));
-    assert!(kw.is_symbol()); // keywords are symbols
-    assert_eq!(kw.as_symbol_id(), Some(SymId(99)));
+    assert!(kw.is_bare_symbol()); // keywords are symbols
+    assert_eq!(kw.as_bare_symbol_id(), Some(SymId(99)));
     // as_keyword_id delegates to as_symbol_id for keyword-named symbols
 }
 

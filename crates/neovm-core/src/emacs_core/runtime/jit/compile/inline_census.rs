@@ -108,7 +108,7 @@ impl Tag {
 fn constant_name(tag: Tag, constants: &[Value]) -> Option<&'static str> {
     constants
         .get(tag.constant()? as usize)?
-        .as_symbol_id()
+        .as_bare_symbol_id()
         .map(crate::emacs_core::intern::resolve_sym)
 }
 
@@ -128,7 +128,7 @@ fn resolve_target(
         if let Some(f) = value.bytecode_data_if_materialized() {
             return Some(f);
         }
-        value = obarray?.symbol_function_id(value.as_symbol_id()?)?;
+        value = obarray?.symbol_function_id(value.as_bare_symbol_id()?)?;
     }
     None
 }

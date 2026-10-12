@@ -37,7 +37,7 @@ fn a_symbol_site_is_monomorphic_until_a_second_symbol() {
     let a = Value::symbol("feedback-test-a");
     s.observe(a);
     s.observe(a);
-    assert!(matches!(s.target(), CallTarget::Sym(id) if Some(id) == a.as_symbol_id()));
+    assert!(matches!(s.target(), CallTarget::Sym(id) if Some(id) == a.as_bare_symbol_id()));
     s.observe(Value::symbol("feedback-test-b"));
     assert!(matches!(s.target(), CallTarget::Mega));
     // Mega is final.

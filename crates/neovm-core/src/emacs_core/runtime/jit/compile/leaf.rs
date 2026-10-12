@@ -959,7 +959,7 @@ impl CompiledLeaf {
                 // symbol the code loads via `materialize_op_sym_id`).
                 let Some(sym_id) = reloc_data
                     .get(site.callee_reloc_idx as usize)
-                    .and_then(|v| v.as_symbol_id())
+                    .and_then(|v| v.as_bare_symbol_id())
                 else {
                     break 'arm (SPEC_EPOCH_DISARMED, 0);
                 };

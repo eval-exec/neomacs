@@ -1,4 +1,6 @@
-//! Entry-front samples buffered until the eval thread's final report, never in a policy charge.
+//! Compile-timer samples buffered per mutator until final report, never in a policy charge.
+//! Entry-only by default; `NEOVM_JIT_FRONT_DIAGNOSTIC_CLASSES=all` includes
+//! every cache/OSR compile class, including synchronous Legacy attempts.
 use super::CompileOrigin;
 use crate::{emacs_core::jit::bg::JobClass, tls_scope::TlsScope};
 use std::cell::{Cell, RefCell};
@@ -8,6 +10,9 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
+
+mod classes;
+use classes::DiagnosticClass;
 
 const CAP: usize = 65_536;
 static THREADS: AtomicU64 = AtomicU64::new(1);
@@ -41,6 +46,7 @@ struct Sample {
     id: u64,
     attempt: u64,
     origin: CompileOrigin,
+    class: DiagnosticClass,
     route: Route,
     seq: Option<u64>,
     start: Instant,
@@ -105,30 +111,34 @@ pub(crate) struct Attempt {
     id: u64,
     ordinal: u64,
     origin: CompileOrigin,
-    entry: bool,
+    class: Option<DiagnosticClass>,
     done: bool,
 }
 
 static_assertions::assert_not_impl_any!(Attempt: Send, Sync);
 
 /// Initialize optional scalar bookkeeping before the existing compile timer starts.
-/// Non-entry attempts mask an enclosing marker but are not emitted.
+/// Unselected attempts mask an enclosing marker but are not emitted.
 pub(crate) fn begin(
     id: u64,
     origin: CompileOrigin,
     class: Option<JobClass>,
 ) -> Option<Box<Attempt>> {
     path()?;
-    Some(Box::new(owned(id, origin, class == Some(JobClass::Entry))))
+    Some(Box::new(owned(
+        id,
+        origin,
+        classes::selection().select(origin, class),
+    )))
 }
-fn owned(id: u64, origin: CompileOrigin, entry: bool) -> Attempt {
+fn owned(id: u64, origin: CompileOrigin, class: Option<DiagnosticClass>) -> Attempt {
     let ordinal = BUFFER.with(|buffer| {
         let mut b = buffer.borrow_mut();
         if b.thread == 0 {
             b.thread = THREADS.fetch_add(1, Ordering::Relaxed);
             b.anchor = Anchor::capture();
         }
-        if entry {
+        if class.is_some() {
             b.started += 1;
         }
         b.started
@@ -138,7 +148,7 @@ fn owned(id: u64, origin: CompileOrigin, entry: bool) -> Attempt {
         id,
         ordinal,
         origin,
-        entry,
+        class,
         done: false,
     }
 }
@@ -152,7 +162,7 @@ impl Attempt {
             .flatten()
             .unwrap_or_default();
         self.done = true;
-        if self.entry {
+        if let Some(class) = self.class {
             BUFFER.with(|buffer| {
                 let mut b = buffer.borrow_mut();
                 b.finished += 1;
@@ -164,6 +174,7 @@ impl Attempt {
                     id: self.id,
                     attempt: self.ordinal,
                     origin: self.origin,
+                    class,
                     route: handoff.route,
                     seq: handoff.seq,
                     start,
@@ -177,7 +188,7 @@ impl Attempt {
 }
 impl Drop for Attempt {
     fn drop(&mut self) {
-        if self.entry && !self.done {
+        if self.class.is_some() && !self.done {
             let _ = BUFFER.try_with(|b| {
                 if let Ok(mut b) = b.try_borrow_mut() {
                     b.aborted += 1;
@@ -212,15 +223,20 @@ fn render(b: &Buffer, out: &mut impl Write) -> io::Result<()> {
         .or_else(|| b.samples.first().map(|s| s.start));
     for s in &b.samples {
         let origin: &'static str = s.origin.into();
+        let class: &'static str = match s.class {
+            DiagnosticClass::Job(class) => class.into(),
+            DiagnosticClass::Synchronous => "synchronous",
+        };
         let start = offset(s.start, epoch.expect("sample epoch"));
         writeln!(
             out,
-            "front_v2 pid={} thread={} attempt={} id={} origin={} class=entry route={} seq={} ok={} start_ns={} return_ns={} full_return_ns={} pre_push_ns={}",
+            "front_v2 pid={} thread={} attempt={} id={} origin={} class={} route={} seq={} ok={} start_ns={} return_ns={} full_return_ns={} pre_push_ns={}",
             std::process::id(),
             b.thread,
             s.attempt,
             s.id,
             origin,
+            class,
             s.route.name(),
             s.seq.map_or_else(|| "-".into(), |n| n.to_string()),
             u8::from(s.ok),

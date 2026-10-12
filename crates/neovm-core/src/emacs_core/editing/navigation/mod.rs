@@ -7,7 +7,7 @@ use super::error::{EvalResult, Flow, signal};
 use super::intern::intern;
 use super::syntax::{SyntaxClass, SyntaxTable};
 use super::textprop::{buffer_overlay_property_at_byte_pos, lookup_buffer_text_property};
-use super::value::{Value, ValueKind, VecLikeType, lexenv_lookup};
+use super::value::{Value, ValueKind, VecLikeType};
 use crate::buffer::{
     AccessibleEmacsByteRange, BufferLispPos, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, LispCharPos1,
@@ -128,7 +128,7 @@ fn dynamic_or_global_symbol_value(eval: &super::eval::Context, name: &str) -> Op
     let name_id = intern(name);
     if eval.lexical_binding()
         && !eval.obarray.is_special(name)
-        && let Some(v) = lexenv_lookup(eval.lexenv, name_id)
+        && let Some(v) = eval.lexenv_lookup_cached_in(eval.lexenv, name_id)
     {
         return Some(v);
     }

@@ -23,9 +23,9 @@ impl WindowChromePresence {
             let parameter = window
                 .parameters()
                 .iter()
-                .find(|(key, _)| key.as_symbol_id() == Some(symbol))
+                .find(|(key, _)| key.as_bare_symbol_id() == Some(symbol))
                 .map(|(_, value)| *value);
-            parameter.is_none_or(|v| v.as_symbol_name() != Some("none"))
+            parameter.is_none_or(|v| v.as_bare_symbol_name() != Some("none"))
                 && (parameter.is_some_and(|v| v.is_truthy())
                     || buffer
                         .buffer_local_value_id(symbol)

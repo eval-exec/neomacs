@@ -13,6 +13,7 @@ pub(super) fn resolve(
     hints: Hints,
     roots: &MenuRoots,
 ) -> Result<String, Flow> {
+    let symbol_mode = ctx.symbol_mode();
     if hints.sequence.is_none()
         && let Some(text) = hints.explicit.filter(|value| value.is_string())
     {
@@ -27,7 +28,7 @@ pub(super) fn resolve(
     if let Some(hint) = hints.sequence.filter(|value| !value.is_nil()) {
         let binding = crate::emacs_core::interactive::builtin_key_binding(ctx, vec![hint])?;
         let alias = command
-            .as_symbol_name()
+            .as_symbol_name(symbol_mode)
             .and_then(|name| ctx.obarray().symbol_function(name));
         if !binding.is_nil() && (binding == command || alias == Some(binding)) {
             keys = hint;

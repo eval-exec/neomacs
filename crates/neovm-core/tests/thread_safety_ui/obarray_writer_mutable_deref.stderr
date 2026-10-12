@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `ObarrayWriteAccess<'_>: DerefMut` is not satisfied
+ --> tests/thread_safety_ui/obarray_writer_mutable_deref.rs:5:57
+  |
+5 |     let _: &mut Obarray = std::ops::DerefMut::deref_mut(&mut writer);
+  |                           ----------------------------- ^^^^^^^^^^^ the trait `DerefMut` is not implemented for `ObarrayWriteAccess<'_>`
+  |                           |
+  |                           required by a bound introduced by this call

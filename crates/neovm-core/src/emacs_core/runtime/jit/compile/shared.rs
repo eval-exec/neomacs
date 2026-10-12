@@ -383,6 +383,7 @@ impl SharedJit {
                     config.default_call_conv,
                     config.pointer_type(),
                     ShimGroups {
+                        throw_flow: crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual,
                         subr_spec: true,
                         cbsym_spec: true,
                         tier2_profile: tier2_profile || has_profile,
@@ -409,6 +410,8 @@ impl SharedJit {
             config.default_call_conv,
             config.pointer_type(),
             ShimGroups {
+                throw_flow:
+                    crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual,
                 subr_spec: true,
                 cbsym_spec: true,
                 tier2_profile,
@@ -736,6 +739,8 @@ impl SharedJit {
             shared.shims,
             super::shim_refs::SelectedShimGroups {
                 main: ShimGroups {
+                    throw_flow:
+                        crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual,
                     subr_spec: true,
                     cbsym_spec: true,
                     tier2_profile,

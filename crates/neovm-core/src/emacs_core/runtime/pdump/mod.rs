@@ -797,7 +797,11 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         features,
         require_stack,
         loads_in_progress,
-        load_buffer_manager(&mut decoder, &state.buffers),
+        crate::buffer::buffer::OwnedBufferStorageParts::try_from(load_buffer_manager(
+            &mut decoder,
+            &state.buffers,
+        ))
+        .map_err(|error| DumpError::DeserializationError(error.to_string()))?,
         load_autoload_manager(&mut decoder, &state.autoloads),
         load_custom_manager(&state.custom),
         load_mode_registry(&mut decoder, &state.modes),
@@ -830,7 +834,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         use crate::buffer::buffer::BUFFER_SLOT_INFO;
         use crate::emacs_core::forward::alloc_buffer_objfwd;
         use crate::emacs_core::intern::intern;
-        let obarray = eval.obarray_mut();
+        let mut obarray = eval.obarray_mut();
         for info in BUFFER_SLOT_INFO {
             if !info.install_as_forwarder {
                 continue;

@@ -53,7 +53,8 @@ fn keyboard_variable_may_not_be_buffer_local(
     if obarray.forward_type(resolved) != Some(LispFwdType::KboardObj) {
         return Ok(());
     }
-    let name = crate::emacs_core::intern::resolve_sym(reported.as_symbol_id().unwrap_or(resolved));
+    let name =
+        crate::emacs_core::intern::resolve_sym(reported.as_bare_symbol_id().unwrap_or(resolved));
     Err(signal(
         "error",
         vec![Value::string(format!(
@@ -67,8 +68,15 @@ pub(crate) fn builtin_make_variable_buffer_local(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (obarray, custom) = (&mut eval.obarray, &mut eval.custom);
-    let (result, resolved) = builtin_make_variable_buffer_local_with_state(obarray, custom, args)?;
+    let custom = &mut eval.custom;
+    // SAFETY: alias/constant validation and localization preserve the existing
+    // forwarder descriptor. This helper does not call Lisp, publish dispatch
+    // metadata, replace storage or return a mutable manager/BLV reference.
+    let (result, resolved) = unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            builtin_make_variable_buffer_local_with_state(obarray, custom, args)
+        })
+    }?;
     eval.mark_user_test_gc_settings_volatile_if_gc_symbol(resolved);
     Ok(result)
 }
@@ -212,16 +220,12 @@ pub(crate) fn builtin_make_local_variable(
     ctx.mark_user_test_gc_settings_volatile_if_gc_symbol(resolved);
     if let Some(current_id) = ctx.buffers.current_buffer_id() {
         let current_buf = Value::make_buffer(current_id);
-        if let Some(blv) = ctx.obarray.blv_mut(resolved)
-            && crate::emacs_core::value::eq_value(&blv.where_buf, &current_buf)
-        {
-            // GNU `Fmake_local_variable` calls `swap_in_global_binding`
-            // before consing the new `(sym . val)` alist entry when the
-            // BLV cache is currently loaded for this buffer.
-            blv.set_where(Value::NIL);
-            blv.found = false;
-            blv.valcell = blv.defcell;
-        }
+        // GNU `Fmake_local_variable` calls `swap_in_global_binding`
+        // before consing the new `(sym . val)` alist entry when the
+        // BLV cache is currently loaded for this buffer. The closed operation
+        // cannot expose or retarget the BLV's forwarded debugger descriptor.
+        ctx.obarray
+            .reset_blv_cache_for_buffer(resolved, current_buf);
         if let Some(buf) = ctx.buffers.get_mut(current_id) {
             // Only seed when no entry exists yet (idempotent — calling
             // make-local-variable twice doesn't double-prepend).
@@ -453,7 +457,7 @@ pub(crate) fn builtin_buffer_local_toplevel_value(
     expect_min_args("buffer-local-toplevel-value", &args, 1)?;
     expect_max_args("buffer-local-toplevel-value", &args, 2)?;
 
-    let symbol = super::builtins::symbols::expect_symbol_id(&args[0])?;
+    let symbol = super::builtins::symbols::expect_symbol_id(&args[0], ctx.symbol_mode())?;
     let resolved = super::builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)?;
     let buffer_id =
         buffer_arg_or_current(ctx, "buffer-local-toplevel-value", args.get(1).copied())?;
@@ -483,7 +487,7 @@ pub(crate) fn builtin_set_buffer_local_toplevel_value(
     expect_min_args("set-buffer-local-toplevel-value", &args, 2)?;
     expect_max_args("set-buffer-local-toplevel-value", &args, 3)?;
 
-    let symbol = super::builtins::symbols::expect_symbol_id(&args[0])?;
+    let symbol = super::builtins::symbols::expect_symbol_id(&args[0], ctx.symbol_mode())?;
     let resolved = super::builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)?;
     let buffer_id =
         buffer_arg_or_current(ctx, "set-buffer-local-toplevel-value", args.get(2).copied())?;
@@ -620,11 +624,7 @@ pub(crate) fn builtin_kill_local_variable_impl(
             // Reset the BLV cache so subsequent reads re-swap to
             // the global default. Equivalent to GNU's
             // `swap_in_global_binding`.
-            if let Some(blv) = ctx.obarray.blv_mut(resolved) {
-                blv.set_where(crate::emacs_core::value::Value::NIL);
-                blv.found = false;
-                blv.valcell = blv.defcell;
-            }
+            ctx.obarray.reset_blv_cache_to_default(resolved);
             // Walk the buffer's alist and remove any (sym . val)
             // pair. Returns whether anything was removed.
             if let Some(buf) = ctx.buffers.get_mut(buffer_id) {

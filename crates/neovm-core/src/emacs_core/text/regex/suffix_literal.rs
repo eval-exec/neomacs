@@ -233,18 +233,25 @@ impl SuffixLiteral {
             // Read an existing whole-table proof, but do not publish a new
             // one into the ordinary scan's cache. Doing so could make its
             // next short search eagerly fill every ASCII byte memo slot.
-            let folds = char_table_folds_into_ascii(&char_table, tick, CharTableWalk::OnlyIfWalked)
-                .unwrap_or_else(|| {
-                    crate::emacs_core::chartable::char_table_may_hold_value_from(
-                        &char_table,
-                        0x80,
-                        &mut |value| {
-                            value
-                                .as_fixnum()
-                                .is_some_and(|code| (0..0x80).contains(&code))
-                        },
-                    )
-                });
+            // The shared whole-table proof is keyed by identity and writes,
+            // not symbol policy; only the bare translator can consume it.
+            let cached = if table.symbol_mode() == crate::tagged::SymbolMode::Bare {
+                char_table_folds_into_ascii(&char_table, tick, CharTableWalk::OnlyIfWalked)
+            } else {
+                None
+            };
+            let folds = cached.unwrap_or_else(|| {
+                crate::emacs_core::chartable::char_table_may_hold_value_from_with_symbols(
+                    &char_table,
+                    0x80,
+                    &mut |value| {
+                        value
+                            .as_fixnum()
+                            .is_some_and(|code| (0..0x80).contains(&code))
+                    },
+                    table.symbol_mode(),
+                )
+            });
             if folds {
                 return None;
             }
@@ -299,9 +306,11 @@ fn peek_byte(table: &CaseTranslation, byte: u8) -> u32 {
         return cached;
     }
     match table.table {
-        Some(char_table) => {
-            crate::emacs_core::chartable::translate_char(&char_table, byte as i64) as u32
-        }
+        Some(char_table) => crate::emacs_core::chartable::translate_char_with_symbols(
+            &char_table,
+            byte as i64,
+            table.symbol_mode(),
+        ) as u32,
         None => CaseTranslation::canonicalize_char(byte as u32),
     }
 }

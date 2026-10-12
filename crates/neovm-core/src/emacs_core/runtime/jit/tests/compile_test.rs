@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
+use crate::emacs_core::jit::test_support::{prepare_entry, prepare_osr, settle};
 use crate::emacs_core::value::LambdaParams;
 use cranelift_frontend::FunctionBuilderContext;
 
@@ -1109,10 +1110,11 @@ fn inlined_callee_redefinition_rejits() {
     f.constants = vec![c_sym].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let f_val = Value::make_bytecode(f.clone());
+    prepare_entry(ctx, &f);
     let r1 = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]);
     assert!(
         matches!(r1, Ok(Some(b)) if b == Value::make_int(25).bits()),
-        "inlined (* 5 5) should be 25"
+        "inlined (* 5 5) should be 25, got {r1:?}"
     );
     // Redefine C and bump the epoch (fset/defalias bump function_epoch).
     ev.obarray
@@ -1120,10 +1122,11 @@ fn inlined_callee_redefinition_rejits() {
     ev.obarray.invalidate_all_function_bindings(
         crate::emacs_core::symbol::FunctionEpochBump::SubrRewrite,
     );
+    prepare_entry(ctx, &f);
     let r2 = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]);
     assert!(
         matches!(r2, Ok(Some(b)) if b == Value::make_int(6).bits()),
-        "after redefinition + epoch bump, re-JIT inlines the new C: (1+ 5) = 6"
+        "after redefinition + epoch bump, re-JIT inlines the new C: (1+ 5) = 6, got {r2:?}"
     );
 }
 
@@ -1309,9 +1312,8 @@ fn precise_eviction_only_evicts_inlined_dependents() {
         vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
         vec![c_sym],
     );
-    let f_val = Value::make_bytecode(f.clone());
     // Compile F (inlines C).
-    let _ = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(4)]);
+    prepare_entry(ctx, &f);
     let f_id = f.jit_runtime().compiled_id_or_assign();
     assert!(
         crate::emacs_core::jit::cache::is_compiled_for_test(f_id),
@@ -1686,8 +1688,10 @@ fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
     callee.lexical = true;
     callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     callee.ops = vec![Op::StackRef(0), Op::Sub1, Op::Return];
-    ev.obarray
-        .set_symbol_function_id(step.as_symbol_id().unwrap(), Value::make_bytecode(callee));
+    ev.obarray.set_symbol_function_id(
+        step.as_bare_symbol_id().unwrap(),
+        Value::make_bytecode(callee),
+    );
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![SymId(1)],
         optional: Vec::new(),
@@ -1947,20 +1951,49 @@ fn compiles_trivial_natives_carsafe_maxmin_throw_numpreds() {
     assert_eq!(run1(Op::Numberp, Value::make_float(1.5), ctx_ptr), t);
     assert_eq!(run1(Op::Numberp, Value::NIL, ctx_ptr), nil);
 
-    // throw: stashes Flow::Throw and exits via the signal path.
-    let tag = Value::symbol("jit-throw-tag");
-    let thrown = lower_nullary_leaf(
-        &[Op::Constant(0), Op::Constant(1), Op::Throw],
-        &[tag, Value::make_int(42)],
-    )
-    .unwrap();
-    assert_eq!(thrown.call(ctx_ptr, &[]), NativeRun::Signal);
-    match take_pending_flow().expect("throw Flow stashed").into_kind() {
-        FlowKind::Throw(thrown) => {
+    // Both opcode engines capture the live policy before their outer catch
+    // resumes; the native shim's generated signature must carry Context too.
+    let bare_tag = Value::symbol("jit-throw-tag");
+    let tag = ev
+        .tagged_heap
+        .alloc_symbol_with_pos(bare_tag, Value::fixnum(0));
+    let ops = [Op::Constant(0), Op::Constant(1), Op::Throw];
+    let constants = [tag, Value::make_int(42)];
+    let native = lower_nullary_leaf(&ops, &constants).unwrap();
+    for policy in [
+        crate::tagged::SymbolMode::Bare,
+        crate::tagged::SymbolMode::Positioned,
+    ] {
+        ev.set_variable(
+            "symbols-with-pos-enabled",
+            Value::bool_val(policy == crate::tagged::SymbolMode::Positioned),
+        );
+        ev.push_condition_frame(crate::emacs_core::eval::ConditionFrame::Catch {
+            tag,
+            resume: crate::emacs_core::eval::ResumeTarget::InterpreterCatch,
+        });
+        let mut code = nullary();
+        code.ops = ops.to_vec();
+        code.constants = constants.to_vec().into();
+        code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+        code.seal_hand_assembled_ops_for_test();
+        let interpreted = crate::emacs_core::bytecode::Vm::from_context(&mut ev)
+            .execute(&code, vec![])
+            .expect_err("throw leaves opcode frame");
+        assert_eq!(native.call(ctx_ptr, &[]), NativeRun::Signal);
+        let compiled = take_pending_flow().expect("throw Flow stashed");
+        ev.set_variable("symbols-with-pos-enabled", Value::NIL);
+        for flow in [interpreted, compiled] {
+            let thrown = flow.as_throw().expect("opcode keeps a throw");
+            assert_eq!(thrown.symbol_mode(), policy);
             assert_eq!(thrown.tag, tag);
             assert_eq!(thrown.value, Value::make_int(42));
+            assert_eq!(
+                thrown.matches_tag(bare_tag),
+                policy == crate::tagged::SymbolMode::Positioned
+            );
         }
-        other => panic!("expected Flow::Throw, got {other:?}"),
+        ev.pop_condition_frame();
     }
 }
 
@@ -2456,6 +2489,7 @@ fn osr_transfers_hot_loop_and_matches_interpreter() {
     crate::emacs_core::jit::force_osr_for_test(true);
     let f_on = mk();
     f_on.jit_runtime().set_hot_for_test();
+    prepare_osr(&mut ev, &f_on, 2);
     let before = crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
     let on = Vm::from_context(&mut ev)
         .execute(&f_on, vec![Value::make_int(n)])
@@ -2538,6 +2572,7 @@ fn osr_precise_deopt_resumes_without_replaying_iterations() {
     crate::emacs_core::jit::force_osr_for_test(true);
     let f_on = mk();
     f_on.jit_runtime().set_hot_for_test();
+    prepare_osr(&mut ev, &f_on, 2);
     let before = crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
     let on = Vm::from_context(&mut ev)
         .execute(&f_on, vec![start, Value::make_int(n)])
@@ -3430,7 +3465,12 @@ fn compiled_aset_matches_the_builtin() {
             args.cons_cdr().cons_car(),
             args.cons_cdr().cons_cdr().cons_car(),
         );
-        let reference = match crate::emacs_core::builtins::builtin_aset_args(&[a, i, v]).kinded() {
+        let reference = match crate::emacs_core::builtins::builtin_aset_args(
+            crate::emacs_core::builtins::ArraySymbolSource::Bare,
+            &[a, i, v],
+        )
+        .kinded()
+        {
             Ok(v) => Ok(v),
             Err(FlowKind::Signal(sig)) => Err(format!("signal {}", sig.symbol_name())),
             Err(other) => Err(format!("{other:?}")),
@@ -7239,6 +7279,12 @@ fn a_panic_contained_in_a_direct_callee_is_healed_by_the_caller() {
         panic!("symbol expected");
     };
     ev.obarray.set_symbol_function_id(callee_id, callee);
+    // Prepare the callee without executing its synthetic panic. The two
+    // observed calls must reach the slow arming and native fast paths.
+    prepare_entry(
+        &mut ev,
+        callee.get_bytecode_data().expect("bytecode callee"),
+    );
     // (lambda () (let ((jit-t7-dynvar 5)) (jit-t7-callee))): the caller
     // speculates the call; its binding makes its exit the specpdl sweep.
     let caller = nullary(
@@ -7369,6 +7415,10 @@ fn a_panic_contained_on_the_spec_fast_path_is_healed_by_the_caller() {
         panic!("symbol expected");
     };
     ev.obarray.set_symbol_function_id(callee_id, callee);
+    prepare_entry(
+        &mut ev,
+        callee.get_bytecode_data().expect("bytecode callee"),
+    );
     // (lambda () (let ((jit-t6-dynvar 5)) (jit-t6-callee))): the caller
     // speculates the call; its own binding makes its exit the depth-based
     // specpdl sweep that collects what the panic left.
@@ -7467,7 +7517,7 @@ fn contained_shim_panic_is_caught_by_leaf_local_condition_case() {
     };
     let err = Value::from_bits(bits);
     assert_eq!(
-        err.cons_car().as_symbol_name(),
+        err.cons_car().as_bare_symbol_name(),
         Some("error"),
         "binding is (error ...)"
     );
@@ -7547,7 +7597,7 @@ fn contained_shim_panic_with_leaked_callee_handler_still_matches_leaf_handler() 
         };
         let err = Value::from_bits(bits);
         assert_eq!(
-            err.cons_car().as_symbol_name(),
+            err.cons_car().as_bare_symbol_name(),
             Some("error"),
             "binding is (error ...)"
         );
@@ -7732,6 +7782,12 @@ fn parked_panic_survives_leaf_exit_cleanup_running_compiled_code() {
     let cleanup_id = cleanup.jit_runtime().compiled_id_or_assign();
     cleanup.jit_runtime().set_hot_for_test();
     let cleanup_val = Value::make_bytecode(cleanup);
+    // Compilation preparation must not run the effectful cleanup: only
+    // the recovery below may signal and write its witness variable.
+    prepare_entry(
+        &mut ev,
+        cleanup_val.get_bytecode_data().expect("bytecode cleanup"),
+    );
     let leaf = lower_nullary_leaf(
         &[
             Op::Constant(0), // cleanup fn value
@@ -7778,7 +7834,7 @@ fn parked_panic_survives_leaf_exit_cleanup_running_compiled_code() {
         .symbol_value_copied("jit-fx-witness")
         .unwrap_or(Value::NIL);
     assert_eq!(
-        witness.cons_car().as_symbol_name(),
+        witness.cons_car().as_bare_symbol_name(),
         Some("arith-error"),
         "inner handler must catch its own arith-error, not the parked panic"
     );
@@ -8015,10 +8071,10 @@ fn a_body_that_calls_itself_is_classified_by_identity() {
     let calls = || vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
     let self_val = Value::make_bytecode(mk(calls(), self_sym));
     ev.obarray
-        .set_symbol_function_id(self_sym.as_symbol_id().unwrap(), self_val);
+        .set_symbol_function_id(self_sym.as_bare_symbol_id().unwrap(), self_val);
     let other_val = Value::make_bytecode(mk(calls(), self_sym));
     ev.obarray
-        .set_symbol_function_id(other_sym.as_symbol_id().unwrap(), other_val);
+        .set_symbol_function_id(other_sym.as_bare_symbol_id().unwrap(), other_val);
     let no_call_val = Value::make_bytecode(mk(vec![Op::Constant(0), Op::Return], self_sym));
 
     let self_data = self_val.get_bytecode_data().unwrap();
@@ -8898,7 +8954,10 @@ fn a_record_type_of_site_answers_inline() {
         };
         for &item in &items {
             let want = if name == "type-of" {
-                crate::emacs_core::builtins::types::builtin_type_of(&[item])
+                crate::emacs_core::builtins::types::builtin_type_of(
+                    &[item],
+                    crate::tagged::SymbolMode::Bare,
+                )
             } else {
                 crate::emacs_core::builtins::types::builtin_cl_type_of(&[item])
             }
@@ -9094,7 +9153,7 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
             "(fboundp {})",
             crate::emacs_core::print::print_value(item)
         );
-        if item.as_symbol_id().is_some() || item.is_nil() || item.is_t() {
+        if item.as_bare_symbol_id().is_some() || item.is_nil() || item.is_t() {
             symbols += 1;
         }
     }
@@ -9262,7 +9321,10 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
                 "(autoload-do-load {} ...) with {nargs} args",
                 crate::emacs_core::print::print_value(item)
             );
-            if !crate::emacs_core::autoload::is_autoload_value(item) {
+            if !crate::emacs_core::autoload::is_autoload_value(
+                item,
+                crate::tagged::value::SymbolMode::Bare,
+            ) {
                 plain += 1;
             }
         }
@@ -9353,7 +9415,10 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
         let fast0 = SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed);
         for item in &items {
             let want = if name == "type-of" {
-                crate::emacs_core::builtins::types::builtin_type_of(&[*item])
+                crate::emacs_core::builtins::types::builtin_type_of(
+                    &[*item],
+                    crate::tagged::SymbolMode::Bare,
+                )
             } else {
                 crate::emacs_core::builtins::types::builtin_cl_type_of(&[*item])
             }
@@ -9438,7 +9503,12 @@ fn an_unrelated_redefinition_keeps_an_inlining_leaf_compiled() {
     let run = |ctx: *mut Context| {
         crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(4)])
     };
-    assert!(matches!(run(ctx), Ok(Some(b)) if b == Value::make_int(16).bits()));
+    prepare_entry(ctx, &f);
+    let first = run(ctx);
+    assert!(
+        matches!(first, Ok(Some(b)) if b == Value::make_int(16).bits()),
+        "initial inlined result: {first:?}"
+    );
     let f_id = f.jit_runtime().compiled_id_or_assign();
     let before =
         crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(f_id).expect("F is compiled");
@@ -9446,7 +9516,11 @@ fn an_unrelated_redefinition_keeps_an_inlining_leaf_compiled() {
         d_id,
         Value::make_bytecode(mk_fn(vec![Op::Sub1, Op::Return], vec![])),
     );
-    assert!(matches!(run(ctx), Ok(Some(b)) if b == Value::make_int(16).bits()));
+    let unrelated = run(ctx);
+    assert!(
+        matches!(unrelated, Ok(Some(b)) if b == Value::make_int(16).bits()),
+        "unrelated redefinition result: {unrelated:?}"
+    );
     assert_eq!(
         crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(f_id),
         Some(before),
@@ -9456,9 +9530,11 @@ fn an_unrelated_redefinition_keeps_an_inlining_leaf_compiled() {
         c_id,
         Value::make_bytecode(mk_fn(vec![Op::Add1, Op::Return], vec![])),
     );
+    prepare_entry(ctx, &f);
+    let redefined = run(ctx);
     assert!(
-        matches!(run(ctx), Ok(Some(b)) if b == Value::make_int(5).bits()),
-        "F recompiled against the new C: (1+ 4)"
+        matches!(redefined, Ok(Some(b)) if b == Value::make_int(5).bits()),
+        "F recompiled against the new C: (1+ 4), got {redefined:?}"
     );
 }
 
@@ -9511,6 +9587,7 @@ fn refsetting_the_same_function_and_repeated_redefinitions_stop_recompiling() {
         Ok(bits) => bits,
         Err(flow) => panic!("F signalled: {flow:?}"),
     };
+    prepare_entry(ctx, &f);
     assert_eq!(run(ctx), Some(Value::make_int(16).bits()));
     let f_id = f.jit_runtime().compiled_id_or_assign();
     let leaf = crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(f_id);
@@ -9526,7 +9603,17 @@ fn refsetting_the_same_function_and_repeated_redefinitions_stop_recompiling() {
         .enumerate()
     {
         ev.obarray.set_symbol_function_id(c_id, def);
-        if let Some(bits) = run(ctx) {
+        // An unstable call-only body may be refused by the profit gate.
+        // Preserve that case, but finish a requested worker compile before
+        // checking the answer; no extra native execution occurs on success.
+        let first = run(ctx);
+        let got = if first.is_some() {
+            first
+        } else {
+            settle(ctx);
+            run(ctx)
+        };
+        if let Some(bits) = got {
             assert_eq!(bits, Value::make_int(want).bits(), "round {round}");
         }
     }

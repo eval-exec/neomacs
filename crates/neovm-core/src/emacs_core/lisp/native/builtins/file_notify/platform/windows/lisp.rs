@@ -15,6 +15,7 @@ pub(crate) fn w32notify_add_watch(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     expect_args("w32notify-add-watch", &args, 3)?;
     let filters = list_to_vec(&args[1]).ok_or_else(|| {
         crate::emacs_core::error::signal(
@@ -30,7 +31,7 @@ pub(crate) fn w32notify_add_watch(
         crate::emacs_core::fileio::lisp_file_name_to_path_buf(ctx.expect_lisp_string(normalized)?);
     let filters = filters
         .iter()
-        .filter_map(|filter| filter.as_symbol_name())
+        .filter_map(|filter| filter.as_symbol_name(symbol_mode))
         .filter_map(W32Filter::from_lisp_name)
         .fold(enumflags2::BitFlags::empty(), |filters, filter| {
             filters | filter

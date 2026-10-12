@@ -7,7 +7,7 @@ fn assert_wrong_type(flow: Flow, predicate: &str, offender: Value) {
     match flow.into_kind() {
         FlowKind::Signal(data) => {
             assert_eq!(data.symbol_name(), "wrong-type-argument");
-            assert_eq!(data.data[0].as_symbol_name(), Some(predicate));
+            assert_eq!(data.data[0].as_bare_symbol_name(), Some(predicate));
             assert_eq!(data.data[1], offender);
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
@@ -176,7 +176,7 @@ fn string_designator_accepts_symbols() {
 
     let symbol = Value::symbol("abc");
     let symbol_name = crate::emacs_core::intern::resolve_lisp_visible_symbol_name(
-        symbol.as_symbol_id().expect("symbol value has an id"),
+        symbol.as_bare_symbol_id().expect("symbol value has an id"),
     );
     let from_symbol = StringDesignator::from_value(&mut eval, symbol).unwrap();
     assert_eq!(from_symbol.text().as_bytes(), b"abc");

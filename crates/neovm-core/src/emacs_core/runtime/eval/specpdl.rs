@@ -562,14 +562,21 @@ impl Context {
                     value,
                 )?;
                 let stored = checked.value();
-                store_runtime_binding(
-                    &mut self.obarray,
-                    &mut self.buffers,
-                    &self.custom,
-                    &self.specpdl,
-                    resolved,
-                    checked,
-                );
+                // SAFETY: watcher callbacks have finished. This noncalling
+                // value-only phase uses P6.1's canonical CellWrite producers,
+                // preserves dispatch metadata and cannot leak a manager loan.
+                unsafe {
+                    self.obarray.with_legacy_value_write(|obarray| {
+                        store_runtime_binding(
+                            obarray,
+                            &mut self.buffers,
+                            &self.custom,
+                            &self.specpdl,
+                            resolved,
+                            checked,
+                        );
+                    });
+                }
                 stored
             }
             Some(ValueCell::Localized(_)) => {

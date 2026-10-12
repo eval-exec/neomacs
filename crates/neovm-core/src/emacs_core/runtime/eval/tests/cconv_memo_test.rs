@@ -422,7 +422,7 @@ fn head_verdicts_match_the_lisp_predicates_for_every_symbol() {
     let mut lisp_names: Vec<String> = crate::emacs_core::value::list_to_vec(&lisp)
         .expect("list")
         .into_iter()
-        .map(|s| s.as_symbol_name().expect("symbol").to_string())
+        .map(|s| s.as_bare_symbol_name().expect("symbol").to_string())
         .collect();
     lisp_names.sort();
     let mut rust_names: Vec<String> = eval
@@ -514,7 +514,7 @@ fn constant_symbols(function: Value) -> Vec<Value> {
         .copied()
         .collect();
     while let Some(value) = stack.pop() {
-        if value.is_symbol() && !value.is_nil() {
+        if value.is_bare_symbol() && !value.is_nil() {
             out.push(value);
         } else if value.is_cons() {
             stack.push(value.cons_car());
@@ -553,7 +553,7 @@ fn trusted_set_audit_pins_the_dumped_byte_code() {
             "{name} is not byte-code"
         );
         for symbol in constant_symbols(function) {
-            let id = symbol.as_symbol_id().expect("symbol");
+            let id = symbol.as_bare_symbol_id().expect("symbol");
             let name = crate::emacs_core::intern::resolve_sym(id).to_string();
             if eval.obarray().is_special_id(id) && !name.starts_with(':') {
                 specials.push(name.clone());
@@ -566,7 +566,7 @@ fn trusted_set_audit_pins_the_dumped_byte_code() {
                 continue;
             };
             let subr = cell.is_subr() || cell.as_subr_id().is_some();
-            let macro_cell = cell.is_cons() && cell.cons_car().is_symbol_named("macro");
+            let macro_cell = cell.is_cons() && cell.cons_car().is_bare_symbol_named("macro");
             if !subr && !macro_cell {
                 callees.push(name);
             }

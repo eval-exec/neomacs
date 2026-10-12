@@ -1364,7 +1364,10 @@ fn ccl_execute_quit_signals_quit() {
     let err = err.expect_err("ccl-execute promotes a pending quit");
     match err.into_kind() {
         FlowKind::Signal(sig) => {
-            assert_eq!(sig.symbol, Value::symbol("quit").as_symbol_id().unwrap());
+            assert_eq!(
+                sig.symbol,
+                Value::symbol("quit").as_bare_symbol_id().unwrap()
+            );
         }
         other => panic!("expected quit signal, got {other:?}"),
     }

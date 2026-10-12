@@ -113,16 +113,19 @@ thread_local! {
 }
 
 /// The existing mutator-local read deduplication, qualified by reclamation.
-/// The shared epoch contains no Lisp state. A clear-before-resume collector
-/// publication makes a same-address replacement miss this cache; live-owner
-/// hits need neither a header publication nor the mutable capture journal.
+/// Actual reclamation clears it on the heap's executing mutator before slot
+/// reuse. Installing another heap also clears it. The shared epoch remains a
+/// cold ledger-validation signal; live-owner hits keep the original word-only
+/// shortcut. A heap has one executing mutator, independently of other heaps.
+#[repr(C)]
 struct RecentReads {
+    // Keep the original word array first, including its indexed-load offset.
+    words: [Cell<usize>; 256],
     // Immutable process policy, or this mutator's scalar test override. Scope
     // and policy changes refresh it before any pointer read; no Lisp state is
     // cached by this field and other mutators cannot change its value.
     observed: Cell<bool>,
     epoch: Cell<u64>,
-    words: [Cell<usize>; 256],
 }
 
 impl RecentReads {
@@ -160,15 +163,24 @@ enum JournalPolicy {
     JournalAndObserve,
 }
 
+// Keep the journal prefix independent of cold observation metadata growth.
+// This is a private Rust layout; generated code does not bake these offsets.
+// The executing mutator owns this State; only atomic marks/epochs are shared.
+#[repr(C)]
 struct State {
-    writes: Box<[usize; JOURNAL_SIZE]>,
     captures: Vec<Capture>,
+    writes: Box<[usize; JOURNAL_SIZE]>,
     journal_policy: JournalPolicy,
     // Exact identities and conservative bounds live in the existing mutator
     // journal. Reclamation prunes dead identities without dereferencing them;
     // Context/dump changes reclassify the surviving owner ranges.
     observed: observed_envelope::ObservedEnvelope,
 }
+
+const _: () = assert!(std::mem::offset_of!(State, captures) == 0);
+const _: () = assert!(std::mem::offset_of!(State, writes) == 3 * std::mem::size_of::<usize>());
+const _: () =
+    assert!(std::mem::offset_of!(State, journal_policy) == 4 * std::mem::size_of::<usize>());
 
 impl Default for State {
     fn default() -> Self {
@@ -208,11 +220,14 @@ struct Capture {
 /// lifetime ends. Identities are not roots: a reclaimed address can be reused
 /// for an unrelated, initially unobserved object. Certificates and their
 /// mutation journals remain local to the observing mutator.
+#[derive(Debug)]
 pub struct CollectionReads {
     reads: FxHashSet<usize>,
     revision: LispCollectionRevision,
     _not_send: std::marker::PhantomData<*const ()>,
 }
+
+static_assertions::assert_not_impl_any!(CollectionReads: Send, Sync);
 
 impl CollectionReads {
     pub fn unchanged(&self) -> bool {
@@ -256,10 +271,14 @@ fn unchanged_since(reads: &FxHashSet<usize>, revision: LispCollectionRevision) -
 
 /// Nested observations contribute reads to their enclosing observation too.
 /// The guard cannot move across threads; unwinding restores the prior scope.
+#[derive(Debug)]
+#[must_use = "dropping the guard ends this mutator's collection-read capture"]
 struct CollectionReadScope {
     active: bool,
     _not_send: std::marker::PhantomData<*const ()>,
 }
+
+static_assertions::assert_not_impl_any!(CollectionReadScope: Send, Sync);
 
 impl CollectionReadScope {
     fn begin() -> Self {
@@ -371,13 +390,15 @@ pub(crate) fn observe(value: TaggedValue) {
     observe_active(value.bits());
 }
 
-// Its sole caller just checked this mutator's active membership and the process
-// gate. No callback or safepoint intervenes, so the private cold helper need not
-// repeat that membership load. Scope changes still clear RECENT before reads.
+// Inactive pointer reads return at the inline membership check. Keep active
+// dependency recording cold and retain its existing private membership guard;
+// neither gate runs a callback or can change this mutator's capture stack.
 #[cold]
 #[inline(never)]
 fn observe_active(bits: usize) {
-    debug_assert!(ACTIVE.with(Cell::get));
+    if !ACTIVE.with(Cell::get) {
+        return;
+    }
     observe_bits(bits);
 }
 
@@ -391,7 +412,13 @@ fn clear_recent_reads() {
 }
 
 fn recent_publication_epoch() -> Option<u64> {
-    RECENT_READS.with(|recent| recent.observed.get().then(|| recent.epoch.get()))
+    RECENT_READS.with(|recent| {
+        recent.observed.get().then(|| {
+            let epoch = super::gc::collection_observation_epoch();
+            recent.epoch.set(epoch);
+            epoch
+        })
+    })
 }
 
 #[inline]
@@ -400,9 +427,9 @@ fn observe_bits(bits: usize) {
     // cons/vector access can inline this check without entering the slow
     // dependency recorder. Scope changes clear it so every active scope
     // still observes nested reads; collisions only cause another lookup.
-    // Same-epoch hits already published before their first revision/data
-    // read. A reclamation epoch change clears the shortcut before any reused
-    // address can be accepted, so only misses need owner publication.
+    // Hits already published before their first revision/data read. The
+    // collector and heap-installation handshakes clear this shortcut before
+    // a replacement address can be accepted, so only misses publish owners.
     if !recently_observed(bits) {
         observe_new_owner(bits);
     }
@@ -411,14 +438,6 @@ fn observe_bits(bits: usize) {
 #[inline]
 fn recently_observed(bits: usize) -> bool {
     RECENT_READS.with(|recent| {
-        // Acquire first: the common same-epoch captured read needs no policy
-        // test. Only reclamation needs to distinguish observation marks from
-        // the Off/Eager identity-only cache. Neither arm trusts a replacement
-        // owner before the Observed cache has been cleared.
-        let epoch = super::gc::collection_observation_epoch();
-        if recent.epoch.get() != epoch {
-            clear_recent_after_reclamation(recent, epoch);
-        }
         let slot = &recent.words[((bits >> 3) ^ (bits >> 11)) & 255];
         bits != 0 && slot.replace(bits) == bits
     })
@@ -429,24 +448,36 @@ fn recently_observed(bits: usize) -> bool {
 // before publishing the compiled gate or snapshotting a dependency.
 #[cold]
 #[inline(never)]
-fn clear_recent_after_reclamation(recent: &RecentReads, epoch: u64) {
+pub(super) fn reclaimed_collection_observations(epoch: u64) {
     // Keep the immutable policy branch entirely on the reclamation edge.
     // Off/Eager retain their identity-only words, but acknowledge this epoch
     // so subsequent reads do not enter the cold helper again.
-    if recent.observed.get() {
-        recent.clear(epoch);
-    } else {
-        recent.epoch.set(epoch);
-    }
+    // Other heaps may reclaim concurrently; they cannot recycle this heap's
+    // live owner. A migrating Context is covered by the installation reset.
+    // try_with also permits final heap reclamation during TLS destruction.
+    let _ = RECENT_READS.try_with(|recent| {
+        if recent.observed.get() {
+            recent.clear(epoch);
+        } else {
+            recent.epoch.set(epoch);
+        }
+    });
+}
+
+#[cold]
+#[inline(never)]
+pub(super) fn reset_recent_reads_for_heap_installation() {
+    let _ = RECENT_READS.try_with(|recent| {
+        recent.clear(super::gc::collection_observation_epoch());
+    });
 }
 
 #[cold]
 #[inline(never)]
 fn observe_new_owner(bits: usize) {
-    // recently_observed acquired this epoch before entering this cold path;
-    // no callback or safepoint intervenes. A real owner remains live while
-    // its pointer projection executes, even if unrelated reclamation advances
-    // the global epoch concurrently.
+    // Misses acquire the shared epoch here, rather than on every cached read.
+    // A real owner remains live while its pointer projection executes, even
+    // if unrelated reclamation advances the global epoch concurrently.
     let publication_epoch = recent_publication_epoch();
     STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -569,6 +600,9 @@ pub(super) fn record_projected_write(value: TaggedValue, projection: WriteProjec
                 false
             }
         };
+        // Keep capture eligibility ahead of the common journal block. In
+        // JournalOnly, this branches directly to the revision/write pair;
+        // no observation booleans remain live across that block.
         let recent = observe && projected && recently_observed(value.bits());
         if observe && projected && !recent {
             publish_observed_owner_in_state(&mut state, value.bits());
@@ -627,8 +661,9 @@ pub(crate) fn compiled_observation_gate(
 }
 
 /// A native false-positive window hit can exclude its whole empty interval.
-/// This is cold protocol refinement, not a last-owner cache: every local
-/// observed address, including vectors and strings, bounds the chosen gap.
+/// This is cold protocol refinement, not a Lisp-state cache: every locally
+/// observed Cons/Vector/Record address bounds the chosen gap. A tiny cons gap
+/// additionally supplies one exact exemption that survives gap replacement.
 /// The caller has already rejected ordinary GC/dump barrier eligibility.
 #[cold]
 #[inline(never)]
@@ -677,16 +712,26 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
     if compiled_journal_mode() != CompiledJournalMode::Observed {
         return false;
     }
-    // RECENT collisions and later scopes still record their own dependency,
-    // but a same-epoch local owner has already completed its sticky publication.
-    // Context/dump changes republish through the existing heap installation and
-    // barrier publisher; they do not require another shared owner mark.
-    if state.observed.already_published(bits) {
-        return false;
-    }
+    // Same-epoch membership proves sticky publication, but reclamation on
+    // another mutator can reuse a veclike address and mark its new lifetime
+    // before this ledger refreshes. Promote cached native eligibility only
+    // from a real live projection; stale certificate replay never reads a
+    // header. Positive slot eligibility may conservatively survive reuse.
+    let tag = bits & super::value::TAG_MASK;
+    let promoted_geometry = if state.observed.already_published(bits) {
+        if tag != super::value::TAG_VECLIKE || state.observed.has_slot_geometry(bits) {
+            return false;
+        }
+        let live_geometry = native_window_collection_owner(bits);
+        if live_geometry != NativeWindowCollectionOwner::Slots {
+            return false;
+        }
+        Some(live_geometry)
+    } else {
+        None
+    };
     let dump = super::gc::current_collection_dump_window();
     let refreshed = state.observed.refresh(dump);
-    let tag = bits & super::value::TAG_MASK;
     if matches!(
         tag,
         super::value::TAG_CONS | super::value::TAG_STRING | super::value::TAG_VECLIKE
@@ -694,7 +739,12 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
     {
         // Another mutator may have published the shared mark first. Its mark
         // does not insert this identity into our private journal envelope.
-        let changed = state.observed.insert(bits);
+        // Header subtype is immutable throughout this live owner's lifetime.
+        // Capture only the eligibility fact here: reclamation and transitive
+        // replay must never dereference the ledger's unrooted owner addresses.
+        let native_geometry =
+            promoted_geometry.unwrap_or_else(|| native_window_collection_owner(bits));
+        let changed = state.observed.insert(bits, native_geometry);
         let newly = if changed {
             #[cfg(test)]
             OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(count.get() + 1));
@@ -714,6 +764,41 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
     } else {
         false
     }
+}
+
+/// Only these native-store owners rely on the shared address-window gate.
+/// String stores use their own exact header-byte guard and journal shim, so
+/// they keep marks/full ledger membership without constraining this geometry.
+/// This cold publication caller owns a live pointer projection and State's
+/// exclusive borrow, with no callback or safepoint. Raw tag/header decoding
+/// avoids recursively observing through `as_veclike_ptr`/`veclike_type`.
+/// Every owner still receives the same sticky mark and full publication-ledger
+/// membership; this fact only limits native address-window geometry.
+#[inline]
+fn native_window_collection_owner(bits: usize) -> NativeWindowCollectionOwner {
+    use super::header::{VecLikeHeader, VecLikeType};
+    match bits & super::value::TAG_MASK {
+        super::value::TAG_CONS => NativeWindowCollectionOwner::Cons,
+        super::value::TAG_VECLIKE => {
+            // SAFETY: called only for a live non-null veclike owner during its
+            // real first pointer projection. Serialized/stale certificate
+            // identities never enter this header-reading publication path.
+            let header = unsafe { &*((bits & !super::value::TAG_MASK) as *const VecLikeHeader) };
+            if matches!(header.type_tag, VecLikeType::Vector | VecLikeType::Record) {
+                NativeWindowCollectionOwner::Slots
+            } else {
+                NativeWindowCollectionOwner::Other
+            }
+        }
+        _ => NativeWindowCollectionOwner::Other,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeWindowCollectionOwner {
+    Other,
+    Cons,
+    Slots,
 }
 
 /// Observe reads made by `read`, rejecting reuse if its dependency budget or
@@ -773,3 +858,7 @@ mod observed_gap_tests;
 #[cfg(all(test, feature = "jit"))]
 #[path = "collection_reads/tests/observed_collisions_test.rs"]
 mod observed_collisions_tests;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "collection_reads/tests/observed_reused_subtype_test.rs"]
+mod observed_reused_subtype_tests;

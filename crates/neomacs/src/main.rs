@@ -543,7 +543,7 @@ fn render_startup_image_error(err: &neovm_core::emacs_core::error::EvalError) ->
             raw_data: Some(payload),
             ..
         } => payload
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .map(str::to_owned)
             .or_else(|| payload.as_utf8_str().map(str::to_owned))
             .unwrap_or_else(|| format!("{err:?}")),

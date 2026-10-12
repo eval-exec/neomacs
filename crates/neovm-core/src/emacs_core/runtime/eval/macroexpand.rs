@@ -40,6 +40,7 @@ impl Context {
     pub(super) fn begin_macro_expansion_scope_frame(
         &mut self,
     ) -> Result<ActiveMacroExpansionScopeState, Flow> {
+        let symbol_mode = self.symbol_mode();
         let saved_specpdl_len = self.specpdl.len();
         let old_dynvars = self
             .obarray
@@ -56,7 +57,7 @@ impl Context {
         let mut cursor = self.lexenv;
         while cursor.is_cons() {
             let entry = cursor.cons_car();
-            if let Some(sym) = entry.as_symbol_id() {
+            if let Some(sym) = entry.as_symbol_id(symbol_mode) {
                 dynvars = Value::cons(Value::from_sym_id(sym), dynvars);
                 match self.specpdl.get_mut(dynvars_root_index) {
                     Some(SpecBinding::GcRoot { value }) => *value = dynvars,
@@ -109,13 +110,16 @@ impl Context {
         form: Value,
         expand_elapsed: std::time::Duration,
     ) {
+        let symbol_mode = self.symbol_mode();
         self.macro_expand_calls = self.macro_expand_calls.saturating_add(1);
         self.macro_expand_total_us = self
             .macro_expand_total_us
             .saturating_add(expand_elapsed.as_micros() as u64);
         if self.macro_perf_enabled && expand_elapsed.as_millis() > 50 {
             let macro_head = if form.is_cons() {
-                form.cons_car().as_symbol_name().unwrap_or("<non-symbol>")
+                form.cons_car()
+                    .as_symbol_name(symbol_mode)
+                    .unwrap_or("<non-symbol>")
             } else {
                 "<atom>"
             };
@@ -165,7 +169,7 @@ impl Context {
         let result = (|| {
             let expanded = if definition.is_macro() {
                 self.apply_macro_callable_for_macroexpand(definition, args)?
-            } else if cons_head_symbol_id(&definition) == Some(macro_symbol()) {
+            } else if cons_head_symbol_id(&definition, self.symbol_mode()) == Some(macro_symbol()) {
                 self.apply_macro_callable_for_macroexpand(definition.cons_cdr(), args)?
             } else if self.function_value_is_callable(&definition) {
                 // GNU `macroexpand` ENVIRONMENT entries store the macro

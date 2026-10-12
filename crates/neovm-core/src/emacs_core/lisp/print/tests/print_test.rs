@@ -921,3 +921,90 @@ fn hash_table_printer_omits_default_eql_test_like_gnu() {
         "OK \"#s(hash-table data (1 2))\"",
     );
 }
+
+#[cfg(test)]
+#[path = "graph_gnu.rs"]
+mod graph_gnu;
+
+#[cfg(test)]
+#[path = "settings_gnu.rs"]
+mod settings_gnu;
+
+#[cfg(test)]
+#[path = "float_output_gnu.rs"]
+mod float_output_gnu;
+
+#[cfg(test)]
+#[path = "raw_hash_test_names.rs"]
+mod raw_hash_test_names;
+
+#[cfg(test)]
+#[path = "compiled_settings_gnu.rs"]
+mod compiled_settings_gnu;
+
+#[cfg(test)]
+#[path = "princ_text.rs"]
+mod princ_text;
+
+#[cfg(test)]
+#[path = "packed_char_header_units.rs"]
+mod packed_char_header_units;
+
+#[cfg(test)]
+#[path = "charset_units.rs"]
+mod charset_units;
+
+#[cfg(test)]
+#[path = "graph_closure_units.rs"]
+mod graph_closure_units;
+
+#[cfg(test)]
+#[path = "graph_level_units.rs"]
+mod graph_level_units;
+
+#[cfg(test)]
+#[path = "graph_tail_units.rs"]
+mod graph_tail_units;
+
+#[cfg(test)]
+#[path = "symbol_escape_units.rs"]
+mod symbol_escape_units;
+
+#[path = "diagnostic_symbols.rs"]
+mod diagnostic_symbols;
+
+#[cfg(test)]
+#[path = "settings_units.rs"]
+mod settings_units;
+
+#[cfg(test)]
+#[path = "scope_guards.rs"]
+mod scope_guards;
+
+#[cfg(test)]
+#[path = "error_charset_units.rs"]
+mod error_charset_units;
+
+#[cfg(test)]
+#[path = "quoted_policy_units.rs"]
+mod quoted_policy_units;
+
+#[cfg(test)]
+#[path = "graph_recursive_closure_units.rs"]
+mod graph_recursive_closure_units;
+
+#[cfg(test)]
+#[path = "graph_byte_stack_guard_units.rs"]
+mod graph_byte_stack_guard_units;
+
+#[cfg(test)]
+#[path = "error_string_leaf_gnu.rs"]
+mod error_string_leaf_gnu;
+
+#[cfg(test)]
+#[path = "symbol_noescape_gnu.rs"]
+mod symbol_noescape_gnu;
+
+#[cfg(test)]
+#[path = "princ_octal_spans_gnu.rs"]
+mod princ_octal_spans_gnu;

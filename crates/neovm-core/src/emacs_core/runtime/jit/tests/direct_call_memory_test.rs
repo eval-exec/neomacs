@@ -30,7 +30,7 @@ fn restore() {
 fn memory_direct_calls_keep_the_memory_abi_and_bypass_the_shim() {
     setup(false);
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(ARMING).expect("warm");
+    eval_fixture_program(&mut ev, ARMING).expect("warm");
     let caller = cached_leaf(&ev, "neovm--dc-caller").expect("caller");
     let callee = cached_leaf(&ev, "neovm--dc-exact").expect("callee");
     assert_eq!(callee.abi, LeafAbi::Memory);
@@ -43,7 +43,8 @@ fn memory_direct_calls_keep_the_memory_abi_and_bypass_the_shim() {
 
     // Only the exact callee is direct in this program. Test an exact-only
     // caller to distinguish an engaged direct call from a declined site.
-    ev.eval_str(
+    eval_fixture_program(
+        &mut ev,
         r#"(progn
   (defun neovm--memory-caller (n) (if n (neovm--dc-exact n 1) 0))
   (byte-compile 'neovm--memory-caller)
@@ -61,7 +62,7 @@ fn memory_direct_calls_keep_the_memory_abi_and_bypass_the_shim() {
 fn an_explicit_register_abi_restores_register_direct_entries() {
     setup(true);
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(ARMING).expect("warm");
+    eval_fixture_program(&mut ev, ARMING).expect("warm");
     let caller = cached_leaf(&ev, "neovm--dc-caller").expect("caller");
     let callee = cached_leaf(&ev, "neovm--dc-exact").expect("callee");
     assert_eq!(callee.abi, LeafAbi::Register { arity: 2 });
@@ -78,7 +79,7 @@ fn an_explicit_register_abi_restores_register_direct_entries() {
 fn memory_direct_slots_clear_unlink_and_rearm_the_current_entry() {
     setup(false);
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(ARMING).expect("warm");
+    eval_fixture_program(&mut ev, ARMING).expect("warm");
     let caller = cached_leaf(&ev, "neovm--dc-caller").expect("caller");
     let callee = cached_leaf(&ev, "neovm--dc-exact").expect("callee");
     let slot = slot_calling(caller, callee).expect("slot");

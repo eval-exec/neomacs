@@ -19,7 +19,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
 fn install(ev: &mut Context, name: &str, f: ByteCodeFunction) -> Value {
     let sym = Value::symbol(name);
     ev.obarray
-        .set_symbol_function_id(sym.as_symbol_id().unwrap(), Value::make_bytecode(f));
+        .set_symbol_function_id(sym.as_bare_symbol_id().unwrap(), Value::make_bytecode(f));
     sym
 }
 
@@ -58,6 +58,17 @@ fn mir_call_retains_native_callee_slots_and_revalidates_redefinition() {
     assert_eq!(leaf.spec_slots.len(), 1);
     assert!(leaf.inline_epoch().is_none());
     let ctx = &mut ev as *mut Context as *mut u8;
+    let callee = ev
+        .obarray
+        .symbol_function_id(sym.as_bare_symbol_id().unwrap())
+        .unwrap();
+    assert!(
+        crate::emacs_core::jit::test_support::resolve_leaf(
+            &mut ev,
+            callee.get_bytecode_data().unwrap(),
+        )
+        .is_some()
+    );
     let before = SPEC_SHIM_FAST_COUNT.load(Ordering::Relaxed);
     for _ in 0..6000 {
         assert_eq!(

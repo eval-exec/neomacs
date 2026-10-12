@@ -11,9 +11,9 @@
 //! The entry names its string by object identity, as GNU's `EQ` does, and
 //! roots it (GNU `staticpro`s the cache variable), so the object cannot be
 //! freed and its address reused while it is cached.  Any change to a
-//! string's bytes moves [`EPOCH`] (see `LispString::recompute_size`, which
-//! every byte mutation ends in), so a cached pair never outlives the layout
-//! it describes. Activation also invalidates an entry after an uncovered
+//! string's bytes moves [`EPOCH`] (see `LispString::recompute_size` and
+//! `LispString::clear_contents_to_unibyte`), so a cached pair never outlives
+//! the layout it describes. Activation also invalidates an entry after an uncovered
 //! collection or thread migration: another thread cannot root this entry and
 //! has its own byte-mutation epoch.
 

@@ -544,6 +544,7 @@ fn replace_match_lisp_string_with_syntax_and_properties(
     buffer_case_context: Option<(
         &crate::emacs_core::syntax::SyntaxTable,
         &crate::emacs_core::casetab::CaseTableOverride,
+        crate::tagged::SymbolMode,
     )>,
 ) -> Result<crate::heap_types::LispString, String> {
     let md = match match_data {
@@ -583,14 +584,17 @@ fn replace_match_lisp_string_with_syntax_and_properties(
         // matched/replacement LispStrings instead of round-tripping through the
         // PUA-sentinel storage form, so eight-bit bytes and PUA glyphs are not
         // confused.
-        let mut cased = if let Some((syntax_table, casetab)) = buffer_case_context {
+        let mut cased = if let Some((syntax_table, casetab, mode)) = buffer_case_context {
             // GNU `Freplace_match` case analysis uses the buffer's case table
             // (UPPERCASEP/LOWERCASEP) and syntax table (word boundaries), so a
             // custom case table (set-case-syntax-pair) capitalizes accordingly.
             crate::emacs_core::casefiddle::apply_replace_match_case_lisp_cased(
                 &replacement,
                 &matched,
-                |ch| syntax_table.char_syntax(ch) == crate::emacs_core::syntax::SyntaxClass::Word,
+                |ch| {
+                    syntax_table.char_syntax_with_symbols(ch, mode)
+                        == crate::emacs_core::syntax::SyntaxClass::Word
+                },
                 |ch| casetab.is_upper(ch),
                 |ch| casetab.is_lower(ch),
                 casetab,
@@ -614,6 +618,7 @@ pub(crate) fn compute_buffer_replacement_lisp_string(
     literal: bool,
     subexp: usize,
     match_data: &Option<super::regex::MatchData>,
+    mode: crate::tagged::SymbolMode,
 ) -> Result<(usize, usize, crate::heap_types::LispString), String> {
     let md = match match_data {
         Some(md) => md,
@@ -664,7 +669,7 @@ pub(crate) fn compute_buffer_replacement_lisp_string(
     // down (e.g. set-case-syntax-pair makes a char an uppercase word constituent).
     let buffer_syntax_table = crate::emacs_core::syntax::SyntaxTable::for_buffer(buf);
     let buffer_case_override =
-        crate::emacs_core::casetab::CaseTableOverride::for_buffer_readonly(buf);
+        crate::emacs_core::casetab::CaseTableOverride::for_buffer_readonly_with_symbols(buf, mode);
     // Replacing into a BUFFER: `\?' is an invalid escape (search.c:2694).
     let replacement = replace_match_lisp_string_with_syntax_and_properties(
         &source,
@@ -675,7 +680,7 @@ pub(crate) fn compute_buffer_replacement_lisp_string(
         &replacement_match_option,
         false,
         false,
-        Some((&buffer_syntax_table, &buffer_case_override)),
+        Some((&buffer_syntax_table, &buffer_case_override, mode)),
     )?;
     let replace_start = if replacement_match_data.source().is_string() {
         super::regex::char_pos_to_byte_lisp_string(

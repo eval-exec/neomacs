@@ -44,7 +44,7 @@ struct ProfilerLog {
 /// are stripped from names — a single unsanitized name would corrupt the whole
 /// folded output and break inferno / the report parser.
 fn frame_label(frame: Value) -> String {
-    let raw = if let Some(name) = frame.as_symbol_name() {
+    let raw = if let Some(name) = frame.as_bare_symbol_name() {
         name.to_string()
     } else if let Some(subr_id) = frame.as_subr_id() {
         resolve_sym(subr_id).to_string()

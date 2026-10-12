@@ -1195,7 +1195,7 @@ fn combine_after_change_calls_active(ctx: &crate::emacs_core::eval::Context) -> 
             let second = tail.cons_car();
             let rest = tail.cons_cdr();
             if rest.is_nil()
-                && second.is_symbol()
+                && second.is_bare_symbol()
                 && BeforeChangeSpecialFunction::SyntaxPpssFlushCache.is_lisp_value(second)
             {
                 let default_val = ctx
@@ -2301,7 +2301,7 @@ pub(crate) fn builtin_translate_region_internal(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    use super::chartable::{builtin_char_table_subtype, ct_lookup, is_char_table};
+    use super::chartable::{builtin_char_table_subtype, ct_lookup_with_symbols, is_char_table};
     use super::emacs_char::{
         MAX_CHAR, MAX_MULTIBYTE_LENGTH, byte8_to_char, char_string, chars_in_multibyte,
         string_char_advance,
@@ -2323,7 +2323,7 @@ pub(crate) fn builtin_translate_region_internal(
     if is_ct_table {
         let purpose = builtin_char_table_subtype(vec![*table])?;
         let translation_sym = Value::symbol("translation-table");
-        if !super::value::eq_value(&purpose, &translation_sym) {
+        if !super::value::eq_value_swp(&purpose, &translation_sym, eval.symbols_with_pos_enabled) {
             return Err(signal(
                 "error",
                 vec![Value::string("Not a translation table")],
@@ -2453,7 +2453,7 @@ pub(crate) fn builtin_translate_region_internal(
                 }
             } else {
                 // char-table case.
-                let val = ct_lookup(table, oc)?;
+                let val = ct_lookup_with_symbols(table, oc, eval.symbol_mode())?;
                 if let Some(c) = val.as_fixnum() {
                     if (0..=MAX_CHAR as i64).contains(&c) {
                         nc = c;

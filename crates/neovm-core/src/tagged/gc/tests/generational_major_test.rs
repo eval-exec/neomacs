@@ -757,7 +757,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
             .unwrap()
             .key
     };
-    let id = symbol.as_symbol_id().unwrap();
+    let id = symbol.as_bare_symbol_id().unwrap();
     assert!(!is_canonical_id(id));
     let symbol_root = roots.keep(symbol);
     if jit {

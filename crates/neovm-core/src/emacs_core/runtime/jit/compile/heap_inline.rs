@@ -39,9 +39,58 @@
 use super::jit_layout::CONTEXT_TAGGED_HEAP_OFFSET;
 use super::jit_layout::heap::{
     FLOAT_SLOT_BYTES, HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_CONS_CUR,
-    HEAP_JIT_CONS_LIM, HEAP_JIT_FLOAT_CUR, HEAP_JIT_FLOAT_LIM,
+    HEAP_JIT_CONS_LIM, HEAP_JIT_EXCLUSION_LEN, HEAP_JIT_EXCLUSION_LO, HEAP_JIT_FLOAT_CUR,
+    HEAP_JIT_FLOAT_LIM, HEAP_JIT_SINGLE_CONS, HEAP_JIT_SLOT_BARRIER_LEN, HEAP_JIT_SLOT_BARRIER_LO,
 };
 use super::*;
+
+/// Branch preference owned by one compilation. It counts decoded explicit
+/// Cons store sites, never observes Lisp state, and adds no runtime metadata.
+/// A single site favours its range proof; multiple sites favour the retained
+/// exact old-cell proof before admitting their independent fresh-cell range.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ConsStoreProbeOrder {
+    #[default]
+    RangeFirst,
+    ExactFirst,
+}
+
+impl ConsStoreProbeOrder {
+    pub(crate) fn for_ops(ops: &[Op]) -> Self {
+        if ops
+            .iter()
+            .filter(|op| matches!(op, Op::Setcar | Op::Setcdr))
+            .take(2)
+            .count()
+            > 1
+        {
+            Self::ExactFirst
+        } else {
+            Self::RangeFirst
+        }
+    }
+
+    fn probes(self) -> [ConsStoreProbe; 2] {
+        match self {
+            Self::RangeFirst => [ConsStoreProbe::Range, ConsStoreProbe::Exact],
+            Self::ExactFirst => [ConsStoreProbe::Exact, ConsStoreProbe::Range],
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ConsStoreProbe {
+    Exact,
+    Range,
+}
+
+/// Compiler-owned store domain. Cons exemptions never admit vector/record
+/// slots, whose native gate uses its own observation hull. No runtime state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeStoreOwner {
+    Cons,
+    Slots,
+}
 
 thread_local! {
     /// Inline heap sites emitted in the function being lowered.
@@ -102,31 +151,79 @@ pub(crate) fn heap_ptr(fb: &mut FunctionBuilder, rt: &RtCtx) -> ClifValue {
 /// shim or safe point between two sites may have changed it.
 fn emit_barrier_window_check(
     fb: &mut FunctionBuilder,
+    rt: &RtCtx,
     heap: ClifValue,
     owner: ClifValue,
     slow: Block,
+    owner_kind: NativeStoreOwner,
 ) {
-    let lo = fb.ins().load(
-        types::I64,
-        MemFlagsData::trusted(),
-        heap,
-        HEAP_JIT_BARRIER_LO as i32,
-    );
-    let len = fb.ins().load(
-        types::I64,
-        MemFlagsData::trusted(),
-        heap,
-        HEAP_JIT_BARRIER_LEN as i32,
-    );
+    let observed = rt
+        .refs
+        .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
+        && !rt.generational_enabled();
+    let outside = fb.create_block();
+    let first_probe = observed
+        && owner_kind == NativeStoreOwner::Cons
+        && rt.refs.observation_exclusions_enabled();
+    if first_probe {
+        emit_cons_observation_exemptions(fb, heap, owner, outside);
+    }
+    let (lo_offset, len_offset, flags) = match owner_kind {
+        NativeStoreOwner::Slots if observed => (
+            HEAP_JIT_SLOT_BARRIER_LO,
+            HEAP_JIT_SLOT_BARRIER_LEN,
+            MemFlagsData::new().with_notrap(),
+        ),
+        NativeStoreOwner::Cons | NativeStoreOwner::Slots => (
+            HEAP_JIT_BARRIER_LO,
+            HEAP_JIT_BARRIER_LEN,
+            MemFlagsData::trusted(),
+        ),
+    };
+    let lo = fb.ins().load(types::I64, flags, heap, lo_offset as i32);
+    let len = fb.ins().load(types::I64, flags, heap, len_offset as i32);
     let offset = fb.ins().isub(owner, lo);
     let inside = fb.ins().icmp(IntCC::UnsignedLessThan, offset, len);
-    let outside = fb.create_block();
-    // Refine an unobserved hole in the completed-store shim, exactly as for
-    // BLVs. A returning helper before the native store changes register
-    // allocation even when never called; keep this original window CFG.
+    // A pre-capture leaf keeps main's hull rejection byte-for-byte: interior
+    // probes there perturbed its hot loop's register allocation, while the
+    // collection shim already completes any store a later capture exempts.
     fb.ins().brif(inside, slow, &[], outside, &[]);
     fb.switch_to_block(outside);
     fb.seal_block(outside);
+}
+
+/// Negative proofs are current heap protocol, not hoisted owner facts. A
+/// first real read clears them before its certificate snapshots a revision;
+/// ordinary ALL and GEN1 publish zero. No callback or safepoint occurs here.
+/// The exact old-cell admission avoids repeating the hull test, while the
+/// separate empty range admits fresh cells without evicting that old cell.
+fn emit_cons_observation_exemptions(
+    fb: &mut FunctionBuilder,
+    heap: ClifValue,
+    owner: ClifValue,
+    outside: Block,
+) {
+    let flags = MemFlagsData::new().with_notrap();
+    let single = fb
+        .ins()
+        .load(types::I64, flags, heap, HEAP_JIT_SINGLE_CONS as i32);
+    let same = fb.ins().icmp(IntCC::Equal, owner, single);
+    let range = fb.create_block();
+    fb.ins().brif(same, outside, &[], range, &[]);
+    fb.switch_to_block(range);
+    fb.seal_block(range);
+    let lo = fb
+        .ins()
+        .load(types::I64, flags, heap, HEAP_JIT_EXCLUSION_LO as i32);
+    let len = fb
+        .ins()
+        .load(types::I64, flags, heap, HEAP_JIT_EXCLUSION_LEN as i32);
+    let offset = fb.ins().isub(owner, lo);
+    let exempt = fb.ins().icmp(IntCC::UnsignedLessThan, offset, len);
+    let hull = fb.create_block();
+    fb.ins().brif(exempt, outside, &[], hull, &[]);
+    fb.switch_to_block(hull);
+    fb.seal_block(hull);
 }
 
 /// Record an accepted Cons or VecLike store with the existing GEN1 helper.
@@ -174,7 +271,7 @@ pub(crate) fn emit_cons_store_barrier(
     // entry check as ordinary inline cons stores. This is compiler metadata.
     note_inline_site();
     let heap = heap_ptr(fb, rt);
-    emit_barrier_window_check(fb, heap, owner, slow);
+    emit_barrier_window_check(fb, rt, heap, owner, slow, NativeStoreOwner::Cons);
     if !rt.generational_enabled() {
         if jit_gen0_collection_journal_eager() {
             emit_collection_write(fb, rt, owner, TAG_CONS);
@@ -235,7 +332,7 @@ fn emit_slot_store_barrier(
 ) {
     use super::jit_layout::heap::GC_HEADER_TENURED_OFFSET;
     use crate::tagged::header::GcHeader;
-    emit_barrier_window_check(fb, heap, owner, slow);
+    emit_barrier_window_check(fb, rt, heap, owner, slow, NativeStoreOwner::Slots);
     if rt.generational_enabled() && super::lowering::is_known_fixnum(fb, value) {
         emit_collection_write(fb, rt, owner, crate::tagged::value::TAG_VECLIKE);
         return;
@@ -363,6 +460,158 @@ pub(crate) fn emit_inline_cons_store_with_proof(
     } else {
         emit_inline_cons_store(fb, rt, cell, value, is_cdr, slow, res, merge);
     }
+}
+
+/// Explicit setcar/setcdr only: keep negative-proof admissions separate from
+/// the general barrier's shared outside block. BLV/HOF callers retain their
+/// existing helper. This uses the heap's published observation protocol.
+/// Off, Eager and GEN1 delegate before making new blocks, and so does a leaf
+/// compiled before any collection observation: its stores keep main's hull
+/// gate and refuse to the collection shim, which completes any later
+/// observation-dependent store. Cold proof blocks there would only perturb
+/// the hot loop's register allocation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_explicit_cons_store_with_proof(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    cell: ClifValue,
+    value: ClifValue,
+    is_cdr: bool,
+    slow: Block,
+    res: Variable,
+    merge: Block,
+    proof: ConsStoreProof,
+) {
+    let observed = rt
+        .refs
+        .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
+        && !rt.generational_enabled();
+    if !observed || !rt.refs.observation_exclusions_enabled() {
+        emit_inline_cons_store_with_proof(fb, rt, cell, value, is_cdr, slow, res, merge, proof);
+        return;
+    }
+    if !matches!(proof, ConsStoreProof::GuardedCons(checked) if checked == cell) {
+        let tag = band_imm_p(fb, cell, TAG_MASK as i64);
+        let is_cons = icmp_imm_p(fb, IntCC::Equal, tag, TAG_CONS as i64);
+        let typed = fb.create_block();
+        fb.ins().brif(is_cons, typed, &[], slow, &[]);
+        fb.switch_to_block(typed);
+        fb.seal_block(typed);
+    }
+    note_inline_site();
+    // The extra interactive refusal paths must not retain the entry's heap
+    // SSA across the loop. This Context owns the stable box and no callback
+    // or safepoint intervenes in this store site.
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let heap = load_heap_ptr(fb, vmctx);
+    for (probe_index, probe) in rt.cons_store_probe_order.probes().into_iter().enumerate() {
+        let flags = MemFlagsData::new().with_notrap();
+        let admitted = match probe {
+            ConsStoreProbe::Exact => {
+                let single = fb
+                    .ins()
+                    .load(types::I64, flags, heap, HEAP_JIT_SINGLE_CONS as i32);
+                let owner = if probe_index == 0 {
+                    iadd_imm_p(fb, cell, -(TAG_CONS as i64))
+                } else {
+                    // Keep refusal-path addresses separate from the hot
+                    // owner's destructive subtraction.
+                    band_imm_p(fb, cell, !(TAG_MASK as i64))
+                };
+                fb.ins().icmp(IntCC::Equal, owner, single)
+            }
+            ConsStoreProbe::Range => {
+                let owner = if probe_index == 0 {
+                    iadd_imm_p(fb, cell, -(TAG_CONS as i64))
+                } else {
+                    // This owner has passed the tag guard. Masking is
+                    // equivalent, but keeps refusal-path owner SSA separate.
+                    band_imm_p(fb, cell, !(TAG_MASK as i64))
+                };
+                let len = fb
+                    .ins()
+                    .load(types::I64, flags, heap, HEAP_JIT_EXCLUSION_LEN as i32);
+                // Keep LO adjacent to SUB so x86 lowering can fold its load.
+                let lo = fb
+                    .ins()
+                    .load(types::I64, flags, heap, HEAP_JIT_EXCLUSION_LO as i32);
+                let offset = fb.ins().isub(owner, lo);
+                fb.ins().icmp(IntCC::UnsignedLessThan, offset, len)
+            }
+        };
+        let store = fb.create_block();
+        let next_probe = fb.create_block();
+        fb.ins().brif(admitted, store, &[], next_probe, &[]);
+        fb.switch_to_block(store);
+        fb.seal_block(store);
+        emit_direct_admitted_cons_store(fb, cell, value, is_cdr, res, merge);
+        fb.switch_to_block(next_probe);
+        fb.seal_block(next_probe);
+    }
+    let owner = band_imm_p(fb, cell, !(TAG_MASK as i64));
+    emit_explicit_cons_hull_admission(fb, heap, owner, cell, value, is_cdr, res, merge, slow);
+    #[cfg(debug_assertions)]
+    INLINE_HEAP_STORES_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Keep each hull-outside admission adjacent to its store too. The rejected
+/// edge is the caller's existing collection shim.
+#[allow(clippy::too_many_arguments)]
+fn emit_explicit_cons_hull_admission(
+    fb: &mut FunctionBuilder,
+    heap: ClifValue,
+    owner: ClifValue,
+    cell: ClifValue,
+    value: ClifValue,
+    is_cdr: bool,
+    res: Variable,
+    merge: Block,
+    rejected: Block,
+) {
+    let lo = fb.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        heap,
+        HEAP_JIT_BARRIER_LO as i32,
+    );
+    let len = fb.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        heap,
+        HEAP_JIT_BARRIER_LEN as i32,
+    );
+    let offset = fb.ins().isub(owner, lo);
+    let inside = fb.ins().icmp(IntCC::UnsignedLessThan, offset, len);
+    let hull_store = fb.create_block();
+    fb.ins().brif(inside, rejected, &[], hull_store, &[]);
+    fb.switch_to_block(hull_store);
+    fb.seal_block(hull_store);
+    emit_direct_admitted_cons_store(fb, cell, value, is_cdr, res, merge);
+}
+
+/// Address through the tagged SSA cell so each admitted edge can fold the
+/// constant untagging into its store, without an owner merge/register copy.
+fn emit_direct_admitted_cons_store(
+    fb: &mut FunctionBuilder,
+    cell: ClifValue,
+    value: ClifValue,
+    is_cdr: bool,
+    res: Variable,
+    merge: Block,
+) {
+    let field = if is_cdr {
+        core::mem::offset_of!(ConsCell, cdr_or_next)
+    } else {
+        core::mem::offset_of!(ConsCell, car)
+    };
+    fb.ins().store(
+        MemFlagsData::trusted(),
+        value,
+        cell,
+        field as i32 - TAG_CONS as i32,
+    );
+    fb.def_var(res, value);
+    fb.ins().jump(merge, &[]);
 }
 
 /// `aset` of a plain vector or record, inline — GNU `Baset`'s in-bytecode

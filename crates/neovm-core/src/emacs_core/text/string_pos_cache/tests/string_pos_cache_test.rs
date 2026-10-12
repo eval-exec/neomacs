@@ -107,3 +107,38 @@ fn a_changed_string_never_answers_from_the_cache() {
     assert_eq!(string_char_to_byte(value, s, 1), 2);
     assert_eq!(string_byte_to_char(value, s, 2), 1);
 }
+
+#[test]
+fn clear_string_invalidates_cached_pair_after_shape_change() {
+    crate::test_utils::init_test_tracing();
+    reset_string_pos_cache();
+    let value = Value::heap_string(LispString::from_emacs_bytes("aжжb".as_bytes().to_vec()));
+    assert_eq!(
+        string_char_to_byte(value, value.as_lisp_string().unwrap(), 2),
+        3
+    );
+    assert!(cached_pair(value, value.as_lisp_string().unwrap()).is_some());
+    crate::emacs_core::buffer::builtin_clear_string(vec![value]).unwrap();
+    let cleared = value.as_lisp_string().unwrap();
+    assert!(
+        cached_pair(value, cleared).is_none(),
+        "the cached multibyte position must not survive clear-string"
+    );
+    assert_eq!(string_char_to_byte(value, cleared, 2), 2);
+    assert_eq!(string_byte_to_char(value, cleared, 3), 3);
+
+    // Byte mutation also invalidates a cached entry on a different owner. Its
+    // backing pointer and length stay unchanged, so this exercises the epoch.
+    let other = Value::heap_string(LispString::from_emacs_bytes("aжжb".as_bytes().to_vec()));
+    assert_eq!(
+        string_char_to_byte(other, other.as_lisp_string().unwrap(), 2),
+        3
+    );
+    assert!(cached_pair(other, other.as_lisp_string().unwrap()).is_some());
+    crate::emacs_core::buffer::builtin_clear_string(vec![value]).unwrap();
+    assert!(cached_pair(other, other.as_lisp_string().unwrap()).is_none());
+    assert_eq!(
+        string_char_to_byte(other, other.as_lisp_string().unwrap(), 2),
+        3
+    );
+}

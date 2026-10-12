@@ -1092,6 +1092,7 @@ pub(crate) fn detected_coding_name(
     coding_system: &str,
     bytes: &[u8],
     block: crate::emacs_core::coding::SourceBlock,
+    mode: crate::tagged::SymbolMode,
 ) -> Option<&'static str> {
     let base = coding_system_base(coding_system);
     let found = match base {
@@ -1101,6 +1102,7 @@ pub(crate) fn detected_coding_name(
                 bytes,
                 base == "prefer-utf-8",
                 block,
+                mode,
             )?);
             // A detection result of `undecided` is this engine's spelling of
             // GNU's nil `found`.
@@ -2109,15 +2111,15 @@ fn context_coding_name(
     ctx: &crate::emacs_core::eval::Context,
     coding_arg: Value,
 ) -> Result<String, crate::emacs_core::error::Flow> {
-    let name = match coding_arg.kind() {
-        ValueKind::Nil => "no-conversion".to_owned(),
-        ValueKind::Symbol(id) => resolve_sym(id).to_owned(),
-        _ => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("symbolp"), coding_arg],
-            ));
-        }
+    let name = if coding_arg.is_nil() {
+        "no-conversion".to_owned()
+    } else if let Some(id) = coding_arg.as_symbol_id(ctx.symbol_mode()) {
+        resolve_sym(id).to_owned()
+    } else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), coding_arg],
+        ));
     };
     validate_coding_system(&name, coding_arg, |candidate| {
         ctx.coding_systems.is_known_or_derived(candidate)
@@ -2142,6 +2144,7 @@ fn canonical_context_coding_name(_ctx: &crate::emacs_core::eval::Context, name: 
 
 fn coding_region_destination(
     arg: Option<Value>,
+    mode: crate::tagged::SymbolMode,
 ) -> Result<Option<Option<crate::buffer::BufferId>>, crate::emacs_core::error::Flow> {
     let Some(value) = arg else {
         return Ok(Some(None));
@@ -2149,7 +2152,7 @@ fn coding_region_destination(
     if value.is_nil() {
         return Ok(Some(None));
     }
-    if value.is_t() {
+    if mode.unwrap(value).is_t() {
         return Ok(None);
     }
     if let Some(buffer_id) = value.as_buffer_id() {
@@ -2395,11 +2398,12 @@ fn insert_coding_result(
 
 fn coding_string_destination(
     arg: Option<Value>,
+    mode: crate::tagged::SymbolMode,
 ) -> Result<Option<crate::buffer::BufferId>, crate::emacs_core::error::Flow> {
     let Some(value) = arg else {
         return Ok(None);
     };
-    if value.is_nil() || value.is_t() {
+    if value.is_nil() || mode.unwrap(value).is_t() {
         return Ok(None);
     }
     value.as_buffer_id().map(Some).ok_or_else(|| {
@@ -3433,7 +3437,7 @@ fn euc_iso2022_spec(
     if resolve_sym(info.coding_type) != "iso-2022" {
         return None;
     }
-    let spec = crate::emacs_core::coding::iso2022_spec(info)?;
+    let spec = crate::emacs_core::coding::iso2022_spec(info, ctx.symbol_mode())?;
     use crate::emacs_core::coding::IsoFlag;
     if spec.flags.contains(IsoFlag::SevenBits) || spec.flags.contains(IsoFlag::Designation) {
         return None;
@@ -4045,7 +4049,10 @@ fn coding_ascii_identity_fast_path(
     encode: bool,
     eol_conversion: crate::emacs_core::coding::EolConversion,
 ) -> bool {
-    if !ctx.coding_systems.is_ascii_compatible(coding) {
+    if !ctx
+        .coding_systems
+        .is_ascii_compatible(coding, ctx.symbol_mode())
+    {
         return false;
     }
     if ctx.coding_systems.get(coding_system_base(coding)).is_none() {
@@ -4350,6 +4357,7 @@ fn run_coding_with_conversion_hook(
             vec![source_arg, Value::symbol(&body)],
             |_| true,
             ctx.eol_conversion(),
+            crate::tagged::SymbolMode::Bare,
         )?;
         let decoded_str = ctx.lisp_string(decoded).ok_or_else(|| {
             signal(
@@ -4595,7 +4603,7 @@ fn full_iso2022_spec(
     if resolve_sym(info.coding_type) != "iso-2022" {
         return None;
     }
-    let spec = crate::emacs_core::coding::iso2022_spec(info)?;
+    let spec = crate::emacs_core::coding::iso2022_spec(info, ctx.symbol_mode())?;
     use crate::emacs_core::coding::IsoFlag;
     if !(spec.flags.contains(IsoFlag::SevenBits) || spec.flags.contains(IsoFlag::Designation)) {
         return None;
@@ -4667,12 +4675,14 @@ fn encode_via_ccl(
     spec: crate::emacs_core::coding::CclCodingSpec,
     coding: &str,
     boundary: EncodingBoundary,
+    mode: crate::tagged::SymbolMode,
 ) -> Result<Vec<u8>, crate::emacs_core::error::Flow> {
     let input = ccl_encoding_input(source, coding);
-    let output = crate::emacs_core::ccl::execute_compiled_ccl(
+    let output = crate::emacs_core::ccl::execute_compiled_ccl_with_symbols(
         spec.encoder,
         &input,
         boundary.owns_end_of_stream(),
+        mode,
     )?;
     Ok(output.into_iter().map(|code| code as u8).collect())
 }
@@ -4681,12 +4691,18 @@ fn decode_via_ccl(
     source: &[u8],
     spec: crate::emacs_core::coding::CclCodingSpec,
     coding: &str,
+    mode: crate::tagged::SymbolMode,
 ) -> Result<Vec<u8>, crate::emacs_core::error::Flow> {
     let input = source
         .iter()
         .map(|byte| i64::from(*byte))
         .collect::<Vec<_>>();
-    let output = crate::emacs_core::ccl::execute_compiled_ccl(spec.decoder, &input, true)?;
+    let output = crate::emacs_core::ccl::execute_compiled_ccl_with_symbols(
+        spec.decoder,
+        &input,
+        true,
+        mode,
+    )?;
     let output = decode_ccl_eol(output, coding);
     let mut bytes = Vec::with_capacity(output.len());
     let mut buffer = [0u8; crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH];
@@ -5081,6 +5097,7 @@ fn detect_undecided_coding(
     bytes: &[u8],
     prefer_utf_8: bool,
     block: crate::emacs_core::coding::SourceBlock,
+    mode: crate::tagged::SymbolMode,
 ) -> Option<crate::emacs_core::intern::SymId> {
     // `prefer-utf-8` raises UTF-8 ahead of the configured category priority --
     // GNU's `prefer_utf_8 && detect_coding_utf_8 (coding, &detect_info)`
@@ -5095,6 +5112,7 @@ fn detect_undecided_coding(
         coding_systems,
         bytes,
         block,
+        mode,
     )
 }
 
@@ -5236,6 +5254,11 @@ fn builtin_coding_string_in_context(
             vec![Value::symbol("stringp"), args[0]],
         )
     })?;
+    // GNU CHECK_CODING_SYSTEM/setup_coding_system precedes Lisp conversion
+    // callbacks (coding.c:9601-9605); the selected coding remains valid even
+    // if a callback later changes symbols-with-pos-enabled.
+    let coding_symbol_mode = ctx.symbol_mode();
+    let requested_coding = args[1];
     let mut coding = context_coding_name(ctx, args[1])?;
     // `last-coding-system-used' reports the name the caller passed, not the
     // system the codec resolved to, so keep it before any rewriting below.
@@ -5266,7 +5289,7 @@ fn builtin_coding_string_in_context(
             args[1] = Value::symbol(&coding);
         }
     }
-    let destination = coding_string_destination(args.get(3).copied())?;
+    let destination = coding_string_destination(args.get(3).copied(), coding_symbol_mode)?;
     // GNU `code_convert_string`'s identity fast path (src/coding.c:9609-9628).
     // It runs BEFORE detection and before any conversion, and only for a `Qt`
     // destination -- which is why a BUFFER destination reports the resolved
@@ -5285,7 +5308,11 @@ fn builtin_coding_string_in_context(
         if entry.reports_coding_result() {
             ctx.set_variable(
                 "last-coding-system-used",
-                Value::symbol(canonical_context_coding_name(ctx, &reported_coding)),
+                if requested_coding.is_nil() {
+                    Value::symbol("no-conversion")
+                } else {
+                    requested_coding
+                },
             );
         }
         if coding_string_nocopy(&args) {
@@ -5325,6 +5352,7 @@ fn builtin_coding_string_in_context(
                 // raise it before converting, `decode_coding_gap` detects
                 // before raising it.  See `CodingEntry::detection`.
                 block,
+                ctx.symbol_mode(),
             )
             .ok_or_else(|| {
                 signal(
@@ -5639,7 +5667,13 @@ fn builtin_coding_string_in_context(
             bytes.extend(encode_utf8_plain(&source));
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some(spec) = ccl_coding {
-            let bytes = encode_via_ccl(&source_string(), spec, &coding, encoding_boundary)?;
+            let bytes = encode_via_ccl(
+                &source_string(),
+                spec,
+                &coding,
+                encoding_boundary,
+                ctx.symbol_mode(),
+            )?;
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some((spec, charsets)) = &full_iso {
             let source = source_string();
@@ -5662,7 +5696,12 @@ fn builtin_coding_string_in_context(
             let bytes = encode_via_charset_list(&source_string(), charset_list);
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else {
-            builtin_encode_coding_string_with_known(args, |_| true, encode_eol_conversion)?
+            builtin_encode_coding_string_with_known(
+                args,
+                |_| true,
+                encode_eol_conversion,
+                coding_symbol_mode,
+            )?
         }
     } else {
         // GNU's decoders, each of which reports `coding->consumed` for itself;
@@ -5720,7 +5759,7 @@ fn builtin_coding_string_in_context(
             // (src/coding.c:5185), so a CCL coding system across a subprocess
             // read boundary is the one decoder still owed an answer.
             Some(DecodedSource::whole(
-                decode_via_ccl(&source_bytes, spec, &coding)?,
+                decode_via_ccl(&source_bytes, spec, &coding, ctx.symbol_mode())?,
                 &source_bytes,
             ))
         } else if let Some((spec, _)) = &full_iso {
@@ -5762,7 +5801,12 @@ fn builtin_coding_string_in_context(
             // source by construction rather than by default.
             None => {
                 run.record(SourceConsumed::all(&source_bytes));
-                builtin_decode_coding_string_with_known(args, |_| true, ctx.eol_conversion())?
+                builtin_decode_coding_string_with_known(
+                    args,
+                    |_| true,
+                    ctx.eol_conversion(),
+                    coding_symbol_mode,
+                )?
             }
         }
     };
@@ -5967,7 +6011,7 @@ fn encode_external_text_with_boundary(
         .to_vec();
     let coding_system = ctx
         .visible_variable_value_or_nil("last-coding-system-used")
-        .as_symbol_id()
+        .as_bare_symbol_id()
         .filter(|&symbol| symbol != intern("nil"))
         .expect("a successful context-aware encode records its concrete coding system");
     Ok(EncodedTextBytes {
@@ -6076,7 +6120,7 @@ pub(crate) fn decode_file_bytes_in_context(
         .clone();
     let coding_system = ctx
         .visible_variable_value_or_nil("last-coding-system-used")
-        .as_symbol_id()
+        .as_bare_symbol_id()
         .filter(|&symbol| symbol != intern("nil"))
         .expect("a successful context-aware decode records its concrete coding system");
     Ok(DecodedFileBytes {
@@ -6136,7 +6180,7 @@ pub(crate) fn decode_process_run_in_context(
     // the same variable `read_process_output_set_last_coding_system` writes.
     let used = ctx
         .visible_variable_value_or_nil("last-coding-system-used")
-        .as_symbol_id()
+        .as_bare_symbol_id()
         .filter(|&symbol| symbol != intern("nil"))
         .expect("a successful context-aware decode records its concrete coding system");
     Ok(DecodedProcessRun {
@@ -6200,7 +6244,7 @@ fn builtin_coding_region(
     expect_args_range(name, &args, 3, 4)?;
 
     let coding = context_coding_name(ctx, args[2])?;
-    let mut destination = coding_region_destination(args.get(3).copied())?;
+    let mut destination = coding_region_destination(args.get(3).copied(), ctx.symbol_mode())?;
     // A DESTINATION that is the current buffer means in-place conversion
     // (GNU `code_convert_region` with dst_object == the source buffer), not an
     // insertion that would duplicate the text.
@@ -6465,6 +6509,7 @@ pub(crate) fn builtin_encode_coding_string(args: Vec<Value>) -> EvalResult {
         args,
         known_coding_system,
         crate::emacs_core::coding::EolConversion::Enabled,
+        crate::tagged::SymbolMode::Bare,
     )
 }
 
@@ -6472,6 +6517,7 @@ pub(crate) fn builtin_encode_coding_string_with_known(
     args: Vec<Value>,
     known: impl FnOnce(&str) -> bool,
     eol_conversion: crate::emacs_core::coding::EolConversion,
+    mode: crate::tagged::SymbolMode,
 ) -> EvalResult {
     expect_min_args("encode-coding-string", &args, 2)?;
     if args.len() > 4 {
@@ -6489,22 +6535,22 @@ pub(crate) fn builtin_encode_coding_string_with_known(
             vec![Value::symbol("stringp"), args[0]],
         )
     })?;
-    let coding = match args[1].kind() {
-        ValueKind::Nil => {
-            return if coding_string_nocopy(&args) {
-                Ok(args[0])
-            } else {
-                copy_lisp_string_value(args[0])
-            };
-        }
-        ValueKind::Symbol(id) => resolve_sym(id).to_owned(),
-        _other => {
-            return Err(signal(
+    if args[1].is_nil() {
+        return if coding_string_nocopy(&args) {
+            Ok(args[0])
+        } else {
+            copy_lisp_string_value(args[0])
+        };
+    }
+    let coding = args[1]
+        .as_symbol_id(mode)
+        .map(|id| resolve_sym(id).to_owned())
+        .ok_or_else(|| {
+            signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), args[1]],
-            ));
-        }
-    };
+            )
+        })?;
     validate_coding_system(&coding, args[1], known)?;
     if coding_string_nocopy(&args)
         && coding_string_trivial_ascii_nocopy(string.as_bytes(), &coding, true)
@@ -6526,6 +6572,7 @@ pub(crate) fn builtin_decode_coding_string(args: Vec<Value>) -> EvalResult {
         args,
         known_coding_system,
         crate::emacs_core::coding::EolConversion::Enabled,
+        crate::tagged::SymbolMode::Bare,
     )
 }
 
@@ -6533,6 +6580,7 @@ pub(crate) fn builtin_decode_coding_string_with_known(
     args: Vec<Value>,
     known: impl FnOnce(&str) -> bool,
     eol_conversion: crate::emacs_core::coding::EolConversion,
+    mode: crate::tagged::SymbolMode,
 ) -> EvalResult {
     expect_min_args("decode-coding-string", &args, 2)?;
     if args.len() > 4 {
@@ -6550,22 +6598,22 @@ pub(crate) fn builtin_decode_coding_string_with_known(
             vec![Value::symbol("stringp"), args[0]],
         )
     })?;
-    let coding = match args[1].kind() {
-        ValueKind::Nil => {
-            return if coding_string_nocopy(&args) {
-                Ok(args[0])
-            } else {
-                copy_lisp_string_value(args[0])
-            };
-        }
-        ValueKind::Symbol(id) => resolve_sym(id).to_owned(),
-        _other => {
-            return Err(signal(
+    if args[1].is_nil() {
+        return if coding_string_nocopy(&args) {
+            Ok(args[0])
+        } else {
+            copy_lisp_string_value(args[0])
+        };
+    }
+    let coding = args[1]
+        .as_symbol_id(mode)
+        .map(|id| resolve_sym(id).to_owned())
+        .ok_or_else(|| {
+            signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), args[1]],
-            ));
-        }
-    };
+            )
+        })?;
     validate_coding_system(&coding, args[1], known)?;
     let bytes = lisp_string_coding_source_bytes(s);
     if coding_string_nocopy(&args) && coding_string_trivial_ascii_nocopy(&bytes, &coding, false) {

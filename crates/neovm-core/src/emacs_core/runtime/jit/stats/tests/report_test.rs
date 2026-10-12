@@ -394,14 +394,15 @@ fn jit_final_report_collects_named_leaves_from_a_context() {
     f.seal_hand_assembled_ops();
     let sym = Value::symbol("jit-report-add");
     ev.obarray
-        .set_symbol_function_id(sym.as_symbol_id().unwrap(), Value::make_bytecode(f));
+        .set_symbol_function_id(sym.as_bare_symbol_id().unwrap(), Value::make_bytecode(f));
     let fval = ev
         .obarray
-        .symbol_function_id(sym.as_symbol_id().unwrap())
+        .symbol_function_id(sym.as_bare_symbol_id().unwrap())
         .expect("bound");
     let bc = fval.get_bytecode_data().expect("bytecode");
     let ctx = &mut ev as *mut Context;
-    let run = |arg: Value| crate::emacs_core::jit::try_run_compiled(ctx, bc, fval, &[arg]);
+    let run =
+        |arg: Value| crate::emacs_core::jit::test_support::run_compiled(ctx, bc, fval, &[arg]);
     assert_eq!(
         run(Value::make_int(41)).expect("no signal"),
         Some(Value::make_int(42).bits())

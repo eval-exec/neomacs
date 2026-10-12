@@ -204,7 +204,7 @@ fn recipe_round_trips_string_symbol_cons() {
     );
     assert_eq!(
         crate::emacs_core::intern::resolve_sym(
-            rebuilt.cons_cdr().cons_car().as_symbol_id().unwrap()
+            rebuilt.cons_cdr().cons_car().as_bare_symbol_id().unwrap()
         ),
         "my-sym"
     );
@@ -502,7 +502,7 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
         .iter()
         .map(|v| {
             crate::emacs_core::intern::resolve_sym(
-                v.as_symbol_id().expect("reloc const is a symbol"),
+                v.as_bare_symbol_id().expect("reloc const is a symbol"),
             )
         })
         .collect();
@@ -521,12 +521,12 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
     // (consp '(1)) → 'yes ; (consp 5) → 'no.
     let cons_arg = Value::cons(Value::make_int(1), Value::NIL);
     assert_eq!(
-        call(cons_arg).as_symbol_id(),
+        call(cons_arg).as_bare_symbol_id(),
         Some(crate::emacs_core::intern::intern("aot-yes")),
         "consp arg → 'aot-yes (by current-session SymId)"
     );
     assert_eq!(
-        call(Value::make_int(5)).as_symbol_id(),
+        call(Value::make_int(5)).as_bare_symbol_id(),
         Some(crate::emacs_core::intern::intern("aot-no")),
         "non-consp arg → 'aot-no"
     );
@@ -546,7 +546,7 @@ fn aot_gensym_symbol_const_is_rejected_stays_jit() {
     // An uninterned (gensym) symbol — name not registered as canonical.
     let gensym = Value::symbol(crate::emacs_core::intern::intern_uninterned("g$decoy"));
     assert!(
-        !crate::emacs_core::intern::is_canonical_id(gensym.as_symbol_id().unwrap()),
+        !crate::emacs_core::intern::is_canonical_id(gensym.as_bare_symbol_id().unwrap()),
         "precondition: the gensym is non-canonical"
     );
     // write_value_recipe must REFUSE the gensym (the load-bearing guard).
@@ -1213,7 +1213,7 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
         .symbol_function_id(sym)
         .and_then(|v| v.get_bytecode_data())
         .expect("bc");
-    let got = super::super::cache::try_run_compiled(
+    let got = crate::emacs_core::jit::test_support::run_compiled(
         std::ptr::null_mut(),
         f,
         Value::NIL,
@@ -1959,4 +1959,38 @@ fn aot_switch_bodies_stay_jit_only() {
         (stats.candidates, stats.prepared, stats.skipped_unsupported),
         (1, 0, 1)
     );
+}
+
+#[test]
+fn issue554_throw_stays_jit_only_under_frozen_aot_imports() {
+    let ordinary_ops = [Op::Constant(0), Op::Constant(1), Op::Cons, Op::Return];
+    let (object, _) = build_baseline_object_for_leaf(
+        &ordinary_ops,
+        &[Value::fixnum(1), Value::fixnum(2)],
+        0,
+        None,
+    )
+    .expect("ordinary AOT emission")
+    .expect("supported ordinary AOT body");
+    let file = object::File::parse(&*object).expect("AOT object");
+    assert!(
+        !file.symbols().any(|symbol| {
+            symbol.is_undefined() && symbol.name() == Ok("neovm_jit_throw_with_symbols")
+        }),
+        "unused Context throw shim must not be declared into AOT"
+    );
+    let ops = [Op::Constant(0), Op::Constant(1), Op::Throw, Op::Return];
+    let constants = [Value::symbol("issue554-aot-throw"), Value::fixnum(9)];
+    // The producer's existing allowlist returns an ordinary JIT fallback.
+    assert!(
+        compile_leaf_to_object(&ops, &constants, 0, None)
+            .expect("production AOT gate")
+            .is_none()
+    );
+    // Even a caller bypassing that allowlist cannot import an unsalted shim
+    // or quietly use the legacy bare-policy ABI45 throw helper.
+    assert!(matches!(
+        build_baseline_object_for_leaf(&ops, &constants, 0, None),
+        Err(CompileError::UnsupportedOp("aot-throw-symbol-policy"))
+    ));
 }

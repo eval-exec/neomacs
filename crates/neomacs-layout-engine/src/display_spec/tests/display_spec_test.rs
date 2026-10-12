@@ -278,11 +278,11 @@ fn parse_display_fringe_layout_left_with_face() {
     ]))
     .expect("left fringe layout");
     assert_eq!(layout.side, DisplayFringeSide::Left);
-    assert!(layout.bitmap.is_symbol_named("magit-fringe-bitmap>"));
+    assert!(layout.bitmap.is_bare_symbol_named("magit-fringe-bitmap>"));
     assert!(
         layout
             .face
-            .is_some_and(|f| f.is_symbol_named("magit-section-heading"))
+            .is_some_and(|f| f.is_bare_symbol_named("magit-section-heading"))
     );
 }
 
@@ -295,7 +295,7 @@ fn parse_display_fringe_layout_right_without_face() {
     ]))
     .expect("right fringe layout");
     assert_eq!(layout.side, DisplayFringeSide::Right);
-    assert!(layout.bitmap.is_symbol_named("right-arrow"));
+    assert!(layout.bitmap.is_bare_symbol_named("right-arrow"));
     assert!(layout.face.is_none());
 }
 

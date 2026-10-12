@@ -30,7 +30,7 @@ fn inline_census_classifies_sites_without_mutating_sources() {
     let target = Value::make_bytecode(callee);
     let named = Value::symbol("inline-census-named");
     ev.obarray
-        .set_symbol_function_id(named.as_symbol_id().unwrap(), target);
+        .set_symbol_function_id(named.as_bare_symbol_id().unwrap(), target);
     let caller = function(
         1,
         vec![

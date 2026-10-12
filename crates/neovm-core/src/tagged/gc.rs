@@ -912,6 +912,54 @@ pub struct TaggedHeap {
     /// A claims-only carrier has disabled measurement; the two facilities
     /// retain independent history, snapshot and per-mutator log lifetimes.
     census: Option<Box<GenCensus>>,
+    /// Native GEN0's exclusion, exact-cons admission and vector/record window
+    /// words, encoded in separate
+    /// one-byte Cells. A single size-16 field sorts ahead of the old byte tail
+    /// in Rust's layout; these size-one fields retain the old field offsets.
+    /// Contiguity is asserted in barrier_window before generated code reads
+    /// each unaligned word. Only this heap's executing mutator publishes;
+    /// the GC worker never reads these Cells, and publication has no callback
+    /// or safepoint, matching the JitHeapState Cells' contract.
+    compiled_observation_exclusion_00: Cell<u8>,
+    compiled_observation_exclusion_01: Cell<u8>,
+    compiled_observation_exclusion_02: Cell<u8>,
+    compiled_observation_exclusion_03: Cell<u8>,
+    compiled_observation_exclusion_04: Cell<u8>,
+    compiled_observation_exclusion_05: Cell<u8>,
+    compiled_observation_exclusion_06: Cell<u8>,
+    compiled_observation_exclusion_07: Cell<u8>,
+    compiled_observation_exclusion_08: Cell<u8>,
+    compiled_observation_exclusion_09: Cell<u8>,
+    compiled_observation_exclusion_10: Cell<u8>,
+    compiled_observation_exclusion_11: Cell<u8>,
+    compiled_observation_exclusion_12: Cell<u8>,
+    compiled_observation_exclusion_13: Cell<u8>,
+    compiled_observation_exclusion_14: Cell<u8>,
+    compiled_observation_exclusion_15: Cell<u8>,
+    compiled_observation_exclusion_16: Cell<u8>,
+    compiled_observation_exclusion_17: Cell<u8>,
+    compiled_observation_exclusion_18: Cell<u8>,
+    compiled_observation_exclusion_19: Cell<u8>,
+    compiled_observation_exclusion_20: Cell<u8>,
+    compiled_observation_exclusion_21: Cell<u8>,
+    compiled_observation_exclusion_22: Cell<u8>,
+    compiled_observation_exclusion_23: Cell<u8>,
+    compiled_observation_exclusion_24: Cell<u8>,
+    compiled_observation_exclusion_25: Cell<u8>,
+    compiled_observation_exclusion_26: Cell<u8>,
+    compiled_observation_exclusion_27: Cell<u8>,
+    compiled_observation_exclusion_28: Cell<u8>,
+    compiled_observation_exclusion_29: Cell<u8>,
+    compiled_observation_exclusion_30: Cell<u8>,
+    compiled_observation_exclusion_31: Cell<u8>,
+    compiled_observation_exclusion_32: Cell<u8>,
+    compiled_observation_exclusion_33: Cell<u8>,
+    compiled_observation_exclusion_34: Cell<u8>,
+    compiled_observation_exclusion_35: Cell<u8>,
+    compiled_observation_exclusion_36: Cell<u8>,
+    compiled_observation_exclusion_37: Cell<u8>,
+    compiled_observation_exclusion_38: Cell<u8>,
+    compiled_observation_exclusion_39: Cell<u8>,
 }
 
 impl Default for TaggedHeap {
@@ -1121,6 +1169,46 @@ impl TaggedHeap {
             dump_addr_hi: 0,
             vec_scan: knobs::vec_scan_mode(),
             census: GenCensus::from_knob(),
+            compiled_observation_exclusion_00: Cell::new(0),
+            compiled_observation_exclusion_01: Cell::new(0),
+            compiled_observation_exclusion_02: Cell::new(0),
+            compiled_observation_exclusion_03: Cell::new(0),
+            compiled_observation_exclusion_04: Cell::new(0),
+            compiled_observation_exclusion_05: Cell::new(0),
+            compiled_observation_exclusion_06: Cell::new(0),
+            compiled_observation_exclusion_07: Cell::new(0),
+            compiled_observation_exclusion_08: Cell::new(0),
+            compiled_observation_exclusion_09: Cell::new(0),
+            compiled_observation_exclusion_10: Cell::new(0),
+            compiled_observation_exclusion_11: Cell::new(0),
+            compiled_observation_exclusion_12: Cell::new(0),
+            compiled_observation_exclusion_13: Cell::new(0),
+            compiled_observation_exclusion_14: Cell::new(0),
+            compiled_observation_exclusion_15: Cell::new(0),
+            compiled_observation_exclusion_16: Cell::new(0),
+            compiled_observation_exclusion_17: Cell::new(0),
+            compiled_observation_exclusion_18: Cell::new(0),
+            compiled_observation_exclusion_19: Cell::new(0),
+            compiled_observation_exclusion_20: Cell::new(0),
+            compiled_observation_exclusion_21: Cell::new(0),
+            compiled_observation_exclusion_22: Cell::new(0),
+            compiled_observation_exclusion_23: Cell::new(0),
+            compiled_observation_exclusion_24: Cell::new(0),
+            compiled_observation_exclusion_25: Cell::new(0),
+            compiled_observation_exclusion_26: Cell::new(0),
+            compiled_observation_exclusion_27: Cell::new(0),
+            compiled_observation_exclusion_28: Cell::new(0),
+            compiled_observation_exclusion_29: Cell::new(0),
+            compiled_observation_exclusion_30: Cell::new(0),
+            compiled_observation_exclusion_31: Cell::new(0),
+            compiled_observation_exclusion_32: Cell::new(0),
+            compiled_observation_exclusion_33: Cell::new(0),
+            compiled_observation_exclusion_34: Cell::new(0),
+            compiled_observation_exclusion_35: Cell::new(0),
+            compiled_observation_exclusion_36: Cell::new(0),
+            compiled_observation_exclusion_37: Cell::new(0),
+            compiled_observation_exclusion_38: Cell::new(0),
+            compiled_observation_exclusion_39: Cell::new(0),
         };
         if knobs::concurrent_claims_on() {
             heap.install_concurrent_claims();
@@ -2699,8 +2787,9 @@ mod barrier_window;
 #[cfg(feature = "jit")]
 pub(crate) use barrier_window::neovm_jit_unobserved_collection_owner;
 pub(crate) use barrier_window::{
-    BarrierWindow, CompiledObservationGate, current_collection_dump_window,
-    publish_collection_observation_window,
+    BarrierWindow, CompiledObservationGate, HEAP_JIT_EXCLUSION_LEN, HEAP_JIT_EXCLUSION_LO,
+    HEAP_JIT_SINGLE_CONS, HEAP_JIT_SLOT_BARRIER_LEN, HEAP_JIT_SLOT_BARRIER_LO,
+    current_collection_dump_window, publish_collection_observation_window,
 };
 
 mod jit_state;
@@ -2840,3 +2929,7 @@ mod major_symbol_preimage_tests;
 #[cfg(test)]
 #[path = "gc/tests/symbol_barrier_test.rs"]
 mod symbol_barrier_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/chartable_contract_test.rs"]
+mod chartable_contract_tests;

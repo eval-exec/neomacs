@@ -99,6 +99,7 @@ fn recursive_edit_entry_and_unwind_refresh_all_mode_lines() {
                 map,
                 &[Value::fixnum('q' as i64)],
                 Value::symbol("neo-leave-recursive-edit"),
+                crate::tagged::SymbolMode::Bare,
             )
             .unwrap();
             let (sender, receiver) = crossbeam_channel::unbounded();

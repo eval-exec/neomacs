@@ -1,0 +1,20 @@
+error[E0277]: `Cell<()>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/arm64_macos/generic/../../scan_storage_lease_sync.rs
+  |
+  |     require_sync::<scan_contract::ScanStorageLease>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Cell<()>` cannot be shared between threads safely
+  |
+  = help: within `ScanStorageLease`, the trait `Sync` is not implemented for `Cell<()>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock`
+note: required because it appears within the type `PhantomData<Cell<()>>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `ScanStorageLease`
+ --> tests/thread_safety_ui/arm64_macos/generic/../../../../src/tagged/gc/scan_contract.rs
+  |
+  | pub(crate) struct ScanStorageLease {
+  |                   ^^^^^^^^^^^^^^^^
+note: required by a bound in `require_sync`
+ --> tests/thread_safety_ui/arm64_macos/generic/../../scan_storage_lease_sync.rs
+  |
+  | fn require_sync<T: Sync>() {}
+  |                    ^^^^ required by this bound in `require_sync`

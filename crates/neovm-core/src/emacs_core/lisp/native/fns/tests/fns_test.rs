@@ -1981,7 +1981,9 @@ fn collate_lessp_rejects_non_string_locale() {
         FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.symbol,
-                Value::symbol("wrong-type-argument").as_symbol_id().unwrap()
+                Value::symbol("wrong-type-argument")
+                    .as_bare_symbol_id()
+                    .unwrap()
             );
             assert_eq!(sig.data[0], Value::symbol("stringp"));
         }
@@ -2000,7 +2002,10 @@ fn collate_lessp_invalid_locale_signals_error() {
     .expect_err("invalid explicit locale should signal error");
     match err.into_kind() {
         FlowKind::Signal(sig) => {
-            assert_eq!(sig.symbol, Value::symbol("error").as_symbol_id().unwrap());
+            assert_eq!(
+                sig.symbol,
+                Value::symbol("error").as_bare_symbol_id().unwrap()
+            );
         }
         other => panic!("expected signal, got {other:?}"),
     }
@@ -2048,7 +2053,9 @@ fn collate_equalp_rejects_non_string_locale() {
         FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.symbol,
-                Value::symbol("wrong-type-argument").as_symbol_id().unwrap()
+                Value::symbol("wrong-type-argument")
+                    .as_bare_symbol_id()
+                    .unwrap()
             );
             assert_eq!(sig.data[0], Value::symbol("stringp"));
         }

@@ -91,7 +91,7 @@ fn buffer_replace_match_rejects_backslash_question_but_string_path_allows_it() {
     let items = list_to_vec(&err).expect("captured error should be a list");
     assert_eq!(items.len(), 2);
     assert!(
-        items[0].is_symbol_named("error"),
+        items[0].is_bare_symbol_named("error"),
         "expected `error' symbol, got {:?}",
         items[0]
     );

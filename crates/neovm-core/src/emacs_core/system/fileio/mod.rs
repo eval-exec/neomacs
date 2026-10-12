@@ -4933,7 +4933,7 @@ fn find_file_name_handler_lisp_with_values(
         // If the handler is a symbol with a non-nil `operations`
         // property, restrict to listed operations. Mirrors GNU's
         // `Fget (handler, Qoperations)` check at fileio.c:409.
-        if let Some(handler_sym) = handler.as_symbol_id() {
+        if let Some(handler_sym) = handler.as_bare_symbol_id() {
             let ops_sym = file_name_handler_symbols().operations;
             if let Some(ops) = obarray
                 .get_property_id(handler_sym, ops_sym)
@@ -6213,6 +6213,7 @@ fn auto_coding_system_name(
     eval: &super::eval::Context,
     value: Value,
 ) -> Result<Option<String>, Flow> {
+    let symbol_mode = eval.symbol_mode();
     // `nil` is GNU's "I did not decide" answer (`NILP (coding_system)`,
     // src/fileio.c:4411, :5057), not a coding-system name.  `nil` is a symbol
     // here, so without this guard it would come back as the name "nil" and
@@ -6220,11 +6221,15 @@ fn auto_coding_system_name(
     if value.is_nil() {
         return Ok(None);
     }
-    let Some(name) = value.as_symbol_name().map(str::to_owned).or_else(|| {
-        value
-            .as_lisp_string()
-            .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
-    }) else {
+    let Some(name) = value
+        .as_symbol_name(symbol_mode)
+        .map(str::to_owned)
+        .or_else(|| {
+            value
+                .as_lisp_string()
+                .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
+        })
+    else {
         return Ok(None);
     };
     if eval.coding_systems.is_known_or_derived(&name) {
@@ -6688,6 +6693,7 @@ fn select_write_region_coding_system(
     to: Value,
     filename: Value,
 ) -> Result<crate::encoding::RuntimeCodingSystem, Flow> {
+    let symbol_mode = eval.symbol_mode();
     let fallback = resolve_write_coding_system_symbol(eval, buffer_id, WriteCodingFallback::Utf8);
     // GNU `choose_write_coding_system': a bound `coding-system-for-write' is
     // used as is, and only confirmed with the selector -- restricted to it,
@@ -6707,14 +6713,17 @@ fn select_write_region_coding_system(
         let resolved = crate::emacs_core::coding::coding_inherit_eol_type_unix(
             &eval.coding_systems,
             Value::from_sym_id(symbol),
+            eval.symbol_mode(),
         );
-        crate::encoding::RuntimeCodingSystem::from_symbol(resolved.as_symbol_id().unwrap_or(symbol))
+        crate::encoding::RuntimeCodingSystem::from_symbol(
+            resolved.as_symbol_id(symbol_mode).unwrap_or(symbol),
+        )
     };
     if for_write.is_some() && !require_warning {
         return Ok(finish(eval, fallback));
     }
     let selector = eval.visible_variable_value_or_nil("select-safe-coding-system-function");
-    let Some(selector_id) = selector.as_symbol_id() else {
+    let Some(selector_id) = selector.as_symbol_id(symbol_mode) else {
         return Ok(finish(eval, fallback));
     };
     if !eval.obarray().fboundp_id(selector_id) {
@@ -6736,7 +6745,7 @@ fn select_write_region_coding_system(
         vec![from, to, default_coding, Value::NIL, filename],
     )?;
     let selected_id = selected
-        .as_symbol_id()
+        .as_symbol_id(symbol_mode)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![selected]))?;
     let selected_name = resolve_sym(selected_id);
     if !eval.coding_systems.is_known_or_derived(selected_name) {
@@ -6779,6 +6788,7 @@ pub(crate) fn builtin_write_region(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_min_args("write-region", &args, 3)?;
     expect_max_args("write-region", &args, 7)?;
     // GNU `Fwrite_region` runs `Fexpand_file_name` on FILENAME first, dispatching
@@ -6800,7 +6810,7 @@ pub(crate) fn builtin_write_region(
     // non-nil MUSTBENEW asks for interactive confirmation here.
     let mustbenew = args.get(6).copied().unwrap_or(Value::NIL);
     let mustbenew_is_excl = mustbenew
-        .as_symbol_name()
+        .as_symbol_name(symbol_mode)
         .is_some_and(|name| name == "excl");
     if !mustbenew.is_nil() && !mustbenew_is_excl {
         barf_or_query_if_file_exists(eval, &resolved, false, "overwrite", true, true)?;
@@ -6871,6 +6881,7 @@ fn write_region_without_handler(
     default_lock_name: LispString,
     mustbenew_is_excl: bool,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     if let Some(current) = eval.buffers.current_buffer_id() {
         let _ = eval.buffers.clear_buffer_labeled_restrictions(current);
         if args[0].is_nil() {
@@ -6928,7 +6939,7 @@ fn write_region_without_handler(
     // written.  Validate it here so we don't silently produce an empty file.
     let coding_for_write = eval.visible_variable_value_or_nil("coding-system-for-write");
     if !coding_for_write.is_nil()
-        && let Some(name) = coding_for_write.as_symbol_name()
+        && let Some(name) = coding_for_write.as_symbol_name(symbol_mode)
         && name != "nil"
         && !eval.coding_systems.is_known_or_derived(name)
     {

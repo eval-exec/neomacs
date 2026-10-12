@@ -1,0 +1,5 @@
+error[E0599]: no method named `with_legacy_storage_write` found for struct `ObarrayWriteAccess<'_>` in the current scope
+ --> tests/thread_safety_ui/obarray_writer_legacy_phase_private.rs:7:21
+  |
+7 |     unsafe { writer.with_legacy_storage_write(|manager| manager.fmakunbound("probe")) };
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `ObarrayWriteAccess<'_>`

@@ -13,6 +13,7 @@ use neovm_core::buffer::{
 use neovm_core::emacs_core::plist::plist_get;
 use neovm_core::emacs_core::symbol::Obarray;
 use neovm_core::emacs_core::{SymId, Value};
+use neovm_core::tagged::SymbolMode;
 use rustc_hash::FxHashMap;
 
 /// Immutable view for a walk on the evaluator thread.
@@ -50,6 +51,7 @@ pub(crate) struct LayoutBufferSnapshot {
 }
 
 impl LayoutBufferSnapshot {
+    #[cfg(test)]
     pub fn from_buffer(buffer: &Buffer) -> Self {
         Self::capture_buffer(buffer, None)
     }
@@ -102,18 +104,42 @@ impl LayoutBufferSnapshot {
     /// could possibly display, as `(first_char, char_budget)`. `None` keeps
     /// the whole-buffer scan, which is what a caller with no window in hand
     /// (a test, a display query) must use.
+    #[cfg(test)]
     pub fn from_buffer_for_window(
         buffer: &Buffer,
         obarray: &Obarray,
         visible: Option<(usize, usize)>,
         target: crate::display_property::DisplayPropertyTarget,
     ) -> Self {
+        Self::from_buffer_for_window_with_symbols(
+            buffer,
+            obarray,
+            visible,
+            target,
+            SymbolMode::Bare,
+        )
+    }
+
+    /// Capture the evaluator's symbol policy before the buffer walk starts.
+    pub fn from_buffer_for_window_with_symbols(
+        buffer: &Buffer,
+        obarray: &Obarray,
+        visible: Option<(usize, usize)>,
+        target: crate::display_property::DisplayPropertyTarget,
+        symbol_mode: SymbolMode,
+    ) -> Self {
         let mut snapshot = Self::capture_buffer(buffer, Some(obarray));
         snapshot.display_target = target;
         snapshot.category_symbol_plists = capture_layout_category_symbol_plists(buffer, obarray);
-        snapshot.automatic_composition_spans =
-            capture_automatic_composition_spans(buffer, obarray, &snapshot.vars, visible);
-        snapshot.string_composition_rules = capture_string_composition_rules(buffer, obarray);
+        snapshot.automatic_composition_spans = capture_automatic_composition_spans(
+            buffer,
+            obarray,
+            &snapshot.vars,
+            visible,
+            symbol_mode,
+        );
+        snapshot.string_composition_rules =
+            capture_string_composition_rules(buffer, obarray, symbol_mode);
         SNAPSHOTS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         snapshot
     }
@@ -137,6 +163,7 @@ pub(super) fn capture_automatic_composition_spans(
     obarray: &Obarray,
     vars: &[Option<Value>; <LayoutVar as strum::EnumCount>::COUNT],
     visible: Option<(usize, usize)>,
+    symbol_mode: SymbolMode,
 ) -> Vec<CharRange> {
     if !buffer.get_multibyte() {
         return Vec::new();
@@ -145,6 +172,7 @@ pub(super) fn capture_automatic_composition_spans(
         vars[LayoutVar::AutoCompositionMode as usize],
         vars[LayoutVar::AutoCompositionFunction as usize],
         obarray,
+        symbol_mode,
     ) else {
         return Vec::new();
     };
@@ -152,10 +180,13 @@ pub(super) fn capture_automatic_composition_spans(
     // The bounded one is memoized only in its whole-buffer form: a memo keyed
     // on the buffer alone cannot answer a question that moves with the window.
     let spans = match visible {
-        Some((first_char, budget)) => {
-            buffer.automatic_composition_spans_visible(table, first_char, budget)
-        }
-        None => buffer.automatic_composition_spans(table),
+        Some((first_char, budget)) => buffer.automatic_composition_spans_visible_with_symbols(
+            table,
+            first_char,
+            budget,
+            symbol_mode,
+        ),
+        None => buffer.automatic_composition_spans_with_symbols(table, symbol_mode),
     };
     spans
         .iter()
@@ -169,23 +200,30 @@ pub(super) fn capture_automatic_composition_spans(
 pub(super) fn capture_string_composition_rules(
     buffer: &Buffer,
     obarray: &Obarray,
+    symbol_mode: SymbolMode,
 ) -> Option<neovm_core::emacs_core::composite::AutomaticCompositionRules> {
     let value = |var| effective_buffer_value(buffer, obarray, var);
     let table = active_composition_table(
         value(LayoutVar::AutoCompositionMode),
         value(LayoutVar::AutoCompositionFunction),
         obarray,
+        symbol_mode,
     )?;
-    neovm_core::emacs_core::composite::AutomaticCompositionRules::new(buffer, table)
+    neovm_core::emacs_core::composite::AutomaticCompositionRules::new_with_symbols(
+        buffer,
+        table,
+        symbol_mode,
+    )
 }
 
 fn active_composition_table(
     mode: Option<Value>,
     function: Option<Value>,
     obarray: &Obarray,
+    symbol_mode: SymbolMode,
 ) -> Option<Value> {
     if mode.is_none_or(Value::is_nil)
-        || !function.is_some_and(|value| value.is_symbol_named("auto-compose-chars"))
+        || !function.is_some_and(|value| value.is_symbol_named("auto-compose-chars", symbol_mode))
     {
         return None;
     }
@@ -197,7 +235,7 @@ fn capture_layout_category_symbol_plists(
     obarray: &Obarray,
 ) -> FxHashMap<SymId, Value> {
     fn remember(category: Value, obarray: &Obarray, plists: &mut FxHashMap<SymId, Value>) {
-        if let Some(category_id) = category.as_symbol_id() {
+        if let Some(category_id) = category.as_bare_symbol_id() {
             neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(category_id);
             plists
                 .entry(category_id)
@@ -356,7 +394,7 @@ impl LayoutBufferView for LayoutBufferSnapshot {
     }
 
     fn layout_category_symbol_property(&self, category: Value, property: Value) -> Option<Value> {
-        let category_id = category.as_symbol_id()?;
+        let category_id = category.as_bare_symbol_id()?;
         let plist = self.category_symbol_plists.get(&category_id).copied()?;
         plist_get(plist, &property)
     }

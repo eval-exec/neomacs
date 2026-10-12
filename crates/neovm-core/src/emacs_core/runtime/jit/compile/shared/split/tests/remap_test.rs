@@ -10,6 +10,7 @@ use cranelift_jit::JITBuilder;
 use cranelift_module::default_libcall_names;
 
 const ALL_GROUPS: ShimGroups = ShimGroups {
+    throw_flow: crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual,
     subr_spec: true,
     cbsym_spec: true,
     tier2_profile: true,

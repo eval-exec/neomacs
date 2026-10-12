@@ -915,11 +915,18 @@ pub mod fast_path {
 /// composes nothing either. This is the scan's own ASCII row
 /// (`select_automatic_composition_spans`), read the same way.
 pub fn ascii_has_no_composition_rules(table: Value) -> bool {
+    ascii_has_no_composition_rules_with_symbols(table, crate::tagged::SymbolMode::Bare)
+}
+
+pub fn ascii_has_no_composition_rules_with_symbols(
+    table: Value,
+    mode: crate::tagged::SymbolMode,
+) -> bool {
     if !super::chartable::is_char_table(&table) {
         return true;
     }
     (0..128).all(|ch| {
-        super::chartable::ct_lookup(&table, ch)
+        super::chartable::ct_lookup_with_symbols(&table, ch, mode)
             .unwrap_or(Value::NIL)
             .is_nil()
     })
@@ -936,12 +943,22 @@ pub struct AutomaticCompositionRules {
     table: Value,
     syntax: super::syntax::SyntaxTable,
     category: Option<Value>,
+    symbol_mode: crate::tagged::SymbolMode,
 }
 
 impl AutomaticCompositionRules {
     pub fn new(buffer: &crate::buffer::Buffer, table: Value) -> Option<Self> {
+        Self::new_with_symbols(buffer, table, crate::tagged::SymbolMode::Bare)
+    }
+
+    pub fn new_with_symbols(
+        buffer: &crate::buffer::Buffer,
+        table: Value,
+        symbol_mode: crate::tagged::SymbolMode,
+    ) -> Option<Self> {
         super::chartable::is_char_table(&table).then(|| Self {
             table,
+            symbol_mode,
             syntax: super::syntax::SyntaxTable::for_buffer(buffer),
             category: super::category::active_category_table_for_buffer(Some(buffer))
                 .ok()
@@ -957,7 +974,8 @@ impl AutomaticCompositionRules {
         let syntax = super::regex_emacs::BufferSyntaxLookup {
             syntax_table: self.syntax,
             category_table: self.category,
-            word_boundary: Default::default(),
+            word_boundary: super::regex_emacs::WordBoundaryLookup::default()
+                .with_symbol_mode(self.symbol_mode),
         };
         select_automatic_composition_spans(self.table, &syntax, text, char_offset)
     }
@@ -984,7 +1002,23 @@ pub fn automatic_composition_spans_in(
     text: &str,
     char_offset: usize,
 ) -> Vec<AutomaticCompositionSpan> {
-    AutomaticCompositionRules::new(buffer, composition_function_table)
+    automatic_composition_spans_in_with_symbols(
+        buffer,
+        composition_function_table,
+        text,
+        char_offset,
+        crate::tagged::SymbolMode::Bare,
+    )
+}
+
+pub fn automatic_composition_spans_in_with_symbols(
+    buffer: &crate::buffer::Buffer,
+    composition_function_table: Value,
+    text: &str,
+    char_offset: usize,
+    mode: crate::tagged::SymbolMode,
+) -> Vec<AutomaticCompositionSpan> {
+    AutomaticCompositionRules::new_with_symbols(buffer, composition_function_table, mode)
         .map(|rules| rules.spans_in(text, char_offset))
         .unwrap_or_default()
 }
@@ -1020,7 +1054,12 @@ fn select_automatic_composition_spans(
     // ASCII row once and index it. Every entry stays reachable from the table
     // itself, which is a root, so holding them here roots nothing new.
     let ascii_rules: [Value; 128] = std::array::from_fn(|ch| {
-        super::chartable::ct_lookup(&composition_function_table, ch as i64).unwrap_or(Value::NIL)
+        super::chartable::ct_lookup_with_symbols(
+            &composition_function_table,
+            ch as i64,
+            syntax.symbol_mode(),
+        )
+        .unwrap_or(Value::NIL)
     });
     // Composition-rule tracing rides RUST_LOG like every other diagnostic:
     // `RUST_LOG=neovm_core::emacs_core::text::composite=debug`.
@@ -1045,8 +1084,12 @@ fn select_automatic_composition_spans(
             let Some(trigger_char) = text[offset..].chars().next() else {
                 break;
             };
-            super::chartable::ct_lookup(&composition_function_table, i64::from(trigger_char as u32))
-                .unwrap_or(Value::NIL)
+            super::chartable::ct_lookup_with_symbols(
+                &composition_function_table,
+                i64::from(trigger_char as u32),
+                syntax.symbol_mode(),
+            )
+            .unwrap_or(Value::NIL)
         };
         // Nearly every character in an ordinary buffer has NO composition
         // rule. `list_to_vec` opens with `Vec::with_capacity(16)` and so
@@ -1191,10 +1234,12 @@ fn is_unicode_combining_mark(code: u32) -> bool {
 /// `lisp/composite.el`; general execution of arbitrary composition rules remains
 /// the broader `find_automatic_composition' port.
 fn has_default_combining_rule(ctx: &super::eval::Context, code: u32) -> bool {
+    let symbol_mode = ctx.symbol_mode();
     let table = ctx.visible_variable_value_or_nil("composition-function-table");
-    let Ok(rules) = super::chartable::builtin_char_table_range(
+    let Ok(rules) = super::chartable::builtin_char_table_range_with_symbols(
         vec![table, Value::fixnum(code as i64)],
         Some(&ctx.obarray),
+        symbol_mode,
     ) else {
         return false;
     };
@@ -1209,7 +1254,7 @@ fn has_default_combining_rule(ctx: &super::eval::Context, code: u32) -> bool {
         fields.len() == 3
             && fields[0].as_utf8_str() == Some("\\c.\\c^+")
             && fields[1].as_fixnum() == Some(1)
-            && fields[2].is_symbol_named("compose-gstring-for-graphic")
+            && fields[2].is_symbol_named("compose-gstring-for-graphic", symbol_mode)
     })
 }
 
@@ -1563,6 +1608,7 @@ pub(crate) fn composition_get_gstring(
 /// a font driver sees it.  A glyph vector after the first nil slot is unused,
 /// exactly as in `src/composite.c`.
 pub(crate) fn composition_gstring_p(ctx: &super::eval::Context, value: Value) -> bool {
+    let symbol_mode = ctx.symbol_mode();
     let Some(gstring) = value.as_vector_data() else {
         return false;
     };
@@ -1578,7 +1624,7 @@ pub(crate) fn composition_gstring_p(ctx: &super::eval::Context, value: Value) ->
     let valid_header_font = header[0].is_nil()
         || super::font::is_font_object(&header[0])
         || header[0]
-            .as_symbol_name()
+            .as_symbol_name(symbol_mode)
             .is_some_and(|name| ctx.coding_systems.is_known_or_derived(name));
     if !valid_header_font
         || !header[1..]

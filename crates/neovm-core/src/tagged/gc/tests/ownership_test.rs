@@ -2301,7 +2301,7 @@ fn a_reclaimed_cons_is_recognizable_as_dead() {
     // decodes as a bogus symbol: an aligned raw pointer under TAG_SYMBOL.
     let link = unsafe { (*doomed.xcons_ptr()).load_cdr() };
     assert!(
-        link.is_symbol(),
+        link.is_bare_symbol(),
         "the free-list link decodes through TAG_SYMBOL (bits 0x{:x})",
         link.bits(),
     );
@@ -3476,4 +3476,37 @@ fn dropping_the_installed_heap_uninstalls_it() {
         "dropping a heap that is not installed must leave the installed one"
     );
     crate::tagged::gc::clear_tagged_heap_if_installed(&kept);
+}
+
+#[test]
+fn concurrent_builtin_clear_string_retains_interval_child_for_snapshot() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let child = heap.alloc_string(crate::heap_types::LispString::from_utf8(
+        "only-in-properties",
+    ));
+    let child_ptr = child.as_string_ptr().unwrap() as *const u8;
+    let owner = heap.alloc_string(crate::heap_types::LispString::from_utf8("props"));
+    let owner_ptr = owner.as_string_ptr().unwrap() as *mut StringObj;
+    // SAFETY: this live, fresh owner is not published or being marked yet.
+    unsafe { *(*owner_ptr).data.intervals_mut() = interval_table_carrying(child) };
+    let mut root = heap.alloc_cons(owner, TaggedValue::NIL);
+    for i in 0..300_000 {
+        root = heap.alloc_cons(TaggedValue::fixnum(i), root);
+    }
+    heap.concurrent_begin();
+    heap.seed_root(root);
+    heap.launch_concurrent_mark();
+    crate::emacs_core::buffer::builtin_clear_string(vec![owner]).unwrap();
+    assert!(!owner.as_lisp_string().unwrap().has_intervals());
+    finish_concurrent_cycle(&mut heap, root);
+    assert!(
+        heap.owns_non_cons_object(child_ptr),
+        "snapshot property child must survive clear"
+    );
+    assert_eq!(child.as_str_owned().as_deref(), Some("only-in-properties"));
+    // No property home remains. The next exact collection must reclaim child.
+    heap.collect_exact(std::iter::once(root));
+    assert!(!heap.owns_non_cons_object(child_ptr));
 }

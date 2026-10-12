@@ -1197,8 +1197,33 @@ pub(crate) fn builtin_format_slice(eval: &mut super::eval::Context, args: &[Valu
     builtin_format_wrapper_strict_slice(eval, args)
 }
 
-fn format_percent_s_in_state(ctx: &crate::emacs_core::eval::Context, value: &Value) -> Vec<u8> {
-    super::misc_eval::print_value_princ_bytes(ctx, value)
+#[derive(Clone, Copy, Debug)]
+enum FormatObjectPrinting {
+    Princ,
+    Prin1,
+}
+
+fn format_object_in_state(
+    ctx: &mut crate::emacs_core::eval::Context,
+    value: &Value,
+    mode: FormatObjectPrinting,
+) -> Result<Vec<u8>, Flow> {
+    let mut scope = super::print::PrintEvaluationGuard::new(ctx);
+    let result = (|| {
+        let ctx = scope.context();
+        let escaping = match mode {
+            FormatObjectPrinting::Princ => super::misc_eval::ObjectEscaping::Unescaped,
+            FormatObjectPrinting::Prin1 => super::misc_eval::ObjectEscaping::Escaped,
+        };
+        let options = super::misc_eval::prepare_format_object_options(ctx, *value, escaping)?;
+        super::print::print_value_bytes_in_context(
+            ctx,
+            value,
+            options,
+            super::print::PrintSettingsSource::Globals,
+        )
+    })();
+    scope.finish(result)
 }
 
 fn format_not_enough_args_error() -> Flow {
@@ -1568,15 +1593,14 @@ impl FormatOutput {
     }
 
     #[inline]
-    fn promote_printed(&mut self, printed: &[u8]) -> Result<(), Flow> {
-        match self.encoding {
-            FormatStringEncoding::Multibyte => Ok(()),
-            FormatStringEncoding::Unibyte => {
-                if !printed.is_ascii() && result_bytes_imply_multibyte(printed) {
-                    self.promote_multibyte()?;
-                }
-                Ok(())
+    fn promote_printed(&mut self, printed: &PrintedFormatFragment) -> Result<(), Flow> {
+        match (self.encoding, printed.encoding) {
+            (FormatStringEncoding::Unibyte, PrintedFormatEncoding::AsciiUnibyte) => Ok(()),
+            (FormatStringEncoding::Unibyte, PrintedFormatEncoding::Multibyte) => {
+                self.promote_multibyte()
             }
+            (FormatStringEncoding::Multibyte, PrintedFormatEncoding::AsciiUnibyte) => Ok(()),
+            (FormatStringEncoding::Multibyte, PrintedFormatEncoding::Multibyte) => Ok(()),
         }
     }
 
@@ -2737,22 +2761,6 @@ fn push_emacs_char(out: &mut Vec<u8>, code: u32) {
     out.extend_from_slice(&buf[..len]);
 }
 
-/// Issue #131: does the formatted result carry genuine multibyte content — a real
-/// (non eight-bit) character above ASCII? Eight-bit raw bytes alone must NOT
-/// promote the result to multibyte (mirrors the old `runtime_string_result_multibyte`
-/// sentinel exclusion); a real Latin-1/Unicode/Private-Use char must.
-fn result_bytes_imply_multibyte(data: &[u8]) -> bool {
-    let mut pos = 0usize;
-    while pos < data.len() {
-        let (code, len) = crate::emacs_core::emacs_char::string_char(&data[pos..]);
-        pos += len;
-        if code > 0x7f && !crate::emacs_core::emacs_char::char_byte8_p(code) {
-            return true;
-        }
-    }
-    false
-}
-
 /// Down-convert canonical multibyte Emacs bytes to unibyte raw bytes. Only valid
 /// when the content has no genuine multibyte character (ASCII + eight-bit only),
 /// which `FormatResultStorage` validates before choosing a unibyte result; a
@@ -2781,63 +2789,138 @@ fn emacs_bytes_to_unibyte(mut data: Vec<u8>) -> Vec<u8> {
     data
 }
 
-// The tuple is the private, single-return handoff for bytes, property spans,
-// source spans, and multibyte state; naming its four parts occurs at the caller.
-#[allow(clippy::type_complexity)]
+/// Encoding of a fresh printer scratch result (GNU print.c:829-831).
+/// The printer produces canonical Emacs bytes; an all-ASCII result becomes
+/// unibyte, while every other result retains the scratch buffer's multibyteness.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrintedFormatEncoding {
+    AsciiUnibyte,
+    Multibyte,
+}
+
+/// Owns canonical printer output together with its derived encoding. Moving
+/// the Vec into this fragment adds no allocation or byte copy. Source strings
+/// retain their own encoding separately instead of using this scratch policy.
+#[derive(Debug)]
+struct PrintedFormatFragment {
+    bytes: Vec<u8>,
+    encoding: PrintedFormatEncoding,
+}
+
+static_assertions::assert_impl_all!(PrintedFormatEncoding: Send, Sync);
+static_assertions::assert_impl_all!(PrintedFormatFragment: Send, Sync);
+
+impl PrintedFormatFragment {
+    #[must_use]
+    fn from_printer_bytes(bytes: Vec<u8>) -> Self {
+        let encoding = if bytes.is_ascii() {
+            PrintedFormatEncoding::AsciiUnibyte
+        } else {
+            PrintedFormatEncoding::Multibyte
+        };
+        Self { bytes, encoding }
+    }
+
+    fn into_value(self) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
+        let encoding = match self.encoding {
+            PrintedFormatEncoding::AsciiUnibyte => FormatStringEncoding::Unibyte,
+            PrintedFormatEncoding::Multibyte => FormatStringEncoding::Multibyte,
+        };
+        // Retain main's fallible byte-bound and terminator-capacity contract.
+        let storage = FormatResultStorage::new(self.bytes, encoding)?;
+        Ok(Value::heap_string(match storage {
+            FormatResultStorage::Unibyte(bytes) => {
+                crate::heap_types::LispString::from_unibyte(bytes)
+            }
+            FormatResultStorage::Multibyte(bytes) => {
+                crate::heap_types::LispString::from_emacs_bytes(bytes)
+            }
+        }))
+    }
+}
+
+/// End the Lisp control-string borrow before an object printer can run Lisp.
+/// These bytes are already canonical, so Multibyte copies without promoting a
+/// second time. Keep the first owned snapshot across all later callbacks.
+fn own_format_control_for_print(
+    control: &mut std::borrow::Cow<'_, [u8]>,
+) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
+    match control {
+        std::borrow::Cow::Borrowed(bytes) => {
+            let owned = format_source_bytes(*bytes, FormatStringEncoding::Multibyte)?;
+            *control = std::borrow::Cow::Owned(owned);
+        }
+        std::borrow::Cow::Owned(_) => {}
+    }
+    Ok(())
+}
+
+/// A resolved exact %S result keeps the fresh printer string's encoding.
+/// General formats retain GNU's input-driven encoding and property transfer.
+/// Only owned bytes and native scalar/span metadata cross this handoff.
+enum FormatInvocationResult {
+    ResolvedPrinted(PrintedFormatFragment),
+    Composed {
+        bytes: Vec<u8>,
+        spans: Vec<FormatPropSpan>,
+        source_spans: Vec<FormatSourceSpan>,
+        force_multibyte_result: bool,
+        new_result: bool,
+    },
+}
+static_assertions::assert_not_impl_any!(FormatInvocationResult: Send, Sync);
+
 fn do_format(
-    ctx: &super::eval::Context,
+    ctx: &mut super::eval::Context,
     args: &[Value],
-    princ_fn: &dyn Fn(&Value) -> Vec<u8>,
-    prin1_fn: &dyn Fn(&Value) -> Vec<u8>,
     quoting_style: FormatMessageQuotingStyle,
-) -> Result<
-    (
-        Vec<u8>,
-        Vec<FormatPropSpan>,
-        Vec<FormatSourceSpan>,
-        bool,
-        bool,
-    ),
-    crate::emacs_core::alloc::AllocationFailure,
-> {
+) -> Result<FormatInvocationResult, crate::emacs_core::alloc::AllocationFailure> {
     // Issue #131: iterate the format string as its real Emacs characters and
     // build the result directly as canonical Emacs internal-encoding bytes —
     // no storage-string round-trip, so a real Private-Use glyph survives and
     // eight-bit / non-Unicode content keeps its disjoint extended encoding.
-    let fmt_ls = args[0].as_lisp_string().ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), args[0]],
-        )
-    })?;
-    // Iterate the canonical multibyte BYTES directly: literal runs copy
-    // whole (`%` is ASCII and can never occur inside a multibyte
-    // sequence), spec characters are ASCII, and only the props/quoting
-    // paths still step per character. The previous decode of the whole
-    // format string into a `Vec<u32>` per call was a top cost of `format`.
-    let fmt_storage: Vec<u8>;
-    // ASCII unibyte bytes ARE their multibyte promotion — borrow them
-    // directly instead of allocating an identity copy per `format` call.
-    let fmt_bytes: &[u8] = if fmt_ls.is_multibyte() || fmt_ls.as_bytes().is_ascii() {
-        fmt_ls.as_bytes()
-    } else {
-        fmt_storage = format_source_bytes(fmt_ls.as_bytes(), FormatStringEncoding::Unibyte)?;
-        &fmt_storage
+    // Capture the source encoding while the control is borrowed. GNU snapshots
+    // entry bytes before object printing (editfns.c:3490-3495,3681); no earlier
+    // scanner operation calls Lisp, so defer the fallible copy to that boundary.
+    // Non-ASCII unibyte controls already need an owned canonical promotion.
+    // Properties retain their live source Value for the later transfer.
+    let (mut fmt_bytes, fmt_encoding): (std::borrow::Cow<'_, [u8]>, FormatStringEncoding) = {
+        let fmt_ls = args[0].as_lisp_string().ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), args[0]],
+            )
+        })?;
+        let encoding = if fmt_ls.is_multibyte() {
+            FormatStringEncoding::Multibyte
+        } else {
+            FormatStringEncoding::Unibyte
+        };
+        let bytes = if fmt_ls.is_multibyte() || fmt_ls.as_bytes().is_ascii() {
+            std::borrow::Cow::Borrowed(fmt_ls.as_bytes())
+        } else {
+            std::borrow::Cow::Owned(format_source_bytes(
+                fmt_ls.as_bytes(),
+                FormatStringEncoding::Unibyte,
+            )?)
+        };
+        (bytes, encoding)
     };
 
     let initial_capacity = fmt_bytes
         .len()
         .checked_add(32)
         .ok_or_else(format_string_overflow_error)?;
-    // The format string has already been borrowed and validated above. Reuse
-    // its encoding witness while still inspecting every remaining argument:
-    // GNU includes unused multibyte string arguments in the upfront decision.
-    let encoding =
-        if fmt_ls.is_multibyte() || args[1..].iter().any(|value| value.string_is_multibyte()) {
-            FormatStringEncoding::Multibyte
-        } else {
-            FormatStringEncoding::Unibyte
-        };
+    // Preserve main's upfront decision, including unused multibyte strings.
+    // The original format encoding is scalar; no heap-string borrow survives
+    // beyond own_format_control_for_print and its first callback boundary.
+    let encoding = if matches!(fmt_encoding, FormatStringEncoding::Multibyte)
+        || args[1..].iter().any(|value| value.string_is_multibyte())
+    {
+        FormatStringEncoding::Multibyte
+    } else {
+        FormatStringEncoding::Unibyte
+    };
     let mut result = FormatOutput::new(initial_capacity, encoding)?;
     let mut spans: Vec<FormatPropSpan> = Vec::new();
     let mut source_spans: Vec<FormatSourceSpan> = Vec::new();
@@ -2859,7 +2942,7 @@ fn do_format(
     // below feed `apply_format_string_prop_spans`/`apply_format_prop_spans`,
     // which are no-ops without a source property table — so skip all span
     // and char-position accounting for the plain propertyless call.
-    let track_props = fmt_has_props
+    let mut track_props = fmt_has_props
         || args[1..].iter().any(|arg| {
             // A symbol argument becomes its NAME string under %s, and that
             // name can carry text properties — probe the same source value
@@ -2917,7 +3000,7 @@ fn do_format(
         let source_start = format_char_pos;
         i += 1;
         format_char_pos += 1;
-        let parsed = parse_format_spec(fmt_bytes, &mut i)?;
+        let parsed = parse_format_spec(fmt_bytes.as_ref(), &mut i)?;
         let spec = parsed.spec;
         format_char_pos += parsed.consumed_chars;
         let spec_source_end = format_char_pos;
@@ -2950,7 +3033,7 @@ fn do_format(
                 // Only `%s` on a string argument preserves text properties: the
                 // string's own bytes land verbatim, so we can map byte ranges in
                 // the argument to byte ranges in the formatted result. For other
-                // types princ_fn produces a fresh printed representation with no
+                // types the object printer produces a fresh representation with no
                 // property origin. Mirrors GNU styled_format (editfns.c:3808),
                 // which sets `spec->intervals` only when `string_intervals (arg)`
                 // is non-NULL. The string's content is measured with its own
@@ -3005,14 +3088,16 @@ fn do_format(
                             },
                         )
                     } else {
+                        own_format_control_for_print(&mut fmt_bytes)?;
+                        let printed = PrintedFormatFragment::from_printer_bytes(
+                            format_object_in_state(ctx, &arg, FormatObjectPrinting::Princ)?,
+                        );
+                        result.promote_printed(&printed)?;
                         (
-                            std::borrow::Cow::Owned(princ_fn(&arg)),
+                            std::borrow::Cow::Owned(printed.bytes),
                             FormatStringEncoding::Multibyte,
                         )
                     };
-                if !arg_is_string {
-                    result.promote_printed(&s)?;
-                }
                 let budget = FormatRemainingOutput::new(&result);
                 let (formatted, content_byte_start_in_formatted, content_byte_end_in_formatted) =
                     format_string_spec_tracked(&s, src_multibyte, &spec, ctx, budget)?;
@@ -3046,10 +3131,37 @@ fn do_format(
                 formatted
             }
             'S' => {
-                let s = prin1_fn(&args[this_arg_idx]);
-                result.promote_printed(&s)?;
+                own_format_control_for_print(&mut fmt_bytes)?;
+                let printed = PrintedFormatFragment::from_printer_bytes(format_object_in_state(
+                    ctx,
+                    &args[this_arg_idx],
+                    FormatObjectPrinting::Prin1,
+                )?);
+                // GNU turns %S into a resolved %s, then returns that string
+                // for an exact two-byte control without live intervals
+                // (editfns.c:3680-3688,3720-3727). Its initial input encoding
+                // does not override the fresh scratch string in this case.
+                // The owned control is the entry snapshot; consult properties
+                // after printing/cleanup, which may have run a Lisp callback.
+                // On refusal reuse this fragment: never invoke printing twice.
+                if fmt_bytes.as_ref() == b"%S" {
+                    if !crate::emacs_core::value::string_has_text_properties_for_value(args[0]) {
+                        return Ok(FormatInvocationResult::ResolvedPrinted(printed));
+                    }
+                    // A callback may have added intervals after the initial
+                    // tracking decision. The unchanged tail must then map
+                    // this single source conversion before copying properties.
+                    track_props = true;
+                }
+                result.promote_printed(&printed)?;
                 let budget = FormatRemainingOutput::new(&result);
-                format_string_spec(&s, FormatStringEncoding::Multibyte, &spec, ctx, budget)?
+                format_string_spec(
+                    &printed.bytes,
+                    FormatStringEncoding::Multibyte,
+                    &spec,
+                    ctx,
+                    budget,
+                )?
             }
             'd' | 'i' | 'b' | 'B' | 'o' | 'x' | 'X' => {
                 // Plain `%d` on a fixnum with no property tracking: render the
@@ -3146,13 +3258,13 @@ fn do_format(
     }
 
     let force_multibyte_result = matches!(result.encoding, FormatStringEncoding::Multibyte);
-    Ok((
-        result.into_bytes(),
+    Ok(FormatInvocationResult::Composed {
+        bytes: result.into_bytes(),
         spans,
         source_spans,
         force_multibyte_result,
         new_result,
-    ))
+    })
 }
 
 /// Owned final format bytes with their GNU encoding and terminator capacity
@@ -3278,14 +3390,29 @@ pub(crate) fn builtin_format_wrapper_strict_slice(
         if let Some(result) = exact_percent_s_string_result(args) {
             return Ok(result);
         }
-        let (bytes, spans, source_spans, force_multibyte_result, new_result) = do_format(
-            ctx,
-            args,
-            &|v| format_percent_s_in_state(ctx, v),
-            &|v| super::error::print_value_bytes_escaped_with_eval(ctx, v),
-            FormatMessageQuotingStyle::None,
-        )
-        .map_err(|failure| failure.into_flow_in_context(ctx))?;
+        let (bytes, spans, source_spans, force_multibyte_result, new_result) =
+            match do_format(ctx, args, FormatMessageQuotingStyle::None)
+                .map_err(|failure| failure.into_flow_in_context(ctx))?
+            {
+                FormatInvocationResult::ResolvedPrinted(printed) => {
+                    return printed
+                        .into_value()
+                        .map_err(|failure| failure.into_flow_in_context(ctx));
+                }
+                FormatInvocationResult::Composed {
+                    bytes,
+                    spans,
+                    source_spans,
+                    force_multibyte_result,
+                    new_result,
+                } => (
+                    bytes,
+                    spans,
+                    source_spans,
+                    force_multibyte_result,
+                    new_result,
+                ),
+            };
         // GNU `styled_format`: `if (! new_result) { val = args[0]; goto return_val; }`
         // (editfns.c:4289). Nothing was formatted, so GNU builds no new string and
         // copies no properties — the format string's own plist keeps its supplied
@@ -3457,17 +3584,32 @@ pub(crate) fn builtin_format_message_slice(
             return Ok(result);
         }
         let quoting_style = crate::emacs_core::coding::builtin_text_quoting_style(ctx, vec![])?;
-        let quoting_style = TextQuotingStyle::from_symbol_value(quoting_style)
+        let quoting_style = TextQuotingStyle::from_symbol_value(quoting_style, ctx.symbol_mode())
             .map(FormatMessageQuotingStyle::from_text_quoting_style)
             .expect("text-quoting-style builtin returns a GNU quoting style symbol");
-        let (bytes, spans, source_spans, force_multibyte_result, new_result) = do_format(
-            ctx,
-            args,
-            &|v| format_percent_s_in_state(ctx, v),
-            &|v| super::error::print_value_bytes_escaped_with_eval(ctx, v),
-            quoting_style,
-        )
-        .map_err(|failure| failure.into_flow_in_context(ctx))?;
+        let (bytes, spans, source_spans, force_multibyte_result, new_result) =
+            match do_format(ctx, args, quoting_style)
+                .map_err(|failure| failure.into_flow_in_context(ctx))?
+            {
+                FormatInvocationResult::ResolvedPrinted(printed) => {
+                    return printed
+                        .into_value()
+                        .map_err(|failure| failure.into_flow_in_context(ctx));
+                }
+                FormatInvocationResult::Composed {
+                    bytes,
+                    spans,
+                    source_spans,
+                    force_multibyte_result,
+                    new_result,
+                } => (
+                    bytes,
+                    spans,
+                    source_spans,
+                    force_multibyte_result,
+                    new_result,
+                ),
+            };
         // GNU `styled_format`: `if (! new_result) { val = args[0]; goto return_val; }`
         // (editfns.c:4289). Nothing was formatted, so GNU builds no new string and
         // copies no properties — the format string's own plist keeps its supplied

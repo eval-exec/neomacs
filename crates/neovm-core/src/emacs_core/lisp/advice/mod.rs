@@ -7,8 +7,9 @@ use crate::emacs_core::error::expect_args;
 use rustc_hash::FxHashMap;
 
 use super::intern::SymId;
-use super::value::{Value, ValueKind, VecLikeType};
+use super::value::{Value, equal_value_swp};
 use crate::gc_trace::GcTrace;
+use crate::tagged::SymbolMode;
 
 // ---------------------------------------------------------------------------
 // Variable watcher system
@@ -37,21 +38,33 @@ impl VariableWatcherList {
     }
 
     /// Add a watcher callback for a variable.
-    pub fn add_watcher(&mut self, var_id: SymId, callback: Value) {
+    pub fn add_watcher(&mut self, var_id: SymId, callback: Value, symbol_mode: SymbolMode) {
         let entry = self.watchers.entry(var_id).or_default();
         // Don't add duplicate watchers.
-        let already_exists = entry
-            .iter()
-            .any(|w| watcher_callback_matches(&w.callback, &callback));
+        let already_exists = entry.iter().any(|w| {
+            equal_value_swp(
+                &w.callback,
+                &callback,
+                0,
+                symbol_mode == SymbolMode::Positioned,
+            )
+        });
         if !already_exists {
             entry.push(VariableWatcher { callback });
         }
     }
 
     /// Remove a watcher callback for a variable.
-    pub fn remove_watcher(&mut self, var_id: SymId, callback: &Value) {
+    pub fn remove_watcher(&mut self, var_id: SymId, callback: &Value, symbol_mode: SymbolMode) {
         if let Some(list) = self.watchers.get_mut(&var_id) {
-            list.retain(|w| !watcher_callback_matches(&w.callback, callback));
+            list.retain(|w| {
+                !equal_value_swp(
+                    &w.callback,
+                    callback,
+                    0,
+                    symbol_mode == SymbolMode::Positioned,
+                )
+            });
             if list.is_empty() {
                 self.watchers.remove(&var_id);
             }
@@ -129,45 +142,6 @@ impl VariableWatcherList {
     }
 }
 
-fn watcher_callback_matches(registered: &Value, candidate: &Value) -> bool {
-    if registered == candidate {
-        return true;
-    }
-    match (registered.kind(), candidate.kind()) {
-        (ValueKind::Veclike(VecLikeType::Lambda), ValueKind::Veclike(VecLikeType::Lambda))
-        | (ValueKind::Veclike(VecLikeType::Macro), ValueKind::Veclike(VecLikeType::Macro)) => {
-            lambda_data_matches(registered, candidate)
-        }
-        _ => false,
-    }
-}
-
-fn lambda_data_matches(left: &Value, right: &Value) -> bool {
-    let (Some(left_params), Some(right_params)) = (left.closure_params(), right.closure_params())
-    else {
-        return false;
-    };
-    left_params.required == right_params.required
-        && left_params.optional == right_params.optional
-        && left_params.rest == right_params.rest
-        && left
-            .closure_body_value()
-            .zip(right.closure_body_value())
-            .is_some_and(|(left_body, right_body)| {
-                super::value::equal_value(&left_body, &right_body, 0)
-            })
-        && lex_envs_equal(
-            &left.closure_env().unwrap_or(None),
-            &right.closure_env().unwrap_or(None),
-        )
-        && left.closure_docstring().flatten() == right.closure_docstring().flatten()
-}
-
-/// Equality for lexical environments (Option<Value>).
-fn lex_envs_equal(a: &Option<super::value::Value>, b: &Option<super::value::Value>) -> bool {
-    a == b
-}
-
 impl Default for VariableWatcherList {
     fn default() -> Self {
         Self::new()
@@ -199,12 +173,13 @@ pub(crate) fn builtin_add_variable_watcher(
 ) -> EvalResult {
     expect_args("add-variable-watcher", &args, 2)?;
 
-    let symbol = super::builtins::symbols::expect_symbol_id(&args[0])?;
+    let symbol = super::builtins::symbols::expect_symbol_id(&args[0], eval.symbol_mode())?;
     let resolved =
         super::builtins::symbols::resolve_variable_alias_id_in_obarray(&eval.obarray, symbol)?;
     let callback = args[1];
 
-    eval.watchers.add_watcher(resolved, callback);
+    let symbol_mode = eval.symbol_mode();
+    eval.watchers.add_watcher(resolved, callback, symbol_mode);
     eval.obarray.note_watchers_changed(resolved, true);
     Ok(Value::NIL)
 }
@@ -218,12 +193,14 @@ pub(crate) fn builtin_remove_variable_watcher(
 ) -> EvalResult {
     expect_args("remove-variable-watcher", &args, 2)?;
 
-    let symbol = super::builtins::symbols::expect_symbol_id(&args[0])?;
+    let symbol = super::builtins::symbols::expect_symbol_id(&args[0], eval.symbol_mode())?;
     let resolved =
         super::builtins::symbols::resolve_variable_alias_id_in_obarray(&eval.obarray, symbol)?;
     let callback = args[1];
 
-    eval.watchers.remove_watcher(resolved, &callback);
+    let symbol_mode = eval.symbol_mode();
+    eval.watchers
+        .remove_watcher(resolved, &callback, symbol_mode);
     let still_watched = eval.watchers.has_watchers(resolved);
     eval.obarray.note_watchers_changed(resolved, still_watched);
     Ok(Value::NIL)
@@ -238,7 +215,7 @@ pub(crate) fn builtin_get_variable_watchers(
 ) -> EvalResult {
     expect_args("get-variable-watchers", &args, 1)?;
 
-    let symbol = super::builtins::symbols::expect_symbol_id(&args[0])?;
+    let symbol = super::builtins::symbols::expect_symbol_id(&args[0], eval.symbol_mode())?;
     let resolved =
         super::builtins::symbols::resolve_variable_alias_id_in_obarray(&eval.obarray, symbol)?;
     Ok(Value::list(eval.watchers.get_watchers(resolved)))

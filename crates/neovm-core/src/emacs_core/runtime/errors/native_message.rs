@@ -26,7 +26,7 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn signal_c_error(&self, message: CErrorMessage<'_>) -> Flow {
-        let style = coding::effective_text_quoting_style(&self.obarray);
+        let style = coding::effective_text_quoting_style(&self.obarray, self.symbol_mode());
         crate::emacs_core::error::signal(
             LispCondition::Error,
             vec![Value::string(coding::requote_c_error_message(

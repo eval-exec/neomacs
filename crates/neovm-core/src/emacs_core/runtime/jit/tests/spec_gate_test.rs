@@ -67,8 +67,8 @@ fn spec_fast_path_engages_for_one_two_and_three_arguments() {
     for nargs in 1..=3usize {
         let name = format!("neo-spec-gate-g{nargs}");
         let g = Value::symbol(&name);
-        ev.obarray
-            .set_symbol_function_id(intern(&name), callee(nargs));
+        let target = callee(nargs);
+        ev.obarray.set_symbol_function_id(intern(&name), target);
         // (lambda (x) (G x x ... x))
         let mut ops = vec![Op::Constant(0)];
         for i in 0..nargs {
@@ -78,7 +78,15 @@ fn spec_fast_path_engages_for_one_two_and_three_arguments() {
         ops.push(Op::Return);
         let caller = lambda(1, true, ops, vec![g]);
         let arg = Value::make_int(7);
-        // The first call compiles the caller and arms the site; the rest
+        crate::emacs_core::jit::test_support::prepare_entry(
+            &mut ev,
+            target.get_bytecode_data().expect("callee bytecode"),
+        );
+        crate::emacs_core::jit::test_support::prepare_entry(
+            &mut ev,
+            caller.get_bytecode_data().expect("caller bytecode"),
+        );
+        // Code is ready; the first original call arms the site, and the rest
         // take the armed fast path.
         assert_eq!(ev.funcall_general_untraced(caller, vec![arg]).unwrap(), arg);
         let before = shim_fast();
@@ -95,6 +103,168 @@ fn spec_fast_path_engages_for_one_two_and_three_arguments() {
         );
         assert!(ev.maybe_quit_hot_ok());
     }
+}
+
+/// The real two-argument bytecode spec shim sees the same ordered Value words
+/// in the unconditional packed producer. Distinct equal-content heap objects prove
+/// identity preservation, rather than merely equal Lisp results.
+#[test]
+fn two_argument_spec_calls_preserve_order_and_heap_identity() {
+    // These setters have no raw-override getter. Restore the prior effective
+    // scalar settings, including if this fixture is entered under an override.
+    struct CompilerPolicy {
+        direct: bool,
+        inline: bool,
+        profit: bool,
+        slow_spec: bool,
+        tier2: Tier2Knob,
+    }
+    impl CompilerPolicy {
+        fn enter() -> Self {
+            let prior = Self {
+                direct: jit_direct_call_on(),
+                inline: crate::emacs_core::jit::inline::jit_inline_on(),
+                profit: jit_profit_gate_on(),
+                slow_spec: jit_force_slow_spec(),
+                tier2: jit_tier2(),
+            };
+            force_direct_call_for_test(Some(false));
+            crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
+            force_profit_gate_for_test(false);
+            force_slow_spec_for_test(Some(false));
+            force_tier2_for_test(Some(Tier2Knob {
+                on: false,
+                ..prior.tier2
+            }));
+            prior
+        }
+    }
+    impl Drop for CompilerPolicy {
+        fn drop(&mut self) {
+            force_direct_call_for_test(Some(self.direct));
+            crate::emacs_core::jit::inline::force_inline_for_test(Some(self.inline));
+            force_profit_gate_for_test(self.profit);
+            force_slow_spec_for_test(Some(self.slow_spec));
+            force_tier2_for_test(Some(self.tier2));
+        }
+    }
+    struct FixtureRoots(usize);
+    impl Drop for FixtureRoots {
+        fn drop(&mut self) {
+            crate::emacs_core::eval::restore_scratch_gc_roots(self.0);
+        }
+    }
+    fn assert_arguments(pair: Value, left: Value, right: Value) {
+        assert!(pair.is_cons(), "callee returns both arguments as a cons");
+        assert_eq!(pair.cons_car().bits(), left.bits(), "first argument word");
+        assert_eq!(pair.cons_cdr().bits(), right.bits(), "second argument word");
+    }
+
+    crate::test_utils::init_test_tracing();
+    let _backend =
+        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _compiler = CompilerPolicy::enter();
+    let mut ev = Context::new();
+    let _roots = FixtureRoots(crate::emacs_core::eval::save_scratch_gc_roots());
+    let left_heap = Value::make_string("same contents, distinct objects");
+    crate::emacs_core::eval::push_scratch_gc_root(left_heap);
+    let right_heap = Value::make_string("same contents, distinct objects");
+    crate::emacs_core::eval::push_scratch_gc_root(right_heap);
+    assert_ne!(left_heap.bits(), right_heap.bits());
+    let arguments = [
+        (Value::make_int(0x12345), Value::make_int(-0x23456)),
+        (Value::NIL, Value::t()),
+        (left_heap, right_heap),
+    ];
+    let name = "neo-spec-gate-packed-two-identity";
+    let g = Value::symbol(name);
+    // Two blocks prevent the trivial-body path. Both branches return (a . b),
+    // with each StackRef selecting a different original argument word.
+    let target = lambda(
+        2,
+        false,
+        vec![
+            Op::StackRef(1),
+            Op::GotoIfNil(6),
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Cons,
+            Op::Return,
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Cons,
+            Op::Return,
+        ],
+        vec![],
+    );
+    ev.obarray.set_symbol_function_id(intern(name), target);
+    crate::emacs_core::jit::test_support::prepare_entry(
+        &mut ev,
+        target.get_bytecode_data().expect("callee bytecode"),
+    );
+    assert!(
+        target
+            .get_bytecode_data()
+            .unwrap()
+            .jit_runtime()
+            .compiled_id()
+            .is_some()
+    );
+
+    // A fresh site targets the prepared named callee. Direct and inline
+    // compilation remain disabled, so it uses the real bytecode spec shim.
+    let caller = lambda(
+        2,
+        true,
+        vec![
+            Op::Constant(0),
+            Op::StackRef(2),
+            Op::StackRef(2),
+            Op::Call(2),
+            Op::Return,
+        ],
+        vec![g],
+    );
+    crate::emacs_core::jit::test_support::prepare_entry(
+        &mut ev,
+        caller.get_bytecode_data().expect("caller bytecode"),
+    );
+    assert!(
+        caller
+            .get_bytecode_data()
+            .unwrap()
+            .jit_runtime()
+            .compiled_id()
+            .is_some()
+    );
+    // The first call arms this fresh site. Every subsequent pair exercises
+    // the warmed CallSpec path; the callee itself contains no nested calls.
+    let (left, right) = arguments[0];
+    assert_arguments(
+        ev.funcall_general_untraced(caller, vec![left, right])
+            .unwrap(),
+        left,
+        right,
+    );
+    let before = shim_fast();
+    for (left, right) in arguments {
+        for _ in 0..3 {
+            assert_arguments(
+                ev.funcall_general_untraced(caller, vec![left, right])
+                    .unwrap(),
+                left,
+                right,
+            );
+        }
+    }
+    // Run this focused fixture alone with --test-threads=1: the engagement
+    // counter is process-global. The prepared callee contains no nested calls.
+    assert_eq!(
+        shim_fast(),
+        before + 9,
+        "all nine warmed CallSpec admissions"
+    );
+    assert!(ev.maybe_quit_hot_ok());
 }
 
 /// (b) A quit raised by compiled code is noticed at the next speculated call,

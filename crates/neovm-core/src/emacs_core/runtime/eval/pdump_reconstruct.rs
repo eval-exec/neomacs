@@ -18,7 +18,7 @@ impl Context {
         features: Vec<SymId>,
         require_stack: Vec<SymId>,
         loads_in_progress: Vec<crate::heap_types::LispString>,
-        buffers: BufferManager,
+        buffers: crate::buffer::buffer::OwnedBufferStorageParts,
         autoloads: AutoloadManager,
         custom: CustomManager,
         modes: ModeRegistry,
@@ -59,14 +59,31 @@ impl Context {
         let throw_on_input =
             obarray.symbol_value_id_or_nil(core_eval_symbols.throw_on_input_symbol);
 
+        let world = world::WorldStorageBuilder {
+            owned_roots: Default::default(),
+            obarray: obarray,
+            features: features,
+            watchers: watchers,
+            active_variable_watchers: HashSet::new(),
+            autoloads: autoloads,
+            treesit: super::super::treesit::TreeSitterManager::new(),
+            frames: lisp_frame_manager(),
+            coding_systems: coding_systems,
+            macro_perf_stats: MacroPerfStats::default(),
+            buffers: buffers,
+            // Prepare allocation-capable managers before retiring the old TLS
+            // installation. The closed factory reinstalls the final view.
+            tagged_heap,
+        }
+        .build();
         let mut ev = Self {
             integer_width_context: Default::default(),
-            owned_roots: Default::default(),
-            tagged_heap,
+            owned_roots: world.owned_roots,
+            tagged_heap: world.tagged_heap,
             pdump_image: None,
             after_pdump_load_hook_pending: false,
             cached_system_name: Value::NIL,
-            obarray,
+            obarray: world.obarray,
             window_edge_drag: crate::emacs_core::window_edge_drag::WindowEdgeDrag::default(),
             specpdl: Vec::new(),
             suspended_thread_bindings: Vec::new(),
@@ -95,12 +112,12 @@ impl Context {
             print_symbols_bare_symbol: core_eval_symbols.print_symbols_bare_symbol,
             runtime_projection_mask: core_eval_symbols.runtime_projection_mask,
             print_symbols_bare,
-            features,
+            features: world.features,
             require_stack,
             loads_in_progress,
             load_read_cursors: Vec::new(),
             last_uncaught_signal_backtrace: None,
-            buffers,
+            buffers: world.buffers,
             xwidgets: super::super::xwidget::XwidgetState::new(),
             last_overlay_modification_hooks: Vec::new(),
             interval_insert_behind_hooks: Value::NIL,
@@ -110,8 +127,8 @@ impl Context {
             combine_after_change_buffer: None,
             message_log_need_newline: false,
             processes: ProcessManager::new(),
-            watchers,
-            active_variable_watchers: HashSet::new(),
+            watchers: world.watchers,
+            active_variable_watchers: world.active_variable_watchers,
             standard_syntax_table,
             syntax_code_objects,
             standard_category_table,
@@ -120,11 +137,11 @@ impl Context {
             registers,
             bookmarks,
             abbrevs,
-            autoloads,
+            autoloads: world.autoloads,
             custom,
             rectangle,
             interactive,
-            treesit: super::super::treesit::TreeSitterManager::new(),
+            treesit: world.treesit,
             minibuffers: MinibufferManager::new(),
             interactive_minibuffer_read_count: 0,
             current_message: None,
@@ -140,7 +157,7 @@ impl Context {
             input_mode_interrupt: true,
             quit_char: 7,
             waiting_for_user_input: false,
-            frames: lisp_frame_manager(),
+            frames: world.frames,
             modes,
             threads: ThreadManager::new(),
             kmacro,
@@ -162,7 +179,7 @@ impl Context {
             tty_frame_host_factory: None,
             visual_config: neomacs_display_protocol::VisualConfig::default(),
             pending_menu_bar_popup_anchor: None,
-            coding_systems,
+            coding_systems: world.coding_systems,
             code_conversion_workspace:
                 crate::code_conversion_workspace::CodeConversionWorkspace::default(),
             face_table,
@@ -228,7 +245,7 @@ impl Context {
             macro_expand_calls: 0,
             macro_expand_total_us: 0,
             macro_perf_enabled: std::env::var_os("NEOVM_TRACE_MACRO_PERF").is_some(),
-            macro_perf_stats: MacroPerfStats::default(),
+            macro_perf_stats: world.macro_perf_stats,
             interpreted_closure_filter_fn: None,
             cconv_memo: cconv_memo::CconvMemo::from_env(),
             tier_i: tier_i::TierI::from_env(),
@@ -282,7 +299,13 @@ impl Context {
         // An image stamped under the legacy policy can omit this C-owned
         // hook entirely. Preserve every saved cell, then let the existing
         // final activation adopt GNU forwarding/special metadata.
-        super::super::window_cmds::restore_gnu_configuration_hook_default(&mut ev.obarray);
+        // SAFETY: this cold hook-default repair only defines a missing special
+        // value cell. It cannot call Lisp or retarget canonical dispatch metadata.
+        unsafe {
+            ev.obarray.with_legacy_value_write(
+                super::super::window_cmds::restore_gnu_configuration_hook_default,
+            );
+        }
 
         ev.finish_runtime_activation(true);
 

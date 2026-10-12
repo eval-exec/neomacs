@@ -68,6 +68,9 @@ fn osr_binding_transfer_preserves_nested_binds_and_outer_native_segment() {
             let mut f = binding_sum(nested);
             f.seal_hand_assembled_ops();
             f.jit_runtime().set_hot_for_test();
+            if osr {
+                crate::emacs_core::jit::test_support::prepare_osr(&mut ctx, &f, 4);
+            }
             let before = cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
             let value = Vm::from_context(&mut ctx)
                 .execute(&f, vec![Value::make_int(2000)])
@@ -118,7 +121,10 @@ fn osr_binding_entry_rejects_wrong_snapshot_without_mutating_either_stack() {
         (&stack[..], &[spec_depth][..]),
     ] {
         let before = cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
-        assert!(cache::try_run_osr(&mut ctx, &f, 4, operands, binds).is_none());
+        assert!(
+            crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 4, operands, binds)
+                .is_none()
+        );
         assert_eq!(cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed), before);
         assert_eq!(ctx.jit_bind_stack, [outer_base]);
         assert_eq!(ctx.specpdl.len(), spec_depth);
@@ -135,7 +141,16 @@ fn osr_binding_entry_rejects_wrong_snapshot_without_mutating_either_stack() {
             ineligible.lexical = false;
         }
         ineligible.seal_hand_assembled_ops();
-        assert!(cache::try_run_osr(&mut ctx, &ineligible, 4, &stack, &[bind_base]).is_none());
+        assert!(
+            crate::emacs_core::jit::test_support::run_osr(
+                &mut ctx,
+                &ineligible,
+                4,
+                &stack,
+                &[bind_base]
+            )
+            .is_none()
+        );
         assert_eq!(ctx.jit_bind_stack, [outer_base]);
         assert_eq!(ctx.specpdl.len(), spec_depth);
     }
@@ -209,6 +224,9 @@ fn osr_binding_deopt_adopts_new_inner_binding_without_replaying_effects() {
         force_osr_for_test(osr);
         let f = mk();
         f.jit_runtime().set_hot_for_test();
+        if osr {
+            crate::emacs_core::jit::test_support::prepare_osr(&mut ctx, &f, 4);
+        }
         let spec_depth = ctx.specpdl.len();
         let before = cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
         let result = Vm::from_context(&mut ctx)
@@ -272,6 +290,9 @@ fn osr_binding_unlet_watchers_collect_and_preserve_cleanup_exit_semantics() {
             f.seal_hand_assembled_ops();
             f.jit_runtime().set_hot_for_test();
             force_osr_for_test(osr);
+            if osr {
+                crate::emacs_core::jit::test_support::prepare_osr(&mut ctx, &f, 4);
+            }
             let spec_depth = ctx.specpdl.len();
             let before = cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
             let gc_before = ctx.tagged_heap.gc_collections();
@@ -355,6 +376,9 @@ fn osr_binding_frame_exit_unwinds_inherited_and_new_binds_for_each_outcome() {
             f.seal_hand_assembled_ops();
             f.jit_runtime().set_hot_for_test();
             force_osr_for_test(osr);
+            if osr {
+                crate::emacs_core::jit::test_support::prepare_osr(&mut ctx, &f, 4);
+            }
             let before = cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
             if exit == "throw" {
                 ctx.push_condition_frame(ConditionFrame::Catch {
@@ -427,6 +451,11 @@ fn osr_binding_transfer_from_iterative_child_preserves_callers_binding() {
     caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     caller.seal_hand_assembled_ops();
     force_osr_for_test(true);
+    crate::emacs_core::jit::test_support::prepare_osr(
+        &mut ctx,
+        child.get_bytecode_data().expect("iterative child bytecode"),
+        4,
+    );
     let before = cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
     let spec_depth = ctx.specpdl.len();
     let result = {

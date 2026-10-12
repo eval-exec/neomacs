@@ -841,20 +841,22 @@ fn garbage_collect_maybe_collects_when_factor_scaled_threshold_exceeded() {
 #[test]
 fn gnutls_error_string_zero_is_success() {
     crate::test_utils::init_test_tracing();
-    let out =
-        crate::emacs_core::builtins::gnutls::builtin_gnutls_error_string(vec![Value::fixnum(0)])
-            .unwrap();
+    let out = crate::emacs_core::builtins::gnutls::builtin_gnutls_error_string(
+        vec![Value::fixnum(0)],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(out, Value::string("Success."));
 }
 
 #[test]
 fn gnutls_peer_status_warning_describe_rejects_non_symbol() {
     crate::test_utils::init_test_tracing();
-    let err =
-        crate::emacs_core::builtins::gnutls::builtin_gnutls_peer_status_warning_describe(vec![
-            Value::fixnum(0),
-        ])
-        .unwrap_err();
+    let err = crate::emacs_core::builtins::gnutls::builtin_gnutls_peer_status_warning_describe(
+        vec![Value::fixnum(0)],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
@@ -940,10 +942,10 @@ fn gnutls_format_certificate_requires_string() {
 #[test]
 fn gnutls_hash_digest_nil_method_signals_error() {
     crate::test_utils::init_test_tracing();
-    let err = crate::emacs_core::builtins::gnutls::builtin_gnutls_hash_digest(vec![
-        Value::NIL,
-        Value::string("a"),
-    ])
+    let err = crate::emacs_core::builtins::gnutls::builtin_gnutls_hash_digest(
+        vec![Value::NIL, Value::string("a")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
     .unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
@@ -954,11 +956,14 @@ fn gnutls_hash_digest_nil_method_signals_error() {
 #[test]
 fn gnutls_hash_mac_returns_raw_hmac_bytes() {
     crate::test_utils::init_test_tracing();
-    let mac = crate::emacs_core::builtins::gnutls::builtin_gnutls_hash_mac(vec![
-        Value::symbol("SHA256"),
-        Value::string("k"),
-        Value::string("a"),
-    ])
+    let mac = crate::emacs_core::builtins::gnutls::builtin_gnutls_hash_mac(
+        vec![
+            Value::symbol("SHA256"),
+            Value::string("k"),
+            Value::string("a"),
+        ],
+        crate::tagged::value::SymbolMode::Bare,
+    )
     .expect("gnutls-hash-mac should evaluate");
     assert_eq!(
         mac.as_lisp_string()
@@ -975,13 +980,16 @@ fn gnutls_hash_mac_returns_raw_hmac_bytes() {
 #[test]
 fn gnutls_symmetric_encrypt_requires_gnutls_support() {
     crate::test_utils::init_test_tracing();
-    let err = crate::emacs_core::builtins::gnutls::builtin_gnutls_symmetric_encrypt(vec![
-        Value::symbol("AES-128-GCM"),
-        Value::string("k"),
-        Value::string("iv"),
-        Value::string("data"),
-        Value::string("aad"),
-    ])
+    let err = crate::emacs_core::builtins::gnutls::builtin_gnutls_symmetric_encrypt(
+        vec![
+            Value::symbol("AES-128-GCM"),
+            Value::string("k"),
+            Value::string("iv"),
+            Value::string("data"),
+            Value::string("aad"),
+        ],
+        crate::tagged::value::SymbolMode::Bare,
+    )
     .unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),

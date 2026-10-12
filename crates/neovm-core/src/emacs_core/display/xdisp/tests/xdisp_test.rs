@@ -1489,11 +1489,13 @@ fn test_format_mode_line_tty_z_orders_keyboard_before_terminal() {
     crate::emacs_core::coding::builtin_set_keyboard_coding_system(
         &mut eval.coding_systems,
         vec![Value::symbol("utf-8-unix")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("set keyboard coding");
     crate::emacs_core::coding::builtin_set_terminal_coding_system(
         &mut eval.coding_systems,
         vec![Value::symbol("no-conversion")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("set terminal coding");
     eval.buffers

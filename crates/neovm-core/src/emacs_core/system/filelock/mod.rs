@@ -612,6 +612,7 @@ pub(crate) fn unlock_file(
                 &eval.obarray,
                 sig.symbol,
                 &Value::symbol("file-error"),
+                eval.symbol_mode(),
             ) =>
         {
             let error_object = Value::cons(Value::symbol(sig.symbol), signal_payload_value(&sig));

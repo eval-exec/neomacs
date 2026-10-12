@@ -12,7 +12,7 @@ pub(super) fn bounded_spec<B: LayoutBufferView>(buffer: &B, budget: usize) -> bo
     let mut spec = buffer
         .layout_buffer_local_value(WindowLayoutVariable::BufferInvisibilitySpec)
         .unwrap_or(Value::T);
-    if spec.is_symbol() {
+    if spec.is_bare_symbol() {
         return true;
     }
     for _ in 0..budget {
@@ -23,8 +23,10 @@ pub(super) fn bounded_spec<B: LayoutBufferView>(buffer: &B, budget: usize) -> bo
             return false;
         }
         let tag = spec.cons_car();
-        if !(tag.is_symbol()
-            || (tag.is_cons() && tag.cons_car().is_symbol() && tag.cons_cdr().is_symbol()))
+        if !(tag.is_bare_symbol()
+            || (tag.is_cons()
+                && tag.cons_car().is_bare_symbol()
+                && tag.cons_cdr().is_bare_symbol()))
         {
             return false;
         }

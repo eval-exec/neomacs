@@ -274,6 +274,7 @@ enum AutoHscrollMode {
 /// Read `auto-hscroll-mode` buffer-local-then-global.  GNU's default when the
 /// variable is unbound is the `t` behaviour.
 fn auto_hscroll_mode(ctx: &Context, buffer_id: crate::buffer::BufferId) -> AutoHscrollMode {
+    let symbol_mode = ctx.symbol_mode();
     let buf = ctx.buffers.get(buffer_id);
     let value = crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value(
         &ctx.obarray,
@@ -284,7 +285,7 @@ fn auto_hscroll_mode(ctx: &Context, buffer_id: crate::buffer::BufferId) -> AutoH
     .unwrap_or(Value::T);
     if value.is_nil() {
         AutoHscrollMode::Off
-    } else if value.is_symbol_named("current-line") {
+    } else if value.is_symbol_named("current-line", symbol_mode) {
         AutoHscrollMode::CurrentLine
     } else {
         AutoHscrollMode::AllLines

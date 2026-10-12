@@ -42,7 +42,7 @@ pub enum DisplaySpaceKey {
 
 impl DisplaySpaceKey {
     pub fn from_lisp_value(value: Value) -> Option<Self> {
-        Self::from_keyword(value.as_symbol_name()?)
+        Self::from_keyword(value.as_bare_symbol_name()?)
     }
 
     pub fn from_keyword(name: &str) -> Option<Self> {
@@ -191,12 +191,12 @@ pub fn display_spec_kind(spec: Value) -> DisplaySpecKind {
         // only; whether AREA itself is usable is a separate question, answered by
         // [`display_spec_margin_value`], because an unusable AREA still keeps the
         // value a single spec rather than turning it into a list of specs.
-        if car.cons_car().is_symbol_named("margin") {
+        if car.cons_car().is_bare_symbol_named("margin") {
             return DisplaySpecKind::Margin;
         }
         return DisplaySpecKind::Other;
     }
-    let Some(name) = car.as_symbol_name() else {
+    let Some(name) = car.as_bare_symbol_name() else {
         return DisplaySpecKind::Other;
     };
     match name {
@@ -229,9 +229,9 @@ fn display_margin_location(head_cdr: Value) -> Option<DisplayMarginLocation> {
     };
     if area.is_nil() {
         Some(DisplayMarginLocation::Text)
-    } else if area.is_symbol_named("left-margin") {
+    } else if area.is_bare_symbol_named("left-margin") {
         Some(DisplayMarginLocation::Left)
-    } else if area.is_symbol_named("right-margin") {
+    } else if area.is_bare_symbol_named("right-margin") {
         Some(DisplayMarginLocation::Right)
     } else {
         None
@@ -293,7 +293,7 @@ impl DisplayPropertySpecs {
     /// Decode the shape of a `display` property value, stripping an outer
     /// `(disable-eval SPEC)` wrapper.
     pub fn of(value: Value) -> Self {
-        if value.is_cons() && value.cons_car().is_symbol_named("disable-eval") {
+        if value.is_cons() && value.cons_car().is_bare_symbol_named("disable-eval") {
             let rest = value.cons_cdr();
             return Self {
                 value: if rest.is_cons() {

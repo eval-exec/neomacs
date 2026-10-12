@@ -32,7 +32,7 @@ pub(super) fn inactive_overlay_arrows(evaluator: &neovm_core::emacs_core::Contex
         if !tail.is_cons() {
             return true;
         }
-        if let Some(sym) = tail.cons_car().as_symbol_id()
+        if let Some(sym) = tail.cons_car().as_bare_symbol_id()
             && evaluator
                 .obarray()
                 .symbol_value_id_copied(sym)
@@ -1087,7 +1087,7 @@ impl LayoutEngine {
             .ok_or(RowProgramError::Unsupported)?;
         let ws = frame_data
             .effective_window_system()
-            .and_then(|value| value.as_symbol_name().map(str::to_owned));
+            .and_then(|value| value.as_bare_symbol_name().map(str::to_owned));
         if ws.is_none() {
             return Err(RowProgramError::Unsupported);
         }
@@ -1152,12 +1152,13 @@ impl LayoutEngine {
         {
             return Err(RowProgramError::Cancelled);
         }
-        let view = BorrowedLayoutBuffer::for_window(
+        let view = BorrowedLayoutBuffer::for_window_with_symbols(
             buffer,
             evaluator.obarray(),
             capture.position,
             128,
             crate::display_property::DisplayPropertyTarget::Graphical,
+            evaluator.symbol_mode(),
         );
         if !inactive_overlay_arrows(evaluator) {
             return Err(RowProgramError::Unsupported);

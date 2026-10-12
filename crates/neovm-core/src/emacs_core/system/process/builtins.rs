@@ -4,6 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use crate::tagged::value::SymbolMode;
 
 /// (internal-default-interrupt-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 pub(crate) fn builtin_internal_default_interrupt_process(
@@ -327,7 +328,7 @@ pub(crate) fn builtin_gnutls_boot(
 ) -> EvalResult {
     expect_args("gnutls-boot", &args, 3)?;
     let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes, &args[0])?;
-    let parameters = parse_gnutls_boot_parameters(args[1], args[2])?;
+    let parameters = parse_gnutls_boot_parameters(args[1], args[2], eval.symbol_mode())?;
     upgrade_process_to_tls::<RustlsBackend>(
         eval,
         id,
@@ -1526,6 +1527,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                         &path,
                         server_backlog.unwrap_or(5),
                         &socket_options,
+                        contact,
                     )?;
                     contact = process_contact_plist_put(
                         contact,
@@ -1580,7 +1582,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                     return Ok(Value::make_process(id));
                 }
 
-                let socket = connect_unix_seqpacket_socket(&path, &socket_options)?;
+                let socket = connect_unix_seqpacket_socket(&path, &socket_options, contact)?;
                 contact = process_contact_plist_put(
                     contact,
                     ProcessKeyword::Remote.value(),
@@ -2200,6 +2202,7 @@ pub(super) fn connect_local_socket_process(
                     &service_path,
                     server_backlog.unwrap_or(5),
                     &socket_options,
+                    contact,
                 )?;
                 contact = process_contact_plist_put(
                     contact,
@@ -2253,7 +2256,7 @@ pub(super) fn connect_local_socket_process(
                 return Ok(Value::make_process(id));
             }
 
-            let socket = connect_unix_seqpacket_socket(&service_path, &socket_options)?;
+            let socket = connect_unix_seqpacket_socket(&service_path, &socket_options, contact)?;
             contact = process_contact_plist_put(
                 contact,
                 ProcessKeyword::Remote.value(),
@@ -2575,7 +2578,7 @@ pub(crate) fn builtin_make_network_process(
     } else {
         None
     };
-    let tls_parameters = parse_make_network_tls_parameters(tls_parameters_val)?;
+    let tls_parameters = parse_make_network_tls_parameters(tls_parameters_val, eval.symbol_mode())?;
 
     // Resolve :buffer to a buffer name (creating buffer if needed).
     let buffer = if !buffer_val.is_nil() {
@@ -2922,6 +2925,7 @@ pub(crate) fn builtin_make_pipe_process(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     eval.sync_process_read_config_from_visible_variables();
     let coding_variables = read_connection_process_coding_variables(eval);
     let result = builtin_make_pipe_process_impl(
@@ -2931,6 +2935,7 @@ pub(crate) fn builtin_make_pipe_process(
         Some(&eval.coding_systems),
         coding_variables,
         args,
+        symbol_mode,
     );
     initialize_created_process_output(eval, result)
 }
@@ -2955,6 +2960,7 @@ pub(crate) fn builtin_make_pipe_process_impl(
     coding_systems: Option<&super::super::coding::CodingSystemManager>,
     coding_variables: ConnectionProcessCodingVariables,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     if args.is_empty() {
         return Ok(Value::NIL);
@@ -3035,7 +3041,7 @@ pub(crate) fn builtin_make_pipe_process_impl(
         coding,
         coding_variables.pipe(process_buffer_multibyteness(buffers, resolved_buffer)),
     );
-    validate_resolved_process_coding_systems(coding_systems, resolved_coding)?;
+    validate_resolved_process_coding_systems(coding_systems, resolved_coding, mode)?;
     let plist = copy_process_plist(plist)?;
     let (pipe_reader, pipe_writer) = os_pipe::pipe().map_err(|error| {
         signal(
@@ -3084,6 +3090,7 @@ pub(crate) fn builtin_make_serial_process(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     eval.sync_process_read_config_from_visible_variables();
     let coding_variables = read_connection_process_coding_variables(eval);
     let result = builtin_make_serial_process_impl(
@@ -3093,6 +3100,7 @@ pub(crate) fn builtin_make_serial_process(
         Some(&eval.coding_systems),
         coding_variables,
         args,
+        symbol_mode,
     );
     initialize_created_process_output(eval, result)
 }
@@ -3104,6 +3112,7 @@ pub(crate) fn builtin_make_serial_process_impl(
     coding_systems: Option<&super::super::coding::CodingSystemManager>,
     coding_variables: ConnectionProcessCodingVariables,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     if args.is_empty() {
         return Ok(Value::NIL);
@@ -3213,7 +3222,7 @@ pub(crate) fn builtin_make_serial_process_impl(
     // GNU resolves and then validates through `setup_process_coding_systems`
     // (src/process.c:3277), the same two steps `make-pipe-process` takes.
     let resolved_coding = resolve_serial_process_coding_systems(coding, coding_variables.serial());
-    validate_resolved_process_coding_systems(coding_systems, resolved_coding)?;
+    validate_resolved_process_coding_systems(coding_systems, resolved_coding, mode)?;
     let plist = copy_process_plist(plist)?;
 
     // GNU `Fserial_process_configure (nargs, args)`, src/process.c:3284, whose
@@ -3344,7 +3353,7 @@ pub(crate) fn builtin_set_network_process_option_impl(
         ));
     }
 
-    if args[1].as_symbol_name().is_none() {
+    if args[1].as_bare_symbol_name().is_none() {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[1]],
@@ -3479,7 +3488,7 @@ pub(crate) fn builtin_delete_process(
         ));
     }
     let id = if let Some(process) = args.first() {
-        if process.as_symbol_name() == Some("message") {
+        if process.as_bare_symbol_name() == Some("message") {
             resolve_get_process_designator_in_state(&eval.processes, &eval.buffers, &Value::NIL)?
         } else {
             resolve_get_process_designator_in_state(&eval.processes, &eval.buffers, process)?
@@ -3515,7 +3524,7 @@ pub(crate) fn builtin_delete_process_impl(
         ));
     }
     let id = if let Some(process) = args.first() {
-        if process.as_symbol_name() == Some("message") {
+        if process.as_bare_symbol_name() == Some("message") {
             resolve_get_process_designator_in_state(processes, buffers, &Value::NIL)?
         } else {
             resolve_get_process_designator_in_state(processes, buffers, process)?
@@ -3845,6 +3854,18 @@ pub(crate) fn builtin_process_attributes(
     builtin_process_attributes_impl(args)
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn builtin_process_attributes_impl(args: Vec<Value>) -> EvalResult {
+    expect_args("process-attributes", &args, 1)?;
+    let pid = cons_to_os_pid(args[0])?;
+    darwin_attributes::attributes(pid)
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[path = "darwin_attributes.rs"]
+mod darwin_attributes;
+
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn builtin_process_attributes_impl(args: Vec<Value>) -> EvalResult {
     expect_args("process-attributes", &args, 1)?;
     let pid = cons_to_os_pid(args[0])?;
@@ -4048,6 +4069,7 @@ pub(crate) fn builtin_make_process(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     if !args.is_empty() {
         check_keyword_arg_pairs(&args)?;
         if make_process_keyword_arg(&args, ProcessKeyword::FileHandler).is_truthy() {
@@ -4096,6 +4118,7 @@ pub(crate) fn builtin_make_process(
         subprocess_cwd,
         Some(&eval.coding_systems),
         coding_environment,
+        symbol_mode,
     );
     eval.restore_specpdl_roots(roots);
     initialize_created_process_output(eval, process)
@@ -4185,6 +4208,7 @@ pub(crate) fn builtin_make_process_impl(
     threads: &ThreadManager,
     args: Vec<Value>,
     default_use_pty: bool,
+    mode: SymbolMode,
 ) -> EvalResult {
     builtin_make_process_impl_with_environment(
         processes,
@@ -4197,6 +4221,7 @@ pub(crate) fn builtin_make_process_impl(
         None,
         None,
         MakeProcessCodingEnvironment::unbound(),
+        mode,
     )
 }
 
@@ -4212,6 +4237,7 @@ pub(super) fn builtin_make_process_impl_with_environment(
     subprocess_cwd: Option<PathBuf>,
     coding_systems: Option<&super::super::coding::CodingSystemManager>,
     coding_environment: MakeProcessCodingEnvironment,
+    mode: SymbolMode,
 ) -> EvalResult {
     if args.is_empty() {
         return Ok(Value::NIL);
@@ -4320,8 +4346,8 @@ pub(super) fn builtin_make_process_impl_with_environment(
     // a process behind.
     let resolved_coding =
         resolve_make_process_coding_systems(coding_val.unwrap_or(Value::NIL), coding_environment);
-    validate_process_coding_component(coding_systems, resolved_coding.decode)?;
-    validate_process_coding_component(coding_systems, resolved_coding.encode)?;
+    validate_process_coding_component(coding_systems, resolved_coding.decode, mode)?;
+    validate_process_coding_component(coding_systems, resolved_coding.encode, mode)?;
     let stderrproc = if stderr_target.is_nil() {
         Value::NIL
     } else if let Some(stderr_id) = process_value_to_id(&stderr_target) {
@@ -4356,6 +4382,7 @@ pub(super) fn builtin_make_process_impl_with_environment(
                 ProcessKeyword::Noquery.value(),
                 Value::bool_val(noquery),
             ],
+            mode,
         )?
     };
     let id = processes.create_process_lisp_resolved(
@@ -4612,7 +4639,7 @@ fn encode_process_send_input_in_context(
         .ok_or_else(|| signal_process_not_running_in_manager(&eval.processes, id))?
         .coding_encode;
     let configured = configured
-        .as_symbol_id()
+        .as_bare_symbol_id()
         .filter(|&symbol| symbol != super::super::intern::intern("nil"))
         .unwrap_or_else(|| super::super::intern::intern("utf-8-unix"));
     let configured = crate::encoding::RuntimeCodingSystem::from_symbol(configured);
@@ -4973,9 +5000,14 @@ pub(crate) fn builtin_set_process_coding_system(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let process = args.first().copied();
-    let result =
-        builtin_set_process_coding_system_impl(&mut eval.processes, &eval.coding_systems, args)?;
+    let result = builtin_set_process_coding_system_impl(
+        &mut eval.processes,
+        &eval.coding_systems,
+        args,
+        symbol_mode,
+    )?;
     let id = resolve_process_object_or_wrong_type_any_in_manager(
         &eval.processes,
         &process.expect("validated arguments"),
@@ -4988,6 +5020,7 @@ pub(crate) fn builtin_set_process_coding_system_impl(
     processes: &mut ProcessManager,
     coding_systems: &super::super::coding::CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_min_args("set-process-coding-system", &args, 1)?;
     if args.len() > 3 {
@@ -5007,9 +5040,10 @@ pub(crate) fn builtin_set_process_coding_system_impl(
     let id = resolve_process_object_or_wrong_type_any_in_manager(processes, &args[0])?;
     let decoding = args.get(1).cloned().unwrap_or(Value::NIL);
     let encoding = args.get(2).cloned().unwrap_or(Value::NIL);
-    super::super::coding::builtin_check_coding_system(coding_systems, vec![decoding])?;
-    super::super::coding::builtin_check_coding_system(coding_systems, vec![encoding])?;
-    let encoding = super::super::coding::coding_inherit_eol_type_unix(coding_systems, encoding);
+    super::super::coding::builtin_check_coding_system(coding_systems, vec![decoding], mode)?;
+    super::super::coding::builtin_check_coding_system(coding_systems, vec![encoding], mode)?;
+    let encoding =
+        super::super::coding::coding_inherit_eol_type_unix(coding_systems, encoding, mode);
 
     let proc = processes.get_any_mut(id).ok_or_else(|| {
         signal(
@@ -5895,7 +5929,7 @@ pub(crate) fn builtin_process_contact_impl(
     })?;
     let key = args.get(1).copied().unwrap_or(Value::NIL);
     let mut contact = proc.childp;
-    match proc.proc_type.as_symbol_name() {
+    match proc.proc_type.as_bare_symbol_name() {
         Some("network") => {
             if process_is_datagram_network(proc)
                 && (key == Value::T || key == ProcessKeyword::Remote.value())
@@ -6194,7 +6228,7 @@ pub(crate) fn make_network_process_subfeatures() -> Value {
 /// Batch/runtime compatibility path. Accepts stdin/stdout/stderr symbols.
 pub(crate) fn builtin_set_binary_mode(args: Vec<Value>) -> EvalResult {
     expect_args("set-binary-mode", &args, 2)?;
-    let stream = args[0].as_symbol_name().ok_or_else(|| {
+    let stream = args[0].as_bare_symbol_name().ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],

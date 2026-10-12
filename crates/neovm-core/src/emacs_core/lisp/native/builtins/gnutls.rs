@@ -6,6 +6,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::tls::format_x509_certificate_pem;
 use crate::emacs_core::value::{VecLikeType, list_to_vec};
+use crate::tagged::value::SymbolMode;
 use aes::Aes256;
 use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::NoPadding};
 use hmac::{KeyInit, Mac, SimpleHmac};
@@ -52,9 +53,9 @@ pub(crate) fn builtin_gnutls_macs(args: Vec<Value>) -> EvalResult {
     ))
 }
 
-pub(crate) fn builtin_gnutls_errorp(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_gnutls_errorp(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("gnutls-errorp", &args, 1)?;
-    if args[0] == Value::T || args[0].is_symbol_named("gnutls-e-again") {
+    if mode.unwrap(args[0]) == Value::T || args[0].is_symbol_named("gnutls-e-again", mode) {
         Ok(Value::NIL)
     } else {
         Ok(Value::T)
@@ -62,9 +63,9 @@ pub(crate) fn builtin_gnutls_errorp(args: Vec<Value>) -> EvalResult {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_gnutls_error_string(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_gnutls_error_string(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("gnutls-error-string", &args, 1)?;
-    gnutls_error_string_impl(None, args[0])
+    gnutls_error_string_impl(None, args[0], mode)
 }
 
 pub(crate) fn builtin_gnutls_error_string_with_ctx(
@@ -72,11 +73,11 @@ pub(crate) fn builtin_gnutls_error_string_with_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-error-string", &args, 1)?;
-    gnutls_error_string_impl(Some(eval), args[0])
+    gnutls_error_string_impl(Some(eval), args[0], eval.symbol_mode())
 }
 
-fn gnutls_error_string_impl(eval: Option<&Context>, error: Value) -> EvalResult {
-    let message = match gnutls_error_code(eval, error) {
+fn gnutls_error_string_impl(eval: Option<&Context>, error: Value, mode: SymbolMode) -> EvalResult {
+    let message = match gnutls_error_code(eval, error, mode) {
         GnutlsErrorCode::SuccessSentinel => "Not an error",
         GnutlsErrorCode::Code(code) => gnutls_error_code_string(code),
         GnutlsErrorCode::SymbolWithoutCode => "Symbol has no numeric gnutls-code property",
@@ -86,9 +87,9 @@ fn gnutls_error_string_impl(eval: Option<&Context>, error: Value) -> EvalResult 
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_gnutls_error_fatalp(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_gnutls_error_fatalp(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("gnutls-error-fatalp", &args, 1)?;
-    gnutls_error_fatalp_impl(None, args[0])
+    gnutls_error_fatalp_impl(None, args[0], mode)
 }
 
 pub(crate) fn builtin_gnutls_error_fatalp_with_ctx(
@@ -96,11 +97,11 @@ pub(crate) fn builtin_gnutls_error_fatalp_with_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-error-fatalp", &args, 1)?;
-    gnutls_error_fatalp_impl(Some(eval), args[0])
+    gnutls_error_fatalp_impl(Some(eval), args[0], eval.symbol_mode())
 }
 
-fn gnutls_error_fatalp_impl(eval: Option<&Context>, error: Value) -> EvalResult {
-    match gnutls_error_code(eval, error) {
+fn gnutls_error_fatalp_impl(eval: Option<&Context>, error: Value, mode: SymbolMode) -> EvalResult {
+    match gnutls_error_code(eval, error, mode) {
         GnutlsErrorCode::SuccessSentinel | GnutlsErrorCode::Code(0) => Ok(Value::NIL),
         GnutlsErrorCode::Code(-28 | -52) => Ok(Value::NIL),
         GnutlsErrorCode::Code(code) if code < 0 => Ok(Value::T),
@@ -123,21 +124,25 @@ enum GnutlsErrorCode {
     InvalidObject,
 }
 
-fn gnutls_error_code(eval: Option<&Context>, value: Value) -> GnutlsErrorCode {
-    if value == Value::T {
+fn gnutls_error_code(eval: Option<&Context>, value: Value, mode: SymbolMode) -> GnutlsErrorCode {
+    if mode.unwrap(value) == Value::T {
         return GnutlsErrorCode::SuccessSentinel;
     }
-    match value.kind() {
+    match mode.unwrap(value).kind() {
         ValueKind::Fixnum(code) => GnutlsErrorCode::Code(code),
         ValueKind::Nil => GnutlsErrorCode::SymbolWithoutCode,
-        ValueKind::Symbol(_) => gnutls_symbol_error_code(eval, value),
+        ValueKind::Symbol(_) => gnutls_symbol_error_code(eval, value, mode),
         _ => GnutlsErrorCode::InvalidObject,
     }
 }
 
-fn gnutls_symbol_error_code(eval: Option<&Context>, value: Value) -> GnutlsErrorCode {
+fn gnutls_symbol_error_code(
+    eval: Option<&Context>,
+    value: Value,
+    mode: SymbolMode,
+) -> GnutlsErrorCode {
     if let Some(eval) = eval
-        && let Some(symbol) = value.as_symbol_id()
+        && let Some(symbol) = value.as_symbol_id(mode)
         && let Some(code) = eval
             .obarray()
             .get_property_id(symbol, intern("gnutls-code"))
@@ -151,7 +156,7 @@ fn gnutls_symbol_error_code(eval: Option<&Context>, value: Value) -> GnutlsError
         };
     }
 
-    match value.as_symbol_name() {
+    match value.as_symbol_name(mode) {
         Some("gnutls-e-again") => GnutlsErrorCode::Code(-28),
         Some("gnutls-e-interrupted") => GnutlsErrorCode::Code(-52),
         Some("gnutls-e-invalid-session") => GnutlsErrorCode::Code(-10),
@@ -170,12 +175,15 @@ fn gnutls_error_code_string(code: i64) -> &'static str {
     }
 }
 
-pub(crate) fn builtin_gnutls_peer_status_warning_describe(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_gnutls_peer_status_warning_describe(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("gnutls-peer-status-warning-describe", &args, 1)?;
     if args[0].is_nil() {
         return Ok(Value::NIL);
     }
-    let Some(symbol) = args[0].as_symbol_name() else {
+    let Some(symbol) = args[0].as_symbol_name(mode) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],
@@ -231,29 +239,29 @@ pub(crate) fn builtin_gnutls_format_certificate(args: Vec<Value>) -> EvalResult 
     Ok(Value::string(formatted))
 }
 
-pub(crate) fn builtin_gnutls_hash_digest(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_gnutls_hash_digest(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("gnutls-hash-digest", &args, 2)?;
-    let algorithm = gnutls_digest_algorithm(&args[0])?;
+    let algorithm = gnutls_digest_algorithm(&args[0], mode)?;
     let input = gnutls_crypto_input_bytes(&args[1], "digest input")?;
     Ok(unibyte_value(&algorithm.digest(&input)))
 }
 
-pub(crate) fn builtin_gnutls_hash_mac(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_gnutls_hash_mac(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("gnutls-hash-mac", &args, 3)?;
-    let algorithm = gnutls_mac_algorithm(&args[0])?;
+    let algorithm = gnutls_mac_algorithm(&args[0], mode)?;
     let key = gnutls_crypto_input_bytes(&args[1], "MAC key")?;
     let input = gnutls_crypto_input_bytes(&args[2], "MAC input")?;
     Ok(unibyte_value(&algorithm.hmac(&key, &input)?))
 }
 
-pub(crate) fn builtin_gnutls_symmetric_decrypt(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_gnutls_symmetric_decrypt(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args_range("gnutls-symmetric-decrypt", &args, 4, 5)?;
-    gnutls_symmetric_cipher(args, GnutlsCipherOperation::Decrypt)
+    gnutls_symmetric_cipher(args, GnutlsCipherOperation::Decrypt, mode)
 }
 
-pub(crate) fn builtin_gnutls_symmetric_encrypt(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_gnutls_symmetric_encrypt(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args_range("gnutls-symmetric-encrypt", &args, 4, 5)?;
-    gnutls_symmetric_cipher(args, GnutlsCipherOperation::Encrypt)
+    gnutls_symmetric_cipher(args, GnutlsCipherOperation::Encrypt, mode)
 }
 
 #[derive(Clone, Copy)]
@@ -392,8 +400,9 @@ enum GnutlsCipherOperation {
 fn gnutls_symmetric_cipher(
     args: Vec<Value>,
     operation: GnutlsCipherOperation,
+    mode: SymbolMode,
 ) -> Result<Value, crate::emacs_core::error::Flow> {
-    let algorithm = gnutls_cipher_algorithm(&args[0])?;
+    let algorithm = gnutls_cipher_algorithm(&args[0], mode)?;
     if args.len() == 5 && !args[4].is_nil() {
         return Err(signal(
             "error",
@@ -412,7 +421,7 @@ fn gnutls_symmetric_cipher(
         ));
     }
 
-    let iv = gnutls_cipher_iv_bytes(&args[2], algorithm.iv_size)?;
+    let iv = gnutls_cipher_iv_bytes(&args[2], algorithm.iv_size, mode)?;
     let input = gnutls_crypto_input_bytes(&args[3], "cipher input")?;
     if input.len() % algorithm.block_size != 0 {
         return Err(signal(
@@ -485,25 +494,35 @@ where
 
 fn gnutls_digest_algorithm(
     value: &Value,
+    mode: SymbolMode,
 ) -> Result<GnutlsDigestAlgorithm, crate::emacs_core::error::Flow> {
     gnutls_algorithm(
         value,
         DIGEST_ALGORITHMS,
         ":digest-algorithm-id",
         "digest-method",
+        mode,
     )
 }
 
 fn gnutls_mac_algorithm(
     value: &Value,
+    mode: SymbolMode,
 ) -> Result<GnutlsDigestAlgorithm, crate::emacs_core::error::Flow> {
-    gnutls_algorithm(value, MAC_ALGORITHMS, ":mac-algorithm-id", "MAC-method")
+    gnutls_algorithm(
+        value,
+        MAC_ALGORITHMS,
+        ":mac-algorithm-id",
+        "MAC-method",
+        mode,
+    )
 }
 
 fn gnutls_cipher_algorithm(
     value: &Value,
+    mode: SymbolMode,
 ) -> Result<GnutlsCipherAlgorithm, crate::emacs_core::error::Flow> {
-    if let Some(name) = value.as_symbol_name().or_else(|| value.as_utf8_str()) {
+    if let Some(name) = value.as_symbol_name(mode).or_else(|| value.as_utf8_str()) {
         if let Some(algorithm) = CIPHER_ALGORITHMS
             .iter()
             .find(|algorithm| algorithm.name == name)
@@ -524,7 +543,7 @@ fn gnutls_cipher_algorithm(
     }
 
     if let Some(items) = list_to_vec(value)
-        && let Some(id) = plist_fixnum(&items, ":cipher-id")
+        && let Some(id) = plist_fixnum(&items, ":cipher-id", mode)
         && let Some(algorithm) = CIPHER_ALGORITHMS
             .iter()
             .find(|algorithm| algorithm.id == id)
@@ -540,8 +559,9 @@ fn gnutls_algorithm(
     algorithms: &[GnutlsDigestAlgorithm],
     id_key: &str,
     description: &str,
+    mode: SymbolMode,
 ) -> Result<GnutlsDigestAlgorithm, crate::emacs_core::error::Flow> {
-    if let Some(name) = value.as_symbol_name().or_else(|| value.as_utf8_str()) {
+    if let Some(name) = value.as_symbol_name(mode).or_else(|| value.as_utf8_str()) {
         if let Some(algorithm) = algorithms.iter().find(|algorithm| algorithm.name == name) {
             return Ok(*algorithm);
         }
@@ -556,7 +576,7 @@ fn gnutls_algorithm(
     }
 
     if let Some(items) = list_to_vec(value)
-        && let Some(id) = plist_fixnum(&items, id_key)
+        && let Some(id) = plist_fixnum(&items, id_key, mode)
         && let Some(algorithm) = algorithms.iter().find(|algorithm| algorithm.id == id)
     {
         return Ok(*algorithm);
@@ -565,9 +585,9 @@ fn gnutls_algorithm(
     Err(invalid_gnutls_algorithm(description, *value))
 }
 
-fn plist_fixnum(items: &[Value], key: &str) -> Option<i64> {
+fn plist_fixnum(items: &[Value], key: &str, mode: SymbolMode) -> Option<i64> {
     items.windows(2).find_map(|pair| {
-        if pair[0].is_symbol_named(key)
+        if pair[0].is_symbol_named(key, mode)
             && let ValueKind::Fixnum(id) = pair[1].kind()
         {
             return Some(id);
@@ -619,10 +639,11 @@ fn gnutls_crypto_input_bytes(
 fn gnutls_cipher_iv_bytes(
     value: &Value,
     expected_size: usize,
+    mode: SymbolMode,
 ) -> Result<Vec<u8>, crate::emacs_core::error::Flow> {
     if let Some(items) = list_to_vec(value)
         && items.len() == 2
-        && items[0].as_symbol_name() == Some("iv-auto")
+        && items[0].as_symbol_name(mode) == Some("iv-auto")
     {
         let ValueKind::Fixnum(size) = items[1].kind() else {
             return Err(gnutls_cipher_extraction_error("cipher IV"));

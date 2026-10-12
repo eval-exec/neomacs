@@ -36,6 +36,8 @@ fn kind(f: &ByteCodeFunction) -> &'static str {
 #[test]
 fn jit_bg_queue_serves_classes_in_priority_order() {
     force_mode_for_test(Some(BgMode::Threaded));
+    // The worker's OSR path is under test, whatever the leaf's size.
+    force_osr_inline_insts_for_test(Some(0));
     force_deopt_for_test(false);
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context;
@@ -79,6 +81,7 @@ fn jit_bg_queue_serves_classes_in_priority_order() {
             .all(|w| w[0].0 != w[1].0 || w[0].1 < w[1].1),
         "FIFO within a class: {served:?}"
     );
+    force_osr_inline_insts_for_test(None);
     force_mode_for_test(None);
 }
 

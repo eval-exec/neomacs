@@ -60,8 +60,8 @@ fn pure_nth(_: &Context, n: Value, list: Value) -> Result<Value, Flow> {
 fn pure_nthcdr(_: &Context, n: Value, list: Value) -> Result<Value, Flow> {
     b::builtin_nthcdr_values(n, list)
 }
-fn pure_elt(_: &Context, sequence: Value, n: Value) -> Result<Value, Flow> {
-    b::bytecode_elt_values(sequence, n)
+fn pure_elt(context: &Context, sequence: Value, n: Value) -> Result<Value, Flow> {
+    b::bytecode_elt_values_in_state(context, sequence, n)
 }
 fn pure_member(ctx: &Context, target: Value, list: Value) -> Result<Value, Flow> {
     b::builtin_member_values(target, list, ctx.symbols_with_pos_enabled)
@@ -83,8 +83,8 @@ fn pure_setcar(_: &Context, cons: Value, new_car: Value) -> Result<Value, Flow> 
 fn pure_setcdr(_: &Context, cons: Value, new_cdr: Value) -> Result<Value, Flow> {
     b::builtin_setcdr_values(cons, new_cdr)
 }
-fn pure_aref(_: &Context, array: Value, index: Value) -> Result<Value, Flow> {
-    b::builtin_aref_values(array, index)
+fn pure_aref(ctx: &Context, array: Value, index: Value) -> Result<Value, Flow> {
+    b::builtin_aref_values_in_state(ctx, array, index)
 }
 fn pure_get(ctx: &Context, symbol: Value, prop: Value) -> Result<Value, Flow> {
     Ok(b::symbol_property_get(ctx, symbol, prop)?
@@ -416,7 +416,9 @@ fn aref_slow(ctx: *mut u8, array: Value, index: Value) -> i64 {
     #[cfg(test)]
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
-        match b::builtin_aref_values(array, index) {
+        // SAFETY: live dormant Context supplied by the JIT shim contract.
+        let context = unsafe { &*(ctx as *const Context) };
+        match b::builtin_aref_values_in_state(context, array, index) {
             Ok(value) => value.bits() as i64,
             Err(flow) => {
                 stash_pending_flow(flow);
@@ -558,7 +560,7 @@ pub extern "C" fn neovm_jit_assq(ctx: *mut u8, key: i64, list: i64) -> i64 {
 /// SAFETY: same vmctx contract as [`neovm_jit_call`]; only read here.
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_setcar(ctx: *mut u8, cell: i64, new_car: i64) -> i64 {
+pub extern "C" fn neovm_jit_setcar_collection(ctx: *mut u8, cell: i64, new_car: i64) -> i64 {
     #[cfg(test)]
     LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let cell = Value::from_bits(cell as usize);
@@ -569,16 +571,46 @@ pub extern "C" fn neovm_jit_setcar(ctx: *mut u8, cell: i64, new_car: i64) -> i64
     list_slow(ctx, pure_setcar, cell, new_car)
 }
 
+// The legacy host entry retains the original full setter without a compiled
+// observation-policy check. Enabled leaves import its specialized twin.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_setcar(ctx: *mut u8, cell: i64, new_car: i64) -> i64 {
+    #[cfg(test)]
+    LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
+    let cell = Value::from_bits(cell as usize);
+    let new_car = Value::from_bits(new_car as usize);
+    if crate::tagged::mutate::set_cons_car(cell, new_car) {
+        return new_car.bits() as i64;
+    }
+    list_slow(ctx, pure_setcar, cell, new_car)
+}
+
 /// `Op::Setcdr` (GNU `Bsetcdr`): [`neovm_jit_setcar`]'s twin.
 /// SAFETY: same vmctx contract as [`neovm_jit_call`]; only read here.
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_setcdr_collection(ctx: *mut u8, cell: i64, new_cdr: i64) -> i64 {
+    #[cfg(test)]
+    LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
+    let cell = Value::from_bits(cell as usize);
+    let new_cdr = Value::from_bits(new_cdr as usize);
+    if compiled_cons_store(cell, new_cdr, true) {
+        return new_cdr.bits() as i64;
+    }
+    list_slow(ctx, pure_setcdr, cell, new_cdr)
+}
+
+// The legacy host entry retains the original full setter without a compiled
+// observation-policy check. Enabled leaves import its specialized twin.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_setcdr(ctx: *mut u8, cell: i64, new_cdr: i64) -> i64 {
     #[cfg(test)]
     LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let cell = Value::from_bits(cell as usize);
     let new_cdr = Value::from_bits(new_cdr as usize);
-    if compiled_cons_store(cell, new_cdr, true) {
+    if crate::tagged::mutate::set_cons_cdr(cell, new_cdr) {
         return new_cdr.bits() as i64;
     }
     list_slow(ctx, pure_setcdr, cell, new_cdr)
@@ -665,7 +697,7 @@ fn list_slow(ctx: *mut u8, builtin: JitBuiltin2Pure, a: Value, b_: Value) -> i64
 /// [`builtin_aset_args`](b::builtin_aset_args) then handles (or signals).
 /// Must agree with it wherever it stores.
 #[inline(always)]
-fn aset_fast(ctx: &Context, array: Value, index: Value, value: Value) -> bool {
+fn aset_collection_fast(ctx: &Context, array: Value, index: Value, value: Value) -> bool {
     use crate::tagged::collection_reads::{CompiledJournalMode, compiled_journal_mode};
     let Some(idx) = index.as_fixnum().and_then(|i| usize::try_from(i).ok()) else {
         return false;
@@ -678,6 +710,15 @@ fn aset_fast(ctx: &Context, array: Value, index: Value, value: Value) -> bool {
     {
         return stored;
     }
+    aset_fast(array, index, value)
+}
+
+// Exact legacy setter tier: Off calls the original host entry below.
+#[inline(always)]
+fn aset_fast(array: Value, index: Value, value: Value) -> bool {
+    let Some(idx) = index.as_fixnum().and_then(|i| usize::try_from(i).ok()) else {
+        return false;
+    };
     if array.veclike_type() == Some(crate::tagged::header::VecLikeType::Vector) {
         // One pass over what `set_vector_slot` would check again: owned
         // storage (a mapped pdump vector copies itself on the slow path),
@@ -800,7 +841,12 @@ fn aset_journaled_vector(
 /// SAFETY: same vmctx contract as [`neovm_jit_call`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_aset(ctx: *mut u8, array: i64, index: i64, value: i64) -> i64 {
+pub extern "C" fn neovm_jit_aset_collection(
+    ctx: *mut u8,
+    array: i64,
+    index: i64,
+    value: i64,
+) -> i64 {
     #[cfg(test)]
     ASET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let array = Value::from_bits(array as usize);
@@ -808,7 +854,24 @@ pub extern "C" fn neovm_jit_aset(ctx: *mut u8, array: i64, index: i64, value: i6
     let value = Value::from_bits(value as usize);
     // SAFETY: seam-provided dormant Context; read-only heap policy access.
     let ctx_ref = unsafe { &*(ctx as *const Context) };
-    if aset_fast(ctx_ref, array, index, value) {
+    if aset_collection_fast(ctx_ref, array, index, value) {
+        return value.bits() as i64;
+    }
+    aset_slow(ctx, array, index, value)
+}
+
+/// The original primitive array setter host entry. Knob-off generated code
+/// imports this name; collection-aware code selects its separate export.
+/// Like GNU Baset, neither entry consults the aset function cell.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_aset(ctx: *mut u8, array: i64, index: i64, value: i64) -> i64 {
+    #[cfg(test)]
+    ASET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
+    let array = Value::from_bits(array as usize);
+    let index = Value::from_bits(index as usize);
+    let value = Value::from_bits(value as usize);
+    if aset_fast(array, index, value) {
         return value.bits() as i64;
     }
     aset_slow(ctx, array, index, value)
@@ -820,7 +883,9 @@ fn aset_slow(ctx: *mut u8, array: Value, index: Value, value: Value) -> i64 {
     #[cfg(test)]
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
-        match b::builtin_aset_args(&[array, index, value]) {
+        // SAFETY: live dormant Context supplied by the JIT shim contract.
+        let context = unsafe { &*(ctx as *const Context) };
+        match b::builtin_aset_args_in_context(context, &[array, index, value]) {
             Ok(value) => value.bits() as i64,
             Err(flow) => {
                 stash_pending_flow(flow);
@@ -1134,8 +1199,11 @@ macro_rules! spec_call_body {
         let direct_consts = slot_ref.direct_consts.load(Ordering::Relaxed);
         if direct_consts != 0
             && ctx_ref.attention_clear(AttentionMask::SPEC_CALL)
-            && slot_ref.epoch.load(Ordering::Relaxed) == ctx_ref.obarray.function_epoch_exclusive()
-            && !ctx_ref.debug_on_next_call_is_armed()
+            && {
+                let mut projection = ctx_ref.dispatch_projection_exclusive();
+                slot_ref.epoch.load(Ordering::Relaxed) == projection.function_epoch()
+                    && !projection.debug_on_next_call_armed_fast()
+            }
             && ctx_ref.depth < ctx_ref.max_depth
         {
             #[cfg(any(test, debug_assertions))]
@@ -1557,10 +1625,10 @@ fn call_spec_slow(
     // and a panic path on every slow call were measured, so debug-only).
     let called = Value::from_bits(sym_bits as usize);
     debug_assert!(
-        called.is_symbol(),
+        called.is_bare_symbol(),
         "a speculated call site's callee is a symbol"
     );
-    let sym = called.xsymbol_id();
+    let sym = called.xbare_symbol_id();
     jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         // Build a rooted LispArgVec from the caller's call-args slot — used only by
         // the strict-call fallback paths (call_for_jit), inside their own
@@ -1591,7 +1659,7 @@ fn call_spec_slow(
                 let armed = if slot_epoch == SPEC_EPOCH_DISARMED {
                     false
                 } else {
-                    let epoch = ctx.obarray.function_epoch();
+                    let epoch = ctx.dispatch_projection().function_epoch();
                     // NEOVM_JIT_FORCE_SLOW_SPEC pretends the armed epoch is stale so
                     // every call exercises the re-validate/re-arm branch.
                     (!jit_force_slow_spec() && slot_epoch == epoch) || {
@@ -1765,7 +1833,8 @@ pub(crate) fn arith_intrinsic_op_by_name(name: &str, nargs: usize) -> Option<u8>
 #[inline(always)]
 pub(crate) fn subr_spec_armed(ctx: &mut Context, sym: i64, expected: i64, slot: &SpecSlot) -> bool {
     if ctx.attention_word_clear(AttentionMask::SUBR_ARMING)
-        && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch_exclusive()
+        && slot.epoch.load(Ordering::Relaxed)
+            == ctx.dispatch_projection_exclusive().function_epoch()
     {
         return true;
     }
@@ -1806,7 +1875,7 @@ pub(crate) fn subr_spec_armed_reference(
     if ctx.compiler_function_overrides_active() {
         return false;
     }
-    let epoch = ctx.obarray.function_epoch();
+    let epoch = ctx.dispatch_projection().function_epoch();
     // NEOVM_JIT_FORCE_SLOW_SPEC pretends the armed epoch is stale so every
     // call exercises the re-validate/re-arm branch.
     (!jit_force_slow_spec() && slot_epoch == epoch) || {
@@ -2064,8 +2133,11 @@ pub extern "C" fn neovm_jit_call_subr_spec(
         // answer), and take the direct fixed-arity call -- so this does.
         // Every other state runs that sequence verbatim.
         if ctx.attention_clear(AttentionMask::SPEC_SUBR)
-            && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch_exclusive()
-            && !ctx.debug_on_next_call_is_armed()
+            && {
+                let mut projection = ctx.dispatch_projection_exclusive();
+                slot.epoch.load(Ordering::Relaxed) == projection.function_epoch()
+                    && !projection.debug_on_next_call_armed_fast()
+            }
         {
             #[cfg(debug_assertions)]
             SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -2265,7 +2337,7 @@ pub extern "C" fn neovm_jit_pred_spec(
             // only FUNDEF here). An autoload object bounces to the generic
             // call, which does the load with its frame and roots.
             PRED_KIND_AUTOLOAD_DO_LOAD => {
-                if crate::emacs_core::autoload::is_autoload_value(&v) {
+                if crate::emacs_core::autoload::is_autoload_value(&v, ctx.symbol_mode()) {
                     return STATUS_NEED_GENERIC;
                 }
                 v
@@ -2294,7 +2366,7 @@ pub extern "C" fn neovm_jit_pred_spec(
             _ if let Some(type_symbol) = crate::emacs_core::builtins::types::record_type_of(v) => {
                 type_symbol
             }
-            _ => match pred_spec_type_of_non_record(kind, v) {
+            _ => match pred_spec_type_of_non_record(ctx, kind, v) {
                 Some(value) => value,
                 None => return STATUS_NEED_GENERIC,
             },
@@ -2315,9 +2387,9 @@ pub extern "C" fn neovm_jit_pred_spec(
 /// their register spills.
 #[cold]
 #[inline(never)]
-fn pred_spec_type_of_non_record(kind: i64, v: Value) -> Option<Value> {
+fn pred_spec_type_of_non_record(ctx: &mut Context, kind: i64, v: Value) -> Option<Value> {
     let answer = if kind == PRED_KIND_TYPE_OF {
-        crate::emacs_core::builtins::types::builtin_type_of(&[v])
+        crate::emacs_core::builtins::types::builtin_type_of_with_ctx_1(ctx, v)
     } else {
         debug_assert_eq!(kind, PRED_KIND_CL_TYPE_OF);
         crate::emacs_core::builtins::types::builtin_cl_type_of(&[v])
@@ -2904,7 +2976,7 @@ fn cbsym_read_contained(ctx: *mut u8, which: u8, args_ptr: *const i64, out: *mut
     })
 }
 
-/// `Op::Throw`: stash `Flow::Throw{tag, value}` for the signal-exit path.
+/// Legacy bare-policy C shim; generated `Op::Throw` uses the Context shim below.
 /// Compiled bodies have no local handlers (handler opcodes bail), so a throw
 /// always propagates out — exactly the interpreter's `resume_nonlocal` once no
 /// local handler matches. Context-free.
@@ -2915,6 +2987,23 @@ pub extern "C" fn neovm_jit_throw(tag: i64, value: i64) {
         stash_pending_flow(Flow::throw(
             Value::from_bits(tag as usize),
             Value::from_bits(value as usize),
+        ));
+    })
+}
+
+/// Generated `Op::Throw`: capture the active policy before any unbinding.
+/// SAFETY: `ctx` is the dormant Context supplied by the generated leaf.
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: generated leaf vmctx contract.
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_throw_with_symbols(ctx: *mut u8, tag: i64, value: i64) {
+    jit_shim_contain!(ctx, (), {
+        // SAFETY: this read cannot collect or call Lisp while the generated
+        // leaf's operand slots are unrooted.
+        let symbol_mode = unsafe { &*(ctx as *const Context) }.symbol_mode();
+        stash_pending_flow(Flow::throw_with_symbols(
+            Value::from_bits(tag as usize),
+            Value::from_bits(value as usize),
+            symbol_mode,
         ));
     })
 }
@@ -3153,7 +3242,9 @@ pub extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *mut i64
                 }
                 FlowKind::Throw(thrown) => {
                     let (tag, value) = (thrown.tag, thrown.value);
-                    let Some(selected) = ctx.matching_catch_resume(&tag) else {
+                    let Some(selected) =
+                        ctx.matching_catch_resume_with_symbols(&tag, thrown.symbol_mode())
+                    else {
                         // No matching catch anywhere: unwind all our frames and
                         // propagate `no-catch` (resume_nonlocal parity).
                         for _ in 0..remaining {
@@ -3196,7 +3287,8 @@ pub extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *mut i64
                     }
                     // The selected catch belongs to an outer frame: ours are all
                     // popped; rethrow for the frame unwind + outer handlers.
-                    stash_pending_flow(Flow::throw(tag, value));
+                    // The outer catch was selected under the original throwing policy.
+                    stash_pending_flow(Flow::from_kind(FlowKind::Throw(thrown)));
                     return -1;
                 }
                 FlowKind::Signal(sig) => {

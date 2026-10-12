@@ -1,0 +1,14 @@
+error[E0624]: associated function `from_world_parts` is private
+ --> tests/thread_safety_ui/world_buffer_factory_private.rs:4:35
+  |
+4 |       let _factory = BufferManager::from_world_parts;
+  |                                     ^^^^^^^^^^^^^^^^ private associated function
+  |
+ ::: src/buffer/buffer.rs
+  |
+  | /     pub(crate) unsafe fn from_world_parts(
+  | |         storage_ptr: NonNull<BufferStorage>,
+  | |         selection: BufferSelection,
+  | |         lease: WorldLease,
+  | |     ) -> Self {
+  | |_____________- private associated function defined here

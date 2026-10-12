@@ -53,7 +53,7 @@ pub fn effect_name_from_lisp(
     scope: EffectScope,
 ) -> Result<String, EffectProfileError> {
     let name = value
-        .as_symbol_name()
+        .as_bare_symbol_name()
         .filter(|name| !name.starts_with(':'))
         .ok_or_else(|| {
             EffectProfileError::new(format!(
@@ -123,7 +123,7 @@ pub fn effect_operations_from_lisp(
 
 fn property_name_from_lisp(value: Value) -> Result<String, EffectProfileError> {
     value
-        .as_symbol_name()
+        .as_bare_symbol_name()
         .and_then(|name| name.strip_prefix(':'))
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
@@ -150,7 +150,10 @@ fn effect_value_from_lisp(value: Value) -> Result<EffectValue, EffectProfileErro
     if let Some(string) = value.as_utf8_str() {
         return Ok(EffectValue::String(string.to_owned()));
     }
-    if let Some(symbol) = value.as_symbol_name().filter(|name| !name.starts_with(':')) {
+    if let Some(symbol) = value
+        .as_bare_symbol_name()
+        .filter(|name| !name.starts_with(':'))
+    {
         return Ok(EffectValue::Symbol(symbol.to_owned()));
     }
     if let Some(items) = list_to_vec(&value) {

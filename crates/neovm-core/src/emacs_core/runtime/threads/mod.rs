@@ -49,7 +49,7 @@ pub(crate) fn thread_condition_case_continuation_parts(
     value: Value,
 ) -> Option<(Value, Value, Value, Value)> {
     let items = list_to_vec(&value)?;
-    if items.len() != 5 || !items[0].is_symbol_named(CONDITION_CASE_CONTINUATION_MARKER) {
+    if items.len() != 5 || !items[0].is_bare_symbol_named(CONDITION_CASE_CONTINUATION_MARKER) {
         return None;
     }
     Some((items[1], items[2], items[3], items[4]))
@@ -64,7 +64,7 @@ pub(crate) fn make_sleep_blocker(seconds: f64) -> Value {
 
 fn sleep_duration_from_blocker(value: Value) -> Option<Duration> {
     let items = list_to_vec(&value)?;
-    if items.len() != 2 || !items[0].is_symbol_named(SLEEP_BLOCKER_MARKER) {
+    if items.len() != 2 || !items[0].is_bare_symbol_named(SLEEP_BLOCKER_MARKER) {
         return None;
     }
     match crate::emacs_core::timer::WaitTimeout::from(items[1].xfloat()) {
@@ -346,7 +346,7 @@ impl ThreadManager {
         let data = thread.error_data;
         thread.error_symbol = Value::NIL;
         thread.error_data = Value::NIL;
-        let sym_id = symbol.as_symbol_id()?;
+        let sym_id = symbol.as_bare_symbol_id()?;
         Some(signal_with_data_id(sym_id, data))
     }
 
@@ -793,7 +793,7 @@ fn split_signal_binding_value(value: Value) -> Option<(Value, Value)> {
     };
     let pair_car = value.cons_car();
     let pair_cdr = value.cons_cdr();
-    pair_car.as_symbol_id()?;
+    pair_car.as_bare_symbol_id()?;
     Some((pair_car, pair_cdr))
 }
 
@@ -1126,6 +1126,7 @@ pub(crate) fn builtin_thread_signal(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     expect_args("thread-signal", &args, 3)?;
     let id = expect_thread_id(&ctx.threads, &args[0])?;
     if !ctx.threads.is_thread(id) {
@@ -1135,7 +1136,7 @@ pub(crate) fn builtin_thread_signal(
         ));
     }
     let error_symbol = args[1];
-    let Some(error_symbol_id) = error_symbol.as_symbol_id() else {
+    let Some(error_symbol_id) = error_symbol.as_symbol_id(symbol_mode) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), error_symbol],

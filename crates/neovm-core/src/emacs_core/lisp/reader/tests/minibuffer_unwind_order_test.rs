@@ -193,8 +193,8 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
                 .as_ref()
                 .err()
                 .and_then(Flow::as_throw)
-                .is_some_and(|thrown| thrown.tag.is_symbol_named("d5-mini-inactive")
-                    && thrown.value.is_symbol_named("interrupted"))
+                .is_some_and(|thrown| thrown.tag.is_bare_symbol_named("d5-mini-inactive")
+                    && thrown.value.is_bare_symbol_named("interrupted"))
         );
     } else if record_active {
         assert_eq!(

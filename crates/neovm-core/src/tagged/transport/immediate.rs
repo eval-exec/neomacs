@@ -65,7 +65,7 @@ impl TryFrom<TaggedValue> for ImmediateValue {
         if let Some(immediate) = Self::untraced(value) {
             return Ok(immediate);
         }
-        match value.as_symbol_id() {
+        match value.as_bare_symbol_id() {
             Some(_) => Err(NotImmediate::SymbolNeedsRoot),
             None => Err(NotImmediate::HeapObject),
         }

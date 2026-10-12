@@ -231,6 +231,7 @@ fn collect_gui_tool_bar_items_for_frame_uses_that_frames_selected_buffer() {
             Value::string("Secondary"),
             Value::symbol("ignore"),
         ]),
+        neovm_core::tagged::SymbolMode::Bare,
     );
     eval.buffer_manager_mut()
         .get_mut(secondary_buffer)
@@ -557,6 +558,7 @@ fn collect_gui_tool_bar_items_for_frame_retains_items_until_gnu_rebuild_predicat
                 Value::list(vec![Value::symbol("1+"), Value::symbol("neo-enable-evals")]),
             ]),
         ]),
+        neovm_core::tagged::SymbolMode::Bare,
     );
     eval.set_variable("tool-bar-map", map);
     let enable_evals = |eval: &Context| {

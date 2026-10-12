@@ -532,7 +532,7 @@ fn calc_space_columns(spec: Value, align_to: bool) -> Option<f64> {
     if let Some(f) = spec.as_float() {
         return Some(f);
     }
-    if let Some(name) = spec.as_symbol_name() {
+    if let Some(name) = spec.as_bare_symbol_name() {
         // Window-relative edge keywords.  We model the text area as starting at
         // column 0 (we do not subtract the line-number gutter / margins / fringe
         // here — see the function doc TODO).  `left`/`text` => column 0; the
@@ -548,8 +548,8 @@ fn calc_space_columns(spec: Value, align_to: bool) -> Option<f64> {
     if spec.is_cons() {
         let car = spec.cons_car();
         // `(+ EXPR...)` / `(- EXPR...)`: GNU sums recursively-resolved values.
-        if car.is_symbol_named("+") || car.is_symbol_named("-") {
-            let minus = car.is_symbol_named("-");
+        if car.is_bare_symbol_named("+") || car.is_bare_symbol_named("-") {
+            let minus = car.is_bare_symbol_named("-");
             let mut cdr = spec.cons_cdr();
             let mut acc = 0.0;
             let mut first = true;
@@ -1892,14 +1892,16 @@ enum WindowLineSelector {
 
 impl WindowLineSelector {
     fn from_lisp_value(value: Value) -> Option<Self> {
-        value.as_symbol_name().and_then(|name| name.parse().ok())
+        value
+            .as_bare_symbol_name()
+            .and_then(|name| name.parse().ok())
     }
 }
 
 fn window_text_pixel_size_includes_mode_line(mode_lines: Option<&Value>) -> bool {
     mode_lines.is_some_and(|mode| {
         mode.is_t()
-            || mode.is_symbol_named("t")
+            || mode.is_bare_symbol_named("t")
             || WindowLineSelector::from_lisp_value(*mode).is_some()
     })
 }
@@ -2507,7 +2509,7 @@ fn mode_line_process_status_in_state(
     };
     observed
         .public_status_symbol()
-        .as_symbol_name()
+        .as_bare_symbol_name()
         .unwrap_or("no process")
 }
 
@@ -2700,7 +2702,7 @@ fn build_mode_line_percent_context(
     // --- Coding system mnemonic (GNU: decode_mode_spec_coding) ---
     let cs_name = context_buffer
         .and_then(|b| b.buffer_local_value("buffer-file-coding-system"))
-        .and_then(|v| v.as_symbol_id());
+        .and_then(|v| v.as_bare_symbol_id());
     let coding_mnemonic = cs_name
         .map(|name| coding_system_mnemonic_char(coding_systems, name))
         .unwrap_or('-');
@@ -2735,10 +2737,10 @@ fn build_mode_line_percent_context(
         } else {
             let term_cs = obarray
                 .symbol_value_copied("terminal-coding-system")
-                .and_then(|v| v.as_symbol_id());
+                .and_then(|v| v.as_bare_symbol_id());
             let kbd_cs = obarray
                 .symbol_value_copied("keyboard-coding-system")
-                .and_then(|v| v.as_symbol_id());
+                .and_then(|v| v.as_bare_symbol_id());
             (
                 kbd_cs
                     .map(|name| coding_system_mnemonic_char(None, name))
@@ -3688,7 +3690,7 @@ impl ModeLineRendered {
         for (name, value) in properties {
             // The synthetic stretch inherits appearance, but it is not itself
             // another min-width source run.
-            if !name.is_symbol_named("display") {
+            if !name.is_bare_symbol_named("display") {
                 self.text_props.put_property_in_char_range(
                     display_char_range(at, at.saturating_add(columns)),
                     *name,
@@ -3847,7 +3849,7 @@ impl ModeLineRendered {
 fn mode_line_display_min_width(props: Value) -> Option<ModeLineMinWidthRun> {
     let items = list_to_vec(&props)?;
     for chunk in items.chunks(2) {
-        if chunk.len() != 2 || !chunk[0].is_symbol_named("display") {
+        if chunk.len() != 2 || !chunk[0].is_bare_symbol_named("display") {
             continue;
         }
         if let Some(run) = mode_line_display_spec_min_width(chunk[1]) {
@@ -3858,7 +3860,7 @@ fn mode_line_display_min_width(props: Value) -> Option<ModeLineMinWidthRun> {
 }
 
 fn mode_line_display_spec_min_width(value: Value) -> Option<ModeLineMinWidthRun> {
-    if !value.is_cons() || !value.cons_car().is_symbol_named("min-width") {
+    if !value.is_cons() || !value.cons_car().is_bare_symbol_named("min-width") {
         return None;
     }
     let width_spec = value.cons_cdr().cons_car();
@@ -3885,7 +3887,7 @@ fn mode_line_display_width_chars(value: Value) -> Option<usize> {
 fn resolve_mode_line_face_spec(args: &[Value]) -> ModeLineFaceSpec {
     let face = args.get(1).copied().unwrap_or(Value::NIL);
     let no_props = face.is_fixnum();
-    let face = if no_props || face.is_nil() || face.is_symbol_named("default") {
+    let face = if no_props || face.is_nil() || face.is_bare_symbol_named("default") {
         None
     } else {
         Some(face)
@@ -4142,6 +4144,7 @@ fn format_mode_line_recursive_rooted(
     risky: bool,
     mut selection: Option<&mut mode_line_flow_policy::FormatSelection>,
 ) -> Result<(), Flow> {
+    let symbol_mode = eval.symbol_mode();
     match format.kind() {
         ValueKind::Nil => {}
 
@@ -4161,7 +4164,7 @@ fn format_mode_line_recursive_rooted(
             let _ = n;
         }
 
-        _ if format.is_symbol() => {
+        _ if format.is_symbol(symbol_mode) => {
             // GNU xdisp.c:28438-28468 (display_mode_element, Lisp_Symbol
             // branch): resolve the symbol's value and recurse. There is
             // no special case for mode-line-front-space or
@@ -4170,7 +4173,7 @@ fn format_mode_line_recursive_rooted(
             // two names to a single hardcoded space, which silently
             // discarded the `(:eval (unless (display-graphic-p) "-%-"))`
             // dash-fill construct that bindings.el installs on TTY.
-            if let Some(name) = format.as_symbol_name()
+            if let Some(name) = format.as_symbol_name(symbol_mode)
                 && let Some(val) =
                     mode_line_symbol_value_in_state(&eval.obarray, &[], &eval.buffers, name)
                 && !val.is_nil()
@@ -4208,7 +4211,7 @@ fn format_mode_line_recursive_rooted(
             eval.push_specpdl_root(car);
             eval.push_specpdl_root(cdr);
 
-            if car.is_symbol_named(":eval") {
+            if car.is_symbol_named(":eval", symbol_mode) {
                 if risky {
                     return Ok(());
                 }
@@ -4234,7 +4237,7 @@ fn format_mode_line_recursive_rooted(
                 return Ok(());
             }
 
-            if car.is_symbol_named(":propertize") {
+            if car.is_symbol_named(":propertize", symbol_mode) {
                 if risky {
                     return Ok(());
                 }
@@ -4276,8 +4279,8 @@ fn format_mode_line_recursive_rooted(
                 return Ok(());
             }
 
-            if car.is_symbol() && !car.is_symbol_named("t") {
-                if let Some(sym_name) = car.as_symbol_name()
+            if car.is_symbol(symbol_mode) && !car.is_symbol_named("t", symbol_mode) {
+                if let Some(sym_name) = car.as_symbol_name(symbol_mode)
                     && mode_line_symbol_value_in_state(&eval.obarray, &[], &eval.buffers, sym_name)
                         .is_some_and(|value| value.is_truthy())
                     && let Some(branch) = mode_line_conditional_branch(cdr, true)
@@ -4364,12 +4367,12 @@ fn format_mode_line_recursive_in_state(
 
         ValueKind::Fixnum(_) => {}
 
-        _ if format.is_symbol() => {
+        _ if format.is_bare_symbol() => {
             // GNU xdisp.c:28438-28468 — symbol branch of display_mode_element.
             // No special case for mode-line-front-space or
             // mode-line-end-spaces; see the note on the equivalent
             // branch in `format_mode_line_recursive`.
-            if let Some(name) = format.as_symbol_name()
+            if let Some(name) = format.as_bare_symbol_name()
                 && let Some(val) = mode_line_symbol_value_in_state(obarray, dynamic, buffers, name)
                 && !val.is_nil()
             {
@@ -4397,14 +4400,14 @@ fn format_mode_line_recursive_in_state(
             let car = format.cons_car();
             let cdr = format.cons_cdr();
 
-            if car.is_symbol_named(":eval") {
+            if car.is_bare_symbol_named(":eval") {
                 if risky {
                     return false;
                 }
                 return true;
             }
 
-            if car.is_symbol_named(":propertize") {
+            if car.is_bare_symbol_named(":propertize") {
                 if risky {
                     return false;
                 }
@@ -4451,8 +4454,8 @@ fn format_mode_line_recursive_in_state(
                 return needs_eval;
             }
 
-            if car.is_symbol() && !car.is_symbol_named("t") {
-                let branch = if let Some(sym_name) = car.as_symbol_name()
+            if car.is_bare_symbol() && !car.is_bare_symbol_named("t") {
+                let branch = if let Some(sym_name) = car.as_bare_symbol_name()
                     && mode_line_symbol_value_in_state(obarray, dynamic, buffers, sym_name)
                         .is_some_and(|value| value.is_truthy())
                 {
@@ -4537,12 +4540,12 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
 
         ValueKind::Fixnum(_) => {}
 
-        _ if format.is_symbol() => {
+        _ if format.is_bare_symbol() => {
             // GNU xdisp.c:28438-28468 — symbol branch of display_mode_element.
             // No special case for mode-line-front-space or
             // mode-line-end-spaces; they are ordinary symbols whose
             // value must be resolved and recursed on.
-            if let Some(name) = format.as_symbol_name()
+            if let Some(name) = format.as_bare_symbol_name()
                 && let Some(val) = mode_line_symbol_value_in_state(obarray, dynamic, buffers, name)
                 && !val.is_nil()
             {
@@ -4574,7 +4577,7 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
             roots.pin(car);
             roots.pin(cdr);
 
-            if car.is_symbol_named(":eval") {
+            if car.is_bare_symbol_named(":eval") {
                 if risky {
                     return Ok(());
                 }
@@ -4602,7 +4605,7 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
                 return Ok(());
             }
 
-            if car.is_symbol_named(":propertize") {
+            if car.is_bare_symbol_named(":propertize") {
                 if risky {
                     return Ok(());
                 }
@@ -4652,8 +4655,8 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
                 return Ok(());
             }
 
-            if car.is_symbol() && !car.is_symbol_named("t") {
-                let branch = if let Some(sym_name) = car.as_symbol_name()
+            if car.is_bare_symbol() && !car.is_bare_symbol_named("t") {
+                let branch = if let Some(sym_name) = car.as_bare_symbol_name()
                     && mode_line_symbol_value_in_state(obarray, dynamic, buffers, sym_name)
                         .is_some_and(|value| value.is_truthy())
                 {
@@ -5732,6 +5735,7 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args_range("window-text-pixel-size", &args, 0, 7)?;
     let (fid, wid) = resolve_live_window_for_text_pixel_size(&eval.frames, args.first())?;
 
@@ -5885,7 +5889,7 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
     // not through trailing blank lines.
     let apply_trim = args
         .get(2)
-        .is_some_and(|v| v.is_t() || v.is_symbol_named("t"));
+        .is_some_and(|v| v.is_t() || v.is_symbol_named("t", symbol_mode));
 
     // Collect first so the immutable buffer borrow ends before `add_to_log`
     // mutates the buffer manager to append to *Messages*.
@@ -6106,7 +6110,7 @@ pub(crate) fn builtin_pos_visible_in_window_p(args: Vec<Value>) -> EvalResult {
     if let Some(pos) = args.first()
         && !pos.is_nil()
         && !pos.is_t()
-        && !pos.is_symbol_named("t")
+        && !pos.is_bare_symbol_named("t")
     {
         expect_integer_or_marker(pos)?;
     }
@@ -6121,6 +6125,7 @@ pub(crate) fn builtin_pos_visible_in_window_p_ctx(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args_range("pos-visible-in-window-p", &args, 0, 3)?;
     validate_optional_window_designator_in_state(
         &eval.frames,
@@ -6141,7 +6146,7 @@ pub(crate) fn builtin_pos_visible_in_window_p_ctx(
         if let Some(pos) = args.first()
             && !pos.is_nil()
             && !pos.is_t()
-            && !pos.is_symbol_named("t")
+            && !pos.is_symbol_named("t", symbol_mode)
         {
             expect_integer_or_marker(pos)?;
         }
@@ -6568,6 +6573,7 @@ pub(crate) fn builtin_current_bidi_paragraph_direction(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     expect_args_range("current-bidi-paragraph-direction", &args, 0, 1)?;
     let ltr = Value::symbol("left-to-right");
     let rtl = Value::symbol("right-to-left");
@@ -6656,7 +6662,7 @@ pub(crate) fn builtin_current_bidi_paragraph_direction(
                 Value::symbol("get-char-code-property"),
                 vec![Value::fixnum(code as i64), Value::symbol("bidi-class")],
             )?;
-            match cls.as_symbol_id() {
+            match cls.as_symbol_id(symbol_mode) {
                 Some(s) if s == l => return Ok(ltr),
                 Some(s) if s == r || s == al => return Ok(rtl),
                 _ => {}
@@ -7642,7 +7648,7 @@ fn resolve_target_position_value(
     last_visible_row_start: impl FnOnce() -> usize,
 ) -> Result<Option<LispCharPos1>, Flow> {
     let lisp_pos = match pos {
-        Some(value) if value.is_t() || value.is_symbol_named("t") => {
+        Some(value) if value.is_t() || value.is_bare_symbol_named("t") => {
             last_visible_row_start().saturating_add(1)
         }
         Some(value) if !value.is_nil() => {
@@ -9763,6 +9769,7 @@ fn snapshot_request_from_args(
     eval: &super::eval::Context,
     rest: &[Value],
 ) -> Result<SnapshotRequest, Flow> {
+    let symbol_mode = eval.symbol_mode();
     let target = match rest.first() {
         None => SnapshotTarget::Selected,
         Some(value) if value.is_nil() => SnapshotTarget::Selected,
@@ -9791,7 +9798,7 @@ fn snapshot_request_from_args(
     let format = match rest.get(1) {
         None => SnapshotFormat::Text,
         Some(value) if value.is_nil() => SnapshotFormat::Text,
-        Some(value) => match value.as_symbol_name() {
+        Some(value) => match value.as_symbol_name(symbol_mode) {
             Some("text") => SnapshotFormat::Text,
             Some("text-faces") => SnapshotFormat::TextFaces,
             Some("json") => SnapshotFormat::Json,

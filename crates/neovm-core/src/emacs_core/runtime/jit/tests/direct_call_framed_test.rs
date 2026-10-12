@@ -493,7 +493,7 @@ fn framed_slots_arm_a_memory_dispatch_tag_only_with_the_framed_bit() {
             }));
             let mut ev = crate::test_utils::runtime_startup_context();
             ev.eval_str(WARM).expect("warm count");
-            ev.eval_str(FRAME_PROGRAM).expect("warm exact framed calls");
+            eval_fixture_program(&mut ev, FRAME_PROGRAM).expect("warm exact framed calls");
             let caller = cached_leaf(&ev, "neovm--ff-caller").expect("compiled caller");
             let callee = cached_leaf(&ev, "neovm--ff-named").expect("compiled callee");
             assert!(callee.has_binds);
@@ -532,7 +532,7 @@ fn a_contained_framed_panic_detaches_three_args_before_gc_and_caller_healing() {
         force_direct_sites_for_test(Some(DirectSitesMode::All));
         force_direct_shapes_for_test(Some(DirectShapesKnob::parse(Some("framed"))));
         let mut ev = crate::test_utils::runtime_startup_context();
-        ev.eval_str(r#"(progn
+        eval_fixture_program(&mut ev, r#"(progn
           (defvar neovm--fp-arm nil)
           (defvar neovm--fp-special 'outside)
           (defun neovm--fp-target (a b c)

@@ -38,7 +38,7 @@ impl ImageSpecIdentity {
     #[must_use]
     pub fn from_lisp_spec(spec: &Value) -> Option<Self> {
         let items = list_to_vec(spec)?;
-        if items.first()?.as_symbol_name() != Some("image") {
+        if items.first()?.as_bare_symbol_name() != Some("image") {
             return None;
         }
         let mut pending = vec![Work::Visit(*spec)];

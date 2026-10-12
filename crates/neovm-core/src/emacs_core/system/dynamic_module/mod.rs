@@ -634,13 +634,16 @@ unsafe fn module_handle_nonlocal_exit(env: *mut emacs_env, flow: Flow) {
     }
 }
 
-fn module_signal_or_throw(priv_: &emacs_env_private) -> Result<(), Flow> {
+fn module_signal_or_throw(
+    priv_: &emacs_env_private,
+    symbol_mode: crate::tagged::SymbolMode,
+) -> Result<(), Flow> {
     match priv_.pending_non_local_exit {
         emacs_funcall_exit::Return => Ok(()),
         emacs_funcall_exit::Signal => {
             let sym_id = priv_
                 .non_local_exit_symbol
-                .as_symbol_id()
+                .as_bare_symbol_id()
                 .unwrap_or_else(|| intern("error"));
             let sym_name = resolve_sym(sym_id);
             let raw_data = priv_.non_local_exit_data;
@@ -651,9 +654,12 @@ fn module_signal_or_throw(priv_: &emacs_env_private) -> Result<(), Flow> {
                 false,
             ))))
         }
-        emacs_funcall_exit::Throw => Err(Flow::throw(
+        // GNU emacs-module.c:1205 invokes Fthrow at final delivery; its
+        // pending exit stores tag/value, not the earlier Lisp binding policy.
+        emacs_funcall_exit::Throw => Err(Flow::throw_with_symbols(
             priv_.non_local_exit_symbol,
             priv_.non_local_exit_data,
+            symbol_mode,
         )),
     }
 }
@@ -2260,7 +2266,7 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
     // SAFETY: env_priv still owns this initialized environment, and the
     // initializer has returned before its pending Lisp exit is inspected.
     let env_priv_ref = unsafe { &*env_priv_ptr };
-    module_signal_or_throw(env_priv_ref)?;
+    module_signal_or_throw(env_priv_ref, ctx.symbol_mode())?;
     drop(active_env);
 
     // SAFETY: the initializer has returned; this environment owns the
@@ -2426,7 +2432,7 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     // the env's pending state was part of the computation the panic tore down.
     let exit = match panic_flow {
         Some(flow) => Err(flow),
-        None => module_signal_or_throw(priv_ref),
+        None => module_signal_or_throw(priv_ref, ctx.symbol_mode()),
     };
     drop(active_env);
 

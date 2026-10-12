@@ -4615,7 +4615,7 @@ impl Frame {
             visible: self.visibility.is_visible(),
             displays_chrome: self.displays_chrome,
             has_window_system: window_system.is_some(),
-            window_system_symbol: window_system.and_then(Value::as_symbol_id),
+            window_system_symbol: window_system.and_then(Value::as_bare_symbol_id),
         }
     }
 
@@ -4751,7 +4751,7 @@ impl Frame {
     pub fn set_parameter(&mut self, key: Value, value: Value) -> Option<Value> {
         // Only successful decoding changes the backend state. The raw value
         // remains observable even when the GUI parameter handler later errors.
-        match key.as_symbol_id().and_then(FrameParam::from_symbol_id) {
+        match key.as_bare_symbol_id().and_then(FrameParam::from_symbol_id) {
             Some(FrameParam::Alpha) => {
                 if let Ok(alpha) = frame_alpha::pair(value) {
                     self.frame_alpha = alpha;
@@ -5990,7 +5990,7 @@ impl Frame {
             if value == Value::T {
                 return (true, true);
             }
-            match value.as_symbol_name() {
+            match value.as_bare_symbol_name() {
                 Some("width") => (true, false),
                 Some("height") => (false, true),
                 _ => (true, true),

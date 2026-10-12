@@ -21,6 +21,7 @@ pub(crate) struct BorrowedLayoutBuffer<'a> {
 }
 
 impl<'a> BorrowedLayoutBuffer<'a> {
+    #[cfg(test)]
     pub(crate) fn for_window(
         buffer: &'a Buffer,
         obarray: &'a Obarray,
@@ -28,12 +29,31 @@ impl<'a> BorrowedLayoutBuffer<'a> {
         max_chars: usize,
         target: crate::display_property::DisplayPropertyTarget,
     ) -> Self {
+        Self::for_window_with_symbols(
+            buffer,
+            obarray,
+            start,
+            max_chars,
+            target,
+            neovm_core::tagged::SymbolMode::Bare,
+        )
+    }
+
+    pub(crate) fn for_window_with_symbols(
+        buffer: &'a Buffer,
+        obarray: &'a Obarray,
+        start: CharPos0,
+        max_chars: usize,
+        target: crate::display_property::DisplayPropertyTarget,
+        symbol_mode: neovm_core::tagged::SymbolMode,
+    ) -> Self {
         let vars = resolve_layout_vars(buffer, Some(obarray));
         let spans = capture_automatic_composition_spans(
             buffer,
             obarray,
             &vars,
             Some((start.get(), max_chars)),
+            symbol_mode,
         );
         Self {
             buffer,
@@ -41,7 +61,7 @@ impl<'a> BorrowedLayoutBuffer<'a> {
             target,
             vars,
             spans,
-            string_rules: capture_string_composition_rules(buffer, obarray),
+            string_rules: capture_string_composition_rules(buffer, obarray, symbol_mode),
         }
     }
 }
@@ -152,7 +172,7 @@ impl LayoutBufferView for BorrowedLayoutBuffer<'_> {
         self.string_rules
     }
     fn layout_category_symbol_property(&self, category: Value, property: Value) -> Option<Value> {
-        let id = category.as_symbol_id()?;
+        let id = category.as_bare_symbol_id()?;
         neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(id);
         neovm_core::emacs_core::plist::plist_get(self.obarray.symbol_plist_id(id), &property)
     }

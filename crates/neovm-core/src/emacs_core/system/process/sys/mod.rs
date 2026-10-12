@@ -123,3 +123,6 @@ impl ChildStatusSource {
 pub(super) fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
     backend::interface_snapshot()
 }
+
+#[cfg(target_os = "macos")]
+pub use process_attributes::{DarwinCpuTime, darwin_process_snapshot};

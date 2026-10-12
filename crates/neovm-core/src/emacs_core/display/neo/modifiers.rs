@@ -68,7 +68,7 @@ fn modifier_key_from_symbol(name: &str) -> Option<EmacsModifierKey> {
 }
 
 fn symbol_name(value: &Value) -> Option<&str> {
-    value.as_symbol_name()
+    value.as_bare_symbol_name()
 }
 
 /// One variable's value, or one plist slot's value.

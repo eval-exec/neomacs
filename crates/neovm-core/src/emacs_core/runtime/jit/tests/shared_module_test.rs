@@ -107,6 +107,10 @@ fn setup(persistent: bool) -> Context {
 /// but its entry; the knob sends it back to a module of its own.
 #[test]
 fn jit_shared_module_is_the_default_and_the_knob_restores_per_leaf_modules() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     let mut ev = setup(true);
     let ctx = &mut ev as *mut Context;
     let leaf = compile_cached(ctx, &add_k(1));
@@ -129,6 +133,10 @@ fn jit_shared_module_is_the_default_and_the_knob_restores_per_leaf_modules() {
 /// leaf (addresses masked): only where the code lives changes.
 #[test]
 fn jit_shared_module_is_code_identical_to_per_leaf_modules() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     use super::compile_pipeline_tests::{compile_corpus_for_test, corpus_len_for_test};
     shared::force_persistent_module_for_test(false);
     let per_leaf = compile_corpus_for_test();
@@ -142,6 +150,10 @@ fn jit_shared_module_is_code_identical_to_per_leaf_modules() {
 /// and consecutive leaves take consecutive pages of the arena.
 #[test]
 fn jit_shared_arena_seals_pages_and_reuses_the_region() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     let mut ev = setup(true);
     let ctx = &mut ev as *mut Context;
     let a = compile_cached(ctx, &add_k(10));
@@ -175,6 +187,10 @@ fn jit_shared_arena_seals_pages_and_reuses_the_region() {
 /// region stays callable.
 #[test]
 fn jit_shared_arena_rolls_over_to_new_regions() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     let mut ev = setup(true);
     let ctx = &mut ev as *mut Context;
     // SAFETY: sysconf has no preconditions.
@@ -197,6 +213,10 @@ fn jit_shared_arena_rolls_over_to_new_regions() {
 /// into one mapping instead of a mapping per leaf).
 #[test]
 fn jit_shared_many_compiles_keep_bookkeeping_and_mappings_bounded() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     const N: i64 = 20_000;
     const LIMIT: u32 = 256;
     let mut ev = setup(true);
@@ -252,6 +272,10 @@ fn jit_shared_many_compiles_keep_bookkeeping_and_mappings_bounded() {
 /// coexist in one module: entries are declared under unique names.
 #[test]
 fn jit_shared_same_label_recompiles_and_osr_coexist() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     let mut ev = setup(true);
     let ctx = &mut ev as *mut Context;
     stats::force_observe_for_test(stats::ObserveOverride {
@@ -302,6 +326,10 @@ fn jit_shared_same_label_recompiles_and_osr_coexist() {
 /// modules; both live side by side.
 #[test]
 fn jit_shared_both_allocators_have_their_module() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     let mut ev = setup(true);
     let ctx = &mut ev as *mut Context;
     let straight = compile_cached(ctx, &add_k(3));
@@ -317,6 +345,10 @@ fn jit_shared_both_allocators_have_their_module() {
 /// recompiles go into the same module and arena.
 #[test]
 fn jit_shared_cache_clear_then_recompile() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     let mut ev = setup(true);
     let ctx = &mut ev as *mut Context;
     let f = add_k(7);
@@ -334,6 +366,10 @@ fn jit_shared_cache_clear_then_recompile() {
 /// and resumes exactly.
 #[test]
 fn jit_shared_force_deopt_harness() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     let mut ev = setup(true);
     force_deopt_for_test(true);
     let ctx = &mut ev as *mut Context;
@@ -360,6 +396,10 @@ fn jit_shared_force_deopt_harness() {
 /// a collection: the leaf's reloc vector is still the root, as before.
 #[test]
 fn jit_shared_leaf_constants_survive_gc() {
+    // This fixture observes this thread\'s persistent module, not worker-owned code.
+    let _backend = crate::emacs_core::jit::bg::TestModeScope::enter(
+        crate::emacs_core::jit::bg::BgMode::Legacy,
+    );
     let mut ev = setup(true);
     let ctx = &mut ev as *mut Context;
     let text = "shared-module constant survives gc";

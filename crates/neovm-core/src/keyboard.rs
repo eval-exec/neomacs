@@ -16,6 +16,7 @@ use crate::emacs_core::intern::{intern, resolve_sym};
 use crate::emacs_core::keyboard::pure::KEY_CHAR_META;
 use crate::emacs_core::keymap::KeymapMarker;
 use crate::emacs_core::wait::CommandInputWaitOutcome;
+use crate::tagged::value::SymbolMode;
 // decode_storage_char_codes import removed — now using emacs_char directly
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
 use crate::heap_types::LispString;
@@ -508,9 +509,13 @@ impl KeyEvent {
         let emacs_event = self.to_emacs_event_value();
         // A Rust-side label (logs, messages): decode here rather than making
         // the shared builder lossy for the Lisp-facing callers.
-        crate::emacs_core::keyboard::pure::describe_single_key_value(&emacs_event, false)
-            .map(|bytes| crate::emacs_core::emacs_char::to_utf8_lossy(&bytes))
-            .unwrap_or_else(|_| format!("{:?}", emacs_event))
+        crate::emacs_core::keyboard::pure::describe_single_key_value(
+            &emacs_event,
+            false,
+            SymbolMode::Bare,
+        )
+        .map(|bytes| crate::emacs_core::emacs_char::to_utf8_lossy(&bytes))
+        .unwrap_or_else(|_| format!("{:?}", emacs_event))
     }
 
     /// Parse an Emacs key description (e.g., "C-x", "M-f").
@@ -2251,21 +2256,22 @@ impl KeyboardRuntime {
         }
     }
 
-    fn low_level_event_kind(event: Value) -> Option<&'static str> {
+    fn low_level_event_kind(event: Value, mode: SymbolMode) -> Option<&'static str> {
         let head = if event.is_cons() {
             event.cons_car()
         } else {
             event
         };
-        head.as_symbol_name()
+        head.as_symbol_name(mode)
     }
 
     fn low_level_event_counts_as_pending(
         event: Value,
         filter: InputPendingFilter,
         ignored_while_no_input: &impl Fn(&str) -> bool,
+        mode: SymbolMode,
     ) -> bool {
-        Self::low_level_event_kind(event)
+        Self::low_level_event_kind(event, mode)
             .is_none_or(|kind| !filter.ignores(kind, ignored_while_no_input))
     }
 
@@ -2405,10 +2411,16 @@ impl KeyboardRuntime {
         &self,
         filter: InputPendingFilter,
         ignored_while_no_input: impl Fn(&str) -> bool,
+        mode: SymbolMode,
     ) -> bool {
         self.kboards().any(|kboard| {
             kboard.unread_events.iter().copied().any(|event| {
-                Self::low_level_event_counts_as_pending(event, filter, &ignored_while_no_input)
+                Self::low_level_event_counts_as_pending(
+                    event,
+                    filter,
+                    &ignored_while_no_input,
+                    mode,
+                )
             })
         })
     }
@@ -2421,8 +2433,9 @@ impl KeyboardRuntime {
         filter: InputPendingFilter,
         track_mouse: bool,
         ignored_while_no_input: impl Fn(&str) -> bool,
+        mode: SymbolMode,
     ) -> bool {
-        self.has_pending_low_level_input_for_query(filter, &ignored_while_no_input)
+        self.has_pending_low_level_input_for_query(filter, &ignored_while_no_input, mode)
             || self.pending_input_events.has_input(
                 crate::frontend_events::FrontendInputQuery::Pending(filter),
                 track_mouse,
@@ -3272,13 +3285,13 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
-    fn has_switch_frame_event_kind(event: &Value) -> bool {
+    fn has_switch_frame_event_kind(event: &Value, mode: SymbolMode) -> bool {
         match event.kind() {
             ValueKind::Cons => {
                 let pair_car = event.cons_car();
                 let _pair_cdr = event.cons_cdr();
                 matches!(
-                    pair_car.as_symbol_name(),
+                    pair_car.as_symbol_name(mode),
                     Some("switch-frame") | Some("select-window")
                 )
             }
@@ -3343,6 +3356,7 @@ impl crate::emacs_core::eval::Context {
             &[special_event_map],
             &[lookup_event],
             true,
+            self.symbol_mode(),
         );
         if binding.is_nil() || binding.is_fixnum() {
             None
@@ -3384,7 +3398,7 @@ impl crate::emacs_core::eval::Context {
     ) -> Result<Option<KeySequenceSuffixTranslation>, crate::emacs_core::error::Flow> {
         use crate::emacs_core::keymap::is_list_keymap;
 
-        if map.is_nil() || !is_list_keymap(&map) {
+        if map.is_nil() || !is_list_keymap(&map, self.symbol_mode()) {
             return Ok(None);
         }
 
@@ -3404,7 +3418,7 @@ impl crate::emacs_core::eval::Context {
                     event,
                     true,
                 )?;
-                if is_list_keymap(&binding) {
+                if is_list_keymap(&binding, self.symbol_mode()) {
                     current_map = binding;
                     continue;
                 }
@@ -3439,18 +3453,25 @@ impl crate::emacs_core::eval::Context {
         } else {
             binding
         };
-        Ok(key_sequence_translation_events(resolved))
+        Ok(key_sequence_translation_events(
+            resolved,
+            self.symbol_mode(),
+        ))
     }
 
     fn translation_map_has_pending_suffix_prefix(&self, map: Value, events: &[Value]) -> bool {
         use crate::emacs_core::keymap::{is_list_keymap, list_keymap_lookup_seq};
 
-        if map.is_nil() || !is_list_keymap(&map) {
+        if map.is_nil() || !is_list_keymap(&map, self.symbol_mode()) {
             return false;
         }
 
-        (0..events.len())
-            .any(|start| is_list_keymap(&list_keymap_lookup_seq(&map, &events[start..])))
+        (0..events.len()).any(|start| {
+            is_list_keymap(
+                &list_keymap_lookup_seq(&map, &events[start..], self.symbol_mode()),
+                self.symbol_mode(),
+            )
+        })
     }
 
     fn apply_translation_map_to_events(
@@ -3521,7 +3542,9 @@ impl crate::emacs_core::eval::Context {
     /// dispatching `prefix-help-command`.
     fn event_matches_help_char(&self, event: &Value) -> bool {
         let help_char = self.eval_symbol("help-char").unwrap_or(Value::NIL);
-        if !help_char.is_nil() && *event == help_char {
+        if !help_char.is_nil()
+            && self.symbol_mode().unwrap(*event) == self.symbol_mode().unwrap(help_char)
+        {
             return true;
         }
         let help_event_list = self.eval_symbol("help-event-list").unwrap_or(Value::NIL);
@@ -3530,7 +3553,7 @@ impl crate::emacs_core::eval::Context {
         }
         let mut cursor = help_event_list;
         while cursor.is_cons() {
-            if cursor.cons_car() == *event {
+            if self.symbol_mode().unwrap(cursor.cons_car()) == self.symbol_mode().unwrap(*event) {
                 return true;
             }
             cursor = cursor.cons_cdr();
@@ -3540,8 +3563,11 @@ impl crate::emacs_core::eval::Context {
 
     fn prefix_echo_message(&mut self, translated_events: &[Value]) -> Option<LispString> {
         let key_vec = Value::vector(translated_events.to_vec());
-        let desc =
-            crate::emacs_core::builtins::keymaps::builtin_key_description(vec![key_vec]).ok()?;
+        let desc = crate::emacs_core::builtins::keymaps::builtin_key_description(
+            vec![key_vec],
+            self.symbol_mode(),
+        )
+        .ok()?;
         let mut message = desc.as_lisp_string()?.clone();
         if translated_events.len() == 1
             && translated_events
@@ -3591,17 +3617,17 @@ impl crate::emacs_core::eval::Context {
         while events.is_cons() {
             let mut event = events.cons_car();
             events = events.cons_cdr();
-            if event.is_symbol_named("help") {
+            if event.is_symbol_named("help", self.symbol_mode()) {
                 event = help_char;
             }
             if event.is_nil() {
                 continue;
             }
-            let desc =
-                crate::emacs_core::builtins::keymaps::builtin_key_description(vec![Value::vector(
-                    vec![event],
-                )])
-                .ok()?;
+            let desc = crate::emacs_core::builtins::keymaps::builtin_key_description(
+                vec![Value::vector(vec![event])],
+                self.symbol_mode(),
+            )
+            .ok()?;
             return desc.as_utf8_str().map(ToOwned::to_owned);
         }
         None
@@ -4672,7 +4698,7 @@ impl crate::emacs_core::eval::Context {
                 };
                 let mut emacs_event = read_event.event;
                 self.clear_quit_flag_after_read_key_sequence_event(&emacs_event);
-                if Self::has_switch_frame_event_kind(&emacs_event)
+                if Self::has_switch_frame_event_kind(&emacs_event, self.symbol_mode())
                     && (!self
                         .command_loop
                         .keyboard
@@ -4783,7 +4809,8 @@ impl crate::emacs_core::eval::Context {
                 .raw_events()
                 .len()
                 == 1
-                && let Some(prefixed) = Self::maybe_prefix_mouse_area(&translated_events)
+                && let Some(prefixed) =
+                    Self::maybe_prefix_mouse_area(&translated_events, self.symbol_mode())
             {
                 self.command_loop
                     .keyboard
@@ -4792,7 +4819,8 @@ impl crate::emacs_core::eval::Context {
                 self.publish_current_key_sequence_as_command_keys();
             }
 
-            let lookup_position = Self::key_sequence_lookup_position(&translated_events);
+            let lookup_position =
+                Self::key_sequence_lookup_position(&translated_events, self.symbol_mode());
             let pre_function_key_resolution = match resolve_active_key_binding(
                 self,
                 &translated_events,
@@ -4809,12 +4837,17 @@ impl crate::emacs_core::eval::Context {
             };
             let pre_function_key_binding = pre_function_key_resolution.binding;
             let pre_function_key_undefined = pre_function_key_resolution.lookup.is_nil()
-                || pre_function_key_resolution.lookup == Value::symbol("undefined")
+                || self
+                    .symbol_mode()
+                    .unwrap(pre_function_key_resolution.lookup)
+                    == Value::symbol("undefined")
                 || pre_function_key_binding.is_nil()
-                || pre_function_key_binding == Value::symbol("undefined");
+                || self.symbol_mode().unwrap(pre_function_key_binding)
+                    == Value::symbol("undefined");
             let pre_function_key_is_prefix = resolve_prefix_keymap_binding_in_obarray(
                 &self.obarray,
                 &pre_function_key_resolution.lookup,
+                self.symbol_mode(),
             )
             .is_some();
             let mut command_binding_resolution =
@@ -4886,8 +4919,11 @@ impl crate::emacs_core::eval::Context {
                 .len()
                 == 1
                 && saved_current_buffer.is_none()
-                && let Some(target_buffer_id) =
-                    Self::key_sequence_target_buffer_id(&translated_events, &self.frames)
+                && let Some(target_buffer_id) = Self::key_sequence_target_buffer_id(
+                    &translated_events,
+                    &self.frames,
+                    self.symbol_mode(),
+                )
                 && self.buffers.current_buffer_id() != Some(target_buffer_id)
             {
                 saved_current_buffer = self.buffers.current_buffer_id();
@@ -4898,7 +4934,8 @@ impl crate::emacs_core::eval::Context {
                 }
                 command_binding_resolution.invalidate();
             }
-            let lookup_position = Self::key_sequence_lookup_position(&translated_events);
+            let lookup_position =
+                Self::key_sequence_lookup_position(&translated_events, self.symbol_mode());
 
             tracing::debug!(
                 "read_key_sequence: looking up binding for {:?}",
@@ -4927,10 +4964,10 @@ impl crate::emacs_core::eval::Context {
                 }
             };
             let mut binding = resolved.binding;
-            let mut lookup_is_undefined =
-                resolved.lookup.is_nil() || resolved.lookup == Value::symbol("undefined");
-            let mut binding_is_undefined =
-                binding.is_nil() || binding == Value::symbol("undefined");
+            let mut lookup_is_undefined = resolved.lookup.is_nil()
+                || self.symbol_mode().unwrap(resolved.lookup) == Value::symbol("undefined");
+            let mut binding_is_undefined = binding.is_nil()
+                || self.symbol_mode().unwrap(binding) == Value::symbol("undefined");
             let mut sequence_is_undefined = lookup_is_undefined || binding_is_undefined;
             tracing::debug!(
                 "read_key_sequence: binding={}",
@@ -4967,9 +5004,10 @@ impl crate::emacs_core::eval::Context {
                             resolved = rewritten_resolution;
                             binding = resolved.binding;
                             lookup_is_undefined = resolved.lookup.is_nil()
-                                || resolved.lookup == Value::symbol("undefined");
-                            binding_is_undefined =
-                                binding.is_nil() || binding == Value::symbol("undefined");
+                                || self.symbol_mode().unwrap(resolved.lookup)
+                                    == Value::symbol("undefined");
+                            binding_is_undefined = binding.is_nil()
+                                || self.symbol_mode().unwrap(binding) == Value::symbol("undefined");
                             sequence_is_undefined = lookup_is_undefined || binding_is_undefined;
                         }
                         UndefinedMouseSequenceFallback::Drop { retained_events } => {
@@ -5042,8 +5080,12 @@ impl crate::emacs_core::eval::Context {
                 }
             }
 
-            let is_prefix =
-                resolve_prefix_keymap_binding_in_obarray(&self.obarray, &resolved.lookup).is_some();
+            let is_prefix = resolve_prefix_keymap_binding_in_obarray(
+                &self.obarray,
+                &resolved.lookup,
+                self.symbol_mode(),
+            )
+            .is_some();
 
             if is_prefix {
                 // GNU doesn't publish a prefix merely because lookup found a
@@ -5121,7 +5163,7 @@ impl crate::emacs_core::eval::Context {
         // when reading the input-method queues.
         if head.is_cons() && head.cons_cdr().is_nil() {
             let car = head.cons_car();
-            if car.as_fixnum().is_some() || car.is_symbol() {
+            if car.as_fixnum().is_some() || car.is_symbol(self.symbol_mode()) {
                 head = car;
             }
         }
@@ -6325,7 +6367,7 @@ impl crate::emacs_core::eval::Context {
             return Ok(false);
         }
         let head = parts[0];
-        if !head.is_symbol_named("help-echo") {
+        if !head.is_symbol_named("help-echo", self.symbol_mode()) {
             return Ok(false);
         }
 
@@ -6435,7 +6477,12 @@ impl crate::emacs_core::eval::Context {
         }
 
         match self.obarray.symbol_function("mouse-fixup-help-message") {
-            Some(function) if !crate::emacs_core::autoload::is_autoload_value(&function) => {
+            Some(function)
+                if !crate::emacs_core::autoload::is_autoload_value(
+                    &function,
+                    self.symbol_mode(),
+                ) =>
+            {
                 self.funcall_general(Value::symbol("mouse-fixup-help-message"), vec![help])
             }
             _ => Ok(help),
@@ -6471,7 +6518,12 @@ impl crate::emacs_core::eval::Context {
         }
 
         match self.obarray.symbol_function("substitute-command-keys") {
-            Some(function) if !crate::emacs_core::autoload::is_autoload_value(&function) => {
+            Some(function)
+                if !crate::emacs_core::autoload::is_autoload_value(
+                    &function,
+                    self.symbol_mode(),
+                ) =>
+            {
                 self.funcall_general(Value::symbol("substitute-command-keys"), vec![help])
             }
             _ => Ok(help),
@@ -6574,26 +6626,29 @@ impl crate::emacs_core::eval::Context {
         Value::list(vec![Value::symbol(&sym), position])
     }
 
-    fn event_position(event: &Value) -> Option<Value> {
+    fn event_position(event: &Value, mode: SymbolMode) -> Option<Value> {
         let event_slots = crate::emacs_core::value::list_to_vec(event)?;
         let position = *event_slots.get(1)?;
         let position_slots = crate::emacs_core::value::list_to_vec(&position)?;
-        if position_slots.len() >= 4 || Self::event_position_area(&position).is_some() {
+        if position_slots.len() >= 4 || Self::event_position_area(&position, mode).is_some() {
             Some(position)
         } else {
             None
         }
     }
 
-    fn key_sequence_lookup_position(events: &[Value]) -> Option<Value> {
-        events.iter().find_map(Self::event_position)
+    fn key_sequence_lookup_position(events: &[Value], mode: SymbolMode) -> Option<Value> {
+        events
+            .iter()
+            .find_map(|event| Self::event_position(event, mode))
     }
 
     fn key_sequence_target_buffer_id(
         events: &[Value],
         frames: &crate::window::FrameManager,
+        mode: SymbolMode,
     ) -> Option<crate::buffer::BufferId> {
-        let position = Self::key_sequence_lookup_position(events)?;
+        let position = Self::key_sequence_lookup_position(events, mode)?;
         let slots = crate::emacs_core::value::list_to_vec(&position)?;
         let first = *slots.first()?;
         let wid = first.as_window_id()?;
@@ -6614,47 +6669,51 @@ impl crate::emacs_core::eval::Context {
         None
     }
 
-    fn event_position_area(position: &Value) -> Option<Value> {
+    fn event_position_area(position: &Value, mode: SymbolMode) -> Option<Value> {
         let slots = crate::emacs_core::value::list_to_vec(position)?;
         let area_or_pos = *slots.get(1)?;
-        match area_or_pos.kind() {
+        match mode.unwrap(area_or_pos).kind() {
             ValueKind::Symbol(_) => Some(area_or_pos),
             ValueKind::Cons => {
                 let head = area_or_pos.cons_car();
-                head.as_symbol_name().map(|_| head)
+                head.as_symbol_name(mode).map(|_| head)
             }
             _ => None,
         }
     }
 
-    fn maybe_prefix_mouse_area(events: &[Value]) -> Option<Vec<Value>> {
+    fn maybe_prefix_mouse_area(events: &[Value], mode: SymbolMode) -> Option<Vec<Value>> {
         let first = events.first()?;
-        let position = Self::event_position(first)?;
-        let area = Self::event_position_area(&position)?;
+        let position = Self::event_position(first, mode)?;
+        let area = Self::event_position_area(&position, mode)?;
         let mut prefixed = Vec::with_capacity(events.len() + 1);
         prefixed.push(area);
         prefixed.extend_from_slice(events);
         Some(prefixed)
     }
 
-    fn mouse_event_symbol_name(event: &Value) -> Option<String> {
-        match event.kind() {
-            ValueKind::Symbol(_) => event.as_symbol_name().map(str::to_owned),
+    fn mouse_event_symbol_name(event: &Value, mode: SymbolMode) -> Option<String> {
+        match mode.unwrap(*event).kind() {
+            ValueKind::Symbol(_) => event.as_symbol_name(mode).map(str::to_owned),
             ValueKind::Cons => {
                 let slots = crate::emacs_core::value::list_to_vec(event)?;
-                slots.first()?.as_symbol_name().map(str::to_owned)
+                slots.first()?.as_symbol_name(mode).map(str::to_owned)
             }
             _ => None,
         }
     }
 
-    fn rewrite_mouse_event_symbol(event: Value, symbol_name: &str) -> Option<Value> {
-        match event.kind() {
+    fn rewrite_mouse_event_symbol(
+        event: Value,
+        symbol_name: &str,
+        mode: SymbolMode,
+    ) -> Option<Value> {
+        match mode.unwrap(event).kind() {
             ValueKind::Symbol(_) => Some(Value::symbol(symbol_name)),
             ValueKind::Cons => {
                 let mut slots = crate::emacs_core::value::list_to_vec(&event)?;
                 let head = slots.first_mut()?;
-                head.as_symbol_name()?;
+                head.as_symbol_name(mode)?;
                 *head = Value::symbol(symbol_name);
                 Some(Value::list(slots))
             }
@@ -6662,8 +6721,11 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
-    fn simplify_mouse_event_once(event: Value) -> Option<(MouseEventFallbackStep, Option<Value>)> {
-        let symbol_name = Self::mouse_event_symbol_name(&event)?;
+    fn simplify_mouse_event_once(
+        event: Value,
+        mode: SymbolMode,
+    ) -> Option<(MouseEventFallbackStep, Option<Value>)> {
+        let symbol_name = Self::mouse_event_symbol_name(&event, mode)?;
         let (modifier_prefix, base) =
             crate::emacs_core::keyboard::pure::split_symbol_modifiers(&symbol_name);
         let mut rewritten_name = modifier_prefix;
@@ -6673,7 +6735,7 @@ impl crate::emacs_core::eval::Context {
             rewritten_name.push_str(rest);
             return Some((
                 MouseEventFallbackStep::Rewrite,
-                Self::rewrite_mouse_event_symbol(event, &rewritten_name),
+                Self::rewrite_mouse_event_symbol(event, &rewritten_name, mode),
             ));
         } else if let Some(rest) = base.strip_prefix("double-") {
             rest
@@ -6688,20 +6750,20 @@ impl crate::emacs_core::eval::Context {
         rewritten_name.push_str(rewritten_base);
         Some((
             MouseEventFallbackStep::Rewrite,
-            Self::rewrite_mouse_event_symbol(event, &rewritten_name),
+            Self::rewrite_mouse_event_symbol(event, &rewritten_name, mode),
         ))
     }
 
-    fn retained_key_sequence_len_after_mouse_drop(events: &[Value]) -> usize {
+    fn retained_key_sequence_len_after_mouse_drop(events: &[Value], mode: SymbolMode) -> usize {
         let Some(last_event) = events.last() else {
             return 0;
         };
 
         let mut retained_len = events.len().saturating_sub(1);
         if retained_len > 0
-            && let Some(position) = Self::event_position(last_event)
-            && let Some(area) = Self::event_position_area(&position)
-            && events[retained_len - 1] == area
+            && let Some(position) = Self::event_position(last_event, mode)
+            && let Some(area) = Self::event_position_area(&position, mode)
+            && mode.unwrap(events[retained_len - 1]) == mode.unwrap(area)
         {
             retained_len -= 1;
         }
@@ -6722,7 +6784,7 @@ impl crate::emacs_core::eval::Context {
 
         loop {
             let Some((step, rewritten_event)) =
-                Self::simplify_mouse_event_once(rewritten_events[last_index])
+                Self::simplify_mouse_event_once(rewritten_events[last_index], self.symbol_mode())
             else {
                 return Ok(None);
             };
@@ -6740,10 +6802,11 @@ impl crate::emacs_core::eval::Context {
                         false,
                         lookup_position,
                     )?;
-                    let lookup_is_undefined =
-                        resolved.lookup.is_nil() || resolved.lookup == Value::symbol("undefined");
-                    let binding_is_undefined =
-                        resolved.binding.is_nil() || resolved.binding == Value::symbol("undefined");
+                    let lookup_is_undefined = resolved.lookup.is_nil()
+                        || self.symbol_mode().unwrap(resolved.lookup) == Value::symbol("undefined");
+                    let binding_is_undefined = resolved.binding.is_nil()
+                        || self.symbol_mode().unwrap(resolved.binding)
+                            == Value::symbol("undefined");
                     if !(lookup_is_undefined || binding_is_undefined) {
                         return Ok(Some(UndefinedMouseSequenceFallback::Rewrite {
                             events: rewritten_events,
@@ -6752,8 +6815,10 @@ impl crate::emacs_core::eval::Context {
                     }
                 }
                 MouseEventFallbackStep::Drop => {
-                    let retained_len =
-                        Self::retained_key_sequence_len_after_mouse_drop(&rewritten_events);
+                    let retained_len = Self::retained_key_sequence_len_after_mouse_drop(
+                        &rewritten_events,
+                        self.symbol_mode(),
+                    );
                     rewritten_events.truncate(retained_len);
                     return Ok(Some(UndefinedMouseSequenceFallback::Drop {
                         retained_events: rewritten_events,
@@ -6861,7 +6926,11 @@ impl crate::emacs_core::eval::Context {
             return None;
         }
         let raw_map = self.tool_bar_map_for_frame(emacs_frame_id);
-        let keymap = crate::emacs_core::keymap::maybe_keymap_in_obarray(self.obarray(), &raw_map)?;
+        let keymap = crate::emacs_core::keymap::maybe_keymap_in_obarray(
+            self.obarray(),
+            &raw_map,
+            self.symbol_mode(),
+        )?;
         let mut remaining = index as usize;
         let mut found = None;
         crate::emacs_core::keymap::list_keymap_for_each_binding(
@@ -6871,7 +6940,7 @@ impl crate::emacs_core::eval::Context {
                 if found.is_some() {
                     return;
                 }
-                if !Self::is_rendered_tool_bar_item(&key, &def) {
+                if !Self::is_rendered_tool_bar_item(&key, &def, self.symbol_mode()) {
                     return;
                 }
                 if remaining == 0 {
@@ -6880,6 +6949,7 @@ impl crate::emacs_core::eval::Context {
                     remaining -= 1;
                 }
             },
+            self.symbol_mode(),
         );
         found
     }
@@ -6917,8 +6987,8 @@ impl crate::emacs_core::eval::Context {
         self.default_tool_bar_map()
     }
 
-    fn is_rendered_tool_bar_item(key: &Value, def: &Value) -> bool {
-        let key_name = key.as_symbol_name().unwrap_or_default();
+    fn is_rendered_tool_bar_item(key: &Value, def: &Value, mode: SymbolMode) -> bool {
+        let key_name = key.as_symbol_name(mode).unwrap_or_default();
         if key_name.starts_with("separator") {
             return true;
         }
@@ -6928,10 +6998,10 @@ impl crate::emacs_core::eval::Context {
             *def
         };
         if !def.is_cons() {
-            return def.as_symbol_name() == Some("menu-bar-separator");
+            return def.as_symbol_name(mode) == Some("menu-bar-separator");
         }
         let car = def.cons_car();
-        KeymapMarker::MenuItem.is_value(car) || car.is_string()
+        KeymapMarker::MenuItem.is_value(car, mode) || car.is_string()
     }
 
     /// GNU make_lispy_movement emits an unmodified event head. The constructor
@@ -7875,11 +7945,11 @@ pub fn parse_interactive_spec(spec: &str) -> Vec<InteractiveCode> {
     codes
 }
 
-fn key_sequence_translation_events(translation: Value) -> Option<Vec<Value>> {
+fn key_sequence_translation_events(translation: Value, mode: SymbolMode) -> Option<Vec<Value>> {
     if translation.is_nil() || translation.is_fixnum() {
         return None;
     }
-    if crate::emacs_core::keymap::is_list_keymap(&translation) {
+    if crate::emacs_core::keymap::is_list_keymap(&translation, mode) {
         return None;
     }
 

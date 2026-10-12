@@ -1,0 +1,9 @@
+error[E0502]: cannot borrow `manager` as mutable because it is also borrowed as immutable
+ --> tests/thread_safety_ui/world_buffer_storage_mutation_alias.rs:6:21
+  |
+5 |     let storage = &*manager;
+  |                     ------- immutable borrow occurs here
+6 |     let _defaults = manager.buffer_defaults_mut();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+7 |     let _retained_storage = storage.buffer_defaults.len();
+  |                             ----------------------- immutable borrow later used here

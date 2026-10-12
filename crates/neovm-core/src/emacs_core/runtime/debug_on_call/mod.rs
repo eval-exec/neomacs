@@ -153,7 +153,7 @@ impl Context {
     /// GNU's swap-in leaves the current buffer's value *in that same cell*, so
     /// reading it there is right for the buffer-local case too.
     #[inline]
-    fn debug_on_next_call_cell(&self) -> Option<&'static LispBoolFwd> {
+    fn debug_on_next_call_cell(&mut self) -> Option<&'static LispBoolFwd> {
         self.obarray
             .debug_on_next_call_bool_fwd_cached()
             .or_else(|| {
@@ -176,12 +176,12 @@ impl Context {
     /// path that takes the arm properly -- and resolves the cell there.
     #[inline(always)]
     pub(crate) fn debug_on_next_call_is_armed(&self) -> bool {
-        self.obarray.debug_on_next_call_armed_fast()
+        self.dispatch_projection().debug_on_next_call_armed_fast()
     }
 
     /// Resolve the memoized cell now, so the unresolved window closes before
     /// any Lisp runs (`finish_runtime_activation`).
-    pub(crate) fn resolve_debug_on_next_call_cell(&self) {
+    pub(crate) fn resolve_debug_on_next_call_cell(&mut self) {
         let _ = self
             .obarray
             .debug_on_next_call_bool_fwd(debug_on_next_call_symbol());

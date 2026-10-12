@@ -336,7 +336,7 @@ fn shaped_slots_arm_the_callee_entry_only_under_the_knob() {
                 force_direct_sites_for_test(Some(DirectSitesMode::All));
                 force_direct_shapes_for_test(Some(shapes));
                 let mut ev = crate::test_utils::runtime_startup_context();
-                ev.eval_str(PROGRAM).expect("warmed");
+                eval_fixture_program(&mut ev, PROGRAM).expect("warmed");
                 let caller = cached_leaf(&ev, "neovm--dsa-caller").expect("caller");
                 let mut out: Vec<(&str, bool)> =
                     ["neovm--dsa-opt", "neovm--dsa-rest", "neovm--dsa-framed"]

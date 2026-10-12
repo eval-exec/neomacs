@@ -132,7 +132,10 @@ fn md5_known_coding_system(name: &str) -> bool {
     super::coding::CodingSystemManager::new().is_known(name)
 }
 
-fn validate_md5_coding_system_arg(args: &[Value]) -> Result<(), Flow> {
+fn validate_md5_coding_system_arg(
+    args: &[Value],
+    mode: crate::tagged::value::SymbolMode,
+) -> Result<(), Flow> {
     let Some(coding_system) = args.get(3) else {
         return Ok(());
     };
@@ -141,10 +144,9 @@ fn validate_md5_coding_system_arg(args: &[Value]) -> Result<(), Flow> {
     }
 
     let noerror = args.get(4).is_some_and(|v| v.is_truthy());
-    let valid = match coding_system.kind() {
-        ValueKind::Symbol(id) => md5_known_coding_system(resolve_sym(id)),
-        _ => false,
-    };
+    let valid = coding_system
+        .as_symbol_id(mode)
+        .is_some_and(|id| md5_known_coding_system(resolve_sym(id)));
 
     if valid || noerror {
         Ok(())
@@ -156,16 +158,17 @@ fn validate_md5_coding_system_arg(args: &[Value]) -> Result<(), Flow> {
     }
 }
 
-fn md5_coding_system_name(args: &[Value]) -> Option<String> {
+fn md5_coding_system_name(
+    args: &[Value],
+    mode: crate::tagged::value::SymbolMode,
+) -> Option<String> {
     let coding_system = args.get(3)?;
     if coding_system.is_nil() {
         return None;
     }
     let noerror = args.get(4).is_some_and(|v| v.is_truthy());
-    match coding_system.kind() {
-        ValueKind::Symbol(id) if md5_known_coding_system(resolve_sym(id)) => {
-            Some(resolve_sym(id).to_owned())
-        }
+    match coding_system.as_symbol_id(mode) {
+        Some(id) if md5_known_coding_system(resolve_sym(id)) => Some(resolve_sym(id).to_owned()),
         _ if noerror => Some("raw-text".to_string()),
         _ => None,
     }
@@ -776,14 +779,14 @@ pub(crate) fn builtin_base64_decode_region(
 /// Context-aware implementation that also supports buffer objects.
 pub(crate) fn builtin_md5(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("md5", &args, 1, 5)?;
-    validate_md5_coding_system_arg(&args)?;
+    validate_md5_coding_system_arg(&args, eval.symbol_mode())?;
     let object = &args[0];
     match object.kind() {
         ValueKind::String => Ok(Value::string(md5_hex_for_string(
             object,
             args.get(1),
             args.get(2),
-            md5_coding_system_name(&args).as_deref(),
+            md5_coding_system_name(&args, eval.symbol_mode()).as_deref(),
             eval.eol_conversion(),
         )?)),
         ValueKind::Veclike(VecLikeType::Buffer) => {
@@ -792,7 +795,7 @@ pub(crate) fn builtin_md5(eval: &mut super::eval::Context, args: Vec<Value>) -> 
                 object.as_buffer_id().unwrap(),
                 args.get(1),
                 args.get(2),
-                md5_coding_system_name(&args).map(|name| intern(&name)),
+                md5_coding_system_name(&args, eval.symbol_mode()).map(|name| intern(&name)),
             )?;
             Ok(Value::string(md5_hash(&input)))
         }
@@ -908,16 +911,16 @@ fn encoded_hash_slice_for_buffer_in_context(
     Ok(crate::encoding::encode_external_text_in_context(eval, text, coding_system)?.bytes)
 }
 
-fn secure_hash_algorithm_name(val: &Value) -> Result<String, Flow> {
-    match val.kind() {
-        ValueKind::Symbol(id) => Ok(resolve_sym(id).to_owned()),
-        ValueKind::Nil => Ok("nil".to_string()),
-        ValueKind::T => Ok("t".to_string()),
-        _ => Err(signal(
+fn secure_hash_algorithm_name(
+    val: &Value,
+    mode: crate::tagged::value::SymbolMode,
+) -> Result<String, Flow> {
+    val.as_symbol_name(mode).map(str::to_owned).ok_or_else(|| {
+        signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), *val],
-        )),
-    }
+        )
+    })
 }
 
 fn normalize_secure_hash_index(
@@ -1039,7 +1042,7 @@ fn secure_hash_digest_bytes(algo_name: &str, input: &[u8]) -> Result<Vec<u8>, Fl
 /// Context-aware implementation that also supports buffer objects.
 pub(crate) fn builtin_secure_hash(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("secure-hash", &args, 2, 5)?;
-    let algo_name = secure_hash_algorithm_name(&args[0])?;
+    let algo_name = secure_hash_algorithm_name(&args[0], eval.symbol_mode())?;
 
     let object = &args[1];
     let input = match object.kind() {
@@ -1479,6 +1482,7 @@ struct CompareStringsCase {
     up: Value,
     ascii: CompareStringsAsciiCase,
     multibyte_buffer: bool,
+    symbol_mode: crate::tagged::SymbolMode,
 }
 
 impl CompareStringsCase {
@@ -1502,6 +1506,7 @@ impl CompareStringsCase {
             up,
             ascii,
             multibyte_buffer,
+            symbol_mode: ctx.symbol_mode(),
         })
     }
 
@@ -1524,11 +1529,19 @@ impl CompareStringsCase {
                     .and_then(|obj| obj.contents.as_slice().get(code as usize).copied())
                     .unwrap_or(Value::NIL),
                 CompareStringsAsciiCase::Lookup => {
-                    crate::emacs_core::chartable::ct_ref(&self.up, code as i64)
+                    crate::emacs_core::chartable::ct_ref_with_symbols(
+                        &self.up,
+                        code as i64,
+                        self.symbol_mode,
+                    )
                 }
             }
         } else {
-            crate::emacs_core::chartable::ct_ref(&self.up, code as i64)
+            crate::emacs_core::chartable::ct_ref_with_symbols(
+                &self.up,
+                code as i64,
+                self.symbol_mode,
+            )
         };
         let cased = match mapped.kind() {
             ValueKind::Fixnum(n) if n >= 0 => n as i32,

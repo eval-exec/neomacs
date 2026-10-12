@@ -129,6 +129,12 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
     for owner in [observed, old_child, target] {
         context.push_specpdl_root(owner);
     }
+    // Compile before the first capture so the actual native leaves take
+    // hull-first admission, including its empty-proof ALL refusal.
+    let setcar = compile_bytecode_function(&store_function(Op::Setcar))
+        .expect("the pre-capture setcar leaf compiles");
+    let setcdr = compile_bytecode_function(&store_function(Op::Setcdr))
+        .expect("the pre-capture setcdr leaf compiles");
     let (_, certificate) = capture(|| observed.cons_car());
     let certificate = certificate.expect("one retained observation");
     let (lo, hi) = crate::tagged::collection_reads::compiled_observation_window();
@@ -142,7 +148,7 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
     let revision = LispCollectionRevision::current();
     let vmctx = (&mut context as *mut Context).cast::<u8>();
     assert_eq!(
-        super::super::dispatch::neovm_jit_setcar(
+        super::super::dispatch::neovm_jit_setcar_collection(
             vmctx,
             target.bits() as i64,
             Value::NIL.bits() as i64
@@ -150,7 +156,7 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
         Value::NIL.bits() as i64,
     );
     assert_eq!(
-        super::super::dispatch::neovm_jit_setcdr(
+        super::super::dispatch::neovm_jit_setcdr_collection(
             vmctx,
             target.bits() as i64,
             Value::NIL.bits() as i64
@@ -164,6 +170,33 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
             .contains(&old_child),
         "the ordinary SATB barrier retains the overwritten child",
     );
+    // Keep the reset in the compiled domain: ordinary mutation helpers
+    // publish the owner and would change this outside-observation fixture.
+    for setter in [
+        super::super::dispatch::neovm_jit_setcar_collection,
+        super::super::dispatch::neovm_jit_setcdr_collection,
+    ] {
+        assert_eq!(
+            setter(vmctx, target.bits() as i64, old_child.bits() as i64),
+            old_child.bits() as i64,
+        );
+    }
+    context.tagged_heap.take_satb_shared_for_test();
+    let calls = cons_shims();
+    for leaf in [&setcar, &setcdr] {
+        assert_eq!(
+            native(&mut context, leaf, &[target, Value::NIL]),
+            Value::NIL
+        );
+        assert!(
+            context
+                .tagged_heap
+                .take_satb_shared_for_test()
+                .contains(&old_child),
+            "each native empty-proof refusal retains its overwritten child",
+        );
+    }
+    assert_eq!(cons_shims() - calls, 2, "ALL refuses both native stores");
     context.tagged_heap.set_concurrent_active_for_test(false);
     assert_eq!(
         LispCollectionRevision::current().steps_since_for_test(revision),
@@ -628,7 +661,6 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
         (Op::Setcdr, StoreKind::Setcdr),
     ] {
         let mut context = context(false);
-        let leaf = compile_bytecode_function(&store_function(op)).expect("native cons setter");
         let mut owners = std::array::from_fn::<_, 3, _>(|_| {
             context.tagged_heap.alloc_cons(Value::NIL, Value::NIL)
         });
@@ -639,6 +671,7 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
         }
         let (_, endpoints) = capture(|| (first.cons_car(), last.cons_car()));
         let endpoints = endpoints.expect("the endpoints bound a real empty interval");
+        let leaf = compile_bytecode_function(&store_function(op)).expect("native cons setter");
         let before = LispCollectionRevision::current();
         let shims = cons_shims();
         for value in [12, 23, 34] {
@@ -657,12 +690,12 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
         assert!(endpoints.unchanged());
         let address = target.bits() & !crate::tagged::value::TAG_MASK;
         assert!(
-            !context
+            context
                 .tagged_heap
                 .jit_barrier_window_for_test()
-                .covers(address)
+                .covers(address),
+            "the primary hull is retained; the native secondary interval bypasses its empty interior"
         );
-
         let (value, reads) = capture(|| kind.read(target));
         assert_eq!(value, Value::make_int(34));
         let reads = reads.expect("a certificate taken after the inline mutation");
@@ -685,6 +718,41 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
         );
         assert!(endpoints.unchanged());
     }
+}
+
+#[test]
+fn gen0_pre_capture_leaf_completes_interior_stores_in_the_shim() {
+    let _journal = JournalMode::observed();
+    let mut context = context(false);
+    assert!(!crate::tagged::gc::has_collection_observations());
+    // Compiled before any capture: main's hull gate, with no native proofs.
+    let leaf = compile_bytecode_function(&store_function(Op::Setcar)).expect("pre-capture setcar");
+    let mut owners =
+        std::array::from_fn::<_, 3, _>(|_| context.tagged_heap.alloc_cons(Value::NIL, Value::NIL));
+    owners.sort_unstable_by_key(|owner| owner.bits());
+    let [first, target, last] = owners;
+    for owner in owners {
+        context.push_specpdl_root(owner);
+    }
+    let (_, endpoints) = capture(|| (first.cons_car(), last.cons_car()));
+    let endpoints = endpoints.expect("the endpoints bound a real empty interval");
+    let before = LispCollectionRevision::current();
+    let shims = cons_shims();
+    for value in [12, 23, 34] {
+        native(
+            &mut context,
+            &leaf,
+            &StoreKind::Setcar.args(target, Value::make_int(value)),
+        );
+    }
+    assert_eq!(LispCollectionRevision::current(), before);
+    assert_eq!(
+        cons_shims(),
+        shims + 3,
+        "a published gap does not change a pre-capture leaf's hull refusal"
+    );
+    assert!(endpoints.unchanged());
+    assert_eq!(target.cons_car(), Value::make_int(34));
 }
 
 fn standalone_heap() -> TaggedHeap {
@@ -943,6 +1011,14 @@ fn gen0_observed_collection_store_cost_probe() {
         )
     } else {
         None
+    };
+    // Supplementary native-code diagnostics can inspect the interactive
+    // frontend after the capture. Normal slope fixtures keep their original
+    // compile-before-capture ordering.
+    let leaf = if std::env::var("FX1_STORE_COMPILE_AFTER_CAPTURE").as_deref() == Ok("1") {
+        probe_leaf(kind, &context)
+    } else {
+        leaf
     };
     let mode = crate::tagged::collection_reads::compiled_journal_mode();
     let (lo, hi) = crate::tagged::collection_reads::compiled_observation_window();

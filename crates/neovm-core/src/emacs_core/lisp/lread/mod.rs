@@ -532,13 +532,14 @@ enum FormReader {
 
 impl FormReader {
     fn resolve(eval: &super::eval::Context, explicit: Option<Value>) -> Self {
+        let symbol_mode = eval.symbol_mode();
         if let Some(read_function) = explicit.filter(|value| !value.is_nil()) {
             return Self::Lisp(read_function);
         }
         match eval
             .obarray
             .symbol_value_copied("load-read-function")
-            .filter(|hook| !hook.is_nil() && !hook.is_symbol_named("read"))
+            .filter(|hook| !hook.is_nil() && !hook.is_symbol_named("read", symbol_mode))
         {
             Some(hook) => Self::Lisp(hook),
             None => Self::Internal,
@@ -1210,10 +1211,11 @@ fn read_coding_system_via_completing_read(
     args: &[Value],
     require_match: bool,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     // GNU passes the symbol-name string of a symbolic DEFAULT-CODING-SYSTEM.
     let default = match args.get(1).copied() {
-        Some(value) if value.is_symbol() && !value.is_nil() => Value::string(
-            super::intern::resolve_sym(value.as_symbol_id().expect("checked symbol")),
+        Some(value) if value.is_symbol(symbol_mode) && !value.is_nil() => Value::string(
+            super::intern::resolve_sym(value.as_symbol_id(symbol_mode).expect("checked symbol")),
         ),
         Some(value) => value,
         None => Value::NIL,

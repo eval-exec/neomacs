@@ -796,7 +796,7 @@ impl DisplayItemFaceResolver for SymbolFaceResolver {
     }
 
     fn resolve_face_ref(&mut self, base: RenderFaceRef, face_value: Value) -> RenderFaceRef {
-        match face_value.as_symbol_name() {
+        match face_value.as_bare_symbol_name() {
             Some("bold") => RenderFaceRef::FaceId(FaceId::new(7)),
             Some("font-lock-string-face") => RenderFaceRef::FaceId(FaceId::new(9)),
             _ => base,
@@ -832,7 +832,7 @@ impl DisplayItemFaceResolver for SymbolFaceResolver {
         base: RenderFaceRef,
         face_value: Value,
     ) -> Option<RenderFaceRef> {
-        match face_value.as_symbol_name() {
+        match face_value.as_bare_symbol_name() {
             Some("highlight") => Some(RenderFaceRef::FaceId(FaceId::new(11))),
             Some("low-mouse") => Some(RenderFaceRef::FaceId(FaceId::new(12))),
             Some("high-mouse") => Some(RenderFaceRef::FaceId(FaceId::new(13))),
@@ -947,7 +947,7 @@ impl DisplayItemFaceResolver for ResolvedDisplayPropertyResolver {
     }
 
     fn resolve_face_ref(&mut self, base: RenderFaceRef, face_value: Value) -> RenderFaceRef {
-        match face_value.as_symbol_name() {
+        match face_value.as_bare_symbol_name() {
             Some("bold") => RenderFaceRef::FaceId(FaceId::new(7)),
             _ => base,
         }
@@ -971,7 +971,7 @@ impl DisplayItemFaceResolver for ResolvedDisplayPropertyResolver {
         face: RenderFaceRef,
     ) -> Option<DisplayMediaReplacement> {
         self.seen_face = Some(face);
-        if display_prop.cons_car().is_symbol_named("image") {
+        if display_prop.cons_car().is_bare_symbol_named("image") {
             Some(DisplayMediaReplacement::image(DisplayImageItem {
                 image_id: 42,
                 source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
@@ -2855,7 +2855,7 @@ fn equal_priority_tie_and_nil_overlay_match_shared_gnu_selection() {
         .overlays()
         .overlay_get_named(selected, Value::symbol("mouse-face"))
         .unwrap();
-    let expected = match selected_value.as_symbol_name() {
+    let expected = match selected_value.as_bare_symbol_name() {
         Some("low-mouse") => FaceId::new(12),
         Some("high-mouse") => FaceId::new(13),
         other => panic!("unexpected selected mouse face: {other:?}"),
@@ -3680,7 +3680,7 @@ fn line_spacing_uses_gnu_numeric_and_cons_scaling_rules() {
         DisplayLineSpacingPolicy::Scale {
             reference: DisplayLineSpacingReference::Named(face),
             ..
-        } if face.is_symbol_named("mode-line")
+        } if face.is_bare_symbol_named("mode-line")
     ));
 }
 

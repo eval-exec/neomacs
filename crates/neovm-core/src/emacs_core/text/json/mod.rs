@@ -24,6 +24,7 @@ use super::value::*;
 use crate::buffer::{EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_min_args;
+use crate::tagged::value::SymbolMode;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use strum::{EnumString, IntoStaticStr};
@@ -39,6 +40,7 @@ use strum::{EnumString, IntoStaticStr};
 /// Options that control how Lisp values are serialized to JSON.
 #[derive(Clone, Debug)]
 struct SerializeOpts {
+    symbol_mode: SymbolMode,
     /// The Lisp value that maps to JSON null.
     null_object: Value,
     /// The Lisp value that maps to JSON false.
@@ -48,6 +50,7 @@ struct SerializeOpts {
 impl Default for SerializeOpts {
     fn default() -> Self {
         Self {
+            symbol_mode: SymbolMode::Bare,
             null_object: Value::keyword(":null"),
             false_object: Value::keyword(":false"),
         }
@@ -87,8 +90,8 @@ enum ObjectType {
 }
 
 impl ObjectType {
-    fn from_symbol_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+    fn from_symbol_value(value: &Value, mode: SymbolMode) -> Option<Self> {
+        value.as_symbol_name(mode)?.parse().ok()
     }
 
     #[cfg(test)]
@@ -106,8 +109,8 @@ enum ArrayType {
 }
 
 impl ArrayType {
-    fn from_symbol_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+    fn from_symbol_value(value: &Value, mode: SymbolMode) -> Option<Self> {
+        value.as_symbol_name(mode)?.parse().ok()
     }
 
     #[cfg(test)]
@@ -126,8 +129,8 @@ enum JsonOptionKey {
 }
 
 impl JsonOptionKey {
-    fn from_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.strip_prefix(':')?.parse().ok()
+    fn from_value(value: &Value, mode: SymbolMode) -> Option<Self> {
+        value.as_symbol_name(mode)?.strip_prefix(':')?.parse().ok()
     }
 
     #[cfg(test)]
@@ -138,7 +141,11 @@ impl JsonOptionKey {
 
 /// Parse keyword arguments from the &rest tail (starting at `start_index`).
 /// Returns `ParseOpts`.  Unknown keywords signal `json-error`.
-fn parse_parse_kwargs(args: &[Value], start_index: usize) -> Result<ParseOpts, Flow> {
+fn parse_parse_kwargs(
+    args: &[Value],
+    start_index: usize,
+    mode: SymbolMode,
+) -> Result<ParseOpts, Flow> {
     let mut opts = ParseOpts::default();
     let rest = &args[start_index..];
     if !rest.len().is_multiple_of(2) {
@@ -151,9 +158,9 @@ fn parse_parse_kwargs(args: &[Value], start_index: usize) -> Result<ParseOpts, F
     for i in (0..rest.len()).step_by(2).rev() {
         let key = &rest[i];
         let value = &rest[i + 1];
-        match JsonOptionKey::from_value(key) {
+        match JsonOptionKey::from_value(key, mode) {
             Some(JsonOptionKey::ObjectType) => {
-                if let Some(object_type) = ObjectType::from_symbol_value(value) {
+                if let Some(object_type) = ObjectType::from_symbol_value(value, mode) {
                     opts.object_type = object_type;
                 } else {
                     return Err(signal(
@@ -166,7 +173,7 @@ fn parse_parse_kwargs(args: &[Value], start_index: usize) -> Result<ParseOpts, F
                 }
             }
             Some(JsonOptionKey::ArrayType) => {
-                if let Some(array_type) = ArrayType::from_symbol_value(value) {
+                if let Some(array_type) = ArrayType::from_symbol_value(value, mode) {
                     opts.array_type = array_type;
                 } else {
                     return Err(signal(
@@ -201,8 +208,15 @@ fn parse_parse_kwargs(args: &[Value], start_index: usize) -> Result<ParseOpts, F
 }
 
 /// Parse keyword arguments relevant to `json-serialize` / `json-insert`.
-fn parse_serialize_kwargs(args: &[Value], start_index: usize) -> Result<SerializeOpts, Flow> {
-    let mut opts = SerializeOpts::default();
+fn parse_serialize_kwargs(
+    args: &[Value],
+    start_index: usize,
+    mode: SymbolMode,
+) -> Result<SerializeOpts, Flow> {
+    let mut opts = SerializeOpts {
+        symbol_mode: mode,
+        ..SerializeOpts::default()
+    };
     let rest = &args[start_index..];
     if !rest.len().is_multiple_of(2) {
         return Err(signal(
@@ -214,7 +228,7 @@ fn parse_serialize_kwargs(args: &[Value], start_index: usize) -> Result<Serializ
     for i in (0..rest.len()).step_by(2).rev() {
         let key = &rest[i];
         let value = &rest[i + 1];
-        match JsonOptionKey::from_value(key) {
+        match JsonOptionKey::from_value(key, mode) {
             Some(JsonOptionKey::NullObject) => {
                 opts.null_object = *value;
             }
@@ -241,8 +255,8 @@ fn parse_serialize_kwargs(args: &[Value], start_index: usize) -> Result<Serializ
 
 /// Check if two Values are equivalent for the purpose of matching the
 /// null/false sentinel objects.
-fn value_matches(a: &Value, b: &Value) -> bool {
-    super::value::eq_value(a, b)
+fn value_matches(a: &Value, b: &Value, mode: SymbolMode) -> bool {
+    super::value::eq_value_swp(a, b, matches!(mode, SymbolMode::Positioned))
 }
 
 /// Serialize a Lisp value to a JSON string.
@@ -276,13 +290,13 @@ fn serialize_into(
     }
 
     // Check for null sentinel.
-    if value_matches(value, &opts.null_object) {
+    if value_matches(value, &opts.null_object, opts.symbol_mode) {
         out.push_str("null");
         return Ok(());
     }
 
     // Check for false sentinel.
-    if value_matches(value, &opts.false_object) {
+    if value_matches(value, &opts.false_object, opts.symbol_mode) {
         out.push_str("false");
         return Ok(());
     }
@@ -401,6 +415,11 @@ fn serialize_into(
             Ok(())
         }
 
+        _ if opts.symbol_mode.unwrap(*value).is_t() => {
+            out.push_str("true");
+            Ok(())
+        }
+
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("json-value-p"), *value],
@@ -445,7 +464,7 @@ fn serialize_cons_object(
             let key = item.cons_car();
             let val = item.cons_cdr();
             // Alist keys are emitted verbatim (no colon stripping).
-            let (symbol, name) = symbol_object_key(&key)?;
+            let (symbol, name) = symbol_object_key(&key, opts.symbol_mode)?;
             if push_unique(&mut seen, symbol) {
                 if wrote_any {
                     out.push(',');
@@ -459,7 +478,7 @@ fn serialize_cons_object(
     } else {
         let mut i = 0;
         while i < items.len() {
-            let (symbol, name) = symbol_object_key(&items[i])?;
+            let (symbol, name) = symbol_object_key(&items[i], opts.symbol_mode)?;
             // A plist must supply a value for every key.
             let val = *items.get(i + 1).ok_or_else(|| {
                 signal(
@@ -553,14 +572,16 @@ fn hash_key_to_string(key: &HashKey) -> Result<String, Flow> {
 /// former `to_owned()` allocated a `String` per key for nothing. The id is
 /// returned alongside because duplicate detection compares symbol IDENTITY,
 /// which is a `SymId` compare rather than a string compare.
-fn symbol_object_key(value: &Value) -> Result<(SymId, &'static str), Flow> {
-    match value.kind() {
-        ValueKind::Symbol(id) => Ok((id, resolve_sym(id))),
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), *value],
-        )),
-    }
+fn symbol_object_key(value: &Value, mode: SymbolMode) -> Result<(SymId, &'static str), Flow> {
+    value
+        .as_symbol_id(mode)
+        .map(|id| (id, resolve_sym(id)))
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), *value],
+            )
+        })
 }
 
 /// Encode a Rust string as a JSON string with proper escaping.
@@ -1405,9 +1426,21 @@ impl<'a> JsonParser<'a> {
 /// ARGS are keyword arguments:
 /// - `:null-object VALUE` — Lisp value to serialize as JSON null (default: :null)
 /// - `:false-object VALUE` — Lisp value to serialize as JSON false (default: :false)
+#[cfg(test)]
 pub(crate) fn builtin_json_serialize(args: Vec<Value>) -> EvalResult {
+    json_serialize_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_json_serialize_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    json_serialize_with_symbols(args, eval.symbol_mode())
+}
+
+fn json_serialize_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_min_args("json-serialize", &args, 1)?;
-    let opts = parse_serialize_kwargs(&args, 1)?;
+    let opts = parse_serialize_kwargs(&args, 1, mode)?;
     let json = serialize_to_json(&args[0], &opts, 0)?;
     // GNU `Fjson_serialize` returns `make_unibyte_string (jo.buf, jo.size)`:
     // a UNIBYTE string of raw UTF-8 bytes (multibyte chars are emitted as
@@ -1426,7 +1459,19 @@ pub(crate) fn builtin_json_serialize(args: Vec<Value>) -> EvalResult {
 /// - `:array-type SYMBOL` — `array` (default, yields vector) or `list`
 /// - `:null-object VALUE` — Lisp value for JSON null (default: :null)
 /// - `:false-object VALUE` — Lisp value for JSON false (default: :false)
+#[cfg(test)]
 pub(crate) fn builtin_json_parse_string(args: Vec<Value>) -> EvalResult {
+    json_parse_string_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_json_parse_string_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    json_parse_string_with_symbols(args, eval.symbol_mode())
+}
+
+fn json_parse_string_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_min_args("json-parse-string", &args, 1)?;
     let input = match args[0].kind() {
         ValueKind::String => args[0]
@@ -1439,7 +1484,7 @@ pub(crate) fn builtin_json_parse_string(args: Vec<Value>) -> EvalResult {
             ));
         }
     };
-    let opts = parse_parse_kwargs(&args, 1)?;
+    let opts = parse_parse_kwargs(&args, 1, mode)?;
     let mut parser = JsonParser::new(input.as_bytes(), input.is_multibyte(), opts);
     let result = parser.parse()?;
 
@@ -1463,7 +1508,7 @@ pub(crate) fn builtin_json_parse_buffer(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let opts = parse_parse_kwargs(&args, 0)?;
+    let opts = parse_parse_kwargs(&args, 0, eval.symbol_mode())?;
     let (input, point_base) = {
         let buf = eval
             .buffers
@@ -1492,7 +1537,7 @@ pub(crate) fn builtin_json_parse_buffer(
 /// Keyword arguments mirror `json-serialize` (`:null-object`, `:false-object`).
 pub(crate) fn builtin_json_insert(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("json-insert", &args, 1)?;
-    let opts = parse_serialize_kwargs(&args, 1)?;
+    let opts = parse_serialize_kwargs(&args, 1, eval.symbol_mode())?;
     let json = serialize_to_json(&args[0], &opts, 0)?;
     let current_id = eval
         .buffers

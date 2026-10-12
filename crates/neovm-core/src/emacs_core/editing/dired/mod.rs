@@ -38,7 +38,7 @@ impl FileIdFormat {
             return Self::Integer;
         }
         value
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .and_then(|name| name.parse::<Self>().ok())
             .unwrap_or(Self::String)
     }

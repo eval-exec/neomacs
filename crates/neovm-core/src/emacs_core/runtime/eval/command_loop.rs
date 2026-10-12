@@ -123,7 +123,7 @@ impl Context {
         &mut self,
         value: Value,
     ) -> Result<CommandLoopExit, Flow> {
-        if value == Value::T {
+        if eq_value_swp(&value, &Value::T, self.symbols_with_pos_enabled) {
             return Ok(CommandLoopExit::Quit);
         }
         if value.is_string() {
@@ -199,7 +199,7 @@ impl Context {
                 Err(ref flow)
                     if let Some(thrown) = flow.as_throw()
                         && catches_exit
-                        && thrown.tag.is_symbol_named("exit") =>
+                        && thrown.matches_tag(Value::symbol("exit")) =>
                 {
                     let value = thrown.value;
                     match self.classify_command_loop_exit(value)? {
@@ -274,7 +274,7 @@ impl Context {
                     Ok(_) => self.command_loop_2(),
                     Err(ref flow)
                         if let Some(thrown) = flow.as_throw()
-                            && thrown.tag.is_symbol_named("top-level") =>
+                            && thrown.matches_tag(Value::symbol("top-level")) =>
                     {
                         // top-level throw inside top_level_1 — fall through
                         // to command_loop_2 just like GNU's two-catch flow.
@@ -298,7 +298,7 @@ impl Context {
                     .as_ref()
                     .err()
                     .and_then(Flow::as_throw)
-                    .is_some_and(|thrown| thrown.tag.is_symbol_named("top-level"));
+                    .is_some_and(|thrown| thrown.matches_tag(Value::symbol("top-level")));
             let result = if caught_top_level {
                 if !self.command_loop_noninteractive() {
                     tracing::debug!("command_loop_inner: top-level throw, restarting loop");
@@ -576,7 +576,7 @@ impl Context {
                 let flow = Flow::from_kind(other);
                 if flow
                     .as_throw()
-                    .is_some_and(|thrown| thrown.tag.is_symbol_named("top-level"))
+                    .is_some_and(|thrown| thrown.matches_tag(Value::symbol("top-level")))
                 {
                     self.command_loop.error_report_failed = true;
                 }
@@ -2094,7 +2094,7 @@ impl Context {
 
     pub(super) fn command_value_for_log(value: Value) -> String {
         value
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .map(str::to_owned)
             .unwrap_or_else(|| crate::emacs_core::print::print_value(&value))
     }
@@ -2102,9 +2102,13 @@ impl Context {
     pub(super) fn command_keys_for_log(keys: &[Value]) -> String {
         keys.iter()
             .map(|key| {
-                crate::emacs_core::keyboard::pure::describe_single_key_value(key, false)
-                    .map(|description| crate::emacs_core::emacs_char::to_utf8_lossy(&description))
-                    .unwrap_or_else(|_| crate::emacs_core::print::print_value(key))
+                crate::emacs_core::keyboard::pure::describe_single_key_value(
+                    key,
+                    false,
+                    crate::tagged::SymbolMode::Bare,
+                )
+                .map(|description| crate::emacs_core::emacs_char::to_utf8_lossy(&description))
+                .unwrap_or_else(|_| crate::emacs_core::print::print_value(key))
             })
             .collect::<Vec<_>>()
             .join(" ")
@@ -3022,6 +3026,7 @@ impl Context {
     /// Mirrors `process_quit_flag` in GNU `eval.c`: clear `quit-flag`, then
     /// honor `throw-on-input`, `kill-emacs`, or signal `quit`.
     pub(super) fn process_quit_flag(&mut self) -> Result<(), Flow> {
+        let symbol_mode = self.symbol_mode();
         let flag = self.quit_flag;
         self.set_quit_flag_value(Value::NIL);
 
@@ -3029,7 +3034,7 @@ impl Context {
             .obarray
             .symbol_value_id_or_nil(self.throw_on_input_symbol);
 
-        if flag.as_symbol_id() == Some(self.kill_emacs_symbol) {
+        if flag.as_symbol_id(symbol_mode) == Some(self.kill_emacs_symbol) {
             // GNU keyboard.c process_quit_flag: (setq quit-flag 'kill-emacs)
             // calls Fkill_emacs, which runs the hooks and exits. Unwinding as
             // a quit signal instead would let condition-case swallow the exit.
@@ -3046,7 +3051,11 @@ impl Context {
                 has_matching_catch = self.has_active_catch(&throw_on_input),
                 "process_quit_flag: throwing for pending input"
             );
-            return Err(Flow::throw(throw_on_input, Value::T));
+            return Err(Flow::throw_with_symbols(
+                throw_on_input,
+                Value::T,
+                self.symbol_mode(),
+            ));
         }
 
         Err(signal(LispCondition::Quit, vec![]))
@@ -3153,8 +3162,9 @@ impl Context {
     /// against the signal's `add_user_signal` NAME, so the comparison really is
     /// on the printed name and a non-symbol really does select no arm.
     pub(crate) fn debug_on_event_signal_name(&self) -> Option<String> {
+        let symbol_mode = self.symbol_mode();
         let value = self.obarray.symbol_value_copied("debug-on-event")?;
-        let name = value.as_symbol_lisp_string()?;
+        let name = value.as_symbol_lisp_string(symbol_mode)?;
         Some(crate::emacs_core::emacs_char::to_utf8_lossy(
             name.as_bytes(),
         ))
@@ -3283,6 +3293,7 @@ impl Context {
     }
 
     pub(super) fn should_ignore_while_no_input_symbol(&self, ignore_symbol: &str) -> bool {
+        let symbol_mode = self.symbol_mode();
         let ignore_list = self
             .obarray
             .symbol_value_copied("while-no-input-ignore-events")
@@ -3290,16 +3301,19 @@ impl Context {
         super::super::value::list_to_vec(&ignore_list)
             .into_iter()
             .flatten()
-            .any(|value| value.is_symbol_named(ignore_symbol))
+            .any(|value| value.is_symbol_named(ignore_symbol, symbol_mode))
     }
 
     pub(crate) fn has_pending_command_input_for_query(&self) -> bool {
         let filter = self.input_pending_filter();
         self.command_loop
             .keyboard
-            .has_pending_command_input_for_query(filter, self.track_mouse_enabled(), |symbol| {
-                self.should_ignore_while_no_input_symbol(symbol)
-            })
+            .has_pending_command_input_for_query(
+                filter,
+                self.track_mouse_enabled(),
+                |symbol| self.should_ignore_while_no_input_symbol(symbol),
+                self.symbol_mode(),
+            )
     }
 
     pub(crate) fn has_pending_frontend_input_with_configured_filter(&self) -> bool {

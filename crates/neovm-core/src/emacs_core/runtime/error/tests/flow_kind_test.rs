@@ -204,13 +204,16 @@ fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc(
     let binding = ctx
         .eval_str("(cons (make-symbol \"gdl-roundtrip-local-error\") (cons (vector 7) 99))")
         .unwrap();
-    let symbol = binding.cons_car().as_symbol_id().unwrap();
+    let symbol = binding
+        .cons_car()
+        .as_symbol_id(crate::tagged::SymbolMode::Bare)
+        .unwrap();
     let tail = binding.cons_cdr();
     let vector = tail.cons_car();
     let target = ResumeTarget::SafeFuncall {
         condition_stack_base: 7,
     };
-    let mut flow = memory_signal_from_binding_value(binding);
+    let mut flow = memory_signal_from_binding_value(binding, crate::tagged::SymbolMode::Bare);
     let signal = flow.as_signal_mut().unwrap();
     signal.selected_resume = Some(target.clone());
     signal.search_complete = true;
@@ -243,7 +246,7 @@ fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc(
     ctx.gc_collect_exact();
     assert!(ctx.tagged_heap.owns_heap_value_for_test(binding));
     assert!(ctx.tagged_heap.owns_heap_value_for_test(vector));
-    assert_eq!(binding.cons_car().as_symbol_id(), Some(symbol));
+    assert_eq!(binding.cons_car().as_bare_symbol_id(), Some(symbol));
     assert_eq!(tail.cons_cdr(), Value::fixnum(99));
     assert_eq!(vector.as_vector_data().unwrap()[0], Value::fixnum(7));
 }
@@ -307,7 +310,7 @@ fn gdl_eval_error_public_signal_constructor_starts_ordinary_unselected() {
     crate::test_utils::init_test_tracing();
     let _ctx = Context::new();
     let back = flow_from_eval_error(EvalError::signal(
-        Value::symbol("error").as_symbol_id().unwrap(),
+        Value::symbol("error").as_bare_symbol_id().unwrap(),
         vec![Value::fixnum(5)],
         None,
     ));

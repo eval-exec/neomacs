@@ -1549,9 +1549,13 @@ impl RecursiveEditBuffer {
 ///
 /// Mirrors GNU Emacs keyboard.c:1187 `Ftop_level`.
 /// Throws to the `top-level` tag to unwind all recursive edits.
-pub(crate) fn builtin_top_level(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_top_level(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("top-level", &args, 0)?;
-    Err(Flow::throw(Value::symbol("top-level"), Value::NIL))
+    Err(Flow::throw_with_symbols(
+        Value::symbol("top-level"),
+        Value::NIL,
+        eval.symbol_mode(),
+    ))
 }
 
 /// `(exit-recursive-edit)` — exit innermost recursive edit.
@@ -1570,7 +1574,11 @@ pub(crate) fn builtin_exit_recursive_edit(
             vec![Value::string("No recursive edit is in progress")],
         ));
     }
-    Err(Flow::throw(Value::symbol("exit"), Value::NIL))
+    Err(Flow::throw_with_symbols(
+        Value::symbol("exit"),
+        Value::NIL,
+        eval.symbol_mode(),
+    ))
 }
 
 /// `(exit-minibuffer)` — exit the active minibuffer.
@@ -1578,9 +1586,16 @@ pub(crate) fn builtin_exit_recursive_edit(
 /// Emacs exits by throwing to the `exit` tag; without a catch this
 /// surfaces as `no-catch`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_exit_minibuffer(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_exit_minibuffer(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("exit-minibuffer", &args, 0)?;
-    Err(Flow::throw(Value::symbol("exit"), Value::NIL))
+    Err(Flow::throw_with_symbols(
+        Value::symbol("exit"),
+        Value::NIL,
+        eval.symbol_mode(),
+    ))
 }
 
 /// `(abort-minibuffers)` — abort active minibuffer sessions.
@@ -1724,7 +1739,11 @@ pub(crate) fn builtin_abort_recursive_edit(
             vec![Value::string("No recursive edit is in progress")],
         ));
     }
-    Err(Flow::throw(Value::symbol("exit"), Value::T))
+    Err(Flow::throw_with_symbols(
+        Value::symbol("exit"),
+        Value::T,
+        eval.symbol_mode(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -2238,7 +2257,7 @@ impl ScanningCompletionPredicate {
     fn classify(predicate: Value) -> Self {
         if predicate.is_nil() {
             Self::AcceptAll
-        } else if predicate.as_symbol_id() == Some(super::interactive::CommandpSymbol::id()) {
+        } else if predicate.as_bare_symbol_id() == Some(super::interactive::CommandpSymbol::id()) {
             Self::CommandpPrimitive
         } else {
             Self::Callable(predicate)

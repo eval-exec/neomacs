@@ -347,7 +347,12 @@ impl AllocationFailure {
                 .special_variable_value_by_id(crate::emacs_core::intern::intern(
                     "memory-signal-data",
                 ))
-                .map(crate::emacs_core::error::memory_signal_from_binding_value)
+                .map(|binding| {
+                    crate::emacs_core::error::memory_signal_from_binding_value(
+                        binding,
+                        context.symbol_mode(),
+                    )
+                })
                 .unwrap_or_else(crate::emacs_core::error::memory_exhausted_error),
         }
     }

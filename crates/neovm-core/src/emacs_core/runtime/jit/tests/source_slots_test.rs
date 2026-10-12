@@ -62,8 +62,9 @@ fn arm(ev: &mut Context, proto: &ByteCodeFunction) {
     assert_eq!(proto.jit_runtime().note_patched_prefix(1), None);
     let ctx = ev as *mut Context;
     let v = Value::make_bytecode(proto.clone());
-    let got = crate::emacs_core::jit::try_run_compiled(ctx, proto, v, &[Value::make_int(0)])
-        .expect("no signal");
+    let got =
+        crate::emacs_core::jit::test_support::run_compiled(ctx, proto, v, &[Value::make_int(0)])
+            .expect("no signal");
     assert!(got.is_some(), "the source compiled");
     cache::arm_leaf_slot(ctx, proto);
     assert!(

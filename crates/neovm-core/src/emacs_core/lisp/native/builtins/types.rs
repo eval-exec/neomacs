@@ -23,8 +23,7 @@ pub(crate) fn builtin_nlistp_1(_eval: &mut super::eval::Context, arg: Value) -> 
 }
 
 pub(crate) fn builtin_symbolp_1(eval: &mut super::eval::Context, arg: Value) -> EvalResult {
-    let is_sym = arg.is_symbol() || (eval.symbols_with_pos_enabled && arg.is_symbol_with_pos());
-    Ok(Value::bool_val(is_sym))
+    Ok(Value::bool_val(arg.is_symbol(eval.symbol_mode())))
 }
 
 pub(crate) fn builtin_numberp_1(_eval: &mut super::eval::Context, arg: Value) -> EvalResult {
@@ -48,12 +47,7 @@ pub(crate) fn builtin_vectorp_1(_eval: &mut super::eval::Context, arg: Value) ->
 }
 
 pub(crate) fn keywordp_swp(arg: Value, symbols_with_pos_enabled: bool) -> bool {
-    let bare = if symbols_with_pos_enabled && arg.is_symbol_with_pos() {
-        arg.as_symbol_with_pos_sym().unwrap_or(arg)
-    } else {
-        arg
-    };
-    bare.is_keyword()
+    arg.is_keyword(crate::tagged::SymbolMode::from(symbols_with_pos_enabled))
 }
 
 pub(crate) fn builtin_keywordp_1(eval: &mut super::eval::Context, arg: Value) -> EvalResult {
@@ -165,15 +159,6 @@ fn is_runtime_function_object(value: &Value) -> bool {
     }
 }
 
-fn autoload_type_of(value: &Value) -> Option<super::autoload::AutoloadType> {
-    if !super::autoload::is_autoload_value(value) {
-        return None;
-    }
-    let items = list_to_vec(value)?;
-    let type_value = items.get(4).cloned().unwrap_or(Value::NIL);
-    Some(super::autoload::AutoloadType::from_value(&type_value))
-}
-
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_functionp(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("functionp", &args, 1)?;
@@ -181,6 +166,11 @@ pub(crate) fn builtin_functionp(eval: &mut super::eval::Context, args: Vec<Value
 }
 
 pub(crate) fn value_is_function(eval: &super::eval::Context, arg: Value) -> bool {
+    // GNU FUNCTIONP delegates to indirect_function, whose initial NILP is
+    // physical even when nil's function cell contains a callable.
+    if arg.is_nil() {
+        return false;
+    }
     let object = eval.unwrap_symbol(arg);
     if let Some(symbol) = match object.kind() {
         ValueKind::Nil => Some(intern("nil")),
@@ -188,11 +178,20 @@ pub(crate) fn value_is_function(eval: &super::eval::Context, arg: Value) -> bool
         ValueKind::Symbol(id) => Some(id),
         _ => None,
     } {
-        if let Some(function) =
-            resolve_indirect_symbol_by_id_in_obarray(&eval.obarray, symbol).map(|(_, value)| value)
+        if let Some(function) = super::symbols::resolve_indirect_symbol_by_id_in_obarray_checked(
+            &eval.obarray,
+            symbol,
+            eval.symbols_with_pos_enabled,
+        )
+        .map(|(_, value)| value)
         {
-            if let Some(autoload_type) = autoload_type_of(&function) {
-                matches!(autoload_type, super::autoload::AutoloadType::Function)
+            if super::autoload::is_autoload_value(&function, eval.symbol_mode()) {
+                // GNU FUNCTIONP accepts autoloads only with a raw nil TYPE.
+                // Non-nil types include positioned symbols even in bare mode.
+                list_to_vec(&function)
+                    .and_then(|items| items.get(4).copied())
+                    .unwrap_or(Value::NIL)
+                    .is_nil()
             } else {
                 is_runtime_function_object(&function)
                     || is_lambda_form_list(&function, eval.symbols_with_pos_enabled)
@@ -227,12 +226,19 @@ pub(crate) fn builtin_hash_table_p(args: Vec<Value>) -> EvalResult {
     Ok(Value::bool_val(args[0].is_hash_table()))
 }
 
-pub(crate) fn builtin_type_of(args: &[Value]) -> EvalResult {
+pub(crate) fn builtin_type_of(args: &[Value], symbols: crate::tagged::SymbolMode) -> EvalResult {
     expect_args("type-of", args, 1)?;
     // GNU Emacs `type-of` handles symbol, integer, subr directly,
     // then delegates to `cl-type-of` for everything else.
     match args[0].kind() {
         ValueKind::Nil | ValueKind::T | ValueKind::Symbol(_) => Ok(Value::symbol("symbol")),
+        // GNU data.c:196-199 uses SYMBOLP here; cl-type-of retains the
+        // physical symbol-with-pos type (data.c:212-236). Classify once.
+        ValueKind::Veclike(VecLikeType::SymbolWithPos)
+            if symbols == crate::tagged::SymbolMode::Positioned =>
+        {
+            Ok(Value::symbol("symbol"))
+        }
         // GNU `type-of` returns `integer` for both fixnums and bignums; only
         // `cl-type-of` distinguishes `bignum`.
         ValueKind::Fixnum(_) | ValueKind::Veclike(VecLikeType::Bignum) => {
@@ -245,17 +251,13 @@ pub(crate) fn builtin_type_of(args: &[Value]) -> EvalResult {
 
 /// `type-of` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-/// Rust callers use [`builtin_type_of`] directly.
+/// Rust callers pass an explicit symbol policy to [`builtin_type_of`].
 pub(crate) fn builtin_type_of_with_ctx_1(
     ctx: &mut super::super::eval::Context,
     object: Value,
 ) -> EvalResult {
     let args: [Value; 1] = [object];
-    // Stale tagged pointer detection is not applicable with tagged pointers —
-    // the old generation-based check relied on tagged pointer indirection which
-    // no longer exists.  Just delegate directly.
-    let _ = ctx; // suppress unused warning
-    builtin_type_of(&args)
+    builtin_type_of(&args, ctx.symbol_mode())
 }
 
 /// `type-of` and `cl-type-of` of a record, `None` for any other value: the

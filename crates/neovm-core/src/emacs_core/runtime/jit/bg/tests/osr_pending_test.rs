@@ -114,6 +114,8 @@ fn jit_bg_pending_osr_is_rooted_and_evicted_with_its_source() {
 #[test]
 fn jit_bg_worker_osr_transfers_while_the_loop_runs() {
     force_mode_for_test(Some(BgMode::Threaded));
+    // The worker's OSR path is under test, whatever the leaf's size.
+    force_osr_inline_insts_for_test(Some(0));
     force_osr_for_test(true);
     force_deopt_for_test(false);
     let mut ctx = Context::new();
@@ -122,6 +124,7 @@ fn jit_bg_worker_osr_transfers_while_the_loop_runs() {
     assert_eq!(count(&mut ctx, &f, 20_000_000), Value::make_int(20_000_000));
     assert_eq!(transfers() - before, 1, "the loop moved to native code");
     assert!(stats_snapshot().installed[JobClass::Osr as usize] >= 1);
+    force_osr_inline_insts_for_test(None);
     force_osr_for_test(false);
     force_mode_for_test(None);
 }

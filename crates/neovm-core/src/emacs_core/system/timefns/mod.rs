@@ -84,7 +84,7 @@ enum TimeZoneSymbol {
 
 impl TimeZoneSymbol {
     fn from_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     #[cfg(test)]
@@ -1993,7 +1993,7 @@ pub(crate) fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
             let (_ignored, a) = check_cons(&a)?;
             let (dstflag, a) = check_cons(&a)?;
             let (zoneval, _) = check_cons(&a)?;
-            let isdst = if dstflag.is_symbol() && !zoneval.is_fixnum() && !zoneval.is_cons() {
+            let isdst = if dstflag.is_bare_symbol() && !zoneval.is_fixnum() && !zoneval.is_cons() {
                 if dstflag.is_nil() {
                     TmIsDst::Standard
                 } else {

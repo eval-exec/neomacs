@@ -5,6 +5,7 @@ use crate::emacs_core::{
     intern::resolve_sym,
     value::{Value, ValueKind, VecLikeType, list_to_vec},
 };
+use crate::tagged::value::SymbolMode;
 
 pub(crate) const KEY_CHAR_META: i64 = 0x8000000;
 pub(crate) const KEY_CHAR_CTRL: i64 = 0x4000000;
@@ -240,7 +241,12 @@ fn describe_int_key(code: i64) -> Result<Vec<u8>, Flow> {
 /// `make_specified_string (..., multibyte=1)`; callers that only want a Rust
 /// string for a message or a log convert lossily at their own call site, where
 /// the loss is visible.
-pub(crate) fn describe_single_key_value(value: &Value, no_angles: bool) -> Result<Vec<u8>, Flow> {
+pub(crate) fn describe_single_key_value(
+    value: &Value,
+    no_angles: bool,
+    mode: SymbolMode,
+) -> Result<Vec<u8>, Flow> {
+    let value = mode.unwrap(*value);
     match value.kind() {
         ValueKind::Fixnum(n) => describe_int_key(n),
         ValueKind::Symbol(id) => Ok(describe_symbol_key(resolve_sym(id), no_angles)),
@@ -265,25 +271,29 @@ pub(crate) fn describe_single_key_value(value: &Value, no_angles: bool) -> Resul
             // every row beneath it.
             if let (Some(_), Some(_)) = (value.cons_car().as_fixnum(), value.cons_cdr().as_fixnum())
             {
-                let mut out = describe_single_key_value(&value.cons_car(), no_angles)?;
+                let mut out = describe_single_key_value(&value.cons_car(), no_angles, mode)?;
                 out.extend_from_slice(b"..");
-                out.extend_from_slice(&describe_single_key_value(&value.cons_cdr(), no_angles)?);
+                out.extend_from_slice(&describe_single_key_value(
+                    &value.cons_cdr(),
+                    no_angles,
+                    mode,
+                )?);
                 return Ok(out);
             }
-            if let Some(items) = list_to_vec(value) {
+            if let Some(items) = list_to_vec(&value) {
                 // GNU lucid_event_type_list_p excludes position-bearing
                 // events. A proper list of symbols/integers is instead a
                 // Lucid event and must still be validated as such.
                 let lucid = !matches!(
-                    value.cons_car().as_symbol_name(),
+                    value.cons_car().as_symbol_name(mode),
                     Some("help-echo" | "vertical-line" | "mode-line" | "tab-line" | "header-line")
                 ) && items
                     .iter()
-                    .all(|item| item.is_symbol() || item.as_fixnum().is_some());
+                    .all(|item| item.is_symbol(mode) || item.as_fixnum().is_some());
                 if lucid {
-                    let converted =
-                        convert_lucid_event_list(&items).ok_or_else(invalid_single_key_error)?;
-                    return describe_single_key_value(&converted, no_angles);
+                    let converted = convert_lucid_event_list(&items, mode)
+                        .ok_or_else(invalid_single_key_error)?;
+                    return describe_single_key_value(&converted, no_angles, mode);
                 }
             }
             // GNU EVENT_HEAD strips exactly one event wrapper, ignoring its
@@ -292,14 +302,14 @@ pub(crate) fn describe_single_key_value(value: &Value, no_angles: bool) -> Resul
             if head.is_cons() {
                 Err(invalid_single_key_error())
             } else {
-                describe_single_key_value(&head, no_angles)
+                describe_single_key_value(&head, no_angles, mode)
             }
         }
         _ => Err(invalid_single_key_error()),
     }
 }
 
-pub(crate) fn key_sequence_values(value: &Value) -> Result<Vec<Value>, Flow> {
+pub(crate) fn key_sequence_values(value: &Value, mode: SymbolMode) -> Result<Vec<Value>, Flow> {
     match value.kind() {
         ValueKind::Nil => Ok(vec![]),
         ValueKind::String => {
@@ -332,7 +342,7 @@ pub(crate) fn key_sequence_values(value: &Value) -> Result<Vec<Value>, Flow> {
                     if e.is_cons()
                         && let Some(items) = list_to_vec(&e)
                         && items.len() > 1
-                        && let Some(c) = convert_lucid_event_list(&items)
+                        && let Some(c) = convert_lucid_event_list(&items, mode)
                     {
                         return c;
                     }
@@ -406,8 +416,8 @@ fn parse_written_event_modifier(name: &str) -> Option<(i64, &str)> {
     .find_map(|(prefix, bit)| name.strip_prefix(prefix).map(|rest| (bit, rest)))
 }
 
-pub(crate) fn reorder_event_symbol_modifiers(value: Value) -> Value {
-    let Some(name) = value.as_symbol_name() else {
+pub(crate) fn reorder_event_symbol_modifiers(value: Value, mode: SymbolMode) -> Value {
+    let Some(name) = value.as_symbol_name(mode) else {
         return value;
     };
 
@@ -446,7 +456,7 @@ fn lucid_symbol_char_base(symbol: &str) -> Option<i64> {
 /// event value.  Returns `None` when the list is not a valid Lucid event
 /// (i.e. it contains non-modifier, non-base elements, or has no base).
 /// This mirrors GNU Emacs `Fevent_convert_list` (keyboard.c).
-pub(crate) fn convert_lucid_event_list(items: &[Value]) -> Option<Value> {
+pub(crate) fn convert_lucid_event_list(items: &[Value], mode: SymbolMode) -> Option<Value> {
     if items.is_empty() {
         return None;
     }
@@ -455,7 +465,7 @@ pub(crate) fn convert_lucid_event_list(items: &[Value]) -> Option<Value> {
     let mut base: Option<Value> = None;
     for (idx, item) in items.iter().enumerate() {
         if base.is_none() {
-            if let Some(sym) = item.as_symbol_name()
+            if let Some(sym) = item.as_symbol_name(mode)
                 && idx + 1 < items.len()
                 && let Some(bit) = event_modifier_bit(sym)
             {
@@ -469,7 +479,7 @@ pub(crate) fn convert_lucid_event_list(items: &[Value]) -> Option<Value> {
         }
     }
 
-    let mut base = base?;
+    let mut base = mode.unwrap(base?);
 
     if let ValueKind::Symbol(id) = base.kind()
         && let Some(code) = lucid_symbol_char_base(resolve_sym(id))

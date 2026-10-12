@@ -186,3 +186,10 @@ threads-required = 4
 [[profile.default.overrides]]
 filter = 'binary_id(neomacs::daemon_lifecycle)'
 threads-required = "num-test-threads"
+
+# Executable lookup failures use a minimal evaluator and local fixtures. No
+# child should start; catch a blocked host lookup promptly, with the case name
+# emitted through tracing rather than consuming the bootstrap-wide watchdog.
+[[profile.default.overrides]]
+filter = 'package(neovm-core) and test(=emacs_core::process::tests::call_process_program_resolution_errors_match_gnu_report_file_error)'
+slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }

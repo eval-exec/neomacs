@@ -8,6 +8,7 @@ use super::intern::{SymId, intern};
 use super::minibuffer::{MinibufferEntryRejection, RecursiveMinibufferPolicy};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::tagged::SymbolMode;
 // storage imports removed — now using emacs_char directly
 use super::symbol::Obarray;
 use super::value::*;
@@ -79,7 +80,9 @@ enum RequireMatchSymbol {
 
 impl RequireMatchSymbol {
     fn from_lisp_value(value: Value) -> Option<Self> {
-        value.as_symbol_name().and_then(|name| name.parse().ok())
+        value
+            .as_bare_symbol_name()
+            .and_then(|name| name.parse().ok())
     }
 }
 
@@ -286,7 +289,13 @@ fn add_minibuffer_history_after_unwind(
     } else {
         // Interactive reads cannot normally precede subr.el, but retain a
         // bootstrap-safe fallback for deliberately minimal test contexts.
-        add_to_minibuffer_history_variable(&mut eval.obarray, history_name, entry);
+        // SAFETY: the bootstrap helper only reads/stores the history value;
+        // it does not call Lisp, alter dispatch metadata, or replace storage.
+        unsafe {
+            eval.obarray.with_legacy_value_write(|obarray| {
+                add_to_minibuffer_history_variable(obarray, history_name, entry);
+            });
+        }
     }
 
     if !entry.as_bytes().is_empty() {
@@ -524,7 +533,7 @@ impl MinibufferCommandOutcome {
         match result {
             Ok(_) => Self::Accepted,
             Err(FlowKind::Throw(ref thrown))
-                if thrown.tag.is_symbol_named("exit") && !thrown.value.is_truthy() =>
+                if thrown.tag.is_bare_symbol_named("exit") && !thrown.value.is_truthy() =>
             {
                 Self::Accepted
             }
@@ -1226,7 +1235,14 @@ fn read_from_active_load_cursor(
         return Err(end_of_file_error_for_source(eof_source));
     }
     let read_result = read_source
-        .read_one_range_with_locate_syms(pos, end, locate_syms, &ctx.obarray, shorthands.as_ref())
+        .read_one_range_with_locate_syms_with_symbols(
+            pos,
+            end,
+            locate_syms,
+            &ctx.obarray,
+            shorthands.as_ref(),
+            ctx.symbol_mode(),
+        )
         .map_err(signal_reader_error_from_string)?;
     let Some((value, next_pos)) = read_result else {
         return Err(end_of_file_error_for_source(eof_source));
@@ -1321,7 +1337,13 @@ pub(crate) fn builtin_read_from_string(
     args: Vec<Value>,
 ) -> EvalResult {
     let shorthands = current_read_symbol_shorthands(ctx);
-    let result = read_from_string_impl_inner(&ctx.obarray, args, false, shorthands.as_ref())?;
+    let result = read_from_string_impl_inner(
+        &ctx.obarray,
+        args,
+        false,
+        shorthands.as_ref(),
+        ctx.symbol_mode(),
+    )?;
     if result.is_cons() {
         ctx.obarray_mut()
             .materialize_read_symbols(result.cons_car());
@@ -1333,7 +1355,7 @@ pub(crate) fn read_from_string_impl(
     obarray: &crate::emacs_core::symbol::Obarray,
     args: Vec<Value>,
 ) -> EvalResult {
-    read_from_string_impl_inner(obarray, args, false, None)
+    read_from_string_impl_inner(obarray, args, false, None, SymbolMode::Bare)
 }
 
 fn read_from_string_impl_inner(
@@ -1341,6 +1363,7 @@ fn read_from_string_impl_inner(
     args: Vec<Value>,
     locate_syms: bool,
     shorthands: Option<&super::value_reader::ReadSymbolShorthands>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_min_args("read-from-string", &args, 1)?;
     if args.len() > 3 {
@@ -1417,12 +1440,13 @@ fn read_from_string_impl_inner(
         end_char
     };
 
-    let read_result = read_source.read_one_range_with_locate_syms(
+    let read_result = read_source.read_one_range_with_locate_syms_with_symbols(
         start_byte,
         end_byte,
         locate_syms,
         obarray,
         shorthands,
+        mode,
     );
 
     let (value, absolute_end_byte) = read_result
@@ -1526,6 +1550,7 @@ pub fn builtin_read_impl(
                 vec![stream],
                 locate_syms,
                 shorthands.as_ref(),
+                ctx.symbol_mode(),
             )?;
             // Return just the car (the parsed object)
             match result.kind() {
@@ -1555,13 +1580,14 @@ pub fn builtin_read_impl(
                     return Err(ReadSourceObject::Anonymous.end_of_file_error());
                 }
 
-                match super::value_reader::read_one_from_buffer_with_locate_syms(
+                match super::value_reader::read_one_from_buffer_with_locate_syms_with_symbols(
                     buf,
                     EmacsByteRange::new(start, end),
                     super::value_reader::BufferReadcharOffsetOrigin::Zero,
                     locate_syms,
                     &ctx.obarray,
                     shorthands.as_ref(),
+                    ctx.symbol_mode(),
                 ) {
                     Ok((value, new_byte_position)) => (
                         Ok(value),
@@ -1621,13 +1647,14 @@ pub fn builtin_read_impl(
                             .end_of_file_error());
                     }
 
-                    match super::value_reader::read_one_from_buffer_with_locate_syms(
+                    match super::value_reader::read_one_from_buffer_with_locate_syms_with_symbols(
                         buf,
                         EmacsByteRange::new(start, end),
                         super::value_reader::BufferReadcharOffsetOrigin::BufferPoint,
                         locate_syms,
                         &ctx.obarray,
                         shorthands.as_ref(),
+                        ctx.symbol_mode(),
                     ) {
                         Ok(result) => Ok(result),
                         Err(e) => {
@@ -1676,6 +1703,7 @@ pub fn builtin_read_impl(
                 vec![input],
                 locate_syms,
                 shorthands.as_ref(),
+                ctx.symbol_mode(),
             )?;
             match result.kind() {
                 ValueKind::Cons => {
@@ -2802,14 +2830,24 @@ pub(crate) fn builtin_discard_input(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("discard-input", &args, 0)?;
-    super::eval::set_runtime_binding(
-        &mut ctx.obarray,
-        &mut ctx.buffers,
-        &ctx.custom,
-        ctx.specpdl.as_slice(),
-        intern("unread-command-events"),
-        Value::NIL,
-    )?;
+    let buffers = &mut ctx.buffers;
+    let custom = &ctx.custom;
+    let specpdl = ctx.specpdl.as_slice();
+    // SAFETY: this storage helper only clears a runtime variable through the
+    // value/forwarder path. It never calls watchers/Lisp or writes either
+    // canonical dispatch word, and returns no manager/interior reference.
+    unsafe {
+        ctx.obarray.with_legacy_value_write(|obarray| {
+            super::eval::set_runtime_binding(
+                obarray,
+                buffers,
+                custom,
+                specpdl,
+                intern("unread-command-events"),
+                Value::NIL,
+            )
+        })
+    }?;
     Ok(Value::NIL)
 }
 
@@ -3204,7 +3242,7 @@ fn yes_or_no_p_should_use_dialog(runtime: &impl KeyboardInputRuntime) -> bool {
     let from_tty_menu = runtime.symbol_value_or_nil("from--tty-menu-p");
     last_nonmenu_event.is_cons()
         || (last_nonmenu_event.is_nil() && last_input_event.is_cons())
-        || (from_tty_menu.is_truthy() && from_tty_menu.as_symbol_name() != Some("unbound"))
+        || (from_tty_menu.is_truthy() && from_tty_menu.as_bare_symbol_name() != Some("unbound"))
 }
 
 // ---------------------------------------------------------------------------

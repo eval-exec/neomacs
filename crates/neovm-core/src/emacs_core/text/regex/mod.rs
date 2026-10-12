@@ -41,6 +41,7 @@
 //!   already implemented in elisp via the `wordify` function
 //!   defined in `subr.el`.
 
+use crate::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -162,6 +163,10 @@ impl PropertizeFrontier<'_> {
 }
 
 impl SyntaxLookup for BufferRegexpSyntaxLookup<'_> {
+    fn symbol_mode(&self) -> SymbolMode {
+        self.base.symbol_mode()
+    }
+
     fn emacs_char_syntax(
         &self,
         c: crate::emacs_core::emacs_char::EmacsChar,
@@ -184,6 +189,7 @@ impl SyntaxLookup for BufferRegexpSyntaxLookup<'_> {
             c,
             abs,
             &self.property_lookup,
+            self.symbol_mode(),
         )
     }
 
@@ -204,12 +210,13 @@ impl SyntaxLookup for BufferRegexpSyntaxLookup<'_> {
         if let Some(frontier) = &self.frontier {
             frontier.note_read(abs);
         }
-        crate::emacs_core::syntax::regexp_syntax_class_at_emacs_byte(
+        crate::emacs_core::syntax::regexp_syntax_class_at_emacs_byte_with_symbols(
             self.buffer,
             &self.base.syntax_table,
             c,
             abs,
             &self.property_lookup,
+            self.symbol_mode(),
         )
     }
 
@@ -306,7 +313,9 @@ impl<'a> StringSyntaxLookup<'a> {
         // Only a honouring scan looks at the intervals at all: the caller has
         // already established that a string with none cannot honour anything,
         // so the ignoring path here touches the string object not at all.
-        let crate::emacs_core::syntax::SyntaxProperties::Honor(_) = syntax_properties else {
+        let (crate::emacs_core::syntax::SyntaxProperties::Honor(_)
+        | crate::emacs_core::syntax::SyntaxProperties::PositionedHonor(_)) = syntax_properties
+        else {
             return Self::Table(base);
         };
         let intervals = string.intervals();
@@ -333,6 +342,10 @@ impl<'a> StringSyntaxLookup<'a> {
 }
 
 impl SyntaxLookup for StringRegexpSyntaxLookup<'_> {
+    fn symbol_mode(&self) -> SymbolMode {
+        self.base.symbol_mode()
+    }
+
     fn emacs_char_syntax(
         &self,
         c: crate::emacs_core::emacs_char::EmacsChar,
@@ -350,6 +363,7 @@ impl SyntaxLookup for StringRegexpSyntaxLookup<'_> {
             c,
             input_pos,
             &self.property_lookup,
+            self.symbol_mode(),
         )
     }
 
@@ -366,11 +380,12 @@ impl SyntaxLookup for StringRegexpSyntaxLookup<'_> {
     }
 
     fn char_syntax_at(&self, c: char, input_pos: usize) -> crate::emacs_core::syntax::SyntaxClass {
-        crate::emacs_core::syntax::regexp_syntax_class_at_string_byte(
+        crate::emacs_core::syntax::regexp_syntax_class_at_string_byte_with_symbols(
             &self.base.syntax_table,
             c,
             input_pos,
             &self.property_lookup,
+            self.symbol_mode(),
         )
     }
 
@@ -555,19 +570,50 @@ type SearchPatternCacheEntry = (
     CompiledSearchPattern,
 );
 
-/// Entry of [`LISP_REGEX_PATTERN_CACHE`]:
-/// `(posix, case_fold, translation_key, pattern_multibyte, target_multibyte,
-///   pattern_bytes, syntax_key, compiled)`.
+/// Packed request identity keeps symbol policy in the existing target byte.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+struct RegexTargetKey(u8);
+
+impl RegexTargetKey {
+    fn new(multibyte: bool, mode: SymbolMode) -> Self {
+        Self((multibyte as u8) | (((mode == SymbolMode::Positioned) as u8) << 1))
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<RegexTargetKey>() == std::mem::size_of::<bool>());
+
+/// Entry of [`LISP_REGEX_PATTERN_CACHE`]; target_key includes symbol policy.
 struct LispRegexPatternCacheEntry {
     posix: bool,
     case_fold: bool,
     translation_key: Option<usize>,
     pattern_multibyte: bool,
-    target_multibyte: bool,
+    target_key: RegexTargetKey,
     pattern: Vec<u8>,
     syntax_key: Option<SyntaxCacheKey>,
     compiled: Rc<CompiledPattern>,
 }
+
+// Gate the exact entry footprint against its prior shape in the core build.
+#[cfg(test)]
+const _: () = {
+    #[allow(dead_code)]
+    struct BeforeTypedTargetKey {
+        posix: bool,
+        case_fold: bool,
+        translation_key: Option<usize>,
+        pattern_multibyte: bool,
+        target_multibyte: bool,
+        pattern: Vec<u8>,
+        syntax_key: Option<SyntaxCacheKey>,
+        compiled: Rc<CompiledPattern>,
+    }
+    assert!(
+        std::mem::size_of::<LispRegexPatternCacheEntry>()
+            == std::mem::size_of::<BeforeTypedTargetKey>()
+    );
+};
 
 /// Does a cached entry compiled under `stored` serve a request running
 /// under `current`?
@@ -2273,6 +2319,8 @@ fn compile_lisp_pattern_with_posix_translation(
         None
     };
     let syntax_key = syntax.cache_key();
+    let mode = syntax.symbol_mode();
+    let target_key = RegexTargetKey::new(target_multibyte, mode);
 
     if let Some(cached) = crate::emacs_core::perf_trace::time_op(
         crate::emacs_core::perf_trace::HotpathOp::RegexCompileHit,
@@ -2280,15 +2328,14 @@ fn compile_lisp_pattern_with_posix_translation(
             LISP_REGEX_PATTERN_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
                 let bytes = pattern.as_bytes();
-                // Length first: it rejects most other patterns in a couple of
-                // instructions before any flag or byte comparison.
+                // Length first rejects most candidates before flags or bytes.
                 let matches = |entry: &LispRegexPatternCacheEntry| {
                     entry.pattern.len() == bytes.len()
                         && entry.posix == posix
                         && entry.case_fold == case_fold
                         && entry.translation_key == translation_key
                         && entry.pattern_multibyte == pattern.is_multibyte()
-                        && entry.target_multibyte == target_multibyte
+                        && entry.target_key == target_key
                         && syntax_key_matches(entry.syntax_key, syntax_key)
                         && entry.pattern.as_slice() == bytes
                 };
@@ -2304,7 +2351,7 @@ fn compile_lisp_pattern_with_posix_translation(
     }
     let effective_translation = if case_fold {
         translation_table
-            .map(CaseTranslation::from_char_table)
+            .map(|table| CaseTranslation::from_char_table_with_symbols(table, mode))
             .or_else(|| Some(CaseTranslation::standard()))
     } else {
         None
@@ -2335,7 +2382,7 @@ fn compile_lisp_pattern_with_posix_translation(
                 case_fold,
                 translation_key,
                 pattern_multibyte: pattern.is_multibyte(),
-                target_multibyte,
+                target_key,
                 pattern: pattern.as_bytes().to_vec(),
                 syntax_key: entry_syntax_key,
                 compiled: compiled.clone(),
@@ -2343,7 +2390,6 @@ fn compile_lisp_pattern_with_posix_translation(
         );
         cache.truncate(LISP_REGEX_PATTERN_CACHE_SIZE);
     });
-
     Ok(compiled)
 }
 
@@ -2361,19 +2407,23 @@ fn compile_lisp_pattern_with_posix_translation(
 /// a second time (~300 Ir per probe; `looking-at` did it twice per call).
 /// GNU's `Flooking_at` compiles once (`compile_pattern`) and matches with
 /// that.
-pub(crate) fn buffer_regexp_syntax_dependency_compiled(
+pub(crate) fn buffer_regexp_syntax_dependency_compiled_with_symbols(
     buf: &Buffer,
     pattern: &LispString,
     case_fold: bool,
     posix: bool,
+    mode: SymbolMode,
 ) -> Result<(BufferRegexpSyntaxDependency, Rc<CompiledPattern>), String> {
-    let syntax = buffer_syntax_lookup(buf);
+    let syntax = buffer_syntax_lookup_with_word_boundary(
+        buf,
+        regex_emacs::WordBoundaryLookup::default().with_symbol_mode(mode),
+    );
     let compiled = compile_lisp_pattern_with_posix_translation(
         pattern,
         case_fold,
         posix,
         buf.get_multibyte(),
-        buffer_search_translation_table(buf, case_fold),
+        buffer_search_translation_table_with_symbols(buf, case_fold, mode),
         &syntax,
     )?;
     let dependency = if compiled.uses_syntax {
@@ -2384,7 +2434,7 @@ pub(crate) fn buffer_regexp_syntax_dependency_compiled(
     Ok((dependency, compiled))
 }
 
-/// The [`buffer_regexp_syntax_dependency_compiled`] classification plus the
+/// The [`buffer_regexp_syntax_dependency_compiled_with_symbols`] classification plus the
 /// pattern's finite maximum per-attempt span in characters (`None` when
 /// unbounded), for callers that can propertize a bounded window instead of
 /// the whole tail.
@@ -3301,6 +3351,7 @@ pub(crate) fn search_forward(
     Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
+#[cfg(test)]
 pub(crate) fn search_forward_into(
     buf: &mut Buffer,
     pattern: &crate::heap_types::LispString,
@@ -3308,6 +3359,26 @@ pub(crate) fn search_forward_into(
     noerror: bool,
     case_fold: bool,
     out: &mut SearchRegisters,
+) -> Result<Option<EmacsBytePos>, String> {
+    search_forward_into_with_symbols(
+        buf,
+        pattern,
+        bound,
+        noerror,
+        case_fold,
+        out,
+        SymbolMode::Bare,
+    )
+}
+
+pub(crate) fn search_forward_into_with_symbols(
+    buf: &mut Buffer,
+    pattern: &crate::heap_types::LispString,
+    bound: Option<usize>,
+    noerror: bool,
+    case_fold: bool,
+    out: &mut SearchRegisters,
+    mode: SymbolMode,
 ) -> Result<Option<EmacsBytePos>, String> {
     let start = buf.point_emacs_byte_pos();
     let accessible = buf.accessible_emacs_byte_region();
@@ -3331,7 +3402,7 @@ pub(crate) fn search_forward_into(
     // A custom `set-case-syntax-pair` table folds custom pairs (e.g. [/])
     // during search; route through the buffer's case-canon table then, else
     // keep the fast hardwired ASCII/Unicode folding.
-    let translation = buffer_search_translation(buf, case_fold);
+    let translation = buffer_search_translation_with_symbols(buf, case_fold, mode);
     let found =
         with_buffer_emacs_bytes(
             buf,
@@ -3378,6 +3449,7 @@ pub(crate) fn search_backward(
     Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
+#[cfg(test)]
 pub(crate) fn search_backward_into(
     buf: &mut Buffer,
     pattern: &crate::heap_types::LispString,
@@ -3385,6 +3457,26 @@ pub(crate) fn search_backward_into(
     noerror: bool,
     case_fold: bool,
     out: &mut SearchRegisters,
+) -> Result<Option<EmacsBytePos>, String> {
+    search_backward_into_with_symbols(
+        buf,
+        pattern,
+        bound,
+        noerror,
+        case_fold,
+        out,
+        SymbolMode::Bare,
+    )
+}
+
+pub(crate) fn search_backward_into_with_symbols(
+    buf: &mut Buffer,
+    pattern: &crate::heap_types::LispString,
+    bound: Option<usize>,
+    noerror: bool,
+    case_fold: bool,
+    out: &mut SearchRegisters,
+    mode: SymbolMode,
 ) -> Result<Option<EmacsBytePos>, String> {
     let end = buf.point_emacs_byte_pos();
     let accessible = buf.accessible_emacs_byte_region();
@@ -3405,7 +3497,7 @@ pub(crate) fn search_backward_into(
 
     let multibyte = buf.get_multibyte();
     let literal = coerce_pattern_to_buffer_bytes(pattern, multibyte);
-    let translation = buffer_search_translation(buf, case_fold);
+    let translation = buffer_search_translation_with_symbols(buf, case_fold, mode);
     let found =
         with_buffer_emacs_bytes(
             buf,
@@ -3659,26 +3751,37 @@ pub(crate) fn re_search_backward_with_posix(
 /// case-canon table (GNU's search `trt`) when a custom `set-case-syntax-pair`
 /// table is installed, else `None` so the engine's fast hardwired folding is
 /// used. Mirrors GNU search.c installing `BVAR (current_buffer, case_canon_table)`.
+#[cfg(test)]
 fn buffer_search_translation(
     buf: &Buffer,
     case_fold: bool,
 ) -> Option<std::rc::Rc<CaseTranslation>> {
-    let table = buffer_search_translation_table(buf, case_fold)?;
+    buffer_search_translation_with_symbols(buf, case_fold, SymbolMode::Bare)
+}
+
+fn buffer_search_translation_with_symbols(
+    buf: &Buffer,
+    case_fold: bool,
+    mode: SymbolMode,
+) -> Option<std::rc::Rc<CaseTranslation>> {
+    let table = buffer_search_translation_table_with_symbols(buf, case_fold, mode)?;
     // One-entry per-thread cache keyed by table IDENTITY: rebuilding the
     // translation per search left its lazy 0..256 memo permanently cold, so
     // every anchor-enumeration and verify lookup walked the char-table
     // (+650M Ir on a literal-search sweep). Identity keying is the
     // established policy — the compiled-pattern cache and GNU's own
     // `compile_pattern` (search.c, `EQ (cp->buf.translate, translate)`)
-    // both key cached translations the same way.
+    // both key cached translations the same way. The existing translation
+    // owns its policy, so checking it also prevents cross-policy memo reuse.
     Some(LITERAL_TRT_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some((bits, trt)) = cache.as_ref()
             && *bits == table.bits()
+            && trt.symbol_mode() == mode
         {
             return trt.clone();
         }
-        let trt = std::rc::Rc::new(CaseTranslation::from_char_table(table));
+        let trt = std::rc::Rc::new(CaseTranslation::from_char_table_with_symbols(table, mode));
         *cache = Some((table.bits(), trt.clone()));
         trt
     }))
@@ -3756,7 +3859,7 @@ pub(crate) fn re_search_forward_lisp_with_posix_into(
         case_fold,
         posix,
         buf.get_multibyte(),
-        buffer_search_translation_table(buf, case_fold),
+        buffer_search_translation_table_with_symbols(buf, case_fold, syn.symbol_mode()),
         &syn,
     )?;
 
@@ -3874,7 +3977,7 @@ pub(crate) fn re_search_backward_lisp_with_posix_into(
         case_fold,
         posix,
         buf.get_multibyte(),
-        buffer_search_translation_table(buf, case_fold),
+        buffer_search_translation_table_with_symbols(buf, case_fold, syn.symbol_mode()),
         &syn,
     )?;
 
@@ -4049,7 +4152,7 @@ pub(crate) fn looking_at_lisp_with_posix(
         case_fold,
         posix,
         buf.get_multibyte(),
-        buffer_search_translation_table(buf, case_fold),
+        buffer_search_translation_table_with_symbols(buf, case_fold, syn.symbol_mode()),
         &syn,
     )?;
 
@@ -5036,6 +5139,10 @@ pub(crate) mod match_stats {
 mod tests;
 
 #[cfg(test)]
+#[path = "tests/positioned_policy_test.rs"]
+mod positioned_policy_tests;
+
+#[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
@@ -5050,3 +5157,14 @@ mod gc_collection_epoch_minor_tests;
 #[cfg(test)]
 #[path = "tests/gc_literal_epoch_test.rs"]
 mod gc_literal_epoch_tests;
+
+fn buffer_search_translation_table_with_symbols(
+    buf: &Buffer,
+    case_fold: bool,
+    mode: SymbolMode,
+) -> Option<super::value::Value> {
+    if !case_fold {
+        return None;
+    }
+    crate::emacs_core::casetab::buffer_case_canon_table_with_symbols(buf, mode)
+}

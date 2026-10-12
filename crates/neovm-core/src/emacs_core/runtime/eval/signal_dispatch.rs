@@ -105,6 +105,14 @@ impl Context {
     }
 
     pub(crate) fn matching_catch_resume(&self, tag: &Value) -> Option<ResumeTarget> {
+        self.matching_catch_resume_with_symbols(tag, self.symbol_mode())
+    }
+
+    pub(crate) fn matching_catch_resume_with_symbols(
+        &self,
+        tag: &Value,
+        mode: crate::tagged::SymbolMode,
+    ) -> Option<ResumeTarget> {
         if tag.is_nil() {
             return None;
         }
@@ -116,7 +124,14 @@ impl Context {
                 ConditionFrame::Catch {
                     tag: catch_tag,
                     resume,
-                } if eq_value(catch_tag, tag) => Some(resume.clone()),
+                } if eq_value_swp(
+                    catch_tag,
+                    tag,
+                    mode == crate::tagged::SymbolMode::Positioned,
+                ) =>
+                {
+                    Some(resume.clone())
+                }
                 _ => None,
             })
     }
@@ -133,6 +148,7 @@ impl Context {
                     &self.obarray,
                     sig.symbol,
                     conditions,
+                    self.symbol_mode(),
                 )
             }
             _ => false,
@@ -224,6 +240,7 @@ impl Context {
                         &self.obarray,
                         sig.symbol,
                         &conditions,
+                        self.symbol_mode(),
                     ) {
                         self.maybe_call_debugger_for_signal(&sig, Some(&conditions))?;
                         sig.selected_resume = Some(resume);
@@ -241,6 +258,7 @@ impl Context {
                         &self.obarray,
                         sig.symbol,
                         &conditions,
+                        self.symbol_mode(),
                     ) {
                         continue;
                     }
@@ -449,6 +467,7 @@ impl Context {
             &self.obarray,
             sig.symbol,
             &Value::from_sym_id(quit_symbol()),
+            self.symbol_mode(),
         ) {
             self.obarray
                 .symbol_value_copied("debug-on-quit")
@@ -458,7 +477,7 @@ impl Context {
                 .symbol_value_copied("debug-on-error")
                 .unwrap_or(Value::NIL)
         };
-        if !wants_debugger(&debug_setting, &conditions) {
+        if !wants_debugger(&debug_setting, &conditions, self.symbol_mode()) {
             return Ok(());
         }
         if self.skip_debugger(sig, &conditions)? {
@@ -589,6 +608,7 @@ impl Context {
             &self.obarray,
             sig.symbol,
             &Value::from_sym_id(quit_symbol()),
+            self.symbol_mode(),
         ) {
             return CommandErrorSeverity::Routine;
         }

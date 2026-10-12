@@ -29,6 +29,7 @@ impl Context {
     }
 
     fn scroll_variable(&self, window: crate::window::WindowId, name: &str) -> Option<Value> {
+        let symbol_mode = self.symbol_mode();
         let frame = self.frame_manager().selected_frame()?;
         let buffer = frame
             .find_window(window)
@@ -36,7 +37,7 @@ impl Context {
             .and_then(|id| self.buffer_manager().get(id))?;
         let symbol = crate::emacs_core::builtins::symbols::resolve_variable_alias_id_in_obarray(
             self.obarray(),
-            Value::symbol(name).as_symbol_id()?,
+            Value::symbol(name).as_symbol_id(symbol_mode)?,
         )
         .ok()?;
         let value = self
@@ -54,6 +55,7 @@ impl Context {
     }
 
     pub fn permits_compositor_pixel_scroll(&self, window: crate::window::WindowId) -> bool {
+        let symbol_mode = self.symbol_mode();
         // Raw input prediction relies on the selected window's keymaps and
         // command context. A resolved preview already has its destination
         // from canonical dispatch and only needs the target buffer's opt-in.
@@ -92,13 +94,15 @@ impl Context {
                 hooks = Some(
                     self.obarray()
                         .default_value_id_copied(
-                            Value::symbol("pre-command-hook").as_symbol_id().unwrap(),
+                            Value::symbol("pre-command-hook")
+                                .as_symbol_id(symbol_mode)
+                                .unwrap(),
                         )
                         .unwrap_or(Value::NIL),
                 );
                 continue;
             }
-            let Some(name) = hook.as_symbol_name() else {
+            let Some(name) = hook.as_symbol_name(symbol_mode) else {
                 return false;
             };
             if !matches!(
@@ -177,7 +181,7 @@ impl Context {
                 .obarray()
                 .symbol_function(name)
                 .and_then(|value| value.as_subr_id())
-                != Value::symbol(name).as_symbol_id()
+                != Value::symbol(name).as_symbol_id(symbol_mode)
             {
                 tracing::debug!(target: "neovm_core::scroll_prediction", function = name, "scroll primitive is customized");
                 return false;
@@ -191,7 +195,13 @@ impl Context {
             return false;
         };
         let command = Value::symbol("pixel-scroll-precision");
-        if command_remapping_lookup_in_keymaps(&maps, command.as_symbol_id().unwrap()).is_some() {
+        if command_remapping_lookup_in_keymaps(
+            &maps,
+            command.as_symbol_id(symbol_mode).unwrap(),
+            symbol_mode,
+        )
+        .is_some()
+        {
             return false;
         }
         ["wheel-up", "wheel-down"].iter().all(|name| {
@@ -205,16 +215,20 @@ impl Context {
                 let Some(map) = variable(name) else {
                     return false;
                 };
-                if !map.is_nil() && !list_keymap_lookup_one_unresolved(&map, &event).is_nil() {
+                if !map.is_nil()
+                    && !list_keymap_lookup_one_unresolved(&map, &event, symbol_mode).is_nil()
+                {
                     return false;
                 }
             }
             maps.iter()
                 .find_map(|map| {
-                    let binding = lookup_key_in_obarray(self.obarray(), map, &[event], true);
+                    let binding =
+                        lookup_key_in_obarray(self.obarray(), map, &[event], true, symbol_mode);
                     (!binding.is_nil()).then(|| {
                         binding == command
-                            && list_keymap_lookup_one_unresolved(map, &event) == command
+                            && list_keymap_lookup_one_unresolved(map, &event, symbol_mode)
+                                == command
                     })
                 })
                 .unwrap_or(false)

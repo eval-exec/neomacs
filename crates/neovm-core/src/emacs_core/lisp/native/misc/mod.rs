@@ -26,7 +26,7 @@ enum LocaleInfoItem {
 
 impl LocaleInfoItem {
     fn from_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     #[cfg(test)]
@@ -143,7 +143,7 @@ fn builtin_rassoc_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
     let key = args[0];
     let alist = args[1];
     // GNU fns.c:2062: symbols and fixnums can use the eq scan.
-    if key.is_nil() || key.is_symbol() || key.is_symbol_with_pos() || key.is_fixnum() {
+    if key.is_nil() || key.is_bare_symbol() || key.is_symbol_with_pos() || key.is_fixnum() {
         return builtin_rassq_values(key, alist, symbols_with_pos_enabled);
     }
     let mut cursor = alist;
@@ -303,7 +303,7 @@ fn rassq_exact(key: Value, alist: Value) -> EvalResult {
 
 fn builtin_rassq_values_swp_scan<const OBSERVED: bool>(key: Value, alist: Value) -> EvalResult {
     let bare = crate::emacs_core::builtins::positioned_symbol_scan::<OBSERVED>(key).unwrap_or(key);
-    if !bare.is_symbol() {
+    if !bare.is_bare_symbol() {
         return builtin_rassq_values_scan::<OBSERVED>(key, alist, false);
     }
     let mut tail = alist;
@@ -362,7 +362,7 @@ fn rassq_swp_exact(bare: Value, alist: Value) -> EvalResult {
 #[cfg(test)]
 pub(crate) fn rassq_exact_for_test(key: Value, alist: Value, swp: bool) -> EvalResult {
     let bare = key.as_symbol_with_pos_sym().unwrap_or(key);
-    if swp && bare.is_symbol() {
+    if swp && bare.is_bare_symbol() {
         rassq_swp_exact(bare, alist)
     } else {
         rassq_exact(key, alist)

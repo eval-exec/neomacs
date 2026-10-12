@@ -62,6 +62,7 @@ fn plan_call_interactively_for_test(
         args,
         interactive_form,
         command_identity,
+        crate::tagged::SymbolMode::Bare,
     )
 }
 
@@ -718,7 +719,12 @@ fn commandp_reads_each_function_cell_once() {
 
     ev.obarray.reset_symbol_slot_read_count();
     assert_eq!(
-        classify_command_designator_in_state(&ev.obarray, &Value::from_sym_id(command), false),
+        classify_command_designator_in_state(
+            &ev.obarray,
+            &Value::from_sym_id(command),
+            false,
+            crate::tagged::SymbolMode::Bare
+        ),
         CommandpClassification::Interactive
     );
     assert_eq!(
@@ -732,7 +738,12 @@ fn commandp_reads_each_function_cell_once() {
         .set_symbol_function_id(alias, Value::from_sym_id(command));
     ev.obarray.reset_symbol_slot_read_count();
     assert_eq!(
-        classify_command_designator_in_state(&ev.obarray, &Value::from_sym_id(alias), false),
+        classify_command_designator_in_state(
+            &ev.obarray,
+            &Value::from_sym_id(alias),
+            false,
+            crate::tagged::SymbolMode::Bare
+        ),
         CommandpClassification::Interactive
     );
     assert_eq!(
@@ -758,7 +769,7 @@ fn commandp_reads_interactivity_from_the_subr_object() {
 
     crate::emacs_core::eval::reset_global_subr_lookup_count();
     assert_eq!(
-        classify_command_object_in_state(&function, false),
+        classify_command_object_in_state(&function, false, crate::tagged::SymbolMode::Bare),
         CommandpClassification::Interactive
     );
     assert_eq!(
@@ -813,7 +824,7 @@ fn commandp_distinguishes_gnu_docstring_references_from_oclosure_tags() {
             Value::NIL,
             doc,
         ]);
-        classify_command_object_in_state(&closure, false)
+        classify_command_object_in_state(&closure, false, crate::tagged::SymbolMode::Bare)
     };
 
     for valid_doc in [
@@ -950,7 +961,10 @@ fn eval_expression_is_real_lisp_function_after_bootstrap() {
         .obarray
         .symbol_function("eval-expression")
         .expect("missing eval-expression bootstrapped function cell");
-    assert!(!crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(!crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::SymbolMode::Bare
+    ));
     let result = builtin_commandp_interactive(&mut ev, &[Value::symbol("eval-expression")])
         .expect("commandp should accept eval-expression");
     assert!(result.is_truthy());
@@ -1063,7 +1077,10 @@ fn abbrev_mode_is_real_lisp_function_after_bootstrap() {
         .obarray
         .symbol_function("abbrev-mode")
         .expect("missing abbrev-mode bootstrapped function cell");
-    assert!(!crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(!crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::SymbolMode::Bare
+    ));
     let command = builtin_commandp_interactive(&mut ev, &[Value::symbol("abbrev-mode")])
         .expect("commandp should accept abbrev-mode");
     assert!(command.is_truthy());
@@ -1087,7 +1104,10 @@ fn bookmark_commands_startup_are_autoloaded() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
-            crate::emacs_core::autoload::is_autoload_value(&function),
+            crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::SymbolMode::Bare
+            ),
             "expected {name} startup function cell to be a GNU autoload"
         );
     }
@@ -1111,7 +1131,10 @@ fn rectangle_commands_startup_are_autoloaded() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
-            crate::emacs_core::autoload::is_autoload_value(&function),
+            crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::SymbolMode::Bare
+            ),
             "expected {name} startup function cell to be a GNU autoload"
         );
     }
@@ -1133,7 +1156,10 @@ fn simple_commands_are_real_lisp_functions_after_bootstrap() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
-            !crate::emacs_core::autoload::is_autoload_value(&function),
+            !crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::SymbolMode::Bare
+            ),
             "expected {name} startup function cell to be loaded, not an autoload"
         );
         let command = builtin_commandp_interactive(&mut ev, &[Value::symbol(name)])
@@ -1161,7 +1187,10 @@ fn replace_commands_are_real_lisp_functions_after_bootstrap() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
-            !crate::emacs_core::autoload::is_autoload_value(&function),
+            !crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::SymbolMode::Bare
+            ),
             "expected {name} startup function cell to be loaded, not an autoload"
         );
         let command = builtin_commandp_interactive(&mut ev, &[Value::symbol(name)])
@@ -1181,7 +1210,10 @@ fn subr_key_binding_commands_are_real_lisp_functions_after_bootstrap() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
-            !crate::emacs_core::autoload::is_autoload_value(&function),
+            !crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::SymbolMode::Bare
+            ),
             "expected {name} startup function cell to be loaded, not an autoload"
         );
         assert!(
@@ -1203,7 +1235,10 @@ fn env_command_is_real_lisp_function_after_bootstrap() {
         .obarray
         .symbol_function("setenv")
         .expect("missing setenv bootstrapped function cell");
-    assert!(!crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(!crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::SymbolMode::Bare
+    ));
     let command = builtin_commandp_interactive(&mut ev, &[Value::symbol("setenv")])
         .expect("commandp should accept setenv");
     assert!(command.is_truthy());
@@ -1218,7 +1253,10 @@ fn files_command_is_real_lisp_function_after_bootstrap() {
         .obarray
         .symbol_function("load-file")
         .expect("missing load-file bootstrapped function cell");
-    assert!(!crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(!crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::SymbolMode::Bare
+    ));
     let command = builtin_commandp_interactive(&mut ev, &[Value::symbol("load-file")])
         .expect("commandp should accept load-file");
     assert!(command.is_truthy());
@@ -1237,7 +1275,10 @@ fn regexp_search_aliases_are_available_after_bootstrap() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
-            !crate::emacs_core::autoload::is_autoload_value(&function),
+            !crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::SymbolMode::Bare
+            ),
             "expected {name} to be a resolved function (defalias), not an autoload"
         );
     }
@@ -1251,7 +1292,10 @@ fn upcase_char_startup_is_autoloaded() {
         .obarray
         .symbol_function("upcase-char")
         .expect("missing upcase-char startup function cell");
-    assert!(crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -1265,7 +1309,10 @@ fn mode_and_mark_commands_are_real_lisp_functions_after_bootstrap() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
-            !crate::emacs_core::autoload::is_autoload_value(&function),
+            !crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::SymbolMode::Bare
+            ),
             "expected {name} startup function cell to be loaded, not an autoload"
         );
         let command = builtin_commandp_interactive(&mut ev, &[Value::symbol(name)])
@@ -1283,7 +1330,10 @@ fn count_matches_is_real_lisp_function_after_bootstrap() {
         .obarray
         .symbol_function("count-matches")
         .expect("missing count-matches bootstrapped function cell");
-    assert!(!crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(!crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::SymbolMode::Bare
+    ));
     let command = builtin_commandp_interactive(&mut ev, &[Value::symbol("count-matches")])
         .expect("commandp call");
     assert!(command.is_truthy());
@@ -1302,7 +1352,7 @@ fn kmacro_name_last_macro_startup_is_autoloaded() {
         .symbol_function("kmacro-name-last-macro")
         .expect("missing kmacro-name-last-macro startup function cell");
     assert!(
-        crate::emacs_core::autoload::is_autoload_value(&function),
+        crate::emacs_core::autoload::is_autoload_value(&function, crate::tagged::SymbolMode::Bare),
         "expected kmacro-name-last-macro startup function cell to be a GNU autoload"
     );
     let command = builtin_commandp_interactive(&mut ev, &[Value::symbol("kmacro-name-last-macro")])
@@ -1348,7 +1398,7 @@ fn ldefs_boot_aliases_name_last_kbd_macro_to_kmacro_name_last_macro() {
         .symbol_function("kmacro-name-last-macro")
         .expect("kmacro-name-last-macro autoload");
     assert!(
-        crate::emacs_core::autoload::is_autoload_value(&kmacro),
+        crate::emacs_core::autoload::is_autoload_value(&kmacro, crate::tagged::SymbolMode::Bare),
         "GNU ldefs-boot should install kmacro-name-last-macro as an autoload"
     );
     assert_eq!(
@@ -1368,7 +1418,7 @@ fn remove_hook_is_available_after_bootstrap() {
         .symbol_function("remove-hook")
         .expect("missing remove-hook startup function cell");
     assert!(
-        !crate::emacs_core::autoload::is_autoload_value(&function),
+        !crate::emacs_core::autoload::is_autoload_value(&function, crate::tagged::SymbolMode::Bare),
         "expected remove-hook to be a resolved function, not an autoload"
     );
 }
@@ -1596,14 +1646,25 @@ fn call_interactively_state_resolution_handles_default_and_noarg_cases() {
     let mut builtin_plan =
         plan_call_interactively_for_test(&mut ev, &[Value::symbol("forward-char")])
             .expect("plan builtin default interactive command");
-    let (_, builtin_args) = resolve_call_interactively_target_and_args_in_state(
-        &mut ev.obarray,
-        &mut Vec::new(),
-        &mut ev.buffers,
-        &ev.custom,
-        ev.specpdl.as_slice(),
-        &mut builtin_plan,
-    )
+    let (_, builtin_args) = unsafe {
+        let buffers = &mut ev.buffers;
+        let custom = &ev.custom;
+        let specpdl = ev.specpdl.as_slice();
+        // SAFETY: this split-state resolver handles only native string-code/
+        // no-argument cases; Lisp/prompting cases are deferred. Its writes are
+        // buffer/runtime Values, not function or canonical descriptor metadata.
+        // No collection, replacement or manager/interior borrow can escape.
+        ev.obarray.with_legacy_value_write(|obarray| {
+            resolve_call_interactively_target_and_args_in_state(
+                obarray,
+                &mut Vec::new(),
+                buffers,
+                custom,
+                specpdl,
+                &mut builtin_plan,
+            )
+        })
+    }
     .expect("resolve builtin default args")
     .expect("shared-state builtin default path");
     assert_eq!(builtin_args, vec![Value::fixnum(4)]);
@@ -1613,14 +1674,25 @@ fn call_interactively_state_resolution_handles_default_and_noarg_cases() {
         .expect("eval lambda");
     let mut lambda_plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan interactive lambda");
-    let (_, lambda_args) = resolve_call_interactively_target_and_args_in_state(
-        &mut ev.obarray,
-        &mut Vec::new(),
-        &mut ev.buffers,
-        &ev.custom,
-        ev.specpdl.as_slice(),
-        &mut lambda_plan,
-    )
+    let (_, lambda_args) = unsafe {
+        let buffers = &mut ev.buffers;
+        let custom = &ev.custom;
+        let specpdl = ev.specpdl.as_slice();
+        // SAFETY: this split-state resolver handles only native string-code/
+        // no-argument cases; Lisp/prompting cases are deferred. Its writes are
+        // buffer/runtime Values, not function or canonical descriptor metadata.
+        // No collection, replacement or manager/interior borrow can escape.
+        ev.obarray.with_legacy_value_write(|obarray| {
+            resolve_call_interactively_target_and_args_in_state(
+                obarray,
+                &mut Vec::new(),
+                buffers,
+                custom,
+                specpdl,
+                &mut lambda_plan,
+            )
+        })
+    }
     .expect("resolve lambda args")
     .expect("shared-state no-arg lambda path");
     assert!(lambda_args.is_empty());
@@ -1635,14 +1707,25 @@ fn call_interactively_state_resolution_defers_prompting_specs_to_eval() {
         .expect("eval prompting lambda");
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan prompting lambda");
-    let resolved = resolve_call_interactively_target_and_args_in_state(
-        &mut ev.obarray,
-        &mut Vec::new(),
-        &mut ev.buffers,
-        &ev.custom,
-        ev.specpdl.as_slice(),
-        &mut plan,
-    )
+    let resolved = unsafe {
+        let buffers = &mut ev.buffers;
+        let custom = &ev.custom;
+        let specpdl = ev.specpdl.as_slice();
+        // SAFETY: this split-state resolver handles only native string-code/
+        // no-argument cases; Lisp/prompting cases are deferred. Its writes are
+        // buffer/runtime Values, not function or canonical descriptor metadata.
+        // No collection, replacement or manager/interior borrow can escape.
+        ev.obarray.with_legacy_value_write(|obarray| {
+            resolve_call_interactively_target_and_args_in_state(
+                obarray,
+                &mut Vec::new(),
+                buffers,
+                custom,
+                specpdl,
+                &mut plan,
+            )
+        })
+    }
     .expect("resolve prompting lambda");
     assert!(resolved.is_none());
 }
@@ -1677,14 +1760,25 @@ fn call_interactively_state_resolution_handles_simple_string_codes_without_eval(
         &[lambda, Value::NIL, Value::vector(vec![event])],
     )
     .expect("plan simple string-code lambda");
-    let (_, args) = resolve_call_interactively_target_and_args_in_state(
-        &mut ev.obarray,
-        &mut Vec::new(),
-        &mut ev.buffers,
-        &ev.custom,
-        ev.specpdl.as_slice(),
-        &mut plan,
-    )
+    let (_, args) = unsafe {
+        let buffers = &mut ev.buffers;
+        let custom = &ev.custom;
+        let specpdl = ev.specpdl.as_slice();
+        // SAFETY: this split-state resolver handles only native string-code/
+        // no-argument cases; Lisp/prompting cases are deferred. Its writes are
+        // buffer/runtime Values, not function or canonical descriptor metadata.
+        // No collection, replacement or manager/interior borrow can escape.
+        ev.obarray.with_legacy_value_write(|obarray| {
+            resolve_call_interactively_target_and_args_in_state(
+                obarray,
+                &mut Vec::new(),
+                buffers,
+                custom,
+                specpdl,
+                &mut plan,
+            )
+        })
+    }
     .expect("resolve simple string-code args")
     .expect("shared-state simple string-code path");
     assert_eq!(
@@ -1721,14 +1815,25 @@ fn call_interactively_state_resolution_applies_shift_selection_prefix_in_state()
         .expect("eval lambda");
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan shift-selection lambda");
-    let (_, args) = resolve_call_interactively_target_and_args_in_state(
-        &mut ev.obarray,
-        &mut Vec::new(),
-        &mut ev.buffers,
-        &ev.custom,
-        ev.specpdl.as_slice(),
-        &mut plan,
-    )
+    let (_, args) = unsafe {
+        let buffers = &mut ev.buffers;
+        let custom = &ev.custom;
+        let specpdl = ev.specpdl.as_slice();
+        // SAFETY: this split-state resolver handles only native string-code/
+        // no-argument cases; Lisp/prompting cases are deferred. Its writes are
+        // buffer/runtime Values, not function or canonical descriptor metadata.
+        // No collection, replacement or manager/interior borrow can escape.
+        ev.obarray.with_legacy_value_write(|obarray| {
+            resolve_call_interactively_target_and_args_in_state(
+                obarray,
+                &mut Vec::new(),
+                buffers,
+                custom,
+                specpdl,
+                &mut plan,
+            )
+        })
+    }
     .expect("resolve shift-selection args")
     .expect("shared-state shift-selection path");
     assert_eq!(args, vec![Value::fixnum(3)]);
@@ -1747,14 +1852,25 @@ fn call_interactively_state_resolution_handles_optional_coding_without_prefix() 
         .expect("eval lambda");
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan optional coding lambda");
-    let (_, args) = resolve_call_interactively_target_and_args_in_state(
-        &mut ev.obarray,
-        &mut Vec::new(),
-        &mut ev.buffers,
-        &ev.custom,
-        ev.specpdl.as_slice(),
-        &mut plan,
-    )
+    let (_, args) = unsafe {
+        let buffers = &mut ev.buffers;
+        let custom = &ev.custom;
+        let specpdl = ev.specpdl.as_slice();
+        // SAFETY: this split-state resolver handles only native string-code/
+        // no-argument cases; Lisp/prompting cases are deferred. Its writes are
+        // buffer/runtime Values, not function or canonical descriptor metadata.
+        // No collection, replacement or manager/interior borrow can escape.
+        ev.obarray.with_legacy_value_write(|obarray| {
+            resolve_call_interactively_target_and_args_in_state(
+                obarray,
+                &mut Vec::new(),
+                buffers,
+                custom,
+                specpdl,
+                &mut plan,
+            )
+        })
+    }
     .expect("resolve optional coding args")
     .expect("shared-state optional coding path");
     assert_eq!(args, vec![Value::NIL]);
@@ -2117,10 +2233,15 @@ fn key_binding_global() {
     ev.select_global_map(km);
     // ctrl-f = char 6
     let ctrl_f = Value::fixnum(6);
-    crate::emacs_core::keymap::list_keymap_define(km, ctrl_f, Value::symbol("forward-char"));
+    crate::emacs_core::keymap::list_keymap_define(
+        km,
+        ctrl_f,
+        Value::symbol("forward-char"),
+        crate::tagged::SymbolMode::Bare,
+    );
 
     let result = builtin_key_binding(&mut ev, vec![Value::string("\x06")]).unwrap();
-    assert_eq!(result.as_symbol_name(), Some("forward-char"));
+    assert_eq!(result.as_bare_symbol_name(), Some("forward-char"));
 }
 
 #[test]
@@ -2288,7 +2409,7 @@ fn key_binding_default_plain_char_self_insert() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let result = builtin_key_binding(&mut ev, vec![Value::string("a")]).unwrap();
-    assert_eq!(result.as_symbol_name(), Some("self-insert-command"));
+    assert_eq!(result.as_bare_symbol_name(), Some("self-insert-command"));
 }
 
 #[test]
@@ -2742,7 +2863,10 @@ fn describe_key_briefly_is_real_lisp_function_after_bootstrap() {
         .obarray
         .symbol_function("describe-key-briefly")
         .expect("missing describe-key-briefly bootstrapped function cell");
-    assert!(!crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(!crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -2812,7 +2936,10 @@ fn thingatpt_startup_functions_are_autoloaded() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing startup function cell for {name}"));
         assert!(
-            crate::emacs_core::autoload::is_autoload_value(&function),
+            crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::SymbolMode::Bare
+            ),
             "{name} should come from GNU thingatpt.el"
         );
     }
@@ -5947,7 +6074,8 @@ fn where_is_preference_reuses_one_predeclared_snapshot() {
         vec![Value::fixnum(KEY_CHAR_CTRL | i64::from(b'c'))],
     ];
 
-    let preferred_modifier = WhereIsPreferredModifier::snapshot(&obarray);
+    let preferred_modifier =
+        WhereIsPreferredModifier::snapshot(&obarray, crate::tagged::SymbolMode::Bare);
     crate::emacs_core::intern::reset_intern_calls();
     let selected = select_where_is_preferred_sequence(preferred_modifier, &sequences);
 
@@ -5983,7 +6111,7 @@ fn where_is_preferred_modifier_accepts_gnu_solitary_names() {
     ] {
         obarray.set_symbol_value("where-is-preferred-modifier", Value::symbol(name));
         assert_eq!(
-            WhereIsPreferredModifier::snapshot(&obarray).mask(),
+            WhereIsPreferredModifier::snapshot(&obarray, crate::tagged::SymbolMode::Bare).mask(),
             expected,
             "GNU solitary modifier spelling {name}"
         );

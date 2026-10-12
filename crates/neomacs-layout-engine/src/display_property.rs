@@ -349,7 +349,7 @@ pub(crate) fn classify_single_display_spec(
     let value = if matches!(display_spec_kind(value), DisplaySpecKind::When) {
         match display_spec_when_parts(value) {
             Some((form, spec))
-                if (eval_enabled || form.is_symbol_named("t")) && conditions.holds(form) =>
+                if (eval_enabled || form.is_bare_symbol_named("t")) && conditions.holds(form) =>
             {
                 spec
             }
@@ -609,7 +609,7 @@ fn parse_display_raise_factor(value: Value) -> Option<f32> {
     if value.is_cons() {
         let car = value.cons_car();
         let cdr = value.cons_cdr();
-        if car.is_symbol_named("raise") {
+        if car.is_bare_symbol_named("raise") {
             if cdr.is_cons() {
                 return cdr.cons_car().as_number_f64().map(|factor| factor as f32);
             }
@@ -624,7 +624,7 @@ fn parse_display_space_width_factor(value: Value) -> Option<f32> {
     if value.is_cons() {
         let car = value.cons_car();
         let cdr = value.cons_cdr();
-        if car.is_symbol_named("space-width") {
+        if car.is_bare_symbol_named("space-width") {
             let factor = if cdr.is_cons() {
                 cdr.cons_car().as_number_f64()
             } else {
@@ -640,7 +640,7 @@ fn parse_display_height_factor(value: Value) -> Option<f32> {
     if value.is_cons() {
         let car = value.cons_car();
         let cdr = value.cons_cdr();
-        if car.is_symbol_named("height") {
+        if car.is_bare_symbol_named("height") {
             if cdr.is_cons() {
                 return cdr.cons_car().as_number_f64().map(|factor| factor as f32);
             }
@@ -655,7 +655,7 @@ fn plist_number(value: Value, key_name: &str) -> Option<f32> {
     let items = list_to_vec(&value)?;
     let mut i = 0;
     while i + 1 < items.len() {
-        if items[i].is_symbol_named(key_name) {
+        if items[i].is_bare_symbol_named(key_name) {
             return items[i + 1].as_number_f64().map(|factor| factor as f32);
         }
         i += 1;

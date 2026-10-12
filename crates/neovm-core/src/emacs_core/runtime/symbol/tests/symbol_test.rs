@@ -1114,7 +1114,7 @@ fn cloned_obarray_resolves_its_own_debug_on_next_call_cell() {
 
     // Cache is primed in the source; the clone must start unresolved and find
     // its own duplicated cell (same value, different address).
-    let cloned_ob = ob.clone();
+    let mut cloned_ob = ob.clone();
     let cloned = cloned_ob
         .debug_on_next_call_bool_fwd(id)
         .expect("clone duplicated the stateful forwarder");

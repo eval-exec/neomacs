@@ -32,7 +32,7 @@ impl VerticalScrollBarType {
     }
 
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     pub fn name(self) -> &'static str {
@@ -57,7 +57,7 @@ impl HorizontalScrollBarType {
     }
 
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     pub fn name(self) -> &'static str {

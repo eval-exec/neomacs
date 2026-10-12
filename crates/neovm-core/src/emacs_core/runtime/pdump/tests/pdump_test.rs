@@ -1785,7 +1785,9 @@ fn test_restore_snapshot_preserves_lone_uninterned_symbol_identity() {
         .obarray
         .symbol_value_copied("compat-pdump-uninterned-holder")
         .expect("holder binding should exist");
-    let held_id = held.as_symbol_id().expect("holder should contain a symbol");
+    let held_id = held
+        .as_bare_symbol_id()
+        .expect("holder should contain a symbol");
     assert_eq!(
         crate::emacs_core::intern::resolve_sym(held_id),
         "compat-pdump-solo-uninterned"
@@ -1824,7 +1826,9 @@ fn test_restore_snapshot_preserves_raw_unibyte_symbol_name_storage() {
             .obarray
             .symbol_value_copied(holder)
             .expect("holder binding should exist");
-        let held_id = held.as_symbol_id().expect("holder should contain a symbol");
+        let held_id = held
+            .as_bare_symbol_id()
+            .expect("holder should contain a symbol");
         let restored_name = crate::emacs_core::intern::resolve_sym_lisp_string(held_id);
         assert_eq!(restored_name.as_bytes(), &[0xFF, b'a']);
         assert!(!restored_name.is_multibyte());

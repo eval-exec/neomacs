@@ -188,7 +188,7 @@ impl Default for ImageScaleEnvironment {
 #[must_use]
 pub fn image_scale_environment(frame: &Frame, obarray: &Obarray) -> ImageScaleEnvironment {
     let default_scale = match obarray.symbol_value_copied("image-scaling-factor") {
-        Some(value) if value.is_symbol_named("auto") => ImageDefaultScale::Auto,
+        Some(value) if value.is_bare_symbol_named("auto") => ImageDefaultScale::Auto,
         Some(value) => numeric_image_scale(value)
             .map(ImageDefaultScale::Explicit)
             .unwrap_or(ImageDefaultScale::Auto),

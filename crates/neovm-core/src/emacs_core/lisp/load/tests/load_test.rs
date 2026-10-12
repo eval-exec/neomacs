@@ -624,7 +624,7 @@ fn loaded_source_paths_accepts_raw_unibyte_load_history_entries() {
 }
 
 fn definition_is_macroish(value: Value) -> bool {
-    value.is_macro() || (value.is_cons() && value.cons_car().as_symbol_name() == Some("macro"))
+    value.is_macro() || (value.is_cons() && value.cons_car().as_bare_symbol_name() == Some("macro"))
 }
 
 fn is_named_defun(form: Value, name: &str) -> bool {
@@ -633,13 +633,13 @@ fn is_named_defun(form: Value, name: &str) -> bool {
     }
     let car = form.cons_car();
     let cdr = form.cons_cdr();
-    if car.as_symbol_name() != Some("defun") {
+    if car.as_bare_symbol_name() != Some("defun") {
         return false;
     }
     if !cdr.is_cons() {
         return false;
     }
-    cdr.cons_car().as_symbol_name() == Some(name)
+    cdr.cons_car().as_bare_symbol_name() == Some(name)
 }
 
 #[test]
@@ -1034,7 +1034,10 @@ fn gnu_bootstrap_files_define_string_helpers_without_rust_shims() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("{name} should be installed by GNU ldefs-boot"));
         assert!(
-            crate::emacs_core::autoload::is_autoload_value(&function),
+            crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::value::SymbolMode::Bare
+            ),
             "{name} should come from GNU autoloads"
         );
     }
@@ -1321,7 +1324,10 @@ fn gnu_help_el_defines_substitute_command_keys_without_rust_shim() {
         .obarray
         .symbol_function("substitute-command-keys")
         .expect("help.el should define substitute-command-keys");
-    assert!(!crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(!crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -1474,7 +1480,7 @@ fn missing_runtime_image_reports_heapless_startup_error() {
                 "raw startup payload should match normalized data"
             );
             let payload = raw
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .expect("startup image load payload should stay heapless");
             assert!(
                 payload.contains("failed to load bootstrap image"),
@@ -1557,7 +1563,7 @@ fn runtime_image_loader_stops_on_primary_fingerprint_mismatch() {
         } => {
             assert_eq!(resolve_sym(symbol), "error");
             let rendered = payload
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .expect("heapless startup error payload");
             assert!(
                 rendered.contains(primary.to_string_lossy().as_ref()),
@@ -9514,7 +9520,7 @@ fn require_expands_tilde_load_path_entries_before_later_directories() {
     assert_eq!(
         eval.obarray()
             .symbol_value_copied("vm-shadowed-require-source")
-            .and_then(|value| value.as_symbol_name()),
+            .and_then(|value| value.as_bare_symbol_name()),
         Some("local")
     );
 }
@@ -13084,7 +13090,10 @@ conveniently adding tool bar items."
         .expect("macroexpand tool-bar define-minor-mode");
     tracing::info!("tool-bar probe: macroexpand complete");
     if let Some(forms) = list_to_vec(&expanded) {
-        if forms.first().is_some_and(|v| v.is_symbol_named("progn")) {
+        if forms
+            .first()
+            .is_some_and(|v| v.is_bare_symbol_named("progn"))
+        {
             for (idx, form) in forms.iter().enumerate().skip(1) {
                 tracing::info!("tool-bar probe: eval expanded subform {}", idx);
                 eval.eval_form(*form).unwrap_or_else(|err| {
@@ -13186,7 +13195,7 @@ fn auth_source_backend_exposes_type_slot() {
     assert!(
         slot_names
             .iter()
-            .any(|value| value.as_symbol_name() == Some("type")),
+            .any(|value| value.as_bare_symbol_name() == Some("type")),
         "expected auth-source-backend slots to include `type`, got {:?}, require_error={require_error:?}",
         slot_names,
     );
@@ -14752,7 +14761,10 @@ fn generated_loaddefs_replays_metadata_forms_on_bootstrap_runtime_surface() {
         .symbol_function("vm-generated-fn")
         .expect("autoload function cell");
     assert!(
-        crate::emacs_core::autoload::is_autoload_value(&autoload),
+        crate::emacs_core::autoload::is_autoload_value(
+            &autoload,
+            crate::tagged::value::SymbolMode::Bare
+        ),
         "autoload form should be installed"
     );
 

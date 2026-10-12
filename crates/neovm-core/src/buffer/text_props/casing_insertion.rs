@@ -218,8 +218,8 @@ impl CasingPropertyContext<'_> {
             direct,
             |category, prop| {
                 self.obarray.get_property_id(
-                    self.controls.equality.bare(category).as_symbol_id()?,
-                    prop.as_symbol_id()?,
+                    self.controls.equality.bare(category).as_bare_symbol_id()?,
+                    prop.as_bare_symbol_id()?,
                 )
             },
             name,
@@ -370,7 +370,7 @@ impl CasingPropertyContext<'_> {
                 .controls
                 .equality
                 .bare(category)
-                .as_symbol_id()
+                .as_bare_symbol_id()
                 .and_then(|category| {
                     self.obarray
                         .get_property_id(category, StickinessProperty::FrontSticky.symbol_id())

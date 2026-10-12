@@ -46,7 +46,7 @@ impl WindowSystemKind {
     }
 
     fn from_symbol_value(value: Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     fn is_neomacs_gui_compatible(self) -> bool {
@@ -667,10 +667,11 @@ pub(crate) fn builtin_display_graphic_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_optional_display_designator_eval(eval, "display-graphic-p", &args)?;
     Ok(Value::bool_val(
         display_window_system_symbol_eval(eval, args.first())?
-            .is_some_and(|value| value.is_symbol()),
+            .is_some_and(|value| value.is_symbol(symbol_mode)),
     ))
 }
 
@@ -1518,6 +1519,7 @@ fn popup_menu_xy(value: Value) -> Option<(f32, f32)> {
 }
 
 fn popup_menu_position(ctx: &mut Context, position: Value) -> PopupMenuPosition {
+    let symbol_mode = ctx.symbol_mode();
     let Some(items) = list_to_vec(&position) else {
         tracing::debug!("x-popup-menu position: non-list position, fallback=(0, 0)");
         return PopupMenuPosition::at(0.0, 0.0);
@@ -1536,7 +1538,7 @@ fn popup_menu_position(ctx: &mut Context, position: Value) -> PopupMenuPosition 
         let area = posn.get(1).and_then(|area| {
             list_to_vec(area)
                 .and_then(|items| items.first().copied())
-                .and_then(|value| value.as_symbol_name())
+                .and_then(|value| value.as_symbol_name(symbol_mode))
         });
         let menu_bar = area.is_some_and(|name| name == "menu-bar");
         let anchor_xy = posn.get(8).and_then(|anchor| popup_menu_xy(*anchor));
@@ -2033,6 +2035,7 @@ fn x_popup_menu_interactive_loop(
     selected: &mut usize,
     token: &mut neomacs_display_protocol::menu::MenuToken,
 ) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     let mut help = TtyMenuHelpTracker::default();
     let submenus_are_selections = selected_frame_window_system_symbol(ctx).is_none();
     show_popup_menu_selection(
@@ -2046,7 +2049,7 @@ fn x_popup_menu_interactive_loop(
         let (keys, binding) = ctx.read_key_sequence()?;
         if keys
             .first()
-            .is_some_and(|key| key.as_symbol_name() == Some("menu-bar"))
+            .is_some_and(|key| key.as_symbol_name(symbol_mode) == Some("menu-bar"))
         {
             // A newer native heading request can arrive before cancellation
             // of this modal transaction. Hand it back to ordinary dispatch;
@@ -2096,7 +2099,7 @@ fn x_popup_menu_interactive_loop(
         }
 
         let command = binding
-            .as_symbol_name()
+            .as_symbol_name(symbol_mode)
             .and_then(TtyMenuNavigationCommand::from_symbol_name)
             .or_else(|| native_popup_navigation_command(&keys));
 
@@ -2204,7 +2207,7 @@ fn popup_menu_selection(
 ) -> Option<NativePopupSelection> {
     let event = keys.first()?;
     let parts = list_to_vec(event)?;
-    if !matches!(parts.len(), 2 | 4) || parts[0].as_symbol_name() != Some("menu-selection") {
+    if !matches!(parts.len(), 2 | 4) || parts[0].as_bare_symbol_name() != Some("menu-selection") {
         return None;
     }
     if parts.len() == 4
@@ -2223,7 +2226,7 @@ fn popup_menu_selection(
 
 fn native_popup_navigation_command(keys: &[Value]) -> Option<TtyMenuNavigationCommand> {
     let event = *keys.first()?;
-    if let Some(name) = event.as_symbol_name() {
+    if let Some(name) = event.as_bare_symbol_name() {
         return match name {
             "down" => Some(TtyMenuNavigationCommand::TtyMenuNextItem),
             "up" => Some(TtyMenuNavigationCommand::TtyMenuPrevItem),

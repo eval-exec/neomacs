@@ -120,7 +120,8 @@ fn a_precise_deopt_counts_in_the_history_and_outlives_the_leaf() {
         .set_reopt_level_for_test(ReoptLevel::BaselineOnly);
     let f_val = Value::make_bytecode(f.clone());
     let run = |arg: Value| {
-        crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[arg]).expect("no signal")
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, f_val, &[arg])
+            .expect("no signal")
     };
     assert_eq!(run(Value::make_int(41)), Some(Value::make_int(42).bits()));
     let id = f.jit_runtime().compiled_id().expect("compiled");

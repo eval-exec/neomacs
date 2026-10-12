@@ -138,7 +138,7 @@ fn read_from_string_symbol() {
         ValueKind::Cons => {
             let pair_car = result.cons_car();
             let pair_cdr = result.cons_cdr();
-            assert_eq!(pair_car.as_symbol_name(), Some("hello"));
+            assert_eq!(pair_car.as_bare_symbol_name(), Some("hello"));
             assert!(pair_cdr.is_fixnum());
         }
         _ => panic!("Expected cons, got {:?}", result),
@@ -180,7 +180,7 @@ fn read_from_string_applies_read_symbol_shorthands() {
     let result =
         builtin_read_from_string(&mut ev, vec![Value::string("ical:error-regexp")]).unwrap();
     assert_eq!(
-        result.cons_car().as_symbol_name(),
+        result.cons_car().as_bare_symbol_name(),
         Some("icalendar-error-regexp"),
         "read-from-string must rewrite ical: prefix via read-symbol-shorthands"
     );
@@ -205,7 +205,7 @@ fn read_from_buffer_applies_read_symbol_shorthands() {
         .goto_buffer_emacs_byte_pos(buf_id, crate::buffer::EmacsBytePos::new(0));
     let result = builtin_read(&mut ev, vec![Value::make_buffer(buf_id)]).unwrap();
     assert_eq!(
-        result.as_symbol_name(),
+        result.as_bare_symbol_name(),
         Some("icalendar-foo"),
         "read from buffer must rewrite ical: prefix via read-symbol-shorthands"
     );
@@ -294,7 +294,7 @@ fn read_from_marker_advances_marker_without_moving_buffer_point_like_gnu() {
     );
 
     let second = builtin_read(&mut ev, vec![marker]).expect("read symbol from marker stream");
-    assert_eq!(second.as_symbol_name(), Some("tail"));
+    assert_eq!(second.as_bare_symbol_name(), Some("tail"));
     assert_eq!(
         crate::emacs_core::marker::marker_position_as_int_with_buffers(&ev.buffers, &marker)
             .expect("marker remains attached after second read"),
@@ -431,7 +431,7 @@ fn read_from_string_preserves_propertized_string_literal_intervals() {
         .get_property_at_char_pos(CharPos0::ZERO, Value::symbol("display"))
         .expect("display property should survive reader literal");
     assert!(display.is_cons());
-    assert!(display.cons_car().is_symbol_named("space"));
+    assert!(display.cons_car().is_bare_symbol_named("space"));
 }
 
 #[test]
@@ -691,7 +691,7 @@ fn read_from_string_keyword() {
         ValueKind::Cons => {
             let pair_car = result.cons_car();
             let _pair_cdr = result.cons_cdr();
-            assert_eq!(pair_car.as_symbol_name(), Some(":test"));
+            assert_eq!(pair_car.as_bare_symbol_name(), Some(":test"));
         }
         _ => panic!("Expected cons"),
     }
@@ -885,7 +885,7 @@ fn read_from_string_interns_symbols_in_global_obarray() {
         builtin_read_from_string(&mut ev, vec![Value::string("reader-obarray-side-effect")])
             .unwrap();
     assert_eq!(
-        result.cons_car().as_symbol_name(),
+        result.cons_car().as_bare_symbol_name(),
         Some("reader-obarray-side-effect")
     );
     assert!(
@@ -920,7 +920,7 @@ fn read_interns_symbols_in_global_obarray() {
     let result =
         builtin_read(&mut ev, vec![Value::string("reader-stream-obarray-symbol")]).unwrap();
     assert_eq!(
-        result.as_symbol_name(),
+        result.as_bare_symbol_name(),
         Some("reader-stream-obarray-symbol")
     );
     assert!(
@@ -2588,7 +2588,10 @@ fn read_passwd_startup_is_autoloaded() {
         .obarray
         .symbol_function("read-passwd")
         .expect("missing read-passwd startup function cell");
-    assert!(crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -5215,7 +5218,7 @@ fn read_from_string_c_style_hex_token_is_symbol_like_gnu() {
     assert_eq!(result.cons_cdr(), Value::fixnum(4));
     let symbol = result.cons_car();
     assert_eq!(
-        symbol.as_symbol_name(),
+        symbol.as_bare_symbol_name(),
         Some("0xc0"),
         "GNU reads ordinary 0x-prefixed tokens as symbols, got {symbol:?}"
     );
@@ -5583,7 +5586,7 @@ fn read_from_string_hash_hash_reads_empty_symbol() {
         ValueKind::Cons => {
             let pair_car = result.cons_car();
             let pair_cdr = result.cons_cdr();
-            assert_eq!(pair_car.as_symbol_name(), Some(""));
+            assert_eq!(pair_car.as_bare_symbol_name(), Some(""));
             assert_eq!(pair_cdr, Value::fixnum(2));
         }
         _ => panic!("Expected cons"),
@@ -5599,7 +5602,7 @@ fn read_from_string_escaped_hash_hash_reads_literal_symbol() {
         ValueKind::Cons => {
             let pair_car = result.cons_car();
             let pair_cdr = result.cons_cdr();
-            assert_eq!(pair_car.as_symbol_name(), Some("##"));
+            assert_eq!(pair_car.as_bare_symbol_name(), Some("##"));
             assert_eq!(pair_cdr, Value::fixnum(4));
         }
         _ => panic!("Expected cons"),

@@ -331,7 +331,7 @@ impl FormalCursor {
         let formal = self.tail.cons_car();
         let formal = formal.as_symbol_with_pos_sym().unwrap_or(formal);
         let symbol = formal
-            .as_symbol_id()
+            .as_bare_symbol_id()
             .ok_or(FormalListError::NonSymbol(formal))?;
         if self.markers.classify(symbol) == FormalRole::RestMarker {
             self.state = match self.state {

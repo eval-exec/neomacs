@@ -1732,7 +1732,7 @@ fn fragmented_snapshot_backend_trace(kind: BufferTextBackendKind) -> LayoutSnaps
             .map(|pos| {
                 snapshot
                     .layout_text_prop_at_emacs_byte_pos(EmacsBytePos::new(pos), face)
-                    .and_then(|value| value.as_symbol_name().map(str::to_owned))
+                    .and_then(|value| value.as_bare_symbol_name().map(str::to_owned))
             })
             .collect(),
         next_prop_changes: byte_boundaries

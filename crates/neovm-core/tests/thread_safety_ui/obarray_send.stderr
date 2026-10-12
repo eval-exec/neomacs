@@ -12,19 +12,10 @@ note: required because it appears within the type `symbol::cell::BlvPtr`
   |                   ^^^^^^
 note: required because it appears within the type `PhantomData<symbol::cell::BlvPtr>`
  --> $RUST/core/src/marker.rs
-  |
-  | pub struct PhantomData<T: PointeeSized>;
-  |            ^^^^^^^^^^^
 note: required because it appears within the type `alloc::raw_vec::RawVec<symbol::cell::BlvPtr>`
  --> $RUST/alloc/src/raw_vec/mod.rs
-  |
-  | pub(crate) struct RawVec<T, A: Allocator = Global> {
-  |                   ^^^^^^
 note: required because it appears within the type `Vec<symbol::cell::BlvPtr>`
  --> $RUST/alloc/src/vec/mod.rs
-  |
-  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
-  |            ^^^
 note: required because it appears within the type `neovm_core::emacs_core::Obarray`
  --> src/emacs_core/runtime/symbol/mod.rs
   |
@@ -45,9 +36,6 @@ error[E0277]: `*const ()` cannot be shared between threads safely
   = help: within `LispFwd`, the trait `Sync` is not implemented for `*const ()`
 note: required because it appears within the type `PhantomData<*const ()>`
  --> $RUST/core/src/marker.rs
-  |
-  | pub struct PhantomData<T: PointeeSized>;
-  |            ^^^^^^^^^^^
 note: required because it appears within the type `LispFwd`
  --> src/emacs_core/runtime/forward/mod.rs
   |
@@ -56,19 +44,10 @@ note: required because it appears within the type `LispFwd`
   = note: required for `&'static LispFwd` to implement `Send`
 note: required because it appears within the type `PhantomData<&'static LispFwd>`
  --> $RUST/core/src/marker.rs
-  |
-  | pub struct PhantomData<T: PointeeSized>;
-  |            ^^^^^^^^^^^
 note: required because it appears within the type `alloc::raw_vec::RawVec<&'static LispFwd>`
  --> $RUST/alloc/src/raw_vec/mod.rs
-  |
-  | pub(crate) struct RawVec<T, A: Allocator = Global> {
-  |                   ^^^^^^
 note: required because it appears within the type `Vec<&'static LispFwd>`
  --> $RUST/alloc/src/vec/mod.rs
-  |
-  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
-  |            ^^^
 note: required because it appears within the type `neovm_core::emacs_core::Obarray`
  --> src/emacs_core/runtime/symbol/mod.rs
   |
@@ -89,9 +68,6 @@ error[E0277]: `*const ()` cannot be sent between threads safely
   = help: within `[LispSymbol; 4096]`, the trait `Send` is not implemented for `*const ()`
 note: required because it appears within the type `PhantomData<*const ()>`
  --> $RUST/core/src/marker.rs
-  |
-  | pub struct PhantomData<T: PointeeSized>;
-  |            ^^^^^^^^^^^
 note: required because it appears within the type `TaggedValue`
  --> src/tagged/value.rs
   |
@@ -106,24 +82,12 @@ note: required because it appears within the type `LispSymbol`
   = note: required for `std::ptr::Unique<[LispSymbol; 4096]>` to implement `Send`
 note: required because it appears within the type `std::boxed::Box<[LispSymbol; 4096]>`
  --> $RUST/alloc/src/boxed.rs
-  |
-  | pub struct Box<
-  |            ^^^
 note: required because it appears within the type `PhantomData<std::boxed::Box<[LispSymbol; 4096]>>`
  --> $RUST/core/src/marker.rs
-  |
-  | pub struct PhantomData<T: PointeeSized>;
-  |            ^^^^^^^^^^^
 note: required because it appears within the type `alloc::raw_vec::RawVec<std::boxed::Box<[LispSymbol; 4096]>>`
  --> $RUST/alloc/src/raw_vec/mod.rs
-  |
-  | pub(crate) struct RawVec<T, A: Allocator = Global> {
-  |                   ^^^^^^
 note: required because it appears within the type `Vec<std::boxed::Box<[LispSymbol; 4096]>>`
  --> $RUST/alloc/src/vec/mod.rs
-  |
-  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
-  |            ^^^
 note: required because it appears within the type `symbol::SymbolChunks`
  --> src/emacs_core/runtime/symbol/mod.rs
   |

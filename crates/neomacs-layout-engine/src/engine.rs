@@ -1861,7 +1861,7 @@ impl LayoutEngine {
             );
             let ws = frame
                 .effective_window_system()
-                .and_then(|v| v.as_symbol_name().map(|s| s.to_string()));
+                .and_then(|v| v.as_bare_symbol_name().map(|s| s.to_string()));
             (
                 bootstrap.background,
                 frame.font_pixel_size,
@@ -4786,16 +4786,19 @@ impl LayoutEngine {
         // `params` already names the semantic display source chosen before
         // fontification and incremental classification.
         let layout_buffer = match evaluator.buffer_manager().get(buf_id) {
-            Some(buffer) => super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window(
-                buffer,
-                evaluator.obarray(),
-                Some(visible_char_bound(params)),
-                display_target,
-            )
-            .with_accessible_end(neovm_core::buffer::CharPos0::new(
-                params.accessible_end_charpos().get().max(0) as usize,
-            ))
-            .with_display_when(display_when),
+            Some(buffer) => {
+                super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+                    buffer,
+                    evaluator.obarray(),
+                    Some(visible_char_bound(params)),
+                    display_target,
+                    evaluator.symbol_mode(),
+                )
+                .with_accessible_end(neovm_core::buffer::CharPos0::new(
+                    params.accessible_end_charpos().get().max(0) as usize,
+                ))
+                .with_display_when(display_when)
+            }
             None => {
                 tracing::debug!("layout_window_rust: buffer {} not found", params.buffer_id);
                 self.frame_output
@@ -5394,7 +5397,7 @@ impl LayoutEngine {
             else {
                 continue;
             };
-            resolved.lisp_name = value.as_symbol_name().map(str::to_owned);
+            resolved.lisp_name = value.as_bare_symbol_name().map(str::to_owned);
             let face_id = crate::display_row::face_state::stable_face_id_for_resolved(
                 &mut face_ids,
                 &resolved,

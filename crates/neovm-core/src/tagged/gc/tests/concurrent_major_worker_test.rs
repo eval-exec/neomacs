@@ -703,7 +703,7 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                 assert!(done.load(Ordering::Acquire));
                 assert!(harness.result.try_recv().is_err());
                 let ids: Vec<_> = [direct, nested, positioned]
-                    .map(TaggedValue::xsymbol_id)
+                    .map(TaggedValue::xbare_symbol_id)
                     .into();
                 assert_eq!(
                     result.symbols.iter().filter(|&&id| id == ids[0]).count(),

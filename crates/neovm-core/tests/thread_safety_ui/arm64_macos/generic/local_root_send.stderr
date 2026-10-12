@@ -1,0 +1,24 @@
+error[E0277]: `*const ()` cannot be sent between threads safely
+ --> tests/thread_safety_ui/arm64_macos/generic/../../local_root_send.rs
+  |
+  |     require_send::<LocalRoot<'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^ `*const ()` cannot be sent between threads safely
+  |
+  = help: within `LocalRoot<'static>`, the trait `Send` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `TaggedValue`
+ --> src/tagged/value.rs
+  |
+  | pub struct TaggedValue(pub(crate) usize, ThreadConfined);
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `LocalRoot<'static>`
+ --> src/tagged/transport/shared_root.rs
+  |
+  | pub struct LocalRoot<'r> {
+  |            ^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/thread_safety_ui/arm64_macos/generic/../../local_root_send.rs
+  |
+  | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`

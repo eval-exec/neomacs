@@ -33,6 +33,8 @@ use crate::emacs_core::eval::{
 };
 use crate::emacs_core::symbol::LispSymbol;
 use crate::emacs_core::value::Value;
+use cranelift_codegen::ir::{InstBuilder, MemFlagsData, Value as ClifValue, types};
+use cranelift_frontend::FunctionBuilder;
 use std::mem::{ManuallyDrop, offset_of, size_of};
 use std::sync::OnceLock;
 
@@ -125,8 +127,42 @@ pub(crate) const CONTEXT_JIT_BIND_STACK_OFFSET: usize = offset_of!(Context, jit_
 pub(crate) const CONTEXT_DEPTH_OFFSET: usize = offset_of!(Context, depth);
 /// `Context::max_depth`: `max-lisp-eval-depth` as the evaluator reads it.
 pub(crate) const CONTEXT_MAX_DEPTH_OFFSET: usize = offset_of!(Context, max_depth);
-/// `Context::obarray` (inline); add an `OBARRAY_*` offset.
+/// The leading stable manager pointer in `Context::obarray`'s owned view.
 pub(crate) const CONTEXT_OBARRAY_OFFSET: usize = offset_of!(Context, obarray);
+/// Owner-private admission words, refreshed at canonical writer retirement.
+/// The current continuation owns this inline header; the World never retains a
+/// destination pointer. Mutable epoch/descriptor words must remain fresh loads.
+pub(crate) const CONTEXT_DISPATCH_CELLS_OFFSET: usize =
+    CONTEXT_OBARRAY_OFFSET + crate::emacs_core::eval::ObarrayView::ADMISSION_HEADER_OFFSET;
+pub(crate) const DISPATCH_FUNCTION_EPOCH_OFFSET: usize =
+    crate::emacs_core::eval::ObarrayView::ADMISSION_EPOCH_OFFSET
+        - crate::emacs_core::eval::ObarrayView::ADMISSION_HEADER_OFFSET;
+pub(crate) const DISPATCH_DEBUG_FWD_OFFSET: usize =
+    crate::emacs_core::eval::ObarrayView::ADMISSION_DEBUGGER_OFFSET
+        - crate::emacs_core::eval::ObarrayView::ADMISSION_HEADER_OFFSET;
+
+/// The stable Obarray allocation belonging to this native continuation.
+///
+/// Only this pointer load is readonly: construction fixes the owned view for
+/// the activation, so Cranelift may retain its base across callbacks. Symbol
+/// cells, spine/length, clocks and forwarder contents remain mutable loads.
+pub(crate) fn emit_obarray_base(fb: &mut FunctionBuilder, vmctx: ClifValue) -> ClifValue {
+    fb.ins().load(
+        types::I64,
+        MemFlagsData::trusted().with_readonly(),
+        vmctx,
+        CONTEXT_OBARRAY_OFFSET as i32,
+    )
+}
+
+/// Address the current owner's inline admission header without a World load.
+/// The values are owner-coherent projections, not readonly constants: callers
+/// reload them after argument evaluation, Lisp calls and collection. A forwarded
+/// Boolean is never copied here; its stable descriptor still reads canonical data.
+pub(crate) fn emit_dispatch_cells_base(fb: &mut FunctionBuilder, vmctx: ClifValue) -> ClifValue {
+    fb.ins()
+        .iadd_imm(vmctx, CONTEXT_DISPATCH_CELLS_OFFSET as i64)
+}
 /// `Context::jit_stack_limit`, the native stack guard's floor.
 pub(crate) const CONTEXT_JIT_STACK_LIMIT_OFFSET: usize = offset_of!(Context, jit_stack_limit);
 pub(crate) use crate::emacs_core::eval::runtime_projection::{
@@ -147,8 +183,12 @@ const _: () = {
 pub(crate) use crate::emacs_core::symbol::{
     LISP_SYMBOL_FLAGS_OFFSET, LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE,
     LISP_SYMBOL_VAL_OFFSET, LISP_SYMBOL_WRITE_WINDOW_OFFSET, OBARRAY_CHUNK_BITS,
-    OBARRAY_CHUNK_SLOTS, OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET,
-    OBARRAY_JIT_LEN_OFFSET, OBARRAY_JIT_SPINE_OFFSET, SYMBOL_FLAGS_REDIRECT_MASK,
+    OBARRAY_CHUNK_SLOTS, OBARRAY_JIT_LEN_OFFSET, OBARRAY_JIT_SPINE_OFFSET,
+    SYMBOL_FLAGS_REDIRECT_MASK,
+};
+#[cfg(test)]
+pub(crate) use crate::emacs_core::symbol::{
+    OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET,
 };
 
 /// A symbol's function cell (`LispSymbol::function`, one `Value` word):
@@ -537,6 +577,10 @@ pub(crate) const fn let_layout() -> LetLayout {
 #[cfg(test)]
 #[path = "jit_layout/tests/golden_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jit_layout/tests/world_projection_test.rs"]
+mod world_projection_tests;
 
 #[cfg(test)]
 #[path = "jit_layout/tests/runtime_prefix_test.rs"]

@@ -13,6 +13,7 @@ pub mod mutate;
 pub mod symbol_marks;
 pub mod transport;
 pub mod value;
+pub use value::SymbolMode;
 
 #[cfg(test)]
 #[path = "tests/tagged_test.rs"]

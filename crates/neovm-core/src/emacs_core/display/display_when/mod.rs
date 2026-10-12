@@ -75,6 +75,7 @@ impl Context {
         sites: &[DisplayWhenSite],
         mut replaces_text: impl FnMut(Value) -> bool,
     ) -> Result<FxHashMap<Value, bool>, Flow> {
+        let symbol_mode = self.symbol_mode();
         let root_scope = self.save_specpdl_roots();
         let mut properties = Vec::with_capacity(sites.len());
         for site in sites {
@@ -139,7 +140,7 @@ impl Context {
                             if form.is_nil() {
                                 continue;
                             }
-                            if !form.is_symbol_named("t") {
+                            if !form.is_symbol_named("t", symbol_mode) {
                                 // Disabled sites have no cached answer: the policy
                                 // belongs to this property, not every equal FORM.
                                 if !eval_enabled {
@@ -210,10 +211,11 @@ impl Context {
         position: i64,
         buffer_position: i64,
     ) -> Result<bool, Flow> {
+        let symbol_mode = self.symbol_mode();
         if form.is_nil() {
             return Ok(false);
         }
-        if form.is_symbol_named("t") {
+        if form.is_symbol_named("t", symbol_mode) {
             return Ok(true);
         }
         let count = self.specpdl.len();

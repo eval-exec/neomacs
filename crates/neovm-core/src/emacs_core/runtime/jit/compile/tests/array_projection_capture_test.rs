@@ -52,7 +52,7 @@ fn native_array_projection_capture_keeps_vector_record_and_bounds_dependencies()
     for shape in [ArrayShape::Vector, ArrayShape::Record] {
         for index in [Value::fixnum(0), Value::fixnum(2), Value::fixnum(-1)] {
             let array = shape.make();
-            let expected = b::builtin_aref_values(array, index);
+            let expected = b::builtin_aref_values(b::ArraySymbolSource::Bare, array, index);
             let (result, reads) = capture(|| shim_aref(&mut ctx, array, index));
             match expected {
                 Ok(value) => assert_eq!(result, value.bits() as i64),

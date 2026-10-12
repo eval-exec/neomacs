@@ -547,7 +547,10 @@ impl EnvKey {
             begv: buf.accessible_char_region().start().get(),
             table_bits: table.chartable.bits(),
             char_table_tick: crate::emacs_core::chartable::char_table_write_tick(),
-            honor_props: matches!(props, SyntaxProperties::Honor(_)),
+            honor_props: matches!(
+                props,
+                SyntaxProperties::Honor(_) | SyntaxProperties::PositionedHonor(_)
+            ),
             escape_policy,
             multibyte: buf.get_multibyte(),
         }
@@ -1015,8 +1018,8 @@ fn category_symbol() -> Value {
 /// `char-property-alias-alist`, `default-text-properties`.
 fn resolves_through_lisp(buf: &Buffer, props: SyntaxProperties<'_>) -> bool {
     match props {
-        SyntaxProperties::Ignore => false,
-        SyntaxProperties::Honor(resolver) => {
+        SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => false,
+        SyntaxProperties::Honor(resolver) | SyntaxProperties::PositionedHonor(resolver) => {
             !resolver.supports_presence_coalescing()
                 || buf.text_props_property_name_presence(category_symbol())
                     != crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent
@@ -1098,7 +1101,9 @@ pub(super) fn parse_partial_sexp_cached(
         return (finish.state, finish.stop);
     }
     count(|stats| stats.queries += 1);
-    if resolves_through_lisp(buf, props) {
+    if props.symbol_mode() == crate::tagged::SymbolMode::Positioned
+        || resolves_through_lisp(buf, props)
+    {
         count(|stats| stats.bypassed += 1);
         let finish = plain(start);
         return (finish.state, finish.stop);
@@ -1364,7 +1369,9 @@ pub(super) fn back_comment_canonical_state(
             &mut Plain,
         ))
     };
-    if resolves_through_lisp(buf, props) {
+    if props.symbol_mode() == crate::tagged::SymbolMode::Positioned
+        || resolves_through_lisp(buf, props)
+    {
         count(|stats| stats.bypassed += 1);
         let state = plain(PartialParseState::new()).state;
         maybe_write_stats_file();

@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+ --> tests/thread_safety_ui/obarray_writer_capability_escape.rs:5:39
+  |
+5 |     context.with_obarray_mut(|writer| writer)
+  |                               ------- ^^^^^^ returning this value requires that `'1` must outlive `'2`
+  |                               |     |
+  |                               |     return type of closure is ObarrayWriteAccess<'2>
+  |                               has type `ObarrayWriteAccess<'1>`

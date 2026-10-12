@@ -8,6 +8,7 @@
 //!   `define-obsolete-variable-alias`, `make-obsolete`, `make-obsolete-variable`.
 
 use crate::emacs_core::error::LispCondition;
+use crate::tagged::value::SymbolMode;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -79,11 +80,11 @@ pub enum AutoloadType {
 
 impl AutoloadType {
     /// Parse a Value into an AutoloadType.
-    pub fn from_value(val: &Value) -> Self {
-        if val.is_t() {
+    pub fn from_value(val: &Value, mode: SymbolMode) -> Self {
+        if mode.unwrap(*val).is_t() {
             return Self::Macro;
         }
-        match val.as_symbol_name() {
+        match val.as_symbol_name(mode) {
             Some("macro") => Self::Macro,
             Some("keymap") => Self::Keymap,
             _ => Self::Function,
@@ -348,11 +349,11 @@ fn runtime_string_to_autoload_string(text: &str) -> LispString {
 // ---------------------------------------------------------------------------
 
 /// Check whether a value is an autoload form (autoload FILE ...).
-pub(crate) fn is_autoload_value(val: &Value) -> bool {
+pub(crate) fn is_autoload_value(val: &Value, mode: SymbolMode) -> bool {
     val.is_cons()
         && val
             .cons_car()
-            .as_symbol_id()
+            .as_symbol_id(mode)
             .is_some_and(|id| id == autoload_symbol_id())
 }
 
@@ -370,6 +371,7 @@ pub(crate) enum AutoloadDoLoadPlan {
 pub(crate) fn plan_autoload_do_load_in_state(
     obarray: &Obarray,
     args: &[Value],
+    mode: SymbolMode,
 ) -> Result<AutoloadDoLoadPlan, Flow> {
     if args.is_empty() || args.len() > 3 {
         return Err(signal(
@@ -382,7 +384,7 @@ pub(crate) fn plan_autoload_do_load_in_state(
     }
 
     let fundef = &args[0];
-    if !is_autoload_value(fundef) {
+    if !is_autoload_value(fundef, mode) {
         return Ok(AutoloadDoLoadPlan::Return(*fundef));
     }
 
@@ -404,23 +406,24 @@ pub(crate) fn plan_autoload_do_load_in_state(
     // autoload's TYPE field (5th element) is `t` or `macro`.
     // This matches GNU Emacs eval.c:Fautoload_do_load.
     let macro_only = args.get(2).copied().unwrap_or(Value::NIL);
-    if macro_only.as_symbol_name() == Some("macro") {
+    if macro_only.as_symbol_name(mode) == Some("macro") {
         let kind = items.get(4).copied().unwrap_or(Value::NIL);
-        let is_macro_type = kind.is_t() || (kind.as_symbol_name() == Some("macro"));
+        let is_macro_type =
+            mode.unwrap(kind).is_t() || (kind.as_symbol_name(mode) == Some("macro"));
         if !is_macro_type {
             return Ok(AutoloadDoLoadPlan::Return(*fundef));
         }
     }
 
     let funname = if args.len() > 1 && !args[1].is_nil() {
-        Some(expect_symbol_id(&args[1])?)
+        Some(expect_symbol_id(&args[1], mode)?)
     } else {
         None
     };
 
     if let Some(name) = funname
         && let Some(override_value) =
-            super::eval::compiler_function_override_in_obarray(obarray, name)
+            super::eval::compiler_function_override_in_obarray(obarray, name, mode)
     {
         return Ok(AutoloadDoLoadPlan::Return(override_value));
     }
@@ -535,7 +538,7 @@ pub(crate) fn builtin_autoload_do_load(
     args: Vec<Value>,
 ) -> EvalResult {
     let original_fundef = args.first().copied();
-    match plan_autoload_do_load_in_state(&eval.obarray, &args)? {
+    match plan_autoload_do_load_in_state(&eval.obarray, &args, eval.symbol_mode())? {
         AutoloadDoLoadPlan::Return(value) => Ok(value),
         AutoloadDoLoadPlan::Load { file, funname } => {
             execute_autoload_load(eval, &file, funname, original_fundef)
@@ -550,7 +553,7 @@ pub(crate) fn builtin_autoload_do_load_3(
     macro_only: Value,
 ) -> EvalResult {
     let args = [fundef, funname, macro_only];
-    match plan_autoload_do_load_in_state(&eval.obarray, &args)? {
+    match plan_autoload_do_load_in_state(&eval.obarray, &args, eval.symbol_mode())? {
         AutoloadDoLoadPlan::Return(value) => Ok(value),
         AutoloadDoLoadPlan::Load { file, funname } => {
             execute_autoload_load(eval, &file, funname, Some(fundef))
@@ -563,7 +566,7 @@ pub(crate) fn builtin_autoload_do_load_in_vm_runtime(
     args: &[Value],
 ) -> EvalResult {
     let original_fundef = args.first().copied();
-    match plan_autoload_do_load_in_state(&shared.obarray, args)? {
+    match plan_autoload_do_load_in_state(&shared.obarray, args, shared.symbol_mode())? {
         AutoloadDoLoadPlan::Return(value) => Ok(value),
         AutoloadDoLoadPlan::Load { file, funname } => {
             execute_autoload_load(shared, &file, funname, original_fundef)
@@ -583,7 +586,7 @@ enum AutoloadDefinitionPlan {
 fn plan_autoload_definition(
     obarray: &Obarray,
     args: &[Value],
-    symbols_with_pos_enabled: bool,
+    mode: SymbolMode,
 ) -> Result<AutoloadDefinitionPlan, Flow> {
     if args.len() < 2 || args.len() > 5 {
         return Err(signal(
@@ -593,23 +596,12 @@ fn plan_autoload_definition(
     }
 
     let func_val = args[0];
-    let name = func_val
-        .as_symbol_id()
-        .or_else(|| {
-            if symbols_with_pos_enabled {
-                func_val
-                    .as_symbol_with_pos_sym()
-                    .and_then(|sym| sym.as_symbol_id())
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| {
-            signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("symbolp"), func_val],
-            )
-        })?;
+    let name = func_val.as_symbol_id(mode).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), func_val],
+        )
+    })?;
 
     let file_val = args[1];
     if !file_val.is_string() {
@@ -623,7 +615,7 @@ fn plan_autoload_definition(
     // autoload, don't override."  If the symbol already has a real (non-
     // autoload) function definition, return nil without touching it.
     if let Some(current) = obarray.symbol_function_id(name)
-        && !is_autoload_value(&current)
+        && !is_autoload_value(&current, mode)
     {
         return Ok(AutoloadDefinitionPlan::KeepExistingDefinition);
     }
@@ -646,8 +638,8 @@ fn plan_autoload_definition(
     })
 }
 
-fn autoload_entry_from_function_cell(function: Value) -> Option<AutoloadEntry> {
-    if !is_autoload_value(&function) {
+fn autoload_entry_from_function_cell(function: Value, mode: SymbolMode) -> Option<AutoloadEntry> {
+    if !is_autoload_value(&function, mode) {
         return None;
     }
     let fields = list_to_vec(&function)?;
@@ -659,7 +651,7 @@ fn autoload_entry_from_function_cell(function: Value) -> Option<AutoloadEntry> {
     let interactive = fields.get(3).is_some_and(|value| value.is_truthy());
     let autoload_type = fields
         .get(4)
-        .map(AutoloadType::from_value)
+        .map(|value| AutoloadType::from_value(value, mode))
         .unwrap_or(AutoloadType::Function);
     Some(AutoloadEntry {
         file,
@@ -674,7 +666,7 @@ fn autoload_entry_from_function_cell(function: Value) -> Option<AutoloadEntry> {
 /// Callable builtin form used by `funcall`/`apply` and direct function calls.
 /// Arguments are already evaluated.
 pub(crate) fn builtin_autoload(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    match plan_autoload_definition(&eval.obarray, &args, eval.symbols_with_pos_enabled)? {
+    match plan_autoload_definition(&eval.obarray, &args, eval.symbol_mode())? {
         AutoloadDefinitionPlan::KeepExistingDefinition => Ok(Value::NIL),
         AutoloadDefinitionPlan::Define {
             symbol,
@@ -699,7 +691,7 @@ pub(crate) fn builtin_autoload(eval: &mut super::eval::Context, args: Vec<Value>
                 let entry = eval
                     .obarray
                     .symbol_function_id(symbol)
-                    .and_then(autoload_entry_from_function_cell);
+                    .and_then(|value| autoload_entry_from_function_cell(value, eval.symbol_mode()));
                 match entry {
                     Some(entry) => eval.autoloads.register_symbol(symbol, entry),
                     None => eval.autoloads.remove_symbol(symbol),

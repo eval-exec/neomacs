@@ -9,7 +9,7 @@ fn native_vector_sort_batches_collection_mutations() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
     for predicate in [Value::NIL, Value::symbol("<"), Value::symbol("string<")] {
-        let strings = predicate.as_symbol_name() == Some("string<");
+        let strings = predicate.as_bare_symbol_name() == Some("string<");
         let vector = Value::vector(
             (0..50)
                 .map(|i| {

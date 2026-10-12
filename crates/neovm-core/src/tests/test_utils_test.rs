@@ -464,14 +464,14 @@ fn is_named_defun_value(form: &Value, name: &str) -> bool {
         return false;
     }
     let car = form.cons_car();
-    if !car.is_symbol_named("defun") {
+    if !car.is_bare_symbol_named("defun") {
         return false;
     }
     let cdr = form.cons_cdr();
     if !cdr.is_cons() {
         return false;
     }
-    cdr.cons_car().is_symbol_named(name)
+    cdr.cons_car().is_bare_symbol_named(name)
 }
 
 /// Create a bare evaluator with GNU `ldefs-boot.el` autoload cells restored

@@ -102,10 +102,6 @@ impl StickinessProperty {
     pub(crate) fn value(self) -> Value {
         Value::from_sym_id(self.symbol_id())
     }
-
-    pub(crate) fn is_value(self, value: Value) -> bool {
-        value.as_symbol_id() == Some(self.symbol_id())
-    }
 }
 
 pub(crate) fn init_textprop_vars(
@@ -2513,7 +2509,7 @@ pub(crate) fn builtin_add_text_properties_in_buffers(
 fn is_anonymous_face_plist(v: &Value) -> bool {
     // GNU treats a cons whose car is a keyword as an anonymous face plist
     // (e.g. (:foreground "red")), not a list of faces.
-    v.is_cons() && v.cons_car().is_keyword()
+    v.is_cons() && v.cons_car().is_bare_keyword()
 }
 
 fn improper_list_tail(list: Value) -> Value {

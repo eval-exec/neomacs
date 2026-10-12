@@ -901,16 +901,14 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     let boolean = intern("discard-void-localized-bool-forwarder");
     let bool_fwd = alloc_boolfwd(false);
     ctx.obarray.install_boolfwd(boolean, bool_fwd);
-    ctx.obarray
-        .make_symbol_localized(boolean, Value::NIL)
-        .expect("localized Bool builtin");
+    ctx.obarray.make_symbol_localized(boolean, Value::NIL);
+    assert!(ctx.obarray.blv(boolean).is_some(), "localized Bool builtin");
     let object = intern("throw-on-input");
     let retained = Value::fixnum(23);
     let obj_fwd = alloc_objfwd(retained);
     ctx.obarray.install_objfwd(object, obj_fwd);
-    ctx.obarray
-        .make_symbol_localized(object, retained)
-        .expect("localized Obj builtin");
+    ctx.obarray.make_symbol_localized(object, retained);
+    assert!(ctx.obarray.blv(object).is_some(), "localized Obj builtin");
     let cells = [boolean, object].map(|symbol| {
         let blv = ctx.obarray.blv(symbol).expect("BLV");
         assert!(blv.fwd.is_some());

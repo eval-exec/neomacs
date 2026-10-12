@@ -81,7 +81,7 @@ fn osr_entry_guard_checks_each_snapshot_before_effects_and_keeps_unknown_heap_sl
         ctx.bc_buf.extend_from_slice(&snapshot);
         let before = cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
         let Some(NativeRun::DeoptAt(resume)) =
-            cache::try_run_osr(&mut ctx, &f, 4, &snapshot, &[borrowed])
+            crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 4, &snapshot, &[borrowed])
         else {
             panic!("incompatible seed must precisely deopt at entry");
         };
@@ -108,7 +108,8 @@ fn osr_entry_guard_checks_each_snapshot_before_effects_and_keeps_unknown_heap_sl
     let snapshot = [payload, Value::make_int(30), Value::make_int(10)];
     ctx.bc_buf.truncate(1);
     ctx.bc_buf.extend_from_slice(&snapshot);
-    let Some(NativeRun::Ok(bits)) = cache::try_run_osr(&mut ctx, &f, 4, &snapshot, &[borrowed])
+    let Some(NativeRun::Ok(bits)) =
+        crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 4, &snapshot, &[borrowed])
     else {
         panic!("compatible seed must run the native body");
     };
@@ -153,7 +154,13 @@ fn osr_entry_guard_keeps_heap_operands_through_native_and_resumed_watched_store_
         let snapshot = [payload, Value::make_int(2), seed];
         ctx.bc_buf.extend_from_slice(&snapshot);
         let gc_before = ctx.tagged_heap.gc_collections();
-        let result = match cache::try_run_osr(&mut ctx, &f, 4, &snapshot, &[borrowed]) {
+        let result = match crate::emacs_core::jit::test_support::run_osr(
+            &mut ctx,
+            &f,
+            4,
+            &snapshot,
+            &[borrowed],
+        ) {
             Some(NativeRun::DeoptAt(resume)) if guard_fails => {
                 assert_eq!(resume.pc, 4);
                 assert_eq!(ctx.tagged_heap.gc_collections(), gc_before);
@@ -223,7 +230,7 @@ fn osr_entry_guard_does_not_infer_a_type_from_a_patched_constant_prefix() {
         let snapshot = [Value::NIL, Value::make_int(2), Value::make_float(0.5)];
         ctx.bc_buf.extend_from_slice(&snapshot);
         let Some(NativeRun::DeoptAt(resume)) =
-            cache::try_run_osr(&mut ctx, &f, 4, &snapshot, &[borrowed])
+            crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 4, &snapshot, &[borrowed])
         else {
             panic!("float seed must reach a precise guard");
         };

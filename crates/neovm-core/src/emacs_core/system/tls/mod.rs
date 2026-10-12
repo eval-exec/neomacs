@@ -10,6 +10,7 @@ use super::value::Value;
 use super::value::list_to_vec;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
+use crate::tagged::value::SymbolMode;
 use base64::Engine;
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use std::io::{Read, Write};
@@ -64,15 +65,15 @@ impl TlsClientParameters {
     }
 }
 
-fn plist_first(items: &[Value], key: &str) -> Option<Value> {
+fn plist_first(items: &[Value], key: &str, mode: SymbolMode) -> Option<Value> {
     items
         .chunks_exact(2)
-        .find(|pair| pair[0].as_symbol_name() == Some(key))
+        .find(|pair| pair[0].as_symbol_name(mode) == Some(key))
         .map(|pair| pair[1])
 }
 
-fn parse_trust_files(items: &[Value]) -> Result<Vec<PathBuf>, Flow> {
-    let mut tail = plist_first(items, ":trustfiles").unwrap_or(Value::NIL);
+fn parse_trust_files(items: &[Value], mode: SymbolMode) -> Result<Vec<PathBuf>, Flow> {
+    let mut tail = plist_first(items, ":trustfiles", mode).unwrap_or(Value::NIL);
     let mut files = Vec::new();
     while tail.is_cons() {
         let trust_file = tail.cons_car();
@@ -90,8 +91,9 @@ fn parse_trust_files(items: &[Value]) -> Result<Vec<PathBuf>, Flow> {
 pub(crate) fn parse_gnutls_boot_parameters(
     credential_type: Value,
     proplist: Value,
+    mode: SymbolMode,
 ) -> Result<GnutlsBootParameters, Flow> {
-    let credential_type = match credential_type.as_symbol_name() {
+    let credential_type = match credential_type.as_symbol_name(mode) {
         Some("gnutls-x509pki") => GnutlsCredentialType::X509Pki,
         Some("gnutls-anon") => {
             return Err(signal(
@@ -122,7 +124,7 @@ pub(crate) fn parse_gnutls_boot_parameters(
         ));
     };
 
-    let Some(hostname) = plist_first(&items, ":hostname").and_then(|v| {
+    let Some(hostname) = plist_first(&items, ":hostname", mode).and_then(|v| {
         v.as_lisp_string()
             .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
     }) else {
@@ -133,7 +135,7 @@ pub(crate) fn parse_gnutls_boot_parameters(
             )],
         ));
     };
-    let trust_files = parse_trust_files(&items)?;
+    let trust_files = parse_trust_files(&items, mode)?;
     let trust_roots = if trust_files.is_empty() {
         TlsTrustRoots::Default
     } else {

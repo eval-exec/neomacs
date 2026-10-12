@@ -2255,7 +2255,7 @@ fn bootstrap_buffers_realize_default_face_from_frame_font_parameter() {
         .expect("bootstrap frame font family");
     let expected_family = expected_family_value
         .as_utf8_str()
-        .or_else(|| expected_family_value.as_symbol_name())
+        .or_else(|| expected_family_value.as_bare_symbol_name())
         .map(str::to_owned)
         .expect("font family name");
     let default = eval.face_table().get("default").expect("default face");
@@ -6273,11 +6273,11 @@ fn gui_bootstrap_accepts_iso_8859_15_coding_primitives() {
         let value = result.unwrap_or_else(|_| panic!("coding probe {label} should evaluate"));
         if let Some(expected_value) = expected {
             let actual_name = value
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .map(|name| name.to_string())
                 .unwrap_or_else(|| format!("{value:?}"));
             let expected_name = expected_value
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .map(|name| name.to_string())
                 .unwrap_or_else(|| format!("{expected_value:?}"));
             assert_eq!(

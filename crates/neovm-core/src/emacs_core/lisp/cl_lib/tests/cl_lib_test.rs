@@ -85,7 +85,7 @@ fn cl_first_list() {
     crate::test_utils::init_test_tracing();
     let list = Value::list(vec![Value::symbol("a"), Value::symbol("b")]);
     let result = builtin_cl_first(vec![list]).unwrap();
-    assert!(result.is_symbol_named("a"));
+    assert!(result.is_bare_symbol_named("a"));
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn cl_second_list() {
     crate::test_utils::init_test_tracing();
     let list = Value::list(vec![Value::symbol("a"), Value::symbol("b")]);
     let result = builtin_cl_second(vec![list]).unwrap();
-    assert!(result.is_symbol_named("b"));
+    assert!(result.is_bare_symbol_named("b"));
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn cl_third_list() {
         Value::symbol("c"),
     ]);
     let result = builtin_cl_third(vec![list]).unwrap();
-    assert!(result.is_symbol_named("c"));
+    assert!(result.is_bare_symbol_named("c"));
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn cl_fourth_list() {
         Value::symbol("d"),
     ]);
     let result = builtin_cl_fourth(vec![list]).unwrap();
-    assert!(result.is_symbol_named("d"));
+    assert!(result.is_bare_symbol_named("d"));
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn cl_fifth_list() {
         Value::symbol("e"),
     ]);
     let result = builtin_cl_fifth(vec![list]).unwrap();
-    assert!(result.is_symbol_named("e"));
+    assert!(result.is_bare_symbol_named("e"));
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn cl_sixth_list() {
         Value::symbol("f"),
     ]);
     let result = builtin_cl_sixth(vec![list]).unwrap();
-    assert!(result.is_symbol_named("f"));
+    assert!(result.is_bare_symbol_named("f"));
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn cl_seventh_list() {
         Value::symbol("g"),
     ]);
     let result = builtin_cl_seventh(vec![list]).unwrap();
-    assert!(result.is_symbol_named("g"));
+    assert!(result.is_bare_symbol_named("g"));
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn cl_eighth_list() {
         Value::symbol("h"),
     ]);
     let result = builtin_cl_eighth(vec![list]).unwrap();
-    assert!(result.is_symbol_named("h"));
+    assert!(result.is_bare_symbol_named("h"));
 }
 
 #[test]
@@ -302,7 +302,7 @@ fn cl_ninth_list() {
         Value::symbol("i"),
     ]);
     let result = builtin_cl_ninth(vec![list]).unwrap();
-    assert!(result.is_symbol_named("i"));
+    assert!(result.is_bare_symbol_named("i"));
 }
 
 #[test]
@@ -334,7 +334,7 @@ fn cl_tenth_list() {
         Value::symbol("j"),
     ]);
     let result = builtin_cl_tenth(vec![list]).unwrap();
-    assert!(result.is_symbol_named("j"));
+    assert!(result.is_bare_symbol_named("j"));
 }
 
 #[test]
@@ -361,7 +361,7 @@ fn cl_rest_list() {
     let result = builtin_cl_rest(vec![list]).unwrap();
     let items = list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 2);
-    assert!(items[0].is_symbol_named("b"));
+    assert!(items[0].is_bare_symbol_named("b"));
 }
 
 #[test]

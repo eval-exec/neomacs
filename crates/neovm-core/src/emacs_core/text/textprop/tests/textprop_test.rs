@@ -51,9 +51,9 @@ fn put_and_get_text_property() {
     let result =
         builtin_get_text_property(&mut eval, vec![Value::fixnum(3), Value::symbol("face")]);
     match result {
-        Ok(v) if v.as_symbol_id().is_some() => {
+        Ok(v) if v.as_bare_symbol_id().is_some() => {
             assert_eq!(
-                crate::emacs_core::intern::resolve_sym(v.as_symbol_id().unwrap()),
+                crate::emacs_core::intern::resolve_sym(v.as_bare_symbol_id().unwrap()),
                 "bold"
             );
         }
@@ -168,7 +168,7 @@ fn get_text_property_uses_category_symbol_identity() {
                  (get-text-property 2 'oracle-prop))"#,
         )
         .expect("evaluation succeeds");
-    assert_eq!(result.as_symbol_name(), Some("from-category"));
+    assert_eq!(result.as_bare_symbol_name(), Some("from-category"));
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn indirect_buffers_share_text_property_updates() {
         vec![Value::fixnum(3), Value::symbol("face"), indirect],
     )
     .unwrap();
-    assert!(via_indirect.is_symbol_named("bold"));
+    assert!(via_indirect.is_bare_symbol_named("bold"));
 
     builtin_remove_text_properties(
         &mut eval,
@@ -526,7 +526,7 @@ fn get_char_property_and_overlay_shape() {
         let pair_cdr = result.cons_cdr();
         (pair_car, pair_cdr)
     };
-    assert!(value.is_symbol_named("bar"));
+    assert!(value.is_bare_symbol_named("bar"));
     let overlayp = builtin_overlayp(&mut eval, vec![overlay]).unwrap();
     assert!(overlayp.is_t());
 }
@@ -597,7 +597,7 @@ fn get_char_property_prefers_highest_priority_overlay() {
     let char_prop =
         builtin_get_char_property(&mut eval, vec![Value::fixnum(2), Value::symbol("face")])
             .unwrap();
-    assert_eq!(char_prop.as_symbol_name(), Some("high"));
+    assert_eq!(char_prop.as_bare_symbol_name(), Some("high"));
 
     let pair = builtin_get_char_property_and_overlay(
         &mut eval,
@@ -609,7 +609,7 @@ fn get_char_property_prefers_highest_priority_overlay() {
     };
     let pair_car = pair.cons_car();
     let pair_cdr = pair.cons_cdr();
-    assert_eq!(pair_car.as_symbol_name(), Some("high"));
+    assert_eq!(pair_car.as_bare_symbol_name(), Some("high"));
     assert_eq!(pair_cdr, high);
 }
 
@@ -632,12 +632,12 @@ fn get_char_property_same_range_overlays_use_gnu_identity_tiebreaker() {
     .unwrap();
     assert_eq!(
         lookup_overlay_property(&eval.obarray, &eval.buffers, first, Value::symbol("face"))
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("first")
     );
     assert_eq!(
         lookup_overlay_property(&eval.obarray, &eval.buffers, second, Value::symbol("face"))
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("second")
     );
     let raw = builtin_overlays_at(&mut eval, vec![Value::fixnum(2)]).unwrap();
@@ -657,7 +657,7 @@ fn get_char_property_same_range_overlays_use_gnu_identity_tiebreaker() {
         builtin_get_char_property(&mut eval, vec![Value::fixnum(2), Value::symbol("face")])
             .unwrap();
     assert_eq!(
-        result.as_symbol_name(),
+        result.as_bare_symbol_name(),
         Some(if winner == first { "first" } else { "second" })
     );
 }
@@ -767,11 +767,11 @@ fn get_pos_property_respects_overlay_advance_and_text_stickiness() {
 
     let carry = builtin_get_pos_property(&mut eval, vec![Value::fixnum(2), Value::symbol("carry")])
         .unwrap();
-    assert_eq!(carry.as_symbol_name(), Some("after"));
+    assert_eq!(carry.as_bare_symbol_name(), Some("after"));
 
     let inside_face =
         builtin_get_pos_property(&mut eval, vec![Value::fixnum(3), Value::symbol("face")]).unwrap();
-    assert_eq!(inside_face.as_symbol_name(), Some("high"));
+    assert_eq!(inside_face.as_bare_symbol_name(), Some("high"));
 }
 
 #[test]
@@ -796,7 +796,7 @@ fn get_pos_property_on_string_delegates_to_text_property() {
         vec![Value::fixnum(3), Value::symbol("face"), string],
     )
     .unwrap();
-    assert_eq!(result.as_symbol_name(), Some("bold"));
+    assert_eq!(result.as_bare_symbol_name(), Some("bold"));
 }
 
 #[test]
@@ -874,7 +874,7 @@ fn string_text_properties_handle_raw_unibyte_storage() {
         vec![Value::fixnum(3), Value::symbol("face"), string],
     )
     .unwrap();
-    assert_eq!(result.as_symbol_name(), Some("bold"));
+    assert_eq!(result.as_bare_symbol_name(), Some("bold"));
 }
 
 #[test]
@@ -969,7 +969,7 @@ fn get_display_property_queries_display_only() {
         ],
     )
     .unwrap();
-    assert!(display.is_symbol_named("dv"));
+    assert!(display.is_bare_symbol_named("dv"));
 }
 
 // -----------------------------------------------------------------------
@@ -992,14 +992,14 @@ fn add_text_properties_multiple() {
 
     let face = builtin_get_text_property(&mut eval, vec![Value::fixnum(2), Value::symbol("face")])
         .unwrap();
-    assert!(face.is_symbol_named("bold"));
+    assert!(face.is_bare_symbol_named("bold"));
 
     let mouse = builtin_get_text_property(
         &mut eval,
         vec![Value::fixnum(2), Value::symbol("mouse-face")],
     )
     .unwrap();
-    assert!(mouse.is_symbol_named("highlight"));
+    assert!(mouse.is_bare_symbol_named("highlight"));
 }
 
 #[test]
@@ -1220,7 +1220,7 @@ fn set_text_properties_replaces_existing_values() {
         builtin_get_text_property(&mut eval, vec![Value::fixnum(2), Value::symbol("q")]).unwrap();
     let p =
         builtin_get_text_property(&mut eval, vec![Value::fixnum(2), Value::symbol("p")]).unwrap();
-    assert!(q.is_symbol_named("z"));
+    assert!(q.is_bare_symbol_named("z"));
     assert!(p.is_nil());
 }
 
@@ -1925,7 +1925,7 @@ fn overlay_put_and_get() {
     .unwrap();
 
     let result = builtin_overlay_get(&mut eval, vec![ov, Value::symbol("face")]).unwrap();
-    assert!(result.is_symbol_named("bold"));
+    assert!(result.is_bare_symbol_named("bold"));
 }
 
 #[test]
@@ -1945,7 +1945,7 @@ fn deleted_overlay_preserves_plist_and_identity() {
     assert!(overlayp.is_t());
 
     let face = builtin_overlay_get(&mut eval, vec![ov, Value::symbol("face")]).unwrap();
-    assert_eq!(face.as_symbol_name(), Some("bold"));
+    assert_eq!(face.as_bare_symbol_name(), Some("bold"));
 
     let properties = builtin_overlay_properties(&mut eval, vec![ov]).unwrap();
     assert_eq!(
@@ -1985,7 +1985,7 @@ fn overlay_get_uses_category_symbol_identity() {
                    (overlay-get overlay 'oracle-prop)))"#,
         )
         .expect("evaluation succeeds");
-    assert_eq!(result.as_symbol_name(), Some("from-category"));
+    assert_eq!(result.as_bare_symbol_name(), Some("from-category"));
 }
 
 // -----------------------------------------------------------------------
@@ -2069,7 +2069,7 @@ fn move_overlay_end_only_preserves_gnu_equal_start_order() {
     let order: Vec<_> = list_to_vec(&result)
         .expect("overlays-at returns a proper list")
         .into_iter()
-        .map(|value| value.as_symbol_name().expect("label is a symbol"))
+        .map(|value| value.as_bare_symbol_name().expect("label is a symbol"))
         .collect();
     assert_eq!(order, vec!["b", "a"]);
 }
@@ -2103,7 +2103,7 @@ fn insert_reorders_equal_start_front_advancing_overlays_like_gnu() {
         list_to_vec(value)
             .expect("overlay order is a proper list")
             .into_iter()
-            .map(|item| item.as_symbol_name().expect("label is a symbol"))
+            .map(|item| item.as_bare_symbol_name().expect("label is a symbol"))
             .collect::<Vec<_>>()
     };
     assert_eq!(labels(&observations[0]), vec!["c", "b", "a"]);
@@ -2245,7 +2245,7 @@ fn get_char_property_coerces_non_fixnum_overlay_priority_to_zero_like_gnu() {
             builtin_get_char_property(&mut eval, vec![Value::fixnum(3), Value::symbol("face")])
                 .unwrap();
         assert!(
-            face.is_symbol_named(expected),
+            face.is_bare_symbol_named(expected),
             "expected face {expected}, got {face:?}"
         );
     }

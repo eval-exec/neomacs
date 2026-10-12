@@ -990,7 +990,7 @@ fn tier_h_snapshot_symbol_handoff_keeps_only_strongly_held_weak_keys() {
     for generational in [false, true] {
         let mut heap = real_heap(generational);
         let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-tier-h-weak-symbol"));
-        let id = symbol.as_symbol_id().unwrap();
+        let id = symbol.as_bare_symbol_id().unwrap();
         let strong = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
         insert(strong, TaggedValue::fixnum(1), symbol);
         let mut weak = LispHashTable::new(HashTableTest::Eq);

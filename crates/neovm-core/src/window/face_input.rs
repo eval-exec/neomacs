@@ -119,7 +119,7 @@ fn capture_face(value: Value) -> Arc<[Token]> {
                     continue;
                 };
                 if items[0]
-                    .as_symbol_name()
+                    .as_bare_symbol_name()
                     .is_some_and(|name| matches!(name, "filtered" | ":filtered"))
                 {
                     tokens.push(Token::Filtered);
@@ -138,14 +138,15 @@ fn capture_face(value: Value) -> Arc<[Token]> {
                 }
                 if value
                     .cons_car()
-                    .as_symbol_name()
+                    .as_bare_symbol_name()
                     .is_some_and(|name| name.starts_with(':'))
                 {
                     tokens.push(Token::Attributes);
                     pending.push(Work::End);
                     for pair in items.chunks_exact(2).rev() {
-                        if let Some(key) =
-                            pair[0].as_symbol_name().and_then(LFaceAttr::from_keyword)
+                        if let Some(key) = pair[0]
+                            .as_bare_symbol_name()
+                            .and_then(LFaceAttr::from_keyword)
                         {
                             pending.push(Work::Attribute(key, pair[1]));
                         }

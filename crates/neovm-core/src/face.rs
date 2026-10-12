@@ -910,7 +910,7 @@ fn face_symbol_value(name: &str) -> Value {
 }
 
 fn normalized_face_name_value(value: &Value) -> Option<Value> {
-    if let Some(name) = value.as_symbol_name() {
+    if let Some(name) = value.as_bare_symbol_name() {
         Some(face_symbol_value(name))
     } else if value.is_string() {
         value
@@ -1163,12 +1163,12 @@ impl Face {
                     }
                 }
                 "weight" => {
-                    if let Some(s) = val.as_symbol_name() {
+                    if let Some(s) = val.as_bare_symbol_name() {
                         face.weight = FontWeight::from_symbol(s);
                     }
                 }
                 "slant" => {
-                    if let Some(s) = val.as_symbol_name() {
+                    if let Some(s) = val.as_bare_symbol_name() {
                         face.slant = FontSlant::from_symbol(s);
                     }
                 }
@@ -1210,7 +1210,7 @@ impl Face {
                     // `merge_face_ref` (xfaces.c:2960-2980) which accepts
                     // any face_ref — symbol, list, or plist — and defers
                     // type dispatch to the recursive resolver.
-                    face.inherit = if val.is_nil() || val.is_symbol_named("nil") {
+                    face.inherit = if val.is_nil() || val.is_bare_symbol_named("nil") {
                         None
                     } else {
                         Some(*val)
@@ -1230,7 +1230,7 @@ impl Face {
                     }
                 }
                 "width" => {
-                    if let Some(s) = val.as_symbol_name() {
+                    if let Some(s) = val.as_bare_symbol_name() {
                         face.width = FontWidth::from_symbol(s);
                     }
                 }
@@ -1239,7 +1239,7 @@ impl Face {
                     // cons, a bitmap file name, or a symbol. Realized to a
                     // `StipplePattern` in the layout bridge, mirroring GNU's
                     // `LFACE_STIPPLE_INDEX`.
-                    face.stipple = if val.is_nil() || val.is_symbol_named("nil") {
+                    face.stipple = if val.is_nil() || val.is_bare_symbol_named("nil") {
                         None
                     } else {
                         Some(*val)
@@ -1267,7 +1267,11 @@ pub(crate) enum DecorationProperty {
 
 impl DecorationProperty {
     pub(crate) fn from_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.trim_start_matches(':').parse().ok()
+        value
+            .as_bare_symbol_name()?
+            .trim_start_matches(':')
+            .parse()
+            .ok()
     }
 
     pub(crate) fn applies_to(self, attribute: LFaceAttr) -> bool {
@@ -1327,7 +1331,7 @@ fn parse_underline_value(
                             .and_then(|spec| realize_color_spec(spec, palette));
                     }
                     Some(DecorationProperty::Style) => {
-                        if let Some(name) = item.as_symbol_name() {
+                        if let Some(name) = item.as_bare_symbol_name() {
                             style =
                                 UnderlineStyle::from_symbol(name).unwrap_or(UnderlineStyle::Line);
                         }
@@ -1404,7 +1408,7 @@ fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
                         color = parse_color_value(item);
                     }
                     Some(DecorationProperty::Style) => {
-                        if let Some(name) = item.as_symbol_name() {
+                        if let Some(name) = item.as_bare_symbol_name() {
                             style = BoxStyle::from_symbol(name).unwrap_or(BoxStyle::Flat);
                         }
                     }
@@ -1418,7 +1422,7 @@ fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
                 style,
             })
         }
-        _ if value.is_symbol_named("unspecified") => FaceDecoration::Unspecified,
+        _ if value.is_bare_symbol_named("unspecified") => FaceDecoration::Unspecified,
         _ => FaceDecoration::Unspecified,
     }
 }
@@ -1923,10 +1927,10 @@ impl FaceTable {
         if depth > 40 {
             return Face::default();
         }
-        if face_ref.is_nil() || face_ref.is_symbol_named("nil") {
+        if face_ref.is_nil() || face_ref.is_bare_symbol_named("nil") {
             return Face::default();
         }
-        if let Some(name) = face_ref.as_symbol_name() {
+        if let Some(name) = face_ref.as_bare_symbol_name() {
             return self.resolve_depth(name, depth);
         }
         let Some(items) = crate::emacs_core::value::list_to_vec(&face_ref) else {
@@ -1936,7 +1940,7 @@ impl FaceTable {
             return Face::default();
         }
         let first_is_keyword = items[0]
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .is_some_and(|s| s.starts_with(':'));
         if first_is_keyword {
             // Attribute plist. Parse own attributes, then recursively
@@ -1983,7 +1987,7 @@ impl FaceTable {
     pub fn face_list(&self) -> Vec<String> {
         self.faces
             .keys()
-            .filter_map(|value| value.as_symbol_name().map(str::to_string))
+            .filter_map(|value| value.as_bare_symbol_name().map(str::to_string))
             .collect()
     }
 
@@ -2000,7 +2004,7 @@ impl FaceTable {
     pub(crate) fn dump_faces_by_sym_id(&self) -> Vec<(SymId, Face)> {
         self.faces
             .iter()
-            .filter_map(|(name, face)| name.as_symbol_id().map(|id| (id, face.clone())))
+            .filter_map(|(name, face)| name.as_bare_symbol_id().map(|id| (id, face.clone())))
             .collect()
     }
 

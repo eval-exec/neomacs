@@ -116,6 +116,7 @@ pub(super) fn handle_display_error(eval: &mut super::super::eval::Context, flow:
                 &eval.obarray,
                 data.symbol,
                 &Value::symbol("error"),
+                eval.symbol_mode(),
             )
         });
     if propagate {

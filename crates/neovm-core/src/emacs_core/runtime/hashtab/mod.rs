@@ -1090,6 +1090,7 @@ pub(crate) fn collect_mapatoms_symbols(
 
 /// (unintern NAME OBARRAY) — remove symbol from obarray.
 pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     // GNU `Sunintern` is `2, 2`: OBARRAY is mandatory (may be nil).
     expect_min_args("unintern", &args, 2)?;
     expect_max_args("unintern", &args, 2)?;
@@ -1103,17 +1104,15 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
         Name(&'a crate::heap_types::LispString),
     }
 
-    let target = match args[0].kind() {
-        ValueKind::Nil | ValueKind::T | ValueKind::Symbol(_) => {
-            UninternTarget::Symbol(args[0].xsymbol_id())
-        }
-        ValueKind::String => UninternTarget::Name(args[0].as_lisp_string().unwrap()),
-        _ => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("stringp"), args[0]],
-            ));
-        }
+    let target = if let Some(symbol) = args[0].as_symbol_id(eval.symbol_mode()) {
+        UninternTarget::Symbol(symbol)
+    } else if let Some(name) = args[0].as_lisp_string() {
+        UninternTarget::Name(name)
+    } else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), args[0]],
+        ));
     };
 
     let target_name = match &target {
@@ -1152,10 +1151,10 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
                     if !found {
                         let should_remove = match &target {
                             UninternTarget::Symbol(target_id) => {
-                                car.as_symbol_id() == Some(*target_id)
+                                car.as_symbol_id(symbol_mode) == Some(*target_id)
                             }
                             UninternTarget::Name(name) => car
-                                .as_symbol_lisp_string()
+                                .as_symbol_lisp_string(symbol_mode)
                                 .is_some_and(|sym_name| sym_name == *name),
                         };
                         if should_remove {

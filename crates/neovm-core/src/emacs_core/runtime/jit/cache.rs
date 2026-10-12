@@ -39,6 +39,7 @@ use crate::emacs_core::value::Value;
 
 mod opt_evidence;
 pub(crate) use opt_evidence::has_ready_opt_osr;
+mod osr_wait;
 
 /// Why a body is interpreted for now although it is hot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +58,9 @@ enum DeferReason {
     /// The background compile queue was full (`jit::bg`): the compile is
     /// asked again, as it was, once the body's heat doubled.
     Backlog,
+    /// The compile depends on a pending optimized OSR compile of the body
+    /// (`osr_wait`): asked again, as it was, once that job has settled.
+    AwaitingOsr,
 }
 
 /// One thread's knowledge of a function's compiled state.
@@ -477,11 +481,13 @@ thread_local! {
 }
 
 /// A pending OSR compile: the job and the header's entry depths the front
-/// computed.
+/// computed, plus the normal entry compile waiting on its outcome, if any
+/// (released when this leaves `OSR_PENDING`, however it leaves).
 struct PendingOsr {
     job: Box<super::bg::PendingJob>,
     stack_depth: usize,
     bind_depth: usize,
+    wait: Option<osr_wait::EntryWait>,
 }
 
 /// What an OSR attempt at a hot back-edge did ([`try_run_osr_probe`]).
@@ -586,11 +592,16 @@ fn compile_osr_leaf(
     name_hint: Option<SymId>,
 ) -> Option<OsrEntry> {
     record_compiled_obarray(Some(obarray));
+    let diagnostic = stats::front_diag::begin(id, stats::CompileOrigin::Osr, None);
     let clock = stats::CompileClock::start(stats::CompileOrigin::Osr);
+    let diagnostic_start = diagnostic.as_ref().map(|_| clock.started());
     let entry = compile_osr_leaf_timed(obarray, func, osr_pc, id, name_hint);
     let elapsed = clock.finish(entry.is_some());
     if let Some(entry) = &entry {
         entry.leaf.obs.note_compile_time(elapsed);
+    }
+    if let (Some(diagnostic), Some(start)) = (diagnostic, diagnostic_start) {
+        diagnostic.finish(start, elapsed, entry.is_some());
     }
     entry
 }
@@ -983,7 +994,7 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
     let compiled = compile_osr_leaf(&live.obarray, func, osr_pc, id, name_hint);
     drop(defer);
     if let Some(entry) = &compiled {
-        register_osr_inline_deps(id, osr_pc, &entry.leaf);
+        register_osr_inline_deps(id, osr_pc, &entry.leaf, EntryLeaves::Cached);
     }
     match (compiled, super::bg::take_deferred()) {
         (Some(entry), Some(code)) => {
@@ -1002,9 +1013,18 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
                         job,
                         stack_depth,
                         bind_depth,
+                        wait: None,
                     },
                 )
             });
+            #[cfg(test)]
+            if super::test_support::awaits_osr() {
+                assert!(
+                    super::bg::quiesce_for_test(std::time::Duration::from_secs(60)),
+                    "native OSR observation waits for its worker"
+                );
+                return probe_osr_pending(key, Some(live)).unwrap_or(OsrLookup::Pending);
+            }
             OsrLookup::Pending
         }
         (compiled, deferred) => {
@@ -1028,10 +1048,31 @@ fn probe_osr_pending(key: (u64, usize), ctx: Option<&Context>) -> Option<OsrLook
         super::bg::note_osr_wait();
         return Some(OsrLookup::Pending);
     }
+    install_osr_pending(key, ctx, EntryLeaves::Cached)
+}
+
+/// Whose inline dependencies an OSR installation re-reads for `id`'s entry.
+#[derive(Clone, Copy)]
+enum EntryLeaves {
+    /// The entry cache slot, outside any borrow of the cache.
+    Cached,
+    /// None: the entry cache is borrowed to compile this id, whose slot holds
+    /// no leaf or job; that compile registers the entry and OSR leaves.
+    Compiling,
+}
+
+/// Install `key`'s ready pending OSR job (see [`probe_osr_pending`]).
+/// Settling the job releases a normal entry compile waiting on it.
+fn install_osr_pending(
+    key: (u64, usize),
+    ctx: Option<&Context>,
+    entry_leaves: EntryLeaves,
+) -> Option<OsrLookup> {
     let PendingOsr {
         job,
         stack_depth,
         bind_depth,
+        wait,
     } = OSR_PENDING.with(|p| p.borrow_mut().remove(&key))?;
     let entry = match super::bg::install(job, None, ctx) {
         Ok(leaf) => Some(OsrEntry {
@@ -1049,9 +1090,11 @@ fn probe_osr_pending(key: (u64, usize), ctx: Option<&Context>) -> Option<OsrLook
         }
     };
     if let Some(entry) = &entry {
-        register_osr_inline_deps(key.0, key.1, &entry.leaf);
+        register_osr_inline_deps(key.0, key.1, &entry.leaf, entry_leaves);
     }
     OSR_CACHE.with(|c| c.borrow_mut().insert(key, entry.clone()));
+    // The entry's next call compiles against the installed (or refused) leaf.
+    drop(wait);
     Some(OsrLookup::Entry(entry))
 }
 
@@ -1107,12 +1150,20 @@ fn register_inline_deps(id: u64, leaf: &CompiledLeaf) {
 /// Replace one OSR variant's memberships while preserving the source's entry
 /// leaf and other loop variants. This is cold compile/installation work on
 /// the owning mutator thread, outside any cache borrow.
-fn register_osr_inline_deps(id: u64, osr_pc: usize, leaf: &CompiledLeaf) {
+fn register_osr_inline_deps(
+    id: u64,
+    osr_pc: usize,
+    leaf: &CompiledLeaf,
+    entry_leaves: EntryLeaves,
+) {
     if !super::compile::jit_inline2_mode().enabled() {
         return;
     }
     forget_inline_deps(id);
-    add_entry_inline_deps(id);
+    match entry_leaves {
+        EntryLeaves::Cached => add_entry_inline_deps(id),
+        EntryLeaves::Compiling => {}
+    }
     add_osr_inline_deps(id, Some(osr_pc));
     add_inline_deps(id, leaf);
 }
@@ -1265,6 +1316,13 @@ fn compile_cache_entry(
             || super::aot::retier::earned_native_admission(rt),
         ..request
     };
+    // Background OSR backends only: decide after the optimized OSR compile
+    // this frontend depends on settles, as a synchronous compile would.
+    if super::bg::pending_count() != 0
+        && let Some(entry) = osr_wait::await_opt_osr(id, func, obarray, request)
+    {
+        return entry;
+    }
     numeric_feedback_trace(id, func);
     record_compiled_obarray(obarray);
     // Per-function entry names (perf map, CLIF/asm dumps), only when asked.
@@ -1404,7 +1462,7 @@ fn callee_name_hint(ctx: *const Context, id: u64) -> Option<SymId> {
     {
         return Some(sym);
     }
-    let sym = ctx.innermost_backtrace_function(64)?.as_symbol_id()?;
+    let sym = ctx.innermost_backtrace_function(64)?.as_bare_symbol_id()?;
     names_this_leaf(sym).then_some(sym)
 }
 
@@ -1791,6 +1849,7 @@ pub(crate) fn cache_entry_kind_for_test(id: u64) -> &'static str {
         Some(CacheEntry::Deferred(DeferReason::NotProfitable)) => "deferred",
         Some(CacheEntry::Deferred(DeferReason::Reoptimize { .. })) => "deferred-reopt",
         Some(CacheEntry::Deferred(DeferReason::Backlog)) => "deferred-backlog",
+        Some(CacheEntry::Deferred(DeferReason::AwaitingOsr)) => "deferred-osr",
         Some(CacheEntry::Pending(_)) => "pending",
         None => "none",
     })
@@ -2286,7 +2345,7 @@ fn request_upgrade(
     rt.disarm_leaf_slot();
     unlink_spec_slots_in(cache, Rc::as_ptr(&old));
     // SAFETY: the dormant Context provided by the native dispatch seam.
-    let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
+    let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
     let name_hint = stats::naming_enabled()
         .then(|| callee_name_hint(ctx, id))
         .flatten();
@@ -2606,7 +2665,7 @@ pub fn try_run_compiled(
         // dispatch (see neovm_jit_call's contract); a shared read of its obarray
         // for compile-time speculation. A null ctx (shim-free test bodies) just
         // disables speculation.
-        let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
+        let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
         // A countdown upgrade keeps its T1 live until the replacement
         // really installs. The legacy heat-driven re-tier below is unchanged.
         if super::compile::jit_tier_upgrade_enabled()
@@ -2708,8 +2767,8 @@ pub fn try_run_compiled(
                 };
                 (policy, profit_gate_bypassed || prev_bypassed)
             }
-            // A refused background compile, asked again as it was.
-            Some(DeferReason::Backlog) | None => (policy, prev_bypassed),
+            // A refused or waiting background compile, asked again as it was.
+            Some(DeferReason::Backlog | DeferReason::AwaitingOsr) | None => (policy, prev_bypassed),
         };
         let request = CompileRequest {
             regalloc: policy,
@@ -2787,7 +2846,11 @@ pub fn try_run_compiled(
     // Execute OUTSIDE the cache borrow (see `CacheEntry::Compiled`).
     match leaf {
         None => Ok(None),
-        Some(leaf) => run_resolved_leaf(ctx, func, func_value, &leaf, args),
+        Some(leaf) => {
+            #[cfg(test)]
+            super::test_support::note_native_dispatch();
+            run_resolved_leaf(ctx, func, func_value, &leaf, args)
+        }
     }
 }
 
@@ -2920,11 +2983,37 @@ pub(crate) fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
     }
 }
 
+/// A spec call can execute a retained T1 while its replacement is pending,
+/// but must not arm that T1: the next call must still probe for installation.
+pub(crate) enum SpecCallLeaf {
+    Armable(*const CompiledLeaf),
+    RetainedUpgrade(Rc<CompiledLeaf>),
+}
+
 #[inline(never)]
 pub(crate) fn resolve_compiled_leaf_ptr(
     ctx: *mut Context,
     func: &ByteCodeFunction,
 ) -> Option<*const CompiledLeaf> {
+    // SAFETY: the existing raw resolver boundary requires a null or live,
+    // dormant owner-thread Context throughout cache compilation/installation.
+    match unsafe { resolve_spec_call_leaf(ctx, func) } {
+        Some(SpecCallLeaf::Armable(ptr)) => Some(ptr),
+        Some(SpecCallLeaf::RetainedUpgrade(_)) | None => None,
+    }
+}
+
+/// Resolve a spec-call candidate without arming a retained pending upgrade.
+///
+/// # Safety
+/// `ctx` must be null or point to a live owner-thread Context that remains
+/// dormant for this call. Cache compilation and installation may inspect its
+/// roots and compilation environment; no competing access may mutate them.
+#[inline(never)]
+pub(crate) unsafe fn resolve_spec_call_leaf(
+    ctx: *mut Context,
+    func: &ByteCodeFunction,
+) -> Option<SpecCallLeaf> {
     let id = func.jit_runtime().compiled_id_or_assign();
     if id > max_compiled_id() {
         return None;
@@ -2937,14 +3026,15 @@ pub(crate) fn resolve_compiled_leaf_ptr(
             install_pending(&mut cache, id, Some(func.jit_runtime()), live);
         }
         // An unfinished upgrade deliberately does not re-arm raw/spec
-        // slots with old: those paths would stop probing forever. The
-        // strict call path still enters old through try_run_compiled.
+        // slots with old: those paths would stop probing forever. Spec
+        // calls receive a retained handle instead, so a cold source need
+        // not fall through the interpreter's initial heat threshold.
         if super::compile::jit_tier_upgrade_enabled() {
             probe_tier2_upgrade(&mut cache, id, func, ctx);
         }
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.
-            let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
+            let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
             let name_hint = stats::naming_enabled()
                 .then(|| callee_name_hint(ctx, id))
                 .flatten();
@@ -2976,7 +3066,25 @@ pub(crate) fn resolve_compiled_leaf_ptr(
             CacheEntry::Compiled(leaf)
                 if leaf.inline_deps().is_empty() || leaf.inline_epoch().is_none() =>
             {
-                Some(Rc::as_ptr(leaf))
+                // A pending Fast result can arrive after its heat crossing.
+                // Arming it now would bypass the strict re-tier branch forever:
+                // armed handlers step aside only on the crossing itself. Refuse
+                // this cold exposure and let the next actual strict call choose
+                // Full through the existing replacement protocol. Keep the
+                // same exemptions as that branch, including the T2 countdown.
+                if leaf.regalloc == RegallocChoice::Fast
+                    && !leaf.call_heavy
+                    && forced_regalloc().is_none()
+                    && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at)
+                {
+                    return None;
+                }
+                Some(SpecCallLeaf::Armable(Rc::as_ptr(leaf)))
+            }
+            CacheEntry::CompiledUpgrading(upgrade)
+                if upgrade.old.inline_deps().is_empty() || upgrade.old.inline_epoch().is_none() =>
+            {
+                Some(SpecCallLeaf::RetainedUpgrade(Rc::clone(&upgrade.old)))
             }
             _ => None,
         }
@@ -3386,6 +3494,10 @@ fn finish_native_run(
 mod tests;
 
 #[cfg(test)]
+#[path = "cache/tests/late_pending_retier_test.rs"]
+mod late_pending_retier_tests;
+
+#[cfg(test)]
 #[path = "cache/tests/tier2_off_test.rs"]
 mod tier2_off_test;
 
@@ -3400,3 +3512,98 @@ mod osr_inline_tests;
 #[cfg(test)]
 #[path = "cache/tests/hof_regalloc_test.rs"]
 mod hof_regalloc_tests;
+
+/// Prepare an entry through its real front/backend protocol without executing
+/// the body. Native-observation tests call this at explicit fixture boundaries;
+/// pending/cancellation tests use the production seam directly.
+#[cfg(test)]
+pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
+    use std::time::Duration;
+    sync_cache_to_current_heap();
+    let id = func.jit_runtime().compiled_id_or_assign();
+    COMPILED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.get(id).is_none() {
+            // SAFETY: the fixture owns this dormant Context (null means no speculation).
+            let obarray = unsafe { ctx.as_ref() }.map(|ctx| &*ctx.obarray);
+            let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+            let entry = compile_cache_entry(
+                id,
+                func,
+                obarray,
+                CompileRequest {
+                    regalloc: RegallocPolicy::Auto,
+                    bypass_profit_gate: false,
+                    origin: stats::CompileOrigin::Dispatch,
+                    tier: super::tier2::CompileTier::T1,
+                },
+                None,
+            );
+            cache.insert(id, entry);
+        }
+    });
+    assert!(
+        super::bg::quiesce_for_test(Duration::from_secs(60)),
+        "backend readiness timed out"
+    );
+    COMPILED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if matches!(cache.get(id), Some(CacheEntry::Pending(job)) if job.is_ready()) {
+            // SAFETY: the fixture still owns the same dormant Context.
+            install_pending(&mut cache, id, Some(func.jit_runtime()), unsafe {
+                ctx.as_ref()
+            });
+        }
+        if matches!(cache.get(id), Some(CacheEntry::Compiled(_))) {
+            // An idle drain may already have installed without this RuntimeState.
+            // This explicit native fixture boundary also clears an existing
+            // admission hold; deferral-policy tests must use the raw seams.
+            func.jit_runtime().defer_tier_up(0);
+        }
+    });
+}
+
+/// Compile/await OSR without transferring control into it: observations retain
+/// their original counters, side effects, stack snapshot and binding depths.
+#[cfg(test)]
+pub(crate) fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, pc: usize) {
+    use std::time::Duration;
+    assert!(
+        !ctx.is_null(),
+        "OSR preparation requires the owning Context"
+    );
+    sync_cache_to_current_heap();
+    let id = func.jit_runtime().compiled_id_or_assign();
+    let _ = osr_lookup(ctx, func, pc, id);
+    assert!(
+        super::bg::quiesce_for_test(Duration::from_secs(60)),
+        "OSR backend readiness timed out"
+    );
+    assert!(
+        matches!(osr_lookup(ctx, func, pc, id), OsrLookup::Entry(_)),
+        "OSR job must finish"
+    );
+}
+
+/// Observe an admitted upgrade without executing the retained T1 while its
+/// backend is pending. The production probe keeps budget, policy and hold
+/// decisions intact; this fixture helper does not promise an upgrade.
+#[cfg(test)]
+pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
+    use std::time::Duration;
+    sync_cache_to_current_heap();
+    let Some(id) = func.jit_runtime().compiled_id() else {
+        return;
+    };
+    if super::compile::jit_tier_upgrade_enabled() {
+        COMPILED.with(|cache| {
+            probe_tier2_upgrade(&mut cache.borrow_mut(), id, func, ctx);
+        });
+        assert!(
+            super::bg::quiesce_for_test(Duration::from_secs(60)),
+            "upgrade backend readiness timed out"
+        );
+        // SAFETY: the fixture owns this dormant Context, or uses no shims.
+        drain_ready_pending(unsafe { ctx.as_ref() });
+    }
+}

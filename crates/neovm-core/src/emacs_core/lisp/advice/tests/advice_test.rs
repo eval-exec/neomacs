@@ -15,7 +15,11 @@ fn add_and_notify_watcher() {
     let var_id = intern("my-var");
     assert!(!wl.has_watchers(var_id));
 
-    wl.add_watcher(var_id, Value::symbol("my-watcher"));
+    wl.add_watcher(
+        var_id,
+        Value::symbol("my-watcher"),
+        crate::tagged::SymbolMode::Bare,
+    );
     assert!(wl.has_watchers(var_id));
 
     let calls = wl.notify_watchers(
@@ -28,14 +32,14 @@ fn add_and_notify_watcher() {
     assert_eq!(calls.len(), 1);
 
     let (callback, args) = &calls[0];
-    assert!(callback.is_symbol_named("my-watcher"));
+    assert!(callback.is_bare_symbol_named("my-watcher"));
     assert_eq!(args.len(), 4);
     // arg 0: symbol name
-    assert!(args[0].is_symbol_named("my-var"));
+    assert!(args[0].is_bare_symbol_named("my-var"));
     // arg 1: new value
     assert!(&args[1].is_fixnum());
     // arg 2: operation
-    assert!(args[2].is_symbol_named("set"));
+    assert!(args[2].is_bare_symbol_named("set"));
     // arg 3: where (nil)
     assert!(args[3].is_nil());
 }
@@ -45,11 +49,23 @@ fn remove_watcher() {
     crate::test_utils::init_test_tracing();
     let mut wl = VariableWatcherList::new();
     let var_id = intern("my-var");
-    wl.add_watcher(var_id, Value::symbol("watcher1"));
-    wl.add_watcher(var_id, Value::symbol("watcher2"));
+    wl.add_watcher(
+        var_id,
+        Value::symbol("watcher1"),
+        crate::tagged::SymbolMode::Bare,
+    );
+    wl.add_watcher(
+        var_id,
+        Value::symbol("watcher2"),
+        crate::tagged::SymbolMode::Bare,
+    );
     assert!(wl.has_watchers(var_id));
 
-    wl.remove_watcher(var_id, &Value::symbol("watcher1"));
+    wl.remove_watcher(
+        var_id,
+        &Value::symbol("watcher1"),
+        crate::tagged::SymbolMode::Bare,
+    );
     let calls = wl.notify_watchers(
         var_id,
         &Value::fixnum(1),
@@ -58,7 +74,7 @@ fn remove_watcher() {
         &Value::NIL,
     );
     assert_eq!(calls.len(), 1);
-    assert!(calls[0].0.is_symbol_named("watcher2"));
+    assert!(calls[0].0.is_bare_symbol_named("watcher2"));
 }
 
 #[test]
@@ -66,9 +82,13 @@ fn remove_all_watchers_cleans_up() {
     crate::test_utils::init_test_tracing();
     let mut wl = VariableWatcherList::new();
     let var_id = intern("my-var");
-    wl.add_watcher(var_id, Value::symbol("w1"));
+    wl.add_watcher(var_id, Value::symbol("w1"), crate::tagged::SymbolMode::Bare);
 
-    wl.remove_watcher(var_id, &Value::symbol("w1"));
+    wl.remove_watcher(
+        var_id,
+        &Value::symbol("w1"),
+        crate::tagged::SymbolMode::Bare,
+    );
     assert!(!wl.has_watchers(var_id));
 }
 
@@ -77,8 +97,8 @@ fn no_duplicate_watchers() {
     crate::test_utils::init_test_tracing();
     let mut wl = VariableWatcherList::new();
     let var_id = intern("my-var");
-    wl.add_watcher(var_id, Value::symbol("w"));
-    wl.add_watcher(var_id, Value::symbol("w"));
+    wl.add_watcher(var_id, Value::symbol("w"), crate::tagged::SymbolMode::Bare);
+    wl.add_watcher(var_id, Value::symbol("w"), crate::tagged::SymbolMode::Bare);
 
     let calls = wl.notify_watchers(
         var_id,
@@ -130,8 +150,8 @@ fn no_duplicate_equivalent_lambda_watchers() {
         interactive: None,
     });
 
-    wl.add_watcher(var_id, callback_a);
-    wl.add_watcher(var_id, callback_b);
+    wl.add_watcher(var_id, callback_a, crate::tagged::SymbolMode::Bare);
+    wl.add_watcher(var_id, callback_b, crate::tagged::SymbolMode::Bare);
     assert_eq!(wl.get_watchers(var_id), vec![callback_a]);
 }
 
@@ -155,9 +175,9 @@ fn multiple_watchers_all_notified() {
     crate::test_utils::init_test_tracing();
     let mut wl = VariableWatcherList::new();
     let var_id = intern("v");
-    wl.add_watcher(var_id, Value::symbol("w1"));
-    wl.add_watcher(var_id, Value::symbol("w2"));
-    wl.add_watcher(var_id, Value::symbol("w3"));
+    wl.add_watcher(var_id, Value::symbol("w1"), crate::tagged::SymbolMode::Bare);
+    wl.add_watcher(var_id, Value::symbol("w2"), crate::tagged::SymbolMode::Bare);
+    wl.add_watcher(var_id, Value::symbol("w3"), crate::tagged::SymbolMode::Bare);
 
     let calls = wl.notify_watchers(
         var_id,
@@ -175,8 +195,8 @@ fn get_watchers_returns_callbacks_in_registration_order() {
     let mut wl = VariableWatcherList::new();
     let var_id = intern("v");
     let missing_id = intern("missing");
-    wl.add_watcher(var_id, Value::symbol("w1"));
-    wl.add_watcher(var_id, Value::symbol("w2"));
+    wl.add_watcher(var_id, Value::symbol("w1"), crate::tagged::SymbolMode::Bare);
+    wl.add_watcher(var_id, Value::symbol("w2"), crate::tagged::SymbolMode::Bare);
 
     let watchers = wl.get_watchers(var_id);
     assert_eq!(watchers, vec![Value::symbol("w1"), Value::symbol("w2")]);

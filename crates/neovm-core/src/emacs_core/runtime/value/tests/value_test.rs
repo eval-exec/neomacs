@@ -119,8 +119,8 @@ fn value_constructors() {
         assert!(Value::make_float(3.125).is_float());
         assert!(Value::string("hello").is_string());
         assert!(Value::char('a').is_char());
-        assert!(Value::symbol("foo").is_symbol());
-        assert!(Value::keyword(":bar").is_keyword());
+        assert!(Value::symbol("foo").is_bare_symbol());
+        assert!(Value::keyword(":bar").is_bare_keyword());
     });
 }
 
@@ -389,7 +389,7 @@ fn keyword_identity_is_consistent_across_constructors() {
         let keyword_from_sym_id = Value::keyword_id(intern(":kw"));
 
         // Keywords are ordinary symbols whose canonical names start with `:`.
-        assert!(keyword_from_symbol_ctor.is_keyword());
+        assert!(keyword_from_symbol_ctor.is_bare_keyword());
         assert!(eq_value(
             &keyword_from_symbol_ctor,
             &keyword_from_keyword_ctor
@@ -415,13 +415,13 @@ fn uninterned_colon_name_is_not_treated_as_keyword() {
     crate::test_utils::init_test_tracing();
     with_test_heap(|| {
         let uninterned = Value::symbol(intern_uninterned(":vm-shadow-keyword"));
-        assert!(!uninterned.is_keyword());
-        assert!(uninterned.as_keyword_id().is_none());
+        assert!(!uninterned.is_bare_keyword());
+        assert!(uninterned.as_bare_keyword_id().is_none());
 
         let canonical = Value::keyword(":vm-shadow-keyword");
-        assert!(canonical.is_keyword());
+        assert!(canonical.is_bare_keyword());
         assert_eq!(
-            canonical.as_keyword_id(),
+            canonical.as_bare_keyword_id(),
             Some(intern(":vm-shadow-keyword"))
         );
     });
@@ -861,8 +861,8 @@ fn type_predicates() {
         assert!(!Value::NIL.is_cons());
 
         assert!(Value::vector(vec![]).is_vector());
-        assert!(Value::symbol("foo").is_symbol());
-        assert!(Value::keyword("bar").is_keyword());
+        assert!(Value::symbol("foo").is_bare_symbol());
+        assert!(Value::keyword("bar").is_bare_keyword());
         assert!(Value::char('x').is_char());
     });
 }

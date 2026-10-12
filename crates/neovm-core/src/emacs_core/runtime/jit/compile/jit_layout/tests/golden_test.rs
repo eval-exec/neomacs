@@ -203,9 +203,26 @@ fn the_context_words_are_the_fields_they_name() {
     let base = std::ptr::from_ref(&ev).cast::<u8>();
     assert_eq!(words_at(base, CONTEXT_DEPTH_OFFSET), 0x1234);
     assert_eq!(words_at(base, CONTEXT_MAX_DEPTH_OFFSET), 0x5678);
+    let obarray = words_at(base, CONTEXT_OBARRAY_OFFSET) as *const u8;
+    assert_eq!(obarray, std::ptr::from_ref(ev.obarray()).cast::<u8>());
     assert_eq!(
-        words_at(base, CONTEXT_OBARRAY_OFFSET + OBARRAY_FUNCTION_EPOCH_OFFSET) as u64,
+        words_at(obarray, OBARRAY_FUNCTION_EPOCH_OFFSET) as u64,
         ev.obarray.function_epoch()
+    );
+    // SAFETY: the repr-pinned offset names the initialized inline owner header,
+    // not a pointer slot. This shared phase excludes header retirement.
+    let dispatch = unsafe { base.add(CONTEXT_DISPATCH_CELLS_OFFSET) };
+    assert_eq!(
+        words_at(dispatch, DISPATCH_FUNCTION_EPOCH_OFFSET) as u64,
+        ev.obarray.function_epoch()
+    );
+    assert_eq!(
+        words_at(dispatch, DISPATCH_DEBUG_FWD_OFFSET),
+        words_at(obarray, OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET)
+    );
+    assert_eq!(
+        words_at(base, CONTEXT_TAGGED_HEAP_OFFSET),
+        std::ptr::from_ref(&*ev.tagged_heap) as usize
     );
     ev.depth = 0;
 }
@@ -531,6 +548,13 @@ fn variable_words_are_where_compiled_code_reads_them() {
         words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET),
         buffer.0 as usize
     );
+    assert_eq!(
+        words_at(
+            ctx,
+            CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_PTR_OFFSET
+        ),
+        std::ptr::from_ref(ev.buffers.current_buffer().expect("a current buffer")) as usize
+    );
     let other = ev.buffers.create_buffer("neovm--jl-other");
     ev.buffers.switch_current(other);
     let ctx = std::ptr::from_ref(&ev).cast::<u8>();
@@ -538,10 +562,24 @@ fn variable_words_are_where_compiled_code_reads_them() {
         words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET),
         other.0 as usize
     );
+    assert_eq!(
+        words_at(
+            ctx,
+            CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_PTR_OFFSET
+        ),
+        std::ptr::from_ref(ev.buffers.current_buffer().expect("a switched buffer")) as usize
+    );
     ev.buffers.kill_buffer(other);
     assert_eq!(ev.buffers.current_buffer_id(), None);
     let ctx = std::ptr::from_ref(&ev).cast::<u8>();
     assert_eq!(words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET), 0);
+    assert_eq!(
+        words_at(
+            ctx,
+            CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_PTR_OFFSET
+        ),
+        0
+    );
     // Forwarders' own slots.
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     ev.obarray

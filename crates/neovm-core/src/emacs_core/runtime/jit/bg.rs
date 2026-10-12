@@ -985,18 +985,46 @@ pub(crate) enum DeferRoute {
 }
 
 /// The class and route the leaf being built may hand its backend under, or
-/// `None` to compile it in line and install it at once. Taking it closes
-/// the scope: one compile defers at most one leaf.
-pub(crate) fn defer_route() -> Option<(JobClass, DeferRoute)> {
+/// `None` to compile it in line and install it at once. `insts` is the
+/// finished function's CLIF instruction count. Taking it closes the scope:
+/// one compile defers at most one leaf.
+pub(crate) fn defer_route(insts: u64) -> Option<(JobClass, DeferRoute)> {
     let class = DEFER_SCOPE.with(|c| c.take())?;
     if deferred_install_for_test() {
         return Some((class, DeferRoute::InLine));
     }
     match mode() {
         BgMode::Legacy | BgMode::Sync => None,
+        BgMode::Threaded if osr_backend_in_line(class, insts) => None,
         BgMode::Threaded => Some((class, DeferRoute::Worker)),
     }
 }
+
+/// Whether an OSR leaf's backend runs in line although a worker could take
+/// it: its function is at most [`osr_in_line_insts`] CLIF instructions.
+/// The loop that asked for it is running now and interprets until the leaf
+/// installs, so a small backend costs less in line than the wait it saves.
+/// A size, never a clock: the same function always takes the same route.
+fn osr_backend_in_line(class: JobClass, insts: u64) -> bool {
+    class == JobClass::Osr && insts <= osr_in_line_insts()
+}
+
+/// `NEOVM_JIT_BG_OSR_INLINE_INSTS`: the largest OSR function (CLIF
+/// instructions) whose backend runs in line under `NEOVM_JIT_BG=on`
+/// (default [`OSR_INLINE_INSTS`]; `0` defers every OSR backend).
+fn osr_in_line_insts() -> u64 {
+    #[cfg(test)]
+    if let Some(limit) = OSR_INLINE_INSTS_TEST.with(Cell::get) {
+        return limit;
+    }
+    static LIMIT: OnceLock<u64> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        knob_count("NEOVM_JIT_BG_OSR_INLINE_INSTS", OSR_INLINE_INSTS as usize) as u64
+    })
+}
+
+/// See [`osr_in_line_insts`].
+pub(crate) const OSR_INLINE_INSTS: u64 = 1024;
 
 /// Start worker `index` for `pool` (x86-64 Linux only; see
 /// [`workers_supported`]).
@@ -1291,6 +1319,7 @@ thread_local! {
     static DEFERRED_INSTALL_TEST: Cell<bool> = const { Cell::new(false) };
     static FAIL_BACKEND_TEST: Cell<bool> = const { Cell::new(false) };
     static QUEUE_CAP_TEST: Cell<Option<usize>> = const { Cell::new(None) };
+    static OSR_INLINE_INSTS_TEST: Cell<Option<u64>> = const { Cell::new(None) };
     static HOLD_PUBLISH_TEST: Cell<bool> = const { Cell::new(false) };
     static HELD_TEST: RefCell<Vec<(Arc<JobCell>, BackendOut)>> = const { RefCell::new(Vec::new()) };
 }
@@ -1311,6 +1340,13 @@ pub(crate) fn note_served_for_test(class: JobClass, seq: u64, cancelled: bool) {
 #[cfg(test)]
 pub(crate) fn take_served_for_test() -> Vec<(JobClass, u64, bool)> {
     std::mem::take(&mut *SERVED_TEST.lock().unwrap_or_else(|p| p.into_inner()))
+}
+
+/// Pin [`osr_in_line_insts`] for this thread (tests only); `None` returns to
+/// the knob.
+#[cfg(test)]
+pub(crate) fn force_osr_inline_insts_for_test(limit: Option<u64>) {
+    OSR_INLINE_INSTS_TEST.with(|c| c.set(limit));
 }
 
 /// Cap the queue at `cap` jobs for pushes and admissions from this thread
@@ -1419,3 +1455,36 @@ mod soak_tests;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/mutator_test.rs"]
 mod mutator_tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "bg/tests/osr_size_test.rs"]
+mod osr_size_tests;
+
+/// Scoped ownership for tests of a particular backend's thread-local module.
+/// Native execution fixtures should await the real worker instead.
+#[cfg(test)]
+#[must_use]
+pub(crate) struct TestModeScope {
+    prior: Option<BgMode>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl TestModeScope {
+    pub(crate) fn enter(mode: BgMode) -> Self {
+        // Backend ownership is mutator-local; do not snapshot or rewrite
+        // the separate process-wide stress knob across independent mutators.
+        let prior = MODE_TEST_OVERRIDE.with(|override_| override_.replace(Some(mode)));
+        Self {
+            prior,
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestModeScope {
+    fn drop(&mut self) {
+        MODE_TEST_OVERRIDE.with(|override_| override_.set(self.prior));
+    }
+}

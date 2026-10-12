@@ -238,7 +238,7 @@ fn face_table_pdump_preserves_lisp_owned_attrs() {
         restored_face
             .family
             .as_ref()
-            .is_some_and(|value| value.is_symbol_named("unspecified"))
+            .is_some_and(|value| value.is_bare_symbol_named("unspecified"))
     );
     assert_eq!(
         restored_face
@@ -252,7 +252,7 @@ fn face_table_pdump_preserves_lisp_owned_attrs() {
         restored_face
             .stipple
             .as_ref()
-            .is_some_and(|value| value.is_symbol_named("unspecified"))
+            .is_some_and(|value| value.is_bare_symbol_named("unspecified"))
     );
     assert_eq!(
         restored_face

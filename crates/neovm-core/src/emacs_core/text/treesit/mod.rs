@@ -1111,7 +1111,7 @@ pub(crate) fn is_compiled_query(value: Value) -> bool {
 
 fn record_id_with_tag(value: Value, expected_tag: &str, id_slot: usize) -> Option<u64> {
     let items = value.as_record_data()?;
-    let tag = items.first()?.as_symbol_name()?;
+    let tag = items.first()?.as_bare_symbol_name()?;
     if tag != expected_tag {
         return None;
     }
@@ -1123,6 +1123,6 @@ fn record_tag_is(value: Value, expected_tag: &str) -> bool {
     value
         .as_record_data()
         .and_then(|items| items.first().copied())
-        .and_then(|tag| tag.as_symbol_name())
+        .and_then(|tag| tag.as_bare_symbol_name())
         == Some(expected_tag)
 }

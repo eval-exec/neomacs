@@ -251,13 +251,14 @@ impl TaggedHeap {
 }
 
 // The normal x86-64 shipping type has no cfg(test) mapped_veclike_traces word.
-// Main 2e4c571469's compiled DWARF supplies this baseline. These assertions
+// Main 2e4c571469 supplies the hot-field baseline; the appended 40-byte
+// compiled observation protocol extends only the heap's tail. These assertions
 // reject silent hot-layout drift during ordinary compilation, independently
 // of the runtime knob. The complete staged DWARF table remains the final gate.
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64", not(test)))]
 const _: () = {
     use std::mem::{align_of, offset_of, size_of};
-    assert!(size_of::<TaggedHeap>() == 4528);
+    assert!(size_of::<TaggedHeap>() == 4568);
     assert!(align_of::<TaggedHeap>() == 8);
     assert!(offset_of!(TaggedHeap, mutator_gc) == 24);
     assert!(offset_of!(TaggedHeap, region_book) == 840);

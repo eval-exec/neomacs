@@ -1109,7 +1109,7 @@ impl HashTableStorage {
         const SCAN_SLOTS: usize = 32;
         if self.slots.len() > SCAN_SLOTS
             || symbols_with_pos_enabled
-            || !(value.is_fixnum() || value.is_symbol())
+            || !(value.is_fixnum() || value.is_bare_symbol())
         {
             return None;
         }
@@ -1629,7 +1629,7 @@ impl HashTableTest {
     }
 
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     pub fn name(self) -> &'static str {
@@ -1674,7 +1674,7 @@ impl HashTableWeakness {
     }
 
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     pub fn name(self) -> &'static str {
@@ -1699,7 +1699,7 @@ impl HashTableMakeKeyword {
     }
 
     pub(crate) fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1726,7 +1726,7 @@ impl HashTableLiteralKey {
     }
 
     pub(crate) fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -4148,10 +4148,6 @@ impl TaggedValue {
         self.to_equal_key_depth_swp(0, &mut seen, symbols_with_pos_enabled)
     }
 
-    fn to_equal_key_depth(self, depth: usize, seen: &mut Vec<usize>) -> HashKey {
-        self.to_equal_key_depth_swp(depth, seen, false)
-    }
-
     fn to_equal_key_depth_swp(
         self,
         depth: usize,
@@ -4274,7 +4270,12 @@ impl TaggedValue {
                     return HashKey::Cycle(index as u32);
                 }
                 seen.push(ptr);
-                let key = closure_to_equal_key(self, depth + 1, seen);
+                let key = closure_to_equal_key(
+                    self,
+                    depth + 1,
+                    seen,
+                    crate::tagged::SymbolMode::from(symbols_with_pos_enabled),
+                );
                 seen.pop();
                 key
             }
@@ -4585,7 +4586,7 @@ fn equal_value_inner(
         return true;
     }
 
-    if left.is_fixnum() || right.is_fixnum() || left.is_symbol() || right.is_symbol() {
+    if left.is_fixnum() || right.is_fixnum() || left.is_bare_symbol() || right.is_bare_symbol() {
         return false;
     }
 
@@ -4863,7 +4864,7 @@ fn try_equal_value_inner(
         return Ok(true);
     }
 
-    if left.is_fixnum() || right.is_fixnum() || left.is_symbol() || right.is_symbol() {
+    if left.is_fixnum() || right.is_fixnum() || left.is_bare_symbol() || right.is_bare_symbol() {
         return Ok(false);
     }
 
@@ -5064,25 +5065,6 @@ fn try_equal_value_inner(
     }
 }
 
-fn closure_params_to_equal_key(params: &LambdaParams) -> HashKey {
-    let mut values = Vec::with_capacity(params.required.len() + params.optional.len() + 3);
-    values.push(HashKey::Text("params".into()));
-    for sym in &params.required {
-        values.push(HashKey::Symbol(*sym));
-    }
-    if !params.optional.is_empty() {
-        values.push(HashKey::Text("&optional".into()));
-        for sym in &params.optional {
-            values.push(HashKey::Symbol(*sym));
-        }
-    }
-    if let Some(rest) = params.rest {
-        values.push(HashKey::Text("&rest".into()));
-        values.push(HashKey::Symbol(rest));
-    }
-    HashKey::EqualVec(values.into_boxed_slice())
-}
-
 /// `equal`-table key for a byte-code object, derived from
 /// [`ByteCodeFunction::structural_parts`] so it agrees with [`bytecode_equal`]
 /// by construction: equal objects produce equal keys, and every difference
@@ -5129,23 +5111,32 @@ fn bytecode_to_equal_key(
     HashKey::ByteCode(keys.into_boxed_slice())
 }
 
-fn closure_to_equal_key(value: Value, depth: usize, seen: &mut Vec<usize>) -> HashKey {
+fn closure_to_equal_key(
+    value: Value,
+    depth: usize,
+    seen: &mut Vec<usize>,
+    symbol_mode: crate::tagged::SymbolMode,
+) -> HashKey {
+    let symbols_with_pos_enabled = match symbol_mode {
+        crate::tagged::SymbolMode::Bare => false,
+        crate::tagged::SymbolMode::Positioned => true,
+    };
     if depth > 200 {
         return HashKey::Text("#<lambda-depth-limit>".into());
     }
 
-    let Some(params) = value.closure_params() else {
+    let Some(arglist) = value.closure_slot(CLOSURE_ARGLIST) else {
         return HashKey::Text("#<invalid-lambda>".into());
     };
 
     let mut slots = vec![
         HashKey::Text("lambda".into()),
-        closure_params_to_equal_key(params),
-        value
-            .closure_body_value()
-            .map_or(HashKey::Nil, |body| body.to_equal_key_depth(0, seen)),
+        arglist.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled),
+        value.closure_body_value().map_or(HashKey::Nil, |body| {
+            body.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled)
+        }),
         match value.closure_env().unwrap_or(None) {
-            Some(env) => env.to_equal_key_depth(0, seen),
+            Some(env) => env.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled),
             None => HashKey::Text("dynamic".into()),
         },
     ];
@@ -5158,7 +5149,7 @@ fn closure_to_equal_key(value: Value, depth: usize, seen: &mut Vec<usize>) -> Ha
         // string value (valid UTF-8 -> text key, eight-bit -> eq key) instead of
         // the retired storage form, whose in-Unicode sentinels would collide a
         // real Private-Use glyph with a raw byte in the equal hash key.
-        let doc = doc_value.to_equal_key_depth(0, seen);
+        let doc = doc_value.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
         slots.push(doc);
     }
 
@@ -5173,11 +5164,20 @@ fn closure_equal(
     symbols_with_pos_enabled: bool,
     kind: EqualKind,
 ) -> bool {
-    let (Some(left_params), Some(right_params)) = (left.closure_params(), right.closure_params())
-    else {
+    let (Some(left_args), Some(right_args)) = (
+        left.closure_slot(CLOSURE_ARGLIST),
+        right.closure_slot(CLOSURE_ARGLIST),
+    ) else {
         return false;
     };
-    if left_params != right_params {
+    if !equal_value_inner(
+        &left_args,
+        &right_args,
+        depth + 1,
+        seen,
+        symbols_with_pos_enabled,
+        kind,
+    ) {
         return false;
     }
 
@@ -5231,11 +5231,20 @@ fn try_closure_equal(
     symbols_with_pos_enabled: bool,
     kind: EqualKind,
 ) -> Result<bool, Flow> {
-    let (Some(left_params), Some(right_params)) = (left.closure_params(), right.closure_params())
-    else {
+    let (Some(left_args), Some(right_args)) = (
+        left.closure_slot(CLOSURE_ARGLIST),
+        right.closure_slot(CLOSURE_ARGLIST),
+    ) else {
         return Ok(false);
     };
-    if left_params != right_params {
+    if !try_equal_value_inner(
+        &left_args,
+        &right_args,
+        depth + 1,
+        seen,
+        symbols_with_pos_enabled,
+        kind,
+    )? {
         return Ok(false);
     }
 

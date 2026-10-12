@@ -84,11 +84,10 @@ fn observed_string_borrowed_byte_materialization_keeps_the_native_gate() {
     let _mode = ObservedMode::new();
     let (mut context, owner, leaf) = fixture(LispString::from_rodata_unibyte(b"abc\0"));
     let (_, reads) = capture(|| owner.as_str_owned().expect("borrowed string"));
-    crate::emacs_core::builtins::builtin_aset_args(&[
-        owner,
-        Value::make_int(0),
-        Value::make_int(66),
-    ])
+    crate::emacs_core::builtins::builtin_aset_args(
+        crate::emacs_core::builtins::ArraySymbolSource::Bare,
+        &[owner, Value::make_int(0), Value::make_int(66)],
+    )
     .expect("interpreted materialization");
     assert!(!reads.expect("borrowed read").unchanged());
     certify_then_store(&mut context, owner, &leaf);

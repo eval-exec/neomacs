@@ -36,7 +36,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
     let frame_data = eval.frame_manager().get(frame).unwrap();
     let ws = frame_data
         .effective_window_system()
-        .and_then(|value| value.as_symbol_name().map(str::to_owned));
+        .and_then(|value| value.as_bare_symbol_name().map(str::to_owned));
     let mode = DisplayRowMeasurementMode::from_frame_window_system(ws.is_some());
     let resolver = crate::neovm_bridge::FaceResolver::new_with_font_sizing(
         eval.face_table(),

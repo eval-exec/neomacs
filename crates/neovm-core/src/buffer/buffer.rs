@@ -1,15 +1,19 @@
 //! Buffer and BufferManager — the core text container for the Elisp VM.
 //!
 //! A `Buffer` wraps a [`BufferText`] with Emacs-style point, mark, narrowing,
-//! markers, and buffer-local variables.  `BufferManager` owns all live buffers
-//! and tracks the current buffer.
+//! markers, and buffer-local variables. Runtime buffer storage is World-owned;
+//! `BufferManager` keeps its private selection and a storage lifetime lease.
 
 #[path = "insdel.rs"]
 mod insdel;
 
-use std::cell::RefCell;
+use std::cell::{RefCell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::marker::PhantomData;
 use std::mem;
+use std::ops::Deref;
+use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use super::buffer_text::BufferText;
@@ -35,6 +39,7 @@ use super::undo;
 #[cfg(test)]
 use super::visited_file_modtime::BaseVisitedFileModtime;
 use super::visited_file_modtime::{FirstChangeModtime, VisitedFileModtime, VisitedFileModtimeSlot};
+use crate::emacs_core::eval::world::WorldLease;
 use crate::emacs_core::intern::{SymId, intern};
 use crate::emacs_core::symbol::SetInternalAlist;
 use crate::emacs_core::value::{RuntimeBindingValue, Value, ValueKind, eq_value};
@@ -430,7 +435,7 @@ impl BufferSlotPredicate {
             Self::Unrestricted => Ok(()),
             Self::String if value.is_string() => Ok(()),
             Self::String => Err(WrongType("stringp")),
-            Self::Symbol if value.is_symbol() => Ok(()),
+            Self::Symbol if value.is_bare_symbol() => Ok(()),
             Self::Symbol => Err(WrongType("symbolp")),
             Self::Integer if value.is_integer() => Ok(()),
             Self::Integer => Err(WrongType("integerp")),
@@ -454,8 +459,8 @@ impl BufferSlotPredicate {
             }
             Self::VerticalScrollBar
                 if value.is_t()
-                    || value.is_symbol_named("left")
-                    || value.is_symbol_named("right") =>
+                    || value.is_bare_symbol_named("left")
+                    || value.is_bare_symbol_named("right") =>
             {
                 Ok(())
             }
@@ -463,8 +468,8 @@ impl BufferSlotPredicate {
                 Err(Choice("One of nil, t, left or right should be specified"))
             }
             Self::OverwriteMode
-                if value.is_symbol_named("overwrite-mode-textual")
-                    || value.is_symbol_named("overwrite-mode-binary") =>
+                if value.is_bare_symbol_named("overwrite-mode-textual")
+                    || value.is_bare_symbol_named("overwrite-mode-binary") =>
             {
                 Ok(())
             }
@@ -1751,7 +1756,7 @@ impl LocalVariableBindings {
                 if !entry.is_cons() {
                     continue;
                 }
-                if let Some(id) = entry.cons_car().as_symbol_id() {
+                if let Some(id) = entry.cons_car().as_bare_symbol_id() {
                     // `assq` observes the first duplicate entry. Preserve that
                     // behavior even though ordinary mutation APIs never create
                     // duplicates.
@@ -1904,8 +1909,8 @@ pub(crate) fn preserve_partial_permanent_local_hook_value(
     while cursor.is_cons() {
         let elt = cursor.cons_car();
         cursor = cursor.cons_cdr();
-        if elt.is_symbol_named("t")
-            || elt.as_symbol_name().is_some_and(|name| {
+        if elt.is_bare_symbol_named("t")
+            || elt.as_bare_symbol_name().is_some_and(|name| {
                 obarray
                     .get_property(name, "permanent-local-hook")
                     .is_some_and(|prop| !prop.is_nil())
@@ -4454,6 +4459,18 @@ impl Buffer {
         &self,
         composition_function_table: Value,
     ) -> std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>> {
+        self.automatic_composition_spans_with_symbols(
+            composition_function_table,
+            crate::tagged::SymbolMode::Bare,
+        )
+    }
+
+    /// Capture-time symbol policy; positioned scans bypass the bare-only memo.
+    pub fn automatic_composition_spans_with_symbols(
+        &self,
+        composition_function_table: Value,
+        symbol_mode: crate::tagged::SymbolMode,
+    ) -> std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>> {
         let key = AutomaticCompositionKey {
             chars_tick: self.chars_modified_tick(),
             props_tick: self.props_modified_tick(),
@@ -4462,6 +4479,7 @@ impl Buffer {
         };
         if let Some((cached_key, spans)) = self.automatic_composition_cache.borrow().as_ref()
             && *cached_key == key
+            && symbol_mode == crate::tagged::SymbolMode::Bare
         {
             return std::rc::Rc::clone(spans);
         }
@@ -4479,14 +4497,18 @@ impl Buffer {
         // starts at point-min, not zero -- and a caller that then added the
         // offset itself would count it twice.
         let spans = std::rc::Rc::new(
-            crate::emacs_core::composite::automatic_composition_spans_in(
+            crate::emacs_core::composite::automatic_composition_spans_in_with_symbols(
                 self,
                 composition_function_table,
                 &text,
                 self.point_min_char_pos().get(),
+                symbol_mode,
             ),
         );
-        *self.automatic_composition_cache.borrow_mut() = Some((key, std::rc::Rc::clone(&spans)));
+        if symbol_mode == crate::tagged::SymbolMode::Bare {
+            *self.automatic_composition_cache.borrow_mut() =
+                Some((key, std::rc::Rc::clone(&spans)));
+        }
         spans
     }
 
@@ -4513,6 +4535,22 @@ impl Buffer {
         first_char: usize,
         budget: usize,
     ) -> std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>> {
+        self.automatic_composition_spans_visible_with_symbols(
+            composition_function_table,
+            first_char,
+            budget,
+            crate::tagged::SymbolMode::Bare,
+        )
+    }
+
+    /// Capture-time symbol policy; positioned scans bypass the bare-only memo.
+    pub fn automatic_composition_spans_visible_with_symbols(
+        &self,
+        composition_function_table: Value,
+        first_char: usize,
+        budget: usize,
+        symbol_mode: crate::tagged::SymbolMode,
+    ) -> std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>> {
         use crate::emacs_core::composite::MAX_AUTO_COMPOSITION_LOOKBACK;
         let accessible_start = self.point_min_char_pos().get();
         let accessible_end = self.point_max_char_pos().get();
@@ -4531,15 +4569,17 @@ impl Buffer {
             self.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(end)),
         );
         let fast = crate::emacs_core::composite::fast_path::enabled();
-        let key = fast.then(|| AutomaticCompositionVisibleKey {
-            chars_tick: self.chars_modified_tick(),
-            props_tick: self.props_modified_tick(),
-            table: composition_function_table.bits(),
-            syntax_table: self.slots[BUFFER_SLOT_SYNTAX_TABLE.index()].bits(),
-            category_table: self.slots[BUFFER_SLOT_CATEGORY_TABLE.index()].bits(),
-            char_table_tick: crate::emacs_core::chartable::char_table_write_tick(),
-            start,
-            end,
+        let key = (fast && symbol_mode == crate::tagged::SymbolMode::Bare).then(|| {
+            AutomaticCompositionVisibleKey {
+                chars_tick: self.chars_modified_tick(),
+                props_tick: self.props_modified_tick(),
+                table: composition_function_table.bits(),
+                syntax_table: self.slots[BUFFER_SLOT_SYNTAX_TABLE.index()].bits(),
+                category_table: self.slots[BUFFER_SLOT_CATEGORY_TABLE.index()].bits(),
+                char_table_tick: crate::emacs_core::chartable::char_table_write_tick(),
+                start,
+                end,
+            }
         });
         if let Some(key) = key {
             if let Some((cached_key, spans)) =
@@ -4551,8 +4591,9 @@ impl Buffer {
             // Pure ASCII with no ASCII rule composes nothing: skip the copy
             // and the per-character walk (see the predicate's doc).
             if self.text.emacs_byte_range_is_ascii(byte_range)
-                && crate::emacs_core::composite::ascii_has_no_composition_rules(
+                && crate::emacs_core::composite::ascii_has_no_composition_rules_with_symbols(
                     composition_function_table,
+                    symbol_mode,
                 )
             {
                 let spans = std::rc::Rc::new(Vec::new());
@@ -4565,11 +4606,12 @@ impl Buffer {
         crate::emacs_core::composite::BYTES_SCANNED
             .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
         let spans = std::rc::Rc::new(
-            crate::emacs_core::composite::automatic_composition_spans_in(
+            crate::emacs_core::composite::automatic_composition_spans_in_with_symbols(
                 self,
                 composition_function_table,
                 &text,
                 start,
+                symbol_mode,
             ),
         );
         if let Some(key) = key {
@@ -4803,7 +4845,7 @@ impl Buffer {
         // the very cons it started at before and only interior entries are
         // unlinked. Head identity therefore proves nothing here.
         self.local_var_alist.retain_bindings(|entry| {
-            let Some(name) = entry.cons_car().as_symbol_name() else {
+            let Some(name) = entry.cons_car().as_bare_symbol_name() else {
                 return BindingRetention::Drop;
             };
             if !kill_permanent
@@ -4811,7 +4853,7 @@ impl Buffer {
                     .get_property(name, "permanent-local")
                     .filter(|v| !v.is_nil())
             {
-                if prop.is_symbol_named("permanent-local-hook") {
+                if prop.is_bare_symbol_named("permanent-local-hook") {
                     // Partial-preserve: filter the value and mutate the
                     // existing cell's cdr in place, so a BLV valcell aimed at
                     // this cons observes the filtered list without re-swapping.
@@ -4825,11 +4867,7 @@ impl Buffer {
             // subsequent reads re-swap to the global default. Mirrors GNU's
             // `swap_in_global_binding' call at `buffer.c:1185'.
             let id = crate::emacs_core::intern::intern(name);
-            if let Some(blv) = obarray.blv_mut(id) {
-                blv.set_where(Value::NIL);
-                blv.found = false;
-                blv.valcell = blv.defcell;
-            }
+            obarray.reset_blv_cache_to_default(id);
             BindingRetention::Drop
         });
 
@@ -4902,7 +4940,7 @@ impl Buffer {
     /// values for LOCALIZED symbols without going through the
     /// obarray's BLV swap-in.
     pub fn find_in_local_var_alist(&self, key: Value) -> Option<Value> {
-        if let Some(sym_id) = key.as_symbol_id() {
+        if let Some(sym_id) = key.as_bare_symbol_id() {
             return self.local_var_alist.value(sym_id);
         }
         let mut alist = self.local_var_alist.as_lisp_alist();
@@ -5117,7 +5155,7 @@ impl Buffer {
             if !entry.is_cons() {
                 continue;
             }
-            if let Some(sym_id) = entry.cons_car().as_symbol_id() {
+            if let Some(sym_id) = entry.cons_car().as_bare_symbol_id() {
                 let cdr = entry.cons_cdr();
                 let binding = if cdr.is_unbound() {
                     RuntimeBindingValue::Void
@@ -5270,20 +5308,25 @@ struct LiveBuffers {
 /// bytecode opcode reading a field of `current_buffer`; we called a C-ABI shim
 /// whose own prologue and epilogue cost more than the read. These let the
 /// generated code walk the same chain the shim walks --
-/// `Context` -> `BufferManager` -> `LiveBuffers::slots` -> `Box<Buffer>`.
+/// `Context` -> private `BufferManager::current_ptr` -> `Buffer`.
+/// The canonical-storage slab walk remains a test oracle for the projection.
 ///
 /// Everything here is JIT-ONLY. A baked host offset is a constant for the
 /// process that generated the code, not a portable fact, so an AOT object --
 /// which is loaded into a DIFFERENT build -- must never contain one.
 ///
-/// Two of the hops CANNOT be baked, because std promises nothing about them:
+/// The canonical-storage oracle has two hops that CANNOT be baked, because
+/// std promises nothing about them:
 /// `Vec`'s field order and `Option<BufferId>`'s tag position. Those are probed
 /// on live values instead, in the shape of
 /// [`crate::tagged::header::LispValueVec::jit_slice_offsets`], and every probe
 /// returns `None` rather than a guess when it cannot prove what it found --
 /// the caller then emits nothing and keeps the shim.
 pub(crate) mod jit_layout {
-    use super::{Buffer, BufferId, BufferManager, LiveBuffers};
+    #[cfg(test)]
+    use super::LiveBuffers;
+    use super::{Buffer, BufferId, BufferManager, BufferStorage};
+    #[cfg(test)]
     use std::sync::OnceLock;
 
     /// `Option<Box<Buffer>>` is a single niche-optimised pointer word, so a
@@ -5296,8 +5339,19 @@ pub(crate) mod jit_layout {
 
     const WORD: usize = std::mem::size_of::<usize>();
 
-    pub(crate) const BUFFER_MANAGER_BUFFERS_OFFSET: usize =
-        std::mem::offset_of!(BufferManager, buffers);
+    #[cfg(any(feature = "jit", test))]
+    pub(crate) const BUFFER_MANAGER_STORAGE_PTR_OFFSET: usize =
+        std::mem::offset_of!(BufferManager, storage_ptr);
+    #[cfg(any(feature = "jit", test))]
+    pub(crate) const BUFFER_STORAGE_BUFFERS_OFFSET: usize =
+        std::mem::offset_of!(BufferStorage, buffers);
+    #[cfg(any(feature = "jit", test))]
+    pub(crate) const BUFFER_MANAGER_CURRENT_PTR_OFFSET: usize =
+        std::mem::offset_of!(BufferManager, current_ptr);
+    const _: () = assert!(
+        std::mem::size_of::<Option<std::ptr::NonNull<Buffer>>>() == WORD,
+        "the current-buffer designator must use the null pointer niche"
+    );
     pub(crate) const BUFFER_MANAGER_CURRENT_OFFSET: usize =
         std::mem::offset_of!(BufferManager, current);
     /// `BufferManager::current_raw`: the current buffer's id as one `u64`,
@@ -5305,8 +5359,10 @@ pub(crate) mod jit_layout {
     pub(crate) const BUFFER_MANAGER_CURRENT_RAW_OFFSET: usize =
         std::mem::offset_of!(BufferManager, current_raw);
     const _: () = assert!(std::mem::size_of::<BufferId>() == std::mem::size_of::<u64>());
+    #[cfg(test)]
     pub(crate) const LIVE_BUFFERS_SLOTS_OFFSET: usize = std::mem::offset_of!(LiveBuffers, slots);
 
+    #[cfg(test)]
     fn find_unique(words: &[usize], want: usize) -> Option<usize> {
         let mut hits = words.iter().enumerate().filter(|&(_, &w)| w == want);
         let (index, _) = hits.next()?;
@@ -5315,6 +5371,7 @@ pub(crate) mod jit_layout {
         hits.next().is_none().then_some(index * WORD)
     }
 
+    #[cfg(test)]
     fn read_words<T>(value: &T) -> Vec<usize> {
         let base = std::ptr::from_ref(value).cast::<usize>();
         // SAFETY: reads whole words inside `value`.
@@ -5325,6 +5382,7 @@ pub(crate) mod jit_layout {
 
     /// Byte offsets of the slot vector's data pointer and length, within the
     /// `Vec` itself. `None` if they cannot be identified unambiguously.
+    #[cfg(test)]
     pub(crate) fn slots_vec_offsets() -> Option<(usize, usize)> {
         static OFFSETS: OnceLock<Option<(usize, usize)>> = OnceLock::new();
         *OFFSETS.get_or_init(|| {
@@ -5349,6 +5407,7 @@ pub(crate) mod jit_layout {
     /// `(tag offset, payload offset, the tag value that means `None`)` for
     /// `Option<BufferId>`. `BufferId` wraps a `u64` and so has no niche: the
     /// option is two words whose order std does not fix.
+    #[cfg(test)]
     pub(crate) fn current_option_layout() -> Option<(usize, usize, u64)> {
         static LAYOUT: OnceLock<Option<(usize, usize, u64)>> = OnceLock::new();
         *LAYOUT.get_or_init(|| {
@@ -5373,9 +5432,26 @@ pub(crate) mod jit_layout {
         })
     }
 
-    /// The address of the current buffer, reached exactly the way generated
-    /// code reaches it. Test-only: it is the oracle the walk test compares
-    /// `BufferManager::current_buffer` against.
+    /// The direct selection designator read by generated code.
+    #[cfg(test)]
+    pub(crate) fn current_buffer_ptr_via_projection(
+        manager: &BufferManager,
+    ) -> Option<*const Buffer> {
+        let base = std::ptr::from_ref(manager).cast::<u8>();
+        // SAFETY: offset_of points at the pinned one-word nullable pointer.
+        // The selection writer publishes null before removal and refreshes
+        // the pointer only from a live allocation.
+        let ptr = unsafe {
+            base.add(BUFFER_MANAGER_CURRENT_PTR_OFFSET)
+                .cast::<*const Buffer>()
+                .read_unaligned()
+        };
+        (!ptr.is_null()).then_some(ptr)
+    }
+
+    /// The current allocation independently reached through the storage slab.
+    /// Test-only: compares the direct generated projection with canonical
+    /// storage and `BufferManager::current_buffer`.
     #[cfg(test)]
     pub(crate) fn current_buffer_ptr_via_walk(manager: &BufferManager) -> Option<*const Buffer> {
         let (tag_off, payload_off, none_tag) = current_option_layout()?;
@@ -5389,8 +5465,12 @@ pub(crate) mod jit_layout {
                 return None;
             }
             let id = current.add(payload_off).cast::<u64>().read_unaligned() as usize;
-            let slots = base
-                .add(BUFFER_MANAGER_BUFFERS_OFFSET)
+            let storage = base
+                .add(BUFFER_MANAGER_STORAGE_PTR_OFFSET)
+                .cast::<*const u8>()
+                .read_unaligned();
+            let slots = storage
+                .add(BUFFER_STORAGE_BUFFERS_OFFSET)
                 .add(LIVE_BUFFERS_SLOTS_OFFSET);
             if id >= slots.add(len_off).cast::<usize>().read_unaligned() {
                 return None;
@@ -5416,6 +5496,13 @@ impl LiveBuffers {
     #[inline]
     fn get_mut(&mut self, id: &BufferId) -> Option<&mut Buffer> {
         self.slots.get_mut(id.0 as usize)?.as_deref_mut()
+    }
+    #[inline]
+    fn buffer_ptr(&mut self, id: BufferId) -> Option<NonNull<Buffer>> {
+        let buffer = self.slots.get_mut(id.0 as usize)?.as_mut()?;
+        // SAFETY: the raw place is the payload of this live Box. Taking its
+        // address creates no temporary mutable reference to the Buffer.
+        Some(unsafe { NonNull::new_unchecked(&raw mut **buffer) })
     }
     fn contains_key(&self, id: &BufferId) -> bool {
         self.get(id).is_some()
@@ -5494,9 +5581,30 @@ impl LiveBuffers {
     }
 }
 
-/// Owns every live buffer, tracks the current buffer, and hands out ids.
-#[derive(Clone)]
+/// A current-buffer selection and a stable view of editor buffer storage.
+///
+/// A runtime World owns the storage allocation. Standalone managers and
+/// detached clones own their storage here; cloning always copies buffers.
+/// No second mutable view or thread-switch authority is created by this type.
+#[repr(C)]
 pub struct BufferManager {
+    storage_ptr: NonNull<BufferStorage>,
+    /// Written only by `set_current_id`, along with the raw id and pointer.
+    current: Option<BufferId>,
+    /// Zero means there is no current buffer; real ids begin at one.
+    current_raw: u64,
+    /// Points into a stable live-buffer allocation, or is null for no selection.
+    current_ptr: Option<NonNull<Buffer>>,
+    backing: BufferBacking,
+}
+
+/// Stable editor-owned storage behind a BufferManager view.
+///
+/// This type is public solely as the smart-pointer Deref target. Its only
+/// public field preserves BufferManager's existing default-slot API. Mutable
+/// access is a short manager phase, never an aggregate World borrow.
+#[doc(hidden)]
+pub struct BufferStorage {
     // Dense-id slab (was FxHashMap, before that SipHash): `buffers` is looked
     // up on the hot buffer-local access/bind path (specbind, get_buffer_local)
     // and by every `current_buffer()`, so the lookup is an index, not a probe.
@@ -5506,15 +5614,6 @@ pub struct BufferManager {
     /// `last_name` and `filename` queryable.
     dead_buffers: FxHashMap<BufferId, Buffer>,
     buffer_order: Vec<BufferId>,
-    /// Written only by [`BufferManager::set_current_id`], which keeps
-    /// [`Self::current_raw`] in step.
-    current: Option<BufferId>,
-    /// `current`'s raw id, or 0 when there is no current buffer (ids start at
-    /// 1): the one word compiled code compares a buffer-local variable's
-    /// cache owner with (`where_buf_id`, never 0), at a fixed offset
-    /// (`jit_layout::BUFFER_MANAGER_CURRENT_RAW_OFFSET`). `Option<BufferId>`
-    /// is two words whose order std does not fix.
-    current_raw: u64,
     next_id: u64,
     next_marker_id: u64,
     labeled_restrictions: FxHashMap<BufferId, Vec<LabeledRestriction>>,
@@ -5533,6 +5632,248 @@ pub struct BufferManager {
     /// clone, which is why saving a point in one buffer supersedes the point
     /// saved in every other one -- see [`SavedPointBeforeCommand`].
     saved_point_before_command: SavedPointBeforeCommand,
+}
+
+/// Cold ownership is separate from the common hot storage pointer.
+#[deny(clippy::wildcard_enum_match_arm)]
+enum BufferBacking {
+    Standalone(Box<UnsafeCell<BufferStorage>>),
+    World(WorldLease),
+    DetachedClone {
+        _storage: Box<UnsafeCell<BufferStorage>>,
+        lease: WorldLease,
+    },
+}
+
+/// Owner-private selection transported only during closed World construction.
+#[derive(Debug)]
+pub(crate) struct BufferSelection {
+    current: Option<BufferId>,
+    owner: PhantomData<*const ()>,
+}
+
+/// Owned construction payload; cannot contain a borrowed World view.
+/// Only consuming conversion exposes its parts to the World constructor.
+#[derive(Debug)]
+pub(crate) struct OwnedBufferStorageParts {
+    storage: Box<UnsafeCell<BufferStorage>>,
+    selection: BufferSelection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum BufferStorageOwnershipError {
+    #[error("a World-backed buffer view cannot surrender its World allocation")]
+    WorldBacked,
+    #[error("a detached buffer clone must retain its originating World lease")]
+    DetachedFromWorld,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BufferCreationHooks {
+    Enabled,
+    Inhibited,
+}
+
+impl OwnedBufferStorageParts {
+    pub(crate) fn into_parts(self) -> (Box<UnsafeCell<BufferStorage>>, BufferSelection) {
+        (self.storage, self.selection)
+    }
+}
+
+impl TryFrom<BufferManager> for OwnedBufferStorageParts {
+    type Error = BufferStorageOwnershipError;
+
+    fn try_from(manager: BufferManager) -> Result<Self, Self::Error> {
+        match manager {
+            BufferManager {
+                backing: BufferBacking::Standalone(storage),
+                current,
+                ..
+            } => Ok(Self {
+                storage,
+                selection: BufferSelection {
+                    current,
+                    owner: PhantomData,
+                },
+            }),
+            BufferManager {
+                backing: BufferBacking::World(_),
+                ..
+            } => Err(BufferStorageOwnershipError::WorldBacked),
+            BufferManager {
+                backing: BufferBacking::DetachedClone { .. },
+                ..
+            } => Err(BufferStorageOwnershipError::DetachedFromWorld),
+        }
+    }
+}
+
+impl From<OwnedBufferStorageParts> for BufferManager {
+    fn from(parts: OwnedBufferStorageParts) -> Self {
+        let (storage, selection) = parts.into_parts();
+        // SAFETY: UnsafeCell::get addresses the live owned Box payload; it
+        // cannot be null and backing retains this same allocation.
+        let storage_ptr = unsafe { NonNull::new_unchecked(storage.get()) };
+        let mut manager = Self {
+            storage_ptr,
+            current: None,
+            current_raw: 0,
+            current_ptr: None,
+            backing: BufferBacking::Standalone(storage),
+        };
+        manager.set_current_id(selection.current);
+        manager
+    }
+}
+
+static_assertions::assert_not_impl_any!(OwnedBufferStorageParts: Send, Sync, Clone);
+static_assertions::assert_impl_all!(BufferCreationHooks: Send, Sync, fmt::Debug, Copy);
+static_assertions::assert_impl_all!(OwnedBufferStorageParts: fmt::Debug);
+static_assertions::assert_impl_all!(BufferStorageOwnershipError: Send, Sync, fmt::Debug, std::error::Error);
+
+static_assertions::assert_not_impl_any!(BufferManager: Send, Sync);
+static_assertions::assert_not_impl_any!(BufferStorage: Send, Sync);
+static_assertions::assert_not_impl_any!(BufferBacking: Send, Sync);
+static_assertions::assert_not_impl_any!(BufferSelection: Send, Sync);
+static_assertions::assert_impl_all!(BufferManager: fmt::Debug);
+static_assertions::assert_impl_all!(BufferStorage: fmt::Debug);
+static_assertions::assert_impl_all!(BufferSelection: fmt::Debug);
+const _: () = assert!(std::mem::offset_of!(BufferManager, storage_ptr) == 0);
+
+impl fmt::Debug for BufferManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BufferManager")
+            .field("storage", &self.storage_ptr)
+            .field("current", &self.current)
+            .field("backing", &self.backing)
+            .finish()
+    }
+}
+
+impl fmt::Debug for BufferStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BufferStorage")
+            .field("live_buffers", &self.buffers.len())
+            .field("dead_buffers", &self.dead_buffers.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for BufferBacking {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Standalone(_) => f.write_str("Standalone"),
+            Self::World(_) => f.write_str("World"),
+            Self::DetachedClone { .. } => f.write_str("DetachedClone"),
+        }
+    }
+}
+
+impl Deref for BufferManager {
+    type Target = BufferStorage;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: closed construction derives this pointer from a stable
+        // UnsafeCell allocation retained by backing. No second runtime view
+        // exists, and this shared phase is bounded by the manager borrow.
+        unsafe { self.storage_ptr.as_ref() }
+    }
+}
+
+impl BufferStorage {
+    fn create_buffer(
+        &mut self,
+        current: Option<BufferId>,
+        name: &str,
+        hooks: BufferCreationHooks,
+    ) -> BufferId {
+        let id = BufferId(self.next_id);
+        self.next_id += 1;
+        let name_value = Value::string(name);
+        let mut buf = Buffer::new_with_text_backend_kind(
+            id,
+            name_value,
+            self.default_text_backend_kind,
+            self.saved_point_before_command.clone(),
+        );
+        buf.set_last_name_value(name_value);
+        // Phase 10D: seed every conditional slot from
+        // `BufferManager::buffer_defaults` so a buffer created
+        // *after* a `setq-default`/`set-default` observes the live
+        // global default rather than the static `BufferSlotInfo`
+        // seed. Always-local slots (-1) keep their per-buffer
+        // initial value (the static seed already populated them).
+        for info in BUFFER_SLOT_INFO {
+            if info.local_flags_idx >= 0 {
+                buf.slots[info.offset.index()] = self.buffer_defaults[info.offset.index()];
+            }
+        }
+        buf.inhibit_buffer_hooks = match hooks {
+            BufferCreationHooks::Enabled => false,
+            BufferCreationHooks::Inhibited => true,
+        };
+        if let Some(default_directory) = current
+            .and_then(|current| self.buffers.get(&current))
+            .and_then(|current| current.buffer_local_value("default-directory"))
+        {
+            buf.set_buffer_local("default-directory", default_directory);
+        }
+        // GNU buffer.c:667 — buffers whose names start with a space have
+        // undo recording disabled by default.
+        if name.starts_with(' ') {
+            buf.set_buffer_local(BUFFER_UNDO_LIST_NAME, crate::emacs_core::value::Value::T);
+        }
+        self.buffers.insert(id, buf);
+        self.buffer_order.push(id);
+        id
+    }
+
+    fn clone_storage(&self) -> Self {
+        Self {
+            buffers: self.buffers.clone(),
+            dead_buffers: self.dead_buffers.clone(),
+            buffer_order: self.buffer_order.clone(),
+            next_id: self.next_id,
+            next_marker_id: self.next_marker_id,
+            labeled_restrictions: self.labeled_restrictions.clone(),
+            default_text_backend_kind: self.default_text_backend_kind,
+            buffer_defaults: self.buffer_defaults,
+            saved_point_before_command: self.saved_point_before_command.clone(),
+        }
+    }
+}
+
+impl Clone for BufferManager {
+    /// Deep-copy buffer storage and rebuild the independent selection.
+    ///
+    /// A World lease retains allocations, not GC reachability. A clone that
+    /// can cross collection must publish its own copied Values with the
+    /// existing explicit root API and refresh that publication after mutation.
+    #[cold]
+    fn clone(&self) -> Self {
+        let storage = Box::new(UnsafeCell::new(self.deref().clone_storage()));
+        // SAFETY: UnsafeCell::get points into this live Box allocation.
+        let storage_ptr = unsafe { NonNull::new_unchecked(storage.get()) };
+        let backing = match &self.backing {
+            BufferBacking::Standalone(_) => BufferBacking::Standalone(storage),
+            BufferBacking::World(lease) | BufferBacking::DetachedClone { lease, .. } => {
+                BufferBacking::DetachedClone {
+                    _storage: storage,
+                    lease: lease.duplicate_for_view(),
+                }
+            }
+        };
+        let mut clone = Self {
+            storage_ptr,
+            current: None,
+            current_raw: 0,
+            current_ptr: None,
+            backing,
+        };
+        clone.set_current_id(self.current);
+        clone
+    }
 }
 
 #[derive(Clone)]
@@ -5706,8 +6047,106 @@ impl BufferSwapTextError {
 }
 
 impl BufferManager {
+    #[inline(always)]
+    fn storage_mut(&mut self) -> &mut BufferStorage {
+        // SAFETY: backing retains the stable allocation and construction
+        // installs one manager view. This exclusive manager phase grants
+        // mutable storage access; no aggregate World reference is formed.
+        unsafe { self.storage_ptr.as_mut() }
+    }
+
+    /// Reinitialize a minimal runtime without detaching its World allocation.
+    /// This cold constructor phase runs before Lisp or manager views escape.
+    #[cfg(test)]
+    #[cold]
+    pub(crate) fn reset_for_minimal_runtime(&mut self) {
+        let (storage, selection) = Self::new_world_parts().into_parts();
+        // Retire the designator before assignment drops the former slab.
+        self.set_current_id(None);
+        *self.storage_mut() = (*storage).into_inner();
+        self.set_current_id(selection.current);
+    }
+
+    /// Mutable access to only the global default slots.
+    ///
+    /// A whole mutable BufferStorage reference is intentionally private:
+    /// replacing its slab would invalidate this manager's private selection.
+    #[inline]
+    pub fn buffer_defaults_mut(&mut self) -> &mut [Value; BUFFER_SLOT_COUNT] {
+        &mut self.storage_mut().buffer_defaults
+    }
+
+    fn with_owned_storage(storage: BufferStorage) -> Self {
+        let storage = Box::new(UnsafeCell::new(storage));
+        // SAFETY: UnsafeCell::get points into this live Box allocation.
+        let storage_ptr = unsafe { NonNull::new_unchecked(storage.get()) };
+        Self {
+            storage_ptr,
+            current: None,
+            current_raw: 0,
+            current_ptr: None,
+            backing: BufferBacking::Standalone(storage),
+        }
+    }
+
+    /// Consume independent storage at the closed World construction boundary.
+    /// An installed World view cannot surrender another owner's allocation.
+    #[cfg(test)]
+    pub(crate) fn into_world_parts(
+        self,
+    ) -> Result<(Box<UnsafeCell<BufferStorage>>, BufferSelection), Self> {
+        match self {
+            Self {
+                backing: BufferBacking::Standalone(storage),
+                current,
+                ..
+            } => Ok((
+                storage,
+                BufferSelection {
+                    current,
+                    owner: PhantomData,
+                },
+            )),
+            retained_view @ Self {
+                backing: BufferBacking::World(_),
+                ..
+            }
+            | retained_view @ Self {
+                backing: BufferBacking::DetachedClone { .. },
+                ..
+            } => Err(retained_view),
+        }
+    }
+
+    /// Install the sole runtime view of this World's buffer allocation.
+    ///
+    /// # Safety
+    /// `storage_ptr` must originate from the UnsafeCell allocation owned by
+    /// `lease`, with no other mutable manager view. The constructing owner
+    /// must remain the only mutator. The lease must retain that same World.
+    pub(crate) unsafe fn from_world_parts(
+        storage_ptr: NonNull<BufferStorage>,
+        selection: BufferSelection,
+        lease: WorldLease,
+    ) -> Self {
+        let mut manager = Self {
+            storage_ptr,
+            current: None,
+            current_raw: 0,
+            current_ptr: None,
+            backing: BufferBacking::World(lease),
+        };
+        manager.set_current_id(selection.current);
+        manager
+    }
+
     /// Create a new `BufferManager` pre-populated with a `*scratch*` buffer.
     pub fn new() -> Self {
+        Self::new_world_parts().into()
+    }
+
+    /// Infallible standalone construction for a new runtime World.
+    pub(crate) fn new_world_parts() -> OwnedBufferStorageParts {
         // Phase 10D: seed `buffer_defaults` from `BUFFER_SLOT_INFO`,
         // mirroring GNU `init_buffer_once` which materializes
         // `buffer_defaults` from the per-slot `default` literals
@@ -5717,12 +6156,10 @@ impl BufferManager {
         for info in BUFFER_SLOT_INFO {
             buffer_defaults[info.offset.index()] = info.default.to_value();
         }
-        let mut mgr = Self {
+        let mut storage = BufferStorage {
             buffers: LiveBuffers::default(),
             dead_buffers: FxHashMap::default(),
             buffer_order: Vec::new(),
-            current: None,
-            current_raw: 0,
             next_id: 1,
             next_marker_id: 1,
             labeled_restrictions: FxHashMap::default(),
@@ -5730,13 +6167,18 @@ impl BufferManager {
             buffer_defaults,
             saved_point_before_command: SavedPointBeforeCommand::new_editor_global(),
         };
-        let scratch = mgr.create_buffer("*scratch*");
-        if let Some(buf) = mgr.buffers.get_mut(&scratch) {
+        let scratch = storage.create_buffer(None, "*scratch*", BufferCreationHooks::Enabled);
+        if let Some(buf) = storage.buffers.get_mut(&scratch) {
             buf.set_last_name_value(crate::emacs_core::value::Value::NIL);
         }
-        mgr.set_current_id(Some(scratch));
-        mgr.note_buffer_order_head(scratch);
-        mgr
+        // This first buffer is already the sole ordering entry.
+        OwnedBufferStorageParts {
+            storage: Box::new(UnsafeCell::new(storage)),
+            selection: BufferSelection {
+                current: Some(scratch),
+                owner: PhantomData,
+            },
+        }
     }
 
     /// Allocate a new buffer with the given name and return its id.
@@ -5750,43 +6192,13 @@ impl BufferManager {
         name: &str,
         inhibit_buffer_hooks: bool,
     ) -> BufferId {
-        let id = BufferId(self.next_id);
-        self.next_id += 1;
-        let name_value = Value::string(name);
-        let mut buf = Buffer::new_with_text_backend_kind(
-            id,
-            name_value,
-            self.default_text_backend_kind,
-            self.saved_point_before_command.clone(),
-        );
-        buf.set_last_name_value(name_value);
-        // Phase 10D: seed every conditional slot from
-        // `BufferManager::buffer_defaults` so a buffer created
-        // *after* a `setq-default`/`set-default` observes the live
-        // global default rather than the static `BufferSlotInfo`
-        // seed. Always-local slots (-1) keep their per-buffer
-        // initial value (the static seed already populated them).
-        for info in BUFFER_SLOT_INFO {
-            if info.local_flags_idx >= 0 {
-                buf.slots[info.offset.index()] = self.buffer_defaults[info.offset.index()];
-            }
-        }
-        buf.inhibit_buffer_hooks = inhibit_buffer_hooks;
-        if let Some(default_directory) = self
-            .current
-            .and_then(|current| self.buffers.get(&current))
-            .and_then(|current| current.buffer_local_value("default-directory"))
-        {
-            buf.set_buffer_local("default-directory", default_directory);
-        }
-        // GNU buffer.c:667 — buffers whose names start with a space have
-        // undo recording disabled by default.
-        if name.starts_with(' ') {
-            buf.set_buffer_local(BUFFER_UNDO_LIST_NAME, crate::emacs_core::value::Value::T);
-        }
-        self.buffers.insert(id, buf);
-        self.buffer_order.push(id);
-        id
+        let current = self.current;
+        let hooks = if inhibit_buffer_hooks {
+            BufferCreationHooks::Inhibited
+        } else {
+            BufferCreationHooks::Enabled
+        };
+        self.storage_mut().create_buffer(current, name, hooks)
     }
 
     pub fn default_text_backend_kind(&self) -> BufferTextBackendKind {
@@ -5798,7 +6210,7 @@ impl BufferManager {
     }
 
     pub(crate) fn set_default_text_backend_kind(&mut self, kind: ImplementedBufferTextBackendKind) {
-        self.default_text_backend_kind = kind;
+        self.storage_mut().default_text_backend_kind = kind;
     }
 
     fn has_indirect_buffers(&self, id: BufferId) -> bool {
@@ -5827,7 +6239,8 @@ impl BufferManager {
         }
 
         if current_id == other_id {
-            self.buffers
+            self.storage_mut()
+                .buffers
                 .get_mut(&current_id)
                 .ok_or(BufferSwapTextError::DeadBuffer)?
                 .note_buffer_swap_text_self();
@@ -5835,12 +6248,18 @@ impl BufferManager {
             return Ok(());
         }
 
+        let selected = self.current;
+        if selected == Some(current_id) {
+            self.set_current_id(None);
+        }
         let mut current = self
+            .storage_mut()
             .buffers
             .remove(&current_id)
             .ok_or(BufferSwapTextError::DeadBuffer)?;
         {
             let other = self
+                .storage_mut()
                 .buffers
                 .get_mut(&other_id)
                 .ok_or(BufferSwapTextError::DeadBuffer)?;
@@ -5858,7 +6277,8 @@ impl BufferManager {
             current.increment_overlay_modified_tick();
             other.increment_overlay_modified_tick();
         }
-        self.buffers.insert(current_id, current);
+        self.storage_mut().buffers.insert(current_id, current);
+        self.set_current_id(selected);
         let _ = self.record_buffer_state_markers(current_id);
         let _ = self.record_buffer_state_markers(other_id);
         Ok(())
@@ -5882,7 +6302,7 @@ impl BufferManager {
         else {
             return;
         };
-        if let Some(indirect) = self.buffers.get_mut(&indirect_id) {
+        if let Some(indirect) = self.storage_mut().buffers.get_mut(&indirect_id) {
             indirect.modtime.reset_as_indirect_of(base_cell);
             // GNU `reset_buffer`: `b->modtime_size = -1` (`src/buffer.c:1093`).
             indirect.modtime_size = None;
@@ -5919,7 +6339,7 @@ impl BufferManager {
         let shared_text = self.buffers.get(&root_id)?.text.shared_clone();
 
         let id = BufferId(self.next_id);
-        self.next_id += 1;
+        self.storage_mut().next_id += 1;
 
         let root_mark = if clone {
             root.mark_emacs_byte_pos()
@@ -5975,8 +6395,8 @@ impl BufferManager {
             /* mark_byte removed */
         }
 
-        self.buffers.insert(id, indirect);
-        self.buffer_order.push(id);
+        self.storage_mut().buffers.insert(id, indirect);
+        self.storage_mut().buffer_order.push(id);
         // GNU `Fmake_indirect_buffer` runs `reset_buffer` on the new buffer,
         // which clears its own modtime (`src/buffer.c:1092-1093`) whatever
         // CLONE says -- an indirect buffer visits no file -- and sets
@@ -5987,14 +6407,19 @@ impl BufferManager {
         let _ = self.ensure_buffer_state_markers(root_id);
         let _ = self.ensure_buffer_state_markers(id);
         if let Some(mark) = root_mark {
-            self.buffers.get_mut(&id)?.set_mark_emacs_byte_pos(mark);
+            self.storage_mut()
+                .buffers
+                .get_mut(&id)?
+                .set_mark_emacs_byte_pos(mark);
         }
         Some(id)
     }
 
     fn note_buffer_order_head(&mut self, id: BufferId) {
-        self.buffer_order.retain(|existing| *existing != id);
-        self.buffer_order.insert(0, id);
+        self.storage_mut()
+            .buffer_order
+            .retain(|existing| *existing != id);
+        self.storage_mut().buffer_order.insert(0, id);
     }
 
     /// Move a live buffer to the end of buffer-list order.
@@ -6006,8 +6431,10 @@ impl BufferManager {
         if !self.buffers.contains_key(&id) {
             return false;
         }
-        self.buffer_order.retain(|existing| *existing != id);
-        self.buffer_order.push(id);
+        self.storage_mut()
+            .buffer_order
+            .retain(|existing| *existing != id);
+        self.storage_mut().buffer_order.push(id);
         true
     }
 
@@ -6017,13 +6444,15 @@ impl BufferManager {
         if id == after || !self.buffers.contains_key(&id) || !self.buffers.contains_key(&after) {
             return false;
         }
-        self.buffer_order.retain(|existing| *existing != id);
+        self.storage_mut()
+            .buffer_order
+            .retain(|existing| *existing != id);
         let insert_at = self
             .buffer_order
             .iter()
             .position(|existing| *existing == after)
             .map_or(self.buffer_order.len(), |index| index + 1);
-        self.buffer_order.insert(insert_at, id);
+        self.storage_mut().buffer_order.insert(insert_at, id);
         true
     }
 
@@ -6050,7 +6479,7 @@ impl BufferManager {
 
     /// Mutable access to a buffer by id.
     pub fn get_mut(&mut self, id: BufferId) -> Option<&mut Buffer> {
-        self.buffers.get_mut(&id)
+        self.storage_mut().buffers.get_mut(&id)
     }
 
     /// Propagate a newly-installed per-buffer default into every live buffer
@@ -6064,7 +6493,7 @@ impl BufferManager {
     pub(crate) fn seed_default_slot_into_unset_buffers(&mut self, slot: BufferSlot, value: Value) {
         let conditional =
             buffer_slot_info_by_offset(slot).is_some_and(|info| info.local_flags_idx >= 0);
-        for buffer in self.buffers.values_mut() {
+        for buffer in self.storage_mut().buffers.values_mut() {
             let unset = if conditional {
                 !buffer.slot_local_flag(slot)
             } else {
@@ -6096,20 +6525,29 @@ impl BufferManager {
     }
 
     /// Immutable access to the current buffer.
+    #[inline]
     pub fn current_buffer(&self) -> Option<&Buffer> {
-        self.current.and_then(|id| self.buffers.get(&id))
+        // SAFETY: selection points to the stable live Box retained by backing.
+        // Removal clears it before freeing; reinsertion and cloning rederive
+        // it. The returned shared borrow remains bounded by this manager.
+        self.current_ptr.map(|ptr| unsafe { ptr.as_ref() })
     }
 
     /// Mutable access to the current buffer.
+    #[inline]
     pub fn current_buffer_mut(&mut self) -> Option<&mut Buffer> {
-        self.current.and_then(|id| self.buffers.get_mut(&id))
+        // SAFETY: the same stable-selection invariant applies. Construction
+        // permits one manager view, so this exclusive manager phase grants
+        // mutable access to the selected Buffer without another World loan.
+        self.current_ptr.map(|mut ptr| unsafe { ptr.as_mut() })
     }
 
     pub(in crate::buffer) fn buffer_mut(&mut self, id: BufferId) -> Option<&mut Buffer> {
-        self.buffers.get_mut(&id)
+        self.storage_mut().buffers.get_mut(&id)
     }
 
     /// Return the current buffer id.
+    #[inline]
     pub fn current_buffer_id(&self) -> Option<BufferId> {
         debug_assert_eq!(
             self.current_raw,
@@ -6124,8 +6562,15 @@ impl BufferManager {
     #[inline]
     fn set_current_id(&mut self, id: Option<BufferId>) {
         debug_assert!(id.is_none_or(|id| id.0 != 0), "buffer ids start at 1");
-        self.current = id;
-        self.current_raw = id.map_or(0, |id| id.0);
+        let selected = id.and_then(|id| {
+            self.storage_mut()
+                .buffers
+                .buffer_ptr(id)
+                .map(|ptr| (id, ptr))
+        });
+        self.current = selected.map(|(id, _)| id);
+        self.current_raw = self.current.map_or(0, |id| id.0);
+        self.current_ptr = selected.map(|(_, ptr)| ptr);
     }
 
     pub fn buffer_hooks_inhibited(&self, id: BufferId) -> bool {
@@ -6159,7 +6604,10 @@ impl BufferManager {
             self.create_marker_at_emacs_byte_pos(buffer_id, begv, InsertionType::Before);
         let (zv_marker, zv_marker_ptr) =
             self.create_marker_at_emacs_byte_pos(buffer_id, zv, InsertionType::After);
-        self.buffers.get_mut(&buffer_id)?.state_markers = Some(BufferStateMarkers {
+        self.storage_mut()
+            .buffers
+            .get_mut(&buffer_id)?
+            .state_markers = Some(BufferStateMarkers {
             pt_marker,
             begv_marker,
             zv_marker,
@@ -6219,7 +6667,7 @@ impl BufferManager {
         let pt = self.marker_anchor_position(buffer_id, markers.pt_marker)?;
         let begv = self.marker_anchor_position(buffer_id, markers.begv_marker)?;
         let zv = self.marker_anchor_position(buffer_id, markers.zv_marker)?;
-        let buffer = self.buffers.get_mut(&buffer_id)?;
+        let buffer = self.storage_mut().buffers.get_mut(&buffer_id)?;
         // GNU buffer.c:795-802 restores the three paired coordinates
         // independently. Transposition moves the state markers along with
         // the text (editfns.c:4500-4523), so saved point can lie outside the
@@ -6326,12 +6774,21 @@ impl BufferManager {
             .text
             .remove_markers_for_buffers(&killed_set);
 
-        for killed_id in &killed_ids {
-            let mut buf = self.buffers.remove(killed_id)?;
-            buf.mark_killed_after_local_reset();
-            self.dead_buffers.insert(*killed_id, buf);
+        // Retire the selection before any selected allocation is removed,
+        // including exceptional or partially completed kill paths.
+        if self
+            .current
+            .is_some_and(|current| killed_set.contains(&current))
+        {
+            self.set_current_id(None);
         }
-        self.buffer_order
+        for killed_id in &killed_ids {
+            let mut buf = self.storage_mut().buffers.remove(killed_id)?;
+            buf.mark_killed_after_local_reset();
+            self.storage_mut().dead_buffers.insert(*killed_id, buf);
+        }
+        self.storage_mut()
+            .buffer_order
             .retain(|buffer_id| !killed_set.contains(buffer_id));
 
         if self
@@ -6491,7 +6948,7 @@ impl BufferManager {
             }
         }
 
-        if let Some(old) = self.labeled_restrictions.remove(&buffer_id) {
+        if let Some(old) = self.storage_mut().labeled_restrictions.remove(&buffer_id) {
             for restriction in old {
                 if !live_marker_ids.contains(&restriction.beg_marker) {
                     self.remove_marker(restriction.beg_marker);
@@ -6505,7 +6962,9 @@ impl BufferManager {
         if self.buffers.contains_key(&buffer_id)
             && let Some(restrictions) = restrictions.filter(|restrictions| !restrictions.is_empty())
         {
-            self.labeled_restrictions.insert(buffer_id, restrictions);
+            self.storage_mut()
+                .labeled_restrictions
+                .insert(buffer_id, restrictions);
         }
     }
 
@@ -6531,7 +6990,8 @@ impl BufferManager {
             self.create_marker_at_emacs_byte_pos(buffer_id, begv, InsertionType::Before);
         let (end_marker, _) =
             self.create_marker_at_emacs_byte_pos(buffer_id, zv, InsertionType::After);
-        self.labeled_restrictions
+        self.storage_mut()
+            .labeled_restrictions
             .entry(buffer_id)
             .or_default()
             .push(LabeledRestriction {
@@ -6543,11 +7003,14 @@ impl BufferManager {
     }
 
     fn pop_labeled_restriction(&mut self, buffer_id: BufferId) -> Option<LabeledRestriction> {
-        let restrictions = self.labeled_restrictions.get_mut(&buffer_id)?;
+        let restrictions = self
+            .storage_mut()
+            .labeled_restrictions
+            .get_mut(&buffer_id)?;
         let restriction = restrictions.pop()?;
         let remove_entry = restrictions.is_empty();
         if remove_entry {
-            self.labeled_restrictions.remove(&buffer_id);
+            self.storage_mut().labeled_restrictions.remove(&buffer_id);
         }
         self.remove_marker(restriction.beg_marker);
         self.remove_marker(restriction.end_marker);
@@ -6599,7 +7062,7 @@ impl BufferManager {
         pos: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
         let (point, has_state_markers) = {
-            let buf = self.buffers.get_mut(&id)?;
+            let buf = self.storage_mut().buffers.get_mut(&id)?;
             buf.goto_emacs_byte_pos(pos);
             (buf.point_emacs_byte_pos(), buf.state_markers.is_some())
         };
@@ -6618,7 +7081,7 @@ impl BufferManager {
         point: TextPositionAnchor,
     ) -> Option<TextPositionAnchor> {
         {
-            let buf = self.buffers.get_mut(&id)?;
+            let buf = self.storage_mut().buffers.get_mut(&id)?;
             buf.set_point_anchor(point);
         }
         let point = self.buffers.get(&id)?.point_anchor();
@@ -6635,11 +7098,14 @@ impl BufferManager {
     #[inline]
     pub(crate) fn note_overlay_modification(&mut self, id: BufferId) -> Option<()> {
         if !self.buffers.any_indirect() {
-            self.buffers.get_mut(&id)?.increment_overlay_modified_tick();
+            self.storage_mut()
+                .buffers
+                .get_mut(&id)?
+                .increment_overlay_modified_tick();
             return Some(());
         }
         let root = self.shared_text_root_id(id)?;
-        for buffer in self.buffers.values_mut() {
+        for buffer in self.storage_mut().buffers.values_mut() {
             if buffer.base_buffer.unwrap_or(buffer.id) == root {
                 buffer.increment_overlay_modified_tick();
             }
@@ -6649,7 +7115,7 @@ impl BufferManager {
 
     pub fn delete_all_buffer_overlays(&mut self, id: BufferId) -> Option<()> {
         let changed = {
-            let buf = self.buffers.get_mut(&id)?;
+            let buf = self.storage_mut().buffers.get_mut(&id)?;
             if buf.overlays.is_empty() {
                 false
             } else {
@@ -6665,6 +7131,7 @@ impl BufferManager {
 
     pub fn delete_buffer_overlay(&mut self, id: BufferId, overlay_id: Value) -> Option<()> {
         let changed = self
+            .storage_mut()
             .buffers
             .get_mut(&id)?
             .overlays
@@ -6683,6 +7150,7 @@ impl BufferManager {
         value: Value,
     ) -> Option<()> {
         let changed = self
+            .storage_mut()
             .buffers
             .get_mut(&id)?
             .overlays
@@ -6694,7 +7162,10 @@ impl BufferManager {
         if changed {
             self.note_overlay_modification(id)?;
         } else {
-            self.buffers.get_mut(&id)?.increment_overlay_modified_tick();
+            self.storage_mut()
+                .buffers
+                .get_mut(&id)?
+                .increment_overlay_modified_tick();
         }
         Some(())
     }
@@ -6704,7 +7175,10 @@ impl BufferManager {
         id: BufferId,
         range: EmacsByteRange,
     ) -> Option<()> {
-        self.buffers.get_mut(&id)?.narrow_to_emacs_byte_range(range);
+        self.storage_mut()
+            .buffers
+            .get_mut(&id)?
+            .narrow_to_emacs_byte_range(range);
         let _ = self.record_buffer_state_markers(id);
         Some(())
     }
@@ -6734,7 +7208,7 @@ impl BufferManager {
             self.delete_buffer_emacs_byte_range(id, delete_range)?;
         }
         {
-            let buf = self.buffers.get_mut(&id)?;
+            let buf = self.storage_mut().buffers.get_mut(&id)?;
             buf.widen();
             buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
         }
@@ -6763,7 +7237,7 @@ impl BufferManager {
             self.delete_buffer_emacs_byte_range(id, delete_range)?;
         }
         {
-            let buf = self.buffers.get_mut(&id)?;
+            let buf = self.storage_mut().buffers.get_mut(&id)?;
             buf.widen();
             buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
         }
@@ -6786,7 +7260,7 @@ impl BufferManager {
         // reads `per_buffer_default(offset)` (the runtime default)
         // rather than the C-level static initializer.
         let defaults_snapshot = self.buffer_defaults;
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         buf.kill_all_local_variables(obarray, kill_permanent, &defaults_snapshot);
         Some(())
     }
@@ -6798,7 +7272,7 @@ impl BufferManager {
         name: Value,
         value: Value,
     ) -> Option<bool> {
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         let entries = buffer_text_property_undo_runs(buf, byte_range)
             .into_iter()
             .filter_map(|run| {
@@ -6824,7 +7298,8 @@ impl BufferManager {
         table: &TextPropertyTable,
         byte_pos: EmacsBytePos,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .text
             .text_props_append_shifted_at_emacs_byte_pos(table, byte_pos);
@@ -6837,7 +7312,8 @@ impl BufferManager {
         table: &TextPropertyTable,
         byte_pos: EmacsBytePos,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .text
             .text_props_merge_missing_shifted_at_emacs_byte_pos(table, byte_pos);
@@ -6849,7 +7325,8 @@ impl BufferManager {
         id: BufferId,
         byte_range: EmacsByteRange,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .text
             .text_props_merge_adjacent_equal_around_emacs_byte_range(byte_range);
@@ -6867,7 +7344,7 @@ impl BufferManager {
         byte_range: EmacsByteRange,
         names: &[Value],
     ) -> Option<bool> {
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         let mut entries = Vec::new();
         for run in buffer_text_property_undo_runs(buf, byte_range) {
             for &name in names {
@@ -6886,7 +7363,7 @@ impl BufferManager {
         byte_range: EmacsByteRange,
         name: Value,
     ) -> Option<bool> {
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         let entries = buffer_text_property_undo_runs(buf, byte_range)
             .into_iter()
             .filter_map(|run| {
@@ -6903,7 +7380,8 @@ impl BufferManager {
         id: BufferId,
         byte_range: EmacsByteRange,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .set_text_properties_with_undo_range(byte_range, Vec::new());
         Some(())
@@ -6916,7 +7394,8 @@ impl BufferManager {
         id: BufferId,
         char_range: CharRange,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .text
             .text_props_set_properties_in_char_range(char_range, Vec::new());
@@ -6929,7 +7408,8 @@ impl BufferManager {
         byte_range: EmacsByteRange,
         plist: Vec<(Value, Value)>,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .set_text_properties_with_undo_range(byte_range, plist);
         Some(())
@@ -6940,7 +7420,7 @@ impl BufferManager {
         id: BufferId,
         byte_range: EmacsByteRange,
     ) -> Option<()> {
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         // Bumps `modified_tick` (as before) AND the dedicated
         // `props_modified_tick` — the single choke point every text-property
         // builtin (put/add/set/remove) routes through, so redisplay sees an
@@ -6953,7 +7433,7 @@ impl BufferManager {
     }
 
     pub fn set_buffer_multibyte_flag(&mut self, id: BufferId, flag: bool) -> Option<()> {
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         buf.set_multibyte_value(flag);
         buf.set_buffer_local(
             "enable-multibyte-characters",
@@ -6968,24 +7448,31 @@ impl BufferManager {
 
     pub fn set_buffer_modified_flag(&mut self, id: BufferId, flag: bool) -> Option<()> {
         let root_id = self.modified_state_root_id(id)?;
-        self.buffers.get_mut(&root_id)?.set_modified(flag);
+        self.storage_mut()
+            .buffers
+            .get_mut(&root_id)?
+            .set_modified(flag);
         Some(())
     }
 
     pub fn restore_buffer_modified_state(&mut self, id: BufferId, flag: Value) -> Option<Value> {
         let root_id = self.modified_state_root_id(id)?;
-        let out = self.buffers.get_mut(&root_id)?.restore_modified_state(flag);
+        let out = self
+            .storage_mut()
+            .buffers
+            .get_mut(&root_id)?
+            .restore_modified_state(flag);
         Some(out)
     }
 
     pub fn set_buffer_auto_saved(&mut self, id: BufferId) -> Option<()> {
-        self.buffers.get_mut(&id)?.mark_auto_saved();
+        self.storage_mut().buffers.get_mut(&id)?.mark_auto_saved();
         Some(())
     }
 
     pub fn set_buffer_modified_tick(&mut self, id: BufferId, tick: i64) -> Option<()> {
         let root_id = self.modified_state_root_id(id)?;
-        let buf = self.buffers.get_mut(&root_id)?;
+        let buf = self.storage_mut().buffers.get_mut(&root_id)?;
         buf.text.set_modified_tick(tick);
         Some(())
     }
@@ -6997,26 +7484,29 @@ impl BufferManager {
         // code such as `find-file-noselect-1` sets the truename slot
         // separately.
         debug_assert!(file_name.is_nil() || file_name.is_string());
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         buf.set_file_name_value(file_name);
         Some(())
     }
 
     pub fn set_buffer_file_truename(&mut self, id: BufferId, file_truename: Value) -> Option<()> {
         debug_assert!(file_truename.is_nil() || file_truename.is_string());
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         buf.slots[BUFFER_SLOT_FILE_TRUENAME.index()] = file_truename;
         Some(())
     }
 
     pub fn set_buffer_name(&mut self, id: BufferId, name: Value) -> Option<()> {
-        self.buffers.get_mut(&id)?.set_name_value(name);
+        self.storage_mut()
+            .buffers
+            .get_mut(&id)?
+            .set_name_value(name);
         Some(())
     }
 
     pub fn rename_buffer(&mut self, id: BufferId, name: Value) -> Option<()> {
         debug_assert!(name.is_string());
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         let old_name = buf.name_value();
         buf.set_last_name_value(old_name);
         buf.set_name_value(name);
@@ -7028,7 +7518,10 @@ impl BufferManager {
         id: BufferId,
         pos: EmacsBytePos,
     ) -> Option<()> {
-        self.buffers.get_mut(&id)?.set_mark_emacs_byte_pos(pos);
+        self.storage_mut()
+            .buffers
+            .get_mut(&id)?
+            .set_mark_emacs_byte_pos(pos);
         Some(())
     }
 
@@ -7037,7 +7530,8 @@ impl BufferManager {
         id: BufferId,
         lisp_char_pos: LispCharPos1,
     ) -> Option<()> {
-        self.buffers.get_mut(&id)?.last_window_start = lisp_char_pos.max(LispCharPos1::ONE);
+        self.storage_mut().buffers.get_mut(&id)?.last_window_start =
+            lisp_char_pos.max(LispCharPos1::ONE);
         Some(())
     }
 
@@ -7048,7 +7542,7 @@ impl BufferManager {
         range: EmacsByteRange,
     ) -> Option<()> {
         let present = {
-            let buf = self.buffers.get_mut(&id)?;
+            let buf = self.storage_mut().buffers.get_mut(&id)?;
             let present = buf.overlays.get(overlay_id).is_some();
             buf.overlays
                 .move_overlay_to_emacs_byte_range(overlay_id, range);
@@ -7059,13 +7553,16 @@ impl BufferManager {
         if present {
             self.note_overlay_modification(id)?;
         } else {
-            self.buffers.get_mut(&id)?.increment_overlay_modified_tick();
+            self.storage_mut()
+                .buffers
+                .get_mut(&id)?
+                .increment_overlay_modified_tick();
         }
         Some(())
     }
 
     pub fn clear_buffer_mark(&mut self, id: BufferId) -> Option<()> {
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         buf.mark_marker_id = None;
         buf.mark_marker_ptr = std::ptr::null_mut();
         /* mark_byte removed */
@@ -7078,7 +7575,10 @@ impl BufferManager {
         name: &str,
         value: Value,
     ) -> Option<()> {
-        self.buffers.get_mut(&id)?.set_buffer_local(name, value);
+        self.storage_mut()
+            .buffers
+            .get_mut(&id)?
+            .set_buffer_local(name, value);
         Some(())
     }
 
@@ -7088,7 +7588,8 @@ impl BufferManager {
         sym_id: SymId,
         value: Value,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .set_buffer_local_by_sym_id(sym_id, value);
         Some(())
@@ -7105,7 +7606,10 @@ impl BufferManager {
     }
 
     pub fn set_buffer_local_map(&mut self, id: BufferId, keymap: Value) -> Option<()> {
-        self.buffers.get_mut(&id)?.set_local_map(keymap);
+        self.storage_mut()
+            .buffers
+            .get_mut(&id)?
+            .set_local_map(keymap);
         Some(())
     }
 
@@ -7115,7 +7619,10 @@ impl BufferManager {
     }
 
     pub fn set_buffer_local_void_property(&mut self, id: BufferId, name: &str) -> Option<()> {
-        self.buffers.get_mut(&id)?.set_buffer_local_void(name);
+        self.storage_mut()
+            .buffers
+            .get_mut(&id)?
+            .set_buffer_local_void(name);
         Some(())
     }
 
@@ -7124,7 +7631,8 @@ impl BufferManager {
         id: BufferId,
         sym_id: SymId,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .set_buffer_local_void_by_sym_id(sym_id);
         Some(())
@@ -7135,7 +7643,7 @@ impl BufferManager {
         id: BufferId,
         name: &str,
     ) -> Option<Option<RuntimeBindingValue>> {
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         Some(buf.kill_buffer_local(name))
     }
 
@@ -7158,7 +7666,7 @@ impl BufferManager {
     /// the previous `Option<()>' gave it nothing to guess from -- the disabled
     /// path and the recorded path both returned `Some(())'.
     pub fn add_undo_boundary(&mut self, id: BufferId) -> Option<UndoBoundaryOutcome> {
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         let mut ul = buf.get_undo_list();
         match undo::UndoRecording::of(&ul) {
             undo::UndoRecording::Disabled => return Some(UndoBoundaryOutcome::UndoDisabled),
@@ -7178,7 +7686,7 @@ impl BufferManager {
     }
 
     pub fn record_undo_point_before_command(&mut self, id: BufferId) -> Option<()> {
-        let buf = self.buffers.get_mut(&id)?;
+        let buf = self.storage_mut().buffers.get_mut(&id)?;
         // GNU's command loop saves point AND buffer into the editor-global pair
         // (src/keyboard.c:1536-1537).  It runs for EVERY command-loop
         // iteration, including the minibuffer's own, which is what supersedes
@@ -7193,7 +7701,10 @@ impl BufferManager {
         id: BufferId,
         range: EmacsByteRange,
     ) -> Option<()> {
-        self.buffers.get_mut(&id)?.narrow_to_emacs_byte_range(range);
+        self.storage_mut()
+            .buffers
+            .get_mut(&id)?
+            .narrow_to_emacs_byte_range(range);
         let _ = self.record_buffer_state_markers(id);
         Some(())
     }
@@ -7203,7 +7714,8 @@ impl BufferManager {
         id: BufferId,
         snapshot: AccessibleBufferRegionSnapshot,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .restore_accessible_region(snapshot);
         let _ = self.record_buffer_state_markers(id);
@@ -7215,7 +7727,8 @@ impl BufferManager {
         id: BufferId,
         snapshot: AccessibleBufferRegionSnapshot,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&id)?
             .restore_accessible_region_with_current_full_end(snapshot);
         let _ = self.record_buffer_state_markers(id);
@@ -7363,7 +7876,7 @@ impl BufferManager {
 
     pub fn configure_buffer_undo_list(&mut self, id: BufferId, value: Value) -> Option<()> {
         {
-            let buf = self.buffers.get_mut(&id)?;
+            let buf = self.storage_mut().buffers.get_mut(&id)?;
             match value.kind() {
                 ValueKind::T => {
                     buf.set_buffer_local(BUFFER_UNDO_LIST_NAME, Value::T);
@@ -7462,7 +7975,7 @@ impl BufferManager {
     /// Allocate a unique marker id without associating it with a buffer.
     pub fn allocate_marker_id(&mut self) -> u64 {
         let id = self.next_marker_id;
-        self.next_marker_id += 1;
+        self.storage_mut().next_marker_id += 1;
         id
     }
 
@@ -7489,7 +8002,7 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> (u64, *mut crate::tagged::header::MarkerObj) {
         let marker_id = self.next_marker_id;
-        self.next_marker_id += 1;
+        self.storage_mut().next_marker_id += 1;
         let marker_ptr = Self::allocate_marker_node(buffer_id, marker_id, insertion_type);
         let _ = self.register_marker_id_at_emacs_byte_pos(
             marker_ptr,
@@ -7508,7 +8021,7 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> (u64, *mut crate::tagged::header::MarkerObj) {
         let marker_id = self.next_marker_id;
-        self.next_marker_id += 1;
+        self.storage_mut().next_marker_id += 1;
         let marker_ptr = Self::allocate_marker_node(buffer_id, marker_id, insertion_type);
         let _ = self.register_marker_id_at_anchor(
             marker_ptr,
@@ -7553,7 +8066,7 @@ impl BufferManager {
         pos: EmacsBytePos,
         insertion_type: InsertionType,
     ) -> Option<()> {
-        let buf = self.buffers.get_mut(&buffer_id)?;
+        let buf = self.storage_mut().buffers.get_mut(&buffer_id)?;
         buf.register_marker_at_emacs_byte_pos(marker_ptr, marker_id, pos, insertion_type);
         Some(())
     }
@@ -7566,7 +8079,7 @@ impl BufferManager {
         position: TextPositionAnchor,
         insertion_type: InsertionType,
     ) -> Option<()> {
-        let buf = self.buffers.get_mut(&buffer_id)?;
+        let buf = self.storage_mut().buffers.get_mut(&buffer_id)?;
         buf.register_marker_at_anchor(marker_ptr, marker_id, position, insertion_type);
         Some(())
     }
@@ -7630,7 +8143,8 @@ impl BufferManager {
         marker_id: u64,
         position: TextPositionAnchor,
     ) -> Option<()> {
-        self.buffers
+        self.storage_mut()
+            .buffers
             .get_mut(&buffer_id)?
             .move_marker_to_anchor(marker_id, position);
         Some(())
@@ -7649,10 +8163,10 @@ impl BufferManager {
     /// for them — only `buffer_defaults` is updated.
     pub fn set_buffer_default_slot(&mut self, info: &BufferSlotInfo, value: Value) {
         debug_assert!(info.offset.index() < BUFFER_SLOT_COUNT);
-        self.buffer_defaults[info.offset.index()] = value;
+        self.storage_mut().buffer_defaults[info.offset.index()] = value;
         if info.local_flags_idx >= 0 {
             // Conditional slot: propagate to non-local buffers.
-            for buf in self.buffers.values_mut() {
+            for buf in self.storage_mut().buffers.values_mut() {
                 if !buf.slot_local_flag(info.offset) {
                     buf.slots[info.offset.index()] = value;
                 }
@@ -7662,7 +8176,7 @@ impl BufferManager {
 
     /// Remove a marker registration from any live buffer.
     pub fn remove_marker(&mut self, marker_id: u64) {
-        for buf in self.buffers.values_mut() {
+        for buf in self.storage_mut().buffers.values_mut() {
             buf.remove_marker_entry(marker_id);
         }
     }
@@ -7753,11 +8267,9 @@ impl BufferManager {
                 buffer_defaults[idx] = *value;
             }
         }
-        let mut manager = Self {
+        let mut manager = Self::with_owned_storage(BufferStorage {
             buffers: LiveBuffers::from_map(buffers),
             buffer_order: Vec::new(),
-            current,
-            current_raw: current.map_or(0, |id| id.0),
             next_id,
             next_marker_id,
             labeled_restrictions: FxHashMap::default(),
@@ -7765,12 +8277,13 @@ impl BufferManager {
             default_text_backend_kind,
             buffer_defaults,
             saved_point_before_command,
-        };
+        });
+        manager.set_current_id(current);
         if let Some(dumped_order) = dumped_buffer_order {
             let mut seen = HashSet::new();
             for id in dumped_order {
                 if manager.buffers.contains_key(id) && seen.insert(*id) {
-                    manager.buffer_order.push(*id);
+                    manager.storage_mut().buffer_order.push(*id);
                 }
             }
             let mut missing: Vec<BufferId> = manager
@@ -7779,10 +8292,10 @@ impl BufferManager {
                 .filter(|id| seen.insert(*id))
                 .collect();
             missing.sort_by_key(|id| id.0);
-            manager.buffer_order.extend(missing);
+            manager.storage_mut().buffer_order.extend(missing);
         } else {
-            manager.buffer_order = manager.buffers.keys().collect();
-            manager.buffer_order.sort_by_key(|id| id.0);
+            manager.storage_mut().buffer_order = manager.buffers.keys().collect();
+            manager.storage_mut().buffer_order.sort_by_key(|id| id.0);
             if let Some(current) = manager.current
                 && manager.buffers.contains_key(&current)
             {
@@ -7926,3 +8439,7 @@ impl GcTrace for BufferManager {
 #[cfg(test)]
 #[path = "buffer/tests/buffer_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "buffer/tests/world_storage_test.rs"]
+mod world_storage_tests;

@@ -78,7 +78,7 @@ pub(crate) enum BookmarkRecordKey {
 #[cfg(test)]
 impl BookmarkRecordKey {
     fn from_lisp_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     fn name(self) -> &'static str {

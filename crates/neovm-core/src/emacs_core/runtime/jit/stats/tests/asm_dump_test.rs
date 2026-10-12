@@ -37,7 +37,7 @@ fn jit_asm_dump_appends_every_compiled_leaf() {
     f.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return];
     f.constants = vec![Value::make_int(1)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    let got = crate::emacs_core::jit::try_run_compiled(
+    let got = crate::emacs_core::jit::test_support::run_compiled(
         std::ptr::null_mut(),
         &f,
         Value::NIL,

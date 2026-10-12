@@ -134,6 +134,8 @@ fn jit_bg_stress_soak_matches_the_interpreter() {
     );
     crate::emacs_core::jit::inline::force_inline_for_test(None);
     force_mode_for_test(Some(BgMode::Threaded));
+    // The worker's OSR path is under test, whatever the leaf's size.
+    force_osr_inline_insts_for_test(Some(0));
     force_stress_for_test(Some(true));
     force_osr_for_test(true);
     let before = stats_snapshot();
@@ -142,6 +144,7 @@ fn jit_bg_stress_soak_matches_the_interpreter() {
     let after = stats_snapshot();
     force_osr_for_test(false);
     force_stress_for_test(None);
+    force_osr_inline_insts_for_test(None);
     force_mode_for_test(None);
     force_profit_gate_for_test(true);
     assert_eq!(

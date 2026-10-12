@@ -11,6 +11,7 @@ use crate::emacs_core::fontset;
 use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, intern, is_canonical_id};
 use crate::emacs_core::minibuffer;
 use crate::emacs_core::symbol::{FunctionCellSnapshot, Obarray, SymbolPlistSnapshot};
+use crate::tagged::SymbolMode;
 use crate::tagged::header::ByteCodeSlotObject;
 use malachite::integer::Integer;
 
@@ -21,31 +22,22 @@ pub(crate) const GNU_INITIAL_OBARRAY_SIZE: usize = 1 << 15;
 // Symbol operations (need evaluator for obarray access)
 // ===========================================================================
 
-pub(crate) fn symbol_id(value: &Value) -> Option<SymId> {
-    if let Some(id) = value.as_symbol_id() {
-        return (!value.is_unbound()).then_some(id);
-    }
-    // This observed projection includes wrong-type veclikes, just as the
-    // previous kind() classification did. It also unwraps positioned symbols.
-    value
-        .as_symbol_with_pos_sym()
-        .and_then(|sym| symbol_id(&sym))
+pub(crate) fn symbol_id(value: &Value, mode: SymbolMode) -> Option<SymId> {
+    value.as_symbol_id(mode).filter(|_| !value.is_unbound())
 }
 
 pub(crate) fn symbol_id_checked(value: &Value, symbols_with_pos_enabled: bool) -> Option<SymId> {
-    if let Some(id) = value.as_symbol_id() {
-        return (!value.is_unbound()).then_some(id);
-    }
-    if symbols_with_pos_enabled {
-        value
-            .as_symbol_with_pos_sym()
-            .and_then(|sym| symbol_id_checked(&sym, symbols_with_pos_enabled))
+    let mode = if symbols_with_pos_enabled {
+        SymbolMode::Positioned
     } else {
-        // kind() previously observed every veclike even with SWP disabled.
-        // Retain that dependency while avoiding full kind decoding.
+        SymbolMode::Bare
+    };
+    let id = symbol_id(value, mode);
+    if id.is_none() && mode == SymbolMode::Bare {
+        // Preserve the old projection's capture dependency for wrong-type veclikes.
         let _ = value.as_veclike_ptr();
-        None
     }
+    id
 }
 
 #[inline(never)]
@@ -95,6 +87,7 @@ fn value_from_symbol_id(id: SymId) -> Value {
 }
 
 pub(crate) trait MacroexpandRuntime {
+    fn symbol_mode(&self) -> SymbolMode;
     fn symbol_function_by_id(&self, symbol: SymId) -> Option<Value>;
     fn autoload_do_load_macro(&mut self, autoload: Value, head: Value) -> Result<(), Flow>;
     /// As autoload_do_load_macro, but keeps `rooted_form` GC-rooted for the
@@ -120,6 +113,9 @@ pub(crate) trait MacroexpandRuntime {
 }
 
 impl MacroexpandRuntime for super::eval::Context {
+    fn symbol_mode(&self) -> SymbolMode {
+        super::eval::Context::symbol_mode(self)
+    }
     fn symbol_function_by_id(&self, symbol: SymId) -> Option<Value> {
         symbol_function_cell_in_obarray(self.obarray(), symbol)
     }
@@ -174,8 +170,8 @@ pub(crate) fn constant_set_outcome_in_obarray(
     }
 }
 
-pub(crate) fn expect_symbol_id(value: &Value) -> Result<SymId, Flow> {
-    symbol_id(value).ok_or_else(|| {
+pub(crate) fn expect_symbol_id(value: &Value, mode: SymbolMode) -> Result<SymId, Flow> {
+    symbol_id(value, mode).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), *value],
@@ -524,7 +520,7 @@ pub(crate) fn builtin_indirect_variable(
 ) -> EvalResult {
     expect_args("indirect-variable", &args, 1)?;
     let obarray = eval.obarray();
-    let Some(symbol) = symbol_id(&args[0]) else {
+    let Some(symbol) = symbol_id(&args[0], eval.symbol_mode()) else {
         return Ok(args[0]);
     };
     let resolved = resolve_variable_alias_id_in_obarray(obarray, symbol)?;
@@ -648,12 +644,13 @@ pub(crate) fn symbol_function_by_id(obarray: &Obarray, symbol: SymId) -> EvalRes
 }
 
 pub(crate) fn builtin_func_arity(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let obarray = eval.obarray();
     expect_args("func-arity", &args, 1)?;
 
     // Unwrap symbol-with-pos transparently for symbol name extraction.
     let arg0 = eval.unwrap_symbol(args[0]);
-    if let Some(name) = arg0.as_symbol_name() {
+    if let Some(name) = arg0.as_symbol_name(symbol_mode) {
         if let Some(function) =
             resolve_indirect_symbol_by_id_in_obarray(obarray, intern(name)).map(|(_, value)| value)
         {
@@ -668,9 +665,12 @@ pub(crate) fn builtin_func_arity(eval: &mut super::eval::Context, args: Vec<Valu
             {
                 return super::subr_info::builtin_func_arity_ctx(eval, vec![function]);
             }
-            if let Some(arity) =
-                dispatch_symbol_func_arity_override_in_obarray(obarray, name, &function)
-            {
+            if let Some(arity) = dispatch_symbol_func_arity_override_in_obarray(
+                obarray,
+                name,
+                &function,
+                eval.symbol_mode(),
+            ) {
                 return Ok(arity);
             }
             return super::subr_info::builtin_func_arity_ctx(eval, vec![function]);
@@ -688,13 +688,14 @@ fn dispatch_symbol_func_arity_override_in_obarray(
     obarray: &Obarray,
     name: &str,
     function: &Value,
+    symbol_mode: SymbolMode,
 ) -> Option<Value> {
     // Only applies to builtin functions (those with Subr function cells).
     if !obarray.symbol_function(name).is_some_and(|v| v.is_subr()) {
         return None;
     }
 
-    if super::autoload::is_autoload_value(function) {
+    if super::autoload::is_autoload_value(function, symbol_mode) {
         return Some(super::subr_info::dispatch_subr_arity_value(name));
     }
 
@@ -743,17 +744,16 @@ pub(crate) fn builtin_fset_2(
     symbol_value: Value,
     def: Value,
 ) -> EvalResult {
+    let mode = eval.symbol_mode();
     let symbol = SymId::from_value(eval, symbol_value)?;
-    if symbol == intern("nil") && !def.is_nil() {
+    if symbol_value.is_nil() && !def.is_nil() {
         return Err(signal(
             LispCondition::SettingConstant,
             vec![Value::symbol("nil")],
         ));
     }
-    let would_cycle = {
-        let obarray = eval.obarray_mut();
-        would_create_function_alias_cycle_in_obarray(obarray, symbol, &def)
-    };
+    let would_cycle =
+        would_create_function_alias_cycle_in_obarray(eval.obarray(), symbol, &def, mode);
     if would_cycle {
         return Err(signal(
             LispCondition::CyclicFunctionIndirection,
@@ -770,6 +770,7 @@ pub(crate) fn builtin_fset_2(
         &mut eval.interactive,
         symbol,
         def,
+        mode,
     );
     Ok(def)
 }
@@ -780,16 +781,26 @@ pub(crate) fn would_create_function_alias_cycle(
     target_symbol: SymId,
     def: &Value,
 ) -> bool {
-    would_create_function_alias_cycle_in_obarray(eval.obarray(), target_symbol, def)
+    would_create_function_alias_cycle_in_obarray(
+        eval.obarray(),
+        target_symbol,
+        def,
+        eval.symbol_mode(),
+    )
 }
 
 pub(crate) fn would_create_function_alias_cycle_in_obarray(
     obarray: &Obarray,
     target_symbol: SymId,
     def: &Value,
+    mode: SymbolMode,
 ) -> bool {
-    let mut current = match symbol_id(def) {
-        Some(id) if id == intern("nil") => return false,
+    // GNU Ffset stops only at physical nil; an enabled positioned nil
+    // remains a symbol link and can close a cycle through nil's cell.
+    if def.is_nil() {
+        return false;
+    }
+    let mut current = match symbol_id(def, mode) {
         Some(id) => id,
         None => return false,
     };
@@ -804,10 +815,15 @@ pub(crate) fn would_create_function_alias_cycle_in_obarray(
         }
 
         let next = match obarray.symbol_function_id(current) {
-            Some(function) => match symbol_id(&function) {
-                Some(id) => id,
-                None => return false,
-            },
+            Some(function) => {
+                if function.is_nil() {
+                    return false;
+                }
+                match symbol_id(&function, mode) {
+                    Some(id) => id,
+                    None => return false,
+                }
+            }
             None => return false,
         };
         current = next;
@@ -885,7 +901,7 @@ pub(crate) fn builtin_defconst_1(eval: &mut super::eval::Context, args: Vec<Valu
 pub(crate) fn builtin_fmakunbound(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("fmakunbound", &args, 1)?;
     let symbol = SymId::from_value(eval, args[0])?;
-    if symbol == intern("nil") || symbol == intern("t") {
+    if args[0].is_nil() || symbol == intern("t") {
         return Err(signal(LispCondition::SettingConstant, vec![args[0]]));
     }
     eval.note_macro_expansion_mutation();
@@ -926,9 +942,8 @@ pub(crate) fn symbol_property_get(
     // alias/redirect resolution on every `get`. `symbol_value_id_or_nil` still
     // follows defvaralias and reads the slot `specbind` writes, so a let-bound
     // override is honored.
-    let overrides = eval
-        .obarray()
-        .symbol_value_id_or_nil(overriding_plist_environment_symbol());
+    let obarray = eval.obarray();
+    let overrides = obarray.symbol_value_id_or_nil(overriding_plist_environment_symbol());
     if overrides.is_cons()
         && let Some(plist) = assq_cdr_swp(&symbol_value, overrides, symbols_with_pos_enabled)
         && let Some(propval) =
@@ -938,7 +953,7 @@ pub(crate) fn symbol_property_get(
         return Ok((sym, Some(propval)));
     }
 
-    let property = match eval.obarray().symbol_plist_snapshot_id(sym) {
+    let property = match obarray.symbol_plist_snapshot_id(sym) {
         SymbolPlistSnapshot::NoEntries => None,
         SymbolPlistSnapshot::Entries(plist) => {
             crate::emacs_core::plist::plist_get_swp(plist, &prop, symbols_with_pos_enabled)
@@ -952,7 +967,14 @@ pub(crate) fn builtin_put(
     args: Vec<Value>,
 ) -> EvalResult {
     ctx.note_macro_expansion_mutation();
-    put_in_obarray(&mut ctx.obarray, args, ctx.symbols_with_pos_enabled)
+    let symbols_with_pos_enabled = ctx.symbols_with_pos_enabled;
+    // SAFETY: plist validation/update is noncalling and changes only property
+    // Values. Neither canonical dispatch word nor storage identity can change.
+    unsafe {
+        ctx.obarray.with_legacy_value_write(|obarray| {
+            put_in_obarray(obarray, args, symbols_with_pos_enabled)
+        })
+    }
 }
 
 #[inline(always)]
@@ -963,13 +985,14 @@ pub(crate) fn builtin_put_3(
     value: Value,
 ) -> EvalResult {
     ctx.note_macro_expansion_mutation();
-    put_in_obarray_values(
-        &mut ctx.obarray,
-        symbol_value,
-        prop,
-        value,
-        ctx.symbols_with_pos_enabled,
-    )
+    let symbols_with_pos_enabled = ctx.symbols_with_pos_enabled;
+    // SAFETY: this storage-level property helper runs no Lisp and publishes
+    // only plist Values; no canonical function/debugger metadata is modified.
+    unsafe {
+        ctx.obarray.with_legacy_value_write(|obarray| {
+            put_in_obarray_values(obarray, symbol_value, prop, value, symbols_with_pos_enabled)
+        })
+    }
 }
 
 pub(crate) fn put_in_obarray(
@@ -1019,6 +1042,7 @@ pub(super) fn builtin_register_code_conversion_map(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let symbols_with_pos_enabled = eval.symbols_with_pos_enabled;
     // Pre-validate the target symbol's plist shape BEFORE allocating a
     // map ID. If the plist is malformed, the subsequent `put` would
@@ -1038,19 +1062,27 @@ pub(super) fn builtin_register_code_conversion_map(
         crate::emacs_core::plist::plist_check(plist)?;
     }
 
-    let obarray = eval.obarray_mut();
-    let map_id = super::ccl::builtin_register_code_conversion_map_impl(args.clone())?;
+    let map_id = super::ccl::builtin_register_code_conversion_map_impl_with_symbols(
+        args.clone(),
+        symbol_mode,
+    )?;
 
-    let _ = put_in_obarray(
-        obarray,
-        vec![args[0], Value::symbol("code-conversion-map"), args[1]],
-        symbols_with_pos_enabled,
-    )?;
-    let _ = put_in_obarray(
-        obarray,
-        vec![args[0], Value::symbol("code-conversion-map-id"), map_id],
-        symbols_with_pos_enabled,
-    )?;
+    // SAFETY: registration is complete; this noncalling phase only publishes
+    // its two property Values and leaves no raw manager/interior authority.
+    unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            let _ = put_in_obarray(
+                obarray,
+                vec![args[0], Value::symbol("code-conversion-map"), args[1]],
+                symbols_with_pos_enabled,
+            )?;
+            put_in_obarray(
+                obarray,
+                vec![args[0], Value::symbol("code-conversion-map-id"), map_id],
+                symbols_with_pos_enabled,
+            )
+        })
+    }?;
 
     Ok(map_id)
 }
@@ -1058,11 +1090,12 @@ pub(super) fn builtin_register_code_conversion_map(
 fn symbol_has_valid_ccl_program_idx_in_obarray(
     obarray: &Obarray,
     symbol: &Value,
+    mode: SymbolMode,
 ) -> Result<bool, Flow> {
-    if !symbol.is_symbol() {
+    if !symbol.is_symbol(mode) {
         return Ok(false);
     }
-    let symbol = expect_symbol_id(symbol)?;
+    let symbol = expect_symbol_id(symbol, mode)?;
     let idx = obarray
         .get_property_id(symbol, intern("ccl-program-idx"))
         .unwrap_or(Value::NIL);
@@ -1074,52 +1107,57 @@ fn symbol_has_valid_ccl_program_idx(
     eval: &mut super::eval::Context,
     symbol: &Value,
 ) -> Result<bool, Flow> {
-    symbol_has_valid_ccl_program_idx_in_obarray(eval.obarray(), symbol)
+    symbol_has_valid_ccl_program_idx_in_obarray(eval.obarray(), symbol, eval.symbol_mode())
 }
 
 pub(super) fn builtin_ccl_program_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let obarray = eval.obarray();
-    if args.len() == 1 && args[0].is_symbol() {
+    if args.len() == 1 && args[0].is_symbol(symbol_mode) {
         return Ok(Value::bool_val(
-            symbol_has_valid_ccl_program_idx_in_obarray(obarray, &args[0])?,
+            symbol_has_valid_ccl_program_idx_in_obarray(obarray, &args[0], symbol_mode)?,
         ));
     }
-    super::ccl::builtin_ccl_program_p_impl(args)
+    super::ccl::builtin_ccl_program_p_impl_with_symbols(args, symbol_mode)
 }
 
 pub(super) fn builtin_ccl_execute(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let obarray = eval.obarray();
-    if args.first().is_some_and(|v| v.is_symbol())
-        && !symbol_has_valid_ccl_program_idx_in_obarray(obarray, &args[0])?
+    if args.first().is_some_and(|v| v.is_symbol(symbol_mode))
+        && !symbol_has_valid_ccl_program_idx_in_obarray(obarray, &args[0], symbol_mode)?
     {
         let mut forced = args.clone();
         forced[0] = Value::fixnum(0);
         return super::ccl::with_ccl_obarray(obarray, || {
-            super::ccl::builtin_ccl_execute_impl(forced)
+            super::ccl::builtin_ccl_execute_impl_with_symbols(forced, symbol_mode)
         });
     }
-    super::ccl::with_ccl_obarray(obarray, || super::ccl::builtin_ccl_execute_impl(args))
+    super::ccl::with_ccl_obarray(obarray, || {
+        super::ccl::builtin_ccl_execute_impl_with_symbols(args, symbol_mode)
+    })
 }
 
 pub(super) fn builtin_ccl_execute_on_string(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let obarray = eval.obarray();
-    if args.first().is_some_and(|v| v.is_symbol())
-        && !symbol_has_valid_ccl_program_idx_in_obarray(obarray, &args[0])?
+    if args.first().is_some_and(|v| v.is_symbol(symbol_mode))
+        && !symbol_has_valid_ccl_program_idx_in_obarray(obarray, &args[0], symbol_mode)?
     {
         let mut forced = args.clone();
         forced[0] = Value::fixnum(0);
         return super::ccl::with_ccl_obarray(obarray, || {
-            super::ccl::builtin_ccl_execute_on_string_impl(forced)
+            super::ccl::builtin_ccl_execute_on_string_impl_with_symbols(forced, symbol_mode)
         });
     }
     super::ccl::with_ccl_obarray(obarray, || {
-        super::ccl::builtin_ccl_execute_on_string_impl(args)
+        super::ccl::builtin_ccl_execute_on_string_impl_with_symbols(args, symbol_mode)
     })
 }
 
@@ -1127,25 +1165,32 @@ pub(super) fn builtin_register_ccl_program(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let symbols_with_pos_enabled = eval.symbols_with_pos_enabled;
-    let obarray = eval.obarray_mut();
     let was_registered = args
         .first()
-        .and_then(|v| v.as_symbol_id())
+        .and_then(|v| v.as_symbol_id(symbol_mode))
         .is_some_and(super::ccl::is_registered_ccl_program);
-    let program_id = super::ccl::builtin_register_ccl_program_impl(args.clone())?;
+    let program_id =
+        super::ccl::builtin_register_ccl_program_impl_with_symbols(args.clone(), symbol_mode)?;
 
     if was_registered {
         return Ok(program_id);
     }
 
-    let publish = put_in_obarray(
-        obarray,
-        vec![args[0], Value::symbol("ccl-program-idx"), program_id],
-        symbols_with_pos_enabled,
-    );
+    // SAFETY: CCL registration/validation finished first; property publication
+    // is noncalling and never changes canonical function/debugger metadata.
+    let publish = unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            put_in_obarray(
+                obarray,
+                vec![args[0], Value::symbol("ccl-program-idx"), program_id],
+                symbols_with_pos_enabled,
+            )
+        })
+    };
     if let Err(err) = publish {
-        if let Some(name) = args[0].as_symbol_id() {
+        if let Some(name) = args[0].as_symbol_id(symbol_mode) {
             super::ccl::unregister_registered_ccl_program(name);
         }
         return Err(err);
@@ -1162,7 +1207,11 @@ pub(crate) fn builtin_setplist(eval: &mut super::eval::Context, args: Vec<Value>
     Ok(plist)
 }
 
-fn macroexpand_environment_binding_by_id(env: &Value, target: SymId) -> Option<Value> {
+fn macroexpand_environment_binding_by_id(
+    env: &Value,
+    target: SymId,
+    mode: SymbolMode,
+) -> Option<Value> {
     let mut cursor = *env;
     loop {
         match cursor.kind() {
@@ -1175,7 +1224,7 @@ fn macroexpand_environment_binding_by_id(env: &Value, target: SymId) -> Option<V
                 };
                 let entry_car = entry.cons_car();
                 let entry_cdr = entry.cons_cdr();
-                if matches!(symbol_id(&entry_car), Some(id) if id == target) {
+                if matches!(symbol_id(&entry_car, mode), Some(id) if id == target) {
                     return Some(entry_cdr);
                 }
             }
@@ -1189,9 +1238,9 @@ fn macroexpand_environment_callable(binding: &Value) -> Result<Value, Flow> {
 }
 
 #[inline]
-fn macroexpand_definition_is_macro(definition: &Value) -> bool {
+fn macroexpand_definition_is_macro(definition: &Value, mode: SymbolMode) -> bool {
     matches!(definition.kind(), ValueKind::Veclike(VecLikeType::Macro))
-        || (definition.is_cons() && definition.cons_car().is_symbol_named("macro"))
+        || (definition.is_cons() && definition.cons_car().is_symbol_named("macro", mode))
 }
 
 /// Collect the elements of a list, signalling `(wrong-type-argument listp
@@ -1227,7 +1276,7 @@ fn macroexpand_once_with_environment<R: MacroexpandRuntime>(
     let form_pair_cdr = form.cons_cdr();
     let head = form_pair_car;
     let tail = form_pair_cdr;
-    let Some(head_id) = symbol_id(&head) else {
+    let Some(head_id) = symbol_id(&head, runtime.symbol_mode()) else {
         return Ok((form, false));
     };
     if let Some(env) = environment
@@ -1245,10 +1294,11 @@ fn macroexpand_once_with_environment<R: MacroexpandRuntime>(
     let mut current_definition = head;
     let mut current_symbol = head_id;
     let mut environment_binding = None;
-    while let Some(definition_symbol) = symbol_id(&current_definition) {
+    while let Some(definition_symbol) = symbol_id(&current_definition, runtime.symbol_mode()) {
         current_symbol = definition_symbol;
         if let Some(env) = environment
-            && let Some(binding) = macroexpand_environment_binding_by_id(env, definition_symbol)
+            && let Some(binding) =
+                macroexpand_environment_binding_by_id(env, definition_symbol, runtime.symbol_mode())
         {
             environment_binding = Some(binding);
             break;
@@ -1273,7 +1323,7 @@ fn macroexpand_once_with_environment<R: MacroexpandRuntime>(
         }
     } else {
         let mut global = current_definition;
-        if super::autoload::is_autoload_value(&global) {
+        if super::autoload::is_autoload_value(&global, runtime.symbol_mode()) {
             // Root the in-flight expansion across the load (see the trait
             // method doc); autoload fires at most once per symbol, so the
             // single root is cheap.
@@ -1287,7 +1337,7 @@ fn macroexpand_once_with_environment<R: MacroexpandRuntime>(
                 .unwrap_or(Value::NIL);
         }
 
-        if macroexpand_definition_is_macro(&global) {
+        if macroexpand_definition_is_macro(&global, runtime.symbol_mode()) {
             Some(global)
         } else {
             None
@@ -1382,6 +1432,10 @@ pub(crate) fn indirect_function_impl_checked(
     expect_min_args("indirect-function", args, 1)?;
     expect_max_args("indirect-function", args, 2)?;
 
+    // GNU indirect_function's !NILP tests the original Value, not XSYMBOL.
+    if args[0].is_nil() {
+        return Ok(args[0]);
+    }
     if let Some(symbol) = symbol_id_checked(&args[0], symbols_with_pos_enabled) {
         if let Some(function) = resolve_indirect_symbol_by_id_in_obarray_checked(
             obarray,
@@ -1420,10 +1474,10 @@ pub(crate) fn resolve_indirect_symbol_by_id_in_obarray_checked(
     let mut current = symbol;
     loop {
         let function = symbol_function_cell_in_obarray(obarray, current)?;
+        if function.is_nil() {
+            return Some((NIL_SYM_ID, function));
+        }
         if let Some(next) = symbol_id_checked(&function, symbols_with_pos_enabled) {
-            if next == NIL_SYM_ID {
-                return Some((next, Value::NIL));
-            }
             current = next;
             continue;
         }
@@ -1435,7 +1489,11 @@ pub(crate) fn resolve_indirect_symbol_by_id(
     eval: &super::eval::Context,
     symbol: SymId,
 ) -> Option<(SymId, Value)> {
-    resolve_indirect_symbol_by_id_in_obarray(eval.obarray(), symbol)
+    resolve_indirect_symbol_by_id_in_obarray_checked(
+        eval.obarray(),
+        symbol,
+        eval.symbols_with_pos_enabled,
+    )
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1571,7 +1629,7 @@ pub(crate) fn global_obarray_symbols_in_bucket_order(
 /// place -- `(aset name 0 ?X)` after `(intern name ob)` makes the symbol answer
 /// to the new spelling and not the old one.
 fn obarray_lookup_name(sym: Value) -> Option<crate::emacs_core::intern::LispVisibleSymbolName> {
-    sym.as_symbol_id()
+    sym.as_bare_symbol_id()
         .map(crate::emacs_core::intern::resolve_lisp_visible_symbol_name)
 }
 
@@ -1611,7 +1669,7 @@ fn obarray_bucket_symbols(mut bucket: Value) -> Vec<Value> {
     let mut symbols = Vec::new();
     while bucket.is_cons() {
         let sym = bucket.cons_car();
-        if sym.as_symbol_lisp_string().is_some() {
+        if sym.as_bare_symbol_lisp_string().is_some() {
             symbols.push(sym);
         }
         bucket = bucket.cons_cdr();
@@ -1623,7 +1681,7 @@ fn obarray_bucket_symbols(mut bucket: Value) -> Vec<Value> {
 fn obarray_bucket_len(mut bucket: Value) -> usize {
     let mut len = 0;
     while bucket.is_cons() {
-        if bucket.cons_car().as_symbol_lisp_string().is_some() {
+        if bucket.cons_car().as_bare_symbol_lisp_string().is_some() {
             len += 1;
         }
         bucket = bucket.cons_cdr();
@@ -1815,6 +1873,9 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
     expect_min_args("intern-soft", args, 1)?;
     expect_max_args("intern-soft", args, 2)?;
 
+    let mode = eval.symbol_mode();
+    let symbol = args[0].as_symbol_id(mode);
+    let input = mode.unwrap(args[0]);
     let effective_obarray = effective_obarray_arg(eval, args);
 
     // Custom obarray path
@@ -1824,7 +1885,7 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
         // string the bucket chain is compared on. The view has to outlive the
         // `Cow` that borrows out of it, so it is bound before the match rather
         // than produced inside one of its arms.
-        let symbol_name_view = match args[0].kind() {
+        let symbol_name_view = match input.kind() {
             ValueKind::Symbol(id) => Some(
                 crate::emacs_core::intern::resolve_lisp_visible_symbol_name(id),
             ),
@@ -1836,14 +1897,14 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
             )),
             _ => None,
         };
-        let name = match (&symbol_name_view, args[0].kind()) {
+        let name = match (&symbol_name_view, input.kind()) {
             (Some(view), _) => std::borrow::Cow::Borrowed(view.text()),
             (None, ValueKind::String) => {
                 std::borrow::Cow::Borrowed(args[0].as_lisp_string().unwrap())
             }
             (None, _other) => {
                 // Transparently unwrap symbol-with-pos → bare symbol name.
-                if let Some(id) = symbol_id(&args[0]) {
+                if let Some(id) = symbol_id(&args[0], eval.symbol_mode()) {
                     std::borrow::Cow::Borrowed(crate::emacs_core::intern::resolve_sym_lisp_string(
                         id,
                     ))
@@ -1864,11 +1925,16 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
         }
         let bucket_idx = obarray_hash_lisp_string(name.as_ref(), vec_len);
         let bucket = obarray_bucket(obarray_val, bucket_idx).unwrap_or(Value::NIL);
-        return Ok(obarray_bucket_find(bucket, name.as_ref()).unwrap_or(Value::NIL));
+        let found = obarray_bucket_find(bucket, name.as_ref()).unwrap_or(Value::NIL);
+        return Ok(match symbol {
+            Some(id) if found.as_bare_symbol_id() == Some(id) => args[0],
+            Some(_) => Value::NIL,
+            None => found,
+        });
     }
 
     // Global obarray path
-    let name = match args[0].kind() {
+    let name = match input.kind() {
         ValueKind::String => std::borrow::Cow::Borrowed(args[0].as_lisp_string().unwrap()),
         ValueKind::Nil => std::borrow::Cow::Borrowed(
             crate::emacs_core::intern::resolve_sym_lisp_string(NIL_SYM_ID),
@@ -1881,7 +1947,7 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
         }
         _other => {
             // Transparently unwrap symbol-with-pos → bare symbol name.
-            if let Some(id) = symbol_id(&args[0]) {
+            if let Some(id) = symbol_id(&args[0], eval.symbol_mode()) {
                 std::borrow::Cow::Borrowed(crate::emacs_core::intern::resolve_sym_lisp_string(id))
             } else {
                 return Err(signal(
@@ -1892,7 +1958,11 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
         }
     };
     if let Some(id) = eval.obarray().intern_soft_lisp_string(name.as_ref()) {
-        Ok(Value::from_sym_id(id))
+        Ok(match symbol {
+            Some(expected) if expected == id => args[0],
+            Some(_) => Value::NIL,
+            None => Value::from_sym_id(id),
+        })
     } else {
         Ok(Value::NIL)
     }
@@ -2262,8 +2332,9 @@ pub(crate) fn builtin_map_charset_chars(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args_range("map-charset-chars", &args, 2, 5)?;
-    let charset = args[1].as_symbol_name().ok_or_else(|| {
+    let charset = args[1].as_symbol_name(symbol_mode).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("charsetp"), args[1]],
@@ -2453,7 +2524,7 @@ fn move_menu_bar_final_items(eval: &super::eval::Context, items: &mut Vec<(Value
         let key = final_items.cons_car();
         if let Some(index) = items
             .iter()
-            .position(|(item_key, _)| item_key.bits() == key.bits())
+            .position(|(item_key, _)| eq_value_swp(item_key, &key, eval.symbols_with_pos_enabled))
         {
             let item = items.remove(index);
             items.push(item);
@@ -2468,32 +2539,41 @@ fn collect_menu_bar_items_from_map(
     items: &mut Vec<(Value, String)>,
 ) {
     let menu_bar = Value::symbol("menu-bar");
-    let raw = crate::emacs_core::keymap::list_keymap_lookup_one(&keymap, &menu_bar);
-    let Some(menu_map) = crate::emacs_core::keymap::maybe_keymap_in_obarray(eval.obarray(), &raw)
-    else {
+    let raw =
+        crate::emacs_core::keymap::list_keymap_lookup_one(&keymap, &menu_bar, eval.symbol_mode());
+    let Some(menu_map) = crate::emacs_core::keymap::maybe_keymap_in_obarray(
+        eval.obarray(),
+        &raw,
+        eval.symbol_mode(),
+    ) else {
         return;
     };
     crate::emacs_core::keymap::list_keymap_for_each_binding_recursive(
         &menu_map,
         Some(eval.obarray()),
         |key, def| {
-            if items.iter().any(|(seen, _)| seen.bits() == key.bits()) {
+            if items
+                .iter()
+                .any(|(seen, _)| eq_value_swp(seen, &key, eval.symbols_with_pos_enabled))
+            {
                 return;
             }
-            if let Some(label) = menu_bar_label(def) {
+            if let Some(label) = menu_bar_label(def, eval.symbol_mode()) {
                 items.push((key, label));
             }
         },
+        eval.symbol_mode(),
     );
 }
 
-fn menu_bar_label(def: Value) -> Option<String> {
+fn menu_bar_label(def: Value, symbol_mode: SymbolMode) -> Option<String> {
     if !def.is_cons() {
         return None;
     }
     let car = def.cons_car();
     let cdr = def.cons_cdr();
-    if crate::emacs_core::keymap::KeymapMarker::MenuItem.is_value(car) && cdr.is_cons() {
+    if crate::emacs_core::keymap::KeymapMarker::MenuItem.is_value(car, symbol_mode) && cdr.is_cons()
+    {
         return cdr
             .cons_car()
             .as_lisp_string()
@@ -2618,14 +2698,14 @@ pub(crate) fn builtin_new_fontset(eval: &mut super::eval::Context, args: Vec<Val
     Ok(Value::string(registered))
 }
 
-pub(crate) fn builtin_open_font(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_open_font(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args_range("open-font", &args, 1, 3)?;
     let is_font_entity = match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Vector) => {
             let items = args[0].as_vector_data().unwrap().clone();
             items
                 .first()
-                .is_some_and(|v| v.as_symbol_name() == Some(":font-entity"))
+                .is_some_and(|v| v.as_symbol_name(symbol_mode) == Some(":font-entity"))
         }
         _ => false,
     };
@@ -2733,17 +2813,19 @@ pub(crate) fn builtin_object_intervals(
     ))
 }
 
-pub(crate) fn builtin_optimize_char_table(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_optimize_char_table(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args_range("optimize-char-table", &args, 1, 2)?;
     let test = match args.get(1) {
         None => super::chartable::OptimizeCharTableTest::Equal,
-        Some(value) if value.is_nil() || value.is_symbol_named("equal") => {
+        Some(value) if value.is_nil() || value.is_symbol_named("equal", symbol_mode) => {
             super::chartable::OptimizeCharTableTest::Equal
         }
-        Some(value) if value.is_symbol_named("eq") => super::chartable::OptimizeCharTableTest::Eq,
+        Some(value) if value.is_symbol_named("eq", symbol_mode) => {
+            super::chartable::OptimizeCharTableTest::Eq
+        }
         Some(_) => return Ok(Value::NIL),
     };
-    super::chartable::optimize_char_table(&args[0], test)?;
+    super::chartable::optimize_char_table_with_symbols(&args[0], test, symbol_mode)?;
     Ok(Value::NIL)
 }
 
@@ -2848,7 +2930,7 @@ pub(crate) fn builtin_position_symbol(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("position-symbol", &args, 2)?;
-    let sym = if args[0].is_symbol() {
+    let sym = if args[0].is_bare_symbol() {
         args[0]
     } else if args[0].is_symbol_with_pos() {
         args[0].as_symbol_with_pos_sym().unwrap()
@@ -3097,9 +3179,9 @@ pub(crate) fn builtin_set_buffer_auto_saved(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_set_charset_plist(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_set_charset_plist(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args("set-charset-plist", &args, 2)?;
-    let name = match args[0].kind() {
+    let name = match symbol_mode.unwrap(args[0]).kind() {
         ValueKind::Symbol(id) => id,
         _other => {
             return Err(signal(
@@ -3113,7 +3195,7 @@ pub(crate) fn builtin_set_charset_plist(args: Vec<Value>) -> EvalResult {
     if let Some(items) = list_to_vec(&args[1]) {
         let mut i = 0;
         while i + 1 < items.len() {
-            if let Some(key) = items[i].as_symbol_id() {
+            if let Some(key) = items[i].as_symbol_id(symbol_mode) {
                 plist_pairs.push((key, items[i + 1]));
             }
             i += 2;
@@ -3195,8 +3277,9 @@ pub(crate) fn builtin_set_fringe_bitmap_face(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     expect_args_range("set-fringe-bitmap-face", &args, 1, 2)?;
-    let bitmap = args[0].as_symbol_name();
+    let bitmap = args[0].as_symbol_name(symbol_mode);
     let has_fringe_property = symbol_property_get(ctx, args[0], Value::symbol("fringe"))?
         .1
         .is_some_and(|v| !v.is_nil());
@@ -3214,7 +3297,7 @@ pub(crate) fn builtin_set_fringe_bitmap_face(
         let face_name = args
             .get(1)
             .filter(|face| !face.is_nil())
-            .and_then(|face| face.as_symbol_name())
+            .and_then(|face| face.as_symbol_name(symbol_mode))
             .map(|name| name.to_string());
         ctx.fringe_bitmaps.set_face(sym, face_name);
     }
@@ -4064,13 +4147,16 @@ fn interactive_form_from_stored_closure_spec(spec: Value) -> Value {
     Value::list(vec![Value::symbol("interactive"), spec])
 }
 
-fn interactive_form_from_quoted_interactive_form(form: &Value) -> Result<Option<Value>, Flow> {
+fn interactive_form_from_quoted_interactive_form(
+    form: &Value,
+    symbol_mode: SymbolMode,
+) -> Result<Option<Value>, Flow> {
     if !form.is_cons() {
         return Ok(None);
     };
     let pair_car = form.cons_car();
     let pair_cdr = form.cons_cdr();
-    if pair_car.as_symbol_name() != Some("interactive") {
+    if pair_car.as_symbol_name(symbol_mode) != Some("interactive") {
         return Ok(None);
     }
 
@@ -4094,13 +4180,16 @@ fn interactive_form_from_quoted_interactive_form(form: &Value) -> Result<Option<
     }
 }
 
-fn interactive_form_from_quoted_lambda(value: &Value) -> Result<Option<Value>, Flow> {
+fn interactive_form_from_quoted_lambda(
+    value: &Value,
+    symbol_mode: SymbolMode,
+) -> Result<Option<Value>, Flow> {
     if !value.is_cons() {
         return Ok(None);
     };
     let lambda_pair_car = value.cons_car();
     let lambda_pair_cdr = value.cons_cdr();
-    if lambda_pair_car.as_symbol_name() != Some("lambda") {
+    if lambda_pair_car.as_symbol_name(symbol_mode) != Some("lambda") {
         return Ok(None);
     }
     if !lambda_pair_cdr.is_cons() {
@@ -4123,7 +4212,8 @@ fn interactive_form_from_quoted_lambda(value: &Value) -> Result<Option<Value>, F
                     continue;
                 }
                 can_skip_doc = false;
-                if let Some(interactive) = interactive_form_from_quoted_interactive_form(&pair_car)?
+                if let Some(interactive) =
+                    interactive_form_from_quoted_interactive_form(&pair_car, symbol_mode)?
                 {
                     return Ok(Some(interactive));
                 }
@@ -4158,10 +4248,11 @@ pub(crate) enum InteractiveFormPlan {
 pub(crate) fn plan_interactive_form_in_state(
     obarray: &Obarray,
     cmd: Value,
+    symbol_mode: SymbolMode,
 ) -> Result<InteractiveFormPlan, Flow> {
     let mut function = cmd;
 
-    if let Some(mut current) = cmd.as_symbol_id() {
+    if let Some(mut current) = cmd.as_symbol_id(symbol_mode) {
         let Some((_, indirect_function)) =
             resolve_indirect_symbol_by_id_in_obarray(obarray, current)
         else {
@@ -4185,7 +4276,7 @@ pub(crate) fn plan_interactive_form_in_state(
                 return Ok(InteractiveFormPlan::Return(Value::NIL));
             };
             function = next_function;
-            let Some(next_symbol) = function.as_symbol_id() else {
+            let Some(next_symbol) = function.as_symbol_id(symbol_mode) else {
                 break;
             };
             current = next_symbol;
@@ -4217,10 +4308,10 @@ pub(crate) fn plan_interactive_form_in_state(
         ValueKind::Veclike(VecLikeType::ByteCode) => Ok(InteractiveFormPlan::Return(
             interactive_form_from_bytecode_value(function).unwrap_or(Value::NIL),
         )),
-        ValueKind::Cons if super::autoload::is_autoload_value(&function) => {
+        ValueKind::Cons if super::autoload::is_autoload_value(&function, symbol_mode) => {
             Ok(InteractiveFormPlan::Autoload {
                 fundef: function,
-                funname: if cmd.as_symbol_id().is_some() {
+                funname: if cmd.as_symbol_id(symbol_mode).is_some() {
                     cmd
                 } else {
                     Value::NIL
@@ -4228,7 +4319,7 @@ pub(crate) fn plan_interactive_form_in_state(
             })
         }
         ValueKind::Cons => Ok(InteractiveFormPlan::Return(
-            interactive_form_from_quoted_lambda(&function)?.unwrap_or(Value::NIL),
+            interactive_form_from_quoted_lambda(&function, symbol_mode)?.unwrap_or(Value::NIL),
         )),
         _ => Ok(InteractiveFormPlan::Return(Value::NIL)),
     }
@@ -4244,11 +4335,12 @@ pub(crate) fn builtin_interactive_form(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("interactive-form", &args, 1)?;
     let cmd = args[0];
 
     // GNU (data.c:1133): Check indirect-function first for nil.
-    if let Some(cmd_id) = cmd.as_symbol_id() {
+    if let Some(cmd_id) = cmd.as_symbol_id(symbol_mode) {
         match resolve_indirect_symbol_by_id(eval, cmd_id) {
             Some((_, indirect)) if !indirect.is_nil() => {}
             _ => return Ok(Value::NIL),
@@ -4259,7 +4351,7 @@ pub(crate) fn builtin_interactive_form(
     // identity, checking `interactive-form` on each symbol in the chain.
     let mut fun = cmd;
     let mut genfun = false;
-    while let Some(symbol) = fun.as_symbol_id() {
+    while let Some(symbol) = fun.as_symbol_id(symbol_mode) {
         if let Some(prop) = eval
             .obarray
             .get_property_id(
@@ -4276,7 +4368,7 @@ pub(crate) fn builtin_interactive_form(
                 // `commandp` hint.  GNU `interactive-form` always loads it to
                 // obtain the real spec, so do not let registry metadata turn
                 // that hint into a no-argument spec.
-                if !super::autoload::is_autoload_value(&next)
+                if !super::autoload::is_autoload_value(&next, eval.symbol_mode())
                     && let Some(form) = crate::emacs_core::interactive::registry_interactive_form(
                         &eval.interactive,
                         symbol,
@@ -4368,8 +4460,8 @@ pub(crate) fn builtin_interactive_form(
         }
 
         // GNU (data.c:1188-1189): autoload → load then retry
-        ValueKind::Cons if super::autoload::is_autoload_value(&fun) => {
-            let funname = if cmd.as_symbol_id().is_some() {
+        ValueKind::Cons if super::autoload::is_autoload_value(&fun, eval.symbol_mode()) => {
+            let funname = if cmd.as_symbol_id(symbol_mode).is_some() {
                 cmd
             } else {
                 Value::NIL
@@ -4380,7 +4472,9 @@ pub(crate) fn builtin_interactive_form(
         }
 
         // GNU (data.c:1190-1202): lambda list (cons starting with `lambda`)
-        ValueKind::Cons => Ok(interactive_form_from_quoted_lambda(&fun)?.unwrap_or(Value::NIL)),
+        ValueKind::Cons => {
+            Ok(interactive_form_from_quoted_lambda(&fun, symbol_mode)?.unwrap_or(Value::NIL))
+        }
 
         _ => Ok(Value::NIL),
     }
@@ -4599,7 +4693,7 @@ pub(crate) fn builtin_internal_complete_buffer(
         return minibuffer::builtin_try_completion(ctx, vec![args[0], buffer_alist, predicate]);
     }
 
-    if flag.is_t() {
+    if eq_value_swp(&flag, &Value::T, ctx.symbols_with_pos_enabled) {
         let completions =
             minibuffer::builtin_all_completions(ctx, vec![args[0], buffer_alist, predicate])?;
         if string.schars() > 0 {
@@ -4611,11 +4705,19 @@ pub(crate) fn builtin_internal_complete_buffer(
         ));
     }
 
-    if eq_value(&flag, &Value::symbol("lambda")) {
+    if eq_value_swp(
+        &flag,
+        &Value::symbol("lambda"),
+        ctx.symbols_with_pos_enabled,
+    ) {
         return minibuffer::builtin_test_completion(ctx, vec![args[0], buffer_alist, predicate]);
     }
 
-    if eq_value(&flag, &Value::symbol("metadata")) {
+    if eq_value_swp(
+        &flag,
+        &Value::symbol("metadata"),
+        ctx.symbols_with_pos_enabled,
+    ) {
         return Ok(Value::list(vec![
             Value::symbol("metadata"),
             Value::cons(Value::symbol("category"), Value::symbol("buffer")),
@@ -4778,7 +4880,13 @@ pub(crate) fn builtin_internal_event_symbol_parse_modifiers(
 ) -> EvalResult {
     expect_args("internal-event-symbol-parse-modifiers", &args, 1)?;
     let symbol = SymId::from_value(eval, args[0])?;
-    cache_event_symbol_properties_in_obarray(eval.obarray_mut(), symbol)?;
+    // SAFETY: event parsing/cache population only writes properties and returns
+    // a detached result; it never calls Lisp or a canonical dispatch writer.
+    unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            cache_event_symbol_properties_in_obarray(obarray, symbol)
+        })
+    }?;
     Ok(eval
         .obarray()
         .get_property_id(symbol, intern("event-symbol-elements"))
@@ -4788,11 +4896,12 @@ pub(crate) fn builtin_internal_event_symbol_parse_modifiers(
 pub(crate) fn cache_event_symbol_value_properties_in_obarray(
     obarray: &mut Obarray,
     value: Value,
+    symbol_mode: SymbolMode,
 ) -> EvalResult {
-    if let Some(symbol) = symbol_id(&value) {
+    if let Some(symbol) = symbol_id(&value, symbol_mode) {
         cache_event_symbol_properties_in_obarray(obarray, symbol)?;
     } else if value.is_cons()
-        && let Some(symbol) = symbol_id(&value.cons_car())
+        && let Some(symbol) = symbol_id(&value.cons_car(), symbol_mode)
     {
         cache_event_symbol_properties_in_obarray(obarray, symbol)?;
     }
@@ -4804,7 +4913,7 @@ pub(crate) fn cache_event_symbol_properties_in_obarray(
     symbol: SymId,
 ) -> EvalResult {
     let symbol_value = Value::from_sym_id(symbol);
-    let name = symbol_value.as_symbol_name().ok_or_else(|| {
+    let name = symbol_value.as_bare_symbol_name().ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), symbol_value],
@@ -5125,6 +5234,7 @@ pub(crate) fn builtin_internal_handle_focus_in(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("internal-handle-focus-in", &args, 1)?;
     if !args[0].is_cons() {
         return Err(signal(
@@ -5134,7 +5244,7 @@ pub(crate) fn builtin_internal_handle_focus_in(
     };
     let pair_car = args[0].cons_car();
     let pair_cdr = args[0].cons_cdr();
-    if pair_car.as_symbol_name() != Some("focus-in") {
+    if pair_car.as_symbol_name(symbol_mode) != Some("focus-in") {
         return Err(signal(
             "error",
             vec![Value::string("invalid focus-in event")],
@@ -5168,8 +5278,8 @@ pub(crate) fn builtin_internal_make_var_non_special(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("internal-make-var-non-special", &args, 1)?;
-    let obarray = eval.obarray_mut();
-    let symbol = expect_symbol_id(&args[0])?;
+    let symbol = expect_symbol_id(&args[0], eval.symbol_mode())?;
+    let mut obarray = eval.obarray_mut();
     obarray.make_non_special_id(symbol);
     Ok(Value::NIL)
 }
@@ -5207,7 +5317,7 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute_from_resource(
         3,
         4,
     )?;
-    if symbol_id(&args[0]).is_none() {
+    if symbol_id(&args[0], eval.symbol_mode()).is_none() {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],
@@ -5215,7 +5325,7 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute_from_resource(
     }
     let resource_value = expect_string_lossy(&args[2])?;
 
-    let Some(attr_id) = symbol_id(&args[1]) else {
+    let Some(attr_id) = symbol_id(&args[1], eval.symbol_mode()) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[1]],
@@ -5498,6 +5608,7 @@ pub(crate) fn builtin_find_operation_coding_system(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     if args.is_empty() {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -5539,7 +5650,7 @@ pub(crate) fn builtin_find_operation_coding_system(
     };
 
     if args.len() <= target_idx + 1 {
-        let op_name = operation.as_symbol_name().unwrap_or("<unknown>");
+        let op_name = operation.as_symbol_name(symbol_mode).unwrap_or("<unknown>");
         return Err(signal(
             "error",
             vec![Value::string(format!(
@@ -5563,7 +5674,7 @@ pub(crate) fn builtin_find_operation_coding_system(
     };
 
     if !valid_target {
-        let op_name = operation.as_symbol_name().unwrap_or("<unknown>");
+        let op_name = operation.as_symbol_name(symbol_mode).unwrap_or("<unknown>");
         return Err(signal(
             "error",
             vec![Value::string(format!(
@@ -5607,12 +5718,13 @@ pub(crate) fn builtin_find_operation_coding_system(
                 if val.is_cons() {
                     return Ok(val);
                 }
-                if !val.is_symbol() {
+                if !val.is_symbol(symbol_mode) {
                     return Ok(Value::NIL);
                 }
                 if !crate::emacs_core::coding::builtin_coding_system_p(
                     &eval.coding_systems,
                     vec![val],
+                    symbol_mode,
                 )?
                 .is_nil()
                 {
@@ -5621,13 +5733,15 @@ pub(crate) fn builtin_find_operation_coding_system(
                 if !builtin_fboundp_1(eval, val)?.is_nil() {
                     let callback_args = Value::list(args.clone());
                     let returned = eval.apply(val, vec![callback_args])?;
+                    let symbol_mode = eval.symbol_mode();
                     if returned.is_cons() {
                         return Ok(returned);
                     }
-                    if returned.is_symbol()
+                    if returned.is_symbol(symbol_mode)
                         && !crate::emacs_core::coding::builtin_coding_system_p(
                             &eval.coding_systems,
                             vec![returned],
+                            symbol_mode,
                         )?
                         .is_nil()
                     {
@@ -5723,36 +5837,51 @@ pub(crate) fn builtin_keymap_prompt(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("keymap-prompt", &args, 1)?;
-    let map = crate::emacs_core::keymap::get_keymap_in_obarray(eval.obarray(), &args[0], false)?;
-    Ok(keymap_prompt_scan(eval.obarray(), map))
+    let map = crate::emacs_core::keymap::get_keymap_in_obarray(
+        eval.obarray(),
+        &args[0],
+        false,
+        eval.symbol_mode(),
+    )?;
+    Ok(keymap_prompt_scan(eval.obarray(), map, eval.symbol_mode()))
 }
 
-fn keymap_prompt_scan(obarray: &Obarray, map: Value) -> Value {
-    keymap_prompt_scan_at_depth(obarray, map, 0)
+fn keymap_prompt_scan(obarray: &Obarray, map: Value, symbol_mode: SymbolMode) -> Value {
+    keymap_prompt_scan_at_depth(obarray, map, 0, symbol_mode)
 }
 
 /// The first prompt string found in MAP's spine, descending into composed
 /// submaps and the parent. Built on the shared keymap-spine taxonomy so this
 /// scan cannot drift from the other spine walkers (see
 /// `keymap::for_each_keymap_element`).
-fn keymap_prompt_scan_at_depth(obarray: &Obarray, map: Value, depth: usize) -> Value {
+fn keymap_prompt_scan_at_depth(
+    obarray: &Obarray,
+    map: Value,
+    depth: usize,
+    symbol_mode: SymbolMode,
+) -> Value {
     use crate::emacs_core::keymap::KeymapElement;
     if depth > 64 {
         return Value::NIL;
     }
     let mut found = Value::NIL;
-    crate::emacs_core::keymap::for_each_keymap_element(&map, Some(obarray), |element| {
-        if !found.is_nil() {
-            return; // the first prompt in spine order wins
-        }
-        match element {
-            KeymapElement::Prompt(prompt) => found = prompt,
-            KeymapElement::Submap(submap) => {
-                found = keymap_prompt_scan_at_depth(obarray, submap, depth + 1);
+    crate::emacs_core::keymap::for_each_keymap_element(
+        &map,
+        Some(obarray),
+        |element| {
+            if !found.is_nil() {
+                return; // the first prompt in spine order wins
             }
-            KeymapElement::Binding { .. } | KeymapElement::IndirectTail(_) => {}
-        }
-    });
+            match element {
+                KeymapElement::Prompt(prompt) => found = prompt,
+                KeymapElement::Submap(submap) => {
+                    found = keymap_prompt_scan_at_depth(obarray, submap, depth + 1, symbol_mode);
+                }
+                KeymapElement::Binding { .. } | KeymapElement::IndirectTail(_) => {}
+            }
+        },
+        symbol_mode,
+    );
     found
 }
 
@@ -6292,9 +6421,9 @@ pub(crate) fn make_interpreted_closure_from_parts_unchecked(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_make_char(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_make_char(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args_range("make-char", &args, 1, 5)?;
-    let Some(charset) = args[0].as_symbol_name() else {
+    let Some(charset) = args[0].as_symbol_name(symbol_mode) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("charsetp"), args[0]],
@@ -6555,3 +6684,7 @@ pub(crate) fn builtin_make_interpreted_closure(args: Vec<Value>) -> EvalResult {
     expect_args_range("make-interpreted-closure", &args, 3, 5)?;
     make_interpreted_closure_from_parts(&args[0], &args[1], &args[2], args.get(3), args.get(4))
 }
+
+#[cfg(test)]
+#[path = "tests/positioned_menu_item_identity_test.rs"]
+mod positioned_menu_item_identity_tests;

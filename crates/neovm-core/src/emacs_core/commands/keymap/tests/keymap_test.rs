@@ -18,6 +18,7 @@ fn displayed_string_keymap_precedes_buffer_position_maps() {
         string_keymap,
         &[Value::symbol("tab-line"), Value::symbol("down-mouse-1")],
         command,
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define displayed string mouse binding");
     crate::emacs_core::textprop::builtin_put_text_property(
@@ -557,11 +558,17 @@ fn parse_modifier_with_named_key() {
 fn list_keymap_create_and_check() {
     crate::test_utils::init_test_tracing();
     let km = make_list_keymap();
-    assert!(is_list_keymap(&km));
+    assert!(is_list_keymap(&km, crate::tagged::SymbolMode::Bare));
     let sparse = make_sparse_list_keymap();
-    assert!(is_list_keymap(&sparse));
-    assert!(!is_list_keymap(&Value::NIL));
-    assert!(!is_list_keymap(&Value::fixnum(42)));
+    assert!(is_list_keymap(&sparse, crate::tagged::SymbolMode::Bare));
+    assert!(!is_list_keymap(
+        &Value::NIL,
+        crate::tagged::SymbolMode::Bare
+    ));
+    assert!(!is_list_keymap(
+        &Value::fixnum(42),
+        crate::tagged::SymbolMode::Bare
+    ));
 }
 
 /// GNU `get_keymap` recognizes the marker with `EQ (XCAR (object),
@@ -575,8 +582,8 @@ fn list_keymap_marker_requires_the_canonical_symbol_object() {
         crate::emacs_core::intern::intern_uninterned("keymap"),
     )]);
 
-    assert!(is_list_keymap(&canonical));
-    assert!(!is_list_keymap(&same_name));
+    assert!(is_list_keymap(&canonical, crate::tagged::SymbolMode::Bare));
+    assert!(!is_list_keymap(&same_name, crate::tagged::SymbolMode::Bare));
 }
 
 #[test]
@@ -584,9 +591,14 @@ fn list_keymap_define_and_lookup() {
     crate::test_utils::init_test_tracing();
     let km = make_sparse_list_keymap();
     let event = Value::symbol("return");
-    list_keymap_define(km, event, Value::symbol("newline"));
-    let result = list_keymap_lookup_one(&km, &event);
-    assert_eq!(result.as_symbol_name(), Some("newline"));
+    list_keymap_define(
+        km,
+        event,
+        Value::symbol("newline"),
+        crate::tagged::SymbolMode::Bare,
+    );
+    let result = list_keymap_lookup_one(&km, &event, crate::tagged::SymbolMode::Bare);
+    assert_eq!(result.as_bare_symbol_name(), Some("newline"));
 }
 
 /// GNU `access_keymap_1` canonicalizes the lookup index once before scanning,
@@ -603,11 +615,21 @@ fn lookup_does_not_canonicalize_each_stored_alist_key() {
     ]);
 
     assert!(
-        list_keymap_lookup_one(&manual, &Value::symbol("C-M-f1")).is_nil(),
+        list_keymap_lookup_one(
+            &manual,
+            &Value::symbol("C-M-f1"),
+            crate::tagged::SymbolMode::Bare
+        )
+        .is_nil(),
         "GNU canonicalizes the lookup event, not a manually stored alist key"
     );
     assert!(
-        list_keymap_lookup_one(&manual, &Value::symbol("M-C-f1")).is_nil(),
+        list_keymap_lookup_one(
+            &manual,
+            &Value::symbol("M-C-f1"),
+            crate::tagged::SymbolMode::Bare
+        )
+        .is_nil(),
         "the noncanonical lookup spelling is canonicalized before the scan"
     );
 }
@@ -618,16 +640,31 @@ fn list_keymap_define_inserts_bindings_before_prompt_like_gnu() {
     let prompt = Value::string("Test Menu");
     let km = Value::cons(Value::symbol("keymap"), Value::cons(prompt, Value::NIL));
 
-    list_keymap_define(km, Value::fixnum('a' as i64), Value::symbol("cmd-a"));
-    list_keymap_define(km, Value::fixnum('b' as i64), Value::symbol("cmd-b"));
-    list_keymap_define(km, Value::fixnum(1), Value::symbol("cmd-c"));
+    list_keymap_define(
+        km,
+        Value::fixnum('a' as i64),
+        Value::symbol("cmd-a"),
+        crate::tagged::SymbolMode::Bare,
+    );
+    list_keymap_define(
+        km,
+        Value::fixnum('b' as i64),
+        Value::symbol("cmd-b"),
+        crate::tagged::SymbolMode::Bare,
+    );
+    list_keymap_define(
+        km,
+        Value::fixnum(1),
+        Value::symbol("cmd-c"),
+        crate::tagged::SymbolMode::Bare,
+    );
 
     let first = km.cons_cdr().cons_car();
     let second = km.cons_cdr().cons_cdr().cons_car();
     let fourth = km.cons_cdr().cons_cdr().cons_cdr().cons_cdr().cons_car();
 
     assert_eq!(first.cons_car(), Value::fixnum(1));
-    assert_eq!(first.cons_cdr().as_symbol_name(), Some("cmd-c"));
+    assert_eq!(first.cons_cdr().as_bare_symbol_name(), Some("cmd-c"));
     assert_eq!(second.cons_car(), Value::fixnum('b' as i64));
     assert_eq!(
         fourth.as_lisp_string().unwrap().as_utf8_str(),
@@ -640,14 +677,22 @@ fn list_keymap_parent_chain() {
     crate::test_utils::init_test_tracing();
     let parent = make_sparse_list_keymap();
     let child = make_sparse_list_keymap();
-    list_keymap_set_parent(child, parent);
-    assert!(is_list_keymap(&list_keymap_parent(&child)));
+    list_keymap_set_parent(child, parent, crate::tagged::SymbolMode::Bare);
+    assert!(is_list_keymap(
+        &list_keymap_parent(&child, crate::tagged::SymbolMode::Bare),
+        crate::tagged::SymbolMode::Bare
+    ));
 
     // Binding in parent is found via child
     let event = Value::fixnum(97); // 'a'
-    list_keymap_define(parent, event, Value::symbol("cmd-a"));
-    let result = list_keymap_lookup_one(&child, &event);
-    assert_eq!(result.as_symbol_name(), Some("cmd-a"));
+    list_keymap_define(
+        parent,
+        event,
+        Value::symbol("cmd-a"),
+        crate::tagged::SymbolMode::Bare,
+    );
+    let result = list_keymap_lookup_one(&child, &event, crate::tagged::SymbolMode::Bare);
+    assert_eq!(result.as_bare_symbol_name(), Some("cmd-a"));
 }
 
 #[test]
@@ -655,13 +700,23 @@ fn list_keymap_child_overrides_parent() {
     crate::test_utils::init_test_tracing();
     let parent = make_sparse_list_keymap();
     let child = make_sparse_list_keymap();
-    list_keymap_set_parent(child, parent);
+    list_keymap_set_parent(child, parent, crate::tagged::SymbolMode::Bare);
 
     let event = Value::fixnum(120); // 'x'
-    list_keymap_define(parent, event, Value::symbol("parent-cmd"));
-    list_keymap_define(child, event, Value::symbol("child-cmd"));
-    let result = list_keymap_lookup_one(&child, &event);
-    assert_eq!(result.as_symbol_name(), Some("child-cmd"));
+    list_keymap_define(
+        parent,
+        event,
+        Value::symbol("parent-cmd"),
+        crate::tagged::SymbolMode::Bare,
+    );
+    list_keymap_define(
+        child,
+        event,
+        Value::symbol("child-cmd"),
+        crate::tagged::SymbolMode::Bare,
+    );
+    let result = list_keymap_lookup_one(&child, &event, crate::tagged::SymbolMode::Bare);
+    assert_eq!(result.as_bare_symbol_name(), Some("child-cmd"));
 }
 
 #[test]
@@ -675,26 +730,51 @@ fn list_keymap_set_parent_replaces_direct_sparse_parent_without_mutating_old_par
         parent_one,
         Value::fixnum('a' as i64),
         Value::symbol("parent-one"),
+        crate::tagged::SymbolMode::Bare,
     );
     list_keymap_define(
         parent_two,
         Value::fixnum('b' as i64),
         Value::symbol("parent-two"),
+        crate::tagged::SymbolMode::Bare,
     );
 
-    list_keymap_set_parent(child, parent_one);
-    assert!(keymap_value_eq(&list_keymap_parent(&child), &parent_one));
+    list_keymap_set_parent(child, parent_one, crate::tagged::SymbolMode::Bare);
+    assert!(keymap_value_eq(
+        &list_keymap_parent(&child, crate::tagged::SymbolMode::Bare),
+        &parent_one
+    ));
 
-    list_keymap_set_parent(child, parent_two);
-    assert!(keymap_value_eq(&list_keymap_parent(&child), &parent_two));
-    assert!(list_keymap_parent(&parent_one).is_nil());
+    list_keymap_set_parent(child, parent_two, crate::tagged::SymbolMode::Bare);
+    assert!(keymap_value_eq(
+        &list_keymap_parent(&child, crate::tagged::SymbolMode::Bare),
+        &parent_two
+    ));
+    assert!(list_keymap_parent(&parent_one, crate::tagged::SymbolMode::Bare).is_nil());
     assert_eq!(
-        list_keymap_lookup_one(&parent_one, &Value::fixnum('a' as i64)).as_symbol_name(),
+        list_keymap_lookup_one(
+            &parent_one,
+            &Value::fixnum('a' as i64),
+            crate::tagged::SymbolMode::Bare
+        )
+        .as_bare_symbol_name(),
         Some("parent-one")
     );
-    assert!(list_keymap_lookup_one(&child, &Value::fixnum('a' as i64)).is_nil());
+    assert!(
+        list_keymap_lookup_one(
+            &child,
+            &Value::fixnum('a' as i64),
+            crate::tagged::SymbolMode::Bare
+        )
+        .is_nil()
+    );
     assert_eq!(
-        list_keymap_lookup_one(&child, &Value::fixnum('b' as i64)).as_symbol_name(),
+        list_keymap_lookup_one(
+            &child,
+            &Value::fixnum('b' as i64),
+            crate::tagged::SymbolMode::Bare
+        )
+        .as_bare_symbol_name(),
         Some("parent-two")
     );
 }
@@ -709,16 +789,27 @@ fn list_keymap_for_each_binding_stops_before_direct_sparse_parent() {
         parent,
         Value::fixnum('a' as i64),
         Value::symbol("parent-cmd"),
+        crate::tagged::SymbolMode::Bare,
     );
-    list_keymap_define(child, Value::fixnum('x' as i64), Value::symbol("child-cmd"));
-    list_keymap_set_parent(child, parent);
+    list_keymap_define(
+        child,
+        Value::fixnum('x' as i64),
+        Value::symbol("child-cmd"),
+        crate::tagged::SymbolMode::Bare,
+    );
+    list_keymap_set_parent(child, parent, crate::tagged::SymbolMode::Bare);
 
     let mut seen = Vec::new();
-    list_keymap_for_each_binding(&child, None, |event, def| seen.push((event, def)));
+    list_keymap_for_each_binding(
+        &child,
+        None,
+        |event, def| seen.push((event, def)),
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].0, Value::fixnum('x' as i64));
-    assert_eq!(seen[0].1.as_symbol_name(), Some("child-cmd"));
+    assert_eq!(seen[0].1.as_bare_symbol_name(), Some("child-cmd"));
 }
 
 #[test]
@@ -734,15 +825,20 @@ fn list_keymap_for_each_binding_reports_inline_vector_slots() {
     let keymap = Value::list(vec![Value::symbol("keymap"), Value::vector(slots)]);
 
     let mut seen = Vec::new();
-    list_keymap_for_each_binding(&keymap, None, |event, def| {
-        if !def.is_nil() {
-            seen.push((event, def));
-        }
-    });
+    list_keymap_for_each_binding(
+        &keymap,
+        None,
+        |event, def| {
+            if !def.is_nil() {
+                seen.push((event, def));
+            }
+        },
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(seen.len(), 1, "seen={seen:?}");
     assert_eq!(seen[0].0, Value::fixnum('a' as i64));
-    assert_eq!(seen[0].1.as_symbol_name(), Some("vec-cmd"));
+    assert_eq!(seen[0].1.as_bare_symbol_name(), Some("vec-cmd"));
 }
 
 #[test]
@@ -752,10 +848,20 @@ fn list_keymap_for_each_binding_normalizes_a_t_binding_to_nil() {
     // a binding of the symbol `t`.
     crate::test_utils::init_test_tracing();
     let keymap = make_sparse_list_keymap();
-    list_keymap_define(keymap, Value::fixnum('u' as i64), Value::T);
+    list_keymap_define(
+        keymap,
+        Value::fixnum('u' as i64),
+        Value::T,
+        crate::tagged::SymbolMode::Bare,
+    );
 
     let mut seen = Vec::new();
-    list_keymap_for_each_binding(&keymap, None, |event, def| seen.push((event, def)));
+    list_keymap_for_each_binding(
+        &keymap,
+        None,
+        |event, def| seen.push((event, def)),
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(seen.len(), 1, "seen={seen:?}");
     assert_eq!(seen[0].0, Value::fixnum('u' as i64));
@@ -768,7 +874,12 @@ fn for_each_keymap_element_classifies_every_gnu_element_kind() {
     // prompt string, `(KEY . BINDING)` cons, inline vector, composed submap.
     crate::test_utils::init_test_tracing();
     let submap = make_sparse_list_keymap();
-    list_keymap_define(submap, Value::fixnum('s' as i64), Value::symbol("sub-cmd"));
+    list_keymap_define(
+        submap,
+        Value::fixnum('s' as i64),
+        Value::symbol("sub-cmd"),
+        crate::tagged::SymbolMode::Bare,
+    );
     let mut slots = vec![Value::NIL; 4];
     slots[2] = Value::symbol("vec-cmd");
     let keymap = Value::list(vec![
@@ -782,16 +893,21 @@ fn for_each_keymap_element_classifies_every_gnu_element_kind() {
     let mut prompts = Vec::new();
     let mut bindings = Vec::new();
     let mut submaps = 0usize;
-    for_each_keymap_element(&keymap, None, |element| match element {
-        KeymapElement::Prompt(prompt) => prompts.push(prompt),
-        KeymapElement::Binding { key, value } => {
-            if !value.is_nil() {
-                bindings.push((key, value));
+    for_each_keymap_element(
+        &keymap,
+        None,
+        |element| match element {
+            KeymapElement::Prompt(prompt) => prompts.push(prompt),
+            KeymapElement::Binding { key, value } => {
+                if !value.is_nil() {
+                    bindings.push((key, value));
+                }
             }
-        }
-        KeymapElement::Submap(_) => submaps += 1,
-        KeymapElement::IndirectTail(_) => {}
-    });
+            KeymapElement::Submap(_) => submaps += 1,
+            KeymapElement::IndirectTail(_) => {}
+        },
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(prompts.len(), 1);
     assert_eq!(
@@ -804,7 +920,10 @@ fn for_each_keymap_element_classifies_every_gnu_element_kind() {
     );
     // The cons binding and the populated vector slot -- the submap's own binding
     // belongs to the submap, not to this level.
-    let names: Vec<Option<&str>> = bindings.iter().map(|(_, v)| v.as_symbol_name()).collect();
+    let names: Vec<Option<&str>> = bindings
+        .iter()
+        .map(|(_, v)| v.as_bare_symbol_name())
+        .collect();
     assert_eq!(
         names,
         vec![Some("cons-cmd"), Some("vec-cmd")],
@@ -819,11 +938,16 @@ fn list_keymap_accessible_descends_into_direct_sparse_parent() {
     let prefix_map = make_sparse_list_keymap();
     let child = make_sparse_list_keymap();
 
-    list_keymap_define(parent, Value::fixnum('a' as i64), prefix_map);
-    list_keymap_set_parent(child, parent);
+    list_keymap_define(
+        parent,
+        Value::fixnum('a' as i64),
+        prefix_map,
+        crate::tagged::SymbolMode::Bare,
+    );
+    list_keymap_set_parent(child, parent, crate::tagged::SymbolMode::Bare);
 
     let mut out = Vec::new();
-    list_keymap_accessible(child, &[], None, &mut out);
+    list_keymap_accessible(child, &[], None, &mut out, crate::tagged::SymbolMode::Bare);
 
     // GNU `accessible-keymaps` follows the parent (via map_keymap), so the
     // parent's `a` prefix map is listed under [?a]. GNU prints ([] [97]).
@@ -846,24 +970,48 @@ fn list_keymap_copy_preserves_direct_sparse_parent_without_inlining_parent_bindi
         parent,
         Value::fixnum('a' as i64),
         Value::symbol("parent-cmd"),
+        crate::tagged::SymbolMode::Bare,
     );
-    list_keymap_define(child, Value::fixnum('x' as i64), Value::symbol("child-cmd"));
-    list_keymap_set_parent(child, parent);
+    list_keymap_define(
+        child,
+        Value::fixnum('x' as i64),
+        Value::symbol("child-cmd"),
+        crate::tagged::SymbolMode::Bare,
+    );
+    list_keymap_set_parent(child, parent, crate::tagged::SymbolMode::Bare);
 
-    let copy = list_keymap_copy(&child);
+    let copy = list_keymap_copy(&child, crate::tagged::SymbolMode::Bare);
 
-    assert!(keymap_value_eq(&list_keymap_parent(&copy), &parent));
+    assert!(keymap_value_eq(
+        &list_keymap_parent(&copy, crate::tagged::SymbolMode::Bare),
+        &parent
+    ));
     assert_eq!(
-        list_keymap_lookup_one(&copy, &Value::fixnum('x' as i64)).as_symbol_name(),
+        list_keymap_lookup_one(
+            &copy,
+            &Value::fixnum('x' as i64),
+            crate::tagged::SymbolMode::Bare
+        )
+        .as_bare_symbol_name(),
         Some("child-cmd")
     );
     assert_eq!(
-        list_keymap_lookup_one(&copy, &Value::fixnum('a' as i64)).as_symbol_name(),
+        list_keymap_lookup_one(
+            &copy,
+            &Value::fixnum('a' as i64),
+            crate::tagged::SymbolMode::Bare
+        )
+        .as_bare_symbol_name(),
         Some("parent-cmd")
     );
 
     let mut seen = Vec::new();
-    list_keymap_for_each_binding(&copy, None, |event, def| seen.push((event, def)));
+    list_keymap_for_each_binding(
+        &copy,
+        None,
+        |event, def| seen.push((event, def)),
+        crate::tagged::SymbolMode::Bare,
+    );
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].0, Value::fixnum('x' as i64));
 }
@@ -874,7 +1022,12 @@ fn store_in_keymap_keeps_prompt_reachable_after_gnu_ordered_prepend() {
     let prompt = Value::string("Auxiliary keymap for Normal state");
     let map = Value::list(vec![Value::symbol("keymap"), prompt]);
 
-    list_keymap_define(map, Value::fixnum('x' as i64), Value::symbol("foo"));
+    list_keymap_define(
+        map,
+        Value::fixnum('x' as i64),
+        Value::symbol("foo"),
+        crate::tagged::SymbolMode::Bare,
+    );
 
     // GNU `store_in_keymap` prepends ordinary bindings before prompt strings;
     // `keymap-prompt` still finds the prompt by scanning the keymap spine.
@@ -882,7 +1035,7 @@ fn store_in_keymap_keeps_prompt_reachable_after_gnu_ordered_prepend() {
     assert!(cdr.is_cons(), "expected non-empty cdr after define-key");
     let head = cdr.cons_car();
     assert_eq!(head.cons_car(), Value::fixnum('x' as i64));
-    assert_eq!(head.cons_cdr().as_symbol_name(), Some("foo"));
+    assert_eq!(head.cons_cdr().as_bare_symbol_name(), Some("foo"));
     let prompt_tail = cdr.cons_cdr();
     assert!(prompt_tail.is_cons(), "expected prompt after binding");
     assert_eq!(
@@ -892,8 +1045,12 @@ fn store_in_keymap_keeps_prompt_reachable_after_gnu_ordered_prepend() {
     );
 
     // The new binding must still exist and be reachable.
-    let bound = list_keymap_lookup_one(&map, &Value::fixnum('x' as i64));
-    assert_eq!(bound.as_symbol_name(), Some("foo"));
+    let bound = list_keymap_lookup_one(
+        &map,
+        &Value::fixnum('x' as i64),
+        crate::tagged::SymbolMode::Bare,
+    );
+    assert_eq!(bound.as_bare_symbol_name(), Some("foo"));
 }
 
 #[test]
@@ -922,15 +1079,21 @@ fn list_keymap_lookup_seq_searches_composed_keymap_members_by_full_sequence() {
         Value::fixnum('[' as i64),
         Value::fixnum('C' as i64),
     ];
-    list_keymap_define_seq(child, &events, Value::vector(vec![Value::symbol("right")])).unwrap();
+    list_keymap_define_seq(
+        child,
+        &events,
+        Value::vector(vec![Value::symbol("right")]),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
 
     let composed = Value::list(vec![Value::symbol("keymap"), child]);
-    let binding = list_keymap_lookup_seq(&composed, &events);
+    let binding = list_keymap_lookup_seq(&composed, &events, crate::tagged::SymbolMode::Bare);
 
     assert_eq!(
         binding
             .as_vector_data()
-            .map(|items| items[0].as_symbol_name()),
+            .map(|items| items[0].as_bare_symbol_name()),
         Some(Some("right"))
     );
 }
@@ -945,15 +1108,27 @@ fn lookup_key_in_obarray_searches_composed_keymap_members_by_full_sequence() {
         Value::fixnum('[' as i64),
         Value::fixnum('C' as i64),
     ];
-    list_keymap_define_seq(child, &events, Value::vector(vec![Value::symbol("right")])).unwrap();
+    list_keymap_define_seq(
+        child,
+        &events,
+        Value::vector(vec![Value::symbol("right")]),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
 
     let composed = Value::list(vec![Value::symbol("keymap"), child]);
-    let binding = lookup_key_in_obarray(&obarray, &composed, &events, false);
+    let binding = lookup_key_in_obarray(
+        &obarray,
+        &composed,
+        &events,
+        false,
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(
         binding
             .as_vector_data()
-            .map(|items| items[0].as_symbol_name()),
+            .map(|items| items[0].as_bare_symbol_name()),
         Some(Some("right"))
     );
 }
@@ -968,16 +1143,28 @@ fn lookup_key_in_obarray_searches_parent_composed_keymap_by_full_sequence() {
         Value::fixnum('[' as i64),
         Value::fixnum('C' as i64),
     ];
-    list_keymap_define_seq(child, &events, Value::vector(vec![Value::symbol("right")])).unwrap();
+    list_keymap_define_seq(
+        child,
+        &events,
+        Value::vector(vec![Value::symbol("right")]),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
 
     let composed_parent = Value::list(vec![Value::symbol("keymap"), child]);
     let map = Value::cons(Value::symbol("keymap"), composed_parent);
-    let binding = lookup_key_in_obarray(&obarray, &map, &events, false);
+    let binding = lookup_key_in_obarray(
+        &obarray,
+        &map,
+        &events,
+        false,
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(
         binding
             .as_vector_data()
-            .map(|items| items[0].as_symbol_name()),
+            .map(|items| items[0].as_bare_symbol_name()),
         Some(Some("right"))
     );
 }
@@ -998,22 +1185,35 @@ fn lookup_key_in_obarray_composes_child_and_parent_prefix_maps() {
         Value::fixnum('[' as i64),
         Value::fixnum('C' as i64),
     ];
-    list_keymap_define_seq(child, &child_events, Value::symbol("child-up")).unwrap();
+    list_keymap_define_seq(
+        child,
+        &child_events,
+        Value::symbol("child-up"),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
     list_keymap_define_seq(
         parent_member,
         &parent_events,
         Value::vector(vec![Value::symbol("right")]),
+        crate::tagged::SymbolMode::Bare,
     )
     .unwrap();
 
     let composed_parent = Value::list(vec![Value::symbol("keymap"), parent_member]);
-    list_keymap_set_parent(child, composed_parent);
-    let binding = lookup_key_in_obarray(&obarray, &child, &parent_events, false);
+    list_keymap_set_parent(child, composed_parent, crate::tagged::SymbolMode::Bare);
+    let binding = lookup_key_in_obarray(
+        &obarray,
+        &child,
+        &parent_events,
+        false,
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(
         binding
             .as_vector_data()
-            .map(|items| items[0].as_symbol_name()),
+            .map(|items| items[0].as_bare_symbol_name()),
         Some(Some("right"))
     );
 }
@@ -1033,24 +1233,40 @@ fn composed_prefix_map_keeps_parent_prefix_at_next_level() {
         Value::fixnum('[' as i64),
         Value::fixnum('C' as i64),
     ];
-    list_keymap_define_seq(child, &child_events, Value::symbol("child-up")).unwrap();
+    list_keymap_define_seq(
+        child,
+        &child_events,
+        Value::symbol("child-up"),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
     list_keymap_define_seq(
         parent_member,
         &parent_events,
         Value::vector(vec![Value::symbol("right")]),
+        crate::tagged::SymbolMode::Bare,
     )
     .unwrap();
 
     let composed_parent = Value::list(vec![Value::symbol("keymap"), parent_member]);
-    list_keymap_set_parent(child, composed_parent);
-    let esc_prefix = list_keymap_lookup_one(&child, &Value::fixnum(27));
-    let bracket_prefix = list_keymap_lookup_one(&esc_prefix, &Value::fixnum('[' as i64));
-    let binding = list_keymap_lookup_one(&bracket_prefix, &Value::fixnum('C' as i64));
+    list_keymap_set_parent(child, composed_parent, crate::tagged::SymbolMode::Bare);
+    let esc_prefix =
+        list_keymap_lookup_one(&child, &Value::fixnum(27), crate::tagged::SymbolMode::Bare);
+    let bracket_prefix = list_keymap_lookup_one(
+        &esc_prefix,
+        &Value::fixnum('[' as i64),
+        crate::tagged::SymbolMode::Bare,
+    );
+    let binding = list_keymap_lookup_one(
+        &bracket_prefix,
+        &Value::fixnum('C' as i64),
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(
         binding
             .as_vector_data()
-            .map(|items| items[0].as_symbol_name()),
+            .map(|items| items[0].as_bare_symbol_name()),
         Some(Some("right"))
     );
 }
@@ -1070,23 +1286,42 @@ fn composed_keymap_accumulates_prefix_maps_from_multiple_members() {
         Value::fixnum('[' as i64),
         Value::fixnum('C' as i64),
     ];
-    list_keymap_define_seq(first_member, &first_events, Value::symbol("first-up")).unwrap();
+    list_keymap_define_seq(
+        first_member,
+        &first_events,
+        Value::symbol("first-up"),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
     list_keymap_define_seq(
         second_member,
         &second_events,
         Value::vector(vec![Value::symbol("right")]),
+        crate::tagged::SymbolMode::Bare,
     )
     .unwrap();
 
     let composed = Value::list(vec![Value::symbol("keymap"), first_member, second_member]);
-    let esc_prefix = list_keymap_lookup_one(&composed, &Value::fixnum(27));
-    let bracket_prefix = list_keymap_lookup_one(&esc_prefix, &Value::fixnum('[' as i64));
-    let binding = list_keymap_lookup_one(&bracket_prefix, &Value::fixnum('C' as i64));
+    let esc_prefix = list_keymap_lookup_one(
+        &composed,
+        &Value::fixnum(27),
+        crate::tagged::SymbolMode::Bare,
+    );
+    let bracket_prefix = list_keymap_lookup_one(
+        &esc_prefix,
+        &Value::fixnum('[' as i64),
+        crate::tagged::SymbolMode::Bare,
+    );
+    let binding = list_keymap_lookup_one(
+        &bracket_prefix,
+        &Value::fixnum('C' as i64),
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(
         binding
             .as_vector_data()
-            .map(|items| items[0].as_symbol_name()),
+            .map(|items| items[0].as_bare_symbol_name()),
         Some(Some("right"))
     );
 }
@@ -1103,20 +1338,27 @@ fn composed_keymap_child_prefix_shadows_parent_command() {
         Value::fixnum('n' as i64),
     ];
 
-    list_keymap_define_seq(child_member, &child_events, Value::symbol("child-command")).unwrap();
+    list_keymap_define_seq(
+        child_member,
+        &child_events,
+        Value::symbol("child-command"),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
     list_keymap_define_seq(
         parent_member,
         &prefix_events,
         Value::symbol("parent-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .unwrap();
 
     let composed = Value::list(vec![Value::symbol("keymap"), child_member, parent_member]);
-    let prefix = list_keymap_lookup_seq(&composed, &prefix_events);
-    assert!(is_list_keymap(&prefix));
+    let prefix = list_keymap_lookup_seq(&composed, &prefix_events, crate::tagged::SymbolMode::Bare);
+    assert!(is_list_keymap(&prefix, crate::tagged::SymbolMode::Bare));
 
-    let binding = list_keymap_lookup_seq(&composed, &child_events);
-    assert_eq!(binding.as_symbol_name(), Some("child-command"));
+    let binding = list_keymap_lookup_seq(&composed, &child_events, crate::tagged::SymbolMode::Bare);
+    assert_eq!(binding.as_bare_symbol_name(), Some("child-command"));
 }
 
 #[test]
@@ -1136,23 +1378,42 @@ fn lookup_key_in_obarray_composes_child_prefix_with_multi_member_parent() {
         Value::fixnum('[' as i64),
         Value::fixnum('C' as i64),
     ];
-    list_keymap_define_seq(child, &child_events, Value::symbol("child-up")).unwrap();
-    list_keymap_define_seq(first_parent, &child_events, Value::symbol("parent-up")).unwrap();
+    list_keymap_define_seq(
+        child,
+        &child_events,
+        Value::symbol("child-up"),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
+    list_keymap_define_seq(
+        first_parent,
+        &child_events,
+        Value::symbol("parent-up"),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
     list_keymap_define_seq(
         second_parent,
         &parent_events,
         Value::vector(vec![Value::symbol("right")]),
+        crate::tagged::SymbolMode::Bare,
     )
     .unwrap();
 
     let composed_parent = Value::list(vec![Value::symbol("keymap"), first_parent, second_parent]);
-    list_keymap_set_parent(child, composed_parent);
-    let binding = lookup_key_in_obarray(&obarray, &child, &parent_events, false);
+    list_keymap_set_parent(child, composed_parent, crate::tagged::SymbolMode::Bare);
+    let binding = lookup_key_in_obarray(
+        &obarray,
+        &child,
+        &parent_events,
+        false,
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(
         binding
             .as_vector_data()
-            .map(|items| items[0].as_symbol_name()),
+            .map(|items| items[0].as_bare_symbol_name()),
         Some(Some("right"))
     );
 }
@@ -1166,11 +1427,13 @@ fn composed_prefix_map_searches_spliced_parent_tail() {
         first_member,
         Value::fixnum('A' as i64),
         Value::symbol("first-up"),
+        crate::tagged::SymbolMode::Bare,
     );
     list_keymap_define(
         parent_member,
         Value::fixnum('C' as i64),
         Value::vector(vec![Value::symbol("right")]),
+        crate::tagged::SymbolMode::Bare,
     );
 
     let parent = Value::list(vec![Value::symbol("keymap"), parent_member]);
@@ -1178,12 +1441,16 @@ fn composed_prefix_map_searches_spliced_parent_tail() {
         Value::symbol("keymap"),
         Value::cons(first_member, parent.cons_cdr()),
     );
-    let binding = list_keymap_lookup_one(&composed, &Value::fixnum('C' as i64));
+    let binding = list_keymap_lookup_one(
+        &composed,
+        &Value::fixnum('C' as i64),
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(
         binding
             .as_vector_data()
-            .map(|items| items[0].as_symbol_name()),
+            .map(|items| items[0].as_bare_symbol_name()),
         Some(Some("right"))
     );
 }
@@ -1193,20 +1460,30 @@ fn composed_keymap_nil_member_does_not_shadow_later_member() {
     crate::test_utils::init_test_tracing();
     let first_member = make_sparse_list_keymap();
     let second_member = make_sparse_list_keymap();
-    list_keymap_define(first_member, Value::fixnum('C' as i64), Value::NIL);
+    list_keymap_define(
+        first_member,
+        Value::fixnum('C' as i64),
+        Value::NIL,
+        crate::tagged::SymbolMode::Bare,
+    );
     list_keymap_define(
         second_member,
         Value::fixnum('C' as i64),
         Value::vector(vec![Value::symbol("right")]),
+        crate::tagged::SymbolMode::Bare,
     );
 
     let composed = Value::list(vec![Value::symbol("keymap"), first_member, second_member]);
-    let binding = list_keymap_lookup_one(&composed, &Value::fixnum('C' as i64));
+    let binding = list_keymap_lookup_one(
+        &composed,
+        &Value::fixnum('C' as i64),
+        crate::tagged::SymbolMode::Bare,
+    );
 
     assert_eq!(
         binding
             .as_vector_data()
-            .map(|items| items[0].as_symbol_name()),
+            .map(|items| items[0].as_bare_symbol_name()),
         Some(Some("right"))
     );
 }
@@ -1399,20 +1676,31 @@ fn composed_keymap_member_searches_its_parent_chain_from_the_root() {
     ];
     let f9 = [esc, bracket, Value::fixnum(50), Value::fixnum(48), tilde];
 
-    list_keymap_define_seq(rxvt, &paste_start, Value::symbol("xterm-paste"))
-        .expect("define leaf binding");
-    list_keymap_define_seq(member, &f9, Value::symbol("f9")).expect("define member binding");
-    list_keymap_set_parent(member, rxvt);
+    list_keymap_define_seq(
+        rxvt,
+        &paste_start,
+        Value::symbol("xterm-paste"),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .expect("define leaf binding");
+    list_keymap_define_seq(
+        member,
+        &f9,
+        Value::symbol("f9"),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .expect("define member binding");
+    list_keymap_set_parent(member, rxvt, crate::tagged::SymbolMode::Bare);
     let composed = Value::list(vec![KeymapMarker::Keymap.symbol_value(), member]);
-    list_keymap_set_parent(root, composed);
+    list_keymap_set_parent(root, composed, crate::tagged::SymbolMode::Bare);
 
     assert_eq!(
-        list_keymap_lookup_seq(&root, &paste_start),
+        list_keymap_lookup_seq(&root, &paste_start, crate::tagged::SymbolMode::Bare),
         Value::symbol("xterm-paste"),
         "the member's parent chain must stay reachable from the root"
     );
     assert_eq!(
-        list_keymap_lookup_seq(&root, &f9),
+        list_keymap_lookup_seq(&root, &f9, crate::tagged::SymbolMode::Bare),
         Value::symbol("f9"),
         "the member's own binding must keep resolving"
     );

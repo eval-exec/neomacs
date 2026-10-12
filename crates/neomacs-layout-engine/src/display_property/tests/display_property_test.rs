@@ -381,11 +381,11 @@ fn classify_display_property_recognizes_left_and_right_fringe_specs() {
     match left.replacement() {
         Some(crate::display_property::DisplayReplacementProperty::Fringe(layout)) => {
             assert_eq!(layout.side, crate::display_spec::DisplayFringeSide::Left);
-            assert!(layout.bitmap.is_symbol_named("magit-fringe-bitmapv"));
+            assert!(layout.bitmap.is_bare_symbol_named("magit-fringe-bitmapv"));
             assert!(
                 layout
                     .face
-                    .is_some_and(|face| face.is_symbol_named("fringe"))
+                    .is_some_and(|face| face.is_bare_symbol_named("fringe"))
             );
         }
         other => panic!("expected left fringe layout, got {other:?}"),
@@ -403,7 +403,7 @@ fn classify_display_property_recognizes_left_and_right_fringe_specs() {
     match right.replacement() {
         Some(crate::display_property::DisplayReplacementProperty::Fringe(layout)) => {
             assert_eq!(layout.side, crate::display_spec::DisplayFringeSide::Right);
-            assert!(layout.bitmap.is_symbol_named("right-arrow"));
+            assert!(layout.bitmap.is_bare_symbol_named("right-arrow"));
             assert!(layout.face.is_none(), "no FACE provided");
         }
         other => panic!("expected right fringe layout, got {other:?}"),
@@ -435,11 +435,11 @@ fn classify_display_property_unwraps_list_wrapped_fringe_spec() {
     match wrapped.replacement() {
         Some(crate::display_property::DisplayReplacementProperty::Fringe(layout)) => {
             assert_eq!(layout.side, crate::display_spec::DisplayFringeSide::Left);
-            assert!(layout.bitmap.is_symbol_named("diff-hl-bmp-middle"));
+            assert!(layout.bitmap.is_bare_symbol_named("diff-hl-bmp-middle"));
             assert!(
                 layout
                     .face
-                    .is_some_and(|face| face.is_symbol_named("diff-hl-change"))
+                    .is_some_and(|face| face.is_bare_symbol_named("diff-hl-change"))
             );
         }
         other => panic!("expected fringe layout from list-wrapped spec, got {other:?}"),
@@ -471,7 +471,7 @@ fn classify_display_property_unwraps_list_wrapped_fringe_spec() {
     match right.replacement() {
         Some(crate::display_property::DisplayReplacementProperty::Fringe(layout)) => {
             assert_eq!(layout.side, crate::display_spec::DisplayFringeSide::Right);
-            assert!(layout.bitmap.is_symbol_named("diff-hl-bmp-insert"));
+            assert!(layout.bitmap.is_bare_symbol_named("diff-hl-bmp-insert"));
         }
         other => panic!("expected right fringe layout from list-wrapped spec, got {other:?}"),
     }

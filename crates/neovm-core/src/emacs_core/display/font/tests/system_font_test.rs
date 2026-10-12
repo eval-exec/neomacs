@@ -117,7 +117,7 @@ fn desktop_style_font_name_applies_family_style_and_point_size_to_default_face()
     assert_eq!(
         font_get(vec![font, Value::keyword("family")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Ubuntu Mono")
     );
     assert_eq!(
@@ -129,7 +129,7 @@ fn desktop_style_font_name_applies_family_style_and_point_size_to_default_face()
     assert_eq!(
         font_get(vec![font, Value::keyword("weight")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("bold")
     );
     // Applying a font must not rewrite the platform preference being queried.

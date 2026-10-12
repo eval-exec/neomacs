@@ -195,8 +195,8 @@ fn context_prebinds_gnu_font_style_tables() {
     assert_eq!(rows.len(), 11);
     let ultra_light = rows[1].as_vector_data().expect("weight row");
     assert_eq!(ultra_light[0], Value::fixnum(40));
-    assert_eq!(ultra_light[1].as_symbol_name(), Some("ultra-light"));
-    assert_eq!(ultra_light[4].as_symbol_name(), Some("extralight"));
+    assert_eq!(ultra_light[1].as_bare_symbol_name(), Some("ultra-light"));
+    assert_eq!(ultra_light[4].as_bare_symbol_name(), Some("extralight"));
 
     let slant_table = eval
         .obarray
@@ -206,8 +206,8 @@ fn context_prebinds_gnu_font_style_tables() {
     assert_eq!(rows.len(), 5);
     let normal = rows[2].as_vector_data().expect("slant row");
     assert_eq!(normal[0], Value::fixnum(100));
-    assert_eq!(normal[1].as_symbol_name(), Some("normal"));
-    assert_eq!(normal[3].as_symbol_name(), Some("unspecified"));
+    assert_eq!(normal[1].as_bare_symbol_name(), Some("normal"));
+    assert_eq!(normal[3].as_bare_symbol_name(), Some("unspecified"));
 
     let width_table = eval
         .obarray
@@ -217,8 +217,8 @@ fn context_prebinds_gnu_font_style_tables() {
     assert_eq!(rows.len(), 9);
     let normal = rows[4].as_vector_data().expect("width row");
     assert_eq!(normal[0], Value::fixnum(100));
-    assert_eq!(normal[1].as_symbol_name(), Some("normal"));
-    assert_eq!(normal[4].as_symbol_name(), Some("unspecified"));
+    assert_eq!(normal[1].as_bare_symbol_name(), Some("normal"));
+    assert_eq!(normal[4].as_bare_symbol_name(), Some("unspecified"));
 }
 
 #[test]
@@ -328,9 +328,9 @@ fn font_c_pure_primitives_validate_and_project_font_values() {
         .expect("named font attributes");
     let items = list_to_vec(&named).expect("attribute plist");
     assert_eq!(items.len(), 4);
-    assert!(items[0].is_symbol_named(":family"));
+    assert!(items[0].is_bare_symbol_named(":family"));
     assert_eq!(items[1].as_utf8_str(), Some("Monospace"));
-    assert!(items[2].is_symbol_named(":height"));
+    assert!(items[2].is_bare_symbol_named(":height"));
     assert_eq!(items[3], Value::fixnum(100));
 
     assert_eq!(
@@ -711,13 +711,13 @@ fn find_font_eval_requests_exact_registry_match_from_display_host() {
     assert_eq!(
         font_get(vec![font, Value::keyword("family")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Noto Sans Mono CJK SC")
     );
     assert_eq!(
         font_get(vec![font, Value::keyword("registry")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("iso10646-1")
     );
     assert_eq!(
@@ -802,7 +802,7 @@ fn font_spec_rejects_numeric_weight_like_gnu() {
     assert_eq!(
         font_get(vec![encoded_thin, Value::keyword("weight")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("thin")
     );
 
@@ -826,19 +826,19 @@ fn font_spec_style_symbols_casefold_and_preserve_aliases_like_gnu() {
     assert_eq!(
         font_get(vec![spec, Value::keyword("weight")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("bold")
     );
     assert_eq!(
         font_get(vec![spec, Value::keyword("slant")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("italic")
     );
     assert_eq!(
         font_get(vec![spec, Value::keyword("width")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("extra-expanded")
     );
 
@@ -854,19 +854,19 @@ fn font_spec_style_symbols_casefold_and_preserve_aliases_like_gnu() {
     assert_eq!(
         font_get(vec![alias_spec, Value::keyword("weight")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("extrabold")
     );
     assert_eq!(
         font_get(vec![alias_spec, Value::keyword("slant")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("ot")
     );
     assert_eq!(
         font_get(vec![alias_spec, Value::keyword("width")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("wide")
     );
 
@@ -876,11 +876,11 @@ fn font_spec_style_symbols_casefold_and_preserve_aliases_like_gnu() {
         Value::symbol("EXTRABOLD"),
     ])
     .unwrap();
-    assert_eq!(put.as_symbol_name(), Some("extrabold"));
+    assert_eq!(put.as_bare_symbol_name(), Some("extrabold"));
     assert_eq!(
         font_get(vec![spec, Value::keyword("weight")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("extrabold")
     );
 
@@ -894,7 +894,7 @@ fn font_get_and_put() {
 
     // Get existing property.
     let family = font_get(vec![spec, Value::keyword("family")]).unwrap();
-    assert_eq!(family.as_symbol_name(), Some("Monospace"));
+    assert_eq!(family.as_bare_symbol_name(), Some("Monospace"));
 
     // Get missing property.
     let missing = font_get(vec![spec, Value::keyword("size")]).unwrap();
@@ -909,9 +909,9 @@ fn font_get_and_put() {
     // Overwrite existing property.
     let put_family =
         font_put(vec![spec, Value::keyword("family"), Value::string("Serif")]).unwrap();
-    assert_eq!(put_family.as_symbol_name(), Some("Serif"));
+    assert_eq!(put_family.as_bare_symbol_name(), Some("Serif"));
     let family2 = font_get(vec![spec, Value::keyword("family")]).unwrap();
-    assert_eq!(family2.as_symbol_name(), Some("Serif"));
+    assert_eq!(family2.as_bare_symbol_name(), Some("Serif"));
 }
 
 #[test]
@@ -932,7 +932,7 @@ fn font_get_keyword_with_colon_matches_keyword_storage_without_colon() {
     let font = build_font_object_with_pixel_size(&face, Some(27));
     let family = font_get(vec![font, Value::keyword(":family")]).unwrap();
     let size = font_get(vec![font, Value::keyword(":size")]).unwrap();
-    assert_eq!(family.as_symbol_name(), Some("Hack"));
+    assert_eq!(family.as_bare_symbol_name(), Some("Hack"));
     assert_eq!(size.as_int(), Some(27));
 }
 
@@ -1252,7 +1252,7 @@ fn font_at_eval_reads_source_style_inline_face_keywords() {
     assert_eq!(
         font_get(vec![font, Value::keyword("family")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("JetBrains Mono")
     );
     // After the specbind refactor, font-get :height returns the raw
@@ -1422,7 +1422,7 @@ fn font_at_eval_prefers_backend_selected_font_match_when_available() {
     assert_eq!(
         font_get(vec![font, Value::keyword("family")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Noto Sans Mono CJK SC")
     );
     assert_eq!(
@@ -1476,7 +1476,7 @@ fn internal_char_font_returns_font_object_and_glyph_code() {
     assert_eq!(
         font_get(vec![result.cons_car(), Value::keyword("family")])
             .unwrap()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("Noto Sans Mono CJK SC")
     );
     assert_eq!(result.cons_cdr(), Value::fixnum(0x2A));
@@ -1770,7 +1770,7 @@ fn query_font_uses_stored_metrics_when_file_probe_is_unavailable() {
     for (index, expected) in [(2, 17), (3, 19), (4, 13), (5, 5), (6, 11), (7, 12)] {
         assert_eq!(values[index].as_int(), Some(expected), "slot {index}");
     }
-    assert_eq!(values[8].cons_car().as_symbol_name(), Some("opentype"));
+    assert_eq!(values[8].cons_car().as_bare_symbol_name(), Some("opentype"));
     assert!(values[8].cons_cdr().cons_car().is_cons());
 
     let err = query_font(&mut eval, vec![Value::NIL]).unwrap_err();

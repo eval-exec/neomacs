@@ -43,7 +43,7 @@ pub(crate) use redisplay_core_defaults::restore_gnu_configuration_hook_default;
 
 fn navigation_transition_direction(value: Value) -> Result<TransitionDirection, Flow> {
     value
-        .as_symbol_name()
+        .as_bare_symbol_name()
         .and_then(|name| name.parse().ok())
         .ok_or_else(|| {
             signal(
@@ -707,7 +707,7 @@ fn window_body_unit_from_lisp(value: Option<&Value>) -> WindowBodyUnit {
     match value {
         None => WindowBodyUnit::CanonicalChars,
         Some(value) if value.is_nil() => WindowBodyUnit::CanonicalChars,
-        Some(value) if value.is_symbol_named("remap") => WindowBodyUnit::RemappedChars,
+        Some(value) if value.is_bare_symbol_named("remap") => WindowBodyUnit::RemappedChars,
         Some(_) => WindowBodyUnit::Pixels,
     }
 }
@@ -728,7 +728,7 @@ enum AllFramesSymbol {
 
 impl AllFramesSymbol {
     fn from_lisp_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 }
 
@@ -771,7 +771,7 @@ impl SplitWindowSide {
             return Self::Right;
         }
         value
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .and_then(|name| name.parse().ok())
             .unwrap_or(Self::Below)
     }
@@ -2008,6 +2008,7 @@ pub(crate) fn builtin_neomacs_frame_edges(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_max_args("neomacs-frame-edges", &args, 2)?;
     let fid = resolve_frame_id(
         eval,
@@ -2035,7 +2036,7 @@ pub(crate) fn builtin_neomacs_frame_edges(
 
     if args
         .get(1)
-        .is_some_and(|value| value.is_symbol_named("inner-edges"))
+        .is_some_and(|value| value.is_symbol_named("inner-edges", symbol_mode))
     {
         let border = frame.internal_border_width().max(0);
         left = left.saturating_add(border);
@@ -2501,7 +2502,7 @@ fn is_valid_cursor_type(value: Value) -> bool {
     if matches!(value.kind(), crate::emacs_core::value::ValueKind::Cons) {
         let head_ok = value
             .cons_car()
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .and_then(CursorTypeSymbol::from_symbol_name)
             .is_some_and(CursorTypeSymbol::accepts_width_tail);
         let tail = value.cons_cdr();
@@ -2531,9 +2532,10 @@ pub(crate) fn builtin_set_window_parameter(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("set-window-parameter", &args, 3)?;
     let gnu_filtered_parameter = crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
-        && args[1].as_symbol_id().is_some_and(|parameter| {
+        && args[1].as_symbol_id(symbol_mode).is_some_and(|parameter| {
             eval.obarray.get_property_id(parameter, intern(":filtered")) == Some(Value::T)
         })
         && eval
@@ -2571,7 +2573,7 @@ pub(crate) fn builtin_set_window_parameter(
     // of the buffer-scoped triggers firing. GNU has no such override and so
     // needs no equivalent; here it is a window-scoped dirty event, the same
     // shape as `set-window-start`.
-    if let Some(name) = args[1].as_symbol_name()
+    if let Some(name) = args[1].as_symbol_name(symbol_mode)
         && crate::buffer::buffer::variable_affects_chrome(name)
     {
         eval.mark_chrome_dirty_window(wid);
@@ -4227,7 +4229,7 @@ pub(crate) fn window_total_height_impl(
         .map(|f| f.char_height)
         .unwrap_or(16.0);
     Ok(Value::fixnum(
-        match args.get(1).and_then(|value| value.as_symbol_name()) {
+        match args.get(1).and_then(|value| value.as_bare_symbol_name()) {
             Some("floor") => (w.bounds().height / ch.max(1.0)).floor() as i64,
             Some("ceiling") => (w.bounds().height / ch.max(1.0)).ceil() as i64,
             _ => window_height_lines(w, ch),
@@ -4258,7 +4260,7 @@ pub(crate) fn window_total_width_impl(
         .map(|f| f.char_width)
         .unwrap_or(8.0);
     Ok(Value::fixnum(
-        match args.get(1).and_then(|value| value.as_symbol_name()) {
+        match args.get(1).and_then(|value| value.as_bare_symbol_name()) {
             Some("floor") => (w.bounds().width / cw.max(1.0)).floor() as i64,
             Some("ceiling") => (w.bounds().width / cw.max(1.0)).ceil() as i64,
             _ => window_width_cols(w, cw),
@@ -5067,6 +5069,7 @@ pub(crate) fn select_window(
     norecord: Value,
     focus_tracking: FrameFocusTracking,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     // GNU `Fselect_window' does `CHECK_LIVE_WINDOW(window)': an internal
     // (non-leaf) window such as `(window-parent W)' is a valid window but not a
     // *live* one, so selecting it signals `wrong-type-argument window-live-p'.
@@ -5091,7 +5094,7 @@ pub(crate) fn select_window(
         eval.gnu_mark_selection(
             old_selected,
             wid,
-            norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay"),
+            norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay", symbol_mode),
         );
     }
     let (record_selection, run_buffer_list_hook, frame_changed, reset_input_frame) = {
@@ -5166,7 +5169,7 @@ pub(crate) fn select_window(
         // mark-for-redisplay. Temporary hook selection raises SOME through
         // gnu_mark_selection without invalidating retained mode-line output.
         if eval.gnu_redisplay_hooks_policy_enabled() {
-            if norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay") {
+            if norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay", symbol_mode) {
                 if let Some(old) = old_selected {
                     eval.mark_chrome_dirty_window(old);
                 }
@@ -5781,7 +5784,7 @@ pub(crate) fn parse_frame_size_param(value: Value) -> Option<FrameSizeParam> {
     if value.is_cons()
         && value
             .cons_car()
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .is_some_and(|name| name == "text-pixels")
     {
         return value
@@ -6550,6 +6553,7 @@ enum RecenterRedraw {
 
 impl RecenterRedraw {
     fn from_call(eval: &super::eval::Context, args: &[Value]) -> Self {
+        let symbol_mode = eval.symbol_mode();
         let centers_without_prefix = args.first().is_none_or(|arg| arg.is_nil());
         let redisplay_requested = args.get(1).is_some_and(|value| value.is_truthy());
         if !centers_without_prefix || !redisplay_requested {
@@ -6560,7 +6564,7 @@ impl RecenterRedraw {
         if policy.is_nil() {
             return Self::Window;
         }
-        if policy.as_symbol_name() == Some("tty")
+        if policy.as_symbol_name(symbol_mode) == Some("tty")
             && eval
                 .frames
                 .selected_frame()
@@ -6612,8 +6616,10 @@ fn recenter_backward_origin(
             buffer_id, point, ..
         } => {
             if buffers.current_buffer_id() != Some(*buffer_id) {
-                let quoting_style =
-                    crate::emacs_core::coding::effective_text_quoting_style(&eval.obarray);
+                let quoting_style = crate::emacs_core::coding::effective_text_quoting_style(
+                    &eval.obarray,
+                    eval.symbol_mode(),
+                );
                 let message = crate::emacs_core::coding::requote_c_error_message(
                     "`recenter'ing a window that does not display current-buffer",
                     quoting_style,
@@ -6668,14 +6674,14 @@ fn resolve_child_shared_minibuffer(
         return Ok(ChildMinibuffer::Own);
     };
 
-    if minibuffer_param.is_nil() || matches!(minibuffer_param.as_symbol_name(), Some("none")) {
+    if minibuffer_param.is_nil() || matches!(minibuffer_param.as_bare_symbol_name(), Some("none")) {
         return Ok(frames
             .root_frame_id(parent_id)
             .and_then(|root_id| frames.get(root_id))
             .and_then(|root| root.minibuffer_window)
             .map_or(ChildMinibuffer::Own, ChildMinibuffer::Shared));
     }
-    if matches!(minibuffer_param.as_symbol_name(), Some("only")) {
+    if matches!(minibuffer_param.as_bare_symbol_name(), Some("only")) {
         return Ok(ChildMinibuffer::Only);
     }
 
@@ -6745,7 +6751,7 @@ pub(crate) fn make_frame_plain_on_terminal(
             if item.is_cons() {
                 let pair_car = item.cons_car();
                 let pair_cdr = item.cons_cdr();
-                if let Some(key) = pair_car.as_symbol_id() {
+                if let Some(key) = pair_car.as_bare_symbol_id() {
                     all_params.push((pair_car, pair_cdr));
                     match resolve_sym(key) {
                         "width" => {
@@ -7039,7 +7045,7 @@ fn parse_gui_frame_params(value: Option<&Value>) -> ParsedGuiFrameParams {
         };
         let pair_car = item.cons_car();
         let pair_cdr = item.cons_cdr();
-        let Some(key) = pair_car.as_symbol_id() else {
+        let Some(key) = pair_car.as_bare_symbol_id() else {
             continue;
         };
         // GNU frame arguments use assq: prepending an entry overrides older
@@ -7145,6 +7151,7 @@ pub(crate) fn builtin_x_create_frame(
     eval: &mut super::eval::Context,
     mut args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("x-create-frame", &args, 1)?;
     if eval.daemon.is_some() && eval.display_host.is_none() {
         return Err(signal(
@@ -7167,7 +7174,9 @@ pub(crate) fn builtin_x_create_frame(
         (FrameParam::ToolBarLines, "tool-bar-mode"),
     ] {
         let symbol = parameter.symbol();
-        let key = symbol.as_symbol_id().expect("known frame parameter symbol");
+        let key = symbol
+            .as_symbol_id(symbol_mode)
+            .expect("known frame parameter symbol");
         if !explicit.all.contains_key(&key) {
             let value = defaults.all.get(&key).copied().unwrap_or_else(|| {
                 let enabled = explicit.parent_frame.is_none()
@@ -7283,7 +7292,7 @@ pub(crate) fn x_create_frame_impl(
         args.first()
     );
     let explicit_font_value = Value::symbol("font")
-        .as_symbol_id()
+        .as_bare_symbol_id()
         .and_then(|font_key| parsed.all.get(&font_key).copied());
     let explicit_font = explicit_font_value.is_some();
     let parent_id = parsed

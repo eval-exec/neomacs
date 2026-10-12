@@ -699,7 +699,7 @@ impl<'a> LoadDecoder<'a> {
                 // Format v12 bakes the word as Value::symbol(dump_local_id)
                 // bits; untag, remap, re-tag.
                 let baked = Value::from_bits(unsafe { word.read_unaligned() });
-                let dump_id = baked.as_symbol_id().ok_or_else(|| {
+                let dump_id = baked.as_bare_symbol_id().ok_or_else(|| {
                     DumpError::ImageFormatError(format!(
                         "symbol fixup word at offset {offset} does not hold baked symbol bits"
                     ))
@@ -744,7 +744,7 @@ impl<'a> LoadDecoder<'a> {
                 // 8*dump_id. Untag first, like the section walk.
                 let word = mapped_heap.value_word_ptr(location_offset)?;
                 let baked = Value::from_bits(unsafe { word.read_unaligned() });
-                let dump_id = baked.as_symbol_id().ok_or_else(|| {
+                let dump_id = baked.as_bare_symbol_id().ok_or_else(|| {
                     DumpError::ImageFormatError(format!(
                         "symbol value-fixup word at offset {location_offset} does not hold baked symbol bits"
                     ))
@@ -2177,6 +2177,8 @@ impl<'a> LoadDecoder<'a> {
                 slots.push(self.load_value(&ascii));
                 slots.extend(contents.iter().map(|slot| self.load_value(slot)));
                 slots.extend(extras.iter().map(|slot| self.load_value(slot)));
+                // Image restoration copies physical slots; the stored purpose is retained,
+                // and later Lisp accesses apply their Context policy.
                 let restored = make_char_table_from_external_slots(&slots)
                     .map_err(DumpError::ImageFormatError)?;
                 value.with_char_table_mut(|table| {
@@ -4287,14 +4289,14 @@ fn dump_face(encoder: &mut DumpEncoder, f: &Face) -> DumpFace {
         inherit_syms: match f.inherit {
             None => Vec::new(),
             Some(v) => {
-                if let Some(id) = v.as_symbol_id() {
+                if let Some(id) = v.as_bare_symbol_id() {
                     vec![dump_sym_id(id)]
                 } else {
                     crate::emacs_core::value::list_to_vec(&v)
                         .map(|items| {
                             items
                                 .iter()
-                                .filter_map(|entry| entry.as_symbol_id().map(dump_sym_id))
+                                .filter_map(|entry| entry.as_bare_symbol_id().map(dump_sym_id))
                                 .collect()
                         })
                         .unwrap_or_default()
@@ -5195,7 +5197,7 @@ pub(crate) fn load_obarray(
             // The row's redirect and its word decode together into the cell.
             let cell = match redirect {
                 SymbolRedirect::Varalias => {
-                    DumpedCell::Alias(val.as_symbol_id().ok_or_else(|| {
+                    DumpedCell::Alias(val.as_bare_symbol_id().ok_or_else(|| {
                         DumpError::DeserializationError(format!(
                             "obarray alias row {} target is not a symbol",
                             sym_id.0

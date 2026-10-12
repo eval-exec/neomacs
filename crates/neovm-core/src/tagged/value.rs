@@ -583,7 +583,7 @@ impl TaggedValue {
     /// Check if this value is a symbol. Keywords are symbols (name starts
     /// with `:`). nil and t are also symbols.
     #[inline(always)]
-    pub fn is_symbol(self) -> bool {
+    pub fn is_bare_symbol(self) -> bool {
         self.0 & TAG_MASK == TAG_SYMBOL
     }
 
@@ -633,8 +633,8 @@ impl TaggedValue {
 
     /// In GNU Emacs, keywords are symbols whose name starts with `:`.
     #[inline]
-    pub fn is_keyword(self) -> bool {
-        self.as_symbol_id()
+    pub fn is_bare_keyword(self) -> bool {
+        self.as_bare_symbol_id()
             .is_some_and(crate::emacs_core::intern::is_keyword_id)
     }
 
@@ -779,7 +779,7 @@ impl TaggedValue {
     /// Extract SymId for a symbol (including keywords, which are symbols
     /// Extract SymId for a symbol (including keywords). Returns None if not a symbol.
     #[inline(always)]
-    pub fn as_symbol_id(self) -> Option<SymId> {
+    pub fn as_bare_symbol_id(self) -> Option<SymId> {
         if self.0 & TAG_MASK == TAG_SYMBOL {
             Some(SymId((self.0 >> TAG_BITS) as u32))
         } else {
@@ -787,10 +787,10 @@ impl TaggedValue {
         }
     }
 
-    /// Extract SymId without tag check. Caller must ensure `is_symbol()`.
+    /// Extract SymId without tag check. Caller must ensure `is_bare_symbol()`.
     #[inline(always)]
-    pub fn xsymbol_id(self) -> SymId {
-        debug_assert!(self.is_symbol());
+    pub fn xbare_symbol_id(self) -> SymId {
+        debug_assert!(self.is_bare_symbol());
         SymId((self.0 >> TAG_BITS) as u32)
     }
 
@@ -815,9 +815,9 @@ impl TaggedValue {
     /// Extract keyword SymId. Returns None if not a keyword.
     /// Keywords are symbols with `:` prefix, so this extracts the symbol id.
     #[inline]
-    pub fn as_keyword_id(self) -> Option<SymId> {
-        if self.is_keyword() {
-            self.as_symbol_id()
+    pub fn as_bare_keyword_id(self) -> Option<SymId> {
+        if self.is_bare_keyword() {
+            self.as_bare_symbol_id()
         } else {
             None
         }
@@ -998,7 +998,7 @@ impl TaggedValue {
                 } else if self.is_unbound() {
                     ValueKind::Unbound
                 } else {
-                    ValueKind::Symbol(self.xsymbol_id())
+                    ValueKind::Symbol(self.xbare_symbol_id())
                 }
             }
             _ if self.is_fixnum() => ValueKind::Fixnum(self.xfixnum()),
@@ -1273,14 +1273,14 @@ impl TaggedValue {
     /// Get symbol name. Returns None if not a symbol.
     /// For keywords (which are symbols in GNU Emacs), returns the keyword name
     /// (e.g., ":foo").
-    pub fn as_symbol_name(self) -> Option<&'static str> {
-        self.as_symbol_lisp_string()
+    pub fn as_bare_symbol_name(self) -> Option<&'static str> {
+        self.as_bare_symbol_lisp_string()
             .and_then(LispString::as_utf8_str)
     }
 
     /// Get the exact Lisp-string storage for a symbol name.
-    pub fn as_symbol_lisp_string(self) -> Option<&'static LispString> {
-        self.as_symbol_id().map(resolve_sym_lisp_string)
+    pub fn as_bare_symbol_lisp_string(self) -> Option<&'static LispString> {
+        self.as_bare_symbol_id().map(resolve_sym_lisp_string)
     }
 
     /// Check if this symbol has the given name.
@@ -1288,10 +1288,10 @@ impl TaggedValue {
     /// Byte equality, not `as_symbol_name` — `name` is valid UTF-8, so
     /// equal bytes imply the symbol's name is too, and the old
     /// validate-then-compare paid a `from_utf8` walk per call (face
-    /// attribute merging asks `is_symbol_named("unspecified")` per
+    /// attribute merging asks `is_bare_symbol_named("unspecified")` per
     /// attribute per face).
-    pub fn is_symbol_named(self, name: &str) -> bool {
-        self.as_symbol_lisp_string()
+    pub fn is_bare_symbol_named(self, name: &str) -> bool {
+        self.as_bare_symbol_lisp_string()
             .is_some_and(|s| s.as_bytes() == name.as_bytes())
     }
 }
@@ -1299,6 +1299,95 @@ impl TaggedValue {
 // ---------------------------------------------------------------------------
 // ValueKind — exhaustive dispatch enum
 // ---------------------------------------------------------------------------
+
+/// GNU's `symbols-with-pos-enabled` policy, supplied by the owning Context.
+///
+/// This is a per-operation capability, not shared or cached Lisp state. Each
+/// mutator supplies its own Context's policy; physical heap/reader operations
+/// use the explicitly bare accessors instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SymbolMode {
+    Bare,
+    Positioned,
+}
+
+impl From<bool> for SymbolMode {
+    fn from(enabled: bool) -> Self {
+        if enabled {
+            Self::Positioned
+        } else {
+            Self::Bare
+        }
+    }
+}
+
+impl SymbolMode {
+    /// Mirror `maybe_remove_pos_from_symbol` without changing other values.
+    #[inline]
+    pub fn unwrap(self, value: TaggedValue) -> TaggedValue {
+        if value.is_bare_symbol() || self == Self::Bare {
+            value
+        } else {
+            value.as_symbol_with_pos_sym().unwrap_or(value)
+        }
+    }
+}
+
+impl TaggedValue {
+    /// GNU SYMBOLP/XSYMBOL projection. The bare tag wins before the policy
+    /// test; positioned heap data is observed only in enabled mode.
+    #[inline]
+    pub fn as_symbol_id(self, mode: SymbolMode) -> Option<SymId> {
+        if let Some(id) = self.as_bare_symbol_id() {
+            return Some(id);
+        }
+        match mode {
+            SymbolMode::Bare => None,
+            SymbolMode::Positioned => self
+                .as_symbol_with_pos_sym()
+                .and_then(TaggedValue::as_bare_symbol_id),
+        }
+    }
+
+    #[inline]
+    pub fn is_symbol(self, mode: SymbolMode) -> bool {
+        // GNU SYMBOLP tests the wrapper tag; XSYMBOL alone projects its
+        // payload. Keep the common bare tag ahead of the policy test.
+        if self.is_bare_symbol() {
+            return true;
+        }
+        match mode {
+            SymbolMode::Bare => false,
+            SymbolMode::Positioned => self.is_symbol_with_pos(),
+        }
+    }
+
+    pub fn as_symbol_lisp_string(self, mode: SymbolMode) -> Option<&'static LispString> {
+        self.as_symbol_id(mode).map(resolve_sym_lisp_string)
+    }
+
+    pub fn as_symbol_name(self, mode: SymbolMode) -> Option<&'static str> {
+        self.as_symbol_lisp_string(mode)
+            .and_then(LispString::as_utf8_str)
+    }
+
+    pub fn is_symbol_named(self, name: &str, mode: SymbolMode) -> bool {
+        self.as_symbol_lisp_string(mode)
+            .is_some_and(|s| s.as_bytes() == name.as_bytes())
+    }
+
+    #[inline]
+    pub fn is_keyword(self, mode: SymbolMode) -> bool {
+        self.as_symbol_id(mode)
+            .is_some_and(crate::emacs_core::intern::is_keyword_id)
+    }
+
+    #[inline]
+    pub fn as_keyword_id(self, mode: SymbolMode) -> Option<SymId> {
+        self.as_symbol_id(mode)
+            .filter(|id| crate::emacs_core::intern::is_keyword_id(*id))
+    }
+}
 
 /// Decoded value kind for `match` ergonomics.
 /// Use `value.kind()` to get this.
