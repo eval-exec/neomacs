@@ -4,6 +4,7 @@ use super::super::super::*;
 use super::InotifyRequest;
 use crate::emacs_core::errno::Errno;
 use crate::emacs_core::error::expect_args;
+use crate::tagged::SymbolMode;
 
 // Both helpers below feed GNU's `report_file_notify_error` (`src/inotify.c`),
 // which reads the *global* `errno` at the time it runs rather than taking one
@@ -54,11 +55,11 @@ fn aspect_symbol_valid(name: &str) -> bool {
     )
 }
 
-fn parse_aspects(aspect: Value) -> Result<Vec<String>, Flow> {
+fn parse_aspects(aspect: Value, symbol_mode: SymbolMode) -> Result<Vec<String>, Flow> {
     if aspect.is_nil() {
         return Ok(Vec::new());
     }
-    if let Some(name) = aspect.as_symbol_name() {
+    if let Some(name) = aspect.as_symbol_name(symbol_mode) {
         return if aspect_symbol_valid(name) {
             Ok(vec![name.to_owned()])
         } else {
@@ -73,7 +74,7 @@ fn parse_aspects(aspect: Value) -> Result<Vec<String>, Flow> {
     let mut rest = aspect;
     while rest.is_cons() {
         let item = rest.cons_car();
-        let Some(name) = item.as_symbol_name() else {
+        let Some(name) = item.as_symbol_name(symbol_mode) else {
             return Err(unknown_aspect_error(item));
         };
         if !aspect_symbol_valid(name) {
@@ -117,7 +118,7 @@ pub(crate) fn inotify_add_watch(
     let path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(
         ctx.expect_lisp_string(registered_file_name)?,
     );
-    let aspects = parse_aspects(args[1])?;
+    let aspects = parse_aspects(args[1], ctx.symbol_mode())?;
     let callback = args[2];
     let notifier = ctx.wait_notifier();
 
@@ -159,3 +160,7 @@ pub(crate) fn inotify_rm_watch(args: Vec<Value>) -> EvalResult {
         }
     })
 }
+
+#[cfg(test)]
+#[path = "tests/positioned_aspects_test.rs"]
+mod positioned_aspects_tests;

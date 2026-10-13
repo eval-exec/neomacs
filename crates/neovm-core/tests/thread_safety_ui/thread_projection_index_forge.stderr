@@ -1,0 +1,11 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/thread_safety_ui/thread_projection_index_forge.rs:5:19
+  |
+5 |     let _forged = TlsIndex(NonZeroU32::MIN);
+  |                   ^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/emacs_core/runtime/forward/thread_projection.rs
+  |
+  | pub struct TlsIndex(NonZeroU32);
+  |                     ^^^^^^^^^^ private field

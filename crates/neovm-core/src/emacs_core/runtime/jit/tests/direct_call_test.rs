@@ -13,6 +13,157 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 
+/// Root parsed fixture forms and preparation operands on their owning
+/// evaluator, including when a public error or assertion unwinds this loader.
+struct FixtureRoots<'a> {
+    ev: &'a mut Context,
+    scope: crate::emacs_core::eval::SpecpdlRootScopeState,
+}
+
+impl<'a> FixtureRoots<'a> {
+    fn new(ev: &'a mut Context) -> Self {
+        let scope = ev.save_specpdl_roots();
+        Self { ev, scope }
+    }
+}
+
+impl Drop for FixtureRoots<'_> {
+    fn drop(&mut self) {
+        self.ev.restore_specpdl_roots(self.scope);
+    }
+}
+
+/// Prepare only source-listed fixture functions and their immutable
+/// bytecode constants. No caller/callee body executes here, and no compilation
+/// mode is overridden. Loaded runtime functions are outside this protocol.
+fn prepare_fixture_functions(ev: &mut Context, names: &[&str]) {
+    let roots = FixtureRoots::new(ev);
+    let mut pending: Vec<_> = names
+        .iter()
+        .filter_map(|name| roots.ev.obarray.symbol_function_id(intern(name)))
+        .filter(|value| value.is_bytecode())
+        .collect();
+    for value in &pending {
+        roots.ev.push_specpdl_root(*value);
+    }
+    let mut seen = std::collections::HashSet::new();
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value.bits()) {
+            continue;
+        }
+        let function = value.get_bytecode_data().expect("fixture bytecode");
+        for constant in function
+            .constants
+            .iter()
+            .copied()
+            .filter(|v| v.is_bytecode())
+        {
+            roots.ev.push_specpdl_root(constant);
+            pending.push(constant);
+        }
+        crate::emacs_core::jit::test_support::prepare_entry(roots.ev, function);
+    }
+}
+
+/// Test-only early compilation between existing top-level fixture forms.
+/// In particular, code is installed before the ORIGINAL warm loops execute;
+/// preparation never replays those loops or the later semantic observation.
+/// Only an outer `progn` is expanded: lexical binding wrappers stay intact.
+pub(crate) fn eval_fixture_program(
+    ev: &mut Context,
+    program: &str,
+) -> Result<Value, crate::emacs_core::error::EvalError> {
+    let names: std::collections::BTreeSet<_> = program
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .filter(|name| name.starts_with("neovm--"))
+        .collect();
+    eval_fixture_program_named(ev, program, &names.into_iter().collect::<Vec<_>>())
+}
+
+/// The same ordered protocol for a fixture with explicitly named functions
+/// outside the `neovm--` namespace. Only those function cells are prepared.
+pub(crate) fn eval_fixture_program_named(
+    ev: &mut Context,
+    program: &str,
+    names: &[&str],
+) -> Result<Value, crate::emacs_core::error::EvalError> {
+    ev.setup_thread_locals();
+    let forms =
+        crate::emacs_core::value_reader::read_all(program, &ev.obarray).map_err(|error| {
+            crate::emacs_core::error::EvalError::signal(
+                intern("error"),
+                vec![Value::string(format!("Read error: {}", error.message))],
+                None,
+            )
+        })?;
+    let roots = FixtureRoots::new(ev);
+    for form in &forms {
+        roots.ev.push_specpdl_root(*form);
+    }
+    let mut ordered = Vec::new();
+    for form in forms {
+        if let Some(parts) = crate::emacs_core::value::list_to_vec(&form)
+            && parts.first().and_then(|head| head.as_bare_symbol_name()) == Some("progn")
+        {
+            ordered.extend(parts.into_iter().skip(1));
+        } else {
+            ordered.push(form);
+        }
+    }
+    let last_root = roots.ev.push_specpdl_root_slot(Value::NIL);
+    let mut result = Value::NIL;
+    for form in ordered {
+        // The previous form's discarded result must not become a new GC root
+        // during the next effectful form (e.g. a weak-key collection).
+        roots.ev.set_specpdl_root_slot(&last_root, Value::NIL);
+        prepare_fixture_functions(roots.ev, names);
+        result = roots.ev.eval_form(form)?;
+        roots.ev.set_specpdl_root_slot(&last_root, result);
+    }
+    prepare_fixture_functions(roots.ev, names);
+    Ok(result)
+}
+
+#[test]
+fn ordered_direct_fixture_preparation_preserves_effects_gc_and_error_roots() {
+    force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::runtime_startup_context();
+    let roots0 = ev.specpdl.len();
+    let result = eval_fixture_program(
+        &mut ev,
+        r#"(progn
+          (setq neovm--direct-fixture-count 0)
+          (defun neovm--direct-fixture-step (n)
+            (setq neovm--direct-fixture-count (1+ neovm--direct-fixture-count))
+            (if n n 0))
+          (byte-compile 'neovm--direct-fixture-step)
+          (dotimes (i 17) (neovm--direct-fixture-step i))
+          (garbage-collect)
+          (list neovm--direct-fixture-count '("future parsed form survives GC")))"#,
+    )
+    .expect("ordered fixture");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&result),
+        "(17 (\"future parsed form survives GC\"))"
+    );
+    assert_eq!(ev.specpdl.len(), roots0, "success restores loader roots");
+    let failed = eval_fixture_program(
+        &mut ev,
+        r#"(progn
+          (setq neovm--direct-fixture-count 0)
+          (neovm--direct-fixture-step 1)
+          (error "stop the fixture")
+          (setq neovm--direct-fixture-count 999))"#,
+    );
+    assert!(failed.is_err(), "public error still stops the fixture");
+    assert_eq!(ev.specpdl.len(), roots0, "error restores loader roots");
+    assert_eq!(
+        ev.eval_str("neovm--direct-fixture-count").expect("witness"),
+        Value::make_int(1),
+        "preparation neither executes nor replays effects"
+    );
+}
+
 /// The compiled leaf the cache holds for the function SYM names.
 fn cached_leaf(ev: &Context, sym: &str) -> Option<&'static CompiledLeaf> {
     let f = ev.obarray.symbol_function_id(intern(sym))?;
@@ -63,7 +214,7 @@ fn armed_entries(direct: bool) -> Vec<(&'static str, *const u8, *const u8)> {
     // for every body, not only the unbounded ones (`DirectSitesMode`).
     force_direct_sites_for_test(Some(DirectSitesMode::All));
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(ARMING).expect("warmed");
+    eval_fixture_program(&mut ev, ARMING).expect("warmed");
     let caller = cached_leaf(&ev, "neovm--dc-caller").expect("the caller is compiled");
     let out = [
         "neovm--dc-exact",
@@ -183,7 +334,7 @@ fn clearing_a_slot_drops_its_direct_entry_and_the_next_call_rearms_it() {
     // for every body, not only the unbounded ones (`DirectSitesMode`).
     force_direct_sites_for_test(Some(DirectSitesMode::All));
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(ARMING).expect("warmed");
+    eval_fixture_program(&mut ev, ARMING).expect("warmed");
     let caller = cached_leaf(&ev, "neovm--dc-caller").expect("caller");
     let callee = cached_leaf(&ev, "neovm--dc-exact").expect("callee");
     let slot = slot_calling(caller, callee).expect("slot");
@@ -294,7 +445,7 @@ fn run_in_with(
             let mut ev = crate::test_utils::runtime_startup_context();
             ev.refresh_attention_for_test();
             ev.eval_str(WARM).expect("warm-up count");
-            ev.eval_str(program).expect("the scenario's program runs");
+            eval_fixture_program(&mut ev, program).expect("the scenario's program runs");
             let depth0 = ev.depth;
             let spec0 = ev.specpdl.len();
             let calls0 = SPEC_CALL_COUNT.load(Ordering::Relaxed);
@@ -566,7 +717,8 @@ fn a_cross_thread_quit_request_stops_a_direct_recursion() {
                 // for every body, not only the unbounded ones (`DirectSitesMode`).
                 force_direct_sites_for_test(Some(DirectSitesMode::All));
                 let mut ev = crate::test_utils::runtime_startup_context();
-                ev.eval_str(
+                eval_fixture_program(
+                    &mut ev,
                     r#"(progn
   (defun neovm--dcqa-rec (n) (if (= n 0) 0 (1+ (neovm--dcqa-rec (1- n)))))
   (byte-compile 'neovm--dcqa-rec)

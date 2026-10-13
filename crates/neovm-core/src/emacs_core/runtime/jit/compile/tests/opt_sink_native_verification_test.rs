@@ -157,7 +157,7 @@ fn independent(
     assert_eq!(pair(actual), expected);
     assert_eq!(ctx.gc_count - before, 1);
     assert_eq!(
-        ctx.obarray.symbol_value("t34-native-proof-side").copied(),
+        ctx.obarray.symbol_value_copied("t34-native-proof-side"),
         Some(flag)
     );
     assert_eq!(ctx.jit_root_stack_top, 0);

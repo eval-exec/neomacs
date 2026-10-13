@@ -20,6 +20,8 @@ mod extension;
 use self::command::CclCommand;
 use self::expr::{eval_expr_self, eval_set_expr};
 use self::extension::{ExtensionStep, MapMultipleState, execute_extension};
+use crate::tagged::value::SymbolMode;
+
 use super::error::{EvalResult, Flow, signal};
 use super::value::*;
 use crate::emacs_core::SymId;
@@ -33,7 +35,7 @@ fn is_integer(value: &Value) -> bool {
     value.is_fixnum()
 }
 
-fn is_valid_ccl_program(program: &Value) -> bool {
+fn is_valid_ccl_program(program: &Value, mode: SymbolMode) -> bool {
     if !program.is_vector() {
         return false;
     };
@@ -43,12 +45,13 @@ fn is_valid_ccl_program(program: &Value) -> bool {
         return false;
     }
 
-    if !program.iter().all(ccl_word_shape) {
+    if !program.iter().all(|word| ccl_word_shape(word, mode)) {
         return false;
     }
 
-    let buf_magnification = program[0].as_int().unwrap();
-    let eof_ic = program[1].as_int().unwrap();
+    let (Some(buf_magnification), Some(eof_ic)) = (program[0].as_int(), program[1].as_int()) else {
+        return false;
+    };
     buf_magnification >= 0 && (0..=program.len() as i64).contains(&eof_ic)
 }
 
@@ -212,11 +215,11 @@ pub(crate) fn is_registered_ccl_program(name: SymId) -> bool {
     with_ccl_registry(|registry| registry.programs.contains_key(&name))
 }
 
-fn resolve_ccl_program_designator(value: &Value) -> Option<Value> {
+fn resolve_ccl_program_designator(value: &Value, mode: SymbolMode) -> Option<Value> {
     if value.is_vector() {
         return Some(*value);
     }
-    let name = value.as_symbol_id()?;
+    let name = value.as_symbol_id(mode)?;
     with_ccl_registry(|registry| registry.lookup_program(name))
 }
 
@@ -228,9 +231,11 @@ fn ccl_quit_pending() -> bool {
     if obarray.is_null() {
         return true;
     }
+    // SAFETY: with_ccl_obarray keeps this same-thread borrowed obarray alive
+    // for the body, restores the prior pointer before that borrow ends, and
+    // the null pointer was rejected above. This read returns a copied Value.
     let inhibited = unsafe { &*obarray }
-        .symbol_value("inhibit-quit")
-        .copied()
+        .symbol_value_copied("inhibit-quit")
         .is_some_and(|value| !value.is_nil());
     !inhibited
 }
@@ -248,7 +253,7 @@ fn surface_ccl_quit(flow: Flow, on_string: bool) -> Flow {
     let Some(sig) = flow.as_signal() else {
         return flow;
     };
-    let Some(marker) = Value::symbol("ccl-quit").as_symbol_id() else {
+    let Some(marker) = Value::symbol("ccl-quit").as_bare_symbol_id() else {
         return flow;
     };
     if sig.symbol != marker {
@@ -280,32 +285,36 @@ fn invalid_ccl_program_at(index: usize) -> Flow {
     )
 }
 
-fn ccl_word_shape(word: &Value) -> bool {
-    if word.as_int().is_some() || word.as_symbol_id().is_some() {
+fn ccl_word_shape(word: &Value, mode: SymbolMode) -> bool {
+    if word.as_int().is_some() || word.as_symbol_id(mode).is_some() {
         return true;
     }
     word.is_cons()
-        && word.cons_car().as_symbol_id().is_some()
-        && word.cons_cdr().as_symbol_id().is_some()
+        && word.cons_car().as_symbol_id(mode).is_some()
+        && word.cons_cdr().as_symbol_id(mode).is_some()
 }
 
 fn property_symbol(name: &str) -> Option<SymId> {
-    Value::symbol(name).as_symbol_id()
+    Value::symbol(name).as_bare_symbol_id()
 }
 
-fn symbol_property_integer(symbol: SymId, property: SymId) -> Option<i64> {
+fn symbol_property_integer(symbol: SymId, property: SymId, mode: SymbolMode) -> Option<i64> {
     let obarray = CCL_OBARRAY.with(|cell| cell.get());
     if obarray.is_null() {
         return None;
     }
     let plist = unsafe { &*obarray }.symbol_plist_id(symbol);
-    super::plist::plist_get(plist, &Value::from_sym_id(property))
-        .and_then(|value| value.as_int())
-        .filter(|id| *id >= 0)
+    super::plist::plist_get_swp(
+        plist,
+        &Value::from_sym_id(property),
+        matches!(mode, SymbolMode::Positioned),
+    )
+    .and_then(|value| value.as_int())
+    .filter(|id| *id >= 0)
 }
 
-fn resolved_symbol_id(symbol: SymId, property: SymId) -> Option<i64> {
-    if let Some(id) = symbol_property_integer(symbol, property) {
+fn resolved_symbol_id(symbol: SymId, property: SymId, mode: SymbolMode) -> Option<i64> {
+    if let Some(id) = symbol_property_integer(symbol, property, mode) {
         return Some(id);
     }
     let program = property_symbol("ccl-program-idx")?;
@@ -321,24 +330,24 @@ fn resolved_symbol_id(symbol: SymId, property: SymId) -> Option<i64> {
     })
 }
 
-fn resolve_ccl_word(word: Value) -> Result<i64, Flow> {
+fn resolve_ccl_word(word: Value, mode: SymbolMode) -> Result<i64, Flow> {
     if let Some(number) = word.as_int() {
         return Ok(number);
     }
     let invalid = || signal("error", vec![Value::string("Invalid CCL program")]);
     if word.is_cons() {
-        let symbol = word.cons_car().as_symbol_id().ok_or_else(invalid)?;
-        let property = word.cons_cdr().as_symbol_id().ok_or_else(invalid)?;
-        return resolved_symbol_id(symbol, property).ok_or_else(invalid);
+        let symbol = word.cons_car().as_symbol_id(mode).ok_or_else(invalid)?;
+        let property = word.cons_cdr().as_symbol_id(mode).ok_or_else(invalid)?;
+        return resolved_symbol_id(symbol, property, mode).ok_or_else(invalid);
     }
-    let symbol = word.as_symbol_id().ok_or_else(invalid)?;
+    let symbol = word.as_symbol_id(mode).ok_or_else(invalid)?;
     for name in [
         "translation-table-id",
         "code-conversion-map-id",
         "ccl-program-idx",
     ] {
         if let Some(property) = property_symbol(name)
-            && let Some(id) = resolved_symbol_id(symbol, property)
+            && let Some(id) = resolved_symbol_id(symbol, property, mode)
         {
             return Ok(id);
         }
@@ -346,11 +355,11 @@ fn resolve_ccl_word(word: Value) -> Result<i64, Flow> {
     Err(invalid())
 }
 
-fn compiled_ccl_words(designator: Value) -> Result<Vec<i32>, Flow> {
-    let Some(program) = resolve_ccl_program_designator(&designator) else {
+fn compiled_ccl_words(designator: Value, mode: SymbolMode) -> Result<Vec<i32>, Flow> {
+    let Some(program) = resolve_ccl_program_designator(&designator, mode) else {
         return Err(signal("error", vec![Value::string("Invalid CCL program")]));
     };
-    if !is_valid_ccl_program(&program) {
+    if !is_valid_ccl_program(&program, mode) {
         return Err(signal("error", vec![Value::string("Invalid CCL program")]));
     }
     program
@@ -358,7 +367,7 @@ fn compiled_ccl_words(designator: Value) -> Result<Vec<i32>, Flow> {
         .expect("validated CCL program is a vector")
         .iter()
         .copied()
-        .map(resolve_ccl_word)
+        .map(|word| resolve_ccl_word(word, mode))
         .map(|resolved| {
             // GNU `resolve_symbol_ccl_program` requires every word to be a C
             // int (`TYPE_RANGED_FIXNUMP (int, ...)`); anything else invalidates
@@ -375,14 +384,14 @@ pub(super) fn code_conversion_map(id: i64) -> Option<Value> {
     with_ccl_registry(|registry| registry.map_by_id(id))
 }
 
-pub(super) fn program_words(id: i64) -> Option<Vec<i32>> {
+pub(super) fn program_words(id: i64, mode: SymbolMode) -> Option<Vec<i32>> {
     let program = with_ccl_registry(|registry| registry.program_by_id(id))?;
-    compiled_ccl_words(program).ok()
+    compiled_ccl_words(program, mode).ok()
 }
 
-pub(super) fn program_words_by_symbol(symbol: SymId) -> Option<Vec<i32>> {
+pub(super) fn program_words_by_symbol(symbol: SymId, mode: SymbolMode) -> Option<Vec<i32>> {
     let id = with_ccl_registry(|registry| registry.program_id(symbol))?;
-    program_words(id)
+    program_words(id, mode)
 }
 
 pub(super) fn install_translation_hash(entries: HashMap<i64, i64>) -> i64 {
@@ -435,9 +444,11 @@ fn checked_lisp_translation_hash_lookup(id: i64, key: i64) -> Option<Translation
     if obarray.is_null() {
         return None;
     }
-    let slot_of_vector = unsafe { &*obarray }
-        .symbol_value("translation-hash-table-vector")
-        .copied()?;
+    // SAFETY: with_ccl_obarray keeps this same-thread borrowed obarray alive
+    // for the body, restores the prior pointer before that borrow ends, and
+    // the null pointer was rejected above. This read returns a copied Value.
+    let slot_of_vector =
+        unsafe { &*obarray }.symbol_value_copied("translation-hash-table-vector")?;
     if !slot_of_vector.is_vector() {
         return Some(TranslationHashLookup::Invalid);
     }
@@ -482,7 +493,10 @@ fn lisp_vector_slot(name: &str, id: i64) -> Option<Value> {
     if obarray.is_null() {
         return None;
     }
-    let vector = unsafe { &*obarray }.symbol_value(name).copied()?;
+    // SAFETY: with_ccl_obarray keeps this same-thread borrowed obarray alive
+    // for the body, restores the prior pointer before that borrow ends, and
+    // the null pointer was rejected above. This read returns a copied Value.
+    let vector = unsafe { &*obarray }.symbol_value_copied(name)?;
     let data = vector.as_vector_data()?;
     let index = usize::try_from(id).ok()?;
     data.get(index).copied()
@@ -646,10 +660,11 @@ fn execute_compiled_ccl_with_state(
     allows_io: bool,
     mut registers: [i64; 8],
     initial_instruction: Option<usize>,
+    mode: SymbolMode,
 ) -> Result<CclExecution, Flow> {
     const HEADER_MAIN: usize = 2;
 
-    let mut words = compiled_ccl_words(designator)?;
+    let mut words = compiled_ccl_words(designator, mode)?;
     // GNU disables reading and writing when the top program's buffer
     // magnification is 0. Called programs do not get their own check.
     let allows_io = allows_io && words[0] != 0;
@@ -1199,7 +1214,7 @@ fn execute_compiled_ccl_with_state(
                 } else {
                     field1
                 };
-                let Some(callee) = program_words(program_id) else {
+                let Some(callee) = program_words(program_id, mode) else {
                     return Err(invalid_ccl_program_at(this_instruction));
                 };
                 let callee_eof = usize::try_from(callee.get(1).copied().unwrap_or(-1))
@@ -1224,6 +1239,7 @@ fn execute_compiled_ccl_with_state(
                     &mut map_state,
                     &mut read_character,
                     &mut write_character,
+                    mode,
                 )? {
                     ExtensionStep::Continue => {}
                     ExtensionStep::Eof => instruction = eof_instruction,
@@ -1263,12 +1279,13 @@ fn execute_compiled_ccl_with_state(
 /// outside this machine: a decoder consumes byte values and produces Emacs
 /// character codes, while an encoder consumes character codes and its caller
 /// truncates produced values to output octets.
-pub(crate) fn execute_compiled_ccl(
+pub(crate) fn execute_compiled_ccl_with_symbols(
     designator: Value,
     input: &[i64],
     last_block: bool,
+    mode: SymbolMode,
 ) -> Result<Vec<i64>, Flow> {
-    execute_compiled_ccl_with_state(designator, input, last_block, true, [0; 8], None)
+    execute_compiled_ccl_with_state(designator, input, last_block, true, [0; 8], None, mode)
         .map(|execution| execution.output)
 }
 
@@ -1282,10 +1299,18 @@ pub(crate) fn execute_compiled_ccl(
 
 /// (ccl-program-p OBJECT) -> nil
 /// This accepts program objects that match the minimum CCL header shape used by Emacs.
+#[cfg(test)]
 pub(crate) fn builtin_ccl_program_p_impl(args: Vec<Value>) -> EvalResult {
+    builtin_ccl_program_p_impl_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_ccl_program_p_impl_with_symbols(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("ccl-program-p", &args, 1)?;
-    let is_program = resolve_ccl_program_designator(&args[0])
-        .is_some_and(|program| is_valid_ccl_program(&program));
+    let is_program = resolve_ccl_program_designator(&args[0], mode)
+        .is_some_and(|program| is_valid_ccl_program(&program, mode));
     Ok(Value::bool_val(is_program))
 }
 
@@ -1293,7 +1318,15 @@ pub(crate) fn builtin_ccl_program_p_impl(args: Vec<Value>) -> EvalResult {
 ///
 /// Runs a program that does not read or write. Register results are written
 /// back into the 8-element vector.
+#[cfg(test)]
 pub(crate) fn builtin_ccl_execute_impl(args: Vec<Value>) -> EvalResult {
+    builtin_ccl_execute_impl_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_ccl_execute_impl_with_symbols(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("ccl-execute", &args, 2)?;
     if !args[1].is_vector() {
         return Err(signal(
@@ -1313,10 +1346,10 @@ pub(crate) fn builtin_ccl_execute_impl(args: Vec<Value>) -> EvalResult {
         ));
     }
 
-    let Some(program) = resolve_ccl_program_designator(&args[0]) else {
+    let Some(program) = resolve_ccl_program_designator(&args[0], mode) else {
         return Err(signal("error", vec![Value::string("Invalid CCL program")]));
     };
-    if !is_valid_ccl_program(&program) {
+    if !is_valid_ccl_program(&program, mode) {
         return Err(signal("error", vec![Value::string("Invalid CCL program")]));
     }
 
@@ -1331,8 +1364,9 @@ pub(crate) fn builtin_ccl_execute_impl(args: Vec<Value>) -> EvalResult {
             *register = integer;
         }
     }
-    let execution = execute_compiled_ccl_with_state(args[0], &[], true, false, registers, None)
-        .map_err(|flow| surface_ccl_quit(flow, false))?;
+    let execution =
+        execute_compiled_ccl_with_state(args[0], &[], true, false, registers, None, mode)
+            .map_err(|flow| surface_ccl_quit(flow, false))?;
     for (index, register) in execution.registers.into_iter().enumerate() {
         let updated = args[1].set_vector_slot(index, Value::fixnum(register));
         debug_assert!(updated, "validated REGISTERS vector remains mutable");
@@ -1384,7 +1418,15 @@ fn ccl_output_string(output: Vec<i64>, unibyte: bool) -> Value {
 }
 
 /// (ccl-execute-on-string CCL-PROGRAM STATUS STRING &optional CONTINUE UNIBYTE-P) -> STRING
+#[cfg(test)]
 pub(crate) fn builtin_ccl_execute_on_string_impl(args: Vec<Value>) -> EvalResult {
+    builtin_ccl_execute_on_string_impl_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_ccl_execute_on_string_impl_with_symbols(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_min_args("ccl-execute-on-string", &args, 3)?;
     expect_max_args("ccl-execute-on-string", &args, 5)?;
     if !args[1].is_vector() {
@@ -1404,10 +1446,10 @@ pub(crate) fn builtin_ccl_execute_on_string_impl(args: Vec<Value>) -> EvalResult
         ));
     }
 
-    let Some(program) = resolve_ccl_program_designator(&args[0]) else {
+    let Some(program) = resolve_ccl_program_designator(&args[0], mode) else {
         return Err(signal("error", vec![Value::string("Invalid CCL program")]));
     };
-    if !is_valid_ccl_program(&program) {
+    if !is_valid_ccl_program(&program, mode) {
         return Err(signal("error", vec![Value::string("Invalid CCL program")]));
     }
 
@@ -1440,6 +1482,7 @@ pub(crate) fn builtin_ccl_execute_on_string_impl(args: Vec<Value>) -> EvalResult
         true,
         registers,
         initial_instruction,
+        mode,
     )
     .map_err(|flow| surface_ccl_quit(flow, true))?;
 
@@ -1455,9 +1498,17 @@ pub(crate) fn builtin_ccl_execute_on_string_impl(args: Vec<Value>) -> EvalResult
 
 /// (register-ccl-program NAME CCL-PROG) -> nil
 /// Stub: accepts and discards the CCL program registration.
+#[cfg(test)]
 pub(crate) fn builtin_register_ccl_program_impl(args: Vec<Value>) -> EvalResult {
+    builtin_register_ccl_program_impl_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_register_ccl_program_impl_with_symbols(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("register-ccl-program", &args, 2)?;
-    if !args[0].is_symbol() {
+    if !args[0].is_symbol(mode) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],
@@ -1476,12 +1527,12 @@ pub(crate) fn builtin_register_ccl_program_impl(args: Vec<Value>) -> EvalResult 
         args[1]
     };
 
-    if !is_valid_ccl_program(&program) {
+    if !is_valid_ccl_program(&program, mode) {
         return Err(signal("error", vec![Value::string("Error in CCL program")]));
     }
 
     let name = args[0]
-        .as_symbol_id()
+        .as_symbol_id(mode)
         .expect("symbol already validated by is_symbol");
     let program_id = with_ccl_registry_mut(|registry| registry.register_program(name, program));
     Ok(Value::fixnum(program_id))
@@ -1489,9 +1540,17 @@ pub(crate) fn builtin_register_ccl_program_impl(args: Vec<Value>) -> EvalResult 
 
 /// (register-code-conversion-map SYMBOL MAP) -> nil
 /// Stub: accepts and discards the code conversion map.
+#[cfg(test)]
 pub(crate) fn builtin_register_code_conversion_map_impl(args: Vec<Value>) -> EvalResult {
+    builtin_register_code_conversion_map_impl_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_register_code_conversion_map_impl_with_symbols(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("register-code-conversion-map", &args, 2)?;
-    if !args[0].is_symbol() {
+    if !args[0].is_symbol(mode) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],
@@ -1505,7 +1564,7 @@ pub(crate) fn builtin_register_code_conversion_map_impl(args: Vec<Value>) -> Eva
     }
 
     let name = args[0]
-        .as_symbol_id()
+        .as_symbol_id(mode)
         .expect("symbol already validated by is_symbol");
     let map_id =
         with_ccl_registry_mut(|registry| registry.register_code_conversion_map(name, args[1]));

@@ -32,6 +32,7 @@ fn warm_deep(ev: &mut Context) {
         .expect("defun");
     ev.eval_str("(byte-compile 'neovm--sg-deep)")
         .expect("byte-compile");
+    crate::emacs_core::jit::test_support::prepare_named(ev, &["neovm--sg-deep"]);
     ev.eval_str("(dotimes (_ 40) (neovm--sg-deep 100))")
         .expect("warm-up");
 }
@@ -213,7 +214,7 @@ fn only_bodies_that_can_reenter_lisp_are_guarded() {
         f.lexical = true;
         f.ops = ops;
         f.constants = constants.into();
-        f.max_stack = 8;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
         f
     };
     // (lambda (x) (1+ x))

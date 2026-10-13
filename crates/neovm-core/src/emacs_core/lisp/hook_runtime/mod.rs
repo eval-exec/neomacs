@@ -68,7 +68,7 @@ impl HookRuntime for Context {
 }
 
 pub(crate) fn resolve_hook_symbol(ctx: &Context, hook_symbol: Value) -> Result<SymId, Flow> {
-    let symbol = builtins::expect_symbol_id(&hook_symbol)?;
+    let symbol = builtins::expect_symbol_id(&hook_symbol, ctx.symbol_mode())?;
     builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)
 }
 
@@ -124,8 +124,7 @@ fn collect_hook_functions_impl(
                     if inherit_global {
                         let global_value = ctx
                             .obarray
-                            .default_value_id(hook_sym)
-                            .copied()
+                            .default_value_id_copied(hook_sym)
                             .unwrap_or(Value::NIL);
                         collect_hook_functions_impl(ctx, hook_sym, global_value, false, out);
                     }
@@ -216,8 +215,7 @@ fn remove_hook_function_after_error_in_context(
 
     let default_value = ctx
         .obarray
-        .default_value_id(hook_sym)
-        .copied()
+        .default_value_id_copied(hook_sym)
         .unwrap_or(Value::NIL);
     if let Some(new_value) = remove_eq_from_hook_list(default_value, function) {
         let symbol = Value::from_sym_id(hook_sym);

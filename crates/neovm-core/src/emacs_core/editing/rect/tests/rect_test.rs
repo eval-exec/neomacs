@@ -34,7 +34,10 @@ fn extract_rectangle_startup_is_autoloaded() {
         .obarray
         .symbol_function("extract-rectangle")
         .expect("missing extract-rectangle startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -144,7 +147,10 @@ fn delete_rectangle_startup_is_autoloaded() {
         .obarray
         .symbol_function("delete-rectangle")
         .expect("missing delete-rectangle startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -169,7 +175,10 @@ fn kill_rectangle_startup_is_autoloaded() {
         .obarray
         .symbol_function("kill-rectangle")
         .expect("missing kill-rectangle startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -198,7 +207,10 @@ fn yank_rectangle_startup_is_autoloaded() {
         .obarray
         .symbol_function("yank-rectangle")
         .expect("missing yank-rectangle startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -254,7 +266,7 @@ fn yank_rectangle_loaded_function_is_simple_bytecode_call() {
             bytecode
                 .constants
                 .iter()
-                .map(|v| v.as_symbol_name())
+                .map(|v| v.as_bare_symbol_name())
                 .collect::<Vec<_>>(),
             vec![Some("killed-rectangle"), Some("insert-rectangle")]
         );
@@ -275,7 +287,10 @@ fn insert_rectangle_startup_is_autoloaded() {
         .obarray
         .symbol_function("insert-rectangle")
         .expect("missing insert-rectangle startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -323,7 +338,10 @@ fn open_rectangle_startup_is_autoloaded() {
         .obarray
         .symbol_function("open-rectangle")
         .expect("missing open-rectangle startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -348,7 +366,10 @@ fn clear_rectangle_startup_is_autoloaded() {
         .obarray
         .symbol_function("clear-rectangle")
         .expect("missing clear-rectangle startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -373,7 +394,10 @@ fn string_rectangle_startup_is_autoloaded() {
         .obarray
         .symbol_function("string-rectangle")
         .expect("missing string-rectangle startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -409,7 +433,10 @@ fn delete_extract_rectangle_startup_is_autoloaded() {
         .obarray
         .symbol_function("delete-extract-rectangle")
         .expect("missing delete-extract-rectangle startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]

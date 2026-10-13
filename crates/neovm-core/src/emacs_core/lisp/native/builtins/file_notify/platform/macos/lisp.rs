@@ -18,6 +18,7 @@ pub(crate) fn kqueue_add_watch(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     expect_args("kqueue-add-watch", &args, 3)?;
     ctx.expect_lisp_string(args[0])?;
     let expanded =
@@ -49,7 +50,7 @@ pub(crate) fn kqueue_add_watch(
     }
     let actions = flags
         .iter()
-        .filter_map(|flag| flag.as_symbol_name())
+        .filter_map(|flag| flag.as_symbol_name(symbol_mode))
         .filter_map(action_from_lisp_name)
         .fold(enumflags2::BitFlags::empty(), |actions, action| {
             actions | action

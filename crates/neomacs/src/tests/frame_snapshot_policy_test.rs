@@ -282,7 +282,7 @@ fn gnu_visible_frame_redisplay_still_propagates_scroll_hook_throw() {
         .eval
         .eval_str("(catch 'd5-owned-redisplay (redisplay t) 'd5-hook-was-not-run)")
         .expect("full transaction must propagate the hook's valid throw immediately");
-    assert_eq!(result.as_symbol_name(), Some("d5-owned-layout-flow"));
+    assert_eq!(result.as_bare_symbol_name(), Some("d5-owned-layout-flow"));
     assert_eq!(hook_count(&mut f.eval), 1);
     assert!(!f.eval.redisplay_hook_flow_pending());
 }

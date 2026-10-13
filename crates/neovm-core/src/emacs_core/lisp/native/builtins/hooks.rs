@@ -1,4 +1,5 @@
 use super::*;
+use crate::tagged::SymbolMode;
 mod redisplay_gnu;
 mod window_configuration_redisplay;
 use crate::buffer::LispCharPos1;
@@ -284,8 +285,7 @@ fn run_window_default_hook_value(
     }
     let global_hook_value = eval
         .obarray
-        .default_value_id(hook_sym)
-        .copied()
+        .default_value_id_copied(hook_sym)
         .unwrap_or(Value::NIL);
     if global_hook_value.is_nil() {
         return Ok(Value::NIL);
@@ -1151,15 +1151,24 @@ fn persistent_window_parameter_keys(value: Value) -> Vec<Value> {
     keys
 }
 
-fn window_parameter_is_persistent(key: &Value, persistent_keys: &[Value]) -> bool {
-    persistent_keys
-        .iter()
-        .any(|persistent| crate::emacs_core::value::eq_value(key, persistent))
+fn window_parameter_is_persistent(
+    key: &Value,
+    persistent_keys: &[Value],
+    symbol_mode: SymbolMode,
+) -> bool {
+    persistent_keys.iter().any(|persistent| {
+        crate::emacs_core::value::eq_value_swp(
+            key,
+            persistent,
+            symbol_mode == SymbolMode::Positioned,
+        )
+    })
 }
 
 fn save_persistent_window_parameters(
     window: &mut crate::window::Window,
     persistent_keys: &[Value],
+    symbol_mode: SymbolMode,
 ) {
     let current = window.parameters().clone();
     let saved = persistent_keys
@@ -1167,7 +1176,13 @@ fn save_persistent_window_parameters(
         .map(|key| {
             let value = current
                 .iter()
-                .find(|(existing_key, _)| crate::emacs_core::value::eq_value(existing_key, key))
+                .find(|(existing_key, _)| {
+                    crate::emacs_core::value::eq_value_swp(
+                        existing_key,
+                        key,
+                        symbol_mode == SymbolMode::Positioned,
+                    )
+                })
                 .map(|(_, value)| *value)
                 .unwrap_or(Value::NIL);
             (*key, value)
@@ -1179,13 +1194,14 @@ fn save_persistent_window_parameters(
 fn save_snapshot_persistent_window_parameters(
     snapshot: &mut WindowConfigurationSnapshot,
     persistent_parameters: Value,
+    symbol_mode: SymbolMode,
 ) -> Vec<Value> {
     let persistent_keys = persistent_window_parameter_keys(persistent_parameters);
-    snapshot
-        .tree
-        .for_each_node_mut(|window| save_persistent_window_parameters(window, &persistent_keys));
+    snapshot.tree.for_each_node_mut(|window| {
+        save_persistent_window_parameters(window, &persistent_keys, symbol_mode)
+    });
     if let Some(minibuffer) = &mut snapshot.minibuffer_leaf {
-        save_persistent_window_parameters(minibuffer, &persistent_keys);
+        save_persistent_window_parameters(minibuffer, &persistent_keys, symbol_mode);
     }
     persistent_keys
 }
@@ -1215,6 +1231,7 @@ fn collect_frame_window_parameters(
 fn merge_restored_window_parameters(
     window: &mut crate::window::Window,
     live_parameters: &HashMap<crate::window::WindowId, Vec<(Value, Value)>>,
+    symbol_mode: SymbolMode,
 ) {
     let saved_parameters = window.parameters().clone();
     let saved_keys = saved_parameters
@@ -1225,14 +1242,18 @@ fn merge_restored_window_parameters(
     let mut merged = live
         .into_iter()
         .flat_map(|params| params.iter().copied())
-        .filter(|(key, _)| !window_parameter_is_persistent(key, &saved_keys))
+        .filter(|(key, _)| !window_parameter_is_persistent(key, &saved_keys, symbol_mode))
         .collect::<Vec<_>>();
 
     for (key, saved_value) in saved_parameters {
         if saved_value.is_nil() {
             if live.is_some_and(|params| {
                 params.iter().any(|(live_key, live_value)| {
-                    crate::emacs_core::value::eq_value(live_key, &key) && live_value.is_truthy()
+                    crate::emacs_core::value::eq_value_swp(
+                        live_key,
+                        &key,
+                        symbol_mode == SymbolMode::Positioned,
+                    ) && live_value.is_truthy()
                 })
             }) {
                 merged.insert(0, (key, Value::NIL));
@@ -1248,12 +1269,13 @@ fn merge_restored_window_parameters(
 fn merge_snapshot_window_parameters(
     snapshot: &mut WindowConfigurationSnapshot,
     live_parameters: &HashMap<crate::window::WindowId, Vec<(Value, Value)>>,
+    symbol_mode: SymbolMode,
 ) {
-    snapshot
-        .tree
-        .for_each_node_mut(|window| merge_restored_window_parameters(window, live_parameters));
+    snapshot.tree.for_each_node_mut(|window| {
+        merge_restored_window_parameters(window, live_parameters, symbol_mode)
+    });
     if let Some(minibuffer) = &mut snapshot.minibuffer_leaf {
-        merge_restored_window_parameters(minibuffer, live_parameters);
+        merge_restored_window_parameters(minibuffer, live_parameters, symbol_mode);
     }
 }
 
@@ -1461,6 +1483,7 @@ pub(crate) fn builtin_current_window_configuration(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_max_args("current-window-configuration", &args, 1)?;
 
     let frame = if let Some(frame) = args.first() {
@@ -1512,9 +1535,9 @@ pub(crate) fn builtin_current_window_configuration(
         save_snapshot_persistent_window_parameters(
             &mut snapshot,
             eval.obarray
-                .symbol_value("window-persistent-parameters")
-                .copied()
+                .symbol_value_copied("window-persistent-parameters")
                 .unwrap_or(Value::NIL),
+            symbol_mode,
         );
         let roots = window_configuration_snapshot_roots(&snapshot);
         let serial = next_window_configuration_serial();
@@ -1697,6 +1720,7 @@ pub(crate) fn set_window_configuration_with_options(
     configuration: Value,
     options: WindowConfigurationRestoreOptions,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let Some((_frame, serial)) = window_configuration_parts_from_value(&configuration) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
@@ -1723,7 +1747,7 @@ pub(crate) fn set_window_configuration_with_options(
         // `old_point` at the very top of `Fset_window_configuration`, from the
         // session as it stands (`src/window.c:7692-7733`).
         let live_current_buffer_point = LiveCurrentBufferPoint::read(eval, &snapshot);
-        merge_snapshot_window_parameters(&mut snapshot, &live_parameters);
+        merge_snapshot_window_parameters(&mut snapshot, &live_parameters, symbol_mode);
         prepare_saved_window_buffer_restoration(eval, &mut snapshot);
         prepare_reused_window_histories(eval, &mut snapshot)?;
         window_configuration_redisplay::prepare(eval, &mut snapshot, options);
@@ -1934,8 +1958,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     let hook_sym = hook_runtime::hook_symbol_by_name(eval, "window-configuration-change-hook");
     let global_hook_value = eval
         .obarray
-        .default_value_id(hook_sym)
-        .copied()
+        .default_value_id_copied(hook_sym)
         .unwrap_or(Value::NIL);
     let selected_window = frame_state.selected_window;
     let window_ids = frame_state.window_list();
@@ -2050,10 +2073,11 @@ fn features_symbol_id() -> crate::emacs_core::intern::SymId {
 }
 
 pub(crate) fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_min_args("featurep", &args, 1)?;
     expect_max_args("featurep", &args, 2)?;
     let feature = eval.unwrap_symbol(args[0]);
-    let sym_id = feature.as_symbol_id().ok_or_else(|| {
+    let sym_id = feature.as_symbol_id(symbol_mode).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],
@@ -2067,8 +2091,7 @@ pub(crate) fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>
     // never reaches here.)
     let features = eval
         .obarray
-        .symbol_value_id(features_symbol_id())
-        .copied()
+        .symbol_value_id_copied(features_symbol_id())
         .unwrap_or(Value::NIL);
     if super::cons_list::builtin_memq_values(feature, features, eval.symbols_with_pos_enabled)?
         .is_nil()

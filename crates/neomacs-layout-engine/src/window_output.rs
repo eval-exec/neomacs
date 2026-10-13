@@ -1304,6 +1304,9 @@ impl WindowChromeStringState {
 
 pub(crate) struct WindowOutputEmitter {
     query_target: Option<LayoutCharPos0>,
+    // A stable buffer glyph completed a position query inside this row.
+    // This is a prefix observation, never proof of a complete final row.
+    query_target_reached: bool,
     collect_query_restarts: bool,
     query_restart_rows: Vec<(LispCharPos1, i64)>,
     /// Whether output-cursor updates are mirrored into the live evaluator
@@ -1412,6 +1415,7 @@ impl WindowOutputEmitter {
         Self {
             publish_live,
             query_target: None,
+            query_target_reached: false,
             collect_query_restarts: false,
             query_restart_rows: Vec::new(),
             frame_id,
@@ -1425,6 +1429,14 @@ impl WindowOutputEmitter {
 
     pub(crate) fn set_query_target(&mut self, target: Option<LayoutCharPos0>) {
         self.query_target = target;
+    }
+
+    pub(crate) fn mark_query_target_reached(&mut self) {
+        self.query_target_reached = true;
+    }
+
+    pub(crate) fn query_target_reached(&self) -> bool {
+        self.query_target_reached
     }
 
     pub(crate) fn set_collect_query_restarts(

@@ -18,6 +18,101 @@ use neovm_core::emacs_core::value::StringTextPropertyRun;
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::heap_types::LispString;
 
+#[test]
+fn ordinary_run_acquisition_horizon_bounds_payload_without_changing_semantic_end() {
+    let (id, snapshot, end) = snapshot_with_text("abcdefλ");
+    let mut source =
+        BufferTextSourceCursor::new(id, &snapshot, CharPos0::ZERO, end, RenderFaceRef::Inherit);
+    source.set_ordinary_run_horizon(CharPos0::new(2));
+    let mut context = DisplaySourceContext::empty();
+    let item = source.next_item(&mut context).unwrap();
+    assert_eq!(item_texts(&[item.clone()]), ["ab"]);
+    assert_eq!(
+        item.span.end,
+        DisplaySourcePosition::buffer(id, CharPos0::new(2), EmacsBytePos::new(2))
+    );
+    assert_eq!(source.char_at(CharPos0::new(6)).unwrap().code(), 'λ' as u32);
+    assert_eq!(source.char_at(end), None);
+}
+
+#[test]
+fn ordinary_run_acquisition_horizon_preserves_complete_display_replacement_extent() {
+    let mut eval = Context::new();
+    let id = eval.buffer_manager().current_buffer().unwrap().id();
+    {
+        let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
+        buffer.insert("abcdef tail");
+        buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(EmacsBytePos::new(0), EmacsBytePos::new(6)),
+            Value::symbol("display"),
+            Value::string("replacement"),
+        );
+        buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(EmacsBytePos::new(2), EmacsBytePos::new(3)),
+            Value::symbol("face"),
+            Value::symbol("bold"),
+        );
+    }
+    let buffer = eval.buffer_manager().get(id).unwrap();
+    let snapshot = LayoutBufferSnapshot::from_buffer(buffer);
+    let mut source = BufferTextSourceCursor::new(
+        id,
+        &snapshot,
+        CharPos0::ZERO,
+        buffer.total_char_end_pos(),
+        RenderFaceRef::Inherit,
+    );
+    source.set_ordinary_run_horizon(CharPos0::new(1));
+    let mut context = DisplaySourceContext::empty();
+    let item = source.next_cursor_item(
+        &mut context,
+        crate::buffer_source::text_source::BufferTextDisplayReplacementMode::TypedReplacementItem,
+    ).unwrap();
+    let BufferTextCursorItem::DisplayPropertyReplacement(replacement) = item else {
+        panic!("expected typed replacement");
+    };
+    assert_eq!(replacement.descriptor().anchor_charpos(), CharPos0::ZERO);
+    assert_eq!(replacement.descriptor().resume_charpos(), 6);
+    assert_eq!(source.current_char_pos(), CharPos0::new(6));
+}
+
+#[test]
+fn ordinary_run_acquisition_horizon_preserves_complete_composition_element() {
+    let mut eval = Context::new();
+    let id = eval.buffer_manager().current_buffer().unwrap().id();
+    {
+        let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
+        buffer.insert("ab tail");
+        buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(EmacsBytePos::new(0), EmacsBytePos::new(2)),
+            Value::symbol("composition"),
+            Value::list(vec![
+                Value::fixnum(0),
+                Value::fixnum(2),
+                Value::vector(vec![Value::fixnum('◉' as i64)]),
+            ]),
+        );
+    }
+    let buffer = eval.buffer_manager().get(id).unwrap();
+    let snapshot = LayoutBufferSnapshot::from_buffer(buffer);
+    let mut source = BufferTextSourceCursor::new(
+        id,
+        &snapshot,
+        CharPos0::ZERO,
+        buffer.total_char_end_pos(),
+        RenderFaceRef::Inherit,
+    );
+    source.set_ordinary_run_horizon(CharPos0::new(1));
+    let mut context = DisplaySourceContext::empty();
+    let item = source.next_item(&mut context).unwrap();
+    assert_eq!(item_texts(&[item.clone()]), ["◉"]);
+    assert_eq!(
+        item.span.end,
+        DisplaySourcePosition::buffer(id, CharPos0::new(2), EmacsBytePos::new(2))
+    );
+    assert_eq!(source.current_char_pos(), CharPos0::new(2));
+}
+
 fn collect_items(source: &mut impl DisplayItemSource) -> Vec<DisplayItem> {
     let mut context = DisplaySourceContext::empty();
     let mut items = Vec::new();
@@ -701,7 +796,7 @@ impl DisplayItemFaceResolver for SymbolFaceResolver {
     }
 
     fn resolve_face_ref(&mut self, base: RenderFaceRef, face_value: Value) -> RenderFaceRef {
-        match face_value.as_symbol_name() {
+        match face_value.as_bare_symbol_name() {
             Some("bold") => RenderFaceRef::FaceId(FaceId::new(7)),
             Some("font-lock-string-face") => RenderFaceRef::FaceId(FaceId::new(9)),
             _ => base,
@@ -737,7 +832,7 @@ impl DisplayItemFaceResolver for SymbolFaceResolver {
         base: RenderFaceRef,
         face_value: Value,
     ) -> Option<RenderFaceRef> {
-        match face_value.as_symbol_name() {
+        match face_value.as_bare_symbol_name() {
             Some("highlight") => Some(RenderFaceRef::FaceId(FaceId::new(11))),
             Some("low-mouse") => Some(RenderFaceRef::FaceId(FaceId::new(12))),
             Some("high-mouse") => Some(RenderFaceRef::FaceId(FaceId::new(13))),
@@ -852,7 +947,7 @@ impl DisplayItemFaceResolver for ResolvedDisplayPropertyResolver {
     }
 
     fn resolve_face_ref(&mut self, base: RenderFaceRef, face_value: Value) -> RenderFaceRef {
-        match face_value.as_symbol_name() {
+        match face_value.as_bare_symbol_name() {
             Some("bold") => RenderFaceRef::FaceId(FaceId::new(7)),
             _ => base,
         }
@@ -876,7 +971,7 @@ impl DisplayItemFaceResolver for ResolvedDisplayPropertyResolver {
         face: RenderFaceRef,
     ) -> Option<DisplayMediaReplacement> {
         self.seen_face = Some(face);
-        if display_prop.cons_car().is_symbol_named("image") {
+        if display_prop.cons_car().is_bare_symbol_named("image") {
             Some(DisplayMediaReplacement::image(DisplayImageItem {
                 image_id: 42,
                 source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
@@ -2760,7 +2855,7 @@ fn equal_priority_tie_and_nil_overlay_match_shared_gnu_selection() {
         .overlays()
         .overlay_get_named(selected, Value::symbol("mouse-face"))
         .unwrap();
-    let expected = match selected_value.as_symbol_name() {
+    let expected = match selected_value.as_bare_symbol_name() {
         Some("low-mouse") => FaceId::new(12),
         Some("high-mouse") => FaceId::new(13),
         other => panic!("unexpected selected mouse face: {other:?}"),
@@ -3585,7 +3680,7 @@ fn line_spacing_uses_gnu_numeric_and_cons_scaling_rules() {
         DisplayLineSpacingPolicy::Scale {
             reference: DisplayLineSpacingReference::Named(face),
             ..
-        } if face.is_symbol_named("mode-line")
+        } if face.is_bare_symbol_named("mode-line")
     ));
 }
 

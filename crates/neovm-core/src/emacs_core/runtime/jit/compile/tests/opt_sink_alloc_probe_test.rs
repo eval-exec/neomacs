@@ -33,6 +33,7 @@ struct Settings;
 impl Settings {
     fn enter(sink: bool) -> Self {
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
+        force_opt_profit_for_test(Some(OptProfitMode::Off));
         force_opt_passes_for_test(Some(OptPasses {
             sink,
             ..OptPasses::ALL
@@ -60,6 +61,7 @@ impl Settings {
 impl Drop for Settings {
     fn drop(&mut self) {
         force_opt_for_test(None, None);
+        force_opt_profit_for_test(None);
         force_opt_passes_for_test(None);
         force_flonum_mode_for_test(None);
         force_tier2_for_test(None);
@@ -132,9 +134,9 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
         LoadOptions::implicit_dependency(MissingFilePolicy::Signal),
     )
     .expect("frozen primitive graph loader must succeed in bare Context");
-    let graph = *ctx
+    let graph = ctx
         .obarray
-        .symbol_value("t34-o36-fixture-objects")
+        .symbol_value_copied("t34-o36-fixture-objects")
         .expect("loader's graph binding");
     roots.add(&[graph]);
     let objects = graph.as_vector_data().expect("42-node graph");
@@ -167,7 +169,7 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
     }
     for &(name, spec) in &oracle::GLOBALS {
         assert_eq!(
-            ctx.obarray.symbol_value(name).unwrap().bits(),
+            ctx.obarray.symbol_value_copied(name).unwrap().bits(),
             constant_value(spec, objects).bits(),
             "global {name}"
         );
@@ -182,7 +184,7 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
             .get_bytecode_data()
             .expect("real GNU byte-code object");
         assert_eq!(source.arglist, Value::make_int(spec.descriptor));
-        assert_eq!(source.max_stack, spec.max_stack);
+        assert_eq!(source.max_stack.get(), spec.max_stack as usize);
         assert_eq!(
             source.gnu_bytecode_bytes.as_ref().unwrap().as_slice(),
             spec.bytes

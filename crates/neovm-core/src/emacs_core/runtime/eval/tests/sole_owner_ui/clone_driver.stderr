@@ -1,0 +1,14 @@
+error[E0599]: no method named `clone` found for struct `SoleOwnerDriver` in the current scope
+  --> src/emacs_core/runtime/eval/tests/sole_owner_ui/clone_driver.rs:10:29
+   |
+10 |     let _duplicate = driver.clone();
+   |                             ^^^^^ method not found in `SoleOwnerDriver`
+   |
+  ::: src/emacs_core/runtime/eval/tests/sole_owner_ui/../../world/sole_owner.rs
+   |
+   | pub(crate) struct SoleOwnerDriver {
+   | --------------------------------- method `clone` not found for this struct
+   |
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following trait defines an item `clone`, perhaps you need to implement it:
+           candidate #1: `Clone`

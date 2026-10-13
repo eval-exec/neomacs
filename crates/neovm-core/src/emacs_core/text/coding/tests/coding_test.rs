@@ -74,7 +74,7 @@ fn plist_get(value: &Value, key: &str) -> Option<Value> {
     let mut idx = 0;
     while idx + 1 < items.len() {
         if items[idx]
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .is_some_and(|name| name.trim_start_matches(':') == needle)
         {
             return Some(items[idx + 1]);
@@ -252,7 +252,7 @@ fn coding_system_list_base_only() {
     let items = list_to_vec(&result).unwrap();
     // Should not contain utf-8-unix, utf-8-dos, utf-8-mac
     for item in &items {
-        if let Some(id) = item.as_symbol_id() {
+        if let Some(id) = item.as_bare_symbol_id() {
             let s = resolve_sym(id);
             assert!(
                 !s.ends_with("-unix") && !s.ends_with("-dos") && !s.ends_with("-mac"),
@@ -277,10 +277,15 @@ fn coding_system_list_rejects_too_many_args() {
 fn coding_system_aliases_found() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_aliases(&m, vec![Value::symbol("utf-8")]).unwrap();
+    let result = builtin_coding_system_aliases(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     let items = list_to_vec(&result).unwrap();
     // First element should be the canonical name
-    assert!(items[0].is_symbol_named("utf-8"));
+    assert!(items[0].is_bare_symbol_named("utf-8"));
     // Should include aliases like mule-utf-8
     assert!(items.len() > 1);
 }
@@ -289,7 +294,12 @@ fn coding_system_aliases_found() {
 fn coding_system_aliases_derive_eol_suffixes() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_aliases(&m, vec![Value::symbol("latin-1-unix")]).unwrap();
+    let result = builtin_coding_system_aliases(
+        &m,
+        vec![Value::symbol("latin-1-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(
         result,
         Value::list(vec![
@@ -304,7 +314,11 @@ fn coding_system_aliases_derive_eol_suffixes() {
 fn coding_system_aliases_unknown() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_aliases(&m, vec![Value::symbol("nonexistent")]);
+    let result = builtin_coding_system_aliases(
+        &m,
+        vec![Value::symbol("nonexistent")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(result.is_err());
 }
 
@@ -312,7 +326,9 @@ fn coding_system_aliases_unknown() {
 fn coding_system_aliases_nil_maps_to_no_conversion_family() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_aliases(&m, vec![Value::NIL]).unwrap();
+    let result =
+        builtin_coding_system_aliases(&m, vec![Value::NIL], crate::tagged::value::SymbolMode::Bare)
+            .unwrap();
     assert_eq!(
         result,
         Value::list(vec![
@@ -326,7 +342,11 @@ fn coding_system_aliases_nil_maps_to_no_conversion_family() {
 fn coding_system_aliases_string_is_type_error() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_aliases(&m, vec![Value::string("utf-8")]);
+    let result = builtin_coding_system_aliases(
+        &m,
+        vec![Value::string("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(result.is_err());
 }
 
@@ -336,10 +356,13 @@ fn coding_system_aliases_string_is_type_error() {
 fn coding_system_get_name() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result =
-        builtin_coding_system_get(&m, vec![Value::symbol("utf-8"), Value::symbol(":name")])
-            .unwrap();
-    assert!(result.is_symbol_named("utf-8"));
+    let result = builtin_coding_system_get(
+        &m,
+        vec![Value::symbol("utf-8"), Value::symbol(":name")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
+    assert!(result.is_bare_symbol_named("utf-8"));
 }
 
 #[test]
@@ -349,18 +372,22 @@ fn coding_system_get_type() {
     let result = builtin_coding_system_get(
         &m,
         vec![Value::symbol("latin-1"), Value::symbol(":coding-type")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
-    assert!(result.is_symbol_named("charset"));
+    assert!(result.is_bare_symbol_named("charset"));
 }
 
 #[test]
 fn coding_system_get_mnemonic() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result =
-        builtin_coding_system_get(&m, vec![Value::symbol("utf-8"), Value::symbol(":mnemonic")])
-            .unwrap();
+    let result = builtin_coding_system_get(
+        &m,
+        vec![Value::symbol("utf-8"), Value::symbol(":mnemonic")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(eq_value(&result, &Value::fixnum('U' as i64)));
 }
 
@@ -371,6 +398,7 @@ fn coding_system_get_eol_type() {
     let result = builtin_coding_system_get(
         &m,
         vec![Value::symbol("utf-8-unix"), Value::symbol(":eol-type")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     assert!(result.is_nil());
@@ -383,6 +411,7 @@ fn coding_system_get_unknown_prop() {
     let result = builtin_coding_system_get(
         &m,
         vec![Value::symbol("utf-8"), Value::symbol(":nonexistent")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     assert!(result.is_nil());
@@ -392,8 +421,11 @@ fn coding_system_get_unknown_prop() {
 fn coding_system_get_unknown_system() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result =
-        builtin_coding_system_get(&m, vec![Value::symbol("bogus"), Value::symbol(":name")]);
+    let result = builtin_coding_system_get(
+        &m,
+        vec![Value::symbol("bogus"), Value::symbol(":name")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(result.is_err());
 }
 
@@ -403,7 +435,12 @@ fn coding_system_get_unknown_system() {
 fn coding_system_plist_utf8_core_fields() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let plist = builtin_coding_system_plist(&m, vec![Value::symbol("utf-8")]).unwrap();
+    let plist = builtin_coding_system_plist(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(plist_get(&plist, ":name"), Some(Value::symbol("utf-8")));
     assert_eq!(
         plist_get(&plist, ":coding-type"),
@@ -419,7 +456,12 @@ fn coding_system_plist_utf8_core_fields() {
 fn coding_system_plist_keyword_keys_work_with_builtin_plist_get() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let plist = builtin_coding_system_plist(&m, vec![Value::symbol("utf-8")]).unwrap();
+    let plist = builtin_coding_system_plist(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
 
     let name = crate::emacs_core::builtins::builtin_plist_get(vec![plist, Value::keyword(":name")])
         .unwrap();
@@ -435,13 +477,23 @@ fn coding_system_plist_keyword_keys_work_with_builtin_plist_get() {
 fn coding_system_plist_normalizes_alias_and_eol_variant_name() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let latin = builtin_coding_system_plist(&m, vec![Value::symbol("latin-1")]).unwrap();
+    let latin = builtin_coding_system_plist(
+        &m,
+        vec![Value::symbol("latin-1")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(
         plist_get(&latin, ":name"),
         Some(Value::symbol("iso-latin-1"))
     );
 
-    let utf8_unix = builtin_coding_system_plist(&m, vec![Value::symbol("utf-8-unix")]).unwrap();
+    let utf8_unix = builtin_coding_system_plist(
+        &m,
+        vec![Value::symbol("utf-8-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(plist_get(&utf8_unix, ":name"), Some(Value::symbol("utf-8")));
 }
 
@@ -449,7 +501,9 @@ fn coding_system_plist_normalizes_alias_and_eol_variant_name() {
 fn coding_system_plist_nil_maps_to_no_conversion() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let plist = builtin_coding_system_plist(&m, vec![Value::NIL]).unwrap();
+    let plist =
+        builtin_coding_system_plist(&m, vec![Value::NIL], crate::tagged::value::SymbolMode::Bare)
+            .unwrap();
     assert_eq!(
         plist_get(&plist, ":name"),
         Some(Value::symbol("no-conversion"))
@@ -464,10 +518,18 @@ fn coding_system_plist_nil_maps_to_no_conversion() {
 fn coding_system_plist_type_and_unknown_errors() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let type_err = builtin_coding_system_plist(&m, vec![Value::string("utf-8")]);
+    let type_err = builtin_coding_system_plist(
+        &m,
+        vec![Value::string("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(type_err.is_err());
 
-    let unknown = builtin_coding_system_plist(&m, vec![Value::symbol("bogus")]);
+    let unknown = builtin_coding_system_plist(
+        &m,
+        vec![Value::symbol("bogus")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(unknown.is_err());
 }
 
@@ -482,10 +544,16 @@ fn coding_system_plist_includes_custom_properties_from_put() {
             Value::symbol(":foo"),
             Value::fixnum(42),
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
 
-    let plist = builtin_coding_system_plist(&m, vec![Value::symbol("utf-8")]).unwrap();
+    let plist = builtin_coding_system_plist(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(plist_get(&plist, ":foo"), Some(Value::fixnum(42)));
 }
 
@@ -502,6 +570,7 @@ fn coding_system_put_custom_prop() {
             Value::symbol(":charset-list"),
             Value::list(vec![Value::symbol("unicode")]),
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     assert_eq!(result, Value::list(vec![Value::symbol("unicode")]));
@@ -513,6 +582,7 @@ fn coding_system_put_custom_prop() {
     let get_result = builtin_coding_system_get(
         &m,
         vec![Value::symbol("utf-8"), Value::symbol(":charset-list")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     assert!(!get_result.is_nil());
@@ -529,12 +599,16 @@ fn coding_system_put_mnemonic() {
             Value::symbol(":mnemonic"),
             Value::char('X'),
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
 
-    let result =
-        builtin_coding_system_get(&m, vec![Value::symbol("utf-8"), Value::symbol(":mnemonic")])
-            .unwrap();
+    let result = builtin_coding_system_get(
+        &m,
+        vec![Value::symbol("utf-8"), Value::symbol(":mnemonic")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(eq_value(&result, &Value::fixnum('X' as i64)));
 }
 
@@ -549,6 +623,7 @@ fn coding_system_put_unknown_system_errors() {
             Value::symbol(":foo"),
             Value::fixnum(1),
         ],
+        crate::tagged::value::SymbolMode::Bare,
     );
     assert!(result.is_err());
 }
@@ -574,6 +649,7 @@ fn define_coding_system_internal_keeps_symbol_metadata() {
             Value::list(vec![Value::keyword(":foo"), Value::fixnum(7)]),
             Value::symbol("unix"),
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
 
@@ -620,6 +696,7 @@ fn define_coding_system_internal_nil_conversion_slots_match_gnu() {
             Value::NIL,
             Value::symbol("unix"),
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
 
@@ -635,6 +712,7 @@ fn define_coding_system_internal_nil_conversion_slots_match_gnu() {
                 Value::symbol("vm-nil-conversion-coding"),
                 Value::keyword(":post-read-conversion"),
             ],
+            crate::tagged::value::SymbolMode::Bare
         )
         .unwrap(),
         Value::NIL
@@ -646,6 +724,7 @@ fn define_coding_system_internal_nil_conversion_slots_match_gnu() {
                 Value::symbol("vm-nil-conversion-coding"),
                 Value::keyword(":pre-write-conversion"),
             ],
+            crate::tagged::value::SymbolMode::Bare
         )
         .unwrap(),
         Value::NIL
@@ -658,23 +737,37 @@ fn define_coding_system_internal_nil_conversion_slots_match_gnu() {
 fn coding_system_base_with_suffix() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_base(&m, vec![Value::symbol("utf-8-unix")]).unwrap();
-    assert!(result.is_symbol_named("utf-8"));
+    let result = builtin_coding_system_base(
+        &m,
+        vec![Value::symbol("utf-8-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
+    assert!(result.is_bare_symbol_named("utf-8"));
 }
 
 #[test]
 fn coding_system_base_without_suffix() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_base(&m, vec![Value::symbol("utf-8")]).unwrap();
-    assert!(result.is_symbol_named("utf-8"));
+    let result = builtin_coding_system_base(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
+    assert!(result.is_bare_symbol_named("utf-8"));
 }
 
 #[test]
 fn coding_system_base_unknown_still_strips() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_base(&m, vec![Value::symbol("foo-bar-unix")]);
+    let result = builtin_coding_system_base(
+        &m,
+        vec![Value::symbol("foo-bar-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(result.is_err());
 }
 
@@ -684,7 +777,12 @@ fn coding_system_base_unknown_still_strips() {
 fn eol_type_unix() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_eol_type(&m, vec![Value::symbol("utf-8-unix")]).unwrap();
+    let result = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("utf-8-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(eq_value(&result, &Value::fixnum(0)));
 }
 
@@ -692,7 +790,12 @@ fn eol_type_unix() {
 fn eol_type_dos() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_eol_type(&m, vec![Value::symbol("utf-8-dos")]).unwrap();
+    let result = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("utf-8-dos")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(eq_value(&result, &Value::fixnum(1)));
 }
 
@@ -700,7 +803,12 @@ fn eol_type_dos() {
 fn eol_type_mac() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_eol_type(&m, vec![Value::symbol("utf-8-mac")]).unwrap();
+    let result = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("utf-8-mac")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(eq_value(&result, &Value::fixnum(2)));
 }
 
@@ -708,14 +816,19 @@ fn eol_type_mac() {
 fn eol_type_undecided_returns_vector() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_eol_type(&m, vec![Value::symbol("utf-8")]).unwrap();
+    let result = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     // Should be a vector of [utf-8-unix utf-8-dos utf-8-mac]
     if result.is_vector() {
         let locked = result.as_vector_data().unwrap().clone();
         assert_eq!(locked.len(), 3);
-        assert!(locked[0].is_symbol_named("utf-8-unix"));
-        assert!(locked[1].is_symbol_named("utf-8-dos"));
-        assert!(locked[2].is_symbol_named("utf-8-mac"));
+        assert!(locked[0].is_bare_symbol_named("utf-8-unix"));
+        assert!(locked[1].is_bare_symbol_named("utf-8-dos"));
+        assert!(locked[2].is_bare_symbol_named("utf-8-mac"));
     } else {
         panic!("expected vector for undecided eol-type");
     }
@@ -725,7 +838,12 @@ fn eol_type_undecided_returns_vector() {
 fn eol_type_latin_alias_uses_iso_latin_display_variants() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_eol_type(&m, vec![Value::symbol("latin-1")]).unwrap();
+    let result = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("latin-1")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     if result.is_vector() {
         let locked = result.as_vector_data().unwrap().clone();
         assert_eq!(locked.len(), 3);
@@ -741,7 +859,12 @@ fn eol_type_latin_alias_uses_iso_latin_display_variants() {
 fn eol_type_gbk_alias_uses_chinese_gbk_display_variants() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_eol_type(&m, vec![Value::symbol("gbk")]).unwrap();
+    let result = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("gbk")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     if result.is_vector() {
         let locked = result.as_vector_data().unwrap().clone();
         assert_eq!(locked.len(), 3);
@@ -757,7 +880,12 @@ fn eol_type_gbk_alias_uses_chinese_gbk_display_variants() {
 fn eol_type_nil_maps_to_no_conversion() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_eol_type(&m, vec![Value::NIL]).unwrap();
+    let result = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::NIL],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(result, Value::fixnum(0));
 }
 
@@ -766,14 +894,22 @@ fn eol_type_non_symbol_designator_returns_nil() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
     assert!(
-        builtin_coding_system_eol_type(&m, vec![Value::string("utf-8")])
-            .unwrap()
-            .is_nil()
+        builtin_coding_system_eol_type(
+            &m,
+            vec![Value::string("utf-8")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap()
+        .is_nil()
     );
     assert!(
-        builtin_coding_system_eol_type(&m, vec![Value::fixnum(1)])
-            .unwrap()
-            .is_nil()
+        builtin_coding_system_eol_type(
+            &m,
+            vec![Value::fixnum(1)],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap()
+        .is_nil()
     );
 }
 
@@ -781,7 +917,12 @@ fn eol_type_non_symbol_designator_returns_nil() {
 fn eol_type_unknown_returns_nil() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_eol_type(&m, vec![Value::symbol("nonexistent")]).unwrap();
+    let result = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("nonexistent")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(result.is_nil());
 }
 
@@ -852,23 +993,37 @@ fn find_coding_systems_region_internal_rejects_non_list_exclude_for_non_ascii_bu
 fn coding_system_type_utf8() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_type(&m, vec![Value::symbol("utf-8")]).unwrap();
-    assert!(result.is_symbol_named("utf-8"));
+    let result = builtin_coding_system_type(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
+    assert!(result.is_bare_symbol_named("utf-8"));
 }
 
 #[test]
 fn coding_system_type_raw_text() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_type(&m, vec![Value::symbol("raw-text")]).unwrap();
-    assert!(result.is_symbol_named("raw-text"));
+    let result = builtin_coding_system_type(
+        &m,
+        vec![Value::symbol("raw-text")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
+    assert!(result.is_bare_symbol_named("raw-text"));
 }
 
 #[test]
 fn coding_system_type_unknown() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_type(&m, vec![Value::symbol("bogus")]);
+    let result = builtin_coding_system_type(
+        &m,
+        vec![Value::symbol("bogus")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(result.is_err());
 }
 
@@ -881,9 +1036,10 @@ fn change_eol_by_int() {
     let result = builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("utf-8"), Value::fixnum(1)],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
-    assert!(result.is_symbol_named("utf-8-dos"));
+    assert!(result.is_bare_symbol_named("utf-8-dos"));
 }
 
 #[test]
@@ -893,9 +1049,10 @@ fn change_eol_by_symbol() {
     let result = builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("utf-8-unix"), Value::symbol("mac")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
-    assert!(result.is_symbol_named("utf-8-mac"));
+    assert!(result.is_bare_symbol_named("utf-8-mac"));
 }
 
 #[test]
@@ -905,9 +1062,10 @@ fn change_eol_strips_existing_suffix() {
     let result = builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("utf-8-dos"), Value::fixnum(0)],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
-    assert!(result.is_symbol_named("utf-8-unix"));
+    assert!(result.is_bare_symbol_named("utf-8-unix"));
 }
 
 #[test]
@@ -917,6 +1075,7 @@ fn change_eol_gbk_alias_returns_canonical_chinese_gbk_variant() {
     let result = builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("gbk"), Value::symbol("unix")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     assert_eq!(result, Value::symbol("chinese-gbk-unix"));
@@ -929,6 +1088,7 @@ fn change_eol_gbk_alias_variant_to_nil_returns_canonical_base() {
     let result = builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("gbk-unix"), Value::NIL],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     assert_eq!(result, Value::symbol("chinese-gbk"));
@@ -941,6 +1101,7 @@ fn change_eol_same_fixed_eol_returns_original_designator_like_gnu() {
     let result = builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("latin-1-unix"), Value::fixnum(0)],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     assert_eq!(result, Value::symbol("latin-1-unix"));
@@ -953,6 +1114,7 @@ fn change_eol_fixed_eol_accepts_equal_float_like_gnu() {
     let result = builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("utf-8-unix"), Value::make_float(0.0)],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     assert_eq!(result, Value::symbol("utf-8-unix"));
@@ -960,6 +1122,7 @@ fn change_eol_fixed_eol_accepts_equal_float_like_gnu() {
     let result = builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("utf-8-dos"), Value::make_float(1.0)],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     assert_eq!(result, Value::symbol("utf-8-dos"));
@@ -972,6 +1135,7 @@ fn change_eol_nonmatching_float_uses_gnu_aref_error() {
     match builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("utf-8-unix"), Value::make_float(1.0)],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .kinded()
     {
@@ -993,6 +1157,7 @@ fn change_eol_out_of_range_uses_gnu_aref_error() {
     match builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("utf-8"), Value::fixnum(3)],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .kinded()
     {
@@ -1014,9 +1179,10 @@ fn change_text_conversion_preserves_eol() {
     let result = builtin_coding_system_change_text_conversion(
         &m,
         vec![Value::symbol("utf-8-unix"), Value::symbol("latin-1")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
-    assert!(result.is_symbol_named("iso-latin-1-unix"));
+    assert!(result.is_bare_symbol_named("iso-latin-1-unix"));
 }
 
 #[test]
@@ -1026,10 +1192,11 @@ fn change_text_conversion_undecided_eol() {
     let result = builtin_coding_system_change_text_conversion(
         &m,
         vec![Value::symbol("utf-8"), Value::symbol("latin-1")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     // utf-8 has undecided eol -> no suffix
-    assert!(result.is_symbol_named("latin-1"));
+    assert!(result.is_bare_symbol_named("latin-1"));
 }
 
 // ----- detect-coding-string -----
@@ -1038,25 +1205,39 @@ fn change_text_conversion_undecided_eol() {
 fn detect_coding_string_highest() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_detect_coding_string(&m, vec![Value::string("hello"), Value::T]).unwrap();
-    assert!(result.is_symbol_named("undecided"));
+    let result = builtin_detect_coding_string(
+        &m,
+        vec![Value::string("hello"), Value::T],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
+    assert!(result.is_bare_symbol_named("undecided"));
 }
 
 #[test]
 fn detect_coding_string_list() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_detect_coding_string(&m, vec![Value::string("hello")]).unwrap();
+    let result = builtin_detect_coding_string(
+        &m,
+        vec![Value::string("hello")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     let items = list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 1);
-    assert!(items[0].is_symbol_named("undecided"));
+    assert!(items[0].is_bare_symbol_named("undecided"));
 }
 
 #[test]
 fn detect_coding_string_wrong_type() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_detect_coding_string(&m, vec![Value::fixnum(42)]);
+    let result = builtin_detect_coding_string(
+        &m,
+        vec![Value::fixnum(42)],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(result.is_err());
 }
 
@@ -1064,7 +1245,11 @@ fn detect_coding_string_wrong_type() {
 fn detect_coding_string_rejects_too_many_args() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_detect_coding_string(&m, vec![Value::string("x"), Value::NIL, Value::NIL]);
+    let result = builtin_detect_coding_string(
+        &m,
+        vec![Value::string("x"), Value::NIL, Value::NIL],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(result.is_err());
 }
 
@@ -1079,9 +1264,10 @@ fn detect_coding_region_highest() {
         &eval.coding_systems,
         &eval.buffers,
         vec![Value::fixnum(1), Value::fixnum(4), Value::T],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
-    assert!(result.is_symbol_named("undecided"));
+    assert!(result.is_bare_symbol_named("undecided"));
 }
 
 #[test]
@@ -1093,11 +1279,12 @@ fn detect_coding_region_list() {
         &eval.coding_systems,
         &eval.buffers,
         vec![Value::fixnum(1), Value::fixnum(4)],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
     let items = list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 1);
-    assert!(items[0].is_symbol_named("undecided"));
+    assert!(items[0].is_bare_symbol_named("undecided"));
 }
 
 #[test]
@@ -1108,6 +1295,7 @@ fn detect_coding_region_rejects_too_many_args() {
         &eval.coding_systems,
         &eval.buffers,
         vec![Value::fixnum(1), Value::fixnum(100), Value::NIL, Value::NIL],
+        crate::tagged::value::SymbolMode::Bare,
     );
     assert!(result.is_err());
 }
@@ -1120,7 +1308,8 @@ fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
         builtin_detect_coding_region(
             &eval.coding_systems,
             &eval.buffers,
-            vec![Value::string("a"), Value::fixnum(1)]
+            vec![Value::string("a"), Value::fixnum(1)],
+            crate::tagged::value::SymbolMode::Bare
         )
         .is_err()
     );
@@ -1128,7 +1317,8 @@ fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
         builtin_detect_coding_region(
             &eval.coding_systems,
             &eval.buffers,
-            vec![Value::fixnum(1), Value::string("b")]
+            vec![Value::fixnum(1), Value::string("b")],
+            crate::tagged::value::SymbolMode::Bare
         )
         .is_err()
     );
@@ -1136,7 +1326,8 @@ fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
         builtin_detect_coding_region(
             &eval.coding_systems,
             &eval.buffers,
-            vec![Value::NIL, Value::fixnum(1)]
+            vec![Value::NIL, Value::fixnum(1)],
+            crate::tagged::value::SymbolMode::Bare
         )
         .is_err()
     );
@@ -1144,7 +1335,8 @@ fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
         builtin_detect_coding_region(
             &eval.coding_systems,
             &eval.buffers,
-            vec![Value::fixnum(1), Value::NIL]
+            vec![Value::fixnum(1), Value::NIL],
+            crate::tagged::value::SymbolMode::Bare
         )
         .is_err()
     );
@@ -1160,6 +1352,7 @@ fn detect_coding_region_validates_accessible_region_like_gnu() {
         &eval.coding_systems,
         &eval.buffers,
         vec![Value::fixnum(0), Value::fixnum(2)],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect_err("GNU validate_region rejects positions before point-min");
     match err.into_kind() {
@@ -1182,7 +1375,7 @@ fn keyboard_coding_system_default() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
     let result = builtin_keyboard_coding_system(&m, vec![]).unwrap();
-    assert!(result.is_symbol_named("no-conversion"));
+    assert!(result.is_bare_symbol_named("no-conversion"));
 }
 
 #[test]
@@ -1190,7 +1383,7 @@ fn terminal_coding_system_default() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
     let result = builtin_terminal_coding_system(&m, vec![]).unwrap();
-    assert!(result.is_symbol_named("undecided"));
+    assert!(result.is_bare_symbol_named("undecided"));
 }
 
 #[test]
@@ -1207,10 +1400,15 @@ fn coding_system_getters_validate_max_arity() {
 fn set_keyboard_coding_system() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    let set = builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("latin-1")]).unwrap();
-    assert!(set.is_symbol_named("iso-latin-1-unix"));
+    let set = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("latin-1")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
+    assert!(set.is_bare_symbol_named("iso-latin-1-unix"));
     let get = builtin_keyboard_coding_system(&m, vec![]).unwrap();
-    assert!(get.is_symbol_named("iso-latin-1-unix"));
+    assert!(get.is_bare_symbol_named("iso-latin-1-unix"));
 }
 
 #[test]
@@ -1218,24 +1416,44 @@ fn set_keyboard_coding_system_canonicalizes_non_unix_alias_suffixes() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
 
-    let latin_dos =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("latin-1-dos")]).unwrap();
+    let latin_dos = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("latin-1-dos")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(latin_dos, Value::symbol("iso-latin-1-unix"));
 
-    let latin_mac =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("latin-1-mac")]).unwrap();
+    let latin_mac = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("latin-1-mac")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(latin_mac, Value::symbol("iso-latin-1-unix"));
 
-    let iso_dos =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("iso-8859-1-dos")]).unwrap();
+    let iso_dos = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("iso-8859-1-dos")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(iso_dos, Value::symbol("iso-latin-1-unix"));
 
-    let ascii_dos =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("ascii-dos")]).unwrap();
+    let ascii_dos = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("ascii-dos")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(ascii_dos, Value::symbol("us-ascii-unix"));
 
-    let ascii_mac =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("ascii-mac")]).unwrap();
+    let ascii_mac = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("ascii-mac")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(ascii_mac, Value::symbol("us-ascii-unix"));
 }
 
@@ -1244,16 +1462,28 @@ fn set_keyboard_coding_system_preserves_explicit_unix_spelling() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
 
-    let latin_unix =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("latin-1-unix")]).unwrap();
+    let latin_unix = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("latin-1-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(latin_unix, Value::symbol("latin-1-unix"));
 
-    let iso_unix =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("iso-8859-1-unix")]).unwrap();
+    let iso_unix = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("iso-8859-1-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(iso_unix, Value::symbol("iso-8859-1-unix"));
 
-    let ascii_unix =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("ascii-unix")]).unwrap();
+    let ascii_unix = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("ascii-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(ascii_unix, Value::symbol("ascii-unix"));
 }
 
@@ -1266,6 +1496,7 @@ fn coding_system_change_eol_conversion_canonicalizes_alias_families() {
         builtin_coding_system_change_eol_conversion(
             &m,
             vec![Value::symbol("latin-1"), Value::fixnum(0)],
+            crate::tagged::value::SymbolMode::Bare
         )
         .unwrap(),
         Value::symbol("iso-latin-1-unix")
@@ -1274,6 +1505,7 @@ fn coding_system_change_eol_conversion_canonicalizes_alias_families() {
         builtin_coding_system_change_eol_conversion(
             &m,
             vec![Value::symbol("latin-1-unix"), Value::NIL],
+            crate::tagged::value::SymbolMode::Bare
         )
         .unwrap(),
         Value::symbol("iso-latin-1")
@@ -1282,6 +1514,7 @@ fn coding_system_change_eol_conversion_canonicalizes_alias_families() {
         builtin_coding_system_change_eol_conversion(
             &m,
             vec![Value::symbol("latin-1-unix"), Value::fixnum(1)],
+            crate::tagged::value::SymbolMode::Bare
         )
         .unwrap(),
         Value::symbol("iso-latin-1-dos")
@@ -1297,6 +1530,7 @@ fn coding_system_change_eol_conversion_canonicalizes_latin9_alias_family() {
         builtin_coding_system_change_eol_conversion(
             &m,
             vec![Value::symbol("iso-8859-15"), Value::fixnum(0)],
+            crate::tagged::value::SymbolMode::Bare
         )
         .unwrap(),
         Value::symbol("iso-latin-9-unix")
@@ -1305,12 +1539,18 @@ fn coding_system_change_eol_conversion_canonicalizes_latin9_alias_family() {
         builtin_coding_system_change_eol_conversion(
             &m,
             vec![Value::symbol("iso-8859-15-unix"), Value::NIL],
+            crate::tagged::value::SymbolMode::Bare
         )
         .unwrap(),
         Value::symbol("iso-latin-9")
     );
     assert_eq!(
-        builtin_coding_system_base(&m, vec![Value::symbol("iso-8859-15-unix")]).unwrap(),
+        builtin_coding_system_base(
+            &m,
+            vec![Value::symbol("iso-8859-15-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::symbol("iso-latin-9")
     );
 }
@@ -1320,8 +1560,12 @@ fn set_keyboard_coding_system_normalizes_latin9_alias_family() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr_with_latin9();
 
-    let set =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("iso-8859-15")]).unwrap();
+    let set = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("iso-8859-15")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(set, Value::symbol("iso-latin-9-unix"));
 
     let get = builtin_keyboard_coding_system(&m, vec![]).unwrap();
@@ -1333,12 +1577,20 @@ fn set_keyboard_coding_system_accepts_alias_derived_variants() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
 
-    let latin_unix =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("latin-1-unix")]).unwrap();
+    let latin_unix = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("latin-1-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(latin_unix, Value::symbol("latin-1-unix"));
 
-    let latin_dos =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("latin-1-dos")]).unwrap();
+    let latin_dos = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("latin-1-dos")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(latin_dos, Value::symbol("iso-latin-1-unix"));
 }
 
@@ -1348,7 +1600,12 @@ fn set_terminal_coding_system_accepts_alias_derived_variants() {
     let mut m = mgr();
 
     assert!(
-        builtin_set_terminal_coding_system(&mut m, vec![Value::symbol("latin-1-unix")]).is_ok()
+        builtin_set_terminal_coding_system(
+            &mut m,
+            vec![Value::symbol("latin-1-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_ok()
     );
     assert_eq!(
         builtin_terminal_coding_system(&m, vec![]).unwrap(),
@@ -1360,28 +1617,53 @@ fn set_terminal_coding_system_accepts_alias_derived_variants() {
 fn set_terminal_coding_system() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    let set = builtin_set_terminal_coding_system(&mut m, vec![Value::symbol("ascii")]).unwrap();
+    let set = builtin_set_terminal_coding_system(
+        &mut m,
+        vec![Value::symbol("ascii")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(set.is_nil());
     let get = builtin_terminal_coding_system(&m, vec![]).unwrap();
-    assert!(get.is_symbol_named("ascii"));
+    assert!(get.is_bare_symbol_named("ascii"));
 }
 
 #[test]
 fn set_keyboard_coding_nil_resets_to_no_conversion() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("latin-1")]).unwrap();
-    builtin_set_keyboard_coding_system(&mut m, vec![Value::NIL]).unwrap();
+    builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("latin-1")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
+    builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::NIL],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     let result = builtin_keyboard_coding_system(&m, vec![]).unwrap();
-    assert!(result.is_symbol_named("no-conversion"));
+    assert!(result.is_bare_symbol_named("no-conversion"));
 }
 
 #[test]
 fn set_terminal_coding_nil_sets_nil_symbol() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    builtin_set_terminal_coding_system(&mut m, vec![Value::symbol("utf-8")]).unwrap();
-    builtin_set_terminal_coding_system(&mut m, vec![Value::NIL]).unwrap();
+    builtin_set_terminal_coding_system(
+        &mut m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
+    builtin_set_terminal_coding_system(
+        &mut m,
+        vec![Value::NIL],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     let result = builtin_terminal_coding_system(&m, vec![]).unwrap();
     assert!(result.is_nil());
 }
@@ -1390,13 +1672,37 @@ fn set_terminal_coding_nil_sets_nil_symbol() {
 fn coding_system_setters_validate_symbol_and_known_names() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    assert!(builtin_set_keyboard_coding_system(&mut m, vec![Value::string("utf-8")]).is_err());
-    assert!(builtin_set_terminal_coding_system(&mut m, vec![Value::string("utf-8")]).is_err());
     assert!(
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("no-such-coding")]).is_err()
+        builtin_set_keyboard_coding_system(
+            &mut m,
+            vec![Value::string("utf-8")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
     );
     assert!(
-        builtin_set_terminal_coding_system(&mut m, vec![Value::symbol("no-such-coding")]).is_err()
+        builtin_set_terminal_coding_system(
+            &mut m,
+            vec![Value::string("utf-8")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
+    );
+    assert!(
+        builtin_set_keyboard_coding_system(
+            &mut m,
+            vec![Value::symbol("no-such-coding")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
+    );
+    assert!(
+        builtin_set_terminal_coding_system(
+            &mut m,
+            vec![Value::symbol("no-such-coding")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
     );
 }
 
@@ -1405,8 +1711,16 @@ fn coding_system_setters_treat_keywords_as_symbol_designators() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
     let keyword = Value::keyword(":utf-8");
-    let kb = builtin_set_keyboard_coding_system(&mut m, vec![keyword]);
-    let term = builtin_set_terminal_coding_system(&mut m, vec![keyword]);
+    let kb = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![keyword],
+        crate::tagged::value::SymbolMode::Bare,
+    );
+    let term = builtin_set_terminal_coding_system(
+        &mut m,
+        vec![keyword],
+        crate::tagged::value::SymbolMode::Bare,
+    );
 
     match kb.kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "coding-system-error"),
@@ -1422,21 +1736,44 @@ fn coding_system_setters_treat_keywords_as_symbol_designators() {
 fn coding_system_setters_validate_arity_edges() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    assert!(builtin_set_keyboard_coding_system(&mut m, vec![Value::NIL, Value::NIL]).is_ok());
     assert!(
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::NIL, Value::NIL, Value::NIL])
-            .is_err()
+        builtin_set_keyboard_coding_system(
+            &mut m,
+            vec![Value::NIL, Value::NIL],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_ok()
+    );
+    assert!(
+        builtin_set_keyboard_coding_system(
+            &mut m,
+            vec![Value::NIL, Value::NIL, Value::NIL],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
     );
 
-    assert!(builtin_set_terminal_coding_system(&mut m, vec![Value::NIL, Value::NIL]).is_ok());
     assert!(
-        builtin_set_terminal_coding_system(&mut m, vec![Value::NIL, Value::NIL, Value::NIL])
-            .is_ok()
+        builtin_set_terminal_coding_system(
+            &mut m,
+            vec![Value::NIL, Value::NIL],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_ok()
     );
     assert!(
         builtin_set_terminal_coding_system(
             &mut m,
-            vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL]
+            vec![Value::NIL, Value::NIL, Value::NIL],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_ok()
+    );
+    assert!(
+        builtin_set_terminal_coding_system(
+            &mut m,
+            vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL],
+            crate::tagged::value::SymbolMode::Bare
         )
         .is_err()
     );
@@ -1452,7 +1789,7 @@ fn priority_list_full() {
     let items = list_to_vec(&result).unwrap();
     assert!(!items.is_empty());
     // First should be utf-8
-    assert!(items[0].is_symbol_named("utf-8"));
+    assert!(items[0].is_bare_symbol_named("utf-8"));
 }
 
 #[test]
@@ -1462,7 +1799,7 @@ fn priority_list_highest() {
     // GNU `(coding-system-priority-list t)` returns a BARE symbol (the base name
     // of the highest-priority category), not a one-element list.
     let result = builtin_coding_system_priority_list(&m, vec![Value::T]).unwrap();
-    assert!(result.is_symbol_named("utf-8"));
+    assert!(result.is_bare_symbol_named("utf-8"));
     assert!(
         list_to_vec(&result).is_none(),
         "HIGHESTP result must be a bare symbol, not a list"
@@ -1515,7 +1852,11 @@ fn strip_eol_suffix_works() {
 fn coding_system_get_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_get(&m, vec![Value::symbol("utf-8")]);
+    let result = builtin_coding_system_get(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert!(result.is_err());
 }
 
@@ -1523,7 +1864,7 @@ fn coding_system_get_wrong_arg_count() {
 fn coding_system_base_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_base(&m, vec![]);
+    let result = builtin_coding_system_base(&m, vec![], crate::tagged::value::SymbolMode::Bare);
     assert!(result.is_err());
 }
 
@@ -1531,7 +1872,7 @@ fn coding_system_base_wrong_arg_count() {
 fn coding_system_aliases_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_aliases(&m, vec![]);
+    let result = builtin_coding_system_aliases(&m, vec![], crate::tagged::value::SymbolMode::Bare);
     assert!(result.is_err());
 }
 
@@ -1539,15 +1880,26 @@ fn coding_system_aliases_wrong_arg_count() {
 fn coding_system_p_reads_runtime_aliases() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    let before = builtin_coding_system_p(&m, vec![Value::symbol("vm-utf8")]).unwrap();
+    let before = builtin_coding_system_p(
+        &m,
+        vec![Value::symbol("vm-utf8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(before.is_nil());
 
     builtin_define_coding_system_alias(
         &mut m,
         vec![Value::symbol("vm-utf8"), Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
-    let after = builtin_coding_system_p(&m, vec![Value::symbol("vm-utf8")]).unwrap();
+    let after = builtin_coding_system_p(
+        &m,
+        vec![Value::symbol("vm-utf8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert!(after.is_truthy());
 }
 
@@ -1556,14 +1908,18 @@ fn coding_system_p_accepts_nil_and_supported_derived_variants() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
     assert!(
-        builtin_coding_system_p(&m, vec![Value::NIL])
+        builtin_coding_system_p(&m, vec![Value::NIL], crate::tagged::value::SymbolMode::Bare)
             .unwrap()
             .is_truthy()
     );
     assert!(
-        builtin_coding_system_p(&m, vec![Value::symbol("ascii-dos")])
-            .unwrap()
-            .is_truthy()
+        builtin_coding_system_p(
+            &m,
+            vec![Value::symbol("ascii-dos")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap()
+        .is_truthy()
     );
 }
 
@@ -1571,7 +1927,11 @@ fn coding_system_p_accepts_nil_and_supported_derived_variants() {
 fn check_coding_system_signals_unknown_symbols() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_check_coding_system(&m, vec![Value::symbol("vm-no-such")]);
+    let result = builtin_check_coding_system(
+        &m,
+        vec![Value::symbol("vm-no-such")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "coding-system-error");
@@ -1586,27 +1946,57 @@ fn check_coding_system_accepts_supported_derived_variants() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
     assert_eq!(
-        builtin_check_coding_system(&m, vec![Value::symbol("latin-1-unix")]).unwrap(),
+        builtin_check_coding_system(
+            &m,
+            vec![Value::symbol("latin-1-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::symbol("latin-1-unix")
     );
     assert_eq!(
-        builtin_check_coding_system(&m, vec![Value::symbol("ascii-unix")]).unwrap(),
+        builtin_check_coding_system(
+            &m,
+            vec![Value::symbol("ascii-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::symbol("ascii-unix")
     );
     assert_eq!(
-        builtin_check_coding_system(&m, vec![Value::symbol("undecided-unix")]).unwrap(),
+        builtin_check_coding_system(
+            &m,
+            vec![Value::symbol("undecided-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::symbol("undecided-unix")
     );
     assert_eq!(
-        builtin_check_coding_system(&m, vec![Value::symbol("utf-8-auto-unix")]).unwrap(),
+        builtin_check_coding_system(
+            &m,
+            vec![Value::symbol("utf-8-auto-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::symbol("utf-8-auto-unix")
     );
     assert_eq!(
-        builtin_check_coding_system(&m, vec![Value::symbol("prefer-utf-8-unix")]).unwrap(),
+        builtin_check_coding_system(
+            &m,
+            vec![Value::symbol("prefer-utf-8-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::symbol("prefer-utf-8-unix")
     );
     assert_eq!(
-        builtin_check_coding_system(&m, vec![Value::symbol("gbk-unix")]).unwrap(),
+        builtin_check_coding_system(
+            &m,
+            vec![Value::symbol("gbk-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::symbol("gbk-unix")
     );
 }
@@ -1615,8 +2005,22 @@ fn check_coding_system_accepts_supported_derived_variants() {
 fn check_coding_system_rejects_unsupported_derived_variants() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    assert!(builtin_check_coding_system(&m, vec![Value::symbol("no-conversion-unix")]).is_err());
-    assert!(builtin_check_coding_system(&m, vec![Value::symbol("binary-unix")]).is_err());
+    assert!(
+        builtin_check_coding_system(
+            &m,
+            vec![Value::symbol("no-conversion-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
+    );
+    assert!(
+        builtin_check_coding_system(
+            &m,
+            vec![Value::symbol("binary-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
+    );
     // emacs-internal is an alias for utf-8-emacs-unix, so
     // emacs-internal-unix correctly resolves to utf-8-emacs-unix
     // (the base is utf-8-emacs-unix, strip suffix → utf-8-emacs, derive
@@ -1775,15 +2179,36 @@ fn check_coding_systems_region_matches_gnu_validation_order() {
 fn set_keyboard_coding_system_rejects_unsuitable_variants() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    let auto = builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("utf-8-auto")]);
-    let auto_derived =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("utf-8-auto-unix")]);
-    let prefer = builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("prefer-utf-8")]);
-    let prefer_derived =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("prefer-utf-8-unix")]);
-    let undecided = builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("undecided")]);
-    let undecided_derived =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("undecided-unix")]);
+    let auto = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("utf-8-auto")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
+    let auto_derived = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("utf-8-auto-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
+    let prefer = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("prefer-utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
+    let prefer_derived = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("prefer-utf-8-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
+    let undecided = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("undecided")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
+    let undecided_derived = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("undecided-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
 
     assert!(auto.is_err());
     assert!(auto_derived.is_err());
@@ -1797,8 +2222,12 @@ fn set_keyboard_coding_system_rejects_unsuitable_variants() {
 fn set_keyboard_coding_system_preserves_emacs_internal() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    let set =
-        builtin_set_keyboard_coding_system(&mut m, vec![Value::symbol("emacs-internal")]).unwrap();
+    let set = builtin_set_keyboard_coding_system(
+        &mut m,
+        vec![Value::symbol("emacs-internal")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(set, Value::symbol("emacs-internal"));
 
     let get = builtin_keyboard_coding_system(&m, vec![]).unwrap();
@@ -1823,20 +2252,25 @@ fn set_coding_system_priority_reorders_front_in_arg_order() {
     builtin_set_coding_system_priority(
         &mut m,
         vec![Value::symbol("raw-text"), Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
 
     let list = builtin_coding_system_priority_list(&m, vec![]).unwrap();
     let items = list_to_vec(&list).unwrap();
-    assert!(items[0].is_symbol_named("raw-text"));
-    assert!(items[1].is_symbol_named("utf-8"));
+    assert!(items[0].is_bare_symbol_named("raw-text"));
+    assert!(items[1].is_bare_symbol_named("utf-8"));
 }
 
 #[test]
 fn set_coding_system_priority_rejects_nil_payload() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    let result = builtin_set_coding_system_priority(&mut m, vec![Value::NIL]);
+    let result = builtin_set_coding_system_priority(
+        &mut m,
+        vec![Value::NIL],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -1850,7 +2284,11 @@ fn set_coding_system_priority_rejects_nil_payload() {
 fn set_coding_system_priority_keyword_signals_coding_system_error() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    let result = builtin_set_coding_system_priority(&mut m, vec![Value::keyword(":utf-8")]);
+    let result = builtin_set_coding_system_priority(
+        &mut m,
+        vec![Value::keyword(":utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "coding-system-error"),
         other => panic!("expected coding-system-error signal, got {other:?}"),
@@ -1861,7 +2299,11 @@ fn set_coding_system_priority_keyword_signals_coding_system_error() {
 fn set_coding_system_priority_string_is_type_error() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
-    let result = builtin_set_coding_system_priority(&mut m, vec![Value::string("utf-8")]);
+    let result = builtin_set_coding_system_priority(
+        &mut m,
+        vec![Value::string("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
@@ -1873,27 +2315,55 @@ fn internal_coding_system_setters_match_surface_validation() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
     assert_eq!(
-        builtin_set_keyboard_coding_system_internal(&mut m, vec![Value::symbol("utf-8")]).unwrap(),
+        builtin_set_keyboard_coding_system_internal(
+            &mut m,
+            vec![Value::symbol("utf-8")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_set_terminal_coding_system_internal(&mut m, vec![Value::symbol("utf-8")]).unwrap(),
+        builtin_set_terminal_coding_system_internal(
+            &mut m,
+            vec![Value::symbol("utf-8")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_set_safe_terminal_coding_system_internal(&mut m, vec![Value::symbol("utf-8")])
-            .unwrap(),
+        builtin_set_safe_terminal_coding_system_internal(
+            &mut m,
+            vec![Value::symbol("utf-8")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .unwrap(),
         Value::NIL
     );
     assert!(
-        builtin_set_keyboard_coding_system_internal(&mut m, vec![Value::symbol("foo")]).is_err()
+        builtin_set_keyboard_coding_system_internal(
+            &mut m,
+            vec![Value::symbol("foo")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
     );
     assert!(
-        builtin_set_terminal_coding_system_internal(&mut m, vec![Value::symbol("foo")]).is_err()
+        builtin_set_terminal_coding_system_internal(
+            &mut m,
+            vec![Value::symbol("foo")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
     );
     assert!(
-        builtin_set_safe_terminal_coding_system_internal(&mut m, vec![Value::symbol("foo")])
-            .is_err()
+        builtin_set_safe_terminal_coding_system_internal(
+            &mut m,
+            vec![Value::symbol("foo")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .is_err()
     );
 }
 
@@ -1944,20 +2414,32 @@ fn text_quoting_style_domain_matches_gnu_symbols() {
     ] {
         let name = style.symbol_name();
         assert_eq!(
-            TextQuotingStyle::from_symbol_value(Value::symbol(name)),
+            TextQuotingStyle::from_symbol_value(
+                Value::symbol(name),
+                crate::tagged::value::SymbolMode::Bare
+            ),
             Some(style)
         );
         assert_eq!(style.to_symbol(), Value::symbol(name));
     }
     assert_eq!(
-        TextQuotingStyle::from_symbol_value(Value::symbol("Curve")),
+        TextQuotingStyle::from_symbol_value(
+            Value::symbol("Curve"),
+            crate::tagged::value::SymbolMode::Bare
+        ),
         None
     );
     assert_eq!(
-        TextQuotingStyle::from_symbol_value(Value::symbol("nil")),
+        TextQuotingStyle::from_symbol_value(
+            Value::symbol("nil"),
+            crate::tagged::value::SymbolMode::Bare
+        ),
         None
     );
-    assert_eq!(TextQuotingStyle::from_symbol_value(Value::NIL), None);
+    assert_eq!(
+        TextQuotingStyle::from_symbol_value(Value::NIL, crate::tagged::value::SymbolMode::Bare),
+        None
+    );
 }
 
 #[test]
@@ -1965,8 +2447,8 @@ fn text_quoting_style_variable_defaults_to_nil() {
     crate::test_utils::init_test_tracing();
     let eval = crate::emacs_core::eval::Context::new();
     assert_eq!(
-        eval.obarray.symbol_value("text-quoting-style"),
-        Some(&Value::NIL)
+        eval.obarray.symbol_value_copied("text-quoting-style"),
+        Some(Value::NIL)
     );
 }
 
@@ -2060,7 +2542,11 @@ fn gnu_detect_state() -> CodingDetectionBindings {
     CodingDetectionBindings {
         priorities,
         systems: cat_system,
-        charset: CharsetDetectionPlan::for_coding_system(&mgr, intern("iso-latin-1")),
+        charset: CharsetDetectionPlan::for_coding_system(
+            &mgr,
+            intern("iso-latin-1"),
+            crate::tagged::value::SymbolMode::Bare,
+        ),
     }
 }
 
@@ -2081,7 +2567,7 @@ fn detect_list_mb(bytes: &[u8], src_chars: usize, multibytep: bool) -> Vec<Strin
     list_to_vec(&v)
         .unwrap()
         .iter()
-        .map(|s| resolve_sym(s.as_symbol_id().unwrap()).to_string())
+        .map(|s| resolve_sym(s.as_bare_symbol_id().unwrap()).to_string())
         .collect()
 }
 
@@ -2271,9 +2757,19 @@ fn set_priority_is_idempotent_across_repeated_calls() {
     // itself: preferring a coding system, then preferring it again, leaves the
     // priority list unchanged (no growth, idempotent) and moves it to the head.
     let mut m = mgr();
-    builtin_set_coding_system_priority(&mut m, vec![Value::symbol("utf-8")]).unwrap();
+    builtin_set_coding_system_priority(
+        &mut m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     let once = list_to_vec(&builtin_coding_system_priority_list(&m, vec![]).unwrap()).unwrap();
-    builtin_set_coding_system_priority(&mut m, vec![Value::symbol("utf-8")]).unwrap();
+    builtin_set_coding_system_priority(
+        &mut m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     let twice = list_to_vec(&builtin_coding_system_priority_list(&m, vec![]).unwrap()).unwrap();
     assert_eq!(
         once.len(),
@@ -2281,11 +2777,11 @@ fn set_priority_is_idempotent_across_repeated_calls() {
         "re-preferring must not grow the list"
     );
     assert_eq!(
-        resolve_sym(once[0].as_symbol_id().unwrap()),
+        resolve_sym(once[0].as_bare_symbol_id().unwrap()),
         "utf-8",
         "preferred system moves to the head"
     );
-    assert_eq!(resolve_sym(twice[0].as_symbol_id().unwrap()), "utf-8");
+    assert_eq!(resolve_sym(twice[0].as_bare_symbol_id().unwrap()), "utf-8");
 }
 
 #[test]
@@ -2297,17 +2793,30 @@ fn set_priority_moves_charset_category_to_front() {
     let base = list_to_vec(&builtin_coding_system_priority_list(&m, vec![]).unwrap())
         .unwrap()
         .len();
-    builtin_set_coding_system_priority(&mut m, vec![Value::symbol("iso-latin-1")]).unwrap();
+    builtin_set_coding_system_priority(
+        &mut m,
+        vec![Value::symbol("iso-latin-1")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     // HIGHESTP returns a bare symbol (GNU `CODING_ATTR_BASE_NAME`).
     let after_latin = builtin_coding_system_priority_list(&m, vec![Value::T]).unwrap();
     assert_eq!(
-        resolve_sym(after_latin.as_symbol_id().unwrap()),
+        resolve_sym(after_latin.as_bare_symbol_id().unwrap()),
         "iso-latin-1"
     );
-    builtin_set_coding_system_priority(&mut m, vec![Value::symbol("utf-8")]).unwrap();
+    builtin_set_coding_system_priority(
+        &mut m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     let after_utf8 =
         list_to_vec(&builtin_coding_system_priority_list(&m, vec![]).unwrap()).unwrap();
-    assert_eq!(resolve_sym(after_utf8[0].as_symbol_id().unwrap()), "utf-8");
+    assert_eq!(
+        resolve_sym(after_utf8[0].as_bare_symbol_id().unwrap()),
+        "utf-8"
+    );
     // Fronting two distinct categories one at a time never grows the list.
     assert!(after_utf8.len() <= base);
 }
@@ -2355,21 +2864,30 @@ fn priority_list_keeps_chinese_iso_8bit_and_big5_after_charset_front() {
     // iso-latin-1 is `coding-category-charset`; the two Chinese systems are
     // distinct (`iso-8-2` and `big5`).
     assert_eq!(
-        coding_category_of(&m, "iso-latin-1"),
+        coding_category_of(&m, "iso-latin-1", crate::tagged::value::SymbolMode::Bare),
         Some("coding-category-charset")
     );
     assert_eq!(
-        coding_category_of(&m, "chinese-iso-8bit"),
+        coding_category_of(
+            &m,
+            "chinese-iso-8bit",
+            crate::tagged::value::SymbolMode::Bare
+        ),
         Some("coding-category-iso-8-2")
     );
     assert_eq!(
-        coding_category_of(&m, "chinese-big5"),
+        coding_category_of(&m, "chinese-big5", crate::tagged::value::SymbolMode::Bare),
         Some("coding-category-big5")
     );
 
     // Fronting the charset category (as `reset-language-environment` does via
     // `iso-latin-1`) must not evict the distinct-category Chinese systems.
-    builtin_set_coding_system_priority(&mut m, vec![Value::symbol("iso-latin-1")]).unwrap();
+    builtin_set_coding_system_priority(
+        &mut m,
+        vec![Value::symbol("iso-latin-1")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     let names: Vec<&str> = m.priority.iter().map(|&s| resolve_sym(s)).collect();
     assert!(
         names.contains(&"chinese-iso-8bit"),
@@ -2401,7 +2919,7 @@ fn coding_category_priority_list_has_all_21_categories_in_order() {
     // and the now-distinct `iso-8-2`/`big5` categories.  The exact GNU order is
     // verified end-to-end against the booted binary's `coding-category-list`.
     let m = mgr();
-    let cats: Vec<&str> = coding_category_priority_list(&m)
+    let cats: Vec<&str> = coding_category_priority_list(&m, crate::tagged::value::SymbolMode::Bare)
         .iter()
         .map(|&s| resolve_sym(s))
         .collect();
@@ -2491,7 +3009,7 @@ fn detect_highest_with_front(front: Option<CodingCat>) -> String {
         true,
         SourceBlock::Last,
     );
-    resolve_sym(v.as_symbol_id().unwrap()).to_string()
+    resolve_sym(v.as_bare_symbol_id().unwrap()).to_string()
 }
 
 #[test]
@@ -2819,29 +3337,36 @@ fn context_eol_conversion_reads_the_defvar_bool_dynamically() {
 fn accessor_memo_follows_every_registry_change() {
     let mut m = mgr();
     let utf8 = Value::symbol("utf-8");
-    let first = builtin_coding_system_plist(&m, vec![utf8]).expect("plist");
-    let second = builtin_coding_system_plist(&m, vec![utf8]).expect("plist");
+    let first = builtin_coding_system_plist(&m, vec![utf8], crate::tagged::value::SymbolMode::Bare)
+        .expect("plist");
+    let second =
+        builtin_coding_system_plist(&m, vec![utf8], crate::tagged::value::SymbolMode::Bare)
+            .expect("plist");
     assert_eq!(first.bits(), second.bits(), "memoized: one object");
     assert_eq!(
-        builtin_coding_system_base(&m, vec![Value::symbol("utf-8-unix")])
-            .expect("base")
-            .as_symbol_name(),
+        builtin_coding_system_base(
+            &m,
+            vec![Value::symbol("utf-8-unix")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("base")
+        .as_bare_symbol_name(),
         Some("utf-8")
     );
 
     m.add_alias("memo-test-alias", "utf-8");
     let alias = Value::symbol("memo-test-alias");
     assert_eq!(
-        builtin_coding_system_base(&m, vec![alias])
+        builtin_coding_system_base(&m, vec![alias], crate::tagged::value::SymbolMode::Bare)
             .expect("base")
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("utf-8")
     );
     m.add_alias("memo-test-alias", "iso-latin-1");
     assert_eq!(
-        builtin_coding_system_base(&m, vec![alias])
+        builtin_coding_system_base(&m, vec![alias], crate::tagged::value::SymbolMode::Bare)
             .expect("base")
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("iso-latin-1"),
         "re-pointed alias: the memo was dropped"
     );
@@ -2856,16 +3381,18 @@ fn accessor_memo_follows_every_registry_change() {
             Value::from_sym_id(key),
             Value::symbol("memo-test-value"),
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("put");
-    let third = builtin_coding_system_plist(&m, vec![utf8]).expect("plist");
+    let third = builtin_coding_system_plist(&m, vec![utf8], crate::tagged::value::SymbolMode::Bare)
+        .expect("plist");
     assert_ne!(first.bits(), third.bits(), "a new plist after the write");
     let items = crate::emacs_core::value::list_to_vec(&third).expect("list");
     let at = items
         .iter()
-        .position(|v| v.as_symbol_id() == Some(key))
+        .position(|v| v.as_bare_symbol_id() == Some(key))
         .expect("the written property is in the plist");
-    assert_eq!(items[at + 1].as_symbol_name(), Some("memo-test-value"));
+    assert_eq!(items[at + 1].as_bare_symbol_name(), Some("memo-test-value"));
 }
 
 /// `coding-system-eol-type` of an undecided system is a vector, and GNU
@@ -2874,12 +3401,26 @@ fn accessor_memo_follows_every_registry_change() {
 #[test]
 fn eol_type_vector_answers_are_fresh_each_call() {
     let m = mgr();
-    let a = builtin_coding_system_eol_type(&m, vec![Value::symbol("utf-8")]).expect("eol");
-    let b = builtin_coding_system_eol_type(&m, vec![Value::symbol("utf-8")]).expect("eol");
+    let a = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .expect("eol");
+    let b = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("utf-8")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .expect("eol");
     assert!(a.is_vector(), "undecided: a vector, got {a:?}");
     assert_ne!(a.bits(), b.bits(), "two calls, two vectors");
-    let fixnum =
-        builtin_coding_system_eol_type(&m, vec![Value::symbol("utf-8-unix")]).expect("eol");
+    let fixnum = builtin_coding_system_eol_type(
+        &m,
+        vec![Value::symbol("utf-8-unix")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .expect("eol");
     assert_eq!(fixnum.as_fixnum(), Some(0));
 }
 

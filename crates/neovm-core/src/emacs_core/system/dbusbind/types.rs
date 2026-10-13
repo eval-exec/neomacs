@@ -37,7 +37,7 @@ pub(super) fn is_type_keyword(value: Value) -> bool {
 }
 
 pub(super) fn symbol_to_arg_type(value: Value) -> Option<ArgType> {
-    if !value.is_keyword() {
+    if !value.is_bare_keyword() {
         return None;
     }
     if value == Value::keyword_by_name(":byte") {

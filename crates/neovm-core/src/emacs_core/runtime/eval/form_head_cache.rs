@@ -32,7 +32,7 @@ pub(super) enum HeadClass {
 /// what its function cell holds, and what dispatch does with that cell.
 #[derive(Clone, Copy)]
 pub(super) struct FormHead {
-    /// True for `lambda` / `byte-code-literal` / `byte-code`, which the
+    /// True for `lambda` / `byte-code-literal`, which the
     /// dispatcher answers before resolving anything.
     pub(super) literal_head: bool,
     /// The symbol's function cell, or `None` if it had none.
@@ -51,9 +51,7 @@ impl FormHead {
     /// needs nothing but the cell get a fast class; everything else is
     /// `Slow` and takes the full resolution unchanged.
     pub(super) fn classify(sym_id: SymId, func: Option<Value>) -> Self {
-        let literal_head = sym_id == lambda_symbol()
-            || sym_id == byte_code_literal_symbol()
-            || sym_id == byte_code_symbol();
+        let literal_head = sym_id == lambda_symbol() || sym_id == byte_code_literal_symbol();
         let class = match func {
             None => HeadClass::Slow,
             Some(func) => match subr_call_entry_from_value(func) {

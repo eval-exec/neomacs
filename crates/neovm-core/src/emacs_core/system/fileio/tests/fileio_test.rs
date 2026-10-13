@@ -91,6 +91,33 @@ fn raw_path_value(path: &std::path::Path) -> Value {
     ))
 }
 
+#[cfg(unix)]
+enum RawFilenameFixture {
+    Created,
+    Unsupported,
+}
+
+#[cfg(unix)]
+fn raw_filename_fixture(result: io::Result<()>) -> RawFilenameFixture {
+    match result {
+        Ok(()) => RawFilenameFixture::Created,
+        Err(error) => {
+            // APFS rejects invalid UTF-8 filename bytes with EILSEQ. GNU also
+            // passes unibyte names unchanged (coding.c:encode_file_name_1) to
+            // native filesystem calls (fileio.c), so these success fixtures
+            // cannot exist there. Probe the actual filesystem, not just the OS.
+            if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EILSEQ) {
+                tracing::info!(
+                    %error,
+                    "skipping raw filename fixture: filesystem rejects invalid UTF-8"
+                );
+                return RawFilenameFixture::Unsupported;
+            }
+            panic!("creating raw filename fixture: {error}");
+        }
+    }
+}
+
 #[test]
 fn temporary_file_directory_for_eval_accepts_raw_unibyte_string() {
     crate::test_utils::init_test_tracing();
@@ -314,7 +341,13 @@ fn test_expand_file_name_tilde() {
 #[test]
 fn test_expand_file_name_tilde_user() {
     crate::test_utils::init_test_tracing();
-    assert_eq!(expand_file_name("~root/", Some("/tmp")), "/root/");
+    // GNU fileio.c uses getpwnam's pw_dir; native GNU on Darwin gives /var/root.
+    let root_home = if cfg!(target_os = "macos") {
+        "/var/root/"
+    } else {
+        "/root/"
+    };
+    assert_eq!(expand_file_name("~root/", Some("/tmp")), root_home);
     assert_eq!(
         expand_file_name("~neomacs-definitely-missing-user/file", Some("/tmp")),
         "/tmp/~neomacs-definitely-missing-user/file"
@@ -357,11 +390,17 @@ fn test_expand_file_name_preserves_gnu_superroot_spellings() {
 #[test]
 fn test_file_truename_missing_file_and_trailing_slash() {
     crate::test_utils::init_test_tracing();
+    // GNU files.el resolves ancestor symlinks even when the leaf is missing.
+    // In particular, /tmp on Darwin points to /private/tmp.
+    let tmp = fs::canonicalize("/tmp").expect("canonical /tmp");
     assert_eq!(
         file_truename("/tmp/neovm-file-truename-missing", None),
-        "/tmp/neovm-file-truename-missing"
+        tmp.join("neovm-file-truename-missing").to_string_lossy()
     );
-    assert_eq!(file_truename("/tmp/../tmp/", None), "/tmp/");
+    assert_eq!(
+        file_truename("/tmp/../tmp/", None),
+        format!("{}/", tmp.to_string_lossy())
+    );
 }
 
 #[test]
@@ -373,7 +412,12 @@ fn test_file_truename_resolves_relative_default_directory() {
     fs::write(&file, b"alpha").unwrap();
 
     let resolved = file_truename("alpha.txt", Some(&dir.to_string_lossy()));
-    assert_eq!(resolved, file.to_string_lossy());
+    assert_eq!(
+        resolved,
+        fs::canonicalize(&file)
+            .expect("canonical fixture file")
+            .to_string_lossy()
+    );
 
     let _ = fs::remove_file(file);
     let _ = fs::remove_dir(dir);
@@ -385,8 +429,15 @@ fn builtin_file_truename_preserves_raw_unibyte_directory_bytes() {
     crate::test_utils::init_test_tracing();
     let dir = raw_temp_path(b"neovm-file-truename-\xFF");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("alpha.txt"), b"alpha").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
+    let RawFilenameFixture::Created =
+        raw_filename_fixture(fs::write(dir.join("alpha.txt"), b"alpha"))
+    else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
 
     let mut eval = Context::new();
     let mut default_dir_bytes = dir.as_os_str().as_bytes().to_vec();
@@ -607,10 +658,19 @@ fn builtin_file_symlink_p_preserves_raw_unibyte_target_bytes() {
 
     let target_name = b"target-\xFF.txt";
     let target_path = base.join(std::ffi::OsStr::from_bytes(target_name));
-    fs::write(&target_path, b"x").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&target_path, b"x")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
 
     let link_path = base.join("link.txt");
-    std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(target_name), &link_path).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(std::os::unix::fs::symlink(
+        std::ffi::OsStr::from_bytes(target_name),
+        &link_path,
+    )) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
 
     let value = call_fileio_builtin!(
         builtin_file_symlink_p,
@@ -634,9 +694,18 @@ fn builtin_file_truename_chases_raw_unibyte_symlink_targets() {
 
     let target_name = b"target-\xFF.txt";
     let target_path = base.join(std::ffi::OsStr::from_bytes(target_name));
-    fs::write(&target_path, b"x").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&target_path, b"x")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
     let link_path = base.join("link.txt");
-    std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(target_name), &link_path).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(std::os::unix::fs::symlink(
+        std::ffi::OsStr::from_bytes(target_name),
+        &link_path,
+    )) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
 
     let mut eval = Context::new();
     eval.set_variable(
@@ -782,7 +851,9 @@ fn builtin_delete_file_internal_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let path = raw_temp_path(b"neovm-delete-file-\xFF");
     let _ = fs::remove_file(&path);
-    fs::write(&path, b"x").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"x")) else {
+        return;
+    };
     let value = Value::heap_string(crate::heap_types::LispString::from_unibyte(
         path.as_os_str().as_bytes().to_vec(),
     ));
@@ -858,7 +929,9 @@ fn builtin_delete_directory_internal_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let path = raw_temp_path(b"neovm-delete-dir-\xFF");
     let _ = fs::remove_dir_all(&path);
-    fs::create_dir_all(&path).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&path)) else {
+        return;
+    };
     let value = Value::heap_string(crate::heap_types::LispString::from_unibyte(
         path.as_os_str().as_bytes().to_vec(),
     ));
@@ -874,6 +947,10 @@ fn builtin_make_directory_internal_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let path = raw_temp_path(b"neovm-mkdir-\xFF");
     let _ = fs::remove_dir_all(&path);
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir(&path)) else {
+        return;
+    };
+    fs::remove_dir(&path).expect("remove raw directory capability probe");
     let value = Value::heap_string(crate::heap_types::LispString::from_unibyte(
         path.as_os_str().as_bytes().to_vec(),
     ));
@@ -972,7 +1049,10 @@ fn builtin_make_symbolic_link_keeps_relative_raw_target_bytes() {
 
     let target = base.join(std::ffi::OsStr::from_bytes(b"target-\xFF"));
     let link = base.join(std::ffi::OsStr::from_bytes(b"link-\xFE"));
-    fs::write(&target, b"x").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&target, b"x")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
 
     let mut eval = Context::new();
     eval.set_variable(
@@ -1066,7 +1146,11 @@ fn directory_files_preserves_raw_unibyte_filename() {
     // path_to_lisp_file_name keeps it as a raw unibyte byte. Either way it must
     // NOT be lossily mangled to U+FFFD.
     let raw_path = base.join(std::ffi::OsStr::from_bytes(b"raw-\xFF-file"));
-    fs::File::create(&raw_path).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::File::create(&raw_path).map(drop))
+    else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
 
     let base_ls = crate::heap_types::LispString::from_unibyte(base.as_os_str().as_bytes().to_vec());
     let files = directory_files(&base_ls, false, None, false, None).unwrap();
@@ -1338,11 +1422,16 @@ fn builtin_copy_file_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let base = raw_temp_path(b"neovm-copy-\xFF");
     let _ = fs::remove_dir_all(&base);
-    fs::create_dir_all(&base).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&base)) else {
+        return;
+    };
 
     let src = base.join(std::ffi::OsStr::from_bytes(b"src-\xFE"));
     let dst = base.join(std::ffi::OsStr::from_bytes(b"dst-\xFD"));
-    fs::write(&src, b"copy me").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&src, b"copy me")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
 
     builtin_copy_file(
         &mut Context::new(),
@@ -1447,11 +1536,16 @@ fn builtin_rename_file_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let base = raw_temp_path(b"neovm-rename-\xFF");
     let _ = fs::remove_dir_all(&base);
-    fs::create_dir_all(&base).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&base)) else {
+        return;
+    };
 
     let src = base.join(std::ffi::OsStr::from_bytes(b"src-\xFE"));
     let dst = base.join(std::ffi::OsStr::from_bytes(b"dst-\xFD"));
-    fs::write(&src, b"rename me").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&src, b"rename me")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
 
     builtin_rename_file(
         &mut Context::new(),
@@ -1498,11 +1592,16 @@ fn builtin_add_name_to_file_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let base = raw_temp_path(b"neovm-add-name-\xFF");
     let _ = fs::remove_dir_all(&base);
-    fs::create_dir_all(&base).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&base)) else {
+        return;
+    };
 
     let src = base.join(std::ffi::OsStr::from_bytes(b"src-\xFE"));
     let dst = base.join(std::ffi::OsStr::from_bytes(b"dst-\xFD"));
-    fs::write(&src, b"link me").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&src, b"link me")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
 
     builtin_add_name_to_file(
         &mut Context::new(),
@@ -1770,7 +1869,12 @@ fn test_fileio_eval_prefers_current_buffer_local_default_directory() {
         builtin_file_truename(&mut eval, vec![Value::string("alpha.txt")])
             .unwrap()
             .as_utf8_str(),
-        Some(base.join("alpha.txt").to_string_lossy().as_ref())
+        Some(
+            fs::canonicalize(base.join("alpha.txt"))
+                .expect("canonical fixture file")
+                .to_string_lossy()
+                .as_ref()
+        )
     );
     assert_eq!(
         builtin_file_exists_p(&mut eval, vec![Value::string("alpha.txt")]).unwrap(),
@@ -1796,7 +1900,8 @@ fn test_builtin_file_truename_counter_validation() {
         vec![Value::string("/tmp"), Value::list(vec![])]
     )
     .unwrap();
-    assert_eq!(value.as_utf8_str(), Some("/tmp"));
+    let tmp = fs::canonicalize("/tmp").expect("canonical /tmp");
+    assert_eq!(value.as_utf8_str(), Some(tmp.to_string_lossy().as_ref()));
 
     let err = call_fileio_builtin!(
         builtin_file_truename,
@@ -1864,9 +1969,12 @@ fn test_builtin_file_truename_eval_uses_default_directory() {
     );
 
     let value = builtin_file_truename(&mut eval, vec![Value::string("alpha.txt")]).unwrap();
+    let expected = fs::canonicalize("/tmp")
+        .expect("canonical /tmp")
+        .join("neovm-file-truename/alpha.txt");
     assert_eq!(
         value.as_utf8_str(),
-        Some("/tmp/neovm-file-truename/alpha.txt")
+        Some(expected.to_string_lossy().as_ref())
     );
 }
 
@@ -2277,7 +2385,9 @@ fn builtin_file_modes_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let path = raw_temp_path(b"neovm-file-modes-\xFF");
     let _ = fs::remove_file(&path);
-    fs::write(&path, b"x").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"x")) else {
+        return;
+    };
     let value = Value::heap_string(crate::heap_types::LispString::from_unibyte(
         path.as_os_str().as_bytes().to_vec(),
     ));
@@ -2294,10 +2404,15 @@ fn builtin_file_predicates_handle_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let base = raw_temp_path(b"neovm-preds-\xFF");
     let _ = fs::remove_dir_all(&base);
-    fs::create_dir_all(&base).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&base)) else {
+        return;
+    };
 
     let file = base.join(std::ffi::OsStr::from_bytes(b"file-\xFF"));
-    fs::write(&file, b"x").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&file, b"x")) else {
+        fs::remove_dir_all(&base).expect("remove raw filename fixture directory");
+        return;
+    };
     let file_value = Value::heap_string(crate::heap_types::LispString::from_unibyte(
         file.as_os_str().as_bytes().to_vec(),
     ));
@@ -2408,7 +2523,9 @@ fn builtin_set_file_modes_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let path = raw_temp_path(b"neovm-set-file-modes-\xFF");
     let _ = fs::remove_file(&path);
-    fs::write(&path, b"x").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"x")) else {
+        return;
+    };
     let value = Value::heap_string(crate::heap_types::LispString::from_unibyte(
         path.as_os_str().as_bytes().to_vec(),
     ));
@@ -3306,7 +3423,9 @@ fn builtin_file_system_info_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let dir = raw_temp_path(b"neovm-file-system-info-\xFF");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create raw dir");
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
 
     let value = builtin_file_system_info(&mut Context::new(), vec![raw_path_value(&dir)])
         .expect("file-system-info should accept raw-byte paths");
@@ -3447,13 +3566,21 @@ fn builtin_file_newer_than_file_p_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let dir = raw_temp_path(b"neovm-file-newer-\xFF");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create raw test dir");
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
 
     let old = dir.join(std::ffi::OsStr::from_bytes(b"old-\xFE"));
     let new = dir.join(std::ffi::OsStr::from_bytes(b"new-\xFD"));
-    fs::write(&old, b"old").expect("write old raw file");
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&old, b"old")) else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
     std::thread::sleep(std::time::Duration::from_millis(1200));
-    fs::write(&new, b"new").expect("write new raw file");
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&new, b"new")) else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
 
     assert_eq!(
         builtin_file_newer_than_file_p(
@@ -3516,10 +3643,15 @@ fn builtin_set_file_times_handles_raw_unibyte_paths() {
     crate::test_utils::init_test_tracing();
     let dir = raw_temp_path(b"neovm-set-file-times-\xFF");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create raw set-file-times dir");
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
 
     let file = dir.join(std::ffi::OsStr::from_bytes(b"alpha-\xFE"));
-    fs::write(&file, b"alpha").expect("write raw file");
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&file, b"alpha")) else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
 
     assert_eq!(
         builtin_set_file_times(
@@ -4024,7 +4156,7 @@ fn insert_file_contents_sets_last_coding_before_after_insert_hook() {
 
     assert_eq!(
         eval.visible_variable_value_or_nil("neomacs-test-last-coding-in-hook")
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("undecided-unix")
     );
 
@@ -4122,7 +4254,7 @@ fn insert_file_contents_preserves_lone_cr_in_lf_text() {
     assert_eq!(buf.buffer_string(), "(setq probe \"a\rb\")\n");
     assert_eq!(
         eval.visible_variable_value_or_nil("last-coding-system-used")
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("undecided-unix")
     );
 }
@@ -4145,7 +4277,7 @@ fn insert_file_contents_consumes_utf8_signature() {
     assert_eq!(buf.buffer_string(), ";;; bom-source.el --- fixture\n");
     assert_eq!(
         eval.visible_variable_value_or_nil("last-coding-system-used")
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("utf-8-with-signature-unix")
     );
 }
@@ -4250,7 +4382,7 @@ fn insert_file_contents_preserves_decoded_charset_text_property() {
             crate::buffer::EmacsBytePos::new(0),
             Value::symbol("charset")
         )
-        .and_then(|value| value.as_symbol_name()),
+        .and_then(|value| value.as_bare_symbol_name()),
         Some("chinese-gb2312")
     );
     assert_eq!(
@@ -4258,7 +4390,7 @@ fn insert_file_contents_preserves_decoded_charset_text_property() {
             crate::buffer::EmacsBytePos::new("一".len()),
             Value::symbol("charset")
         )
-        .and_then(|value| value.as_symbol_name()),
+        .and_then(|value| value.as_bare_symbol_name()),
         Some("chinese-gb2312")
     );
 }
@@ -4851,10 +4983,15 @@ fn builtin_insert_file_contents_handles_raw_unibyte_filename() {
 
     let dir = raw_temp_path(b"neovm-insert-file-\xFF");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
 
     let path = dir.join(std::ffi::OsStr::from_bytes(b"visit-\xFE"));
-    fs::write(&path, b"raw file").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"raw file")) else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
 
     let mut eval = Context::new();
     let result = builtin_insert_file_contents(&mut eval, vec![raw_path_value(&path), Value::T])
@@ -5757,7 +5894,9 @@ fn builtin_write_region_handles_raw_unibyte_filename_and_visit() {
 
     let dir = raw_temp_path(b"neovm-write-region-\xFF");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
 
     let out_path = dir.join(std::ffi::OsStr::from_bytes(b"buffer-\xFE"));
 
@@ -5799,10 +5938,16 @@ fn builtin_write_region_does_not_create_backup_for_raw_unibyte_filename() {
 
     let dir = raw_temp_path(b"neovm-write-region-no-backup-\xFF");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
 
     let out_path = dir.join(std::ffi::OsStr::from_bytes(b"buffer-\xFE"));
-    fs::write(&out_path, b"old bytes").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&out_path, b"old bytes"))
+    else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
     let backup_path = dir.join(std::ffi::OsStr::from_bytes(b"buffer-\xFE~"));
 
     let mut eval = Context::new();
@@ -5883,10 +6028,16 @@ fn builtin_find_file_noselect_handles_raw_unibyte_filename() {
 
     let dir = raw_temp_path(b"neovm-find-file-\xFF");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
 
     let path = dir.join(std::ffi::OsStr::from_bytes(b"find-\xFE"));
-    fs::write(&path, b"file content here").unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::write(&path, b"file content here"))
+    else {
+        fs::remove_dir_all(&dir).expect("remove raw filename fixture directory");
+        return;
+    };
 
     let mut eval = Context::new();
     let result = builtin_find_file_noselect(&mut eval, vec![raw_path_value(&path)])
@@ -6006,7 +6157,9 @@ fn builtin_do_auto_save_preserves_raw_unibyte_filename_and_bytes() {
 
     let dir = raw_temp_path(b"neovm-auto-save-\xFF");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let RawFilenameFixture::Created = raw_filename_fixture(fs::create_dir_all(&dir)) else {
+        return;
+    };
 
     let visited_path = dir.join(std::ffi::OsStr::from_bytes(b"visited-\xFE"));
     let auto_path = dir.join(std::ffi::OsStr::from_bytes(b"#visited-\xFE#"));
@@ -6255,7 +6408,7 @@ fn find_file_name_handler_reads_current_buffer_syntax_table() {
         vec![Value::string("zzz"), Value::symbol("insert-file-contents")],
     )
     .unwrap();
-    let hit_name = hit.as_symbol_name().map(|name| name.to_string());
+    let hit_name = hit.as_bare_symbol_name().map(|name| name.to_string());
     LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
     assert_eq!(
         hit_name.as_deref(),
@@ -6531,5 +6684,104 @@ fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
             .visible_variable_value_or_nil("neovm-test-auto-coding-saw-tail")
             .is_nil(),
         "the tail's coding cookie must be inside the probe"
+    );
+}
+
+#[cfg(test)]
+#[path = "time_boundary.rs"]
+mod time_boundary;
+
+// Native panic fixture: exercises Rust unwinding through the actual
+// format-decode callback path of the insert-file pipeline.
+fn p410_panicking_format_decode(eval: &mut Context, _args: Vec<Value>) -> EvalResult {
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-point-motion-hooks")
+            .is_truthy()
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-modification-hooks")
+            .is_truthy()
+    );
+    assert!(crate::buffer::undo::undo_list_is_disabled(
+        &eval
+            .buffers
+            .current_buffer()
+            .expect("source")
+            .get_undo_list()
+    ));
+    let target = eval
+        .buffers
+        .find_buffer_by_name(" *p410-panic-target*")
+        .expect("target");
+    eval.set_current_buffer_unrecorded(target)
+        .expect("callback buffer switch");
+    panic!("native format-decode panic fixture");
+}
+
+/// A Rust panic during decoding retires the dynamic suffix and the saved
+/// undo root storage-only (P4.11), but keeps what GNU's signal path keeps:
+/// the callback-selected buffer and the disabled undo list (fileio.c:5198).
+#[test]
+fn decoding_panic_cleans_dynamic_suffix_and_roots_but_keeps_inverse_state() {
+    use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    let mut eval = Context::new();
+    let source = eval.buffers.current_buffer_id().expect("source");
+    let target = eval.buffers.create_buffer(" *p410-panic-target*");
+    eval.buffers
+        .insert_into_buffer(source, "abc")
+        .expect("source text");
+    eval.buffers
+        .configure_buffer_undo_list(target, Value::NIL)
+        .expect("target undo");
+    let old_undo = Value::cons(Value::fixnum(424242), Value::NIL);
+    eval.buffers
+        .configure_buffer_undo_list(source, old_undo)
+        .expect("source undo");
+    for name in ["inhibit-point-motion-hooks", "inhibit-modification-hooks"] {
+        eval.try_set_runtime_binding_by_id(intern(name), Value::NIL)
+            .expect("initial dynamic value");
+    }
+    eval.register_subr(SubrSpec::new(
+        "format-decode",
+        NativeFn::ContextVec(p410_panicking_format_decode),
+        SubrArity::new(3, Some(3)),
+    ));
+    let original_count = eval.specpdl.len();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = run_after_insert_file_pipeline(&mut eval, source, false, false, 3);
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(
+        eval.specpdl.len(),
+        original_count,
+        "bindings and saved undo root must retire"
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-point-motion-hooks")
+            .is_nil()
+    );
+    assert!(
+        eval.visible_variable_value_or_nil("inhibit-modification-hooks")
+            .is_nil()
+    );
+    assert_eq!(
+        eval.buffers.current_buffer_id(),
+        Some(target),
+        "callback-selected buffer persists"
+    );
+    assert!(crate::buffer::undo::undo_list_is_disabled(
+        &eval.buffers.get(source).expect("source").get_undo_list()
+    ));
+    assert!(
+        eval.buffers
+            .get(target)
+            .expect("target")
+            .get_undo_list()
+            .is_nil()
+    );
+    eval.gc_collect_exact();
+    assert!(
+        !eval.tagged_heap.owns_heap_value_for_test(old_undo),
+        "retired undo snapshot must not leak a GC root"
     );
 }

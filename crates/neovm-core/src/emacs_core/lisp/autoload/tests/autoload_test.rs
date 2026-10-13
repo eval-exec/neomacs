@@ -226,19 +226,19 @@ fn autoload_manager_multiple_entries() {
 fn autoload_type_from_value() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
-        AutoloadType::from_value(&Value::NIL),
+        AutoloadType::from_value(&Value::NIL, SymbolMode::Bare),
         AutoloadType::Function
     );
     assert_eq!(
-        AutoloadType::from_value(&Value::symbol("macro")),
+        AutoloadType::from_value(&Value::symbol("macro"), SymbolMode::Bare),
         AutoloadType::Macro
     );
     assert_eq!(
-        AutoloadType::from_value(&Value::symbol("keymap")),
+        AutoloadType::from_value(&Value::symbol("keymap"), SymbolMode::Bare),
         AutoloadType::Keymap
     );
     assert_eq!(
-        AutoloadType::from_value(&Value::symbol("unknown")),
+        AutoloadType::from_value(&Value::symbol("unknown"), SymbolMode::Bare),
         AutoloadType::Function
     );
 }
@@ -253,7 +253,7 @@ fn autoload_type_roundtrip() {
     ];
     for ty in &types {
         let val = ty.to_value();
-        let back = AutoloadType::from_value(&val);
+        let back = AutoloadType::from_value(&val, SymbolMode::Bare);
         assert_eq!(&back, ty);
     }
 }
@@ -412,14 +412,14 @@ fn obsolete_variable_tracking() {
 fn is_autoload_value_positive() {
     crate::test_utils::init_test_tracing();
     let val = Value::list(vec![Value::symbol("autoload"), Value::string("my-file")]);
-    assert!(is_autoload_value(&val));
+    assert!(is_autoload_value(&val, SymbolMode::Bare));
 }
 
 #[test]
 fn is_autoload_value_matches_gnu_first_cell_check() {
     crate::test_utils::init_test_tracing();
     let dotted = Value::cons(Value::symbol("autoload"), Value::symbol("not-a-list"));
-    assert!(is_autoload_value(&dotted));
+    assert!(is_autoload_value(&dotted, SymbolMode::Bare));
 }
 
 #[test]
@@ -428,18 +428,18 @@ fn is_autoload_value_requires_canonical_autoload_symbol() {
     let uninterned_autoload =
         Value::symbol(crate::emacs_core::intern::intern_uninterned("autoload"));
     let val = Value::cons(uninterned_autoload, Value::symbol("not-a-list"));
-    assert!(!is_autoload_value(&val));
+    assert!(!is_autoload_value(&val, SymbolMode::Bare));
 }
 
 #[test]
 fn is_autoload_value_negative() {
     crate::test_utils::init_test_tracing();
-    assert!(!is_autoload_value(&Value::NIL));
-    assert!(!is_autoload_value(&Value::fixnum(42)));
-    assert!(!is_autoload_value(&Value::list(vec![
-        Value::symbol("lambda"),
-        Value::NIL,
-    ])));
+    assert!(!is_autoload_value(&Value::NIL, SymbolMode::Bare));
+    assert!(!is_autoload_value(&Value::fixnum(42), SymbolMode::Bare));
+    assert!(!is_autoload_value(
+        &Value::list(vec![Value::symbol("lambda"), Value::NIL,]),
+        SymbolMode::Bare
+    ));
 }
 
 // -----------------------------------------------------------------------
@@ -921,7 +921,7 @@ fn autoload_sets_uninterned_symbol_function_cell_by_identity() {
         .obarray
         .symbol_function_of_value(&sym)
         .expect("uninterned symbol function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(&function, SymbolMode::Bare));
     let cell = list_to_vec(&function).expect("autoload cell should be a list");
     assert_eq!(cell[1], Value::string("nofile"));
 }
@@ -1032,4 +1032,34 @@ fn with_eval_after_load_fires_when_already_provided() {
            neovm--weal-test-result"#,
     );
     assert_eq!(results[3], "OK executed");
+}
+
+#[test]
+fn positioned_autoload_heads_and_type_fields_follow_symbol_policy() {
+    // GNU eval.c:2502 and 2506-2507 use EQ for these fields.
+    let mut ctx = Context::new();
+    let head = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("autoload"), Value::fixnum(4));
+    let macro_type = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("macro"), Value::fixnum(5));
+    let form = Value::list(vec![head, Value::string("issue554-autoload")]);
+    assert!(!is_autoload_value(&form, SymbolMode::Bare));
+    assert!(is_autoload_value(&form, SymbolMode::Positioned));
+    assert_eq!(
+        AutoloadType::from_value(&macro_type, SymbolMode::Bare),
+        AutoloadType::Function
+    );
+    assert_eq!(
+        AutoloadType::from_value(&macro_type, SymbolMode::Positioned),
+        AutoloadType::Macro
+    );
+    assert!(
+        matches!(plan_autoload_do_load_in_state(&ctx.obarray, &[form], SymbolMode::Bare).unwrap(), AutoloadDoLoadPlan::Return(value) if value == form)
+    );
+    assert!(matches!(
+        plan_autoload_do_load_in_state(&ctx.obarray, &[form], SymbolMode::Positioned).unwrap(),
+        AutoloadDoLoadPlan::Load { .. }
+    ));
 }

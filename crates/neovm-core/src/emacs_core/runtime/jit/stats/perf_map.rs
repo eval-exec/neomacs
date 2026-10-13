@@ -136,7 +136,7 @@ pub(crate) fn anon_name(func: &ByteCodeFunction) -> Box<str> {
     let syms: Vec<&str> = func
         .constants
         .iter()
-        .filter_map(|v| v.as_symbol_id())
+        .filter_map(|v| v.as_bare_symbol_id())
         .take(2)
         .map(symbol_name)
         .collect();

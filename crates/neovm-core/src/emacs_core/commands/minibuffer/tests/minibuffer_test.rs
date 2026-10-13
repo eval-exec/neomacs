@@ -1310,20 +1310,22 @@ fn builtin_recursive_edit_rejects_args() {
 #[test]
 fn builtin_top_level_throws_top_level_tag() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_top_level(vec![]);
+    let mut eval = super::super::eval::Context::new();
+    let result = builtin_top_level(&mut eval, vec![]);
     // top-level now throws 'top-level to exit all recursive edits
     // (mirrors GNU Emacs keyboard.c:1187 Ftop_level).
     assert!(matches!(
         result.kinded_ref(),
         Err(FlowRef::Throw(ref thrown))
-            if thrown.tag.is_symbol_named("top-level") && thrown.value.is_nil()
+            if thrown.tag.is_bare_symbol_named("top-level") && thrown.value.is_nil()
     ));
 }
 
 #[test]
 fn builtin_top_level_rejects_args() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_top_level(vec![Value::NIL]);
+    let mut eval = super::super::eval::Context::new();
+    let result = builtin_top_level(&mut eval, vec![Value::NIL]);
     assert!(if matches!(
         result.kinded_ref(),
         Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
@@ -1446,11 +1448,12 @@ fn builtin_minibuffer_contents_no_properties_rejects_args() {
 #[test]
 fn builtin_exit_minibuffer_throws_exit_tag() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_exit_minibuffer(vec![]);
+    let mut eval = super::super::eval::Context::new();
+    let result = builtin_exit_minibuffer(&mut eval, vec![]);
     assert!(matches!(
         result.kinded_ref(),
         Err(FlowRef::Throw(ref thrown))
-            if thrown.tag.is_symbol_named("exit") && thrown.value.is_nil()
+            if thrown.tag.is_bare_symbol_named("exit") && thrown.value.is_nil()
     ));
 }
 
@@ -1768,9 +1771,9 @@ fn completion_state_reads_use_predeclared_symbols() {
 fn repeated_mx_completion_does_not_intern_during_candidate_scan() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    let obarray = *eval
+    let obarray = eval
         .obarray
-        .symbol_value("obarray")
+        .symbol_value_copied("obarray")
         .expect("global obarray proxy");
     let args = vec![
         Value::string(""),

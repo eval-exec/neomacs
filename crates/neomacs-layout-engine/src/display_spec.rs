@@ -37,7 +37,7 @@ pub(crate) enum DisplaySpecHead {
 
 impl DisplaySpecHead {
     pub(crate) fn is_head_of(self, value: &Value) -> bool {
-        value.is_cons() && value.cons_car().is_symbol_named(self.into())
+        value.is_cons() && value.cons_car().is_bare_symbol_named(self.into())
     }
 }
 
@@ -64,7 +64,7 @@ enum DisplayMediaKey {
 
 impl DisplayMediaKey {
     fn from_lisp_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.strip_prefix(':')?.parse().ok()
+        value.as_bare_symbol_name()?.strip_prefix(':')?.parse().ok()
     }
 }
 
@@ -160,7 +160,7 @@ impl DisplayImageDimension {
         if !factor.is_finite() || factor < 0.0 {
             return None;
         }
-        let unit = match value.cons_cdr().as_symbol_name()? {
+        let unit = match value.cons_cdr().as_bare_symbol_name()? {
             "em" => DisplayImageRelativeUnit::Em,
             "ch" => DisplayImageRelativeUnit::CharacterHeight,
             "cw" => DisplayImageRelativeUnit::CharacterWidth,
@@ -319,7 +319,7 @@ impl DisplayImageSliceSpec {
 
 pub(crate) fn parse_display_image_slice(value: Value) -> Option<DisplayImageSliceSpec> {
     let items = list_to_vec(&value)?;
-    if items.first()?.as_symbol_name() != Some("slice") {
+    if items.first()?.as_bare_symbol_name() != Some("slice") {
         return None;
     }
     let operand = |index| {
@@ -461,7 +461,7 @@ pub(crate) fn parse_display_fringe_layout(value: &Value) -> Option<DisplayFringe
     if !value.is_cons() {
         return None;
     }
-    let side = match value.cons_car().as_symbol_name()? {
+    let side = match value.cons_car().as_bare_symbol_name()? {
         "left-fringe" => DisplayFringeSide::Left,
         "right-fringe" => DisplayFringeSide::Right,
         _ => return None,
@@ -476,13 +476,19 @@ pub(crate) fn parse_display_fringe_layout(value: &Value) -> Option<DisplayFringe
     Some(DisplayFringeLayout { bitmap, side, face })
 }
 
+/// `face_fg`/`face_bg` are the face this image is displayed under (the
+/// specification's own `:foreground`/`:background` override them);
+/// `frame_foreground` is GNU's `FRAME_FOREGROUND_PIXEL` -- the frame's
+/// `foreground-color` (src/image.c:6518) -- which a decoder that must paint an
+/// unresolvable color key with something reads instead (issue #550).
 pub(crate) fn parse_display_image_layout(
     prop_val: &Value,
-    default_fg: u32,
-    default_bg: u32,
+    face_fg: u32,
+    face_bg: u32,
+    frame_foreground: u32,
 ) -> Option<DisplayImageLayout> {
     let items = list_to_vec(prop_val)?;
-    if items.first()?.as_symbol_name() != Some(DisplaySpecHead::Image.into()) {
+    if items.first()?.as_bare_symbol_name() != Some(DisplaySpecHead::Image.into()) {
         return None;
     }
 
@@ -499,8 +505,8 @@ pub(crate) fn parse_display_image_layout(
     let mut scale = ImageScalePolicy::Unspecified;
     let mut ascent = DisplayImageAscentPolicy::default();
     let mut margin = DisplayImageMargin::default();
-    let mut fg_color = default_fg;
-    let mut bg_color = default_bg;
+    let mut fg_color = face_fg;
+    let mut bg_color = face_bg;
 
     let mut i = 1usize;
     while i + 1 < items.len() {
@@ -522,7 +528,7 @@ pub(crate) fn parse_display_image_layout(
                 // Same domain the evaluator parses: t enables at the
                 // default sampling ceiling, a positive integer sets the
                 // ceiling, anything else stays GNU-static.
-                animation = if value.is_symbol_named("t") {
+                animation = if value.is_bare_symbol_named("t") {
                     ImageAnimationPolicy::enabled(None)
                 } else if let Some(fps) = value.as_int()
                     && u32::try_from(fps).is_ok_and(|fps| fps > 0)
@@ -573,7 +579,8 @@ pub(crate) fn parse_display_image_layout(
                 height: DisplayImageAxisSize::resolve_precedence(height, max_height),
             },
             rotation,
-            colors: ImageColorContext::from_pixels(fg_color, bg_color),
+            colors: ImageColorContext::from_pixels(fg_color, bg_color)
+                .with_frame_foreground(frame_foreground),
             mask: image_mask_policy_from_items(&items),
             animation,
             frame,
@@ -613,7 +620,7 @@ pub(crate) fn parse_display_video_layout(
     fallback_height: f32,
 ) -> Option<DisplayVideoLayout> {
     let items = list_to_vec(prop_val)?;
-    if items.first()?.as_symbol_name() != Some(DisplaySpecHead::Video.into()) {
+    if items.first()?.as_bare_symbol_name() != Some(DisplaySpecHead::Video.into()) {
         return None;
     }
 
@@ -660,7 +667,7 @@ pub(crate) fn parse_display_webkit_layout(
     fallback_height: f32,
 ) -> Option<DisplayWebKitLayout> {
     let items = list_to_vec(prop_val)?;
-    if items.first()?.as_symbol_name() != Some(DisplaySpecHead::Webkit.into()) {
+    if items.first()?.as_bare_symbol_name() != Some(DisplaySpecHead::Webkit.into()) {
         return None;
     }
 
@@ -724,7 +731,7 @@ fn parse_surface_id_value(value: Value) -> Option<u32> {
 /// typo'd spec shows up instead of vanishing.
 pub(crate) fn parse_display_surface_layout(prop_val: &Value) -> Option<DisplaySurfaceLayout> {
     let items = list_to_vec(prop_val)?;
-    if items.first()?.as_symbol_name() != Some(DisplaySpecHead::Surface.into()) {
+    if items.first()?.as_bare_symbol_name() != Some(DisplaySpecHead::Surface.into()) {
         return None;
     }
 
@@ -769,11 +776,14 @@ fn parse_surface_uniform_entry(entry: Value) -> Option<(String, [u32; 4], u8)> {
         return None;
     }
     let name_value = entry.cons_car();
-    let name = name_value.as_symbol_name().map(str::to_owned).or_else(|| {
-        name_value
-            .as_lisp_string()
-            .and_then(|s| s.as_utf8_str().map(str::to_owned))
-    })?;
+    let name = name_value
+        .as_bare_symbol_name()
+        .map(str::to_owned)
+        .or_else(|| {
+            name_value
+                .as_lisp_string()
+                .and_then(|s| s.as_utf8_str().map(str::to_owned))
+        })?;
     let value = entry.cons_cdr();
     let number = |v: Value| -> Option<f32> {
         match v.kind() {
@@ -811,7 +821,7 @@ pub(crate) fn parse_display_surface_source_layout(
     fallback_height: f32,
 ) -> Option<DisplaySurfaceSourceLayout> {
     let items = list_to_vec(prop_val)?;
-    if items.first()?.as_symbol_name() != Some(DisplaySpecHead::Surface.into()) {
+    if items.first()?.as_bare_symbol_name() != Some(DisplaySpecHead::Surface.into()) {
         return None;
     }
 
@@ -888,7 +898,7 @@ pub(crate) fn parse_display_surface_source_layout(
 
 pub(crate) fn parse_display_xwidget_layout(prop_val: &Value) -> Option<DisplayXwidgetLayout> {
     let items = list_to_vec(prop_val)?;
-    if items.first()?.as_symbol_name() != Some(DisplaySpecHead::Xwidget.into()) {
+    if items.first()?.as_bare_symbol_name() != Some(DisplaySpecHead::Xwidget.into()) {
         return None;
     }
 
@@ -920,14 +930,14 @@ fn parse_image_dimension(value: Value) -> Option<u32> {
 }
 
 fn parse_image_scale(value: Value) -> Option<ImageScalePolicy> {
-    if value.is_symbol_named("default") {
+    if value.is_bare_symbol_named("default") {
         return Some(ImageScalePolicy::Default);
     }
     Some(ImageScalePolicy::Explicit(numeric_image_scale(value)?))
 }
 
 fn parse_image_ascent(value: Value) -> Option<DisplayImageAscentPolicy> {
-    if value.is_symbol_named("center") {
+    if value.is_bare_symbol_named("center") {
         return Some(DisplayImageAscentPolicy::Center);
     }
     let percent = match value.kind() {
@@ -952,7 +962,7 @@ fn parse_boolish(value: Value) -> bool {
 pub(crate) use neovm_core::emacs_core::display_spec::DisplaySpaceKey;
 
 pub(crate) fn is_display_space_spec(value: &Value) -> bool {
-    value.is_cons() && value.cons_car().is_symbol_named("space")
+    value.is_cons() && value.cons_car().is_bare_symbol_named("space")
 }
 
 /// Note: the `left-fringe`/`right-fringe` DISPLAY SPEC (a cons headed by that

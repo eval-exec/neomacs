@@ -78,16 +78,19 @@ fn the_shim_table_and_the_exported_name_list_are_the_same_set() {
 }
 
 #[test]
-fn aot_import_prefix_preserves_main_names_without_the_journal_shim() {
+fn aot_import_prefix_preserves_main_names_before_collection_shims() {
     use crate::emacs_core::jit::aot::{JIT_SHIM_NAMES, MIR_SHIM_NAMES};
 
-    // The collection shim is JIT-only. Prepending it to the exported set
-    // would displace direct_framed from main's frozen AOT import prefix.
-    assert_eq!(MIR_SHIM_NAMES.len(), 70);
+    // ABI31 appends collection imports to the exact legacy AOT prefix.
+    // Selected Opt/refinement exports remain forbidden AOT imports.
+    assert_eq!(MIR_SHIM_NAMES.len(), 77);
     assert_eq!(MIR_SHIM_NAMES.first(), Some(&"neovm_jit_hof_length"));
-    assert_eq!(MIR_SHIM_NAMES.last(), Some(&"neovm_jit_direct_framed"));
-    assert!(!MIR_SHIM_NAMES.contains(&"neovm_jit_string_collection_write"));
+    assert_eq!(MIR_SHIM_NAMES.get(69), Some(&"neovm_jit_direct_framed"));
+    assert!(!MIR_SHIM_NAMES[..70].contains(&"neovm_jit_string_collection_write"));
+    assert!(MIR_SHIM_NAMES.contains(&"neovm_jit_string_collection_write"));
     assert!(!MIR_SHIM_NAMES.contains(&"neovm_jit_t2_record_array_use"));
     assert!(!MIR_SHIM_NAMES.contains(&"neovm_jit_sqrt_binding_valid"));
     assert!(JIT_SHIM_NAMES.contains(&"neovm_jit_string_collection_write"));
+    assert!(!MIR_SHIM_NAMES.contains(&"neovm_jit_throw_with_symbols"));
+    assert!(JIT_SHIM_NAMES.contains(&"neovm_jit_throw_with_symbols"));
 }

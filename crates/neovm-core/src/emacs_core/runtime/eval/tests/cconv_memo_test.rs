@@ -422,7 +422,7 @@ fn head_verdicts_match_the_lisp_predicates_for_every_symbol() {
     let mut lisp_names: Vec<String> = crate::emacs_core::value::list_to_vec(&lisp)
         .expect("list")
         .into_iter()
-        .map(|s| s.as_symbol_name().expect("symbol").to_string())
+        .map(|s| s.as_bare_symbol_name().expect("symbol").to_string())
         .collect();
     lisp_names.sort();
     let mut rust_names: Vec<String> = eval
@@ -514,7 +514,7 @@ fn constant_symbols(function: Value) -> Vec<Value> {
         .copied()
         .collect();
     while let Some(value) = stack.pop() {
-        if value.is_symbol() && !value.is_nil() {
+        if value.is_bare_symbol() && !value.is_nil() {
             out.push(value);
         } else if value.is_cons() {
             stack.push(value.cons_car());
@@ -553,7 +553,7 @@ fn trusted_set_audit_pins_the_dumped_byte_code() {
             "{name} is not byte-code"
         );
         for symbol in constant_symbols(function) {
-            let id = symbol.as_symbol_id().expect("symbol");
+            let id = symbol.as_bare_symbol_id().expect("symbol");
             let name = crate::emacs_core::intern::resolve_sym(id).to_string();
             if eval.obarray().is_special_id(id) && !name.starts_with(':') {
                 specials.push(name.clone());
@@ -566,7 +566,7 @@ fn trusted_set_audit_pins_the_dumped_byte_code() {
                 continue;
             };
             let subr = cell.is_subr() || cell.as_subr_id().is_some();
-            let macro_cell = cell.is_cons() && cell.cons_car().is_symbol_named("macro");
+            let macro_cell = cell.is_cons() && cell.cons_car().is_bare_symbol_named("macro");
             if !subr && !macro_cell {
                 callees.push(name);
             }
@@ -1092,12 +1092,15 @@ fn collection_hooks_wait_for_the_end_of_an_observed_run() {
                 (add-hook 'post-gc-hook
                           (lambda () (gensym) (setq cm-hooks-gc-runs (1+ cm-hooks-gc-runs)))))",
     );
+    // Bootstrap and warm calls can already have drained deferred hooks. Count
+    // the exact additional drain for this forced observed run.
+    let deferrals = count(&eval, CconvMemoEvent::GcHooksDeferred);
     eval.cconv_memo.collect_in_next_observed_run_for_test();
     let closure = printed(&mut eval, "(cm-hooks 1)");
     assert_eq!(closure, "#[nil ((list a)) ((a . 1))]");
     assert_eq!(count(&eval, CconvMemoEvent::VerifyMatch), matches + 1);
     assert_eq!(count(&eval, CconvMemoEvent::VerifyMismatch), 0);
-    assert_eq!(count(&eval, CconvMemoEvent::GcHooksDeferred), 1);
+    assert_eq!(count(&eval, CconvMemoEvent::GcHooksDeferred), deferrals + 1);
     // They ran before the creation returned.
     assert_eq!(
         printed(

@@ -901,6 +901,10 @@ fn eval_internal_show_cursor_tracks_per_window_state() {
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let selected =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+    // GNU's `split-window` stages the old window's new size before calling
+    // the primitive, which rejects an unstaged split.
+    eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 12))")
+        .expect("stage the old window before a valid primitive split");
     let other = crate::emacs_core::builtins::dispatch_builtin(
         &mut eval,
         "split-window-internal",
@@ -2648,7 +2652,7 @@ fn x_popup_menu_position_window_slot_accepts_a_frame_like_gnu() {
     // GNU reaches it through `CHECK_LIVE_WINDOW`.
     let internal = probe(
         &mut eval,
-        "(list (list 0 0) (window-parent (split-window-internal nil (/ (window-pixel-height nil) 2) nil nil)))",
+        "(list (list 0 0) (window-parent ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) nil (/ (window-pixel-height nil) 2) nil nil)))",
     );
     assert!(
         internal.starts_with("(wrong-type-argument (window-live-p "),
@@ -3441,7 +3445,7 @@ fn eval_monitor_attributes_include_bootstrapped_frame() {
         if attr.is_cons() {
             let pair_car = attr.cons_car();
             let pair_cdr = attr.cons_cdr();
-            if pair_car.is_symbol_named("frames") {
+            if pair_car.is_bare_symbol_named("frames") {
                 frames_value = pair_cdr;
                 break;
             }
@@ -3493,7 +3497,7 @@ fn eval_monitor_queries_accept_frame_handle_designator() {
         if attr.is_cons() {
             let pair_car = attr.cons_car();
             let pair_cdr = attr.cons_cdr();
-            if pair_car.is_symbol_named("frames") {
+            if pair_car.is_bare_symbol_named("frames") {
                 let frames = list_to_vec(&pair_cdr).expect("frames list");
                 frame = frames.first().cloned().expect("first frame");
                 break;
@@ -4190,6 +4194,7 @@ fn x_popup_menu_interactive_keymap_returns_selected_event() {
         menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::KeyPress {
         key: crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return),
@@ -4223,7 +4228,12 @@ fn old_style_menu_help_keeps_the_real_submenu_definition() {
     );
 
     let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(menu, Value::symbol("parent"), definition);
+    crate::emacs_core::keymap::list_keymap_define(
+        menu,
+        Value::symbol("parent"),
+        definition,
+        crate::tagged::SymbolMode::Bare,
+    );
     let resolved = crate::emacs_core::menu::resolve(&mut eval, menu, true).unwrap();
     let entry = &resolved.entries()[0];
 
@@ -4274,6 +4284,7 @@ fn x_popup_menu_publishes_selected_item_help_and_keeps_it_after_teardown() {
             Value::symbol(":help"),
             Value::string("Open the selected document"),
         ]),
+        crate::tagged::SymbolMode::Bare,
     );
     crate::emacs_core::keymap::list_keymap_define(
         menu,
@@ -4283,6 +4294,7 @@ fn x_popup_menu_publishes_selected_item_help_and_keeps_it_after_teardown() {
             Value::string("Plain"),
             Value::T,
         ]),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::MenuSelection {
         index: 1,
@@ -4412,6 +4424,7 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
         submenu,
         Value::symbol("visual-line-mode"),
         Value::cons(Value::string("Visual Line Mode"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
 
     let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
@@ -4419,6 +4432,7 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
         menu,
         Value::symbol("line-wrapping"),
         Value::cons(Value::string("Line Wrapping in this Buffer"), submenu),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::MenuSelection {
         index: -1,
@@ -4464,6 +4478,7 @@ fn x_popup_menu_interactive_submenu_selection_returns_full_event_path() {
         submenu,
         Value::symbol("visual-line-mode"),
         Value::cons(Value::string("Visual Line Mode"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
 
     let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
@@ -4471,6 +4486,7 @@ fn x_popup_menu_interactive_submenu_selection_returns_full_event_path() {
         menu,
         Value::symbol("line-wrapping"),
         Value::cons(Value::string("Line Wrapping in this Buffer"), submenu),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::MenuSelection {
         index: 1,
@@ -4506,6 +4522,7 @@ fn x_popup_menu_interactive_ignores_tty_mouse_navigation() {
         tty_menu_navigation_map,
         Value::symbol("mouse-movement"),
         Value::symbol("tty-menu-select"),
+        crate::tagged::SymbolMode::Bare,
     );
     eval.set_variable("tty-menu-navigation-map", tty_menu_navigation_map);
     eval.set_variable("track-mouse", Value::T);
@@ -4515,6 +4532,7 @@ fn x_popup_menu_interactive_ignores_tty_mouse_navigation() {
         menu,
         Value::symbol("first"),
         Value::cons(Value::string("First"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::MouseMove {
         x: 8.0,
@@ -4553,11 +4571,13 @@ fn x_popup_menu_interactive_keyboard_select_roots_selected_event() {
         menu,
         Value::symbol("second"),
         Value::cons(Value::string("Second"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
     crate::emacs_core::keymap::list_keymap_define(
         menu,
         Value::symbol("first"),
         Value::cons(Value::string("First"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::KeyPress {
         key: crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Down),
@@ -4592,6 +4612,7 @@ fn x_popup_menu_interactive_cancel_returns_nil() {
         menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::MenuSelection {
         index: -1,
@@ -4630,6 +4651,7 @@ fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
         menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::MenuSelection {
         index: -1,
@@ -4699,6 +4721,7 @@ fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
         menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::MenuSelection {
         index: -1,
@@ -4750,13 +4773,20 @@ fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
         menu_bar,
         Value::symbol("help-menu"),
         Value::cons(Value::string("Help"), help_menu),
+        crate::tagged::SymbolMode::Bare,
     );
     crate::emacs_core::keymap::list_keymap_define(
         menu_bar,
         Value::symbol("file"),
         Value::cons(Value::string("File"), file_menu),
+        crate::tagged::SymbolMode::Bare,
     );
-    crate::emacs_core::keymap::list_keymap_define(global_map, Value::symbol("menu-bar"), menu_bar);
+    crate::emacs_core::keymap::list_keymap_define(
+        global_map,
+        Value::symbol("menu-bar"),
+        menu_bar,
+        crate::tagged::SymbolMode::Bare,
+    );
     eval.set_variable("global-map", global_map);
     eval.select_global_map(global_map);
     eval.set_variable(
@@ -4768,6 +4798,7 @@ fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
         file_menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::KeyPress {
         key: crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Right),
@@ -4809,6 +4840,7 @@ fn x_popup_menu_preserves_heading_click_queued_before_old_cancellation() {
         menu,
         Value::symbol("entry"),
         Value::cons(Value::string("Entry"), Value::T),
+        crate::tagged::SymbolMode::Bare,
     );
     tx.send(crate::keyboard::InputEvent::MenuBarClick {
         request_id: Some(neomacs_display_protocol::menu::MenuBarRequestId(42)),

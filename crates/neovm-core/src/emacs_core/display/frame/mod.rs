@@ -205,8 +205,7 @@ fn iconify_frame_action(
     if frame.parent_frame.as_frame_id().is_some() {
         let child_policy = eval
             .obarray()
-            .symbol_value("iconify-child-frame")
-            .copied()
+            .symbol_value_copied("iconify-child-frame")
             .unwrap_or(Value::NIL);
         if child_policy.is_nil() {
             return Ok(IconifyFrameAction::Noop);
@@ -1409,6 +1408,7 @@ pub(crate) fn builtin_frame_parameters(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-parameters", &args, 1)?;
     let fid = resolve_frame_id_in_state(
@@ -1496,13 +1496,13 @@ pub(crate) fn builtin_frame_parameters(
     // User parameters.
     for (k, v) in &frame.parameters {
         if frame.effective_window_system().is_none()
-            && k.as_symbol_id()
+            && k.as_symbol_id(symbol_mode)
                 .and_then(FrameParam::from_symbol_id)
                 .is_some_and(|param| param == FrameParam::Font)
         {
             continue;
         }
-        if k.as_symbol_name()
+        if k.as_symbol_name(symbol_mode)
             .is_some_and(|name| name == "width" || name == "height" || name == "visibility")
         {
             continue;
@@ -1510,11 +1510,11 @@ pub(crate) fn builtin_frame_parameters(
         // `font-parameter' is a neomacs-internal frame slot used by the font
         // resolution machinery (font.rs); GNU has no such frame parameter and
         // never reports it from `frame-parameters'.  Skip it.
-        if k.as_symbol_name() == Some("font-parameter") {
+        if k.as_symbol_name(symbol_mode) == Some("font-parameter") {
             continue;
         }
         let value = k
-            .as_symbol_id()
+            .as_symbol_id(symbol_mode)
             .and_then(FrameParam::from_symbol_id)
             .filter(|param| *param == FrameParam::Font)
             .map_or(*v, |_| super::font::public_frame_font_parameter_value(*v));
@@ -1630,6 +1630,7 @@ pub(crate) fn builtin_modify_frame_parameters(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_min_args("modify-frame-parameters", &args, 2)?;
     expect_max_args("modify-frame-parameters", &args, 2)?;
     let fid = resolve_frame_id_in_state(
@@ -1657,7 +1658,7 @@ pub(crate) fn builtin_modify_frame_parameters(
         if item.is_cons() {
             let pair_car = item.cons_car();
             let pair_cdr = item.cons_cdr();
-            if let Some(key) = pair_car.as_symbol_id() {
+            if let Some(key) = pair_car.as_symbol_id(symbol_mode) {
                 let key_name = resolve_sym(key);
                 match key_name {
                     "width" => {

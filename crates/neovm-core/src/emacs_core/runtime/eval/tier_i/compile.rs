@@ -379,7 +379,7 @@ impl Compiler<'_> {
             if item.is_symbol_with_pos() {
                 return None;
             }
-            let id = item.as_symbol_id()?;
+            let id = item.as_bare_symbol_id()?;
             if id != optional_arg_symbol() && id != rest_arg_symbol() {
                 out.push(id);
             }
@@ -435,7 +435,7 @@ impl Compiler<'_> {
         if form.is_symbol_with_pos() {
             return Node::Eval(form);
         }
-        if let Some(sym) = form.as_symbol_id() {
+        if let Some(sym) = form.as_bare_symbol_id() {
             self.summary.vars += 1;
             let slots = self.candidates(sym);
             if !slots.is_empty() {
@@ -466,7 +466,10 @@ impl Compiler<'_> {
     fn cons_form(&mut self, form: Value) -> Node {
         let head = form.cons_car();
         let tail = form.cons_cdr();
-        let Some(head_id) = head.as_symbol_id().filter(|_| !head.is_symbol_with_pos()) else {
+        let Some(head_id) = head
+            .as_bare_symbol_id()
+            .filter(|_| !head.is_symbol_with_pos())
+        else {
             self.summary.evals += 1;
             return Node::Eval(form);
         };
@@ -808,17 +811,22 @@ fn plain_symbol(value: Value) -> Option<SymId> {
     if value.is_symbol_with_pos() {
         return None;
     }
-    value.as_symbol_id()
+    value.as_bare_symbol_id()
 }
 
 /// Whether a function cell is a macro as `eval_sub` would expand it: a
 /// macro object, `(macro . F)`, or an autoload whose type is `macro`.
 fn cell_is_macro(obarray: &Obarray, func: Value) -> bool {
     let _ = obarray;
-    if func.is_macro() || cons_head_symbol_id(&func) == Some(macro_symbol()) {
+    if func.is_macro()
+        || cons_head_symbol_id(&func, crate::tagged::SymbolMode::Positioned) == Some(macro_symbol())
+    {
         return true;
     }
-    if super::super::super::autoload::is_autoload_value(&func) {
+    if super::super::super::autoload::is_autoload_value(
+        &func,
+        crate::tagged::SymbolMode::Positioned,
+    ) {
         // (autoload FILE DOC INTERACTIVE TYPE)
         let mut cursor = func;
         for _ in 0..4 {
@@ -829,7 +837,7 @@ fn cell_is_macro(obarray: &Obarray, func: Value) -> bool {
         }
         return cursor.is_cons() && {
             let kind = cursor.cons_car();
-            kind.is_symbol_named("macro") || kind.is_t()
+            kind.is_bare_symbol_named("macro") || kind.is_t()
         };
     }
     false

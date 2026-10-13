@@ -15,7 +15,7 @@ fn function(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFun
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops_for_test();
     f
 }
@@ -30,7 +30,7 @@ fn inline_census_classifies_sites_without_mutating_sources() {
     let target = Value::make_bytecode(callee);
     let named = Value::symbol("inline-census-named");
     ev.obarray
-        .set_symbol_function_id(named.as_symbol_id().unwrap(), target);
+        .set_symbol_function_id(named.as_bare_symbol_id().unwrap(), target);
     let caller = function(
         1,
         vec![

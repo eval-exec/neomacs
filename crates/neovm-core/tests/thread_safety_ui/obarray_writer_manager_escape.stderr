@@ -1,0 +1,17 @@
+error: lifetime may not live long enough
+ --> tests/thread_safety_ui/obarray_writer_manager_escape.rs:4:39
+  |
+4 |     context.with_obarray_mut(|writer| &*writer)
+  |                               ------- ^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+  |                               |     |
+  |                               |     return type of closure is &'2 neovm_core::emacs_core::Obarray
+  |                               has type `ObarrayWriteAccess<'1>`
+
+error[E0515]: cannot return value referencing function parameter `writer`
+ --> tests/thread_safety_ui/obarray_writer_manager_escape.rs:4:39
+  |
+4 |     context.with_obarray_mut(|writer| &*writer)
+  |                                       ^^------
+  |                                       | |
+  |                                       | `writer` is borrowed here
+  |                                       returns a value referencing data owned by the current function

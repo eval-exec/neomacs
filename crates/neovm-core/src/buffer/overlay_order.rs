@@ -7,9 +7,14 @@
 //! compact topology mirror preserves exactly that ordering state without
 //! duplicating interval positions or query augmentation.
 
+#![deny(clippy::wildcard_enum_match_arm)]
+
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::marker::PhantomData;
+use std::mem::size_of;
+use std::rc::Rc;
 
 use rustc_hash::FxHashMap;
 
@@ -26,6 +31,7 @@ enum Descent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 struct OrderNodeId(u32);
 
 impl OrderNodeId {
@@ -33,6 +39,43 @@ impl OrderNodeId {
         self.0 as usize
     }
 }
+
+/// A slot removed from the linked topology but still owned by its arena.
+///
+/// Only `detach_node` constructs this token. Consuming it is required to
+/// recycle the slot or restore its retained node; a linked `OrderNodeId`
+/// cannot be passed to either operation. The token is call-local under the
+/// mirror's exclusive borrow and cannot be copied to finish a detach twice.
+/// It carries authority over a mutator-owned arena slot, so its zero-sized
+/// `Rc` marker also prevents sending or sharing it with another mutator.
+#[derive(Debug)]
+#[repr(transparent)]
+#[must_use = "a detached GNU order node must be recycled or reinserted"]
+struct DetachedOrderNode {
+    node: OrderNodeId,
+    _mutator: PhantomData<Rc<()>>,
+}
+
+static_assertions::assert_impl_all!(OrderNodeId: Copy, Send, Sync);
+static_assertions::assert_not_impl_any!(DetachedOrderNode: Copy, Clone, Send, Sync);
+
+const _: () = assert!(size_of::<OrderNodeId>() == size_of::<u32>());
+const _: () = assert!(size_of::<DetachedOrderNode>() == size_of::<OrderNodeId>());
+
+/// Membership failures leave the mirror unchanged.
+///
+/// These are internal index contracts, not Lisp conditions. Callers that have
+/// already validated membership treat a failure as invariant corruption.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub(super) enum GnuOverlayOrderError {
+    #[error("overlay identity is already present in the GNU order mirror")]
+    AlreadyPresent,
+    #[error("overlay identity is missing from the GNU order mirror")]
+    MissingIdentity,
+}
+
+// Typed mutation results retain the old bool's one-byte representation.
+const _: () = assert!(size_of::<Result<(), GnuOverlayOrderError>>() == size_of::<bool>());
 
 #[derive(Clone, Copy, Debug)]
 struct OrderNode<I> {
@@ -79,13 +122,16 @@ where
     }
 
     /// Insert using GNU's `new_start <= existing_start` left descent.
+    ///
+    /// # Errors
+    /// Returns `AlreadyPresent` before comparing or mutating a duplicate.
     pub(super) fn insert_by(
         &mut self,
         identity: I,
         mut compare_with_existing: impl FnMut(I) -> Ordering,
-    ) -> bool {
+    ) -> Result<(), GnuOverlayOrderError> {
         if self.by_identity.contains_key(&identity) {
-            return false;
+            return Err(GnuOverlayOrderError::AlreadyPresent);
         }
 
         let mut parent = None;
@@ -126,7 +172,7 @@ where
         if parent.is_some() {
             self.insert_fix(id);
         }
-        true
+        Ok(())
     }
 
     /// Return a member's predecessor in GNU's structural in-order traversal.
@@ -165,9 +211,17 @@ where
     /// then preserves GNU's exact topology and front-advancing pre-order.
     /// Mutations require the owning buffer's exclusive access to this mirror;
     /// the successor is call-local state and is not shared across mutators.
-    pub(super) fn insert_before(&mut self, identity: I, successor: Option<I>) -> bool {
+    ///
+    /// # Errors
+    /// Returns `AlreadyPresent` without mutating a duplicate. A supplied
+    /// successor must belong to the mirror, as validated by the owning index.
+    pub(super) fn insert_before(
+        &mut self,
+        identity: I,
+        successor: Option<I>,
+    ) -> Result<(), GnuOverlayOrderError> {
         if self.by_identity.contains_key(&identity) {
-            return false;
+            return Err(GnuOverlayOrderError::AlreadyPresent);
         }
 
         let (parent, descent) = match successor {
@@ -218,23 +272,31 @@ where
         if parent.is_some() {
             self.insert_fix(id);
         }
-        true
+        Ok(())
     }
 
     /// Remove one identity using the same successor-splice algorithm and
     /// fix-up cases as GNU's `itree_remove`.
-    pub(super) fn remove(&mut self, identity: I) -> bool {
+    ///
+    /// # Errors
+    /// Returns `MissingIdentity` without mutation when the identity is absent.
+    pub(super) fn remove(&mut self, identity: I) -> Result<(), GnuOverlayOrderError> {
         let Some(node) = self.by_identity.remove(&identity) else {
-            return false;
+            return Err(GnuOverlayOrderError::MissingIdentity);
         };
-        self.detach_node(node);
+        let detached = self.detach_node(node);
+        self.recycle_detached_node(detached, identity);
+        Ok(())
+    }
 
+    #[inline]
+    fn recycle_detached_node(&mut self, detached: DetachedOrderNode, identity: I) {
+        let node = detached.node;
         let removed = self.nodes[node.index()]
             .take()
             .expect("GNU order identity map referenced a vacant node");
         debug_assert_eq!(removed.identity, identity);
         self.free.push(node);
-        true
     }
 
     /// Reinsert an existing node with GNU's remove/fixup/insert/fixup order.
@@ -245,16 +307,30 @@ where
     /// reacquire this same slot. No identity lookup or arena mutation is needed
     /// during the detached interval. The owner holds exclusive access; only
     /// the internal comparison runs before this method restores a valid tree.
+    ///
+    /// # Errors
+    /// Returns `MissingIdentity` before comparing or mutating an absent member.
     pub(super) fn reinsert_by(
         &mut self,
         identity: I,
-        mut compare_with_existing: impl FnMut(I) -> Ordering,
-    ) -> bool {
+        compare_with_existing: impl FnMut(I) -> Ordering,
+    ) -> Result<(), GnuOverlayOrderError> {
         let Some(node) = self.by_identity.get(&identity).copied() else {
-            return false;
+            return Err(GnuOverlayOrderError::MissingIdentity);
         };
-        self.detach_node(node);
+        let detached = self.detach_node(node);
+        self.reinsert_detached_by(detached, identity, compare_with_existing);
+        Ok(())
+    }
 
+    #[inline]
+    fn reinsert_detached_by(
+        &mut self,
+        detached: DetachedOrderNode,
+        identity: I,
+        mut compare_with_existing: impl FnMut(I) -> Ordering,
+    ) {
+        let node = detached.node;
         let mut parent = None;
         let mut child = self.root;
         let mut descent = Descent::Left;
@@ -292,13 +368,12 @@ where
         if parent.is_some() {
             self.insert_fix(node);
         }
-        true
     }
 
     /// Detach a node using GNU's successor splice and deletion fixup.
     /// The caller retains responsibility for its identity entry and slot.
     #[inline]
-    fn detach_node(&mut self, node: OrderNodeId) {
+    fn detach_node(&mut self, node: OrderNodeId) -> DetachedOrderNode {
         let splice = if self.node(node).left.is_none() || self.node(node).right.is_none() {
             node
         } else {
@@ -323,6 +398,10 @@ where
         }
         if removed_black {
             self.remove_fix(subtree, subtree_parent);
+        }
+        DetachedOrderNode {
+            node,
+            _mutator: PhantomData,
         }
     }
 

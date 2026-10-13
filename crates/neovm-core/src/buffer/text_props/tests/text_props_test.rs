@@ -176,7 +176,7 @@ fn get_property_returns_correct_value() {
     );
     let val = get_at_char(&table, 5, Value::symbol("face")).unwrap();
     assert!(
-        val.as_symbol_id()
+        val.as_bare_symbol_id()
             .is_some_and(|id| crate::emacs_core::intern::resolve_sym(id) == "bold")
     );
 }
@@ -296,20 +296,20 @@ fn overlapping_put_splits_intervals() {
     // [0, 5) should still have "bold"
     let val = get_at_char(&table, 3, Value::symbol("face")).unwrap();
     assert!(
-        val.as_symbol_id()
+        val.as_bare_symbol_id()
             .is_some_and(|id| crate::emacs_core::intern::resolve_sym(id) == "bold")
     );
 
     // [5, 15) should have "italic" (overwritten)
     let val = get_at_char(&table, 7, Value::symbol("face")).unwrap();
     assert!(
-        val.as_symbol_id()
+        val.as_bare_symbol_id()
             .is_some_and(|id| crate::emacs_core::intern::resolve_sym(id) == "italic")
     );
 
     let val = get_at_char(&table, 12, Value::symbol("face")).unwrap();
     assert!(
-        val.as_symbol_id()
+        val.as_bare_symbol_id()
             .is_some_and(|id| crate::emacs_core::intern::resolve_sym(id) == "italic")
     );
 }
@@ -358,19 +358,19 @@ fn put_property_inner_range() {
 
     let val = get_at_char(&table, 3, Value::symbol("face")).unwrap();
     assert!(
-        val.as_symbol_id()
+        val.as_bare_symbol_id()
             .is_some_and(|id| crate::emacs_core::intern::resolve_sym(id) == "default")
     );
 
     let val = get_at_char(&table, 10, Value::symbol("face")).unwrap();
     assert!(
-        val.as_symbol_id()
+        val.as_bare_symbol_id()
             .is_some_and(|id| crate::emacs_core::intern::resolve_sym(id) == "bold")
     );
 
     let val = get_at_char(&table, 17, Value::symbol("face")).unwrap();
     assert!(
-        val.as_symbol_id()
+        val.as_bare_symbol_id()
             .is_some_and(|id| crate::emacs_core::intern::resolve_sym(id) == "default")
     );
 }
@@ -1607,7 +1607,7 @@ fn put_property_overwrites_same_name() {
 
     let val = get_at_char(&table, 5, Value::symbol("face")).unwrap();
     assert!(
-        val.as_symbol_id()
+        val.as_bare_symbol_id()
             .is_some_and(|id| crate::emacs_core::intern::resolve_sym(id) == "italic")
     );
 }
@@ -2620,11 +2620,11 @@ fn bold_runs(table: &TextPropertyTable) -> Vec<(usize, usize, Option<&'static st
         .map(|(start, end, plist)| {
             let face = plist
                 .iter()
-                .find(|(name, _)| name.is_symbol_named("face"))
+                .find(|(name, _)| name.is_bare_symbol_named("face"))
                 .map(|(_, value)| {
-                    if value.is_symbol_named("bold") {
+                    if value.is_bare_symbol_named("bold") {
                         "bold"
-                    } else if value.is_symbol_named("italic") {
+                    } else if value.is_bare_symbol_named("italic") {
                         "italic"
                     } else {
                         "?"
@@ -2758,7 +2758,7 @@ fn put_split_leaves_the_original_plist_object_with_the_unchanged_text() {
         table.raw_plist_at_for_test(char_pos(7)).unwrap().bits(),
         original.bits()
     );
-    assert!(plist_value_get(original, face).is_some_and(|v| v.is_symbol_named("bold")));
+    assert!(plist_value_get(original, face).is_some_and(|v| v.is_bare_symbol_named("bold")));
 
     // End split: [5, 10) is the remainder.
     let mut table = TextPropertyTable::new();
@@ -2773,7 +2773,7 @@ fn put_split_leaves_the_original_plist_object_with_the_unchanged_text() {
         table.raw_plist_at_for_test(char_pos(2)).unwrap().bits(),
         original.bits()
     );
-    assert!(plist_value_get(original, face).is_some_and(|v| v.is_symbol_named("bold")));
+    assert!(plist_value_get(original, face).is_some_and(|v| v.is_bare_symbol_named("bold")));
 
     // Both: [0, 3) keeps the object, [3, 6) and [6, 10) are two distinct copies.
     let mut table = TextPropertyTable::new();
@@ -2787,8 +2787,8 @@ fn put_split_leaves_the_original_plist_object_with_the_unchanged_text() {
     assert_ne!(mid.bits(), original.bits());
     assert_ne!(right.bits(), original.bits());
     assert_ne!(mid.bits(), right.bits());
-    assert!(plist_value_get(original, face).is_some_and(|v| v.is_symbol_named("bold")));
-    assert!(plist_value_get(right, face).is_some_and(|v| v.is_symbol_named("bold")));
+    assert!(plist_value_get(original, face).is_some_and(|v| v.is_bare_symbol_named("bold")));
+    assert!(plist_value_get(right, face).is_some_and(|v| v.is_bare_symbol_named("bold")));
 }
 
 #[test]

@@ -1,0 +1,9 @@
+error: cannot construct `ThreadProjectionDescriptor` with struct literal syntax due to private fields
+ --> tests/thread_safety_ui/thread_projection_construct.rs:4:5
+  |
+4 |     ThreadProjectionDescriptor { index, canonical }
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^   -----  --------- private field
+  |                                  |
+  |                                  private field
+  |
+  = note: ...and other private field `header` that was not provided

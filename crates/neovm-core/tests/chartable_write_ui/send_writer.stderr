@@ -1,0 +1,122 @@
+error[E0277]: `NonNull<CharTableObj>` cannot be sent between threads safely
+ --> tests/chartable_write_ui/send_writer.rs:6:20
+  |
+6 |     require_send::<CharTableWrite<'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<CharTableObj>` cannot be sent between threads safely
+  |
+  = help: within `CharTableWrite<'static>`, the trait `Send` is not implemented for `NonNull<CharTableObj>`
+note: required because it appears within the type `CharTableWrite<'static>`
+ --> src/tagged/mutate/chartable.rs
+  |
+  | pub struct CharTableWrite<'a> {
+  |            ^^^^^^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/chartable_write_ui/send_writer.rs:3:20
+  |
+3 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`
+
+error[E0277]: `*mut GcHeader` cannot be sent between threads safely
+ --> tests/chartable_write_ui/send_writer.rs:6:20
+  |
+6 |     require_send::<CharTableWrite<'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^ `*mut GcHeader` cannot be sent between threads safely
+  |
+  = help: within `CharTableWrite<'static>`, the trait `Send` is not implemented for `*mut GcHeader`
+note: required because it appears within the type `GcHeader`
+ --> src/tagged/header.rs
+  |
+  | pub struct GcHeader {
+  |            ^^^^^^^^
+note: required because it appears within the type `VecLikeHeader`
+ --> src/tagged/header.rs
+  |
+  | pub struct VecLikeHeader {
+  |            ^^^^^^^^^^^^^
+note: required because it appears within the type `CharTableObj`
+ --> src/tagged/header.rs
+  |
+  | pub struct CharTableObj {
+  |            ^^^^^^^^^^^^
+  = note: required because it appears within the type `&'static mut CharTableObj`
+note: required because it appears within the type `PhantomData<&'static mut CharTableObj>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `CharTableWrite<'static>`
+ --> src/tagged/mutate/chartable.rs
+  |
+  | pub struct CharTableWrite<'a> {
+  |            ^^^^^^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/chartable_write_ui/send_writer.rs:3:20
+  |
+3 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`
+
+error[E0277]: `*const ()` cannot be sent between threads safely
+ --> tests/chartable_write_ui/send_writer.rs:6:20
+  |
+6 |     require_send::<CharTableWrite<'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^ `*const ()` cannot be sent between threads safely
+  |
+  = help: within `CharTableWrite<'static>`, the trait `Send` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `TaggedValue`
+ --> src/tagged/value.rs
+  |
+  | pub struct TaggedValue(pub(crate) usize, ThreadConfined);
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `CharTableObj`
+ --> src/tagged/header.rs
+  |
+  | pub struct CharTableObj {
+  |            ^^^^^^^^^^^^
+  = note: required because it appears within the type `&'static mut CharTableObj`
+note: required because it appears within the type `PhantomData<&'static mut CharTableObj>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `CharTableWrite<'static>`
+ --> src/tagged/mutate/chartable.rs
+  |
+  | pub struct CharTableWrite<'a> {
+  |            ^^^^^^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/chartable_write_ui/send_writer.rs:3:20
+  |
+3 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`
+
+error[E0277]: `*const TaggedValue` cannot be sent between threads safely
+ --> tests/chartable_write_ui/send_writer.rs:6:20
+  |
+6 |     require_send::<CharTableWrite<'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^ `*const TaggedValue` cannot be sent between threads safely
+  |
+  = help: within `CharTableWrite<'static>`, the trait `Send` is not implemented for `*const TaggedValue`
+note: required because it appears within the type `header::LispValueVecStorage`
+ --> src/tagged/header.rs
+  |
+  | enum LispValueVecStorage {
+  |      ^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `LispValueVec`
+ --> src/tagged/header.rs
+  |
+  | pub struct LispValueVec {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `CharTableObj`
+ --> src/tagged/header.rs
+  |
+  | pub struct CharTableObj {
+  |            ^^^^^^^^^^^^
+  = note: required because it appears within the type `&'static mut CharTableObj`
+note: required because it appears within the type `PhantomData<&'static mut CharTableObj>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `CharTableWrite<'static>`
+ --> src/tagged/mutate/chartable.rs
+  |
+  | pub struct CharTableWrite<'a> {
+  |            ^^^^^^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/chartable_write_ui/send_writer.rs:3:20
+  |
+3 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`

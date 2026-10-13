@@ -20,17 +20,21 @@ fn function(ops: &[Op], constants: &[Value], shape: ParamShape) -> ByteCodeFunct
         rest: shape.has_rest.then(|| intern("opt-reference-rest")),
     });
     function.lexical = true;
-    function.max_stack = 128;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(128);
     function.ops = ops.to_vec();
     function.constants = constants.to_vec().into();
     function
 }
 
 fn ir(function: &ByteCodeFunction, prefix: usize) -> Func {
+    let shape = function
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters");
     let shape = ParamShape {
-        required: function.params.required.len(),
-        optional: function.params.optional.len(),
-        has_rest: function.params.rest.is_some(),
+        required: shape.required(),
+        optional: shape.optional().expect("consistent fixture parameters"),
+        has_rest: shape.rest().is_present(),
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
         function.executable_ops(),

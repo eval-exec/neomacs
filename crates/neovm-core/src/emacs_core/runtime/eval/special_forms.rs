@@ -99,9 +99,6 @@ impl Context {
                 id if id == byte_code_literal_symbol() && surface_id == target_id => {
                     Some(self.sf_byte_code_literal_value(tail))
                 }
-                id if id == byte_code_symbol() && surface_id == target_id => {
-                    Some(self.sf_byte_code_value(tail))
-                }
                 _ => None,
             },
         };
@@ -215,7 +212,7 @@ impl Context {
 
     pub(super) fn sf_function_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         let arg = self.one_unevalled_arg(call_name, tail)?;
-        if cons_head_symbol_id(&arg) == Some(lambda_symbol()) {
+        if cons_head_symbol_id(&arg, self.symbol_mode()) == Some(lambda_symbol()) {
             return self.instantiate_callable_cons_form(arg);
         }
         Ok(arg)
@@ -258,80 +255,80 @@ impl Context {
         let temps_base = context.bc_buf.len();
         let mut bindings = varlist;
 
-        // Initializers may mutate the validated spine. GNU Flet (eval.c:1158)
-        // visits at most the original length and stops when it reaches an atom.
+        // GNU Flet (eval.c:1154-1165) evaluates every initializer before
+        // checking any binder. Keep each value rooted until the second pass.
+        context.push_eval_temp_root(tail);
         for _ in 0..varlist_len {
             if !bindings.is_cons() {
                 break;
             }
-            let binding = context.unwrap_symbol(bindings.cons_car());
+            let binding = bindings.cons_car();
             bindings = bindings.cons_cdr();
-            // GNU advances before the initializer, which may detach this
-            // next cons before forcing GC. Keep the live cursor rooted.
             context.set_eval_temp_root_slot(bindings_slot, bindings);
-            if let Some(id) = binding.as_symbol_id() {
-                // A bare binder binds nil, which is never a keyword's own value.
-                if let Some(name) = let_constant_error_name(&context.obarray, id, Value::NIL) {
-                    if constant_binding_error.is_none() {
-                        constant_binding_error = Some(name);
-                    }
-                    continue;
-                }
-                if use_lexical
-                    && !context.obarray.is_special_id(id)
-                    && !context.lexenv_declares_special_cached_in(context.lexenv, id)
-                {
-                    lexical_bindings.push((id, Value::NIL));
-                } else {
-                    dynamic_sym_ids.push((id, Value::NIL));
-                }
-                continue;
-            }
-            if !binding.is_cons() {
-                context.bc_buf.truncate(temps_base);
-                // GNU takes `(car elt)` of a non-symbol binding, so a non-list
-                // element signals `(wrong-type-argument listp ELT)`.
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), binding],
-                ));
-            }
-            let head = context.unwrap_symbol(binding.cons_car());
-            let Some(id) = head.as_symbol_id() else {
-                context.bc_buf.truncate(temps_base);
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("symbolp"), head],
-                ));
-            };
-            let mut value_tail = binding.cons_cdr();
-            let value = if value_tail.is_nil() {
+            let value = if binding.is_symbol(context.symbol_mode()) {
                 Value::NIL
-            } else if value_tail.is_cons() {
-                let init_form = value_tail.cons_car();
-                value_tail = value_tail.cons_cdr();
-                if !value_tail.is_nil() {
-                    context.bc_buf.truncate(temps_base);
-                    return Err(signal(
-                        LispCondition::Error,
-                        vec![
-                            Value::string("`let' bindings can have only one value-form"),
-                            binding,
-                        ],
-                    ));
-                }
-                match context.eval_sub(init_form) {
-                    Ok(value) => value,
-                    Err(err) => {
+            } else if binding.is_cons() {
+                let mut value_tail = binding.cons_cdr();
+                if value_tail.is_nil() {
+                    Value::NIL
+                } else if value_tail.is_cons() {
+                    let init_form = value_tail.cons_car();
+                    value_tail = value_tail.cons_cdr();
+                    if !value_tail.is_nil() {
                         context.bc_buf.truncate(temps_base);
-                        return Err(err);
+                        return Err(signal(
+                            LispCondition::Error,
+                            vec![
+                                Value::string("`let' bindings can have only one value-form"),
+                                binding,
+                            ],
+                        ));
                     }
+                    match context.eval_sub(init_form) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            context.bc_buf.truncate(temps_base);
+                            return Err(err);
+                        }
+                    }
+                } else {
+                    context.bc_buf.truncate(temps_base);
+                    return Err(context.listp_error(binding));
                 }
             } else {
                 context.bc_buf.truncate(temps_base);
                 return Err(context.listp_error(binding));
             };
             context.bc_buf.push(value);
+        }
+
+        // Revisit the live list, as GNU eval.c:1174-1180 does. Lisp can have
+        // changed both its entries and symbols-with-pos-enabled above.
+        let nvars = context.bc_buf.len() - temps_base;
+        bindings = tail.cons_car();
+        for index in 0..nvars {
+            if !bindings.is_cons() {
+                break;
+            }
+            let binding = bindings.cons_car();
+            bindings = bindings.cons_cdr();
+            let symbol = if binding.is_symbol(context.symbol_mode()) {
+                binding
+            } else if binding.is_cons() {
+                binding.cons_car()
+            } else {
+                context.bc_buf.truncate(temps_base);
+                return Err(context.listp_error(binding));
+            };
+            let symbol = context.unwrap_symbol(symbol);
+            let Some(id) = symbol.as_bare_symbol_id() else {
+                context.bc_buf.truncate(temps_base);
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("symbolp"), symbol],
+                ));
+            };
+            let value = context.bc_buf[temps_base + index];
             if let Some(name) = let_constant_error_name(&context.obarray, id, value) {
                 if constant_binding_error.is_none() {
                     constant_binding_error = Some(name);
@@ -438,6 +435,7 @@ impl Context {
         let mut roots = EvalTempRootsToSequenceGuard::enter(self);
         let context = roots.context();
         let val_temp_slot = context.push_eval_temp_root_slot(Value::NIL);
+        let var_temp_slot = context.push_eval_temp_root_slot(Value::NIL);
         let tortoise_slot = context.push_eval_temp_root_slot(varlist);
         let bindings_slot = context.push_eval_temp_root_slot(varlist);
         let init_result: Result<(), Flow> = (|| {
@@ -445,17 +443,12 @@ impl Context {
             let mut cycle = crate::emacs_core::builtins::GnuTailCycle::new(varlist);
             while bindings.is_cons() {
                 context.set_eval_temp_root_slot(bindings_slot, bindings);
-                let binding = context.unwrap_symbol(bindings.cons_car());
-                let (id, value) = if let Some(id) = binding.as_symbol_id() {
-                    (id, Value::NIL)
+                let binding = bindings.cons_car();
+                let (symbol, value) = if binding.is_symbol(context.symbol_mode()) {
+                    (binding, Value::NIL)
                 } else if binding.is_cons() {
-                    let head = context.unwrap_symbol(binding.cons_car());
-                    let Some(id) = head.as_symbol_id() else {
-                        return Err(signal(
-                            LispCondition::WrongTypeArgument,
-                            vec![Value::symbol("symbolp"), head],
-                        ));
-                    };
+                    let symbol = binding.cons_car();
+                    context.set_eval_temp_root_slot(var_temp_slot, symbol);
                     let mut value_tail = binding.cons_cdr();
                     let value = if value_tail.is_nil() {
                         Value::NIL
@@ -475,13 +468,21 @@ impl Context {
                     } else {
                         return Err(context.listp_error(binding));
                     };
-                    (id, value)
+                    (symbol, value)
                 } else {
                     // GNU takes `(car elt)`, so a non-list element signals
                     // `(wrong-type-argument listp ELT)`.
                     return Err(signal(
                         LispCondition::WrongTypeArgument,
                         vec![Value::symbol("listp"), binding],
+                    ));
+                };
+                // GNU Flet_star (eval.c:1104-1108) normalizes after eval.
+                let symbol = context.unwrap_symbol(symbol);
+                let Some(id) = symbol.as_bare_symbol_id() else {
+                    return Err(signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("symbolp"), symbol],
                     ));
                 };
                 context.set_eval_temp_root_slot(val_temp_slot, value);
@@ -555,14 +556,24 @@ impl Context {
             let value_form = cursor.cons_car();
             cursor = cursor.cons_cdr();
             nargs += 1;
+            // GNU Fsetq (eval.c:491-502) evaluates before SYMBOLP/Fset.
+            // A positioned operand can be detached by the RHS before GC.
+            let root_scope = (!symbol.is_bare_symbol()).then(|| self.save_eval_temp_roots());
+            if root_scope.is_some() {
+                self.push_eval_temp_root(symbol);
+            }
+            let value = self.eval_sub(value_form);
+            if let Some(scope) = root_scope {
+                self.restore_eval_temp_roots_to_sequence(scope);
+            }
+            let value = value?;
             let symbol = self.unwrap_symbol(symbol);
-            let Some(sym_id) = symbol.as_symbol_id() else {
+            let Some(sym_id) = symbol.as_bare_symbol_id() else {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("symbolp"), symbol],
                 ));
             };
-            let value = self.eval_sub(value_form)?;
             // Debug probe for multibyte assignments to default-directory.
             // Kept at debug level so it doesn't pollute normal error
             // output (Doom always fires this with pure-ASCII paths that
@@ -791,7 +802,7 @@ impl Context {
         }
 
         let symbol = self.unwrap_symbol(tail.cons_car());
-        let Some(sym_id) = symbol.as_symbol_id() else {
+        let Some(sym_id) = symbol.as_bare_symbol_id() else {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), symbol],
@@ -867,7 +878,7 @@ impl Context {
             return Err(self.listp_error(tail));
         }
         let symbol = self.unwrap_symbol(tail.cons_car());
-        let Some(sym_id) = symbol.as_symbol_id() else {
+        let Some(sym_id) = symbol.as_bare_symbol_id() else {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), symbol],
@@ -942,13 +953,13 @@ impl Context {
                 Ok(dispatched) => Err(Flow::signal_boxed(dispatched)),
                 Err(ref flow)
                     if let Some(thrown) = flow.as_throw()
-                        && eq_value(&tag, &thrown.tag) =>
+                        && thrown.matches_tag(tag) =>
                 {
                     Ok(thrown.value)
                 }
                 Err(flow) => Err(flow),
             },
-            Err(FlowKind::Throw(ref thrown)) if eq_value(&tag, &thrown.tag) => Ok(thrown.value),
+            Err(FlowKind::Throw(ref thrown)) if thrown.matches_tag(tag) => Ok(thrown.value),
             Err(flow) => Err(Flow::from_kind(flow)),
         };
         self.pop_condition_frame();
@@ -1003,6 +1014,7 @@ impl Context {
         call_name: SymId,
         tail: Value,
     ) -> EvalResult {
+        let symbol_mode = self.symbol_mode();
         let nargs = self.value_list_len_or_error(tail)?;
         if nargs < 2 {
             return Err(signal(
@@ -1011,7 +1023,7 @@ impl Context {
             ));
         }
         let var = self.unwrap_symbol(tail.cons_car());
-        let Some(var_id) = var.as_symbol_id() else {
+        let Some(var_id) = var.as_symbol_id(symbol_mode) else {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), var],
@@ -1045,7 +1057,7 @@ impl Context {
                 ));
             }
             let head = handler.cons_car();
-            if !(head.is_symbol() || head.is_symbol_with_pos() || head.is_cons()) {
+            if !(head.is_symbol(symbol_mode) || head.is_cons()) {
                 return Err(signal(
                     "error",
                     vec![Value::string(format!(
@@ -1055,7 +1067,7 @@ impl Context {
                 ));
             }
             let head_unwrapped = self.unwrap_symbol(head);
-            if head_unwrapped.is_symbol_named(":success") {
+            if head_unwrapped.is_symbol_named(":success", symbol_mode) {
                 success_handler_idx = Some(handler_index);
             }
         }
@@ -1100,14 +1112,11 @@ impl Context {
                 if let Some(idx) = success_handler_idx {
                     let handler = handlers_vec[idx];
                     let bind_var = !var.is_nil();
-                    // Mirror the error-handler arm: bind VAR lexically when
-                    // lexical binding is in effect and VAR is not special, else
-                    // dynamically (GNU condition-case binds the :success var the
-                    // same way it binds an error handler's var).
-                    let use_lexical_binding = bind_var
-                        && self.lexical_binding()
-                        && !is_runtime_dynamically_special(&self.obarray, var_id)
-                        && !self.lexenv_declares_special_cached_in(self.lexenv, var_id);
+                    // GNU eval.c:1676-1685 extends the lexical environment
+                    // directly for VAR, even when a special declaration would
+                    // make an ordinary let binding dynamic. Both handler kinds
+                    // use this same rule.
+                    let use_lexical_binding = bind_var && self.lexical_binding();
                     let specpdl_count = self.specpdl.len();
                     if use_lexical_binding {
                         let old_lexenv = self.lexenv;
@@ -1140,10 +1149,9 @@ impl Context {
                     let handler = handlers_vec[handler_index];
                     let bind_var = !var.is_nil();
                     let binding_value = make_signal_binding_value(&sig);
-                    let use_lexical_binding = bind_var
-                        && self.lexical_binding()
-                        && !is_runtime_dynamically_special(&self.obarray, var_id)
-                        && !self.lexenv_declares_special_cached_in(self.lexenv, var_id);
+                    // GNU binds a handler VAR lexically regardless of global
+                    // or local special declarations (eval.c:1676-1685).
+                    let use_lexical_binding = bind_var && self.lexical_binding();
 
                     let specpdl_count = self.specpdl.len();
                     if use_lexical_binding {
@@ -1195,7 +1203,8 @@ impl Context {
         handlers: Value,
         lexenv: Value,
     ) -> EvalResult {
-        let Some(var_id) = var.as_symbol_id() else {
+        let symbol_mode = self.symbol_mode();
+        let Some(var_id) = var.as_symbol_id(symbol_mode) else {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), var],
@@ -1208,7 +1217,7 @@ impl Context {
             handler.is_cons()
                 && self
                     .unwrap_symbol(handler.cons_car())
-                    .is_symbol_named(":success")
+                    .is_symbol_named(":success", symbol_mode)
         });
 
         let specpdl_count = self.specpdl.len();
@@ -1229,67 +1238,36 @@ impl Context {
     }
 
     pub(super) fn sf_save_excursion_value(&mut self, tail: Value) -> EvalResult {
-        let count = self.specpdl.len();
-        self.record_save_excursion();
-        let result = self.sf_progn_value(tail);
-        self.unbind_to_with_result(count, result)
+        let mut scope = ExcursionScope::enter(self);
+        let result = scope.context().sf_progn_value(tail);
+        scope.finish(result)
     }
 
     pub(super) fn sf_save_current_buffer_value(&mut self, tail: Value) -> EvalResult {
-        // Specpdl-carried like the VM arm and GNU's
-        // record_unwind_current_buffer, so a panic contained at a module/JIT
-        // boundary inside the body restores the buffer via the boundary
-        // unwind (an imperative restore here would be skipped, leaving the
-        // wrong buffer current). PS fix-wave sweep hit.
-        let count = self.specpdl.len();
-        if let Some(buf) = self.buffers.current_buffer() {
-            self.specpdl
-                .push(SpecBinding::SaveCurrentBuffer { buffer_id: buf.id });
-        }
-        let result = self.sf_progn_value(tail);
-        self.unbind_to_with_result(count, result)
+        let mut scope = CurrentBufferScope::enter(self);
+        let result = scope.context().sf_progn_value(tail);
+        scope.finish(result)
     }
 
     pub(super) fn sf_save_restriction_value(&mut self, tail: Value) -> EvalResult {
-        let count = self.specpdl.len();
-        if let Some(state) = self.buffers.save_current_restriction_state() {
-            self.specpdl.push(SpecBinding::save_restriction(state));
-        }
-        let result = self.sf_progn_value(tail);
-        self.unbind_to_with_result(count, result)
+        let mut scope = RestrictionScope::enter(self);
+        let result = scope.context().sf_progn_value(tail);
+        scope.finish(result)
     }
 
     pub(super) fn validate_throw(&self, flow: Flow) -> Flow {
         match flow.kind() {
             FlowRef::Throw(thrown) => {
-                if self.has_active_catch(&thrown.tag) {
+                if self
+                    .matching_catch_resume_with_symbols(&thrown.tag, thrown.symbol_mode())
+                    .is_some()
+                {
                     flow
                 } else {
                     signal(LispCondition::NoCatch, vec![thrown.tag, thrown.value])
                 }
             }
             _ => flow,
-        }
-    }
-
-    /// Recursively walk a `Value`, treating everything as literal data
-    /// except `(byte-code-literal ...)` cons cells which are converted to
-    /// `Value::ByteCode` via `sf_byte_code_literal_value`.
-    pub(super) fn quote_value_with_bytecode(&mut self, value: Value) -> EvalResult {
-        if value.is_cons() && cons_head_symbol_id(&value) == Some(byte_code_literal_symbol()) {
-            return self.sf_byte_code_literal_value(value.cons_cdr());
-        }
-
-        match value.kind() {
-            ValueKind::Veclike(VecLikeType::Vector) => {
-                let items = value.as_vector_data().unwrap();
-                let mut values = Vec::with_capacity(items.len());
-                for item in items {
-                    values.push(self.quote_value_with_bytecode(*item)?);
-                }
-                Ok(Value::vector(values))
-            }
-            _ => Ok(value),
         }
     }
 
@@ -1306,131 +1284,14 @@ impl Context {
             return Ok(vector);
         }
 
-        let mut values = Vec::with_capacity(items.len());
-        for item in items {
-            values.push(self.quote_value_with_bytecode(*item)?);
-        }
-
-        crate::emacs_core::builtins::make_byte_code_from_slots(&values)
-    }
-
-    pub(super) fn sf_byte_code_value(&mut self, tail: Value) -> EvalResult {
-        let args = list_to_vec(&tail).ok_or_else(|| self.listp_error(tail))?;
-        if args.len() != 3 {
-            return Err(signal(
-                LispCondition::WrongNumberOfArguments,
-                vec![Value::symbol("byte-code"), Value::fixnum(args.len() as i64)],
-            ));
-        }
-        let trace_toplevel_bytecode = std::env::var_os("NEOVM_TRACE_TOPLEVEL_BYTECODE").is_some();
-        let load_file_name = if trace_toplevel_bytecode {
-            self.obarray()
-                .symbol_value("load-file-name")
-                .and_then(|value| {
-                    value
-                        .as_lisp_string()
-                        .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
-                })
-                .unwrap_or_else(|| "<unknown>".to_string())
-        } else {
-            String::new()
-        };
-        let decode_start = trace_toplevel_bytecode.then(std::time::Instant::now);
-
-        let bytecode_str = args[0];
-        let constants_vec = self.quote_value_with_bytecode(args[1])?;
-        let maxdepth = args[2];
-
-        use crate::emacs_core::bytecode::ByteCodeFunction;
-        use crate::emacs_core::bytecode::decode::decode_gnu_bytecode_with_offset_map;
-        use crate::emacs_core::value::LambdaParams;
-
-        // Bytecode strings are unibyte and may contain non-UTF-8 bytes.
-        // Access raw bytes directly, same fix as make_byte_code_from_parts.
-        let raw_bytes = if let Some(ls) = bytecode_str.as_lisp_string() {
-            ls.as_bytes().to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let mut constants: Vec<Value> = match constants_vec.kind() {
-            ValueKind::Veclike(VecLikeType::Vector) => {
-                constants_vec.as_vector_data().unwrap().clone()
-            }
-            _ => Vec::new(),
-        };
-
-        for constant in &mut constants {
-            *constant = crate::emacs_core::builtins::try_convert_nested_compiled_literal(*constant);
-        }
-
-        let (ops, gnu_byte_offset_map) =
-            decode_gnu_bytecode_with_offset_map(&raw_bytes, &mut constants).map_err(|e| {
-                signal(
-                    "error",
-                    vec![Value::string(format!("bytecode decode error: {}", e))],
-                )
-            })?;
-        if let Some(start) = decode_start {
-            tracing::info!(
-                "TOPLEVEL-BYTECODE decode file={} bytes={} consts={} ops={} elapsed={:.2?}",
-                load_file_name,
-                raw_bytes.len(),
-                constants.len(),
-                ops.len(),
-                start.elapsed()
-            );
-        }
-
-        let max_stack = match maxdepth.kind() {
-            ValueKind::Fixnum(n) => n as u16,
-            _ => 16,
-        };
-
-        let bc = ByteCodeFunction {
-            source_id: super::super::bytecode::fresh_bytecode_source_id(),
-            ops,
-            // The instructions above came straight from the sealing decoder;
-            // the stack proof is recomputed below once every shape field
-            // (params/lexical/arglist/env/max_stack) is in place.
-            ops_sealed: true,
-            stack_verified: false,
-            constants: constants.into(),
-            max_stack,
-            params: LambdaParams::simple(vec![]),
-            arglist: Value::NIL,
-            lexical: false,
-            env: None,
-            gnu_byte_offset_map: Some(gnu_byte_offset_map),
-            gnu_bytecode_bytes: None,
-            docstring: None,
-            doc_form: None,
-            interactive: None,
-            closure_slot_count: 4,
-            extra_slots: Vec::new(),
-            #[cfg(feature = "jit")]
-            runtime: Some(crate::emacs_core::jit::Runtime::new()),
-            lazy_gnu_code: None,
-        };
-
-        let mut vm = super::super::bytecode::Vm::from_context(self);
-        let exec_start = trace_toplevel_bytecode.then(std::time::Instant::now);
-        let result = vm.execute(&bc, vec![]);
-        if let Some(start) = exec_start {
-            tracing::info!(
-                "TOPLEVEL-BYTECODE exec   file={} ops={} elapsed={:.2?}",
-                load_file_name,
-                bc.executable_ops().len(),
-                start.elapsed()
-            );
-        }
-        result
+        crate::emacs_core::builtins::make_byte_code_from_slots(items)
     }
 
     pub(crate) fn defalias_value(&mut self, sym: Value, def: Value) -> EvalResult {
-        let plan = builtins::plan_defalias_in_obarray(self.obarray(), &[sym, def])?;
+        let plan =
+            builtins::plan_defalias_in_obarray(self.obarray(), &[sym, def], self.symbol_mode())?;
         let builtins::DefaliasPlan { action, result, .. } = plan;
-        self.record_load_history_entry(LoadHistoryEntry::function(result, def));
+        self.record_load_history_entry(LoadHistoryEntry::function(result, def, self.symbol_mode()));
         self.record_defalias_function_history(result);
         match action {
             builtins::DefaliasAction::SetFunction { symbol, definition } => {
@@ -1449,7 +1310,8 @@ impl Context {
                 self.apply(hook, vec![symbol_value, definition])?;
             }
         }
-        if let Some(symbol) = result.as_symbol_id() {
+        let symbol_mode = self.symbol_mode();
+        if let Some(symbol) = result.as_symbol_id(symbol_mode) {
             let definition = self
                 .obarray
                 .symbol_function_id(symbol)
@@ -1458,6 +1320,7 @@ impl Context {
                 &mut self.interactive,
                 symbol,
                 definition,
+                symbol_mode,
             );
         }
         Ok(result)
@@ -1471,7 +1334,8 @@ impl Context {
     /// when its `.el' loads).  Must run *before* the new definition is
     /// installed, so the previous definition is still readable.
     pub(crate) fn record_defalias_function_history(&mut self, result: Value) {
-        if let Some(symbol) = result.as_symbol_id() {
+        let symbol_mode = self.symbol_mode();
+        if let Some(symbol) = result.as_symbol_id(symbol_mode) {
             let olddef = self
                 .obarray
                 .symbol_function_id(symbol)
@@ -1632,7 +1496,16 @@ impl Context {
         subfeatures: Option<Value>,
     ) -> EvalResult {
         self.note_macro_expansion_mutation();
-        provide_value_in_state(&mut self.obarray, &mut self.features, feature, subfeatures)?;
+        let mode = self.symbol_mode();
+        let features = &mut self.features;
+        // SAFETY: provide_value_in_state only publishes feature values and
+        // properties. Its Lisp after-load hooks run below, after this loan;
+        // no canonical function/debugger metadata or storage identity changes.
+        unsafe {
+            self.obarray.with_legacy_value_write(|obarray| {
+                provide_value_in_state(obarray, features, feature, subfeatures, mode)
+            })
+        }?;
         self.record_load_history_entry(LoadHistoryEntry::ProvidedFeature(feature));
         // GNU Emacs Fprovide (fns.c): after adding the feature, run any
         // load-hooks registered in `after-load-alist`.
@@ -1652,8 +1525,7 @@ impl Context {
     pub(super) fn run_after_load_hooks_for_feature(&mut self, feature: Value) -> Result<(), Flow> {
         let after_load_alist = self
             .obarray
-            .symbol_value("after-load-alist")
-            .cloned()
+            .symbol_value_copied("after-load-alist")
             .unwrap_or(Value::NIL);
         if after_load_alist.is_nil() {
             return Ok(());
@@ -1667,7 +1539,7 @@ impl Context {
                 let pair_cdr = cursor.cons_cdr();
                 if pair_car.is_cons() {
                     let inner_pair_car = pair_car.cons_car();
-                    if inner_pair_car == feature {
+                    if eq_value_swp(&inner_pair_car, &feature, self.symbols_with_pos_enabled) {
                         found = pair_car;
                         break;
                     }
@@ -1715,12 +1587,13 @@ impl Context {
         filename: Option<Value>,
         noerror: Option<Value>,
     ) -> EvalResult {
-        let feature_name = super::super::builtins::symbols::symbol_id(&feature)
+        let feature_name = super::super::builtins::symbols::symbol_id(&feature, self.symbol_mode())
             .map(|sid| resolve_sym(sid).to_string());
         let filename_str = filename.as_ref().and_then(|v| {
             v.as_lisp_string()
                 .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
         });
+        let symbol_mode = self.symbol_mode();
         match plan_require_in_state(
             &self.obarray,
             self.buffers.current_buffer(),
@@ -1729,6 +1602,7 @@ impl Context {
             feature,
             filename,
             noerror,
+            symbol_mode,
         ) {
             Err(e) => {
                 let rendered = super::super::error::format_flow_with_eval(self, &e);
@@ -1783,6 +1657,7 @@ impl Context {
                                 .map_err(super::super::error::flow_from_eval_error)?;
                                 eval.refresh_features_from_variable();
                                 finish_require_in_state(&eval.features, sym_id, &name, Some(&path))
+                                    .map(|_| feature)
                             });
                         let result = self.unbind_to_with_result(spec_entry, result);
                         if let Err(ref e) = result
@@ -1809,7 +1684,9 @@ impl Context {
     pub(super) fn flow_has_active_handler(&self, flow: &Flow) -> bool {
         match flow.kind() {
             FlowRef::Signal(sig) => self.has_active_condition_handler_for_signal(sig),
-            FlowRef::Throw(thrown) => self.has_active_catch(&thrown.tag),
+            FlowRef::Throw(thrown) => self
+                .matching_catch_resume_with_symbols(&thrown.tag, thrown.symbol_mode())
+                .is_some(),
             // Nothing handles a shutdown; it unwinds to the process boundary.
             FlowRef::ThreadBlocked(_) | FlowRef::Shutdown(_) => false,
         }

@@ -5,8 +5,9 @@ use crate::emacs_core::error::expect_args;
 
 fn value_to_buffer_text_backend_kind(
     value: Value,
+    mode: crate::tagged::SymbolMode,
 ) -> Result<ImplementedBufferTextBackendKind, Flow> {
-    let symbol = super::symbols::expect_symbol_id(&value)?;
+    let symbol = super::symbols::expect_symbol_id(&value, mode)?;
     let name = resolve_sym(symbol);
     let kind = name.parse::<BufferTextBackendKind>().map_err(|_| {
         signal(
@@ -58,7 +59,7 @@ pub(crate) fn builtin_neomacs_set_default_buffer_text_backend(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("neomacs-set-default-buffer-text-backend", &args, 1)?;
-    let kind = value_to_buffer_text_backend_kind(args[0])?;
+    let kind = value_to_buffer_text_backend_kind(args[0], ctx.symbol_mode())?;
     ctx.buffers.set_default_text_backend_kind(kind);
     Ok(buffer_text_backend_kind_value(kind.public_kind()))
 }
@@ -68,7 +69,7 @@ pub(crate) fn builtin_neomacs_set_buffer_text_backend(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("neomacs-set-buffer-text-backend", &args, 1)?;
-    let kind = value_to_buffer_text_backend_kind(args[0])?;
+    let kind = value_to_buffer_text_backend_kind(args[0], ctx.symbol_mode())?;
     let buffer = ctx
         .buffers
         .current_buffer_mut()

@@ -71,12 +71,14 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
     sqrt_witnesses: &sqrt_snapshot::SqrtCallWitnesses,
     chains: &mut Vec<super::super::vframe::DeoptChain>,
 ) -> Result<cranelift_module::FuncId, CompileError> {
+    let rootwin_census = lowering::RootWinCounterScope::enter();
     debug_assert!(
         abi == LeafAbi::Memory || (!aot && osr_pc.is_none()),
         "AOT and OSR entries keep the memory ABI"
     );
     let variable_raw = uniform_raw_osr_slots(cfg, known_fixnum_slots, osr_pc);
     let has_raw_slots = variable_raw.iter().any(|&raw| raw);
+    let cons_store_probe_order = heap_inline::ConsStoreProbeOrder::for_ops(ops);
     lowering::imm_pool_reset();
     cold_exits::begin_function();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
@@ -125,13 +127,18 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
             let cbsym_spec = spec_sites.values().any(|site| site.kind.is_cbsym());
             let shapes = jit_direct_shapes();
             let groups = ShimGroups {
+                throw_flow: if !aot && ops.iter().any(|op| matches!(op, Op::Throw)) {
+                    crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual
+                } else {
+                    crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Unavailable
+                },
                 subr_spec,
                 cbsym_spec,
                 tier2_profile: emit.t2.is_some(),
                 direct_shapes: !aot && (shapes.optional || shapes.rest),
                 call_census: !aot && jit_call_census_on(),
                 direct_framed: !aot && shapes.framed,
-                collection_journal: !aot && jit_gen0_collection_journal_on(),
+                collection_journal: jit_gen0_collection_journal_on(),
                 collection_observation_gate: !aot
                     && super::shim_refs::collection_observation_gate_enabled(),
                 hof: inline::active_fused().is_some_and(|body| {
@@ -175,10 +182,14 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
                 refs,
                 vmctx_var,
                 ptr_ty,
+                forward_atomics: super::atomic_forward::ForwardAtomics::for_isa(
+                    sink.module().isa(),
+                ),
                 call_args_slot,
                 call_result_slot,
                 rootwin: None,
                 heap: None,
+                cons_store_probe_order,
                 inline_alloc: !aot && jit_inline_alloc_on(),
                 generational: std::cell::Cell::new(aot.then_some(false)),
                 direct_sites: std::cell::Cell::new(0),
@@ -766,6 +777,12 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
                             break;
                         }
                         Op::Throw => {
+                            // ABI45's frozen AOT import prefix has no Context
+                            // throw shim. Production AOT excludes this opcode;
+                            // direct baseline emission must fail closed too.
+                            if aot {
+                                return Err(CompileError::UnsupportedOp("aot-throw-symbol-policy"));
+                            }
                             // Stash Flow::Throw{tag, value} and exit via the signal
                             // path; inside a protected extent that path is the
                             // handler dispatch (a same-function `catch` is caught
@@ -773,8 +790,12 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
                             let value = stack.pop().ok_or(CompileError::StackUnderflow)?;
                             let tag = stack.pop().ok_or(CompileError::StackUnderflow)?;
                             let rt = rt.as_ref().ok_or(CompileError::UnsupportedOp("throw"))?;
-                            let throw_flow = rt.refs.get(fb.func, Shim::ThrowFlow);
-                            fb.ins().call(throw_flow, &[tag, value]);
+                            let throw_flow =
+                                rt.refs
+                                    .try_get(fb.func, Shim::ThrowFlowWithSymbols)
+                                    .ok_or(CompileError::UnsupportedOp("throw-context-shim"))?;
+                            let vmctx = fb.use_var(rt.vmctx_var);
+                            fb.ins().call(throw_flow, &[vmctx, tag, value]);
                             let se = signal_target_for_site(
                                 &mut fb,
                                 &mut signal_exit,
@@ -1220,7 +1241,9 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
     });
 
     note_clif_size(&func);
-    let (rw_emitted, rw_elided) = lowering::rootwin_counters();
+    let rootwin_counts = rootwin_census.snapshot();
+    let rw_emitted = rootwin_counts.emitted();
+    let rw_elided = rootwin_counts.elided();
     lowering::dump_clif(
         &func,
         &format!(
@@ -1228,7 +1251,7 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
             ops.len()
         ),
     );
-    sink.define_leaf(
+    let id = sink.define_leaf(
         LeafEntry {
             name: entry_name,
             linkage: entry_linkage,
@@ -1236,7 +1259,9 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
         },
         func,
         super::super::stats::asm_dump::want_disasm(aot),
-    )
+    )?;
+    rootwin_census.finish();
+    Ok(id)
 }
 
 /// Frontend-owned requirements, never runtime or mutator state. Threading:

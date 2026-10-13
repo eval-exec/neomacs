@@ -46,7 +46,7 @@ fn named_let() -> ByteCodeFunction {
         Op::Goto(1),         // 13: back edge
     ];
     f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     assert_eq!(f.ops.last(), Some(&Op::Return), "sealed: trailing Return");
     f

@@ -343,9 +343,9 @@ fn finalized_load_path_for_role(root: &Path, role: RuntimeImageRole) -> Vec<Stri
     finalize_cached_bootstrap_eval(&mut eval, root, role).expect("finalize cached bootstrap eval");
     let load_path = eval
         .obarray()
-        .symbol_value("load-path")
+        .symbol_value_copied("load-path")
         .expect("finalize should set load-path");
-    let entries = list_to_vec(load_path).expect("load-path is a list");
+    let entries = list_to_vec(&load_path).expect("load-path is a list");
     load_path_entry_strings(&entries)
 }
 
@@ -566,8 +566,7 @@ fn load_binds_standard_input_so_read_consumes_the_next_top_level_form() {
 
     let consumed = eval
         .obarray()
-        .symbol_value("i179-consumed")
-        .copied()
+        .symbol_value_copied("i179-consumed")
         .expect("i179-consumed bound");
     assert!(
         equal_value(&consumed, &Value::symbol("the-next-symbol-form"), 0),
@@ -576,8 +575,7 @@ fn load_binds_standard_input_so_read_consumes_the_next_top_level_form() {
 
     let after = eval
         .obarray()
-        .symbol_value("i179-after")
-        .copied()
+        .symbol_value_copied("i179-after")
         .expect("i179-after bound: loop must resume after the consumed form");
     assert!(
         equal_value(&after, &Value::symbol("after-marker"), 0),
@@ -626,7 +624,7 @@ fn loaded_source_paths_accepts_raw_unibyte_load_history_entries() {
 }
 
 fn definition_is_macroish(value: Value) -> bool {
-    value.is_macro() || (value.is_cons() && value.cons_car().as_symbol_name() == Some("macro"))
+    value.is_macro() || (value.is_cons() && value.cons_car().as_bare_symbol_name() == Some("macro"))
 }
 
 fn is_named_defun(form: Value, name: &str) -> bool {
@@ -635,13 +633,13 @@ fn is_named_defun(form: Value, name: &str) -> bool {
     }
     let car = form.cons_car();
     let cdr = form.cons_cdr();
-    if car.as_symbol_name() != Some("defun") {
+    if car.as_bare_symbol_name() != Some("defun") {
         return false;
     }
     if !cdr.is_cons() {
         return false;
     }
-    cdr.cons_car().as_symbol_name() == Some(name)
+    cdr.cons_car().as_bare_symbol_name() == Some(name)
 }
 
 #[test]
@@ -672,8 +670,10 @@ fn dump_emacs_portable_writes_reloadable_snapshot() {
     let loaded = crate::emacs_core::pdump::load_from_dump(&dump_path)
         .expect("reloading dumped snapshot should succeed");
     assert_eq!(
-        loaded.obarray().symbol_value("dump-portable-test-var"),
-        Some(&Value::fixnum(42))
+        loaded
+            .obarray()
+            .symbol_value_copied("dump-portable-test-var"),
+        Some(Value::fixnum(42))
     );
 }
 
@@ -701,8 +701,10 @@ fn dump_emacs_portable_overwrites_existing_target() {
     let loaded = crate::emacs_core::pdump::load_from_dump(&dump_path)
         .expect("reloading overwritten snapshot should succeed");
     assert_eq!(
-        loaded.obarray().symbol_value("dump-portable-test-var"),
-        Some(&Value::fixnum(2))
+        loaded
+            .obarray()
+            .symbol_value_copied("dump-portable-test-var"),
+        Some(Value::fixnum(2))
     );
 }
 
@@ -734,8 +736,10 @@ fn dump_emacs_portable_expands_relative_target_against_default_directory() {
     let loaded = crate::emacs_core::pdump::load_from_dump(&dump_path)
         .expect("reloading relative dump snapshot should succeed");
     assert_eq!(
-        loaded.obarray().symbol_value("dump-portable-test-var"),
-        Some(&Value::fixnum(7))
+        loaded
+            .obarray()
+            .symbol_value_copied("dump-portable-test-var"),
+        Some(Value::fixnum(7))
     );
 }
 
@@ -853,8 +857,8 @@ fn dump_emacs_portable_succeeds_after_finalizer_is_collected() {
     eval.eval_str_each("(setq dump-finalizer-keeper nil)");
     eval.gc_collect_exact();
     assert_eq!(
-        eval.obarray().symbol_value("dump-finalizer-ran"),
-        Some(&Value::T),
+        eval.obarray().symbol_value_copied("dump-finalizer-ran"),
+        Some(Value::T),
         "the doomed finalizer's function must run before the dump"
     );
 
@@ -867,8 +871,8 @@ fn dump_emacs_portable_succeeds_after_finalizer_is_collected() {
     let loaded = crate::emacs_core::pdump::load_from_dump(&dump_path)
         .expect("reloading the post-finalizer snapshot should succeed");
     assert_eq!(
-        loaded.obarray().symbol_value("dump-finalizer-ran"),
-        Some(&Value::T)
+        loaded.obarray().symbol_value_copied("dump-finalizer-ran"),
+        Some(Value::T)
     );
 }
 
@@ -892,8 +896,8 @@ fn dump_emacs_portable_runs_pending_finalizers_before_dumping() {
     .expect("dump-emacs-portable should collect pending finalizers and succeed");
 
     assert_eq!(
-        eval.obarray().symbol_value("dump-finalizer-ran"),
-        Some(&Value::T),
+        eval.obarray().symbol_value_copied("dump-finalizer-ran"),
+        Some(Value::T),
         "the pre-dump collection must run the pending finalizer"
     );
     assert!(dump_path.exists(), "the dump file must be written");
@@ -1002,8 +1006,7 @@ fn raw_context_seeds_gnu_callproc_program_name_variables() {
     ] {
         let value = eval
             .obarray
-            .symbol_value(name)
-            .copied()
+            .symbol_value_copied(name)
             .unwrap_or_else(|| panic!("{name} should be preloaded like GNU callproc.c"));
         assert_eq!(value.as_runtime_string_owned().as_deref(), Some(expected));
         assert!(eval.obarray.is_special(name), "{name} should be special");
@@ -1031,7 +1034,10 @@ fn gnu_bootstrap_files_define_string_helpers_without_rust_shims() {
             .symbol_function(name)
             .unwrap_or_else(|| panic!("{name} should be installed by GNU ldefs-boot"));
         assert!(
-            crate::emacs_core::autoload::is_autoload_value(&function),
+            crate::emacs_core::autoload::is_autoload_value(
+                &function,
+                crate::tagged::value::SymbolMode::Bare
+            ),
             "{name} should come from GNU autoloads"
         );
     }
@@ -1303,7 +1309,7 @@ fn raw_context_does_not_prebind_frame_creation_function() {
     let eval = Context::new();
     assert!(
         eval.obarray
-            .symbol_value("frame-creation-function")
+            .symbol_value_copied("frame-creation-function")
             .is_none(),
         "frame-creation-function should come from GNU frame.el/cl-generic bootstrap, not Context::new"
     );
@@ -1318,7 +1324,10 @@ fn gnu_help_el_defines_substitute_command_keys_without_rust_shim() {
         .obarray
         .symbol_function("substitute-command-keys")
         .expect("help.el should define substitute-command-keys");
-    assert!(!crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(!crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -1471,7 +1480,7 @@ fn missing_runtime_image_reports_heapless_startup_error() {
                 "raw startup payload should match normalized data"
             );
             let payload = raw
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .expect("startup image load payload should stay heapless");
             assert!(
                 payload.contains("failed to load bootstrap image"),
@@ -1509,8 +1518,8 @@ fn runtime_image_loader_falls_back_to_fingerprinted_candidate_when_primary_is_mi
     assert_eq!(
         loaded
             .obarray()
-            .symbol_value("runtime-image-candidate-test-var"),
-        Some(&Value::fixnum(42))
+            .symbol_value_copied("runtime-image-candidate-test-var"),
+        Some(Value::fixnum(42))
     );
 }
 
@@ -1554,7 +1563,7 @@ fn runtime_image_loader_stops_on_primary_fingerprint_mismatch() {
         } => {
             assert_eq!(resolve_sym(symbol), "error");
             let rendered = payload
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .expect("heapless startup error payload");
             assert!(
                 rendered.contains(primary.to_string_lossy().as_ref()),
@@ -1595,8 +1604,10 @@ fn after_pdump_load_hook_runs_after_finalize_and_only_once() {
 
     let mut loaded = crate::emacs_core::pdump::load_from_dump(&dump_path).expect("load dump");
     assert_eq!(
-        loaded.obarray().symbol_value("compat-pdump-hook-fired"),
-        Some(&Value::NIL)
+        loaded
+            .obarray()
+            .symbol_value_copied("compat-pdump-hook-fired"),
+        Some(Value::NIL)
     );
 
     finalize_cached_bootstrap_eval(
@@ -1610,14 +1621,16 @@ fn after_pdump_load_hook_runs_after_finalize_and_only_once() {
         "startup helper should consume the pending pdump hook"
     );
     assert_eq!(
-        loaded.obarray().symbol_value("compat-pdump-hook-fired"),
-        Some(&Value::T)
+        loaded
+            .obarray()
+            .symbol_value_copied("compat-pdump-hook-fired"),
+        Some(Value::T)
     );
     assert_eq!(
         loaded
             .obarray()
-            .symbol_value("compat-pdump-hook-saw-load-path"),
-        Some(&Value::T)
+            .symbol_value_copied("compat-pdump-hook-saw-load-path"),
+        Some(Value::T)
     );
     assert!(
         !maybe_run_after_pdump_load_hook(&mut loaded),
@@ -1688,18 +1701,18 @@ fn load_file_stops_immediately_on_kill_emacs() {
         })
     );
     assert_eq!(
-        eval.obarray().symbol_value("load-kill-before"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("load-kill-before"),
+        Some(Value::T)
     );
-    assert_eq!(eval.obarray().symbol_value("load-kill-after"), None);
+    assert_eq!(eval.obarray().symbol_value_copied("load-kill-after"), None);
 }
 
 #[test]
 fn context_seeds_pdumper_fingerprint() {
     let eval = Context::new();
     assert_eq!(
-        eval.obarray().symbol_value("pdumper-fingerprint"),
-        Some(&Value::string(crate::emacs_core::pdump::fingerprint_hex()))
+        eval.obarray().symbol_value_copied("pdumper-fingerprint"),
+        Some(Value::string(crate::emacs_core::pdump::fingerprint_hex()))
     );
 }
 
@@ -1721,8 +1734,9 @@ fn dump_loadup_invocation_seeds_pre_startup_command_line_state() {
 
     assert_eq!(
         list_to_vec(
-            eval.obarray()
-                .symbol_value("command-line-args")
+            &eval
+                .obarray()
+                .symbol_value_copied("command-line-args")
                 .expect("command-line-args seeded")
         )
         .expect("command-line-args list"),
@@ -1734,20 +1748,20 @@ fn dump_loadup_invocation_seeds_pre_startup_command_line_state() {
         ]
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-args-left"),
-        Some(&Value::NIL)
+        eval.obarray().symbol_value_copied("command-line-args-left"),
+        Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray().symbol_value("command-line-processed"),
-        Some(&Value::NIL)
+        eval.obarray().symbol_value_copied("command-line-processed"),
+        Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray().symbol_value("noninteractive"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("noninteractive"),
+        Some(Value::T)
     );
     assert_eq!(
-        eval.obarray().symbol_value("dump-mode"),
-        Some(&Value::string("pdump"))
+        eval.obarray().symbol_value_copied("dump-mode"),
+        Some(Value::string("pdump"))
     );
 }
 
@@ -1757,11 +1771,14 @@ fn preload_only_loadup_invocation_has_no_session_command_line_surface() {
     apply_loadup_invocation(&mut eval, &LoadupInvocation::PreloadOnly);
 
     assert_eq!(
-        eval.obarray().symbol_value("command-line-processed"),
-        Some(&Value::T),
+        eval.obarray().symbol_value_copied("command-line-processed"),
+        Some(Value::T),
         "loadup's top-level tail must remain inert during source preload"
     );
-    assert_eq!(eval.obarray().symbol_value("dump-mode"), Some(&Value::NIL));
+    assert_eq!(
+        eval.obarray().symbol_value_copied("dump-mode"),
+        Some(Value::NIL)
+    );
 }
 
 #[test]
@@ -1777,13 +1794,13 @@ fn runtime_startup_state_clears_top_level_eval_state() {
         "runtime startup state should end at a clean top-level evaluator surface"
     );
     assert_eq!(
-        eval.obarray().symbol_value("load-file-name"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("load-file-name"),
+        Some(Value::NIL),
         "runtime startup state should not retain loadup.el as load-file-name"
     );
     assert_eq!(
-        eval.obarray().symbol_value("load-true-file-name"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("load-true-file-name"),
+        Some(Value::NIL),
         "runtime startup state should not retain loadup.el as load-true-file-name"
     );
 }
@@ -4267,7 +4284,7 @@ fn bootstrap_runtime_mx_eager_completion_services_printable_input_before_quit() 
         {
             let eager_background_ran = eval
                 .obarray()
-                .symbol_value("neo-mx-eager-background-count")
+                .symbol_value_copied("neo-mx-eager-background-count")
                 .and_then(|value| value.as_int())
                 .is_some_and(|count| count > 0);
             if text.contains("M-x ") && eager_background_ran {
@@ -8988,8 +9005,7 @@ fn builtin_load_accepts_raw_unibyte_absolute_filename_values() {
     assert_eq!(loaded, Value::T);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-load-absolute-raw-ran")
-            .copied(),
+            .symbol_value_copied("vm-load-absolute-raw-ran"),
         Some(Value::T)
     );
 
@@ -9027,8 +9043,7 @@ fn builtin_load_resolves_raw_unibyte_load_path_entries() {
     assert_eq!(loaded, Value::T);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-load-raw-load-path-ran")
-            .copied(),
+            .symbol_value_copied("vm-load-raw-load-path-ran"),
         Some(Value::T)
     );
 
@@ -9068,7 +9083,7 @@ fn builtin_load_substitutes_environment_variables_before_search() {
     .expect("load should substitute environment variables before search");
     assert_eq!(loaded, Value::T);
     assert_eq!(
-        eval.obarray().symbol_value("vm-load-env-ran").copied(),
+        eval.obarray().symbol_value_copied("vm-load-env-ran"),
         Some(Value::T)
     );
 
@@ -9186,8 +9201,9 @@ fn builtin_load_honors_bare_live_representation_suffix() {
 
     assert_eq!(loaded, Value::T);
     assert_eq!(
-        eval.obarray().symbol_value("vm-loaded-live-representation"),
-        Some(&Value::T)
+        eval.obarray()
+            .symbol_value_copied("vm-loaded-live-representation"),
+        Some(Value::T)
     );
 }
 
@@ -9228,7 +9244,8 @@ fn builtin_load_rejects_non_string_live_suffix_entries() {
         false
     });
     assert_eq!(
-        eval.obarray().symbol_value("vm-invalid-suffix-probe-ran"),
+        eval.obarray()
+            .symbol_value_copied("vm-invalid-suffix-probe-ran"),
         None
     );
 }
@@ -9261,7 +9278,7 @@ fn builtin_load_does_not_try_bare_name_when_representation_suffixes_are_nil() {
     assert_eq!(loaded, Value::NIL);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-bare-representation-probe-ran"),
+            .symbol_value_copied("vm-bare-representation-probe-ran"),
         None
     );
 }
@@ -9303,8 +9320,8 @@ fn builtin_load_finds_representation_of_already_suffixed_name() {
     assert_eq!(loaded, Value::T);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-represented-suffixed-name-ran"),
-        Some(&Value::T)
+            .symbol_value_copied("vm-represented-suffixed-name-ran"),
+        Some(Value::T)
     );
 }
 
@@ -9332,8 +9349,8 @@ fn builtin_load_must_suffix_accepts_exact_name_with_directory() {
     assert_eq!(loaded, Value::T);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-directory-qualified-probe-ran"),
-        Some(&Value::T)
+            .symbol_value_copied("vm-directory-qualified-probe-ran"),
+        Some(Value::T)
     );
 }
 
@@ -9360,8 +9377,8 @@ fn builtin_load_nosuffix_does_not_read_live_suffix_variables() {
 
     assert_eq!(loaded, Value::T);
     assert_eq!(
-        eval.obarray().symbol_value("vm-nosuffix-probe-ran"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("vm-nosuffix-probe-ran"),
+        Some(Value::T)
     );
 }
 
@@ -9502,8 +9519,8 @@ fn require_expands_tilde_load_path_entries_before_later_directories() {
 
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-shadowed-require-source")
-            .and_then(|value| (*value).as_symbol_name()),
+            .symbol_value_copied("vm-shadowed-require-source")
+            .and_then(|value| value.as_bare_symbol_name()),
         Some("local")
     );
 }
@@ -9630,8 +9647,7 @@ fn load_file_records_load_history() {
 
     let history = eval
         .obarray()
-        .symbol_value("load-history")
-        .cloned()
+        .symbol_value_copied("load-history")
         .unwrap_or(Value::NIL);
     let entries = super::super::value::list_to_vec(&history).expect("load-history is a list");
     assert!(
@@ -9645,7 +9661,7 @@ fn load_file_records_load_history() {
         Some(path_str.as_str())
     );
     assert_eq!(
-        eval.obarray().symbol_value("load-file-name").cloned(),
+        eval.obarray().symbol_value_copied("load-file-name"),
         Some(Value::NIL)
     );
 
@@ -9683,8 +9699,7 @@ fn load_file_records_gnu_style_defalias_provide_and_require_history_items() {
 
     let history = eval
         .obarray()
-        .symbol_value("load-history")
-        .cloned()
+        .symbol_value_copied("load-history")
         .unwrap_or(Value::NIL);
     let entries = list_to_vec(&history).expect("load-history is a list");
 
@@ -9756,21 +9771,20 @@ fn builtin_load_uses_hist_file_name_when_purify_flag_is_set() {
     let true_name = file.to_string_lossy().to_string();
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-purify-load-file-name-seen")
+            .symbol_value_copied("vm-purify-load-file-name-seen")
             .and_then(|value| value.as_utf8_str()),
         Some("probe.el")
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-purify-load-true-file-name-seen")
+            .symbol_value_copied("vm-purify-load-true-file-name-seen")
             .and_then(|value| value.as_utf8_str()),
         Some(true_name.as_str())
     );
 
     let current_load_list = eval
         .obarray()
-        .symbol_value("vm-purify-current-load-list-seen")
-        .cloned()
+        .symbol_value_copied("vm-purify-current-load-list-seen")
         .expect("captured current-load-list");
     let current_entries = list_to_vec(&current_load_list).expect("current-load-list is a list");
     assert_eq!(
@@ -9782,8 +9796,7 @@ fn builtin_load_uses_hist_file_name_when_purify_flag_is_set() {
 
     let history = eval
         .obarray()
-        .symbol_value("load-history")
-        .cloned()
+        .symbol_value_copied("load-history")
         .unwrap_or(Value::NIL);
     let entries = list_to_vec(&history).expect("load-history is a list");
     let first = list_to_vec(&entries[0]).expect("entry is a list");
@@ -9818,8 +9831,7 @@ fn builtin_load_records_preloaded_files_only_while_purifying() {
         .expect("load under purify-flag");
     let recorded = purifying
         .obarray()
-        .symbol_value("preloaded-file-list")
-        .cloned()
+        .symbol_value_copied("preloaded-file-list")
         .unwrap_or(Value::NIL);
     let recorded = list_to_vec(&recorded).expect("preloaded-file-list is a list");
     assert_eq!(
@@ -9836,8 +9848,7 @@ fn builtin_load_records_preloaded_files_only_while_purifying() {
     assert_eq!(
         plain
             .obarray()
-            .symbol_value("preloaded-file-list")
-            .cloned()
+            .symbol_value_copied("preloaded-file-list")
             .unwrap_or(Value::NIL),
         Value::NIL,
         "an ordinary runtime load records nothing"
@@ -9895,8 +9906,7 @@ fn require_records_the_requested_feature_name_not_the_found_path() {
 
     let recorded = eval
         .obarray()
-        .symbol_value("preloaded-file-list")
-        .cloned()
+        .symbol_value_copied("preloaded-file-list")
         .unwrap_or(Value::NIL);
     let recorded = list_to_vec(&recorded).expect("preloaded-file-list is a list");
     assert_eq!(
@@ -9907,8 +9917,7 @@ fn require_records_the_requested_feature_name_not_the_found_path() {
 
     let history = eval
         .obarray()
-        .symbol_value("load-history")
-        .cloned()
+        .symbol_value_copied("load-history")
         .unwrap_or(Value::NIL);
     let entries = list_to_vec(&history).expect("load-history is a list");
     let first =
@@ -9946,8 +9955,7 @@ fn builtin_load_prepends_history_entry_and_preserves_existing_tail() {
 
     let history = eval
         .obarray()
-        .symbol_value("load-history")
-        .cloned()
+        .symbol_value_copied("load-history")
         .unwrap_or(Value::NIL);
     let entries = list_to_vec(&history).expect("load-history is a list");
     let first = list_to_vec(&entries[0]).expect("entry is a list");
@@ -9994,8 +10002,7 @@ fn load_file_exact_gc_roots_load_history_and_after_load_filename() {
 
     let history = eval
         .obarray()
-        .symbol_value("load-history")
-        .cloned()
+        .symbol_value_copied("load-history")
         .unwrap_or(Value::NIL);
     let entries = super::super::value::list_to_vec(&history).expect("load-history is a list");
     assert!(
@@ -10010,7 +10017,7 @@ fn load_file_exact_gc_roots_load_history_and_after_load_filename() {
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-after-load-filename")
+            .symbol_value_copied("vm-after-load-filename")
             .and_then(|v| v.as_utf8_str()),
         Some(path_str.as_str())
     );
@@ -10028,12 +10035,11 @@ fn ensure_startup_compat_variables_backfills_xfaces_bootstrap_state() {
     eval.set_variable("face--new-frame-defaults", Value::NIL);
     assert_eq!(
         eval.obarray()
-            .symbol_value("face--new-frame-defaults")
-            .copied(),
+            .symbol_value_copied("face--new-frame-defaults"),
         Some(Value::NIL)
     );
     assert_eq!(
-        eval.obarray().symbol_value("doc-directory").copied(),
+        eval.obarray().symbol_value_copied("doc-directory"),
         Some(Value::NIL),
         "the bare constructor's forwarded doc-directory is bound"
     );
@@ -10042,66 +10048,62 @@ fn ensure_startup_compat_variables_backfills_xfaces_bootstrap_state() {
     ensure_startup_compat_variables(&mut eval, &project_root);
 
     assert_eq!(
-        eval.obarray().symbol_value("face-default-stipple").copied(),
+        eval.obarray().symbol_value_copied("face-default-stipple"),
         Some(Value::string("gray3"))
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("face-near-same-color-threshold")
-            .copied(),
+            .symbol_value_copied("face-near-same-color-threshold"),
         Some(Value::fixnum(30_000))
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("face-font-lax-matched-attributes")
-            .copied(),
+            .symbol_value_copied("face-font-lax-matched-attributes"),
         Some(Value::T)
     );
     assert!(
         eval.obarray()
-            .symbol_value("system-configuration")
+            .symbol_value_copied("system-configuration")
             .is_some_and(|v| v.is_string()),
         "system-configuration should be backfilled to a string"
     );
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     assert_eq!(
         eval.obarray()
-            .symbol_value("system-configuration")
+            .symbol_value_copied("system-configuration")
             .and_then(|value| value.as_utf8_str()),
         Some("x86_64-pc-linux-gnu")
     );
     assert_eq!(
-        eval.obarray().symbol_value("doc-directory").copied(),
+        eval.obarray().symbol_value_copied("doc-directory"),
         Some(Value::NIL),
         "backfilling missing variables must preserve a bound nil doc-directory"
     );
     assert!(
         eval.obarray()
-            .symbol_value("system-configuration-options")
+            .symbol_value_copied("system-configuration-options")
             .is_some_and(|v| v.is_string()),
         "system-configuration-options should be backfilled to a string"
     );
     assert!(
         eval.obarray()
-            .symbol_value("system-configuration-features")
+            .symbol_value_copied("system-configuration-features")
             .is_some_and(|v| v.is_string()),
         "system-configuration-features should be backfilled to a string"
     );
     assert!(
         eval.obarray()
-            .symbol_value("operating-system-release")
+            .symbol_value_copied("operating-system-release")
             .is_some_and(|value| value.is_nil() || value.is_string()),
         "operating-system-release should be backfilled to nil or a string"
     );
     assert_eq!(
-        eval.obarray().symbol_value("system-uses-terminfo").copied(),
+        eval.obarray().symbol_value_copied("system-uses-terminfo"),
         Some(Value::T),
         "system-uses-terminfo should match GNU terminfo builds"
     );
     assert_eq!(
-        eval.obarray()
-            .symbol_value("delayed-warnings-list")
-            .copied(),
+        eval.obarray().symbol_value_copied("delayed-warnings-list"),
         Some(Value::NIL)
     );
     assert!(
@@ -10111,8 +10113,7 @@ fn ensure_startup_compat_variables_backfills_xfaces_bootstrap_state() {
 
     let table = eval
         .obarray()
-        .symbol_value("face--new-frame-defaults")
-        .copied()
+        .symbol_value_copied("face--new-frame-defaults")
         .expect("face hash table backfilled");
     let ht = table
         .as_hash_table()
@@ -10133,17 +10134,17 @@ fn ensure_startup_compat_variables_backfills_xfaces_bootstrap_state() {
     let expected_directory = lisp_directory_name_from_host_path(&project_root.join("etc"));
     assert_eq!(
         eval.obarray()
-            .symbol_value("doc-directory")
+            .symbol_value_copied("doc-directory")
             .and_then(|value| value.as_utf8_str()),
         Some(expected_directory.as_str()),
         "real startup must initialize doc-directory from PATH_DOC"
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("doc-directory")
+            .symbol_value_copied("doc-directory")
             .and_then(|value| value.as_utf8_str()),
         eval.obarray()
-            .symbol_value("data-directory")
+            .symbol_value_copied("data-directory")
             .and_then(|value| value.as_utf8_str()),
         "PATH_DOC and PATH_DATA both refer to this tree's etc directory"
     );
@@ -10273,7 +10274,7 @@ fn runtime_identity_replaces_image_owned_user_full_name() {
     super::super::runtime_identity::install(&mut eval);
 
     assert_ne!(
-        eval.obarray().symbol_value("user-full-name").copied(),
+        eval.obarray().symbol_value_copied("user-full-name"),
         Some(stale),
         "runtime identity must replace the user full name stored in the image"
     );
@@ -10290,8 +10291,7 @@ fn runtime_identity_replaces_image_owned_operating_system_release() {
 
     assert_ne!(
         eval.obarray()
-            .symbol_value("operating-system-release")
-            .copied(),
+            .symbol_value_copied("operating-system-release"),
         Some(stale),
         "runtime identity must replace the kernel release stored in the image"
     );
@@ -10326,24 +10326,24 @@ fn nested_load_restores_parent_load_file_name() {
     let child_str = child.to_string_lossy().to_string();
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-parent-seen")
+            .symbol_value_copied("vm-parent-seen")
             .and_then(|v| v.as_utf8_str()),
         Some(parent_str.as_str())
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-child-seen")
+            .symbol_value_copied("vm-child-seen")
             .and_then(|v| v.as_utf8_str()),
         Some(child_str.as_str())
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-parent-after-child")
+            .symbol_value_copied("vm-parent-after-child")
             .and_then(|v| v.as_utf8_str()),
         Some(parent_str.as_str())
     );
     assert_eq!(
-        eval.obarray().symbol_value("load-file-name").cloned(),
+        eval.obarray().symbol_value_copied("load-file-name"),
         Some(Value::NIL),
         "load-file-name should be restored after top-level load",
     );
@@ -10391,19 +10391,19 @@ fn nested_load_exact_gc_preserves_reader_load_file_name() {
     let child_str = child.to_string_lossy().to_string();
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-parent-reader-before")
+            .symbol_value_copied("vm-parent-reader-before")
             .and_then(|v| v.as_utf8_str()),
         Some(parent_str.as_str())
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-child-reader")
+            .symbol_value_copied("vm-child-reader")
             .and_then(|v| v.as_utf8_str()),
         Some(child_str.as_str())
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-parent-reader-after")
+            .symbol_value_copied("vm-parent-reader-after")
             .and_then(|v| v.as_utf8_str()),
         Some(parent_str.as_str())
     );
@@ -10434,14 +10434,14 @@ fn load_replaces_t_user_init_file_with_found_filename() {
     let expected = crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&file);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-user-init-file-seen")
+            .symbol_value_copied("vm-user-init-file-seen")
             .and_then(|value| value.as_utf8_str()),
         Some(expected.as_str()),
         "the init file must see its resolved filename while loading",
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("user-init-file")
+            .symbol_value_copied("user-init-file")
             .and_then(|value| value.as_utf8_str()),
         Some(expected.as_str()),
         "the resolved filename must persist after loading",
@@ -10470,8 +10470,7 @@ fn after_load_error_formatting_handles_raw_unibyte_signal_names() {
     assert_eq!(loaded, Value::T);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-after-load-raw-signal-file-loaded")
-            .copied(),
+            .symbol_value_copied("vm-after-load-raw-signal-file-loaded"),
         Some(Value::T),
     );
 }
@@ -10494,8 +10493,8 @@ fn load_file_binds_load_true_file_name_and_current_load_list() {
     .expect("write fixture");
 
     let mut eval = super::super::eval::Context::new();
-    let old_load_true_file = eval.obarray().symbol_value("load-true-file-name").cloned();
-    let old_current_load_list = eval.obarray().symbol_value("current-load-list").cloned();
+    let old_load_true_file = eval.obarray().symbol_value_copied("load-true-file-name");
+    let old_current_load_list = eval.obarray().symbol_value_copied("current-load-list");
 
     let loaded = load_file(&mut eval, &file).expect("load fixture");
     assert_eq!(loaded, Value::T);
@@ -10503,15 +10502,14 @@ fn load_file_binds_load_true_file_name_and_current_load_list() {
     let file_str = file.to_string_lossy().to_string();
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-load-true-file-name-seen")
+            .symbol_value_copied("vm-load-true-file-name-seen")
             .and_then(|v| v.as_utf8_str()),
         Some(file_str.as_str())
     );
 
     let current_load_list = eval
         .obarray()
-        .symbol_value("vm-current-load-list-seen")
-        .copied()
+        .symbol_value_copied("vm-current-load-list-seen")
         .expect("load should capture current-load-list");
     let entries = list_to_vec(&current_load_list).expect("current-load-list should be a list");
     let first = entries
@@ -10521,12 +10519,12 @@ fn load_file_binds_load_true_file_name_and_current_load_list() {
     assert_eq!(first.as_utf8_str(), Some(file_str.as_str()));
 
     assert_eq!(
-        eval.obarray().symbol_value("load-true-file-name").cloned(),
+        eval.obarray().symbol_value_copied("load-true-file-name"),
         old_load_true_file.or(Some(Value::NIL)),
         "load-true-file-name should be restored after top-level load",
     );
     assert_eq!(
-        eval.obarray().symbol_value("current-load-list").cloned(),
+        eval.obarray().symbol_value_copied("current-load-list"),
         old_current_load_list,
         "current-load-list should be restored after top-level load",
     );
@@ -10558,7 +10556,7 @@ fn builtin_load_file_accepts_raw_unibyte_filename_values() {
         .expect("load-file should accept raw unibyte filename values");
     assert_eq!(loaded, Value::T);
     assert_eq!(
-        eval.obarray().symbol_value("vm-load-file-raw-ran").copied(),
+        eval.obarray().symbol_value_copied("vm-load-file-raw-ran"),
         Some(Value::T)
     );
 
@@ -10588,9 +10586,7 @@ fn load_file_accepts_shebang_and_honors_second_line_lexical_binding_cookie() {
     let loaded = load_file(&mut eval, &file).expect("load shebang fixture");
     assert_eq!(loaded, Value::T);
     assert_eq!(
-        eval.obarray()
-            .symbol_value("vm-load-shebang-probe")
-            .cloned(),
+        eval.obarray().symbol_value_copied("vm-load-shebang-probe"),
         Some(Value::T),
         "second-line lexical-binding cookie should set lexical-binding to t during load",
     );
@@ -10631,8 +10627,7 @@ fn load_file_does_not_enable_lexical_binding_from_non_cookie_second_line_text() 
     assert_eq!(loaded, Value::T);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-load-shebang-false-probe")
-            .cloned(),
+            .symbol_value_copied("vm-load-shebang-false-probe"),
         Some(Value::NIL),
         "non-cookie second-line text must not flip lexical-binding to t",
     );
@@ -10734,8 +10729,7 @@ fn nested_source_load_preserves_current_buffer_local_lexical_binding() {
     load_file(&mut eval, &parent).expect("load parent fixture");
     let loaded = eval
         .obarray()
-        .symbol_value("vm-nested-load-result")
-        .cloned()
+        .symbol_value_copied("vm-nested-load-result")
         .expect("parent should store result list");
     let payload = list_to_vec(&loaded).expect("parent should store a list");
     assert_eq!(
@@ -10765,12 +10759,12 @@ fn load_file_accepts_utf8_bom_prefixed_source() {
     let loaded = load_file(&mut eval, &file).expect("load bom fixture");
     assert_eq!(loaded, Value::T);
     assert_eq!(
-        eval.obarray().symbol_value("vm-load-bom-probe").cloned(),
+        eval.obarray().symbol_value_copied("vm-load-bom-probe"),
         Some(Value::symbol("ok")),
         "utf-8 bom should be ignored by reader before first form",
     );
     assert_eq!(
-        eval.obarray().symbol_value("vm-load-bom-flag").cloned(),
+        eval.obarray().symbol_value_copied("vm-load-bom-flag"),
         Some(Value::T)
     );
 
@@ -10798,8 +10792,7 @@ fn load_file_preserves_literal_carriage_return_inside_string() {
     assert_eq!(loaded, Value::T);
     let value = eval
         .obarray()
-        .symbol_value("vm-load-cr-string")
-        .copied()
+        .symbol_value_copied("vm-load-cr-string")
         .expect("loaded string binding");
     let ls = value.as_lisp_string().expect("loaded string");
     assert_eq!(
@@ -10832,8 +10825,7 @@ fn load_file_normalizes_crlf_source_before_reading_forms() {
     assert_eq!(loaded, Value::T);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-load-crlf-line-continuation")
-            .cloned(),
+            .symbol_value_copied("vm-load-crlf-line-continuation"),
         Some(Value::string("alphabeta")),
         "source loading should apply GNU-style CRLF decoding before Lisp reading"
     );
@@ -10861,9 +10853,7 @@ fn load_file_reads_utf8_emacs_extended_char_literals() {
     let loaded = load_file(&mut eval, &file).expect("load utf-8-emacs source fixture");
     assert_eq!(loaded, Value::T);
     assert_eq!(
-        eval.obarray()
-            .symbol_value("vm-load-extended-char")
-            .cloned(),
+        eval.obarray().symbol_value_copied("vm-load-extended-char"),
         Some(Value::fixnum(0x1A_01CA)),
         "source loading should preserve GNU utf-8-emacs non-Unicode character literals"
     );
@@ -11060,7 +11050,7 @@ fn load_elc_is_supported() {
         result.err()
     );
     assert_eq!(
-        eval.obarray().symbol_value("vm-elc-loaded").cloned(),
+        eval.obarray().symbol_value_copied("vm-elc-loaded"),
         Some(Value::T),
     );
 
@@ -11090,8 +11080,7 @@ fn load_elc_preserves_unibyte_reader_literals() {
 
     let raw = eval
         .obarray()
-        .symbol_value("vm-elc-raw")
-        .copied()
+        .symbol_value_copied("vm-elc-raw")
         .expect("load should set vm-elc-raw");
     let text = raw
         .as_lisp_string()
@@ -11099,7 +11088,7 @@ fn load_elc_preserves_unibyte_reader_literals() {
     assert!(!text.is_multibyte());
     assert_eq!(text.as_bytes(), &[0xFF]);
     assert_eq!(
-        eval.obarray().symbol_value("vm-elc-char").cloned(),
+        eval.obarray().symbol_value_copied("vm-elc-char"),
         Some(Value::fixnum(255))
     );
 
@@ -11358,7 +11347,7 @@ fn direct_hook_runtime_accepts_bootstrap_uninterned_symbol_hook_members() {
     .expect("direct hook runtime should run uninterned hook symbol");
 
     assert_eq!(
-        eval.obarray().symbol_value("test-hook-result").copied(),
+        eval.obarray().symbol_value_copied("test-hook-result"),
         Some(Value::fixnum(42)),
         "direct hook runtime should funcall uninterned hook members"
     );
@@ -11406,7 +11395,7 @@ fn bootstrap_lisp_run_hook_with_args_accepts_uninterned_symbol_after_setup_eval(
         .expect("separate bootstrap run-hook-with-args call should work");
 
     assert_eq!(
-        eval.obarray().symbol_value("test-hook-result").copied(),
+        eval.obarray().symbol_value_copied("test-hook-result"),
         Some(Value::fixnum(42)),
         "separate Lisp eval should still funcall uninterned hook members"
     );
@@ -11429,7 +11418,7 @@ fn uninterned_symbol_in_hook_works() {
     )
     .expect("hook with uninterned symbol should work");
 
-    let result = eval.obarray().symbol_value("test-hook-result").cloned();
+    let result = eval.obarray().symbol_value_copied("test-hook-result");
     assert!(
         result.is_some_and(|v| v == Value::fixnum(42)),
         "hook with uninterned symbol should fire"
@@ -11483,7 +11472,7 @@ fn elc_loading_defines_defcustom_variables() {
     // Check that general-default-states is defined (defcustom)
     let bound = eval
         .obarray()
-        .symbol_value("general-default-states")
+        .symbol_value_copied("general-default-states")
         .is_some();
     let special = eval.obarray().is_special("general-default-states");
     eprintln!("general-default-states: bound={bound}, special={special}");
@@ -11497,7 +11486,7 @@ fn elc_loading_defines_defcustom_variables() {
         "general-default-prefix",
         "general-default-keymaps",
     ] {
-        let b = eval.obarray().symbol_value(var).is_some();
+        let b = eval.obarray().symbol_value_copied(var).is_some();
         let s = eval.obarray().is_special(var);
         let fbound = eval.obarray().symbol_function(var).is_some();
         eprintln!("  {var}: bound={b}, special={s}, fbound={fbound}");
@@ -11534,11 +11523,11 @@ fn elc_loading_defines_defcustom_variables() {
 
     let gds_bound = eval
         .obarray()
-        .symbol_value("general-default-states")
+        .symbol_value_copied("general-default-states")
         .is_some();
     let gik_bound = eval
         .obarray()
-        .symbol_value("general-implicit-kbd")
+        .symbol_value_copied("general-implicit-kbd")
         .is_some();
     eprintln!(
         "After Form 0: general-default-states bound={gds_bound}, general-implicit-kbd bound={gik_bound}"
@@ -13101,7 +13090,10 @@ conveniently adding tool bar items."
         .expect("macroexpand tool-bar define-minor-mode");
     tracing::info!("tool-bar probe: macroexpand complete");
     if let Some(forms) = list_to_vec(&expanded) {
-        if forms.first().is_some_and(|v| v.is_symbol_named("progn")) {
+        if forms
+            .first()
+            .is_some_and(|v| v.is_bare_symbol_named("progn"))
+        {
             for (idx, form) in forms.iter().enumerate().skip(1) {
                 tracing::info!("tool-bar probe: eval expanded subform {}", idx);
                 eval.eval_form(*form).unwrap_or_else(|err| {
@@ -13164,8 +13156,9 @@ fn evaluator_bootstrap_binds_default_frame_scroll_bars_like_gnu_frame_c() {
     crate::test_utils::init_test_tracing();
     let eval = Context::new();
     assert_eq!(
-        eval.obarray.symbol_value("default-frame-scroll-bars"),
-        Some(&Value::symbol("right"))
+        eval.obarray
+            .symbol_value_copied("default-frame-scroll-bars"),
+        Some(Value::symbol("right"))
     );
 }
 
@@ -13202,7 +13195,7 @@ fn auth_source_backend_exposes_type_slot() {
     assert!(
         slot_names
             .iter()
-            .any(|value| value.as_symbol_name() == Some("type")),
+            .any(|value| value.as_bare_symbol_name() == Some("type")),
         "expected auth-source-backend slots to include `type`, got {:?}, require_error={require_error:?}",
         slot_names,
     );
@@ -14768,15 +14761,17 @@ fn generated_loaddefs_replays_metadata_forms_on_bootstrap_runtime_surface() {
         .symbol_function("vm-generated-fn")
         .expect("autoload function cell");
     assert!(
-        crate::emacs_core::autoload::is_autoload_value(&autoload),
+        crate::emacs_core::autoload::is_autoload_value(
+            &autoload,
+            crate::tagged::value::SymbolMode::Bare
+        ),
         "autoload form should be installed"
     );
 
     let prefixes = crate::emacs_core::builtins::builtin_gethash(vec![
         Value::string("vm-generated-"),
         eval.obarray()
-            .symbol_value("definition-prefixes")
-            .copied()
+            .symbol_value_copied("definition-prefixes")
             .expect("definition-prefixes table"),
     ])
     .expect("gethash definition-prefixes");
@@ -15029,8 +15024,7 @@ fn runtime_finalize_resets_gensym_counter_like_gnu_dump() {
     .expect("finalize runtime image");
     assert_eq!(
         eval.obarray()
-            .symbol_value("gensym-counter")
-            .copied()
+            .symbol_value_copied("gensym-counter")
             .expect("gensym-counter should be bound"),
         Value::fixnum(0)
     );
@@ -15824,8 +15818,8 @@ fn runtime_image_loads_from_path_exec_when_nothing_sits_beside_the_executable() 
     assert_eq!(
         loaded
             .obarray()
-            .symbol_value("path-exec-runtime-image-test-var"),
-        Some(&Value::fixnum(218))
+            .symbol_value_copied("path-exec-runtime-image-test-var"),
+        Some(Value::fixnum(218))
     );
 }
 
@@ -15852,10 +15846,7 @@ fn final_runtime_image_activation_restores_the_gnu_eval_depth() {
     .expect("load final runtime image");
 
     assert_eq!(
-        loaded
-            .obarray()
-            .symbol_value("max-lisp-eval-depth")
-            .copied(),
+        loaded.obarray().symbol_value_copied("max-lisp-eval-depth"),
         Some(Value::fixnum(1600))
     );
 }

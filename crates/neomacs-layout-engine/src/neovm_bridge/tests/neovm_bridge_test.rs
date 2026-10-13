@@ -1732,7 +1732,7 @@ fn fragmented_snapshot_backend_trace(kind: BufferTextBackendKind) -> LayoutSnaps
             .map(|pos| {
                 snapshot
                     .layout_text_prop_at_emacs_byte_pos(EmacsBytePos::new(pos), face)
-                    .and_then(|value| value.as_symbol_name().map(str::to_owned))
+                    .and_then(|value| value.as_bare_symbol_name().map(str::to_owned))
             })
             .collect(),
         next_prop_changes: byte_boundaries
@@ -1948,7 +1948,7 @@ fn buffer_invisible_ellipsis_text_reads_display_table_slot() {
         Value::fixnum(' ' as i64),
     ]);
     table
-        .with_char_table_mut(|obj| obj.extras.ensure_owned()[4] = glyphs)
+        .with_char_table_mut(|obj| obj.set_extra(4, glyphs))
         .expect("char-table");
 
     if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {

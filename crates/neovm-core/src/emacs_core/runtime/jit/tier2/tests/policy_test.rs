@@ -25,7 +25,7 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     f
 }
@@ -73,7 +73,7 @@ fn run(
     args: &[Value],
 ) -> Value {
     Value::from_bits(
-        cache::try_run_compiled(ctx, f, Value::NIL, args)
+        crate::emacs_core::jit::test_support::run_compiled(ctx, f, Value::NIL, args)
             .unwrap()
             .unwrap(),
     )
@@ -124,6 +124,8 @@ fn tier2_policy_requires_a_stable_work_window() {
     run(&mut ctx, &f, &[]);
     assert!(old.obs.t2.due().is_some());
     run(&mut ctx, &f, &[]);
+    // Observe publication of the actual queued upgrade, without another body.
+    crate::emacs_core::jit::test_support::settle(&mut ctx);
     assert!(!std::ptr::eq(old, current(&f)));
     assert_eq!(
         old.obs.t2.reserved_us.get(),
@@ -186,6 +188,8 @@ fn tier2_policy_budget_denial_rearms_current_native_leaf() {
     run(&mut ctx, &f, &[]);
     assert!(old.obs.t2.due().is_some());
     run(&mut ctx, &f, &[]);
+    // Observe publication of the actual queued upgrade, without another body.
+    crate::emacs_core::jit::test_support::settle(&mut ctx);
     assert!(!std::ptr::eq(old, current(&f)));
     force_tier2_for_test(None);
     force_tier2_policy_for_test(None);
@@ -201,6 +205,9 @@ fn tier2_loop_second_call_uses_upgrade_without_changing_polls() {
     run(&mut ctx, &f, &[Value::make_int(1_000_000)]);
     let t1 = current(&f);
     assert_eq!(t1.obs.t2.due(), Some(T2Upgrade::Feedback));
+    // Stage the due upgrade through production admission without executing a
+    // third loop; the second observed activation must run the installed T2.
+    crate::emacs_core::jit::test_support::prepare_upgrade(&mut ctx, &f);
     crate::emacs_core::eval::reset_bytecode_branch_poll_count();
     run(&mut ctx, &f, &[Value::make_int(1_000_000)]);
     let t2 = current(&f);
@@ -231,6 +238,8 @@ fn tier2_deopt_reverts_and_preserves_retreat_and_ban() {
     run(&mut ctx, &f, &[Value::make_int(10)]);
     run(&mut ctx, &f, &[Value::make_int(10)]);
     let t1 = current(&f);
+    assert!(t1.obs.t2.due().is_some());
+    crate::emacs_core::jit::test_support::prepare_upgrade(&mut ctx, &f);
     run(&mut ctx, &f, &[Value::make_int(10)]);
     let t2 = current(&f);
     assert_ne!(std::ptr::from_ref(t1), std::ptr::from_ref(t2));
@@ -328,6 +337,8 @@ fn tier2_policy_due_upgrade_rechecks_budget_at_compile_seam() {
     run(&mut ctx, &f, &[]);
     assert!(old.obs.t2.due().is_some());
     run(&mut ctx, &f, &[]);
+    // Observe publication of the actual queued upgrade, without another body.
+    crate::emacs_core::jit::test_support::settle(&mut ctx);
     assert!(!std::ptr::eq(old, current(&f)));
     force_tier2_for_test(None);
     force_tier2_policy_for_test(None);

@@ -19,6 +19,7 @@ use malachite::integer::Integer;
 // imports removed — using emacs_char + Vec<u8> directly
 use super::emacs_char;
 use crate::buffer::{Buffer, EmacsByteLen, EmacsBytePos, EmacsByteRange};
+use crate::tagged::SymbolMode;
 use smallvec::SmallVec;
 use std::cell::Cell;
 
@@ -170,6 +171,24 @@ pub fn read_one_with_locate_syms(
     locate_syms: bool,
     obarray: &super::symbol::Obarray,
 ) -> Result<Option<(Value, usize)>, ReadError> {
+    read_one_with_locate_syms_with_symbols(
+        input,
+        source_multibyte,
+        start,
+        locate_syms,
+        obarray,
+        SymbolMode::Bare,
+    )
+}
+
+pub fn read_one_with_locate_syms_with_symbols(
+    input: &str,
+    source_multibyte: bool,
+    start: usize,
+    locate_syms: bool,
+    obarray: &super::symbol::Obarray,
+    mode: SymbolMode,
+) -> Result<Option<(Value, usize)>, ReadError> {
     let mut reader = Reader::new(
         input,
         ReaderSourceSemantics::for_lisp_object(source_multibyte),
@@ -178,6 +197,7 @@ pub fn read_one_with_locate_syms(
     reader.pos = start;
     reader.readchar_offset_origin = ReadcharOffsetOrigin::RelativeToSourceByte(start);
     reader.locate_syms = locate_syms;
+    reader.symbol_mode = mode;
     if !reader.skip_ws_and_comments() {
         return Ok(None);
     }
@@ -191,16 +211,18 @@ pub fn read_one_with_locate_syms(
 /// it does not copy the accessible region into a temporary string on each
 /// `(read (current-buffer))`.  Keep the same model here so repeated buffer
 /// reads, such as `unidata-gen.el`, advance through the original buffer.
-pub(crate) fn read_one_from_buffer_with_locate_syms(
+pub(crate) fn read_one_from_buffer_with_locate_syms_with_symbols(
     buffer: &Buffer,
     range: EmacsByteRange,
     readchar_offset_origin: BufferReadcharOffsetOrigin,
     locate_syms: bool,
     obarray: &super::symbol::Obarray,
     shorthands: Option<&ReadSymbolShorthands>,
+    mode: SymbolMode,
 ) -> Result<(Option<Value>, EmacsBytePos), ReadError> {
     let mut reader = Reader::new_buffer(buffer, range, readchar_offset_origin, obarray);
     reader.locate_syms = locate_syms;
+    reader.symbol_mode = mode;
     reader.shorthands = shorthands;
     if !reader.skip_ws_and_comments() {
         return Ok((None, EmacsBytePos::new(reader.pos)));
@@ -299,19 +321,38 @@ impl<'a> LispReadSource<'a> {
         locate_syms: bool,
         obarray: &super::symbol::Obarray,
     ) -> Result<Option<(Value, usize)>, ReadError> {
-        self.read_one_range_with_locate_syms(start, self.logical_len(), locate_syms, obarray, None)
+        self.read_one_with_locate_syms_with_symbols(start, locate_syms, obarray, SymbolMode::Bare)
     }
 
-    pub(crate) fn read_one_range_with_locate_syms(
+    pub fn read_one_with_locate_syms_with_symbols(
+        &self,
+        start: usize,
+        locate_syms: bool,
+        obarray: &super::symbol::Obarray,
+        mode: SymbolMode,
+    ) -> Result<Option<(Value, usize)>, ReadError> {
+        self.read_one_range_with_locate_syms_with_symbols(
+            start,
+            self.logical_len(),
+            locate_syms,
+            obarray,
+            None,
+            mode,
+        )
+    }
+
+    pub(crate) fn read_one_range_with_locate_syms_with_symbols(
         &self,
         start: usize,
         end: usize,
         locate_syms: bool,
         obarray: &super::symbol::Obarray,
         shorthands: Option<&ReadSymbolShorthands>,
+        mode: SymbolMode,
     ) -> Result<Option<(Value, usize)>, ReadError> {
         let mut reader = Reader::new_lisp_string(self.input, start, end, obarray);
         reader.locate_syms = locate_syms;
+        reader.symbol_mode = mode;
         reader.shorthands = shorthands;
         if !reader.skip_ws_and_comments() {
             return Ok(None);
@@ -454,6 +495,8 @@ struct Reader<'a> {
     read_labels: std::collections::HashMap<usize, Value>,
     /// When true, wrap interned symbols in symbol-with-pos objects.
     locate_syms: bool,
+    /// Dynamic SYMBOLP/EQ policy, supplied by the user-facing reader boundary.
+    symbol_mode: SymbolMode,
     /// Coordinate origin for `symbol-with-pos-pos`.  GNU initializes its
     /// character counter to the absolute point for buffer streams and zero
     /// for strings, markers, functions, and files.
@@ -533,7 +576,7 @@ fn substitute_read_placeholder_recurse(
         return object;
     }
 
-    if subtree.is_symbol() || subtree.is_number() {
+    if subtree.is_bare_symbol() || subtree.is_number() {
         return subtree;
     }
 
@@ -598,6 +641,7 @@ impl<'a> Reader<'a> {
             limit: input.len(),
             read_labels: std::collections::HashMap::new(),
             locate_syms: false,
+            symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(0),
             obarray,
             shorthands: None,
@@ -617,6 +661,7 @@ impl<'a> Reader<'a> {
             limit: input.len(),
             read_labels: std::collections::HashMap::new(),
             locate_syms: false,
+            symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(0),
             obarray,
             shorthands: None,
@@ -643,6 +688,7 @@ impl<'a> Reader<'a> {
             limit: end,
             read_labels: std::collections::HashMap::new(),
             locate_syms: false,
+            symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(start),
             obarray,
             shorthands: None,
@@ -671,6 +717,7 @@ impl<'a> Reader<'a> {
             limit: end,
             read_labels: std::collections::HashMap::new(),
             locate_syms: false,
+            symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: match readchar_offset_origin {
                 BufferReadcharOffsetOrigin::BufferPoint => {
                     ReadcharOffsetOrigin::AbsoluteBufferPosition
@@ -819,7 +866,7 @@ impl<'a> Reader<'a> {
 
         // Wrap symbols with their source position when locate_syms is active.
         // Matches GNU read0: SYMBOLP(val) && !NILP(val).
-        if self.locate_syms && value.is_symbol() && !value.is_nil() {
+        if self.locate_syms && value.is_bare_symbol() && !value.is_nil() {
             let pos_val = Value::fixnum(self.symbol_position(form_start) as i64);
             Ok(crate::tagged::gc::with_tagged_heap(|heap| {
                 heap.alloc_symbol_with_pos(value, pos_val)
@@ -1770,7 +1817,10 @@ impl<'a> Reader<'a> {
                 let result = if is_sub_char_table {
                     crate::emacs_core::chartable::make_sub_char_table_from_external_slots(&items)
                 } else {
-                    crate::emacs_core::chartable::make_char_table_from_external_slots(&items)
+                    crate::emacs_core::chartable::make_char_table_from_external_slots_with_symbols(
+                        &items,
+                        self.symbol_mode,
+                    )
                 }
                 .map_err(|msg| self.error(&msg));
                 restore_scratch_gc_roots(saved);
@@ -1811,8 +1861,7 @@ impl<'a> Reader<'a> {
                 let sym_id = super::intern::intern("load-file-name");
                 Ok(self
                     .obarray
-                    .symbol_value_id(sym_id)
-                    .copied()
+                    .symbol_value_id_copied(sym_id)
                     .unwrap_or(Value::NIL))
             }
             x if x == b'#' as u32 => {
@@ -2100,7 +2149,7 @@ impl<'a> Reader<'a> {
         // Check if first element is the symbol `hash-table`
         let is_hash_table = items
             .first()
-            .is_some_and(|v| v.is_symbol_named("hash-table"));
+            .is_some_and(|v| v.is_bare_symbol_named("hash-table"));
 
         if is_hash_table {
             let result = self.read_hash_table_literal_from_plist(&items[1..]);
@@ -2123,7 +2172,7 @@ impl<'a> Reader<'a> {
         if let Some(test_value) = plist_get(plist, HashTableLiteralKey::Test)
             && !test_value.is_nil()
         {
-            let Some(name) = test_value.as_symbol_name() else {
+            let Some(name) = test_value.as_bare_symbol_name() else {
                 return Err(self.signal_error(
                     "wrong-type-argument",
                     vec![Value::symbol("symbolp"), test_value],
@@ -2154,7 +2203,7 @@ impl<'a> Reader<'a> {
             Some(value) if value.is_nil() => None,
             Some(value) if value.is_t() => Some(HashTableWeakness::KeyAndValue),
             Some(value) => {
-                let Some(name) = value.as_symbol_name() else {
+                let Some(name) = value.as_bare_symbol_name() else {
                     return Err(self.signal_error(
                         "error",
                         vec![Value::string("Invalid hash table weakness"), value],
@@ -2460,7 +2509,7 @@ impl<'a> Reader<'a> {
 
     fn read_circle_enabled(&self) -> bool {
         self.obarray
-            .symbol_value("read-circle")
+            .symbol_value_copied("read-circle")
             .is_none_or(|value| !value.is_nil())
     }
 

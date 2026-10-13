@@ -1,5 +1,7 @@
 //! Native generational stores retain the same collection-read dependencies
-//! as the mutation helpers used by the interpreter.
+//! as the mutation helpers used by the interpreter. Like GEN0, an observed
+//! owner refuses to its collection shim, which journals it; an unobserved
+//! owner stays inline.
 
 use super::*;
 use crate::tagged::collection_reads::capture;
@@ -30,14 +32,15 @@ fn generational_inline_cons_stores_invalidate_collection_read_certificates() {
             reads.unchanged(),
             "an unrelated native store preserves reuse"
         );
+        assert_eq!(cons_shims(), before, "the unobserved owner stays inline");
         let revision = LispCollectionRevision::current();
         native(&mut context, &leaf, &[owner, Value::make_int(8)]);
         assert_ne!(LispCollectionRevision::current(), revision);
         assert!(!reads.unchanged(), "the observed native owner changed");
         assert_eq!(
             cons_shims(),
-            before,
-            "the journal does not outline the store"
+            before + 1,
+            "the observed owner journals in its collection shim"
         );
 
         let (_, reads) = capture(|| {
@@ -82,7 +85,11 @@ fn generational_constant_fixnum_store_keeps_collection_history() {
     let (_, reads) = capture(|| owner.cons_car());
     let before = cons_shims();
     assert_eq!(native(&mut context, &leaf, &[owner]), Value::make_int(12));
-    assert_eq!(cons_shims(), before);
+    assert_eq!(
+        cons_shims(),
+        before + 1,
+        "the observed owner journals in the shim"
+    );
     assert!(!reads.expect("coherent read").unchanged());
     context.restore_specpdl_roots(roots);
 }
@@ -119,7 +126,8 @@ fn generational_inline_aset_invalidates_vector_and_record_certificates() {
         native(&mut context, &leaf, &[owner, index, Value::make_int(2)]);
         assert_eq!(
             super::super::dispatch::ASET_SHIM_CALLS.with(|count| count.get()),
-            before
+            before + 1,
+            "the observed owner journals in the aset shim"
         );
         assert_ne!(LispCollectionRevision::current(), revision);
         assert!(!reads.expect("coherent array read").unchanged());
@@ -150,7 +158,11 @@ fn generational_inline_blv_stores_invalidate_collection_read_certificates() {
             native(&mut context, &leaf, &[Value::make_int(27)]),
             Value::make_int(27)
         );
-        assert_eq!(VARSET_SHIM_CALLS.with(|count| count.get()), before);
+        assert_eq!(
+            VARSET_SHIM_CALLS.with(|count| count.get()),
+            before + 1,
+            "the observed BLV cell journals in the varset shim"
+        );
         assert!(!reads.expect("coherent BLV cell read").unchanged());
     }
 }

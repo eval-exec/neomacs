@@ -272,7 +272,8 @@ pub(super) fn define_split(
     // portable payload may go: another module could not link the rest.
     let mut payload = payload;
     if payload.portable
-        && let Some((class, route)) = crate::emacs_core::jit::bg::defer_route()
+        && let Some((class, route)) =
+            crate::emacs_core::jit::bg::defer_route(payload.func.dfg.num_insts() as u64)
     {
         use crate::emacs_core::jit::bg::{self, DeferRoute};
         let pending = JitDefined {
@@ -454,7 +455,8 @@ pub(super) fn define_split_selected(
     // portable payload may go: another module could not link the rest.
     let mut payload = payload;
     if payload.portable
-        && let Some((class, route)) = crate::emacs_core::jit::bg::defer_route()
+        && let Some((class, route)) =
+            crate::emacs_core::jit::bg::defer_route(payload.func.dfg.num_insts() as u64)
     {
         use crate::emacs_core::jit::bg::{self, DeferRoute};
         let pending = JitDefined {

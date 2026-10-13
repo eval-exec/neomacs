@@ -325,7 +325,7 @@ fn windows_recursive_watch_delivers_an_ordered_rename_pair() {
             .iter()
             .filter(|fields| {
                 matches!(
-                    fields.get(1).and_then(|value| value.as_symbol_name()),
+                    fields.get(1).and_then(|value| value.as_bare_symbol_name()),
                     Some("renamed-from" | "renamed-to")
                 )
             })
@@ -336,7 +336,7 @@ fn windows_recursive_watch_delivers_an_ordered_rename_pair() {
         .iter()
         .filter(|fields| {
             matches!(
-                fields.get(1).and_then(|value| value.as_symbol_name()),
+                fields.get(1).and_then(|value| value.as_bare_symbol_name()),
                 Some("renamed-from" | "renamed-to")
             )
         })
@@ -410,7 +410,7 @@ fn windows_file_watch_preserves_a_rename_to_a_different_name() {
             .iter()
             .filter(|fields| {
                 matches!(
-                    fields.get(1).and_then(|value| value.as_symbol_name()),
+                    fields.get(1).and_then(|value| value.as_bare_symbol_name()),
                     Some("renamed-from" | "renamed-to")
                 )
             })
@@ -421,7 +421,7 @@ fn windows_file_watch_preserves_a_rename_to_a_different_name() {
         .iter()
         .filter(|fields| {
             matches!(
-                fields.get(1).and_then(|value| value.as_symbol_name()),
+                fields.get(1).and_then(|value| value.as_bare_symbol_name()),
                 Some("renamed-from" | "renamed-to")
             )
         })

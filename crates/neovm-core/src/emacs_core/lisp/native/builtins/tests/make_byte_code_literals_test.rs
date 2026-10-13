@@ -1,45 +1,45 @@
-//! `make-byte-code` reifies `(make-hash-table-from-literal '(hash-table ...))`
-//! forms in its constant vector (how `.elc` files carry hash-table
-//! literals) and leaves every other constant alone.
+//! `make-byte-code` stores its constant vector verbatim, as GNU
+//! `Fmake_byte_code` (alloc.c) does with `Fvector`: list constants shaped
+//! like `(make-hash-table-from-literal ...)` stay ordinary lists.
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
 #[test]
-fn make_byte_code_converts_only_hash_table_literal_forms() {
+fn make_byte_code_keeps_literal_shaped_constants_verbatim() {
+    // A bare Context has no macros (no dotimes/unless), so the form sticks
+    // to special forms and subrs.
     let mut ctx = Context::new();
-    let f = ctx
+    // GNU 31.1 answers (t t t make-hash-table-from-literal) for this form.
+    let result = ctx
         .eval_str(
-            "(let ((circular (list 'mbl-head 1)))
-               (setcdr (cdr circular) circular)
-               (make-byte-code 0 \"\\300\\207\"
-                 (vector
-                  '(make-hash-table-from-literal '(hash-table test eq data (mbl-k 1)))
-                  (list (make-symbol \"make-hash-table-from-literal\")
-                        ''(hash-table data (mbl-k 2)))
-                  '(mbl-other '(hash-table data (mbl-k 3)))
-                  '(make-hash-table-from-literal)
-                  '(make-hash-table-from-literal . improper)
-                  '(1 . 2)
-                  circular)
-                 1))",
+            "(let* ((circular (list 'mbl-head 1))
+                    (_ (setcdr (cdr circular) circular))
+                    (literal '(make-hash-table-from-literal
+                               '(hash-table test eq data (mbl-k 1))))
+                    (vec (vector
+                          literal
+                          (list (make-symbol \"make-hash-table-from-literal\")
+                                ''(hash-table data (mbl-k 2)))
+                          '(mbl-other '(hash-table data (mbl-k 3)))
+                          '(make-hash-table-from-literal)
+                          '(make-hash-table-from-literal . improper)
+                          '(1 . 2)
+                          circular))
+                    (constants (aref (make-byte-code 0 \"\\300\\207\" vec 1) 2)))
+               (list (eq constants vec)
+                     (let ((all-conses t) (i 0))
+                       (while (< i (length constants))
+                         (if (consp (aref constants i)) nil (setq all-conses nil))
+                         (setq i (1+ i)))
+                       all-conses)
+                     (eq (aref constants 0) literal)
+                     (car (aref constants 0))))",
         )
         .expect("make-byte-code");
-    crate::emacs_core::eval::push_scratch_gc_root(f);
-    let constants = f.get_bytecode_data().unwrap().constants.to_vec();
-    // The interned head, and an uninterned symbol of the same name (the
-    // conversion has always matched the name), become tables.
-    for (index, want) in [(0, 1), (1, 2)] {
-        let table = constants[index];
-        assert!(table.is_hash_table(), "constant {index}: {table:?}");
-        let table = table.as_hash_table().unwrap();
-        let key = Value::symbol("mbl-k").to_hash_key(&table.test);
-        let got = table.data.get(&key).copied();
-        assert_eq!(got, Some(Value::fixnum(want)), "constant {index}");
-    }
-    // Everything else stays the very same object.
-    for (index, constant) in constants.iter().enumerate().skip(2) {
-        assert!(constant.is_cons(), "constant {index}: {constant:?}");
-    }
-    assert_eq!(constants[2].cons_car(), Value::symbol("mbl-other"));
-    assert_eq!(constants[6].cons_car(), Value::symbol("mbl-head"));
+    let items = crate::emacs_core::value::list_to_vec(&result).expect("result list");
+    assert_eq!(items.len(), 4, "{result:?}");
+    assert_eq!(items[0], Value::T, "constants vector identity");
+    assert_eq!(items[1], Value::T, "every constant stays a cons");
+    assert_eq!(items[2], Value::T, "literal-shaped constant identity");
+    assert_eq!(items[3], Value::symbol("make-hash-table-from-literal"));
 }

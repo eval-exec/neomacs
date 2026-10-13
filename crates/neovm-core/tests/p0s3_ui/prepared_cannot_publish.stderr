@@ -1,0 +1,5 @@
+error[E0599]: no method named `publish` found for struct `PreparedRootBatch` in the current scope
+ --> tests/p0s3_ui/prepared_cannot_publish.rs:4:22
+  |
+4 |     let _ = prepared.publish();
+  |                      ^^^^^^^ method not found in `PreparedRootBatch`

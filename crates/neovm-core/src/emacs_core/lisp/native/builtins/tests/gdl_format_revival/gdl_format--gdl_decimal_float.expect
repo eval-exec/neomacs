@@ -1,0 +1,1 @@
+(("0" "0" "    0|" "+0" "0" "" "+inf" " -inf" "-nan" "0inf" "-0nan" "-00012" "00000000") ((error "Maximum string size exceeded") (error "Maximum string size exceeded") (error "Maximum string size exceeded") (overflow-error) (error "Maximum string size exceeded") (error "Maximum string size exceeded") (error "Maximum string size exceeded") (overflow-error)))

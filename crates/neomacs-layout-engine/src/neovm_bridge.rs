@@ -114,7 +114,7 @@ impl DisplayLineNumbersMode {
             // `(setq display-line-numbers-type 'absolute)` (issue #441).
             Some(value) if value.is_truthy() => {
                 match DisplayLineNumbersSymbol::from_symbol_name(
-                    value.as_symbol_name().unwrap_or(""),
+                    value.as_bare_symbol_name().unwrap_or(""),
                 ) {
                     Some(DisplayLineNumbersSymbol::Relative) => Self::Relative,
                     Some(DisplayLineNumbersSymbol::Visual) => Self::Visual,
@@ -282,6 +282,7 @@ pub(crate) fn window_string_composition_rules(
     capture_string_composition_rules(
         evaluator.buffer_manager().get(buffer_id)?,
         evaluator.obarray(),
+        evaluator.symbol_mode(),
     )
 }
 
@@ -291,6 +292,7 @@ pub(crate) fn current_string_composition_rules(
     capture_string_composition_rules(
         evaluator.buffer_manager().current_buffer()?,
         evaluator.obarray(),
+        evaluator.symbol_mode(),
     )
 }
 
@@ -458,7 +460,7 @@ pub(crate) fn buffer_local_value<B: LayoutBufferView + ?Sized>(
 fn effective_buffer_value(buffer: &Buffer, obarray: &Obarray, var: LayoutVar) -> Option<Value> {
     buffer
         .buffer_local_value_id(var.sym_id())
-        .or_else(|| obarray.symbol_value_id(var.sym_id()).copied())
+        .or_else(|| obarray.symbol_value_id_copied(var.sym_id()))
 }
 
 fn frame_parameter_int(frame: &Frame, name: &str, default: i64) -> i64 {
@@ -582,13 +584,13 @@ pub(crate) fn window_parameter_by_name(window: &Window, name: &str) -> Option<Va
     window
         .parameters()
         .iter()
-        .find(|(key, _)| key.as_symbol_name() == Some(name))
+        .find(|(key, _)| key.as_bare_symbol_name() == Some(name))
         .map(|(_, value)| *value)
 }
 
 fn global_bool(obarray: &Obarray, name: &str) -> bool {
     obarray
-        .symbol_value(name)
+        .symbol_value_copied(name)
         .is_some_and(|value| !value.is_nil())
 }
 
@@ -788,7 +790,7 @@ pub(crate) fn resolve_fringe_indicator_bitmap_index<B: LayoutBufferView>(
 
     let registry = ctx.fringe_bitmap_registry();
     let resolve_index = |sym: Value| -> Option<u16> {
-        let sym_id = sym.as_symbol_id()?;
+        let sym_id = sym.as_bare_symbol_id()?;
         let index = registry.index_of(sym_id)?;
         u16::try_from(index).ok()
     };
@@ -977,7 +979,7 @@ impl TtyGlyphlessCharDisplay {
         if method.is_cons() {
             method = method.cons_cdr();
         }
-        match method.as_symbol_name() {
+        match method.as_bare_symbol_name() {
             Some("zero-width") => Some(GlyphlessMethod::ZeroWidth),
             Some("thin-space") => Some(GlyphlessMethod::ThinSpace),
             Some("empty-box") => Some(GlyphlessMethod::EmptyBox),
@@ -1092,7 +1094,7 @@ pub(crate) enum ForwardScrollMeasurement {
 fn parse_color_pixel(value: &Value) -> Option<u32> {
     value
         .as_runtime_string_owned()
-        .or_else(|| value.as_symbol_name().map(str::to_string))
+        .or_else(|| value.as_bare_symbol_name().map(str::to_string))
         .and_then(|spec| NeoColor::parse(&spec))
         .map(|color| color_to_pixel(&color))
 }
@@ -1219,8 +1221,8 @@ fn frame_cursor_foreground_pixel(frame: &Frame, face_table: &FaceTable, obarray:
     // GNU's Vx_cursor_fore_pixel is a color-name string when explicitly set;
     // otherwise x_set_cursor_color uses FRAME_BACKGROUND_PIXEL.
     obarray
-        .symbol_value("x-cursor-fore-pixel")
-        .and_then(parse_color_pixel)
+        .symbol_value_copied("x-cursor-fore-pixel")
+        .and_then(|value| parse_color_pixel(&value))
         .unwrap_or_else(|| frame_background_color_pixel(frame, face_table))
 }
 
@@ -1282,7 +1284,7 @@ fn parse_visual_cursor_spec(
 
     let mut iter = items.chunks_exact(2);
     for pair in &mut iter {
-        let key = pair[0].as_symbol_name()?;
+        let key = pair[0].as_bare_symbol_name()?;
         let value = pair[1];
         match key {
             ":position" | ":pos" => {
@@ -1455,7 +1457,7 @@ pub fn window_params_from_neovm_with_font_sizing(
     let effective_window_system = frame.effective_window_system();
     let is_window_system = effective_window_system.is_some();
     let window_system =
-        effective_window_system.and_then(|v| v.as_symbol_name().map(|s| s.to_string()));
+        effective_window_system.and_then(|v| v.as_bare_symbol_name().map(|s| s.to_string()));
 
     let (
         win_id,
@@ -1595,7 +1597,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         effective_buffer_int(buffer, obarray, LayoutVar::ScrollConservatively, 0);
     let scroll_step = effective_buffer_int(buffer, obarray, LayoutVar::ScrollStep, 0);
     let scroll_minibuffer_conservatively = obarray
-        .symbol_value("scroll-minibuffer-conservatively")
+        .symbol_value_copied("scroll-minibuffer-conservatively")
         .is_none_or(|value| !value.is_nil());
     let scroll_margin = effective_buffer_int(buffer, obarray, LayoutVar::ScrollMargin, 0);
 
@@ -3772,9 +3774,9 @@ impl FaceResolver {
 
     fn face_spec_is_plist(items: &[Value]) -> bool {
         match items.first() {
-            Some(v) if v.is_keyword() => true,
+            Some(v) if v.is_bare_keyword() => true,
             Some(item) => item
-                .as_symbol_name()
+                .as_bare_symbol_name()
                 .is_some_and(|name| name.starts_with(':')),
             None => false,
         }
@@ -4154,7 +4156,7 @@ impl FaceResolver {
         depth: usize,
         diagnostics: FaceReferenceDiagnostics,
     ) -> Option<NeoFace> {
-        if depth > 40 || face_ref.is_nil() || face_ref.is_symbol_named("nil") {
+        if depth > 40 || face_ref.is_nil() || face_ref.is_bare_symbol_named("nil") {
             return None;
         }
 
@@ -4197,7 +4199,7 @@ impl FaceResolver {
 
     fn face_name_from_value(value: &Value) -> Option<&str> {
         match value.kind() {
-            ValueKind::Symbol(_) => value.as_symbol_name(),
+            ValueKind::Symbol(_) => value.as_bare_symbol_name(),
             ValueKind::String => value.as_utf8_str(),
             _ => None,
         }
@@ -4221,7 +4223,7 @@ impl FaceResolver {
     ///                          (nil for TTY, "x" for X11, etc.). Non-GNU
     ///                          neomacs extension, retained.
     fn eval_filtered_face_spec(&self, items: &[Value]) -> FilteredFaceSpec {
-        let Some(name) = items.first().and_then(|first| first.as_symbol_name()) else {
+        let Some(name) = items.first().and_then(|first| first.as_bare_symbol_name()) else {
             return FilteredFaceSpec::NotFiltered;
         };
         if name != "filtered" && name != ":filtered" {
@@ -4244,7 +4246,10 @@ impl FaceResolver {
         let filter_items = list_to_vec(filter).unwrap_or_default();
         let mut i = 0;
         while i < filter_items.len() {
-            let Some(pred_name) = filter_items.get(i).and_then(|pred| pred.as_symbol_name()) else {
+            let Some(pred_name) = filter_items
+                .get(i)
+                .and_then(|pred| pred.as_bare_symbol_name())
+            else {
                 return FilteredFaceSpec::Rejected;
             };
             match pred_name {
@@ -4271,7 +4276,7 @@ impl FaceResolver {
                     i += 1;
                     let ws_name = filter_items
                         .get(i)
-                        .and_then(|val| val.as_symbol_name())
+                        .and_then(|val| val.as_bare_symbol_name())
                         .unwrap_or("");
                     let current = self.window_system.as_deref().unwrap_or("nil");
                     if current != ws_name && ws_name != "nil" {
@@ -4331,7 +4336,9 @@ impl FaceResolver {
             .face_table
             .get(face_name)
             .and_then(|face| face.inherit)
-            .is_some_and(|inherit| !inherit.is_nil() && !inherit.is_symbol_named("unspecified"));
+            .is_some_and(|inherit| {
+                !inherit.is_nil() && !inherit.is_bare_symbol_named("unspecified")
+            });
 
         // This is GNU `lookup_basic_face`'s fast path: an unrelated, non-nil
         // remapping alist cannot change a basic face that neither has a direct
@@ -4848,7 +4855,7 @@ impl FaceResolver {
         match val.kind() {
             ValueKind::Nil => Vec::new(),
             ValueKind::Symbol(_) => {
-                if let Some(name) = val.as_symbol_name() {
+                if let Some(name) = val.as_bare_symbol_name() {
                     if name == "nil" {
                         Vec::new()
                     } else {
@@ -4871,7 +4878,7 @@ impl FaceResolver {
                         items
                             .iter()
                             .filter_map(|item| {
-                                item.as_symbol_name()
+                                item.as_bare_symbol_name()
                                     .filter(|n| *n != "nil")
                                     .map(|n| n.to_string())
                             })

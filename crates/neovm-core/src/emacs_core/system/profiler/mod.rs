@@ -44,7 +44,7 @@ struct ProfilerLog {
 /// are stripped from names — a single unsanitized name would corrupt the whole
 /// folded output and break inferno / the report parser.
 fn frame_label(frame: Value) -> String {
-    let raw = if let Some(name) = frame.as_symbol_name() {
+    let raw = if let Some(name) = frame.as_bare_symbol_name() {
         name.to_string()
     } else if let Some(subr_id) = frame.as_subr_id() {
         resolve_sym(subr_id).to_string()
@@ -579,7 +579,7 @@ impl Context {
     fn profiler_settings(&self) -> (usize, usize) {
         let bounded_setting = |name: &str, default: usize, maximum: usize| {
             self.obarray
-                .symbol_value(name)
+                .symbol_value_copied(name)
                 .and_then(|value| value.as_fixnum())
                 .map(|value| value.clamp(0, maximum as i64) as usize)
                 .unwrap_or(default)

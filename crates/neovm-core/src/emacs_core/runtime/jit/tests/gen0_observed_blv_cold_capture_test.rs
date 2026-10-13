@@ -212,11 +212,13 @@ fn check_binding(local: bool) {
     );
     assert_eq!(
         super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Bind),
-        1
+        1,
+        "the binding site is inline"
     );
     assert_eq!(
         super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Unbind),
-        1
+        1,
+        "the unbinding site is inline"
     );
     let old = raw_cdr(target);
     let depths = (context.specpdl.len(), context.jit_bind_stack.len());

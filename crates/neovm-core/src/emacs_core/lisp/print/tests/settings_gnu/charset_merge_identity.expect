@@ -1,0 +1,1 @@
+(nil "#(\"ab\" 0 1 (foo \"x\") 1 2 (foo \"x\"))" "#(\"ab\" 0 1 (foo bar baz quux) 1 2 (baz quux foo bar))" "#(\"ab\" 0 1 (foo bar) 1 2 (foo bar))")

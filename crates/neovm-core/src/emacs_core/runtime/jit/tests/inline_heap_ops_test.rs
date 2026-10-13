@@ -18,7 +18,7 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f
 }
 
@@ -173,6 +173,7 @@ fn cons_store_clif(
     );
     let config = module.target_config();
     let groups = ShimGroups {
+        throw_flow: crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Unavailable,
         subr_spec: false,
         cbsym_spec: false,
         tier2_profile: false,
@@ -214,10 +215,12 @@ fn cons_store_clif(
             refs,
             vmctx_var,
             ptr_ty: types::I64,
+            forward_atomics: crate::emacs_core::jit::compile::ForwardAtomics::for_isa(module.isa()),
             call_args_slot: args_slot,
             call_result_slot: result_slot,
             rootwin: None,
             heap: Some(params[0]),
+            cons_store_probe_order: Default::default(),
             inline_alloc: false,
             generational: std::cell::Cell::new(Some(false)),
             direct_sites: std::cell::Cell::new(0),
@@ -266,10 +269,12 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
     impl Drop for Settings {
         fn drop(&mut self) {
             force_opt_for_test(None, None);
+            force_opt_passes_for_test(None);
             force_deopt_for_test(false);
         }
     }
     let _settings = Settings;
+    force_opt_passes_for_test(Some(OptPasses::default()));
     force_deopt_for_test(false);
     let lower = |f: &ByteCodeFunction| {
         lower_leaf_full_osr_with_opt(
@@ -1007,7 +1012,7 @@ fn osr_into_a_cons_loop_allocates_inline() {
     let snapshot = [Value::make_int(500), Value::NIL];
     ctx.bc_buf.extend_from_slice(&snapshot);
     let before = conses_counted();
-    let run = crate::emacs_core::jit::cache::try_run_osr(&mut ctx, &f, 1, &snapshot, &[]);
+    let run = crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 1, &snapshot, &[]);
     let Some(NativeRun::Ok(bits)) = run else {
         panic!("the OSR transfer must run the loop natively: {run:?}");
     };

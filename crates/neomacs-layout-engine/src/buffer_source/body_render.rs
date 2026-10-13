@@ -53,6 +53,7 @@ use neovm_core::emacs_core::image_catalog::ImageScaleEnvironment;
 pub(crate) enum BufferSourceBodyRenderOutcome {
     Complete(BufferSourcePostLoopRenderOutcome),
     SyncHorizonExhausted,
+    QueryHorizonExhausted,
 }
 
 pub(crate) struct BufferSourceWalkSetupRequest<'a> {
@@ -358,13 +359,23 @@ impl BufferSourceWalkSetup {
         overlay_text_row_context: BufferOverlayStringTextRowRenderContext<'request>,
         buffer: &B,
     ) -> crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome {
-        let mut source_walk = BufferSourceWalk::new_for_window(
-            loop_context.buffer_id(),
-            buffer,
-            Some(params.window_id as u64),
-            self.charpos,
-            loop_context.text_start_byte(),
-        );
+        let mut source_walk = match loop_context.source_acquisition_end() {
+            Some(end) => BufferSourceWalk::new_for_window_range(
+                loop_context.buffer_id(),
+                buffer,
+                Some(params.window_id as u64),
+                self.charpos,
+                end,
+                loop_context.text_start_byte(),
+            ),
+            None => BufferSourceWalk::new_for_window(
+                loop_context.buffer_id(),
+                buffer,
+                Some(params.window_id as u64),
+                self.charpos,
+                loop_context.text_start_byte(),
+            ),
+        };
 
         BufferSourceLoopMutableState::new(
             &mut self.invisible_text_checkpoint,
@@ -491,6 +502,10 @@ impl BufferSourceWalkSetup {
 
         if loop_outcome == crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::SyncHorizonExhausted {
             return BufferSourceBodyRenderOutcome::SyncHorizonExhausted;
+        }
+
+        if loop_outcome == crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::QueryHorizonExhausted {
+            return BufferSourceBodyRenderOutcome::QueryHorizonExhausted;
         }
 
         BufferSourceBodyRenderOutcome::Complete(self.render_tail_and_decide_retry(

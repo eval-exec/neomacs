@@ -286,7 +286,7 @@ fn test_define_abbrev_and_lookup() {
     // Look up via abbrev-symbol
     let sym = builtin_abbrev_symbol(&mut eval, vec![Value::string("btw"), table]).unwrap();
     assert!(sym.is_truthy());
-    assert_eq!(sym.as_symbol_name(), Some("btw"));
+    assert_eq!(sym.as_bare_symbol_name(), Some("btw"));
 
     // Non-existent
     let result = builtin_abbrev_expansion(&mut eval, vec![Value::string("xyz"), table]).unwrap();
@@ -298,23 +298,32 @@ fn abbrev_system_setting_matches_gnu_force_domain() {
     crate::test_utils::init_test_tracing();
 
     assert_eq!(
-        AbbrevSystemSetting::from_system_flag(Value::NIL),
+        AbbrevSystemSetting::from_system_flag(Value::NIL, crate::tagged::SymbolMode::Bare),
         AbbrevSystemSetting::User
     );
     assert_eq!(
-        AbbrevSystemSetting::from_system_flag(Value::T),
+        AbbrevSystemSetting::from_system_flag(Value::T, crate::tagged::SymbolMode::Bare),
         AbbrevSystemSetting::System
     );
     assert_eq!(
-        AbbrevSystemSetting::from_system_flag(Value::symbol("force")),
+        AbbrevSystemSetting::from_system_flag(
+            Value::symbol("force"),
+            crate::tagged::SymbolMode::Bare
+        ),
         AbbrevSystemSetting::Force
     );
     assert_eq!(
-        AbbrevSystemSetting::from_system_flag(Value::keyword(":force")),
+        AbbrevSystemSetting::from_system_flag(
+            Value::keyword(":force"),
+            crate::tagged::SymbolMode::Bare
+        ),
         AbbrevSystemSetting::System
     );
     assert_eq!(
-        AbbrevSystemSetting::from_system_flag(Value::string("force")),
+        AbbrevSystemSetting::from_system_flag(
+            Value::string("force"),
+            crate::tagged::SymbolMode::Bare
+        ),
         AbbrevSystemSetting::System
     );
 }
@@ -351,7 +360,7 @@ fn define_abbrev_system_force_matches_gnu_overwrite_and_storage() {
     let expansion = builtin_abbrev_expansion(&mut eval, vec![Value::string("x"), table]).unwrap();
     assert_eq!(expansion.as_utf8_str(), Some("user"));
     let sym = builtin_abbrev_symbol(&mut eval, vec![Value::string("x"), table]).unwrap();
-    let sym_id = symbol_id(sym).expect("abbrev symbol");
+    let sym_id = symbol_id(sym, crate::tagged::value::SymbolMode::Bare).expect("abbrev symbol");
     assert!(
         eval.obarray()
             .get_property_id(sym_id, intern(":system"))
@@ -382,8 +391,7 @@ fn define_abbrev_system_force_matches_gnu_overwrite_and_storage() {
     );
     assert!(
         eval.obarray()
-            .symbol_value("abbrevs-changed")
-            .copied()
+            .symbol_value_copied("abbrevs-changed")
             .unwrap_or(Value::NIL)
             .is_nil()
     );
@@ -455,7 +463,7 @@ fn test_define_abbrev_table_and_lookup() {
     builtin_define_abbrev_table(&mut eval, vec![Value::symbol("test-table"), Value::NIL]).unwrap();
 
     // The symbol value should be an abbrev table
-    let table = eval.obarray().symbol_value("test-table").cloned().unwrap();
+    let table = eval.obarray().symbol_value_copied("test-table").unwrap();
     let result = builtin_abbrev_table_p(&mut eval, vec![table]).unwrap();
     assert!(result.is_truthy());
 }
@@ -470,8 +478,7 @@ fn test_insert_abbrev_table_description_writes_buffer_text() {
 
     let table = eval
         .obarray()
-        .symbol_value("test-table")
-        .cloned()
+        .symbol_value_copied("test-table")
         .expect("test-table value");
     builtin_define_abbrev(
         &mut eval,

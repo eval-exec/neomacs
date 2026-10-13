@@ -10,7 +10,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
 }
@@ -57,8 +57,10 @@ fn mir_inline_identity_rechecks_after_a_variable_watcher() {
     .unwrap();
     let id = Value::symbol("mir-inline-id");
     let callee = function(vec![Op::StackRef(0), Op::Return], vec![], 1);
-    ev.obarray
-        .set_symbol_function_id(id.as_symbol_id().unwrap(), Value::make_bytecode(callee));
+    ev.obarray.set_symbol_function_id(
+        id.as_bare_symbol_id().unwrap(),
+        Value::make_bytecode(callee),
+    );
     let f = function(
         vec![
             Op::Constant(0),
@@ -106,8 +108,10 @@ fn mir_inline_identity_honors_debug_override_quit_and_depth() {
         let mut ev = Context::new();
         let id = Value::symbol("mir-inline-flags-id");
         let callee = function(vec![Op::StackRef(0), Op::Return], vec![], 1);
-        ev.obarray
-            .set_symbol_function_id(id.as_symbol_id().unwrap(), Value::make_bytecode(callee));
+        ev.obarray.set_symbol_function_id(
+            id.as_bare_symbol_id().unwrap(),
+            Value::make_bytecode(callee),
+        );
         let value = match variable {
             "max-lisp-eval-depth" => Value::make_int(0),
             "internal--compiler-function-overrides" => ev
@@ -167,8 +171,10 @@ fn mir_inline_identity_deopts_on_each_asynchronous_source() {
         let mut ev = Context::new();
         let id = Value::symbol("mir-inline-async-id");
         let callee = function(vec![Op::StackRef(0), Op::Return], vec![], 1);
-        ev.obarray
-            .set_symbol_function_id(id.as_symbol_id().unwrap(), Value::make_bytecode(callee));
+        ev.obarray.set_symbol_function_id(
+            id.as_bare_symbol_id().unwrap(),
+            Value::make_bytecode(callee),
+        );
         // The shape of the flag test above (a variable write, then the
         // inlined call), with a variable no guard looks at.
         let f = function(
@@ -238,8 +244,10 @@ fn mir_inline_guard_reconstructs_a_virtual_argument() {
     .unwrap();
     let sym = Value::symbol("mir-inline-car");
     let callee = function(vec![Op::StackRef(0), Op::Car, Op::Return], vec![], 1);
-    ev.obarray
-        .set_symbol_function_id(sym.as_symbol_id().unwrap(), Value::make_bytecode(callee));
+    ev.obarray.set_symbol_function_id(
+        sym.as_bare_symbol_id().unwrap(),
+        Value::make_bytecode(callee),
+    );
     let f = function(
         vec![
             Op::Constant(0),
@@ -309,8 +317,10 @@ fn mir_inline_keeps_a_callees_non_fixnum_feedback_on_the_native_call_path() {
         callee
             .jit_runtime()
             .record_numeric(2, callee.ops.len(), feedback);
-        ev.obarray
-            .set_symbol_function_id(sym.as_symbol_id().unwrap(), Value::make_bytecode(callee));
+        ev.obarray.set_symbol_function_id(
+            sym.as_bare_symbol_id().unwrap(),
+            Value::make_bytecode(callee),
+        );
         let f = function(
             vec![
                 Op::StackRef(1),

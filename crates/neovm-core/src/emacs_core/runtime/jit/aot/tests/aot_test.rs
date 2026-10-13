@@ -204,7 +204,7 @@ fn recipe_round_trips_string_symbol_cons() {
     );
     assert_eq!(
         crate::emacs_core::intern::resolve_sym(
-            rebuilt.cons_cdr().cons_car().as_symbol_id().unwrap()
+            rebuilt.cons_cdr().cons_car().as_bare_symbol_id().unwrap()
         ),
         "my-sym"
     );
@@ -310,7 +310,7 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
     f.lexical = true;
     f.ops = ops.to_vec();
     f.constants = constants.to_vec().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
 
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     // For a 1-arg body sweep `args`; otherwise call once with the first
@@ -502,7 +502,7 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
         .iter()
         .map(|v| {
             crate::emacs_core::intern::resolve_sym(
-                v.as_symbol_id().expect("reloc const is a symbol"),
+                v.as_bare_symbol_id().expect("reloc const is a symbol"),
             )
         })
         .collect();
@@ -521,12 +521,12 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
     // (consp '(1)) → 'yes ; (consp 5) → 'no.
     let cons_arg = Value::cons(Value::make_int(1), Value::NIL);
     assert_eq!(
-        call(cons_arg).as_symbol_id(),
+        call(cons_arg).as_bare_symbol_id(),
         Some(crate::emacs_core::intern::intern("aot-yes")),
         "consp arg → 'aot-yes (by current-session SymId)"
     );
     assert_eq!(
-        call(Value::make_int(5)).as_symbol_id(),
+        call(Value::make_int(5)).as_bare_symbol_id(),
         Some(crate::emacs_core::intern::intern("aot-no")),
         "non-consp arg → 'aot-no"
     );
@@ -546,7 +546,7 @@ fn aot_gensym_symbol_const_is_rejected_stays_jit() {
     // An uninterned (gensym) symbol — name not registered as canonical.
     let gensym = Value::symbol(crate::emacs_core::intern::intern_uninterned("g$decoy"));
     assert!(
-        !crate::emacs_core::intern::is_canonical_id(gensym.as_symbol_id().unwrap()),
+        !crate::emacs_core::intern::is_canonical_id(gensym.as_bare_symbol_id().unwrap()),
         "precondition: the gensym is non-canonical"
     );
     // write_value_recipe must REFUSE the gensym (the load-bearing guard).
@@ -762,7 +762,7 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
     f.lexical = true;
     f.ops = ops.clone();
     f.constants = constants.clone().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
 
     // Drive try_run_compiled so the AOT leaf is cached.
     let id = f.jit_runtime().compiled_id_or_assign();
@@ -869,7 +869,7 @@ fn aot_hit_serves_without_jitting_through_cache() {
     f.lexical = true;
     f.ops = ops.clone();
     f.constants = constants.clone().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
 
     let id = f.jit_runtime().compiled_id_or_assign();
     let got = super::super::cache::try_run_compiled(
@@ -913,7 +913,7 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
     a.lexical = true;
     a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
     a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = 16;
+    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let a_id = crate::emacs_core::intern::intern("r2-cand-add5");
     ev.obarray
         .set_symbol_function_id(a_id, Value::make_bytecode(a));
@@ -927,7 +927,7 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
     });
     b.lexical = true;
     b.ops = vec![Op::StackRef(0), Op::Return];
-    b.max_stack = 16;
+    b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let b_id = crate::emacs_core::intern::intern("r2-noncand-optional");
     ev.obarray
         .set_symbol_function_id(b_id, Value::make_bytecode(b));
@@ -1038,7 +1038,7 @@ fn r2_prepopulate_native_from_call_1_and_survives_gc() {
     a.lexical = true;
     a.ops = ops.clone();
     a.constants = constants.clone().into();
-    a.max_stack = 16;
+    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let sym = crate::emacs_core::intern::intern("r2-prepop-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1131,7 +1131,7 @@ fn r2_prepopulate_skips_on_preload_miss() {
     a.lexical = true;
     a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
     a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = 16;
+    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let sym = crate::emacs_core::intern::intern("r2-prepop-miss-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1194,7 +1194,7 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
     a.lexical = true;
     a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
     a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = 16;
+    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let sym = crate::emacs_core::intern::intern("r2-prepop-nooverwrite-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1213,7 +1213,7 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
         .symbol_function_id(sym)
         .and_then(|v| v.get_bytecode_data())
         .expect("bc");
-    let got = super::super::cache::try_run_compiled(
+    let got = crate::emacs_core::jit::test_support::run_compiled(
         std::ptr::null_mut(),
         f,
         Value::NIL,
@@ -1271,7 +1271,7 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
             b.lexical = true;
             b.ops = vec![Op::Constant(0), Op::Sub, Op::Return];
             b.constants = vec![Value::make_int(1)].into();
-            b.max_stack = 16;
+            b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
             b
         }),
     );
@@ -1399,7 +1399,7 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
         f.lexical = true;
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.seal_hand_assembled_ops();
         f
     };
@@ -1532,7 +1532,7 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
         f.lexical = true;
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.seal_hand_assembled_ops();
         f
     };
@@ -1674,7 +1674,7 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
     f.lexical = true;
     f.ops = ops.clone();
     f.constants = consts.clone().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let sym = crate::emacs_core::intern::intern("pf-fc-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(f));
@@ -1747,7 +1747,7 @@ fn pgo_pred_body(callee: &str) -> crate::emacs_core::bytecode::ByteCodeFunction 
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
     f.constants = vec![Value::symbol(intern(callee))].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -1959,4 +1959,38 @@ fn aot_switch_bodies_stay_jit_only() {
         (stats.candidates, stats.prepared, stats.skipped_unsupported),
         (1, 0, 1)
     );
+}
+
+#[test]
+fn issue554_throw_stays_jit_only_under_frozen_aot_imports() {
+    let ordinary_ops = [Op::Constant(0), Op::Constant(1), Op::Cons, Op::Return];
+    let (object, _) = build_baseline_object_for_leaf(
+        &ordinary_ops,
+        &[Value::fixnum(1), Value::fixnum(2)],
+        0,
+        None,
+    )
+    .expect("ordinary AOT emission")
+    .expect("supported ordinary AOT body");
+    let file = object::File::parse(&*object).expect("AOT object");
+    assert!(
+        !file.symbols().any(|symbol| {
+            symbol.is_undefined() && symbol.name() == Ok("neovm_jit_throw_with_symbols")
+        }),
+        "unused Context throw shim must not be declared into AOT"
+    );
+    let ops = [Op::Constant(0), Op::Constant(1), Op::Throw, Op::Return];
+    let constants = [Value::symbol("issue554-aot-throw"), Value::fixnum(9)];
+    // The producer's existing allowlist returns an ordinary JIT fallback.
+    assert!(
+        compile_leaf_to_object(&ops, &constants, 0, None)
+            .expect("production AOT gate")
+            .is_none()
+    );
+    // Even a caller bypassing that allowlist cannot import an unsalted shim
+    // or quietly use the legacy bare-policy ABI45 throw helper.
+    assert!(matches!(
+        build_baseline_object_for_leaf(&ops, &constants, 0, None),
+        Err(CompileError::UnsupportedOp("aot-throw-symbol-policy"))
+    ));
 }

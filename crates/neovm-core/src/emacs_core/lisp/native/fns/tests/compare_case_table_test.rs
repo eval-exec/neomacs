@@ -16,7 +16,7 @@ fn context_with_mappings(mappings: &[(u32, u32)]) -> Context {
     for &(code, mapped) in mappings {
         chartable::ct_set_single(&up, code as i64, Value::fixnum(mapped as i64));
     }
-    table.with_char_table_mut(|obj| obj.extras.ensure_owned()[0] = up);
+    table.with_char_table_mut(|obj| obj.set_extra(0, up));
     casetab::builtin_set_case_table(&mut ctx, vec![table]).unwrap();
     ctx
 }
@@ -104,7 +104,7 @@ fn compare_case_table_ascii_parent_fallback_is_observed() {
     let parent = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
     chartable::ct_set_single(&parent, b'a' as i64, Value::fixnum(b'X' as i64));
     chartable::ct_set_single(&up, b'a' as i64, Value::NIL);
-    up.with_char_table_mut(|obj| obj.parent = parent);
+    up.with_char_table_mut(|obj| obj.set_parent(parent));
     assert_eq!(compare(&mut ctx, "a", "X"), Value::T);
 }
 

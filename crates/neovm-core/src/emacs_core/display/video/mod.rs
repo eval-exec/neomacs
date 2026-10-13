@@ -48,7 +48,8 @@ pub fn parse_video_display_reference(
     items: &[Value],
     default_autoplay: bool,
 ) -> Option<VideoDisplayReference> {
-    if items.first()?.as_symbol_name() != Some("video") || !(items.len() - 1).is_multiple_of(2) {
+    if items.first()?.as_bare_symbol_name() != Some("video") || !(items.len() - 1).is_multiple_of(2)
+    {
         return None;
     }
 
@@ -60,7 +61,7 @@ pub fn parse_video_display_reference(
     let mut index = 1;
     while index + 1 < items.len() {
         let value = items[index + 1];
-        match items[index].as_symbol_name() {
+        match items[index].as_bare_symbol_name() {
             Some(":id") => {
                 if session.is_some() || source.is_some() {
                     return None;
@@ -83,7 +84,7 @@ pub fn parse_video_display_reference(
                 has_playback_options = true;
                 loop_count = if value.is_nil() {
                     0
-                } else if value.is_symbol_named("t") {
+                } else if value.is_bare_symbol_named("t") {
                     -1
                 } else {
                     let count = i32::try_from(value.as_int()?).ok()?;

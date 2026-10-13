@@ -1,0 +1,9 @@
+error[E0451]: fields `ty` and `_thread_confined` of struct `LispFwd` are private
+ --> tests/thread_safety_ui/forward_header_construct.rs:5:9
+  |
+4 |     let _header = LispFwd {
+  |                   ------- in this type
+5 |         ty: LispFwdType::Int,
+  |         ^^ private field
+6 |         _thread_confined: Default::default(),
+  |         ^^^^^^^^^^^^^^^^ private field

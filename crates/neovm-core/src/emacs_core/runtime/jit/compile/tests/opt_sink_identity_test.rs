@@ -75,7 +75,7 @@ fn load(ctx: &mut Context, roots: &Roots) {
         roots.add(&[value]);
         let source = value.get_bytecode_data().unwrap();
         assert_eq!(source.arglist, Value::make_int(spec.descriptor));
-        assert_eq!(source.max_stack, spec.max_stack);
+        assert_eq!(source.max_stack.get(), spec.max_stack as usize);
         assert_eq!(
             source.gnu_bytecode_bytes.as_ref().unwrap().as_slice(),
             spec.bytes
@@ -105,7 +105,11 @@ fn source(value: Value) -> &'static ByteCodeFunction {
 
 fn original_plan(source: &ByteCodeFunction) -> ir::Func {
     let ops = source.executable_ops();
-    let arity = source.params.required.len();
+    let arity = source
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     let cfg = analyze_cfg(
         ops,
         &source.constants,
@@ -156,7 +160,11 @@ fn prepared_with_reps(source: &ByteCodeFunction, sink: bool, reps: bool) -> ir::
     }));
     let _snapshot = publish_numeric_feedback(source); // observed Tier-0 types, never fabricated
     let ops = source.executable_ops();
-    let arity = source.params.required.len();
+    let arity = source
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     let cfg = analyze_cfg(
         ops,
         &source.constants,
@@ -211,7 +219,11 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func, roots: &Roots) -> CompiledL
     let leaf = lower_opt_ir_for_test(
         source.executable_ops(),
         &source.constants,
-        source.params.required.len(),
+        source
+            .params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         source.executable_gnu_byte_offset_map(),
         plan,
     )
@@ -876,7 +888,7 @@ fn assert_frame(stack: &[Value], args: &[Value]) {
     assert_eq!(stack[9], Value::make_int(1));
 }
 fn side(ctx: &Context, payload: Value) {
-    let value = *ctx.obarray.symbol_value("t34-o36-side").unwrap();
+    let value = ctx.obarray.symbol_value_copied("t34-o36-side").unwrap();
     let items = list_to_vec(&value).unwrap();
     assert_eq!(items, vec![Value::symbol("stored"), payload]);
 }
@@ -995,15 +1007,19 @@ fn opt_sink_native_virtual_full_frame_after_visible_store() {
     assert_frame(&resume.stack, &args);
     side(&ctx, payload);
     assert_eq!(
-        ctx.obarray.symbol_value("t34-o36-watch-count").unwrap(),
-        &Value::make_int(1)
+        ctx.obarray
+            .symbol_value_copied("t34-o36-watch-count")
+            .unwrap(),
+        Value::make_int(1)
     );
     let replayed = resumed(&mut ctx, function, &resume).unwrap();
     roots.add(&[replayed]);
     assert_eq!(print_value(&replayed), expected_print);
     assert_eq!(
-        ctx.obarray.symbol_value("t34-o36-watch-count").unwrap(),
-        &Value::make_int(1),
+        ctx.obarray
+            .symbol_value_copied("t34-o36-watch-count")
+            .unwrap(),
+        Value::make_int(1),
         "cold replay must not repeat visible pre-guard store"
     );
     // Actual frozen GNU wrong-type input still reports the original signal,

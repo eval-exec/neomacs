@@ -22,8 +22,8 @@ fn collection_lookup_capture_retains_ascii_child_and_parent_dependencies() {
         let parent = Value::make_char_table(Value::NIL, Value::fixnum(42), 0);
         let table = Value::make_char_table(Value::NIL, Value::NIL, 0);
         table.with_char_table_mut(|obj| {
-            obj.ascii = child;
-            obj.parent = parent;
+            obj.set_ascii(child);
+            obj.set_parent(parent);
         });
         let (result, reads) = capture(|| ct_lookup(&table, b'x' as i64));
         assert_eq!(result.unwrap(), Value::fixnum(42));
@@ -34,15 +34,13 @@ fn collection_lookup_capture_retains_ascii_child_and_parent_dependencies() {
         assert!(reads.unchanged());
         match changed {
             Dependency::Table => {
-                table.with_char_table_mut(|obj| obj.defalt = Value::T);
+                table.with_char_table_mut(|obj| obj.set_default(Value::T));
             }
             Dependency::Child => {
-                child.with_sub_char_table_mut(|obj| {
-                    obj.contents.ensure_owned()[b'x' as usize] = Value::T
-                });
+                child.with_sub_char_table_mut(|obj| obj.set_contents(b'x' as usize, Value::T));
             }
             Dependency::Parent => {
-                parent.with_char_table_mut(|obj| obj.defalt = Value::T);
+                parent.with_char_table_mut(|obj| obj.set_default(Value::T));
             }
             Dependency::NestedChild => {
                 // A child read by a nested lookup still joins its outer capture.
@@ -50,9 +48,7 @@ fn collection_lookup_capture_retains_ascii_child_and_parent_dependencies() {
                     let (_, inner) = capture(|| ct_lookup(&table, b'x' as i64));
                     assert!(inner.unwrap().unchanged_and_observe());
                 });
-                child.with_sub_char_table_mut(|obj| {
-                    obj.contents.ensure_owned()[b'x' as usize] = Value::T
-                });
+                child.with_sub_char_table_mut(|obj| obj.set_contents(b'x' as usize, Value::T));
                 assert!(!outer.unwrap().unchanged());
             }
         }
@@ -70,7 +66,7 @@ fn collection_lookup_capture_retains_rejected_veclike_headers() {
 
     let table = Value::make_char_table(Value::NIL, Value::NIL, 0);
     let wrong_parent = Value::vector(vec![Value::NIL]);
-    table.with_char_table_mut(|obj| obj.parent = wrong_parent);
+    table.with_char_table_mut(|obj| obj.set_parent(wrong_parent));
     let (result, reads) = capture(|| ct_lookup(&table, b'x' as i64));
     assert_eq!(result.unwrap(), Value::NIL);
     wrong_parent.set_vector_slot(0, Value::T);

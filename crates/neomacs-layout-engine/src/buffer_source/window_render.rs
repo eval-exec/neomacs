@@ -21,7 +21,7 @@ use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess};
 use crate::types::{FrameParams, WindowParams};
 use crate::viewport_resolution::ForwardViewportMeasurement;
 use crate::window_layout::WindowLayoutBox;
-use neovm_core::buffer::BufferId;
+use neovm_core::buffer::{BufferId, CharLen};
 use neovm_core::window::{FrameId, WindowId};
 
 /// Attempt-owned numeric read policy. An artificial horizon retry keeps
@@ -32,6 +32,37 @@ use neovm_core::window::{FrameId, WindowId};
 enum SyncSourceRead {
     AllowHorizon,
     UncappedRetry,
+}
+
+/// Acquisition allowance owned by one synchronous query attempt. Its numeric
+/// geometry estimate limits copied source, never ZV or visible geometry. Each
+/// mutator grows its own allowance when the canonical walk needs more source.
+#[derive(Clone, Copy)]
+struct WindowTextReadBudget {
+    chars: CharLen,
+}
+
+impl WindowTextReadBudget {
+    fn initial(params: &WindowParams) -> Self {
+        let cols = (params.text_bounds.width / params.char_width.max(1.0))
+            .ceil()
+            .max(1.0) as usize;
+        let chars = params
+            .source_interpretation_rows()
+            .saturating_add(2)
+            .saturating_mul(cols)
+            .saturating_add(1)
+            .max(1);
+        Self {
+            chars: CharLen::new(chars),
+        }
+    }
+
+    fn grow(self) -> Self {
+        Self {
+            chars: CharLen::new(self.chars.get().saturating_mul(2)),
+        }
+    }
 }
 
 pub(crate) struct BufferWindowRenderRequest<'a, B>
@@ -113,6 +144,60 @@ where
         cursor_only: Option<crate::incremental_layout::CursorOnlyReplay>,
         scroll: Option<crate::incremental_layout::ScrollReplay>,
     ) -> BufferSourceRenderAttemptOutcome {
+        if self.position_publication.is_synchronous_query()
+            && self.params.source_extent == crate::types::WindowSourceExtent::Viewport
+            // Selective indentation classification needs a complete indent.
+            // Its current scanner has no incomplete-acquisition witness.
+            && self.params.selective_display == 0
+        {
+            let mut budget = WindowTextReadBudget::initial(self.params);
+            loop {
+                let checkpoint = context
+                    .output_mut()
+                    .output_target()
+                    .builder()
+                    .capture_source_attempt_checkpoint(
+                        neomacs_display_protocol::types::DisplayWindowId::new(
+                            self.params.window_id,
+                        ),
+                    );
+                let request = Self {
+                    frame_id: self.frame_id,
+                    window_id: self.window_id,
+                    params: self.params,
+                    frame_params: self.frame_params,
+                    layout_box: self.layout_box,
+                    buffer_id: self.buffer_id,
+                    buffer: self.buffer,
+                    buffer_name: self.buffer_name,
+                    reserve_right_border_col: self.reserve_right_border_col,
+                    position_publication: self.position_publication,
+                    resolved_window_start: self.resolved_window_start,
+                    forward_viewport_measurement: self.forward_viewport_measurement.clone(),
+                };
+                let outcome = request.render_once(
+                    context.reborrow(),
+                    text_buf,
+                    remaining_visibility_retries,
+                    None,
+                    None,
+                    SyncSourceRead::AllowHorizon,
+                    Some(budget),
+                );
+                if !matches!(
+                    outcome,
+                    BufferSourceRenderAttemptOutcome::QuerySourceHorizonExhausted
+                ) {
+                    return outcome;
+                }
+                context
+                    .output_mut()
+                    .output_target()
+                    .builder()
+                    .restore_source_attempt_checkpoint(checkpoint);
+                budget = budget.grow();
+            }
+        }
         let uses_sync_budget = scroll
             .as_ref()
             .is_some_and(|replay| replay.edit && replay.sync.is_some())
@@ -125,6 +210,7 @@ where
                 cursor_only,
                 scroll,
                 SyncSourceRead::AllowHorizon,
+                None,
             );
         }
         let full_request = Self {
@@ -155,6 +241,7 @@ where
             cursor_only,
             scroll,
             SyncSourceRead::AllowHorizon,
+            None,
         );
         if let BufferSourceRenderAttemptOutcome::SyncSourceHorizonExhausted { replay } = outcome {
             #[cfg(test)]
@@ -184,6 +271,7 @@ where
                 None,
                 replay.map(|replay| *replay),
                 SyncSourceRead::UncappedRetry,
+                None,
             )
         } else {
             outcome
@@ -198,6 +286,7 @@ where
         cursor_only: Option<crate::incremental_layout::CursorOnlyReplay>,
         scroll: Option<crate::incremental_layout::ScrollReplay>,
         sync_source_read: SyncSourceRead,
+        window_text_budget: Option<WindowTextReadBudget>,
     ) -> BufferSourceRenderAttemptOutcome {
         let Self {
             frame_id,
@@ -356,6 +445,12 @@ where
             }
         } else {
             BufferWindowSourceRequest::from_window_params(params, geometry.max_rows)
+        };
+
+        let source_request = if let Some(budget) = window_text_budget {
+            source_request.with_window_chars(budget.chars)
+        } else {
+            source_request
         };
 
         let text_source = if scroll.is_some() {

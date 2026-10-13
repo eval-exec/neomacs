@@ -137,6 +137,7 @@ fn self_policy_recursion_bypasses_the_shim_and_rearms_after_unlink() {
     let _policy = SelfPolicy::enter(false, true);
     let mut ev = crate::test_utils::runtime_startup_context();
     ev.eval_str(PROGRAM).expect("defined");
+    crate::emacs_core::jit::test_support::prepare_named(&mut ev, &["neovm--self-rec"]);
     ev.eval_str("(dotimes (_ 1500) (neovm--self-rec 4))")
         .expect("warm");
     let leaf = cached(&ev, "neovm--self-rec");

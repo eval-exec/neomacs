@@ -139,7 +139,8 @@ pub(crate) static BUFFER_LOCAL_VALUE: LeafSpec = LeafSpec::new(
 );
 
 pub(crate) fn buffer_local_value(ctx: &Context, variable: Value, buffer: Value) -> LeafResult {
-    if let Some(sym) = variable.as_symbol_id()
+    let symbol_mode = ctx.symbol_mode();
+    if let Some(sym) = variable.as_symbol_id(symbol_mode)
         && buffer.as_buffer_id().is_some()
         && buffer.as_buffer_id() == ctx.buffers.current_buffer_id()
         && ctx
@@ -401,8 +402,8 @@ pub(crate) static ELT: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-pub(crate) fn elt(_: &Context, sequence: Value, n: Value) -> LeafResult {
-    Ok(bytecode_elt_values(sequence, n)?)
+pub(crate) fn elt(context: &Context, sequence: Value, n: Value) -> LeafResult {
+    Ok(bytecode_elt_values_in_state(context, sequence, n)?)
 }
 
 /// `Bmemq` (`Op::Memq`). Compiled `memq` sites keep their value shim

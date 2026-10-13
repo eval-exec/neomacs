@@ -123,7 +123,7 @@ pub(crate) fn seed_input_decode_map_from_terminal(eval: &mut Context) {
         tracing::debug!("term_get_fkeys: no termcap/terminfo database for TERM={term:?}");
         return;
     };
-    let Some(input_decode_map) = eval.obarray().symbol_value("input-decode-map").copied() else {
+    let Some(input_decode_map) = eval.obarray().symbol_value_copied("input-decode-map") else {
         return;
     };
 
@@ -196,7 +196,14 @@ fn define_terminal_key(eval: &mut Context, keymap: Value, sequence: &[u8], name:
     let definition = Value::vector(vec![Value::symbol(intern(name))]);
     // `define-key' with REMOVE nil, which is what the deleted wrapper was
     // (DIVERGENCES.md 152).
-    match list_keymap_define_seq_in_obarray_ex(eval.obarray(), keymap, &events, definition, false) {
+    match list_keymap_define_seq_in_obarray_ex(
+        eval.obarray(),
+        keymap,
+        &events,
+        definition,
+        false,
+        eval.symbol_mode(),
+    ) {
         Ok(()) => true,
         Err(err) => {
             tracing::debug!(

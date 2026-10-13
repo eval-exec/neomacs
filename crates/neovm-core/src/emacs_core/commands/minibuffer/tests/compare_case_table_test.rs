@@ -14,7 +14,7 @@ fn context_with_mappings(mappings: &[(u32, u32)]) -> Context {
     for &(code, mapped) in mappings {
         chartable::ct_set_single(&up, code as i64, Value::fixnum(mapped as i64));
     }
-    table.with_char_table_mut(|obj| obj.extras.ensure_owned()[0] = up);
+    table.with_char_table_mut(|obj| obj.set_extra(0, up));
     casetab::builtin_set_case_table(&mut ctx, vec![table]).unwrap();
     ctx
 }

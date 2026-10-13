@@ -25,6 +25,7 @@
 //! - GNU header: `src/regex-emacs.h`
 //! - GNU search: `src/search.c` (3514 lines)
 
+use crate::tagged::SymbolMode;
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
@@ -492,10 +493,11 @@ pub(crate) struct LiteralPrefilter {
 #[derive(Clone, Debug)]
 pub struct CaseTranslation {
     /// Translations for codes 0..256, filled ON DEMAND when backed by a
-    /// char-table (see [`CaseTranslation::from_char_table`]).
+    /// char-table (see [`CaseTranslation::from_char_table_with_symbols`]).
     /// [`CASE_TRANSLATION_UNFILLED`] marks a slot not yet computed.
     byte: [std::cell::Cell<u32>; 256],
     table: Option<crate::emacs_core::value::Value>,
+    symbol_mode: SymbolMode,
     /// Memo for codes from 256 up when backed by a char-table, allocated on
     /// the first such code (see [`WideTranslationMemo`]).
     wide: std::cell::OnceCell<Box<WideTranslationMemo>>,
@@ -530,7 +532,7 @@ impl WideTranslationMemo {
         }
     }
 
-    fn translate(&self, table: &crate::emacs_core::value::Value, c: u32) -> u32 {
+    fn translate(&self, table: &crate::emacs_core::value::Value, c: u32, mode: SymbolMode) -> u32 {
         let tick = crate::emacs_core::chartable::char_table_write_tick();
         if self.tick.get() != tick {
             for slot in &self.slots {
@@ -543,7 +545,8 @@ impl WideTranslationMemo {
         if packed != WIDE_TRANSLATION_EMPTY && (packed >> 32) as u32 == c {
             return packed as u32;
         }
-        let translated = crate::emacs_core::chartable::translate_char(table, c as i64) as u32;
+        let translated =
+            crate::emacs_core::chartable::translate_char_with_symbols(table, c as i64, mode) as u32;
         slot.set(((c as u64) << 32) | translated as u64);
         translated
     }
@@ -576,6 +579,10 @@ pub(crate) enum AsciiPreimage {
 
 impl CaseTranslation {
     /// Cached translators retain their Lisp table through the regexp root group.
+    pub(crate) fn symbol_mode(&self) -> SymbolMode {
+        self.symbol_mode
+    }
+
     pub(crate) fn gc_root(&self) -> Option<Value> {
         self.table
     }
@@ -609,6 +616,9 @@ impl CaseTranslation {
 
     #[inline]
     fn ascii_preimage_for(&self, walk: CharTableWalk) -> AsciiPreimage {
+        if self.symbol_mode == SymbolMode::Positioned {
+            return AsciiPreimage::Unknown;
+        }
         match self.table {
             None => AsciiPreimage::AsciiOnly,
             Some(table) => {
@@ -735,6 +745,7 @@ impl CaseTranslation {
         Self {
             byte,
             table: None,
+            symbol_mode: SymbolMode::Bare,
             wide: std::cell::OnceCell::new(),
             ascii_preimage_memo: std::cell::Cell::new(None),
         }
@@ -756,10 +767,16 @@ impl CaseTranslation {
     /// it cannot outlive the table the way an identity-keyed cache could.
     /// `standard()` above already applied the same lesson to the constant
     /// table; this path was simply missed.
+    #[cfg(test)]
     pub(crate) fn from_char_table(table: crate::emacs_core::value::Value) -> Self {
+        Self::from_char_table_with_symbols(table, SymbolMode::Bare)
+    }
+
+    pub(crate) fn from_char_table_with_symbols(table: Value, mode: SymbolMode) -> Self {
         Self {
             byte: std::array::from_fn(|_| std::cell::Cell::new(CASE_TRANSLATION_UNFILLED)),
             table: Some(table),
+            symbol_mode: mode,
             wide: std::cell::OnceCell::new(),
             ascii_preimage_memo: std::cell::Cell::new(None),
         }
@@ -774,7 +791,11 @@ impl CaseTranslation {
             return Some(cached);
         }
         let translated = match self.table {
-            Some(table) => crate::emacs_core::chartable::translate_char(&table, c as i64) as u32,
+            Some(table) => crate::emacs_core::chartable::translate_char_with_symbols(
+                &table,
+                c as i64,
+                self.symbol_mode,
+            ) as u32,
             None => Self::canonicalize_char(c as u32),
         };
         slot.set(translated);
@@ -797,7 +818,7 @@ impl CaseTranslation {
             return self
                 .wide
                 .get_or_init(|| Box::new(WideTranslationMemo::new()))
-                .translate(&table, c);
+                .translate(&table, c, self.symbol_mode);
         }
         Self::canonicalize_char(c)
     }
@@ -3958,6 +3979,7 @@ pub(crate) struct WordBoundaryLookup {
     char_script_table: Option<Value>,
     word_combining_categories: Value,
     word_separating_categories: Value,
+    symbol_mode: SymbolMode,
 }
 
 impl Default for WordBoundaryLookup {
@@ -3966,26 +3988,45 @@ impl Default for WordBoundaryLookup {
             char_script_table: None,
             word_combining_categories: Value::NIL,
             word_separating_categories: Value::NIL,
+            symbol_mode: SymbolMode::Bare,
         }
     }
 }
 
 impl WordBoundaryLookup {
-    pub(crate) fn new(
+    pub(crate) fn new_with_symbols(
         char_script_table: Option<Value>,
         word_combining_categories: Value,
         word_separating_categories: Value,
+        symbol_mode: SymbolMode,
     ) -> Self {
         Self {
             char_script_table,
             word_combining_categories,
             word_separating_categories,
+            symbol_mode,
         }
+    }
+
+    pub(crate) fn symbol_mode(&self) -> SymbolMode {
+        self.symbol_mode
+    }
+
+    pub(crate) fn with_symbol_mode(mut self, mode: SymbolMode) -> Self {
+        self.symbol_mode = mode;
+        self
     }
 
     fn script_at(&self, c: char) -> Value {
         self.char_script_table
-            .and_then(|table| crate::emacs_core::chartable::ct_lookup(&table, c as i64).ok())
+            .and_then(|table| {
+                crate::emacs_core::chartable::ct_lookup_with_symbols(
+                    &table,
+                    c as i64,
+                    self.symbol_mode,
+                )
+                .ok()
+            })
             .unwrap_or(Value::NIL)
     }
 
@@ -4020,7 +4061,11 @@ impl WordBoundaryLookup {
             return false;
         }
 
-        let same_script = self.script_at(c1) == self.script_at(c2);
+        let same_script = crate::emacs_core::value::eq_value_swp(
+            &self.script_at(c1),
+            &self.script_at(c2),
+            self.symbol_mode == SymbolMode::Positioned,
+        );
         let mut categories = if same_script {
             self.word_separating_categories
         } else {
@@ -4040,7 +4085,12 @@ impl WordBoundaryLookup {
     fn script_at_emacs(&self, c: emacs_char::EmacsChar) -> Value {
         self.char_script_table
             .and_then(|table| {
-                crate::emacs_core::chartable::ct_lookup(&table, i64::from(c.code())).ok()
+                crate::emacs_core::chartable::ct_lookup_with_symbols(
+                    &table,
+                    i64::from(c.code()),
+                    self.symbol_mode,
+                )
+                .ok()
             })
             .unwrap_or(Value::NIL)
     }
@@ -4084,9 +4134,10 @@ impl WordBoundaryLookup {
         c2: emacs_char::EmacsChar,
         syntax: &BufferSyntaxLookup,
     ) -> bool {
-        let same_script = crate::emacs_core::value::eq_value(
+        let same_script = crate::emacs_core::value::eq_value_swp(
             &self.script_at_emacs(c1),
             &self.script_at_emacs(c2),
+            self.symbol_mode == SymbolMode::Positioned,
         );
         let mut categories = if same_script {
             self.word_separating_categories
@@ -4100,10 +4151,18 @@ impl WordBoundaryLookup {
         let Some(table) = syntax.category_table else {
             return default_result;
         };
-        let set1 = crate::emacs_core::chartable::ct_lookup(&table, i64::from(c1.code()))
-            .unwrap_or(Value::NIL);
-        let set2 = crate::emacs_core::chartable::ct_lookup(&table, i64::from(c2.code()))
-            .unwrap_or(Value::NIL);
+        let set1 = crate::emacs_core::chartable::ct_lookup_with_symbols(
+            &table,
+            i64::from(c1.code()),
+            self.symbol_mode,
+        )
+        .unwrap_or(Value::NIL);
+        let set2 = crate::emacs_core::chartable::ct_lookup_with_symbols(
+            &table,
+            i64::from(c2.code()),
+            self.symbol_mode,
+        )
+        .unwrap_or(Value::NIL);
         // GNU returns its script decision before examining category wildcards
         // when either character's category set is nil (category.c:395-400).
         let (Some(set1), Some(set2)) = (
@@ -4131,6 +4190,9 @@ impl WordBoundaryLookup {
 }
 
 pub(crate) trait SyntaxLookup {
+    fn symbol_mode(&self) -> SymbolMode {
+        SymbolMode::Bare
+    }
     /// Return the syntax class of character `c` in the current syntax table.
     fn char_syntax(&self, c: char) -> SyntaxClass;
 
@@ -4142,6 +4204,34 @@ pub(crate) trait SyntaxLookup {
     fn char_syntax_at(&self, c: char, input_pos: usize) -> SyntaxClass {
         let _ = input_pos;
         self.char_syntax(c)
+    }
+
+    /// Syntax of a full Emacs character. Byte8 keys must never be reduced to
+    /// their corresponding Latin-1 scalar before indexing a syntax table.
+    fn emacs_char_syntax(&self, c: emacs_char::EmacsChar) -> SyntaxClass {
+        c.as_rust_char().map_or_else(
+            || crate::emacs_core::syntax::standard_syntax_class_for_code(c.code()),
+            |c| self.char_syntax(c),
+        )
+    }
+
+    /// Position-aware syntax retaining byte8/non-Unicode table keys.
+    fn emacs_char_syntax_at(&self, c: emacs_char::EmacsChar, input_pos: usize) -> SyntaxClass {
+        c.as_rust_char().map_or_else(
+            || self.emacs_char_syntax(c),
+            |c| self.char_syntax_at(c, input_pos),
+        )
+    }
+
+    fn emacs_word_boundary_between(
+        &self,
+        c1: emacs_char::EmacsChar,
+        c2: emacs_char::EmacsChar,
+    ) -> bool {
+        match (c1.as_rust_char(), c2.as_rust_char()) {
+            (Some(c1), Some(c2)) => self.word_boundary_between(c1, c2),
+            _ => false,
+        }
     }
 
     /// Return true if character `c` belongs to category `cat`.
@@ -4247,14 +4337,64 @@ impl SyntaxLookup for DefaultSyntaxLookup {
 }
 
 impl SyntaxLookup for BufferSyntaxLookup {
+    fn symbol_mode(&self) -> SymbolMode {
+        self.word_boundary.symbol_mode()
+    }
+
+    fn emacs_char_syntax(&self, c: emacs_char::EmacsChar) -> SyntaxClass {
+        if self.symbol_mode() == SymbolMode::Bare {
+            return self.syntax_table.char_syntax_code(c.code());
+        }
+        crate::emacs_core::syntax::syntax_entry_at_char_code_with_symbols(
+            &self.syntax_table.chartable(),
+            c.code(),
+            self.symbol_mode(),
+        )
+        .map_or_else(
+            || self.syntax_table.char_syntax_code(c.code()),
+            |entry| entry.class,
+        )
+    }
+
+    fn emacs_char_syntax_at(&self, c: emacs_char::EmacsChar, _input_pos: usize) -> SyntaxClass {
+        self.emacs_char_syntax(c)
+    }
+
+    fn emacs_word_boundary_between(
+        &self,
+        c1: emacs_char::EmacsChar,
+        c2: emacs_char::EmacsChar,
+    ) -> bool {
+        // GNU category.h:116-118: only full codes below 0x100 bypass
+        // word_boundary_p; a byte8 character is outside that range.
+        (c1.code() >= 0x100 || c2.code() >= 0x100)
+            && self
+                .word_boundary
+                .boundary_between_emacs_characters(c1, c2, self)
+    }
+
     fn char_syntax(&self, c: char) -> SyntaxClass {
-        self.syntax_table.char_syntax(c)
+        if self.symbol_mode() == SymbolMode::Bare {
+            return self.syntax_table.char_syntax(c);
+        }
+        crate::emacs_core::syntax::syntax_entry_at_char_code_with_symbols(
+            &self.syntax_table.chartable(),
+            c as u32,
+            self.symbol_mode(),
+        )
+        .map_or_else(|| self.syntax_table.char_syntax(c), |entry| entry.class)
     }
 
     fn char_has_category(&self, c: char, cat: u8) -> bool {
         self.category_table
             .and_then(|table| {
-                crate::emacs_core::category::char_has_category_in_table(table, c, cat).ok()
+                crate::emacs_core::category::char_has_category_in_table_with_symbols(
+                    table,
+                    c,
+                    cat,
+                    self.symbol_mode(),
+                )
+                .ok()
             })
             .unwrap_or_else(|| default_char_has_category(c, cat))
     }
@@ -4271,6 +4411,9 @@ impl SyntaxLookup for BufferSyntaxLookup {
     }
 
     fn class_cache_key(&self) -> Option<LookupClassKey> {
+        if self.symbol_mode() == SymbolMode::Positioned {
+            return None;
+        }
         Some(LookupClassKey::Tables {
             syntax: self.syntax_table.chartable().bits(),
             category: self.category_table.map_or(0, |table| table.bits()),
@@ -4458,10 +4601,10 @@ fn regex_unibyte_to_char(byte: u8) -> u32 {
     }
 }
 
-/// Rust `char` used for syntax-table lookups of an Emacs character code.
-/// Byte8 codes collapse to their raw byte so `char_syntax` sees the same
-/// 0x80..=0xFF index GNU's syntax table uses for eight-bit characters.
-fn regex_syntax_char(code: u32) -> char {
+/// Rust scalar used by Unicode predicates, scalar charset ranges and the
+/// existing standalone category matcher. Syntax and word-boundary table reads
+/// instead retain the full `EmacsChar`.
+fn regex_scalar_char(code: u32) -> char {
     if emacs_char::char_byte8_p(code) {
         char::from(emacs_char::char_to_byte8(code))
     } else {
@@ -4539,11 +4682,12 @@ fn posix_class_matches(
     case_mode: PosixClassCaseMode,
 ) -> bool {
     let byte = regex_char_to_unibyte(code);
-    let ch = regex_syntax_char(code);
+    let ch = regex_scalar_char(code);
+    let emacs_ch = emacs_char::EmacsChar::from_code_unchecked(code);
     let char_syntax = || {
         input_pos.map_or_else(
-            || syntax.char_syntax(ch),
-            |position| syntax.char_syntax_at(ch, position),
+            || syntax.emacs_char_syntax(emacs_ch),
+            |position| syntax.emacs_char_syntax_at(emacs_ch, position),
         )
     };
     let is_real_ascii = code < 0x80;
@@ -4921,7 +5065,7 @@ fn match_charset_at_slow(
             .multibyte_charsets
             .get(&charset_op_pos)
             .map(|ranges| {
-                let ch = regex_syntax_char(ch);
+                let ch = regex_scalar_char(ch);
                 ranges.iter().any(|&(lo, hi)| ch >= lo && ch <= hi)
             })
             .unwrap_or(false);
@@ -4953,7 +5097,8 @@ fn match_syntaxspec_at(
         return None;
     }
     let (c, len) = re_text_char(text, d, target_multibyte)?;
-    let is = syntax.char_syntax_at(regex_syntax_char(c), d) as u8 == class_byte;
+    let is = syntax.emacs_char_syntax_at(emacs_char::EmacsChar::from_code_unchecked(c), d) as u8
+        == class_byte;
     if is != negate { Some(len) } else { None }
 }
 
@@ -4971,7 +5116,8 @@ fn match_syntaxspecset_at(
         return None;
     }
     let (c, len) = re_text_char(text, d, target_multibyte)?;
-    let class = syntax.char_syntax_at(regex_syntax_char(c), d) as u16;
+    let class =
+        syntax.emacs_char_syntax_at(emacs_char::EmacsChar::from_code_unchecked(c), d) as u16;
     if (mask >> class) & 1 != 0 {
         Some(len)
     } else {
@@ -4994,7 +5140,7 @@ fn match_categoryspec_at(
         return None;
     }
     let (c, len) = re_text_char(text, d, target_multibyte)?;
-    let has = syntax.char_has_category(regex_syntax_char(c), cat);
+    let has = syntax.char_has_category(regex_scalar_char(c), cat);
     if has != negate { Some(len) } else { None }
 }
 
@@ -5006,10 +5152,10 @@ fn re_char_and_syntax(
     pos: usize,
     target_multibyte: bool,
     syntax: &dyn SyntaxLookup,
-) -> Option<(char, SyntaxClass)> {
+) -> Option<(emacs_char::EmacsChar, SyntaxClass)> {
     re_text_char(text, pos, target_multibyte).map(|(c, _)| {
-        let c = regex_syntax_char(c);
-        (c, syntax.char_syntax_at(c, pos))
+        let c = emacs_char::EmacsChar::from_code_unchecked(c);
+        (c, syntax.emacs_char_syntax_at(c, pos))
     })
 }
 
@@ -5023,7 +5169,7 @@ fn re_char_is_symbol(
 ) -> bool {
     re_text_char(text, pos, target_multibyte)
         .map(|(c, _)| {
-            let s = syntax.char_syntax_at(regex_syntax_char(c), pos);
+            let s = syntax.emacs_char_syntax_at(emacs_char::EmacsChar::from_code_unchecked(c), pos);
             s == SyntaxClass::Word || s == SyntaxClass::Symbol
         })
         .unwrap_or(false)
@@ -5054,7 +5200,7 @@ fn assert_word_boundary(
     let current = re_char_and_syntax(text, d, target_multibyte, syntax);
     match (previous, current) {
         (Some((c1, SyntaxClass::Word)), Some((c2, SyntaxClass::Word))) => {
-            syntax.word_boundary_between(c1, c2)
+            syntax.emacs_word_boundary_between(c1, c2)
         }
         (Some((_, previous)), Some((_, current))) => {
             (previous == SyntaxClass::Word) != (current == SyntaxClass::Word)
@@ -5082,7 +5228,7 @@ fn assert_word_beg(
     };
     match previous {
         (_, class) if class != SyntaxClass::Word => true,
-        (c1, SyntaxClass::Word) => syntax.word_boundary_between(c1, c2),
+        (c1, SyntaxClass::Word) => syntax.emacs_word_boundary_between(c1, c2),
         _ => false,
     }
 }
@@ -5108,7 +5254,7 @@ fn assert_word_end(
     };
     match current {
         (_, class) if class != SyntaxClass::Word => true,
-        (c2, SyntaxClass::Word) => syntax.word_boundary_between(c1, c2),
+        (c2, SyntaxClass::Word) => syntax.emacs_word_boundary_between(c1, c2),
         _ => false,
     }
 }
@@ -9976,3 +10122,7 @@ mod start_anchor_tests;
 #[cfg(test)]
 #[path = "tests/suffix_literal_test.rs"]
 mod suffix_literal_tests;
+
+#[cfg(test)]
+#[path = "tests/raw_byte_syntax_test.rs"]
+mod raw_byte_syntax_tests;

@@ -25,6 +25,22 @@ use crate::buffer::{
 /// Matches GNU Emacs `GAP_BYTES_DFL` (`src/buffer.h:205`).
 pub(crate) const GAP_BYTES_DFL: usize = 2000;
 
+/// GNU `BUF_BYTES_MAX` (`src/buffer.h:195-200`): "A buffer cannot contain
+/// more bytes than a 1-origin fixnum can represent". Every constructor and
+/// insertion keeps the text within it, which is what lets a position read from
+/// a live buffer become a fixnum without a range check.
+pub(crate) const BUF_BYTES_MAX: usize =
+    (crate::tagged::value::TaggedValue::MOST_POSITIVE_FIXNUM - 1) as usize;
+
+/// Enforce [`BUF_BYTES_MAX`] for a text of `len` bytes. GNU signals
+/// `buffer_overflow` (insdel.c:476); the Lisp primitives that can request such
+/// sizes validate them first, so reaching this means an internal caller broke
+/// the invariant.
+#[inline]
+fn assert_within_buffer_limit(len: usize) {
+    assert!(len <= BUF_BYTES_MAX, "Maximum buffer size exceeded");
+}
+
 /// Floor for the gap after shrinking — not enforced today because we don't
 /// shrink yet, but kept as a named constant to match GNU's `GAP_BYTES_MIN`
 /// (`src/buffer.h:210`).
@@ -105,6 +121,7 @@ impl GapBuffer {
 
     /// Create a gap buffer pre-loaded with raw Emacs bytes.
     pub fn from_emacs_bytes(text: &[u8], multibyte: bool) -> Self {
+        assert_within_buffer_limit(text.len());
         let gap = GAP_BYTES_DFL;
         let char_count = emacs_char_count_bytes(text, multibyte).get();
         let byte_count = text.len();
@@ -130,6 +147,7 @@ impl GapBuffer {
         multibyte: bool,
         gap_state: GapCompatState,
     ) -> Self {
+        assert_within_buffer_limit(text.len());
         let total_chars = emacs_char_count_bytes(text, multibyte).get();
         let gap_start_chars = gap_state.pos().get();
         assert!(
@@ -548,6 +566,7 @@ impl GapBuffer {
         );
 
         let inserted_bytes = bytes.len();
+        assert_within_buffer_limit(self.total_bytes.saturating_add(inserted_bytes));
         self.move_gap_to(pos);
         self.ensure_gap(inserted_bytes);
 
@@ -1257,6 +1276,7 @@ impl GapBuffer {
     }
     /// Reconstruct from text bytes (for pdump load).
     pub(crate) fn from_dump(text: Vec<u8>, multibyte: bool) -> Self {
+        assert_within_buffer_limit(text.len());
         let len = text.len();
         let char_count = emacs_char_count_bytes(&text, multibyte).get();
         let byte_count = text.len();

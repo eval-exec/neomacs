@@ -9,8 +9,8 @@ use cranelift_codegen::ir::{Block, InstBuilder, MemFlagsData, Value as ClifValue
 use cranelift_frontend::FunctionBuilder;
 
 use super::jit_layout::{
-    CONTEXT_OBARRAY_OFFSET, LISP_SYMBOL_FUNCTION_OFFSET, LISP_SYMBOL_SIZE, OBARRAY_CHUNK_BITS,
-    OBARRAY_CHUNK_SLOTS, OBARRAY_JIT_LEN_OFFSET, OBARRAY_JIT_SPINE_OFFSET,
+    LISP_SYMBOL_FUNCTION_OFFSET, LISP_SYMBOL_SIZE, OBARRAY_CHUNK_BITS, OBARRAY_CHUNK_SLOTS,
+    OBARRAY_JIT_LEN_OFFSET, OBARRAY_JIT_SPINE_OFFSET,
 };
 use super::lowering::{RtCtx, emit_guard};
 use crate::emacs_core::intern::SymId;
@@ -36,22 +36,17 @@ pub(super) fn emit_identity_guard(
     let same = fb.ins().icmp(IntCC::Equal, designator, called_symbol);
     emit_guard(fb, deopt, same);
     let ctx = fb.use_var(rt.vmctx_var);
-    let len = fb.ins().load(
-        types::I64,
-        flags,
-        ctx,
-        (CONTEXT_OBARRAY_OFFSET + OBARRAY_JIT_LEN_OFFSET) as i32,
-    );
+    let obarray = super::jit_layout::emit_obarray_base(fb, ctx);
+    let len = fb
+        .ins()
+        .load(types::I64, flags, obarray, OBARRAY_JIT_LEN_OFFSET as i32);
     let exists = fb
         .ins()
         .icmp_imm_u(IntCC::UnsignedGreaterThan, len, i64::from(symbol.0));
     emit_guard(fb, deopt, exists);
-    let spine = fb.ins().load(
-        types::I64,
-        flags,
-        ctx,
-        (CONTEXT_OBARRAY_OFFSET + OBARRAY_JIT_SPINE_OFFSET) as i32,
-    );
+    let spine = fb
+        .ins()
+        .load(types::I64, flags, obarray, OBARRAY_JIT_SPINE_OFFSET as i32);
     let chunk = fb.ins().load(
         types::I64,
         flags,

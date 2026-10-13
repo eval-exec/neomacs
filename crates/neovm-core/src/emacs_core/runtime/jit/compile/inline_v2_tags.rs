@@ -30,7 +30,7 @@ fn is_named(tag: Tag, constants: &[Value], name: &str) -> bool {
     };
     constants
         .get(i as usize)
-        .and_then(|value| value.as_symbol_id())
+        .and_then(|value| value.as_bare_symbol_id())
         .is_some_and(|id| crate::emacs_core::intern::resolve_sym(id) == name)
 }
 
@@ -316,7 +316,7 @@ fn fuse_front(
                     if target.is_bytecode() {
                         return Some((i, RegionKind::Constant, target));
                     }
-                    let symbol = target.as_symbol_id()?;
+                    let symbol = target.as_bare_symbol_id()?;
                     if crate::emacs_core::jit::cache::inline_callee_is_unstable(symbol) {
                         return None;
                     }

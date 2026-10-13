@@ -475,7 +475,7 @@ fn format_reverses_percent_s_text_property_plist_order_like_gnu_add_properties()
     let intervals = props.intervals_snapshot();
     let ordered_keys: Vec<_> = intervals[0]
         .ordered_properties()
-        .map(|(name, _)| name.as_symbol_name().unwrap().to_string())
+        .map(|(name, _)| name.as_bare_symbol_name().unwrap().to_string())
         .collect();
 
     assert_eq!(result.as_utf8_str(), Some("key ok"));

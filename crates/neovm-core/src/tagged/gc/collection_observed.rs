@@ -44,7 +44,8 @@ static HAS_NONCONS_MARKS: AtomicBool = AtomicBool::new(false);
 
 // A scalar, not a Lisp identity cache. Release advancement follows metadata
 // clearing and precedes allocation-slot reuse or mutator resumption. Readers
-// Acquire it before trusting the existing RECENT cache or narrowing a ledger.
+// Acquire it on cold owner publication or before narrowing a ledger. The
+// collecting mutator invalidates its RECENT cache at this actual-clear edge.
 static OBSERVATION_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
@@ -55,7 +56,10 @@ pub(crate) fn collection_observation_epoch() -> u64 {
 /// Complete a reclamation batch after its sticky bits have been cleared.
 #[inline]
 pub(crate) fn advance_collection_observation_epoch() {
-    OBSERVATION_EPOCH.fetch_add(1, Ordering::Release);
+    let epoch = OBSERVATION_EPOCH
+        .fetch_add(1, Ordering::Release)
+        .wrapping_add(1);
+    super::super::collection_reads::reclaimed_collection_observations(epoch);
 }
 
 #[inline]
@@ -153,14 +157,11 @@ pub(crate) fn mark_collection_observed(bits: usize) -> bool {
     match bits & TAG_MASK {
         TAG_CONS => mark_cons_observed(address),
         TAG_STRING => {
-            // SAFETY: the caller supplies a live string owner. Complete both
-            // sticky publications before the certificate's revision snapshot.
+            // SAFETY: the caller supplies a live string owner. The atomic
+            // header mark survives byte-storage replacement and materialization;
+            // publish it before the certificate's revision snapshot.
             let owner = unsafe { &*(address as *const StringObj) };
-            let newly_set = mark_noncons_observed(address, &owner.header);
-            // Also repair the owned mirror when this header was marked while
-            // its payload was borrowed. Repeated owner observations are safe.
-            owner.data.mark_owned_storage_collection_observed();
-            newly_set
+            mark_noncons_observed(address, &owner.header)
         }
         TAG_FLOAT | TAG_VECLIKE => {
             // SAFETY: a live non-cons heap owner begins with GcHeader. Raw

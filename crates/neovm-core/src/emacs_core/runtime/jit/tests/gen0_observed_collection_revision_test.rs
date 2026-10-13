@@ -129,6 +129,12 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
     for owner in [observed, old_child, target] {
         context.push_specpdl_root(owner);
     }
+    // Compile before the first capture so the actual native leaves take
+    // hull-first admission, including its empty-proof ALL refusal.
+    let setcar = compile_bytecode_function(&store_function(Op::Setcar))
+        .expect("the pre-capture setcar leaf compiles");
+    let setcdr = compile_bytecode_function(&store_function(Op::Setcdr))
+        .expect("the pre-capture setcdr leaf compiles");
     let (_, certificate) = capture(|| observed.cons_car());
     let certificate = certificate.expect("one retained observation");
     let (lo, hi) = crate::tagged::collection_reads::compiled_observation_window();
@@ -142,7 +148,7 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
     let revision = LispCollectionRevision::current();
     let vmctx = (&mut context as *mut Context).cast::<u8>();
     assert_eq!(
-        super::super::dispatch::neovm_jit_setcar(
+        super::super::dispatch::neovm_jit_setcar_collection(
             vmctx,
             target.bits() as i64,
             Value::NIL.bits() as i64
@@ -150,7 +156,7 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
         Value::NIL.bits() as i64,
     );
     assert_eq!(
-        super::super::dispatch::neovm_jit_setcdr(
+        super::super::dispatch::neovm_jit_setcdr_collection(
             vmctx,
             target.bits() as i64,
             Value::NIL.bits() as i64
@@ -164,6 +170,33 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
             .contains(&old_child),
         "the ordinary SATB barrier retains the overwritten child",
     );
+    // Keep the reset in the compiled domain: ordinary mutation helpers
+    // publish the owner and would change this outside-observation fixture.
+    for setter in [
+        super::super::dispatch::neovm_jit_setcar_collection,
+        super::super::dispatch::neovm_jit_setcdr_collection,
+    ] {
+        assert_eq!(
+            setter(vmctx, target.bits() as i64, old_child.bits() as i64),
+            old_child.bits() as i64,
+        );
+    }
+    context.tagged_heap.take_satb_shared_for_test();
+    let calls = cons_shims();
+    for leaf in [&setcar, &setcdr] {
+        assert_eq!(
+            native(&mut context, leaf, &[target, Value::NIL]),
+            Value::NIL
+        );
+        assert!(
+            context
+                .tagged_heap
+                .take_satb_shared_for_test()
+                .contains(&old_child),
+            "each native empty-proof refusal retains its overwritten child",
+        );
+    }
+    assert_eq!(cons_shims() - calls, 2, "ALL refuses both native stores");
     context.tagged_heap.set_concurrent_active_for_test(false);
     assert_eq!(
         LispCollectionRevision::current().steps_since_for_test(revision),
@@ -179,8 +212,7 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
     );
 }
 
-#[test]
-fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
+fn check_mapped_blv_binding() {
     let _journal = JournalMode::observed();
     let mut source = blv_context(false);
     let source_owner = blv_cell(&source, false);
@@ -197,9 +229,9 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
     set_tagged_heap(&mut context.tagged_heap);
     context.specpdl.reserve(16);
     context.jit_bind_stack.reserve(16);
-    let owner = *context
+    let owner = context
         .obarray()
-        .symbol_value("fx1-mapped-default-owner")
+        .symbol_value_copied("fx1-mapped-default-owner")
         .expect("mapped owner root");
     let symbol = context
         .obarray()
@@ -226,6 +258,7 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
             .remember_mapped_cons_ahead_of_writes(owner)
     );
     assert!(!is_observed(owner.bits()));
+    super::super::inline_vars::reset_inline_var_sites();
     let leaf = compile_blv(
         &context,
         &[
@@ -238,6 +271,14 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
         &[Value::symbol("u34-inline-blv")],
         1,
     );
+    assert_eq!(
+        super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Bind),
+        1
+    );
+    assert_eq!(
+        super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Unbind),
+        1
+    );
     for _ in 0..3 {
         assert_eq!(native(&mut context, &leaf, &[Value::T]), Value::T);
     }
@@ -247,7 +288,7 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
     assert_eq!(
         super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get()) - binds,
         0,
-        "an unobserved remembered dump cell keeps its inline binding proof",
+        "the remembered binding stays inline",
     );
     assert_eq!(
         super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get()) - unbinds,
@@ -271,8 +312,17 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
     );
 }
 
+#[test]
+fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
+    check_mapped_blv_binding();
+}
+
 fn blv_context(local: bool) -> Context {
-    let mut context = context(false);
+    blv_context_in(local, false)
+}
+
+fn blv_context_in(local: bool, generational: bool) -> Context {
+    let mut context = context(generational);
     context.specpdl.reserve(16);
     context.jit_bind_stack.reserve(16);
     let setup = if local {
@@ -306,9 +356,13 @@ fn aset_leaf() -> CompiledLeaf {
 }
 
 fn fixture(kind: StoreKind) -> (Context, Value, CompiledLeaf) {
+    fixture_in(kind, false)
+}
+
+fn fixture_in(kind: StoreKind, generational: bool) -> (Context, Value, CompiledLeaf) {
     if matches!(kind, StoreKind::BlvDefault | StoreKind::BlvLocal) {
         let local = matches!(kind, StoreKind::BlvLocal);
-        let mut context = blv_context(local);
+        let mut context = blv_context_in(local, generational);
         let owner = blv_cell(&context, local);
         // Return the supplied value directly: a VarRef after VarSet would
         // intentionally observe the BLV cell inside setter-only captures.
@@ -321,7 +375,7 @@ fn fixture(kind: StoreKind) -> (Context, Value, CompiledLeaf) {
         context.push_specpdl_root(owner);
         return (context, owner, leaf);
     }
-    let mut context = context(false);
+    let mut context = context(generational);
     let leaf = match kind {
         StoreKind::Setcar | StoreKind::Setcdr => {
             compile_bytecode_function(&store_function(if matches!(kind, StoreKind::Setcar) {
@@ -357,8 +411,13 @@ fn fixture(kind: StoreKind) -> (Context, Value, CompiledLeaf) {
 }
 
 fn check_first_store(kind: StoreKind) {
+    check_first_store_in(kind, false);
+}
+
+/// GEN0 and GEN1 make the same observed-owner journal decision.
+fn check_first_store_in(kind: StoreKind, generational: bool) {
     let _journal = JournalMode::observed();
-    let (mut context, owner, leaf) = fixture(kind);
+    let (mut context, owner, leaf) = fixture_in(kind, generational);
     assert!(!is_observed(owner.bits()), "fresh owner: {kind:?}");
     let before = LispCollectionRevision::current();
     let shims_before = kind.shim_calls();
@@ -615,7 +674,6 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
         (Op::Setcdr, StoreKind::Setcdr),
     ] {
         let mut context = context(false);
-        let leaf = compile_bytecode_function(&store_function(op)).expect("native cons setter");
         let mut owners = std::array::from_fn::<_, 3, _>(|_| {
             context.tagged_heap.alloc_cons(Value::NIL, Value::NIL)
         });
@@ -626,6 +684,7 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
         }
         let (_, endpoints) = capture(|| (first.cons_car(), last.cons_car()));
         let endpoints = endpoints.expect("the endpoints bound a real empty interval");
+        let leaf = compile_bytecode_function(&store_function(op)).expect("native cons setter");
         let before = LispCollectionRevision::current();
         let shims = cons_shims();
         for value in [12, 23, 34] {
@@ -644,12 +703,12 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
         assert!(endpoints.unchanged());
         let address = target.bits() & !crate::tagged::value::TAG_MASK;
         assert!(
-            !context
+            context
                 .tagged_heap
                 .jit_barrier_window_for_test()
-                .covers(address)
+                .covers(address),
+            "the primary hull is retained; the native secondary interval bypasses its empty interior"
         );
-
         let (value, reads) = capture(|| kind.read(target));
         assert_eq!(value, Value::make_int(34));
         let reads = reads.expect("a certificate taken after the inline mutation");
@@ -672,6 +731,41 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
         );
         assert!(endpoints.unchanged());
     }
+}
+
+#[test]
+fn gen0_pre_capture_leaf_completes_interior_stores_in_the_shim() {
+    let _journal = JournalMode::observed();
+    let mut context = context(false);
+    assert!(!crate::tagged::gc::has_collection_observations());
+    // Compiled before any capture: main's hull gate, with no native proofs.
+    let leaf = compile_bytecode_function(&store_function(Op::Setcar)).expect("pre-capture setcar");
+    let mut owners =
+        std::array::from_fn::<_, 3, _>(|_| context.tagged_heap.alloc_cons(Value::NIL, Value::NIL));
+    owners.sort_unstable_by_key(|owner| owner.bits());
+    let [first, target, last] = owners;
+    for owner in owners {
+        context.push_specpdl_root(owner);
+    }
+    let (_, endpoints) = capture(|| (first.cons_car(), last.cons_car()));
+    let endpoints = endpoints.expect("the endpoints bound a real empty interval");
+    let before = LispCollectionRevision::current();
+    let shims = cons_shims();
+    for value in [12, 23, 34] {
+        native(
+            &mut context,
+            &leaf,
+            &StoreKind::Setcar.args(target, Value::make_int(value)),
+        );
+    }
+    assert_eq!(LispCollectionRevision::current(), before);
+    assert_eq!(
+        cons_shims(),
+        shims + 3,
+        "a published gap does not change a pre-capture leaf's hull refusal"
+    );
+    assert!(endpoints.unchanged());
+    assert_eq!(target.cons_car(), Value::make_int(34));
 }
 
 fn standalone_heap() -> TaggedHeap {
@@ -931,6 +1025,14 @@ fn gen0_observed_collection_store_cost_probe() {
     } else {
         None
     };
+    // Supplementary native-code diagnostics can inspect the interactive
+    // frontend after the capture. Normal slope fixtures keep their original
+    // compile-before-capture ordering.
+    let leaf = if std::env::var("FX1_STORE_COMPILE_AFTER_CAPTURE").as_deref() == Ok("1") {
+        probe_leaf(kind, &context)
+    } else {
+        leaf
+    };
     let mode = crate::tagged::collection_reads::compiled_journal_mode();
     let (lo, hi) = crate::tagged::collection_reads::compiled_observation_window();
     let address = owner.bits() & !crate::tagged::value::TAG_MASK;
@@ -971,3 +1073,6 @@ fn gen0_observed_collection_store_cost_probe() {
         result.as_fixnum().expect("fixnum result"), gcs_before, gcs_after,
         usize::from(envelope), owner_in_envelope, observed_neighbors, journal_steps);
 }
+
+#[path = "gen1_observed_collection_gate_test.rs"]
+mod gen1_observed_collection_gate;

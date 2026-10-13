@@ -12,7 +12,7 @@ fn raw_loop(ops: Vec<Op>) -> ByteCodeFunction {
     f.lexical = true;
     f.constants = vec![Value::make_int(0), Value::make_int(3), Value::make_int(99)].into();
     f.ops = ops;
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     f
 }
@@ -59,7 +59,7 @@ fn osr_raw_zero_is_truthy_for_plain_and_else_pop_branches() {
         let snapshot = [Value::make_int(0)];
         ctx.bc_buf.extend_from_slice(&snapshot);
         assert_eq!(
-            cache::try_run_osr(&mut ctx, &f, 1, &snapshot, &[]),
+            crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 1, &snapshot, &[]),
             Some(NativeRun::Ok(Value::make_int(3).bits())),
             "on_nil={on_nil} else_pop={else_pop}"
         );
@@ -96,7 +96,7 @@ fn osr_raw_condition_is_popped_before_normalizing_a_reused_temporary_slot() {
     let snapshot = [Value::make_int(0)];
     ctx.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
-        cache::try_run_osr(&mut ctx, &f, 1, &snapshot, &[]),
+        crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 1, &snapshot, &[]),
         Some(NativeRun::Ok(Value::make_int(3).bits()))
     );
 }
@@ -150,7 +150,7 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
         Op::Switch,
         Op::Return,
     ];
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
     let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
@@ -163,7 +163,7 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
         let before = ctx.tagged_heap.gc_collections();
         reset_bytecode_branch_poll_count();
         ctx.gc_stress = true;
-        let result = cache::try_run_osr(&mut ctx, &f, 2, &snapshot, &[]);
+        let result = crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 2, &snapshot, &[]);
         ctx.gc_stress = false;
         let Some(NativeRun::Ok(bits)) = result else {
             panic!("{result:?}");
@@ -185,7 +185,7 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
     ctx.bc_buf.extend_from_slice(&snapshot);
     reset_bytecode_branch_poll_count();
     ctx.set_quit_flag_value(Value::T);
-    let result = cache::try_run_osr(&mut ctx, &f, 2, &snapshot, &[]);
+    let result = crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 2, &snapshot, &[]);
     ctx.set_quit_flag_value(Value::NIL);
     assert_eq!(result, Some(NativeRun::Signal));
     assert_eq!(bytecode_branch_poll_count(), 1);
@@ -217,7 +217,7 @@ fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() 
         Op::GotoIfNotNil(1),
         Op::Return,
     ];
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
     let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
@@ -225,7 +225,8 @@ fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() 
     let max = Value::MOST_POSITIVE_FIXNUM;
     let snapshot = [Value::make_int(max)];
     ctx.bc_buf.extend_from_slice(&snapshot);
-    let Some(NativeRun::DeoptAt(resume)) = cache::try_run_osr(&mut ctx, &f, 1, &snapshot, &[])
+    let Some(NativeRun::DeoptAt(resume)) =
+        crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 1, &snapshot, &[])
     else {
         panic!("raw increment must precisely deopt on overflow");
     };
@@ -316,7 +317,7 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
             Op::List(2),
             Op::Return,
         ];
-        f.max_stack = 8;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
         f.seal_hand_assembled_ops();
         let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
         let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
@@ -326,7 +327,7 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
         ctx.bc_buf.clear();
         ctx.bc_buf.extend_from_slice(&snapshot);
         VARREF_SHIM_CALLS.with(|c| c.set(0));
-        let result = cache::try_run_osr(&mut ctx, &f, 2, &snapshot, &[]);
+        let result = crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 2, &snapshot, &[]);
         let Some(NativeRun::Ok(bits)) = result else {
             panic!("{name}: {result:?}")
         };
@@ -379,7 +380,7 @@ fn osr_raw_varref_type_change_retags_live_slots_for_precise_resume() {
         Op::List(2),
         Op::Return,
     ];
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
     let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
@@ -387,7 +388,8 @@ fn osr_raw_varref_type_change_retags_live_slots_for_precise_resume() {
     assert!(raw[0] && raw[1]);
     let snapshot = [Value::make_int(3), Value::make_int(0)];
     ctx.bc_buf.extend_from_slice(&snapshot);
-    let Some(NativeRun::DeoptAt(resume)) = cache::try_run_osr(&mut ctx, &f, 2, &snapshot, &[])
+    let Some(NativeRun::DeoptAt(resume)) =
+        crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 2, &snapshot, &[])
     else {
         panic!("the arithmetic after the float read must precisely deopt");
     };

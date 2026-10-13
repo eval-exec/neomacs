@@ -638,7 +638,7 @@ fn neovm_jit_call_general(
             // `(apply F ...)` into a compiled F, also without leaving native
             // code.
             if nargs >= 2
-                && func_val.as_symbol_id() == Some(Vm::apply_builtin_id())
+                && func_val.as_bare_symbol_id() == Some(Vm::apply_builtin_id())
                 && let Some(outcome) = Vm::call_apply_native(ctx_ref, func_val, args_ptr, nargs)
             {
                 return native_call_status(outcome, out);
@@ -649,7 +649,7 @@ fn neovm_jit_call_general(
             ctx_ref.bc_buf.extend_from_slice(unsafe {
                 core::slice::from_raw_parts(args_ptr as *const Value, nargs)
             });
-            if func_val.is_symbol()
+            if func_val.is_bare_symbol()
                 && let Some(res) =
                     Vm::call_builtin_symbol_for_jit(ctx_ref, func_val, args_start, nargs)
             {
@@ -808,7 +808,7 @@ pub(crate) struct ShimAddr(*const ());
 unsafe impl Sync for ShimAddr {}
 
 #[used]
-pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 74] = [
+pub(crate) static JIT_SHIM_TABLE: &[(&str, ShimAddr)] = &[
     (
         "neovm_jit_unobserved_collection_owner",
         ShimAddr(crate::tagged::gc::neovm_jit_unobserved_collection_owner as *const ()),
@@ -993,6 +993,10 @@ pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 74] = [
         ShimAddr(neovm_jit_symbolp_slow as *const ()),
     ),
     ("neovm_jit_throw", ShimAddr(neovm_jit_throw as *const ())),
+    (
+        "neovm_jit_throw_with_symbols",
+        ShimAddr(neovm_jit_throw_with_symbols as *const ()),
+    ),
     ("neovm_jit_unbind", ShimAddr(neovm_jit_unbind as *const ())),
     (
         "neovm_jit_unwind_protect",
@@ -1060,13 +1064,37 @@ pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 74] = [
         "neovm_jit_sqrt_binding_valid",
         ShimAddr(neovm_jit_sqrt_binding_valid as *const ()),
     ),
+    (
+        "neovm_jit_aset_collection",
+        ShimAddr(neovm_jit_aset_collection as *const ()),
+    ),
+    (
+        "neovm_jit_varset_collection",
+        ShimAddr(neovm_jit_varset_collection as *const ()),
+    ),
+    (
+        "neovm_jit_varbind_collection",
+        ShimAddr(neovm_jit_varbind_collection as *const ()),
+    ),
+    (
+        "neovm_jit_unbind_collection",
+        ShimAddr(neovm_jit_unbind_collection as *const ()),
+    ),
+    (
+        "neovm_jit_setcar_collection",
+        ShimAddr(neovm_jit_setcar_collection as *const ()),
+    ),
+    (
+        "neovm_jit_setcdr_collection",
+        ShimAddr(neovm_jit_setcdr_collection as *const ()),
+    ),
 ];
 
 /// Register every shim in [`JIT_SHIM_TABLE`] with a JIT module builder. Both
 /// tiers' builders call this, so a shim that exists is a shim the JIT can
 /// resolve — in the production binary and in a test binary alike.
 pub(crate) fn register_shims(builder: &mut cranelift_jit::JITBuilder) {
-    for (name, addr) in &JIT_SHIM_TABLE {
+    for (name, addr) in JIT_SHIM_TABLE {
         builder.symbol(*name, addr.0 as *const u8);
     }
 }
@@ -1074,6 +1102,10 @@ pub(crate) fn register_shims(builder: &mut cranelift_jit::JITBuilder) {
 #[cfg(test)]
 #[path = "shims/tests/shim_table_test.rs"]
 mod shim_table_tests;
+
+#[cfg(test)]
+#[path = "shims/tests/collection_store_imports.rs"]
+mod collection_store_import_tests;
 
 #[cfg(test)]
 thread_local! {
@@ -1208,7 +1240,7 @@ pub extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64
 /// [`neovm_jit_call`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(test)]
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1243,13 +1275,52 @@ pub extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     })
 }
 
+// The original host entry remains the direct knob-off call path. The
+// collection-aware export is selected during lowering, never by this body.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+    #[cfg(test)]
+    VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
+    jit_shim_contain!(ctx, STATUS_SIGNAL, {
+        use crate::emacs_core::intern::SymId;
+        let value = Value::from_bits(val as usize);
+        {
+            // SAFETY: see neovm_jit_call's function-level contract.
+            let ctx = unsafe { &mut *(ctx as *mut Context) };
+            // A plain cell: one store, no safe point, so no scratch roots and
+            // no `Vm` (see `Context::try_set_plain_variable`); likewise a
+            // cached buffer-local or forwarded store (P1.4 A2).
+            if ctx.try_set_plain_variable(SymId(sym as u32), value)
+                || ctx.try_set_var_cached(SymId(sym as u32), value)
+            {
+                return STATUS_OK;
+            }
+        }
+        let saved = save_scratch_gc_roots();
+        push_scratch_gc_root(value);
+        // SAFETY: see neovm_jit_call's function-level contract.
+        let ctx = unsafe { &mut *(ctx as *mut Context) };
+        let mut vm = Vm::from_context(ctx);
+        let status = match vm.varset_for_jit(SymId(sym as u32), value) {
+            Ok(()) => STATUS_OK,
+            Err(flow) => {
+                stash_pending_flow(flow);
+                STATUS_SIGNAL
+            }
+        };
+        restore_scratch_gc_roots(saved);
+        status
+    })
+}
+
 /// Dynamically bind a variable (`Op::VarBind` semantics: GNU `Bvarbind`,
 /// `specbind(sym, POP)`). Records the pre-bind specpdl depth for the matching
 /// `unbind`, or stashes the predicate signal and returns [`STATUS_SIGNAL`].
 /// SAFETY: same vmctx contract as [`neovm_jit_call`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(test)]
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1288,12 +1359,99 @@ pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     })
 }
 
+// The original host entry remains the direct knob-off call path. The
+// collection-aware export is selected during lowering, never by this body.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+    #[cfg(test)]
+    VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
+    jit_shim_contain!(ctx, STATUS_SIGNAL, {
+        use crate::emacs_core::intern::SymId;
+        let value = Value::from_bits(val as usize);
+        // SAFETY: see neovm_jit_call's function-level contract.
+        let ctx = unsafe { &mut *(ctx as *mut Context) };
+        let bind_depth = ctx.specpdl.len();
+        // GNU `specbind`'s plain arm first: one swap and a specpdl push, no
+        // Lisp and no safe point, so `value` needs no scratch root (the cell
+        // holds it from the swap on). Rooting it and going through the
+        // general `try_specbind` cost more than the bind itself on a source
+        // load, where nearly every `let` is of a plain global.
+        // Likewise a cached buffer-local or forwarded bind (P1.4 A3).
+        if ctx.specbind_plain_untrapped_fast(SymId(sym as u32), value)
+            || ctx.specbind_cached(SymId(sym as u32), value)
+        {
+            ctx.jit_bind_stack.push(bind_depth);
+            return STATUS_OK;
+        }
+        let saved = save_scratch_gc_roots();
+        push_scratch_gc_root(value);
+        // Both tiers refused: the general `specbind`, without retrying them.
+        let status = match ctx.specbind_uncached(SymId(sym as u32), value) {
+            Ok(()) => {
+                ctx.jit_bind_stack.push(bind_depth);
+                STATUS_OK
+            }
+            Err(flow) => {
+                stash_pending_flow(flow);
+                STATUS_SIGNAL
+            }
+        };
+        restore_scratch_gc_roots(saved);
+        status
+    })
+}
+
 /// Unbind the `n` most recent JIT-made dynamic bindings (`Op::Unbind`
 /// semantics). The static bind-depth analysis guarantees `n` never exceeds this
 /// frame's outstanding binds; the `min` is defensive only.
 /// Returns `STATUS_SIGNAL` with the cleanup flow stashed when unwinding exits
 /// nonlocally. SAFETY: same vmctx contract as [`neovm_jit_call`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i64 {
+    #[cfg(test)]
+    UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
+    // SAFETY: see neovm_jit_call's function-level contract.
+    let ctx = unsafe { &mut *(ctx as *mut Context) };
+    let target = {
+        let s = &mut ctx.jit_bind_stack;
+        let take = (n as usize).min(s.len());
+        if take == 0 {
+            None
+        } else {
+            let target = s[s.len() - take];
+            let new_len = s.len() - take;
+            s.truncate(new_len);
+            Some(target)
+        }
+    };
+    let Some(target) = target else {
+        return STATUS_OK;
+    };
+    // GNU `unbind_to`'s common case, top-down: a `let` of a plain untrapped
+    // cell is one store, the lexical environment a `let` saved is one
+    // store. Pop those first; only what is left -- a watched or buffer-local
+    // `let`, an `unwind-protect`, a frame with `debug-on-exit` -- takes the
+    // general unwinder with its quit-flag bracket and debugger check. The
+    // general path did this same pop, after ~80 instructions of its own on
+    // every unbind of a source load's `let`s.
+    ctx.pop_compiled_specpdl_suffix(target);
+    if ctx.specpdl.len() <= target {
+        return STATUS_OK;
+    }
+    match ctx.unbind_to_with_result(target, Ok(Value::NIL)) {
+        Ok(_) => STATUS_OK,
+        Err(flow) => {
+            stash_pending_flow(flow);
+            STATUS_SIGNAL
+        }
+    }
+}
+
+// The original host entry remains the direct knob-off call path. The
+// collection-aware export is selected during lowering, never by this body.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
     #[cfg(test)]
@@ -1322,7 +1480,7 @@ pub extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
     // general unwinder with its quit-flag bracket and debugger check. The
     // general path did this same pop, after ~80 instructions of its own on
     // every unbind of a source load's `let`s.
-    ctx.pop_compiled_specpdl_suffix(target);
+    ctx.pop_simple_specpdl_suffix(target);
     if ctx.specpdl.len() <= target {
         return STATUS_OK;
     }

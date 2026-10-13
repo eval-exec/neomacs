@@ -605,13 +605,14 @@ impl Context {
     /// The final report lines, with function names resolved (a walk of the
     /// obarray, so only at the end of a session).
     pub(crate) fn tier_i_report_lines(&self, limit: usize) -> Vec<String> {
+        let symbol_mode = self.symbol_mode();
         let mut names: FxHashMap<usize, String> = FxHashMap::default();
         for (id, _) in self.obarray.iter_symbols() {
             let Some(cell) = self.obarray.symbol_function_id(id) else {
                 continue;
             };
             let (closure, macro_suffix) =
-                if cell.is_cons() && cell.cons_car().is_symbol_named("macro") {
+                if cell.is_cons() && cell.cons_car().is_symbol_named("macro", symbol_mode) {
                     (cell.cons_cdr(), " (macro)")
                 } else {
                     (cell, "")

@@ -253,7 +253,7 @@ pub fn image_frame_index_from_lisp(value: Value) -> Option<ImageFrameIndex> {
 
 impl ImageSpecKey {
     pub fn from_lisp_value(value: Value) -> Option<Self> {
-        Self::from_keyword(value.as_symbol_name()?)
+        Self::from_keyword(value.as_bare_symbol_name()?)
     }
 
     pub fn from_keyword(name: &str) -> Option<Self> {
@@ -269,7 +269,7 @@ impl ImageSpecKey {
     }
 
     pub fn is_value(self, value: Value) -> bool {
-        value.as_symbol_name() == Some(self.keyword())
+        value.as_bare_symbol_name() == Some(self.keyword())
     }
 }
 
@@ -328,7 +328,7 @@ enum ImageArea {
 impl ImageArea {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     fn from_symbol_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 }
 
@@ -433,7 +433,9 @@ pub fn image_load_identity(spec: &Value, items: &[Value]) -> ImageLoadIdentity {
         let value = items[index + 1];
         match ImageSpecKey::from_lisp_value(items[index]) {
             Some(ImageSpecKey::Type) => {
-                format = value.as_symbol_name().map(ImageFormatName::from_lisp_type);
+                format = value
+                    .as_bare_symbol_name()
+                    .map(ImageFormatName::from_lisp_type);
             }
             Some(ImageSpecKey::File) => file = value.as_utf8_str().map(str::to_owned),
             _ => {}
@@ -592,7 +594,7 @@ pub(crate) fn image_spec_ascent(spec: &Value) -> ImageAscentPolicy {
     while index + 1 < items.len() {
         if ImageSpecKey::from_lisp_value(items[index]) == Some(ImageSpecKey::Ascent) {
             let value = items[index + 1];
-            if value.is_symbol_named("center") {
+            if value.is_bare_symbol_named("center") {
                 return ImageAscentPolicy::Center;
             }
             if let Some(percent) = value.as_int().map(|percent| percent as f32)
@@ -613,7 +615,7 @@ pub(crate) fn image_resolve_request_from_spec(
     default_colors: (u32, u32),
 ) -> Option<ImageResolveRequest> {
     let items = list_to_vec(spec)?;
-    if items.first()?.as_symbol_name() != Some("image") {
+    if items.first()?.as_bare_symbol_name() != Some("image") {
         return None;
     }
 
@@ -653,7 +655,7 @@ pub(crate) fn image_resolve_request_from_spec(
                 }
             }
             Some(ImageSpecKey::Animation) => {
-                animation = if value.is_symbol_named("t") {
+                animation = if value.is_bare_symbol_named("t") {
                     ImageAnimationPolicy::enabled(None)
                 } else if let Some(fps) = value.as_int()
                     && u32::try_from(fps).is_ok_and(|fps| fps > 0)
@@ -669,7 +671,7 @@ pub(crate) fn image_resolve_request_from_spec(
             Some(ImageSpecKey::MaxHeight) => {
                 max_height = parse_image_dimension(value).or(max_height)
             }
-            Some(ImageSpecKey::Scale) if value.is_symbol_named("default") => {
+            Some(ImageSpecKey::Scale) if value.is_bare_symbol_named("default") => {
                 scale = ImageScalePolicy::Default;
             }
             Some(ImageSpecKey::Scale) => {
@@ -720,10 +722,10 @@ fn image_mask_rgb16(value: Value) -> Option<[u16; 3]> {
 }
 
 fn heuristic_mask_argument(value: Value) -> Option<ImageHeuristicMask> {
-    if value.is_symbol_named("heuristic") {
+    if value.is_bare_symbol_named("heuristic") {
         return Some(ImageHeuristicMask::FourCorners);
     }
-    if !value.is_cons() || !value.cons_car().is_symbol_named("heuristic") {
+    if !value.is_cons() || !value.cons_car().is_bare_symbol_named("heuristic") {
         return None;
     }
     let tail = value.cons_cdr();
@@ -830,7 +832,7 @@ pub fn is_image_spec(value: &Value) -> bool {
         None => return false,
     };
 
-    if items.is_empty() || items[0].as_symbol_name() != Some("image") {
+    if items.is_empty() || items[0].as_bare_symbol_name() != Some("image") {
         return false;
     }
 
@@ -848,7 +850,9 @@ pub fn is_image_spec(value: &Value) -> bool {
             match key {
                 ImageSpecKey::Type if !type_seen => {
                     type_seen = true;
-                    type_ok = val.as_symbol_name().is_some_and(is_supported_image_type);
+                    type_ok = val
+                        .as_bare_symbol_name()
+                        .is_some_and(is_supported_image_type);
                 }
                 ImageSpecKey::File if !file_seen => {
                     file_seen = true;
@@ -886,7 +890,7 @@ fn image_spec_plist(spec: &Value) -> Value {
     if items.is_empty() {
         return Value::NIL;
     }
-    if items[0].as_symbol_name() == Some("image") {
+    if items[0].as_bare_symbol_name() == Some("image") {
         // Plist is everything after the `image` symbol.
         return Value::list(items[1..].to_vec());
     }
@@ -905,7 +909,7 @@ fn image_spec_plist(spec: &Value) -> Value {
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_image_type_available_p(args: Vec<Value>) -> EvalResult {
     expect_args("image-type-available-p", &args, 1)?;
-    let type_name = match args[0].as_symbol_name() {
+    let type_name = match args[0].as_bare_symbol_name() {
         Some(name) => name.to_string(),
         None => {
             return Err(signal(
@@ -935,7 +939,7 @@ pub(crate) fn builtin_create_image(args: Vec<Value>) -> EvalResult {
 
     // TYPE argument (optional).
     let image_type = if args.len() > 1 && !args[1].is_nil() {
-        match args[1].as_symbol_name() {
+        match args[1].as_bare_symbol_name() {
             Some(name) => {
                 let normalized = normalize_image_type_name(name).unwrap_or(name);
                 Value::symbol(normalized)
@@ -1791,7 +1795,7 @@ pub(crate) fn builtin_image_type(args: Vec<Value>) -> EvalResult {
         }
     } else {
         let rendered = super::print::print_value(&explicit_type);
-        let sym_name = explicit_type.as_symbol_name().ok_or_else(|| {
+        let sym_name = explicit_type.as_bare_symbol_name().ok_or_else(|| {
             signal(
                 "error",
                 vec![Value::string(format!("Invalid image type `{rendered}`"))],
@@ -1858,6 +1862,7 @@ pub(crate) fn builtin_image_transforms_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_max_args("image-transforms-p", &args, 1)?;
     if let Some(frame_or_display) = args.first() {
         expect_frame_designator("image-transforms-p", frame_or_display)?;
@@ -1865,7 +1870,7 @@ pub(crate) fn builtin_image_transforms_p(
     // GNU decodes the FRAME and tests `FRAME_WINDOW_P` — it does not fall back
     // to the global `window-system`, the way the `display-*-p` predicates do.
     let window_system = super::display::frame_window_system_symbol(eval, args.first())?
-        .is_some_and(|value| value.is_symbol());
+        .is_some_and(|value| value.is_symbol(symbol_mode));
     if !window_system {
         return Ok(Value::NIL);
     }
@@ -1912,7 +1917,10 @@ impl Context {
         if diagnostics.is_empty() {
             return;
         }
-        let quoting = crate::emacs_core::coding::effective_text_quoting_style(&self.obarray);
+        let quoting = crate::emacs_core::coding::effective_text_quoting_style(
+            &self.obarray,
+            self.symbol_mode(),
+        );
         for diagnostic in diagnostics {
             let message = crate::emacs_core::coding::requote_c_error_message(&diagnostic, quoting);
             self.add_to_log(&message);

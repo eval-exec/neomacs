@@ -6,42 +6,231 @@ use crate::emacs_core::eval::LispArgVec;
 use crate::emacs_core::hashtab::hash_key_to_visible_value;
 use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use crate::emacs_core::value::{HashProbe, HashTableMakeKeyword, ValueKind, VecLikeType};
+use crate::tagged::value::SymbolMode;
 
 // ===========================================================================
 // Vector operations
 // ===========================================================================
 
+/// Checked backing extent for a Value vector. Nonempty storage has exactly
+/// the size and alignment of `elements` Values; empty storage never reaches
+/// the allocator. Only arithmetic metadata is retained, so this witness is
+/// Send + Sync and independent of any mutator or GC. It grants no permission
+/// to transfer the Lisp Values subsequently stored in the allocation.
+#[derive(Clone, Copy, Debug)]
+enum VectorElementLayout {
+    Empty,
+    Nonempty {
+        elements: std::num::NonZeroUsize,
+        layout: std::alloc::Layout,
+    },
+}
+
+static_assertions::assert_impl_all!(VectorElementLayout: Send, Sync);
+
+impl TryFrom<usize> for VectorElementLayout {
+    type Error = crate::emacs_core::alloc::AllocationFailure;
+
+    #[inline]
+    fn try_from(elements: usize) -> Result<Self, Self::Error> {
+        let Some(elements) = std::num::NonZeroUsize::new(elements) else {
+            return Ok(Self::Empty);
+        };
+        let layout = std::alloc::Layout::array::<Value>(elements.get())?;
+        Ok(Self::Nonempty { elements, layout })
+    }
+}
+
+/// Allocate empty Value backing through Rust's global allocator. GNU
+/// alloc.c:3399-3400 rejects an unrepresentable extent; alloc.c:3353-3383 and
+/// 4142 deliver backing allocation failure through memory-signal-data.
+/// InvalidLayout and NullAllocation remain typed until the invoking mutator
+/// selects its live memory condition. No Lisp allocation or GC occurs here;
+/// Vec immediately owns the storage, while its existing resize initializes
+/// the Values and the existing Value::vector adoption registers the result.
+#[inline]
+#[deny(clippy::wildcard_enum_match_arm)]
+fn allocate_vector_elements(
+    extent: VectorElementLayout,
+) -> Result<Vec<Value>, crate::emacs_core::alloc::AllocationFailure> {
+    match extent {
+        VectorElementLayout::Empty => Ok(Vec::new()),
+        VectorElementLayout::Nonempty { elements, layout } => {
+            // SAFETY: the private witness checked Layout::array::<Value> for
+            // this nonzero capacity, including Value alignment and isize size
+            // limits. alloc uses the Global allocator, and null is handled
+            // before the storage can be adopted or dereferenced.
+            let pointer = unsafe { std::alloc::alloc(layout) };
+            let pointer = std::ptr::NonNull::new(pointer)
+                .ok_or(crate::emacs_core::alloc::AllocationFailure::NullAllocation)?
+                .cast::<Value>();
+            // SAFETY: this unique Global allocation exactly matches the
+            // Vec<Value> capacity's Layout::array::<Value>. Length zero exposes
+            // no uninitialized Values. Immediate adoption has no alias or
+            // intervening fallible step; ordinary Vec growth and Drop use the
+            // same global allocator and matching Value layout. Stored Values
+            // retain their existing invoking-mutator ownership contract.
+            Ok(unsafe { Vec::from_raw_parts(pointer.as_ptr(), 0, elements.get()) })
+        }
+    }
+}
+/// The owning symbol policy is consulted only by the char-table arm.
+/// Ordinary array access carries one pointer-sized source without reading it.
+#[derive(Clone, Copy)]
+pub(crate) enum ArraySymbolSource<'a> {
+    Bare,
+    Context(&'a super::eval::Context),
+}
+
+impl std::fmt::Debug for ArraySymbolSource<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Bare => "Bare",
+            Self::Context(_) => "Context",
+        })
+    }
+}
+
+/// A source is resolved only after the shared array dispatch selects a char table.
+/// Separate source types let the VM borrow its Context slot without loading it
+/// for vector, string, record or bool-vector operations.
+pub(crate) trait ArraySymbolPolicy {
+    fn mode(self) -> SymbolMode;
+
+    /// The shared dispatch has already checked the index and selected String.
+    /// Ordinary callers retain the existing validating string-write boundary.
+    fn replace_string(
+        self,
+        array: &Value,
+        index: &Value,
+        new_element: &Value,
+        _checked_index: i64,
+    ) -> Result<Value, Flow>
+    where
+        Self: Sized,
+    {
+        aset_string_replacement(array, index, new_element)
+    }
+}
+
+impl ArraySymbolPolicy for ArraySymbolSource<'_> {
+    fn mode(self) -> SymbolMode {
+        match self {
+            Self::Bare => SymbolMode::Bare,
+            Self::Context(context) => context.symbol_mode(),
+        }
+    }
+}
+
+const _: () = assert!(
+    std::mem::size_of::<ArraySymbolSource<'_>>() == std::mem::size_of::<&super::eval::Context>()
+);
+
+/// A shared borrow of the VM's owning Context slot. This carries no policy
+/// snapshot and cannot replace or mutably access the Context through the slot.
+/// The borrow ends when the synchronous array operation returns.
+struct VmArraySymbolSource<'slot, 'context>(&'slot &'context mut super::eval::Context);
+
+impl ArraySymbolPolicy for VmArraySymbolSource<'_, '_> {
+    fn mode(self) -> SymbolMode {
+        // Keep the slot address in the VM-only monomorph's argument list.
+        // ThinLTO otherwise promotes its Context load into every array opcode.
+        // Consume the slot opaquely only after dispatch selects a char table;
+        // ordinary array paths perform neither this barrier nor the load.
+        let context_slot = std::hint::black_box(self.0);
+        context_slot.symbol_mode()
+    }
+
+    // This specialization is reached only by run_loop's array source. Keep
+    // the string-write body visible there without changing global helpers.
+    #[inline(always)]
+    fn replace_string(
+        self,
+        array: &Value,
+        index: &Value,
+        new_element: &Value,
+        checked_index: i64,
+    ) -> Result<Value, Flow> {
+        aset_string_replacement_in_vm_string_arm(array, index, new_element, checked_index)
+    }
+}
+
+/// Used only by run_loop: defer the VM Context-slot load to the char-table arm.
+pub(crate) fn builtin_aref_values_in_vm_context_slot(
+    context_slot: &&mut super::eval::Context,
+    array: Value,
+    index: Value,
+) -> EvalResult {
+    builtin_aref_values(VmArraySymbolSource(context_slot), array, index)
+}
+
+/// Used only by run_loop: the ordinary vector write does not read the slot.
+pub(crate) fn builtin_aset_args_in_vm_context_slot(
+    context_slot: &&mut super::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    builtin_aset_args(VmArraySymbolSource(context_slot), args)
+}
+
 pub(crate) fn builtin_make_vector(args: Vec<Value>) -> EvalResult {
+    make_vector(args).map_err(crate::emacs_core::alloc::AllocationFailure::into_flow)
+}
+
+pub(crate) fn builtin_make_vector_in_context(
+    context: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    make_vector(args).map_err(|failure| failure.into_flow_in_context(context))
+}
+
+fn make_vector(args: Vec<Value>) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
     expect_args("make-vector", &args, 2)?;
     let len = expect_wholenump(&args[0])? as usize;
-    Ok(Value::vector(vec![args[1]; len]))
+    // GNU alloc.c:3399-3400 rejects unrepresentable vector storage and
+    // lisp_malloc reports allocation failure as a Lisp condition.
+    let mut elements = allocate_vector_elements(VectorElementLayout::try_from(len)?)?;
+    elements.resize(len, args[1]);
+    Ok(Value::vector(elements))
 }
 
 pub(crate) fn builtin_vector_slice(_eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     Ok(Value::vector(args.to_vec()))
 }
 
+#[cfg(test)]
 pub(crate) fn builtin_aref(args: Vec<Value>) -> EvalResult {
     expect_args("aref", &args, 2)?;
-    builtin_aref_values(args[0], args[1])
+    builtin_aref_values(ArraySymbolSource::Bare, args[0], args[1])
 }
 
 #[inline(always)]
 pub(crate) fn builtin_aref_2(
-    _eval: &mut super::eval::Context,
+    eval: &mut super::eval::Context,
     array: Value,
     index: Value,
 ) -> EvalResult {
-    builtin_aref_values(array, index)
+    builtin_aref_values_in_state(eval, array, index)
+}
+
+pub(crate) fn builtin_aref_values_in_state(
+    eval: &super::eval::Context,
+    array: Value,
+    index: Value,
+) -> EvalResult {
+    builtin_aref_values(ArraySymbolSource::Context(eval), array, index)
 }
 
 #[inline(never)]
-pub(crate) fn builtin_aref_values(array: Value, index: Value) -> EvalResult {
+pub(crate) fn builtin_aref_values(
+    symbols: impl ArraySymbolPolicy,
+    array: Value,
+    index: Value,
+) -> EvalResult {
     let idx_fixnum = expect_fixnum(&index)?;
     match array.kind() {
         ValueKind::Veclike(VecLikeType::CharTable) => {
             let ch = expect_char_table_index(&index)?;
-            super::chartable::ct_lookup(&array, ch)
+            super::chartable::ct_lookup_with_symbols(&array, ch, symbols.mode())
         }
         // A vector or record slot: no in-band tags (P3.2 L0.8), so slot 0
         // is just slot 0, as in GNU `Faref`. A negative index wraps to a huge
@@ -91,6 +280,72 @@ pub(crate) fn builtin_aref_values(array: Value, index: Value) -> EvalResult {
     }
 }
 
+// One source for the complete string-write behavior. The ordinary public
+// boundary validates its inputs; run_loop's String arm has those validations
+// already. Only the VM-only expansion receives a site-specific inline hint.
+macro_rules! aset_string_write_body {
+    ($array:ident, $index:ident, $new_element:ident, $idx_fixnum:ident) => {{
+        let string = $array.as_lisp_string().expect("string");
+        if $idx_fixnum < 0 || $idx_fixnum as usize >= string.schars() {
+            return Err(signal(
+                LispCondition::ArgsOutOfRange,
+                vec![*$array, *$index],
+            ));
+        }
+        let idx = $idx_fixnum as usize;
+
+        let replacement_code = insert_char_code_from_value($new_element)?;
+        if !(0..=0x3F_FFFF).contains(&replacement_code) {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("characterp"), *$new_element],
+            ));
+        }
+        let replacement_code = replacement_code as u32;
+        if !string.is_multibyte() && replacement_code > 0xff {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "Attempt to store non-byte value into unibyte string",
+                )],
+            ));
+        }
+        if string.is_multibyte() {
+            if replacement_code > 0x7f {
+                return Err(signal(
+                    "error",
+                    vec![Value::string(
+                        "Attempt to store non-ASCII char into multibyte string",
+                    )],
+                ));
+            }
+            // GNU `Faset` locates the byte with `string_char_to_byte' (src/fns.c),
+            // which returns the index unchanged when `SCHARS == SBYTES' and
+            // otherwise scans from whichever END is nearer. `LispString` already
+            // implements both; the bare-slice converter can implement neither,
+            // because a `&[u8]` does not know SCHARS -- so reaching for it made
+            // this O(index).
+            let byte_pos = string.char_to_byte_pos(idx);
+            if string.as_bytes()[byte_pos] > 0x7f {
+                return Err(signal(
+                    "error",
+                    vec![Value::string(
+                        "Attempt to replace non-ASCII char in multibyte string",
+                    )],
+                ));
+            }
+            $array.set_string_byte_same_char_count(byte_pos, replacement_code as u8);
+            return Ok(*$array);
+        }
+
+        // GNU's unibyte `Faset` is one bounds check plus `SSET`.  Rebuilding the
+        // complete string here made byte-at-a-time protocol transforms (for
+        // example WebSocket masking) quadratic in the frame size.
+        $array.set_string_byte_same_char_count(idx, replacement_code as u8);
+        Ok(*$array)
+    }};
+}
+
 pub(crate) fn aset_string_replacement(
     array: &Value,
     index: &Value,
@@ -104,61 +359,19 @@ pub(crate) fn aset_string_replacement(
     };
 
     let idx_fixnum = expect_fixnum(index)?;
-    let string = array.as_lisp_string().expect("string");
-    if idx_fixnum < 0 || idx_fixnum as usize >= string.schars() {
-        return Err(signal(LispCondition::ArgsOutOfRange, vec![*array, *index]));
-    }
-    let idx = idx_fixnum as usize;
+    aset_string_write_body!(array, index, new_element, idx_fixnum)
+}
 
-    let replacement_code = insert_char_code_from_value(new_element)?;
-    if !(0..=0x3F_FFFF).contains(&replacement_code) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("characterp"), *new_element],
-        ));
-    }
-    let replacement_code = replacement_code as u32;
-    if !string.is_multibyte() && replacement_code > 0xff {
-        return Err(signal(
-            "error",
-            vec![Value::string(
-                "Attempt to store non-byte value into unibyte string",
-            )],
-        ));
-    }
-    if string.is_multibyte() {
-        if replacement_code > 0x7f {
-            return Err(signal(
-                "error",
-                vec![Value::string(
-                    "Attempt to store non-ASCII char into multibyte string",
-                )],
-            ));
-        }
-        // GNU `Faset` locates the byte with `string_char_to_byte' (src/fns.c),
-        // which returns the index unchanged when `SCHARS == SBYTES' and
-        // otherwise scans from whichever END is nearer. `LispString` already
-        // implements both; the bare-slice converter can implement neither,
-        // because a `&[u8]` does not know SCHARS -- so reaching for it made
-        // this O(index).
-        let byte_pos = string.char_to_byte_pos(idx);
-        if string.as_bytes()[byte_pos] > 0x7f {
-            return Err(signal(
-                "error",
-                vec![Value::string(
-                    "Attempt to replace non-ASCII char in multibyte string",
-                )],
-            ));
-        }
-        array.set_string_byte_same_char_count(byte_pos, replacement_code as u8);
-        return Ok(*array);
-    }
-
-    // GNU's unibyte `Faset` is one bounds check plus `SSET`.  Rebuilding the
-    // complete string here made byte-at-a-time protocol transforms (for
-    // example WebSocket masking) quadratic in the frame size.
-    array.set_string_byte_same_char_count(idx, replacement_code as u8);
-    Ok(*array)
+/// Used only by run_loop's String arm after CHECK_FIXNUM and array dispatch.
+/// The original index Value remains available for bounds-error payloads.
+#[inline(always)]
+fn aset_string_replacement_in_vm_string_arm(
+    array: &Value,
+    index: &Value,
+    new_element: &Value,
+    idx_fixnum: i64,
+) -> Result<Value, Flow> {
+    aset_string_write_body!(array, index, new_element, idx_fixnum)
 }
 
 /// `aset` for callers that own their argument vector (now only the unit
@@ -170,12 +383,26 @@ pub(crate) fn aset_string_replacement(
 /// (`dhrystone`: 370,708 clones and 305,131 `Vec::from_iter` calls).
 #[cfg(test)]
 pub(crate) fn builtin_aset(args: Vec<Value>) -> EvalResult {
-    builtin_aset_args(&args)
+    builtin_aset_args(ArraySymbolSource::Bare, &args)
+}
+
+pub(crate) fn builtin_aset_args_in_state(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    builtin_aset_args_in_context(eval, args)
+}
+
+pub(crate) fn builtin_aset_args_in_context(
+    eval: &super::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    builtin_aset_args(ArraySymbolSource::Context(eval), args)
 }
 
 /// `aset` reading its arguments in place.
 #[inline(never)]
-pub(crate) fn builtin_aset_args(args: &[Value]) -> EvalResult {
+pub(crate) fn builtin_aset_args(symbols: impl ArraySymbolPolicy, args: &[Value]) -> EvalResult {
     expect_args("aset", args, 3)?;
     // GNU src/data.c:Faset starts with CHECK_FIXNUM (idx) before checking
     // whether ARRAY is mutable by `aset`.
@@ -183,9 +410,10 @@ pub(crate) fn builtin_aset_args(args: &[Value]) -> EvalResult {
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::CharTable) => {
             let ch = expect_char_table_index(&args[1])?;
-            super::chartable::builtin_set_char_table_range(
+            super::chartable::builtin_set_char_table_range_with_symbols(
                 vec![args[0], Value::fixnum(ch), args[2]],
                 None,
+                symbols.mode(),
             )
         }
         // A vector or record slot (no in-band tags, P3.2 L0.8).
@@ -221,7 +449,7 @@ pub(crate) fn builtin_aset_args(args: &[Value]) -> EvalResult {
             }
         }
         ValueKind::String => {
-            let _updated = aset_string_replacement(&args[0], &args[1], &args[2])?;
+            let _updated = symbols.replace_string(&args[0], &args[1], &args[2], idx_fixnum)?;
             Ok(args[2])
         }
         _ => Err(signal(
@@ -361,13 +589,22 @@ fn invalid_hash_table_keyword_argument(arg: Value) -> Flow {
     )
 }
 
-fn hash_test_from_designator(value: &Value) -> Option<HashTableTest> {
-    HashTableTest::from_symbol_value(value)
+fn hash_test_from_designator(value: &Value, mode: SymbolMode) -> Option<HashTableTest> {
+    HashTableTest::from_symbol_value(
+        &value
+            .as_symbol_id(mode)
+            .map(Value::from_sym_id)
+            .unwrap_or(*value),
+    )
 }
 
-fn hash_test_from_user_test_pair(test: &Value, hash: &Value) -> Option<HashTableTest> {
-    let test_name = test.as_symbol_name()?;
-    let hash_name = hash.as_symbol_name()?;
+fn hash_test_from_user_test_pair(
+    test: &Value,
+    hash: &Value,
+    mode: SymbolMode,
+) -> Option<HashTableTest> {
+    let test_name = test.as_symbol_name(mode)?;
+    let hash_name = hash.as_symbol_name(mode)?;
     match (test_name, hash_name) {
         ("eq", "sxhash-eq") => Some(HashTableTest::Eq),
         ("eql", "sxhash-eql") => Some(HashTableTest::Eql),
@@ -412,16 +649,28 @@ fn maybe_resize_hash_table_for_insert(table: &mut LispHashTable, inserting_new_k
     // each backing collection grow with the entries actually inserted.
 }
 
+#[cfg(test)]
 pub(crate) fn builtin_define_hash_table_test(args: Vec<Value>) -> EvalResult {
+    define_hash_table_test_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_define_hash_table_test_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    define_hash_table_test_with_symbols(args, eval.symbol_mode())
+}
+
+fn define_hash_table_test_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("define-hash-table-test", &args, 3)?;
-    let Some(alias_name) = args[0].as_symbol_name() else {
+    let Some(alias_name) = args[0].as_symbol_name(mode) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],
         ));
     };
-    let standard_test = hash_test_from_user_test_pair(&args[1], &args[2])
-        .or_else(|| hash_test_from_designator(&args[1]));
+    let standard_test = hash_test_from_user_test_pair(&args[1], &args[2], mode)
+        .or_else(|| hash_test_from_designator(&args[1], mode));
     // GNU chooses built-in tests only from make-hash-table's :test NAME.
     // A custom NAME always retains both callbacks, even when its comparison
     // designator is eq, eql, or equal. Keep the storage-test classification;
@@ -443,6 +692,17 @@ pub(crate) fn builtin_make_hash_table(args: Vec<Value>) -> EvalResult {
 }
 
 pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
+    make_hash_table_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_make_hash_table_in_state(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+) -> EvalResult {
+    make_hash_table_with_symbols(args, eval.symbol_mode())
+}
+
+fn make_hash_table_with_symbols(args: &[Value], mode: SymbolMode) -> EvalResult {
     if !args.len().is_multiple_of(2) {
         return Err(signal(
             "error",
@@ -457,9 +717,9 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
     let mut i = args.len();
     while i >= 2 {
         i -= 1;
-        let arg = args[i];
+        let arg = mode.unwrap(args[i]);
         i -= 1;
-        let kw = args[i];
+        let kw = mode.unwrap(args[i]);
         match HashTableMakeKeyword::from_symbol_value(&kw) {
             Some(HashTableMakeKeyword::Test) => test_arg = arg,
             Some(HashTableMakeKeyword::Weakness) => weakness_arg = arg,
@@ -476,7 +736,7 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
     let (test, test_name) = match test_arg.kind() {
         ValueKind::Nil => (HashTableTest::Eql, None),
         _ => {
-            let Some(name) = test_arg.as_symbol_name() else {
+            let Some(name) = test_arg.as_symbol_name(mode) else {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("symbolp"), test_arg],
@@ -485,7 +745,7 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
             let test = match HashTableTest::from_symbol_name(name) {
                 Some(test)
                     if !super::super::hashtab::hash_test_parity_enabled()
-                        || test_arg.as_symbol_id() == Some(intern(test.name())) =>
+                        || test_arg.as_symbol_id(mode) == Some(intern(test.name())) =>
                 {
                     test
                 }
@@ -501,7 +761,7 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
                 }
             };
             let test_name = if super::super::hashtab::hash_test_parity_enabled() {
-                test_arg.as_symbol_id()
+                test_arg.as_symbol_id(mode)
             } else {
                 Some(intern(name))
             };
@@ -509,22 +769,13 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
         }
     };
 
-    let size = match size_arg.kind() {
-        ValueKind::Nil => 0,
-        ValueKind::Fixnum(n) if n >= 0 => n,
-        _ => {
-            return Err(signal(
-                "error",
-                vec![Value::string("Invalid hash table size"), size_arg],
-            ));
-        }
-    };
+    let size_hint = crate::emacs_core::alloc::HashTableHint::try_from(size_arg)?;
 
     let weakness = match weakness_arg.kind() {
         ValueKind::Nil => None,
         ValueKind::T => Some(HashTableWeakness::KeyAndValue),
         _ => {
-            let Some(name) = weakness_arg.as_symbol_name() else {
+            let Some(name) = weakness_arg.as_symbol_name(mode) else {
                 return Err(signal(
                     "error",
                     vec![Value::string("Invalid hash table weakness"), weakness_arg],
@@ -542,7 +793,8 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
         }
     };
 
-    let table = Value::hash_table_with_options(test, size, weakness, 1.5, 0.8125);
+    let size = crate::emacs_core::alloc::HashTableSize::try_from(size_hint)?;
+    let table = Value::try_hash_table_with_options(test, size, weakness)?;
     if table.is_hash_table() {
         let _ = table.with_hash_table_mut(|ht| {
             ht.test_name = test_name;
@@ -1757,3 +2009,11 @@ mod aset_string_in_place_test;
 #[cfg(test)]
 #[path = "tests/gc_tls_collections_test.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/vector_storage_test.rs"]
+mod vector_storage_tests;
+
+#[cfg(test)]
+#[path = "tests/positioned_builtin_classes_test.rs"]
+mod positioned_builtin_classes_tests;

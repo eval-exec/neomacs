@@ -119,11 +119,16 @@ fn append(
     };
     let mut bindings = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    keymap::list_keymap_for_each_binding_recursive(&map, Some(ctx.obarray()), |key, def| {
-        if seen.insert(key) {
-            bindings.push((out._roots.keep(key), out._roots.keep(def)));
-        }
-    });
+    keymap::list_keymap_for_each_binding_recursive(
+        &map,
+        Some(ctx.obarray()),
+        |key, def| {
+            if seen.insert(key) {
+                bindings.push((out._roots.keep(key), out._roots.keep(def)));
+            }
+        },
+        ctx.symbol_mode(),
+    );
     for (key, def) in bindings {
         let Some((entry, child)) =
             parse(ctx, def, traversal.path.len() as u32, is_tty, &out._roots)?

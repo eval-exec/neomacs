@@ -512,7 +512,7 @@ impl IntervalNode {
                 break;
             }
             let value = rest.cons_car();
-            if let Some(id) = key.as_symbol_id() {
+            if let Some(id) = key.as_bare_symbol_id() {
                 if id == ids.front_sticky {
                     front_sticky = value.is_truthy();
                 } else if id == ids.rear_nonsticky {
@@ -2873,7 +2873,7 @@ impl TextPropertyTable {
     /// symbol's string twice on every put.
     fn name_is_syntax_relevant(name: Value) -> bool {
         let ids = cached_plist_flag_symbols();
-        name.as_symbol_id()
+        name.as_bare_symbol_id()
             .is_some_and(|id| id == ids.syntax_table || id == ids.category)
     }
 
@@ -5177,3 +5177,9 @@ impl GcTrace for TextPropertyTable {
 #[cfg(test)]
 #[path = "text_props/tests/text_props_test.rs"]
 mod tests;
+
+#[path = "text_props/casing_insertion.rs"]
+mod casing_insertion;
+pub(crate) use casing_insertion::{
+    CasingPropertyControls, CasingPropertyMode, CasingPropertyRoots,
+};

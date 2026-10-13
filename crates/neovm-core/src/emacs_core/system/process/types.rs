@@ -4,6 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use crate::tagged::value::SymbolMode;
 
 /// Unique identifier for a process.
 pub type ProcessId = u64;
@@ -415,7 +416,7 @@ pub(super) enum ProcessStatusSymbol {
 
 impl ProcessStatusSymbol {
     pub(super) fn from_symbol_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     pub(super) fn from_status_value(status: Value) -> Option<Self> {
@@ -456,7 +457,7 @@ pub(super) enum ProcessTtyStream {
 
 impl ProcessTtyStream {
     pub(super) fn from_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1052,6 +1053,51 @@ pub(crate) enum ProcessWaitBackendInterest {
     NotificationsAndProcesses,
 }
 
+/// A validated monotonic deadline. An overflowing duration denotes an
+/// indefinite wait, which still wakes for process or evaluator notifications.
+/// This immutable clock value contains no mutator-owned state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProcessWaitDeadline {
+    Poll,
+    Until(Instant),
+    Forever,
+}
+
+static_assertions::assert_impl_all!(ProcessWaitDeadline: Send, Sync);
+
+impl From<Duration> for ProcessWaitDeadline {
+    #[inline]
+    fn from(timeout: Duration) -> Self {
+        if timeout.is_zero() {
+            Self::Poll
+        } else {
+            Instant::now()
+                .checked_add(timeout)
+                .map_or(Self::Forever, Self::Until)
+        }
+    }
+}
+
+impl ProcessWaitDeadline {
+    #[inline]
+    pub(super) fn remaining(self, now: Instant) -> Option<Duration> {
+        match self {
+            Self::Poll => Some(Duration::ZERO),
+            Self::Until(deadline) => Some(deadline.saturating_duration_since(now)),
+            Self::Forever => None,
+        }
+    }
+
+    #[inline]
+    pub(super) fn is_expired(self, now: Instant) -> bool {
+        match self {
+            Self::Poll => true,
+            Self::Until(deadline) => now >= deadline,
+            Self::Forever => false,
+        }
+    }
+}
+
 impl ProcessWaitBackendInterest {
     pub(super) fn wants_notifications(self) -> bool {
         matches!(
@@ -1139,16 +1185,12 @@ impl ProcessWaitBackend {
                 }
             }
 
-            let deadline = Instant::now() + timeout;
+            let deadline = ProcessWaitDeadline::from(timeout);
             loop {
                 let now = Instant::now();
-                let wait_time = if timeout.is_zero() {
-                    Duration::ZERO
-                } else {
-                    deadline.saturating_duration_since(now)
-                };
+                let wait_time = deadline.remaining(now);
                 let mut events = polling::Events::new();
-                match poller.wait(&mut events, Some(wait_time)) {
+                match poller.wait(&mut events, wait_time) {
                     Ok(_) => {
                         let mut notification_wakeup = interest.wants_notifications()
                             && self.notification_pending.swap(false, Ordering::AcqRel);
@@ -1200,8 +1242,7 @@ impl ProcessWaitBackend {
                         if backend.has_notification_wakeup()
                             || backend.has_ready_processes()
                             || backend.has_writable_processes()
-                            || timeout.is_zero()
-                            || Instant::now() >= deadline
+                            || deadline.is_expired(Instant::now())
                         {
                             return Some(backend);
                         }
@@ -1229,7 +1270,7 @@ impl ProcessWaitBackend {
                     // non-exhaustive and a future backend may surface it; what
                     // it must NOT be is a mechanism something else relies on.
                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
-                        if timeout.is_zero() || Instant::now() >= deadline {
+                        if deadline.is_expired(Instant::now()) {
                             return Some(ProcessWaitEvents::from_sources_with_writable(
                                 false,
                                 Vec::new(),
@@ -1266,7 +1307,7 @@ impl AcceptedClientBuffer {
         server_name: &str,
         client_name: &str,
     ) -> Self {
-        if !server_filter.is_symbol_named(DEFAULT_PROCESS_FILTER_SYMBOL)
+        if !server_filter.is_bare_symbol_named(DEFAULT_PROCESS_FILTER_SYMBOL)
             && server_filter != Value::T
         {
             return Self::None;
@@ -1480,7 +1521,7 @@ pub(super) fn os_str_to_lisp_string(value: &OsStr) -> LispString {
 }
 
 pub(super) fn process_coding_symbol_name(value: Value) -> &'static str {
-    match value.as_symbol_name() {
+    match value.as_bare_symbol_name() {
         Some(name) => name,
         None => "utf-8-unix",
     }
@@ -1517,7 +1558,7 @@ pub(super) fn process_coding_name_converts_nothing(name: &str) -> bool {
 pub(super) fn process_encode_coding_converts_nothing(coding: Value) -> bool {
     coding.is_nil()
         || matches!(
-            coding.as_symbol_name(),
+            coding.as_bare_symbol_name(),
             Some("binary" | "no-conversion" | "raw-text")
         )
 }
@@ -1623,6 +1664,7 @@ impl ProcessOutputDecoding {
         coding_systems: &crate::emacs_core::coding::CodingSystemManager,
         bytes: &[u8],
         block: crate::emacs_core::coding::SourceBlock,
+        mode: SymbolMode,
     ) -> ResolvedProcessDecoding {
         match self {
             Self::Bytes(name) => ResolvedProcessDecoding::Bytes(name),
@@ -1631,9 +1673,14 @@ impl ProcessOutputDecoding {
                 // A nil `found` leaves the coding system exactly as it was,
                 // decoder included -- and it will be offered the NEXT chunk
                 // again, because the name it keeps still requires detection.
-                let found =
-                    crate::encoding::detected_coding_name(coding_systems, requested, bytes, block)
-                        .unwrap_or(requested);
+                let found = crate::encoding::detected_coding_name(
+                    coding_systems,
+                    requested,
+                    bytes,
+                    block,
+                    mode,
+                )
+                .unwrap_or(requested);
                 if process_coding_name_converts_nothing(found) {
                     ResolvedProcessDecoding::Bytes(found)
                 } else {
@@ -2378,6 +2425,7 @@ pub(super) fn pending_process_output_run(
     sink: ProcessOutputSink,
     bytes: &[u8],
     block: crate::emacs_core::coding::SourceBlock,
+    mode: SymbolMode,
 ) -> PendingProcessRun {
     let decoding = ProcessOutputDecoding::for_process(proc.coding_decode, sink);
     // GNU's `p->decoding_carryover = 0` (src/process.c:6312) followed by
@@ -2410,7 +2458,7 @@ pub(super) fn pending_process_output_run(
     // character" (src/coding.c:1215), and the decode needs it to decide what to
     // do with the tail -- so the one flag is spent twice here exactly as GNU
     // spends its one flag twice.
-    let resolved = decoding.detected(coding_systems, &combined, block);
+    let resolved = decoding.detected(coding_systems, &combined, block, mode);
     PendingProcessRun {
         coding: resolved,
         bytes: combined,
@@ -2550,6 +2598,7 @@ pub(super) fn process_output_read_from_io_result(
     outcome: ProcessReadOutcome,
     bytes: &[u8],
     full_read_len: usize,
+    mode: SymbolMode,
 ) -> ProcessBytesRead {
     match outcome {
         ProcessReadOutcome::EndOfStream => match proc.coding_state.reach_last_block() {
@@ -2575,6 +2624,7 @@ pub(super) fn process_output_read_from_io_result(
                             destination.sink(),
                             &[],
                             crate::emacs_core::coding::SourceBlock::Last,
+                            mode,
                         );
                         if bytes_read > 0 {
                             ProcessBytesRead::Data { run, bytes_read }
@@ -2587,7 +2637,7 @@ pub(super) fn process_output_read_from_io_result(
         },
         ProcessReadOutcome::Bytes(n) => {
             update_process_adaptive_read_buffering(proc, n, n == full_read_len);
-            process_run_from_bytes(proc, coding_systems, destination, &bytes[..n])
+            process_run_from_bytes(proc, coding_systems, destination, &bytes[..n], mode)
         }
         ProcessReadOutcome::WouldBlock => ProcessBytesRead::WouldBlock,
         ProcessReadOutcome::PtyClosed => ProcessBytesRead::Eof,
@@ -2625,6 +2675,7 @@ pub(super) fn process_run_from_bytes(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,
     destination: ProcessOutputDestination,
     bytes: &[u8],
+    mode: SymbolMode,
 ) -> ProcessBytesRead {
     let bytes_read = bytes.len();
     // GNU's `nread`: this read plus the carryover it is prepended to
@@ -2642,6 +2693,7 @@ pub(super) fn process_run_from_bytes(
                 destination.sink(),
                 bytes,
                 crate::emacs_core::coding::SourceBlock::More,
+                mode,
             ),
             bytes_read,
         },
@@ -2796,6 +2848,7 @@ pub(super) fn write_queue_pop(queue: Value) -> (Value, Option<ProcessWriteQueueE
 
 pub(super) fn parse_make_network_tls_parameters(
     value: Value,
+    mode: SymbolMode,
 ) -> Result<Option<super::super::tls::GnutlsBootParameters>, Flow> {
     if value.is_nil() {
         return Ok(None);
@@ -2809,7 +2862,7 @@ pub(super) fn parse_make_network_tls_parameters(
     let Some((&credential_type, rest)) = items.split_first() else {
         return Ok(None);
     };
-    parse_gnutls_boot_parameters(credential_type, Value::list(rest.to_vec())).map(Some)
+    parse_gnutls_boot_parameters(credential_type, Value::list(rest.to_vec()), mode).map(Some)
 }
 
 pub(super) fn process_status_stop_value(signal_num: i64) -> Value {
@@ -3376,9 +3429,10 @@ pub(super) fn process_buffer_multibyteness(
 pub(super) fn validate_resolved_process_coding_systems(
     coding_systems: Option<&super::super::coding::CodingSystemManager>,
     resolved: ProcessCodingSystems,
+    mode: SymbolMode,
 ) -> Result<(), Flow> {
-    validate_process_coding_component(coding_systems, resolved.decode)?;
-    validate_process_coding_component(coding_systems, resolved.encode)
+    validate_process_coding_component(coding_systems, resolved.decode, mode)?;
+    validate_process_coding_component(coding_systems, resolved.encode, mode)
 }
 
 /// GNU `Fmake_pipe_process`'s coding resolver, src/process.c:2517-2570.
@@ -3451,7 +3505,8 @@ pub(super) fn create_network_process_record(
     buffer: Value,
     coding: ProcessCodingSystems,
 ) -> Result<ProcessId, Flow> {
-    validate_resolved_process_coding_systems(Some(&eval.coding_systems), coding)?;
+    let symbol_mode = eval.symbol_mode();
+    validate_resolved_process_coding_systems(Some(&eval.coding_systems), coding, symbol_mode)?;
     let id = eval.processes.create_process_with_kind_lisp(
         name,
         buffer,
@@ -3754,10 +3809,12 @@ pub(super) fn resolve_make_process_coding_systems(
 pub(super) fn validate_process_coding_component(
     coding_systems: Option<&super::super::coding::CodingSystemManager>,
     value: Value,
+    mode: SymbolMode,
 ) -> Result<(), Flow> {
     if let Some(coding_systems) = coding_systems {
-        super::super::coding::builtin_check_coding_system(coding_systems, vec![value]).map(|_| ())
-    } else if value.is_nil() || value.as_symbol_name().is_some() {
+        super::super::coding::builtin_check_coding_system(coding_systems, vec![value], mode)
+            .map(|_| ())
+    } else if value.is_nil() || value.as_symbol_name(mode).is_some() {
         Ok(())
     } else {
         Err(signal(
@@ -4205,7 +4262,7 @@ pub(super) enum ProcessFilterDispatch {
 
 impl ProcessFilterDispatch {
     pub(super) fn from_lisp(filter: Value) -> Self {
-        if filter.is_nil() || filter.is_symbol_named(DEFAULT_PROCESS_FILTER_SYMBOL) {
+        if filter.is_nil() || filter.is_bare_symbol_named(DEFAULT_PROCESS_FILTER_SYMBOL) {
             Self::Default
         } else if filter.is_t() {
             Self::Suspended
@@ -4975,7 +5032,10 @@ pub(super) fn nowait_tcp_immediate_addrs(
     port: u16,
     family: NetworkProcessFamily,
 ) -> Option<Vec<SocketAddr>> {
-    if host_value.is_nil() || host_value.as_symbol_name() == Some("local") || host == "localhost" {
+    if host_value.is_nil()
+        || host_value.as_bare_symbol_name() == Some("local")
+        || host == "localhost"
+    {
         let ip = family.loopback_host().parse::<IpAddr>().ok()?;
         return Some(vec![SocketAddr::new(ip, port)]);
     }
@@ -5154,9 +5214,19 @@ pub(super) fn bind_unix_seqpacket_listener_socket(
     path: &Path,
     backlog: i32,
     options: &[NetworkSocketOptionSpec],
+    contact: Value,
 ) -> Result<Socket, Flow> {
-    let socket = Socket::new(Domain::UNIX, Type::SEQPACKET, None)
-        .map_err(|err| network_socket_io_error("Cannot create server socket", err))?;
+    let socket = Socket::new(Domain::UNIX, Type::SEQPACKET, None).map_err(|err| {
+        #[cfg(target_os = "macos")]
+        {
+            network_socket_io_error_with_name("make server process failed", contact, err)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = contact;
+            network_socket_io_error("Cannot create server socket", err)
+        }
+    })?;
     apply_network_socket_options(&socket, options)?;
     let sock_addr = SockAddr::unix(path)
         .map_err(|err| network_socket_io_error("Cannot bind server socket", err))?;
@@ -5176,9 +5246,19 @@ pub(super) fn bind_unix_seqpacket_listener_socket(
 pub(super) fn connect_unix_seqpacket_socket(
     path: &Path,
     options: &[NetworkSocketOptionSpec],
+    contact: Value,
 ) -> Result<Socket, Flow> {
-    let socket = Socket::new(Domain::UNIX, Type::SEQPACKET, None)
-        .map_err(|err| network_socket_io_error("Cannot create client socket", err))?;
+    let socket = Socket::new(Domain::UNIX, Type::SEQPACKET, None).map_err(|err| {
+        #[cfg(target_os = "macos")]
+        {
+            network_socket_io_error_with_name("make client process failed", contact, err)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = contact;
+            network_socket_io_error("Cannot create client socket", err)
+        }
+    })?;
     apply_network_socket_options(&socket, options)?;
     let sock_addr = SockAddr::unix(path)
         .map_err(|err| network_socket_io_error("make client process failed", err))?;
@@ -6432,6 +6512,7 @@ impl ProcessManager {
         id: ProcessId,
         destination: ProcessOutputDestination,
         coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
     ) -> ProcessBytesRead {
         let Some(proc) = self.processes.get_mut(&id) else {
             return ProcessBytesRead::NoSource;
@@ -6474,6 +6555,7 @@ impl ProcessManager {
             ProcessReadOutcome::from_stream_read(&result),
             &buf,
             full_read_len,
+            mode,
         )
     }
 
@@ -6488,6 +6570,7 @@ impl ProcessManager {
         id: ProcessId,
         destination: ProcessOutputDestination,
         coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
     ) -> ProcessBytesRead {
         let Some(proc) = self.processes.get_mut(&id) else {
             return ProcessBytesRead::NoSource;
@@ -6507,6 +6590,7 @@ impl ProcessManager {
             ProcessReadOutcome::from_stream_read(&result),
             &buf,
             full_read_len,
+            mode,
         )
     }
 
@@ -6518,6 +6602,7 @@ impl ProcessManager {
         id: ProcessId,
         destination: ProcessOutputDestination,
         coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
     ) -> ProcessBytesRead {
         let Some(proc) = self.processes.get_mut(&id) else {
             return ProcessBytesRead::NoSource;
@@ -6537,6 +6622,7 @@ impl ProcessManager {
             ProcessReadOutcome::from_pty_read(&result),
             &buf,
             full_read_len,
+            mode,
         )
     }
 
@@ -6545,6 +6631,7 @@ impl ProcessManager {
         id: ProcessId,
         destination: ProcessOutputDestination,
         coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
     ) -> ProcessBytesRead {
         let Some(proc) = self.processes.get_mut(&id) else {
             return ProcessBytesRead::NoSource;
@@ -6565,6 +6652,7 @@ impl ProcessManager {
                 ProcessReadOutcome::from_stream_read(&result),
                 &buf,
                 full_read_len,
+                mode,
             );
             return read;
         }
@@ -6604,13 +6692,14 @@ impl ProcessManager {
                     ProcessReadOutcome::from_stream_read(&result),
                     &buf,
                     full_read_len,
+                    mode,
                 ),
                 RawNetworkRead::Udp(result) => match result {
                     Ok((n, addr)) => {
                         update_process_adaptive_read_buffering(proc, n, n == full_read_len);
                         proc.datagram_socket_addr = Some(addr);
                         proc.datagram_address = socket_addr_to_lisp_value(addr);
-                        process_run_from_bytes(proc, coding_systems, destination, &buf[..n])
+                        process_run_from_bytes(proc, coding_systems, destination, &buf[..n], mode)
                     }
                     Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                         ProcessBytesRead::WouldBlock
@@ -6628,7 +6717,7 @@ impl ProcessManager {
                                 crate::emacs_core::fileio::path_to_lisp_file_name(&path),
                             );
                         }
-                        process_run_from_bytes(proc, coding_systems, destination, &buf[..n])
+                        process_run_from_bytes(proc, coding_systems, destination, &buf[..n], mode)
                     }
                     Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                         ProcessBytesRead::WouldBlock
@@ -7536,6 +7625,7 @@ impl ProcessManager {
     pub(super) fn complete_pending_network_connect(
         &mut self,
         id: ProcessId,
+        mode: SymbolMode,
     ) -> Result<PendingNetworkConnectCompletion, Flow> {
         let Some(proc) = self.processes.get(&id) else {
             return Ok(PendingNetworkConnectCompletion::None);
@@ -7644,7 +7734,7 @@ impl ProcessManager {
             .get(&id)
             .map(|proc| proc.gnutls_boot_parameters)
             .filter(|parameters| !parameters.is_nil())
-            .map(parse_make_network_tls_parameters)
+            .map(|parameters| parse_make_network_tls_parameters(parameters, mode))
             .transpose()
             .map_err(|flow| {
                 self.delete_process(id);
@@ -8111,6 +8201,7 @@ impl ProcessManager {
         id: ProcessId,
         destination: ProcessOutputDestination,
         coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
     ) -> ProcessBytesRead {
         if self
             .processes
@@ -8123,16 +8214,16 @@ impl ProcessManager {
 
         match source {
             Some(ProcessOutputSource::Pty) => {
-                self.read_pty_output_result(id, destination, coding_systems)
+                self.read_pty_output_result(id, destination, coding_systems, mode)
             }
             Some(ProcessOutputSource::ChildStdout) => {
-                self.read_child_stdout_result(id, destination, coding_systems)
+                self.read_child_stdout_result(id, destination, coding_systems, mode)
             }
             Some(ProcessOutputSource::Network) => {
-                self.read_network_output_result(id, destination, coding_systems)
+                self.read_network_output_result(id, destination, coding_systems, mode)
             }
             Some(ProcessOutputSource::Serial) => {
-                self.read_serial_output_result(id, destination, coding_systems)
+                self.read_serial_output_result(id, destination, coding_systems, mode)
             }
             None => ProcessBytesRead::NoSource,
         }
@@ -8166,7 +8257,7 @@ impl ProcessManager {
         destination: ProcessOutputDestination,
         coding_systems: &crate::emacs_core::coding::CodingSystemManager,
     ) -> Option<PendingProcessRun> {
-        match self.read_process_output_result(id, destination, coding_systems) {
+        match self.read_process_output_result(id, destination, coding_systems, SymbolMode::Bare) {
             ProcessBytesRead::Data { run, .. } | ProcessBytesRead::EofAfterLastBlock { run } => {
                 Some(run)
             }
@@ -8328,7 +8419,7 @@ impl super::super::eval::Context {
             .get_any(id)
             .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?
             .coding_encode
-            .as_symbol_id()
+            .as_bare_symbol_id()
             .filter(|&symbol| symbol != super::super::intern::intern("nil"))
             .unwrap_or_else(|| super::super::intern::intern("undecided"));
         let state = ProcessEncodingState::initialized(
@@ -8714,36 +8805,38 @@ impl super::super::eval::Context {
         id: ProcessId,
         destination: ProcessOutputDestination,
     ) -> Result<ProcessOutputRead, Flow> {
+        let symbol_mode = self.symbol_mode();
         // Stage one: the read.  It borrows the `ProcessManager` mutably out of
         // `self` and gives it back with a [`PendingProcessRun`] -- bytes and a
         // settled coding system, no text.  It no longer needs
         // `inhibit-eol-conversion': the trailing-CR lookahead that made it
         // matter is `eol_dos`, and `eol_dos` is the DECODER's, as it is in GNU
         // (src/coding.c:1250-1251).
-        let (run, bytes_read, last_block) =
-            match self
-                .processes
-                .read_process_output_result(id, destination, &self.coding_systems)
-            {
-                ProcessBytesRead::Data { run, bytes_read } => (run, bytes_read, false),
-                ProcessBytesRead::EofAfterLastBlock { run } => (run, 0, true),
-                // `read_and_insert_process_output` returned at :6464 without
-                // decoding, so stages two and three below have nothing to do:
-                // no text for a filter, no `last-coding-system-used', no
-                // sticky rewrite of the process's coding system.  The count
-                // still travels, because GNU's caller counts the read as
-                // activity whether or not anything was made of it.
-                ProcessBytesRead::Discarded { bytes_read } => {
-                    return Ok(ProcessOutputRead::Data {
-                        data: LispString::from_utf8(""),
-                        bytes_read,
-                    });
-                }
-                ProcessBytesRead::WouldBlock => return Ok(ProcessOutputRead::WouldBlock),
-                ProcessBytesRead::Failed => return Ok(ProcessOutputRead::Failed),
-                ProcessBytesRead::Eof => return Ok(ProcessOutputRead::Eof),
-                ProcessBytesRead::NoSource => return Ok(ProcessOutputRead::NoSource),
-            };
+        let (run, bytes_read, last_block) = match self.processes.read_process_output_result(
+            id,
+            destination,
+            &self.coding_systems,
+            symbol_mode,
+        ) {
+            ProcessBytesRead::Data { run, bytes_read } => (run, bytes_read, false),
+            ProcessBytesRead::EofAfterLastBlock { run } => (run, 0, true),
+            // `read_and_insert_process_output` returned at :6464 without
+            // decoding, so stages two and three below have nothing to do:
+            // no text for a filter, no `last-coding-system-used', no
+            // sticky rewrite of the process's coding system.  The count
+            // still travels, because GNU's caller counts the read as
+            // activity whether or not anything was made of it.
+            ProcessBytesRead::Discarded { bytes_read } => {
+                return Ok(ProcessOutputRead::Data {
+                    data: LispString::from_utf8(""),
+                    bytes_read,
+                });
+            }
+            ProcessBytesRead::WouldBlock => return Ok(ProcessOutputRead::WouldBlock),
+            ProcessBytesRead::Failed => return Ok(ProcessOutputRead::Failed),
+            ProcessBytesRead::Eof => return Ok(ProcessOutputRead::Eof),
+            ProcessBytesRead::NoSource => return Ok(ProcessOutputRead::NoSource),
+        };
         // Stage two: the decode, with the whole `Context` in hand because GNU's
         // decoder needs the whole editor -- ISO-2022's designations, CCL
         // programs and charset lists live in the evaluator, and
@@ -9234,7 +9327,10 @@ impl super::super::eval::Context {
 
         let writable_processes = request.ready_processes(events.writable_processes_ref().to_vec());
         for pid in writable_processes {
-            match self.processes.complete_pending_network_connect(pid)? {
+            match {
+                let mode = self.symbol_mode();
+                self.processes.complete_pending_network_connect(pid, mode)?
+            } {
                 PendingNetworkConnectCompletion::None => {}
                 PendingNetworkConnectCompletion::Retrying => {
                     outcome.record_serviced();
@@ -9306,7 +9402,10 @@ impl super::super::eval::Context {
                 .get(pid)
                 .is_some_and(process_has_ready_async_dns)
             {
-                match self.processes.complete_pending_network_connect(pid)? {
+                match {
+                    let mode = self.symbol_mode();
+                    self.processes.complete_pending_network_connect(pid, mode)?
+                } {
                     PendingNetworkConnectCompletion::None => {}
                     PendingNetworkConnectCompletion::Retrying => {
                         outcome.record_serviced();

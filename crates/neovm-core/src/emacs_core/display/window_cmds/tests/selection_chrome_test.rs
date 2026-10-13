@@ -50,7 +50,7 @@ fn gnu_temporary_selection_preserves_clean_chrome_and_recorded_selection_marks_o
         let (mut eval, old, new, untouched) = fixture();
         builtin_select_window(&mut eval, vec![Value::make_window(new.0), norecord])
             .expect("selection");
-        let marked = norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay");
+        let marked = norecord.is_nil() || norecord.is_bare_symbol_named("mark-for-redisplay");
         assert_eq!(
             eval.chrome_dirty().is_dirty(old),
             marked,

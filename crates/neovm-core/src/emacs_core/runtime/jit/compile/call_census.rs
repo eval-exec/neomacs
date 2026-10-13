@@ -278,14 +278,14 @@ pub(crate) extern "C" fn neovm_jit_call_census(
     let ctx = unsafe { &*(ctx as *const crate::emacs_core::eval::Context) };
     // A symbol names its function cell's contents (no alias chasing: an
     // alias counts as `other`).
-    let resolve = |v: Value| match v.as_symbol_id() {
+    let resolve = |v: Value| match v.as_bare_symbol_id() {
         Some(sym) => ctx.obarray.symbol_function_id(sym).unwrap_or(Value::NIL),
         None => v,
     };
     let nargs = nargs as usize;
     let mut callee = Value::from_bits(word as usize);
     if site == CensusSite::Value
-        && callee.as_symbol_id() == Some(crate::emacs_core::bytecode::Vm::apply_builtin_id())
+        && callee.as_bare_symbol_id() == Some(crate::emacs_core::bytecode::Vm::apply_builtin_id())
     {
         site = CensusSite::Apply;
         // A call of the builtin carries `apply` as its callee and the

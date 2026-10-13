@@ -15,7 +15,7 @@ pub(crate) fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> Byt
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
 }
@@ -42,6 +42,10 @@ fn add1() -> ByteCodeFunction {
 /// stall aggregate.
 #[test]
 fn jit_pipeline_dispatch_compile_is_split_by_phase() {
+    // This per-thread clock sums front and backend phases on the same thread.
+    // Worker front/latency accounting is observed separately in bg tests.
+    let _backend =
+        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     force_deopt_for_test(false);
     observe_stats();
     stats::reset_compile_stats();
@@ -90,7 +94,7 @@ fn jit_pipeline_first_sight_and_direct_origins() {
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context;
     let f = add1();
-    assert!(cache::resolve_compiled_leaf_ptr(ctx, &f).is_some());
+    assert!(crate::emacs_core::jit::test_support::resolve_leaf(ctx, &f).is_some());
     let g = add1();
     compile_bytecode_function_with(&g, None).expect("compiles");
     let s = stats::compile_stats_snapshot();
@@ -241,7 +245,7 @@ fn compile_corpus() -> Vec<String> {
         for (ops, constants, arity) in corpus() {
             let f = function(ops, constants, arity);
             assert!(
-                cache::resolve_compiled_leaf_ptr(ctx, &f).is_some(),
+                crate::emacs_core::jit::test_support::resolve_leaf(ctx, &f).is_some(),
                 "every corpus body compiles: {:?}",
                 f.ops
             );
@@ -376,7 +380,7 @@ fn jit_pipeline_lazy_shim_import_keeps_only_used_imports() {
             vec![],
             1,
         );
-        assert!(cache::resolve_compiled_leaf_ptr(ctx, &f).is_some());
+        assert!(crate::emacs_core::jit::test_support::resolve_leaf(ctx, &f).is_some());
     };
     shim_refs::force_lazy_shims_for_test(true);
     let lazy = captured_clif(cons_body);
@@ -420,6 +424,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
         cranelift_jit::JITModule::new(builder)
     };
     let every = ShimGroups {
+        throw_flow: crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual,
         subr_spec: true,
         cbsym_spec: true,
         tier2_profile: true,
@@ -441,6 +446,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
     let mut func =
         Function::with_name_signature(UserFuncName::user(0, 0), Signature::new(CallConv::SystemV));
     let base_only = ShimGroups {
+        throw_flow: crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Unavailable,
         subr_spec: false,
         cbsym_spec: false,
         tier2_profile: false,
@@ -541,7 +547,9 @@ fn optional_add1() -> ByteCodeFunction {
         vec![Value::make_int(1)],
         1,
     );
-    f.params.optional = vec![SymId(9)];
+    let mut params = f.params.named().expect("named fixture parameters").clone();
+    params.optional = vec![SymId(9)];
+    f.params = params.into();
     f
 }
 
@@ -589,7 +597,13 @@ fn jit_pipeline_leaf_records_its_mir_verdict() {
         ("baseline", Some("gate_opt".to_string()))
     );
     let mut rest = optional_add1();
-    rest.params.rest = Some(SymId(10));
+    let mut params = rest
+        .params
+        .named()
+        .expect("named fixture parameters")
+        .clone();
+    params.rest = Some(SymId(10));
+    rest.params = params.into();
     assert_eq!(
         verdict(&rest),
         ("baseline", Some("gate_rest+gate_opt".to_string())),

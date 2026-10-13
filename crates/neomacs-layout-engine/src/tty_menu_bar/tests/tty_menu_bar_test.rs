@@ -16,14 +16,20 @@ fn extract_menu_label_preserves_raw_unibyte_strings() {
         .expect("runtime string for raw label");
 
     let plain = Value::cons(raw, Value::symbol("ignore"));
-    assert_eq!(extract_menu_label(&plain), Some(expected.clone()));
+    assert_eq!(
+        extract_menu_label(&plain, neovm_core::tagged::SymbolMode::Bare),
+        Some(expected.clone())
+    );
 
     let menu_item = Value::list(vec![
         Value::symbol("menu-item"),
         raw,
         Value::symbol("ignore"),
     ]);
-    assert_eq!(extract_menu_label(&menu_item), Some(expected));
+    assert_eq!(
+        extract_menu_label(&menu_item, neovm_core::tagged::SymbolMode::Bare),
+        Some(expected)
+    );
 }
 
 #[test]
@@ -40,17 +46,33 @@ fn collect_from_keymap_includes_inherited_menu_bar_items() {
         parent_menu,
         Value::symbol("text"),
         Value::cons(Value::string("Text"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
     list_keymap_define(
         child_menu,
         Value::symbol("org"),
         Value::cons(Value::string("Org"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
-    list_keymap_set_parent(child_menu, parent_menu);
+    list_keymap_set_parent(
+        child_menu,
+        parent_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
 
-    list_keymap_define(parent, Value::symbol("menu-bar"), parent_menu);
-    list_keymap_define(child, Value::symbol("menu-bar"), child_menu);
-    list_keymap_set_parent(child, parent);
+    list_keymap_define(
+        parent,
+        Value::symbol("menu-bar"),
+        parent_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
+    list_keymap_define(
+        child,
+        Value::symbol("menu-bar"),
+        child_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
+    list_keymap_set_parent(child, parent, neovm_core::tagged::SymbolMode::Bare);
 
     let mut items = Vec::new();
     collect_from_keymap(&eval, &child, &mut items);
@@ -81,6 +103,7 @@ fn collect_from_keymap_hides_inherited_undefined_menu_items() {
             parent_menu,
             Value::symbol(key),
             Value::cons(Value::string(label), Value::symbol("ignore")),
+            neovm_core::tagged::SymbolMode::Bare,
         );
     }
 
@@ -88,13 +111,28 @@ fn collect_from_keymap_hides_inherited_undefined_menu_items() {
         child_menu,
         Value::symbol("org"),
         Value::cons(Value::string("Org"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
     for key in ["headings", "show", "hide"] {
-        list_keymap_define(child_menu, Value::symbol(key), Value::symbol("undefined"));
+        list_keymap_define(
+            child_menu,
+            Value::symbol(key),
+            Value::symbol("undefined"),
+            neovm_core::tagged::SymbolMode::Bare,
+        );
     }
-    list_keymap_set_parent(child_menu, parent_menu);
+    list_keymap_set_parent(
+        child_menu,
+        parent_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
 
-    list_keymap_define(keymap, Value::symbol("menu-bar"), child_menu);
+    list_keymap_define(
+        keymap,
+        Value::symbol("menu-bar"),
+        child_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
 
     let mut items = Vec::new();
     collect_from_keymap(&eval, &keymap, &mut items);
@@ -119,8 +157,14 @@ fn later_active_keymap_undefined_removes_earlier_menu_item() {
         global_menu,
         Value::symbol("edit"),
         Value::cons(Value::string("Edit"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
-    list_keymap_define(global_map, Value::symbol("menu-bar"), global_menu);
+    list_keymap_define(
+        global_map,
+        Value::symbol("menu-bar"),
+        global_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
 
     let local_map = make_sparse_list_keymap();
     let local_menu = make_sparse_list_keymap();
@@ -128,8 +172,14 @@ fn later_active_keymap_undefined_removes_earlier_menu_item() {
         local_menu,
         Value::symbol("edit"),
         Value::symbol("undefined"),
+        neovm_core::tagged::SymbolMode::Bare,
     );
-    list_keymap_define(local_map, Value::symbol("menu-bar"), local_menu);
+    list_keymap_define(
+        local_map,
+        Value::symbol("menu-bar"),
+        local_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
 
     let mut items = Vec::new();
     collect_from_keymap(&eval, &global_map, &mut items);
@@ -153,11 +203,10 @@ fn final_menu_items_follow_the_declared_order() {
         .expect("set final menu order through the forwarded Lisp variable");
     assert_eq!(
         eval.obarray()
-            .symbol_value("menu-bar-final-items")
-            .copied()
+            .symbol_value_copied("menu-bar-final-items")
             .expect("menu-bar-final-items is bound")
             .cons_car()
-            .as_symbol_name(),
+            .as_bare_symbol_name(),
         Some("completion"),
     );
     let mut items = [
@@ -198,6 +247,7 @@ fn collect_from_keymap_descends_embedded_menu_bar_keymaps() {
             Value::string("Org"),
             make_sparse_list_keymap(),
         ]),
+        neovm_core::tagged::SymbolMode::Bare,
     );
     list_keymap_define(
         org_group,
@@ -207,6 +257,7 @@ fn collect_from_keymap_descends_embedded_menu_bar_keymaps() {
             Value::string("Table"),
             make_sparse_list_keymap(),
         ]),
+        neovm_core::tagged::SymbolMode::Bare,
     );
     list_keymap_define(
         text_group,
@@ -216,10 +267,16 @@ fn collect_from_keymap_descends_embedded_menu_bar_keymaps() {
             Value::string("Text"),
             make_sparse_list_keymap(),
         ]),
+        neovm_core::tagged::SymbolMode::Bare,
     );
 
     let menu_bar = Value::list(vec![Value::symbol("keymap"), org_group, text_group]);
-    list_keymap_define(keymap, Value::symbol("menu-bar"), menu_bar);
+    list_keymap_define(
+        keymap,
+        Value::symbol("menu-bar"),
+        menu_bar,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
 
     let mut items = Vec::new();
     collect_from_keymap(&eval, &keymap, &mut items);
@@ -243,8 +300,14 @@ fn collect_tty_menu_bar_items_uses_selected_window_local_map() {
         local_menu,
         Value::symbol("mode-menu"),
         Value::cons(Value::string("Mode Menu"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
-    list_keymap_define(local_map, Value::symbol("menu-bar"), local_menu);
+    list_keymap_define(
+        local_map,
+        Value::symbol("menu-bar"),
+        local_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
     eval.buffer_manager_mut()
         .set_buffer_local_map(selected_buffer, local_map)
         .expect("set selected buffer local map");
@@ -296,8 +359,14 @@ fn menu_bar_item_cache_tracks_temporary_window_selection() {
             local_menu,
             Value::symbol(key),
             Value::cons(Value::string(label), Value::symbol("ignore")),
+            neovm_core::tagged::SymbolMode::Bare,
         );
-        list_keymap_define(local_map, Value::symbol("menu-bar"), local_menu);
+        list_keymap_define(
+            local_map,
+            Value::symbol("menu-bar"),
+            local_menu,
+            neovm_core::tagged::SymbolMode::Bare,
+        );
         eval.buffer_manager_mut()
             .set_buffer_local_map(buffer, local_map)
             .expect("set buffer local map");
@@ -358,8 +427,14 @@ fn menu_bar_item_cache_rebuilds_only_at_the_redisplay_invalidation_boundary() {
         local_menu,
         Value::symbol("first-menu"),
         Value::cons(Value::string("First"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
-    list_keymap_define(local_map, Value::symbol("menu-bar"), local_menu);
+    list_keymap_define(
+        local_map,
+        Value::symbol("menu-bar"),
+        local_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
     eval.buffer_manager_mut()
         .set_buffer_local_map(buffer_a, local_map)
         .expect("set local map");
@@ -382,6 +457,7 @@ fn menu_bar_item_cache_rebuilds_only_at_the_redisplay_invalidation_boundary() {
         local_menu,
         Value::symbol("second-menu"),
         Value::cons(Value::string("Second"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
     eval.eval_str("(message \"ordinary redisplay is not a menu rebuild\")")
         .expect("invalidate general redisplay without crossing the menu boundary");
@@ -413,8 +489,14 @@ fn menu_bar_item_cache_rebuilds_only_at_the_redisplay_invalidation_boundary() {
         other_menu,
         Value::symbol("other-menu"),
         Value::cons(Value::string("Other"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
-    list_keymap_define(other_map, Value::symbol("menu-bar"), other_menu);
+    list_keymap_define(
+        other_map,
+        Value::symbol("menu-bar"),
+        other_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
     eval.buffer_manager_mut()
         .set_buffer_local_map(buffer_b, other_map)
         .expect("set other local map");
@@ -462,8 +544,14 @@ fn offscreen_buffer_modified_state_does_not_rebuild_the_prepared_menu() {
         visible_menu,
         Value::symbol("visible-menu"),
         Value::cons(Value::string("Visible"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
-    list_keymap_define(visible_map, Value::symbol("menu-bar"), visible_menu);
+    list_keymap_define(
+        visible_map,
+        Value::symbol("menu-bar"),
+        visible_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
     eval.buffer_manager_mut()
         .set_buffer_local_map(visible, visible_map)
         .expect("set visible local map");
@@ -483,8 +571,14 @@ fn offscreen_buffer_modified_state_does_not_rebuild_the_prepared_menu() {
         offscreen_menu,
         Value::symbol("offscreen-menu"),
         Value::cons(Value::string("Offscreen"), Value::symbol("ignore")),
+        neovm_core::tagged::SymbolMode::Bare,
     );
-    list_keymap_define(offscreen_map, Value::symbol("menu-bar"), offscreen_menu);
+    list_keymap_define(
+        offscreen_map,
+        Value::symbol("menu-bar"),
+        offscreen_menu,
+        neovm_core::tagged::SymbolMode::Bare,
+    );
     eval.buffer_manager_mut()
         .set_buffer_local_map(offscreen, offscreen_map)
         .expect("set offscreen local map");

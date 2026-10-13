@@ -687,7 +687,7 @@ pub(crate) enum HeadVerdict {
 /// `autoload-do-load` with MACRO-ONLY `macro` would load it
 /// (src/eval.c `Fautoload_do_load`).
 fn autoload_of_macro(def: Value) -> bool {
-    if !def.is_cons() || def.cons_car().as_symbol_id() != Some(autoload_cell_symbol()) {
+    if !def.is_cons() || def.cons_car().as_bare_symbol_id() != Some(autoload_cell_symbol()) {
         return false;
     }
     let mut tail = def;
@@ -698,11 +698,11 @@ fn autoload_of_macro(def: Value) -> bool {
         }
     }
     let kind = tail.cons_car();
-    kind.is_t() || kind.as_symbol_id() == Some(macro_cell_symbol())
+    kind.is_t() || kind.as_bare_symbol_id() == Some(macro_cell_symbol())
 }
 
 fn is_macro_cell(def: Value) -> bool {
-    def.is_cons() && def.cons_car().as_symbol_id() == Some(macro_cell_symbol())
+    def.is_cons() && def.cons_car().as_bare_symbol_id() == Some(macro_cell_symbol())
 }
 
 /// The `(assq VAR ENV)` of cconv.el:965, skipping non-cons entries.
@@ -710,7 +710,7 @@ fn env_assq(env: Value, var: SymId) -> Option<Value> {
     let mut tail = env;
     while tail.is_cons() {
         let entry = tail.cons_car();
-        if entry.is_cons() && entry.cons_car().as_symbol_id() == Some(var) {
+        if entry.is_cons() && entry.cons_car().as_bare_symbol_id() == Some(var) {
             return Some(entry);
         }
         tail = tail.cons_cdr();
@@ -770,7 +770,7 @@ const FAST_DEPTH_BUDGET: usize = 8;
 /// has more forms after it.
 fn body_keeps_whole_context(body: Value) -> bool {
     body.is_cons()
-        && body.cons_car().as_symbol_id() == Some(closure_dont_trim_context_symbol())
+        && body.cons_car().as_bare_symbol_id() == Some(closure_dont_trim_context_symbol())
         && !body.cons_cdr().is_nil()
 }
 
@@ -830,7 +830,7 @@ impl Context {
             buffer_ticks,
             gensym_counter: self
                 .obarray
-                .symbol_value_id(gensym_counter_symbol())
+                .symbol_value_id_copied(gensym_counter_symbol())
                 .map_or(0, |value| value.bits()),
             function_epoch: self.obarray.function_epoch(),
             obarray_len: self.obarray.len(),
@@ -862,11 +862,12 @@ impl Context {
     /// GNU `macrop` (subr.el:4793-4799) of a function cell that is a symbol:
     /// follow the aliases, then a `(macro ...)` or an autoloaded macro.
     fn cconv_symbol_macrop(&self, mut id: SymId) -> Option<bool> {
+        let symbol_mode = self.symbol_mode();
         for _ in 0..ALIAS_HOP_CAP {
             let Some(def) = self.cconv_fbound_cell(id) else {
                 return Some(false);
             };
-            match def.as_symbol_id() {
+            match def.as_symbol_id(symbol_mode) {
                 Some(next) if !def.is_nil() => id = next,
                 _ => return Some(is_macro_cell(def) || autoload_of_macro(def)),
             }
@@ -880,6 +881,7 @@ impl Context {
     /// memo refuses to run when `overriding-plist-environment` could make
     /// `get` answer otherwise.
     pub(crate) fn cconv_head_verdict(&self, id: SymId) -> HeadVerdict {
+        let symbol_mode = self.symbol_mode();
         if let Some(def) = self.cconv_fbound_cell(id) {
             if autoload_of_macro(def) {
                 return HeadVerdict::AutoloadMacro;
@@ -887,7 +889,7 @@ impl Context {
             if is_macro_cell(def) {
                 return HeadVerdict::Macro;
             }
-            if let Some(alias) = def.as_symbol_id() {
+            if let Some(alias) = def.as_symbol_id(symbol_mode) {
                 match self.cconv_symbol_macrop(alias) {
                     Some(true) => return HeadVerdict::Macro,
                     Some(false) => {}
@@ -907,7 +909,7 @@ impl Context {
             let Some(cell) = self.cconv_fbound_cell(f) else {
                 return HeadVerdict::Plain;
             };
-            match cell.as_symbol_id() {
+            match cell.as_symbol_id(symbol_mode) {
                 Some(next) => f = next,
                 None => return HeadVerdict::Plain,
             }
@@ -993,8 +995,7 @@ impl Context {
         let mut limit = self.max_depth;
         if let Some(global) = as_limit(
             self.obarray
-                .symbol_value_id(max_lisp_eval_depth_symbol())
-                .copied(),
+                .symbol_value_id_copied(max_lisp_eval_depth_symbol()),
         ) {
             limit = limit.min(global);
         }
@@ -1095,6 +1096,7 @@ impl Context {
         body: Value,
         env: Value,
     ) -> Option<(Box<[SymId]>, Box<[SymId]>)> {
+        let symbol_mode = self.symbol_mode();
         use crate::tagged::header::{CLOSURE_ARGLIST, CLOSURE_CODE, CLOSURE_CONSTANTS};
         if closure.veclike_type() != Some(VecLikeType::Lambda) {
             return None;
@@ -1113,13 +1115,13 @@ impl Context {
         while tail.is_cons() {
             let item = tail.cons_car();
             if item.is_cons() {
-                let var = item.cons_car().as_symbol_id()?;
+                let var = item.cons_car().as_symbol_id(symbol_mode)?;
                 if !dynv.is_empty() || env_assq(env, var) != Some(item) {
                     return None;
                 }
                 lexv.push(var);
-            } else if item.is_symbol() && !item.is_nil() && !item.is_t() {
-                dynv.push(item.as_symbol_id()?);
+            } else if item.is_symbol(symbol_mode) && !item.is_nil() && !item.is_t() {
+                dynv.push(item.as_symbol_id(symbol_mode)?);
             } else {
                 return None;
             }
@@ -1278,8 +1280,10 @@ impl Context {
     /// knob is on and the filter is `cconv-make-interpreted-closure` itself.
     #[inline]
     pub(super) fn cconv_filter_call_applies(&self, closure_hook: Value) -> bool {
+        let symbol_mode = self.symbol_mode();
         self.cconv_memo.engaged()
-            && closure_hook.as_symbol_id() == Some(cconv_make_interpreted_closure_symbol())
+            && closure_hook.as_symbol_id(symbol_mode)
+                == Some(cconv_make_interpreted_closure_symbol())
     }
 
     /// `cconv-make-interpreted-closure` on the parts `Ffunction` built,

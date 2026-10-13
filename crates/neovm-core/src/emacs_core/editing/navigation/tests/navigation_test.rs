@@ -487,7 +487,7 @@ fn bootstrap_next_and_previous_line_match_simple_el() {
            (goto-char 1)
            (condition-case err (next-line) (error (car err))))",
     );
-    assert_eq!(next_line_err.as_symbol_name(), Some("end-of-buffer"));
+    assert_eq!(next_line_err.as_bare_symbol_name(), Some("end-of-buffer"));
 
     let previous_line_pos = eval_int(
         &mut ev,
@@ -509,7 +509,7 @@ fn bootstrap_next_and_previous_line_match_simple_el() {
            (condition-case err (previous-line) (error (car err))))",
     );
     assert_eq!(
-        previous_line_err.as_symbol_name(),
+        previous_line_err.as_bare_symbol_name(),
         Some("beginning-of-buffer")
     );
 
@@ -522,7 +522,7 @@ fn bootstrap_next_and_previous_line_match_simple_el() {
            (condition-case err (previous-line) (error (car err))))",
     );
     assert_eq!(
-        previous_line_mid_err.as_symbol_name(),
+        previous_line_mid_err.as_bare_symbol_name(),
         Some("beginning-of-buffer")
     );
 }
@@ -601,7 +601,7 @@ fn bootstrap_beginning_and_end_of_buffer_match_simple_el() {
         "(condition-case err (beginning-of-buffer nil nil) (error (car err)))",
     );
     assert_eq!(
-        beginning_err.as_symbol_name(),
+        beginning_err.as_bare_symbol_name(),
         Some("wrong-number-of-arguments")
     );
 
@@ -609,7 +609,10 @@ fn bootstrap_beginning_and_end_of_buffer_match_simple_el() {
         &mut ev,
         "(condition-case err (end-of-buffer nil nil) (error (car err)))",
     );
-    assert_eq!(end_err.as_symbol_name(), Some("wrong-number-of-arguments"));
+    assert_eq!(
+        end_err.as_bare_symbol_name(),
+        Some("wrong-number-of-arguments")
+    );
 }
 
 #[test]
@@ -646,7 +649,7 @@ fn bootstrap_goto_line_matches_simple_el() {
         "(condition-case err (goto-line 1 nil nil nil nil) (error (car err)))",
     );
     assert_eq!(
-        arity_err.as_symbol_name(),
+        arity_err.as_bare_symbol_name(),
         Some("wrong-number-of-arguments")
     );
 }
@@ -880,7 +883,10 @@ fn test_use_region_p_is_available_after_bootstrap() {
         .symbol_function("use-region-p")
         .expect("missing use-region-p startup function cell");
     assert!(
-        !crate::emacs_core::autoload::is_autoload_value(&function),
+        !crate::emacs_core::autoload::is_autoload_value(
+            &function,
+            crate::tagged::value::SymbolMode::Bare
+        ),
         "expected use-region-p to be a resolved function, not an autoload"
     );
 }
@@ -1136,7 +1142,7 @@ fn test_forward_char_honors_narrowing_end() {
         &mut ev,
         "(condition-case err (forward-char 10) (end-of-buffer 'caught))",
     );
-    assert_eq!(result.as_symbol_name(), Some("caught"));
+    assert_eq!(result.as_bare_symbol_name(), Some("caught"));
     let pos = eval_int(&mut ev, "(point)");
     assert_eq!(pos, 7);
 }
@@ -1152,7 +1158,7 @@ fn test_forward_char_honors_narrowing_beginning() {
         &mut ev,
         "(condition-case err (forward-char -10) (beginning-of-buffer 'caught))",
     );
-    assert_eq!(result.as_symbol_name(), Some("caught"));
+    assert_eq!(result.as_bare_symbol_name(), Some("caught"));
     let pos = eval_int(&mut ev, "(point)");
     assert_eq!(pos, 3);
 }
@@ -1161,3 +1167,7 @@ fn test_forward_char_honors_narrowing_beginning() {
 mod line_index;
 #[path = "selective_display_gnu_test.rs"]
 mod selective_display_gnu;
+
+#[cfg(test)]
+#[path = "tsb_boundary_numbers.rs"]
+mod tsb_boundary_numbers;

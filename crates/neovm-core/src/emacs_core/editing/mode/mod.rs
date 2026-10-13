@@ -171,7 +171,7 @@ fn mode_symbol_id(name: &str) -> SymId {
 
 fn mode_symbol_name(value: Value) -> &'static str {
     value
-        .as_symbol_name()
+        .as_bare_symbol_name()
         .expect("mode identity should be stored as a symbol")
 }
 
@@ -533,7 +533,7 @@ impl ModeRegistry {
     /// Register a custom variable.
     pub fn register_custom_variable(&mut self, name: &str, var: CustomVariable) {
         if let Some(group_name) = var.group
-            && let Some(group_symbol) = group_name.as_symbol_id()
+            && let Some(group_symbol) = group_name.as_bare_symbol_id()
             && let Some(group) = self.custom_groups.get_mut(&group_symbol)
         {
             let member = mode_symbol(name);

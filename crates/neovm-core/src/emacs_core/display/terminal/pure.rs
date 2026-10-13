@@ -937,7 +937,7 @@ pub(crate) fn expect_terminal_designator_eval(
 /// `init_sys_modes` publishes the tty's ERASE character -- the mode's
 /// `:variable` setter stores the genuine 0/1 (DIVERGENCES.md entry 67).
 fn terminal_parameter_default_value(key: &Value) -> Option<Value> {
-    match key.as_symbol_name() {
+    match key.as_bare_symbol_name() {
         Some("keyboard-coding-saved-meta-mode") => Some(Value::list(vec![Value::T])),
         _ => None,
     }

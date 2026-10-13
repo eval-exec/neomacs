@@ -1,0 +1,5 @@
+error[E0616]: field `offset` of struct `LispBufferObjFwd` is private
+ --> tests/thread_safety_ui/buffer_obj_offset_private.rs:7:9
+  |
+7 |     fwd.offset
+  |         ^^^^^^ private field

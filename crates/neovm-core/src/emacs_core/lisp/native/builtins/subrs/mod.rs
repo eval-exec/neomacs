@@ -97,7 +97,12 @@ impl EvaluatorCompatibility<NeedsEventProperties> {
         self,
         ctx: &mut crate::emacs_core::eval::Context,
     ) -> EvaluatorCompatibility<NeedsPublicEval> {
-        symbols::init_event_symbol_properties(&mut ctx.obarray);
+        // SAFETY: compatibility setup only initializes event symbol properties;
+        // it does not call Lisp or mutate canonical function/debugger metadata.
+        unsafe {
+            ctx.obarray
+                .with_legacy_value_write(symbols::init_event_symbol_properties);
+        }
         EvaluatorCompatibility(std::marker::PhantomData)
     }
 }
@@ -134,8 +139,7 @@ fn push_onto_charset_list(
     use crate::emacs_core::value::Value;
     let current = ctx
         .obarray
-        .symbol_value("charset-list")
-        .copied()
+        .symbol_value_copied("charset-list")
         .unwrap_or(Value::NIL);
     // Unconditionally, as GNU does: defining the same alias twice leaves two
     // entries in its list, and nothing in a normal session defines a charset
@@ -145,8 +149,6 @@ fn push_onto_charset_list(
 }
 
 pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
-    use crate::emacs_core::value::*;
-
     #[cfg(windows)]
     crate::emacs_core::w32::register_subrs(ctx);
     lcms::register_subrs(ctx);
@@ -3824,7 +3826,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "make-string",
-        NativeFn::ContextVec(|_ctx, args| builtin_make_string(args)),
+        NativeFn::ContextVec(super::strings::builtin_make_string_in_context),
         SubrArity::new(2, Some(3)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -3847,7 +3849,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(SubrSpec::new(
         "elt",
-        NativeFn::ContextVec(|_ctx, args| builtin_elt(args)),
+        NativeFn::ContextVec(builtin_elt_in_state),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::fixed2("memql", builtin_memql_2, FixedMin2::Two));
@@ -3888,12 +3890,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "charsetp",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::charset::builtin_charsetp(args)),
+        NativeFn::ContextVec(crate::emacs_core::charset::builtin_charsetp_in_state),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "charset-plist",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::charset::builtin_charset_plist(args)),
+        NativeFn::ContextVec(crate::emacs_core::charset::builtin_charset_plist_in_state),
         SubrArity::new(1, Some(1)),
     ));
     // A coding system's memoized `:ascii-compatible-p`/`:category` are
@@ -3906,7 +3908,8 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|ctx, args| {
             ctx.coding_systems.invalidate_lookup_cache();
             let name = args.first().copied();
-            let defined = crate::emacs_core::charset::builtin_define_charset_internal(args)?;
+            let defined =
+                crate::emacs_core::charset::builtin_define_charset_internal_in_state(ctx, args)?;
             // GNU `Fdefine_charset_internal' ends by consing the name onto
             // `Vcharset_list' (charset.c), newest first. Ours never did, so
             // `charset-list' stayed nil while GNU's held 203 charsets --
@@ -3923,7 +3926,8 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|ctx, args| {
             ctx.coding_systems.invalidate_lookup_cache();
             let alias = args.first().copied();
-            let defined = crate::emacs_core::charset::builtin_define_charset_alias(args)?;
+            let defined =
+                crate::emacs_core::charset::builtin_define_charset_alias_in_state(ctx, args)?;
             // An alias joins `charset-list' too, though not the priority list.
             if let Some(alias) = alias {
                 push_onto_charset_list(ctx, alias);
@@ -3963,14 +3967,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "copy-syntax-table",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::syntax::builtin_copy_syntax_table(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_copy_syntax_table_in_state),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "syntax-table-p",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::syntax::builtin_syntax_table_p(args)),
+        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_syntax_table_p_in_state),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4117,17 +4119,17 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "single-key-description",
-        NativeFn::ContextVec(|_ctx, args| builtin_single_key_description(args)),
+        NativeFn::ContextVec(|ctx, args| builtin_single_key_description(args, ctx.symbol_mode())),
         SubrArity::new(1, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
         "key-description",
-        NativeFn::ContextVec(|_ctx, args| builtin_key_description(args)),
+        NativeFn::ContextVec(|ctx, args| builtin_key_description(args, ctx.symbol_mode())),
         SubrArity::new(1, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
         "event-convert-list",
-        NativeFn::ContextVec(|_ctx, args| builtin_event_convert_list(args)),
+        NativeFn::ContextVec(|ctx, args| builtin_event_convert_list(args, ctx.symbol_mode())),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4315,7 +4317,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "frame-or-buffer-changed-p",
-        NativeFn::ContextVec(|_ctx, args| builtin_frame_or_buffer_changed_p(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            builtin_frame_or_buffer_changed_p(args, ctx.symbol_mode())
+        }),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4389,9 +4393,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "get-unicode-property-internal",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::chartable::builtin_get_unicode_property_internal(args)
-        }),
+        NativeFn::ContextVec(
+            crate::emacs_core::chartable::builtin_get_unicode_property_internal_in_state,
+        ),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4436,7 +4440,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "gnutls-errorp",
-        NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_errorp(args)),
+        NativeFn::ContextVec(|ctx, args| gnutls::builtin_gnutls_errorp(args, ctx.symbol_mode())),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4451,12 +4455,14 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "gnutls-hash-digest",
-        NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_hash_digest(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            gnutls::builtin_gnutls_hash_digest(args, ctx.symbol_mode())
+        }),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
         "gnutls-hash-mac",
-        NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_hash_mac(args)),
+        NativeFn::ContextVec(|ctx, args| gnutls::builtin_gnutls_hash_mac(args, ctx.symbol_mode())),
         SubrArity::new(3, Some(3)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4471,19 +4477,23 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "gnutls-peer-status-warning-describe",
-        NativeFn::ContextVec(|_ctx, args| {
-            gnutls::builtin_gnutls_peer_status_warning_describe(args)
+        NativeFn::ContextVec(|ctx, args| {
+            gnutls::builtin_gnutls_peer_status_warning_describe(args, ctx.symbol_mode())
         }),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "gnutls-symmetric-decrypt",
-        NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_symmetric_decrypt(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            gnutls::builtin_gnutls_symmetric_decrypt(args, ctx.symbol_mode())
+        }),
         SubrArity::new(4, Some(5)),
     ));
     ctx.register_subr(SubrSpec::new(
         "gnutls-symmetric-encrypt",
-        NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_symmetric_encrypt(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            gnutls::builtin_gnutls_symmetric_encrypt(args, ctx.symbol_mode())
+        }),
         SubrArity::new(4, Some(5)),
     ));
     ctx.register_subr(
@@ -4510,7 +4520,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "init-image-library",
-        NativeFn::ContextVec(|_ctx, args| builtin_init_image_library(args)),
+        NativeFn::ContextVec(|ctx, args| builtin_init_image_library(args, ctx.symbol_mode())),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4568,85 +4578,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // the GNU bytecodes, and executes them via the bytecode VM.
     ctx.register_subr(SubrSpec::new(
         "byte-code",
-        NativeFn::ContextVec(|ctx, args| {
-            crate::emacs_core::builtins::expect_args("byte-code", &args, 3)?;
-            let bytestr = args[0];
-            let constants_vec = args[1];
-            let maxdepth = args[2];
-
-            use crate::emacs_core::bytecode::ByteCodeFunction;
-            use crate::emacs_core::bytecode::decode::decode_gnu_bytecode_with_offset_map;
-            use crate::emacs_core::value::LambdaParams;
-
-            // Bytecode strings are unibyte and may contain non-UTF-8 bytes.
-            let raw_bytes = if let Some(ls) = ctx.lisp_string(bytestr) {
-                ls.as_bytes().to_vec()
-            } else {
-                return Err(crate::emacs_core::error::signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("stringp"), bytestr],
-                ));
-            };
-
-            let mut constants: Vec<Value> = match constants_vec.kind() {
-                ValueKind::Veclike(VecLikeType::Vector) => {
-                    constants_vec.as_vector_data().unwrap().clone()
-                }
-                _ => {
-                    return Err(crate::emacs_core::error::signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("vectorp"), constants_vec],
-                    ));
-                }
-            };
-
-            for constant in &mut constants {
-                *constant =
-                    crate::emacs_core::builtins::try_convert_nested_compiled_literal(*constant);
-            }
-
-            let (ops, gnu_byte_offset_map) =
-                decode_gnu_bytecode_with_offset_map(&raw_bytes, &mut constants).map_err(|e| {
-                    crate::emacs_core::error::signal(
-                        "error",
-                        vec![Value::string(format!("bytecode decode error: {}", e))],
-                    )
-                })?;
-
-            let max_stack = match maxdepth.kind() {
-                ValueKind::Fixnum(n) => n as u16,
-                _ => 16,
-            };
-
-            let bc = ByteCodeFunction {
-                source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-                ops,
-                // The instructions above came straight from the sealing decoder;
-                // the stack proof is recomputed below once every shape field
-                // (params/lexical/arglist/env/max_stack) is in place.
-                ops_sealed: true,
-                stack_verified: false,
-                constants: constants.into(),
-                max_stack,
-                params: LambdaParams::simple(vec![]),
-                arglist: Value::NIL,
-                lexical: false,
-                env: None,
-                gnu_byte_offset_map: Some(gnu_byte_offset_map),
-                gnu_bytecode_bytes: None,
-                docstring: None,
-                doc_form: None,
-                interactive: None,
-                closure_slot_count: 4,
-                extra_slots: Vec::new(),
-                #[cfg(feature = "jit")]
-                runtime: Some(crate::emacs_core::jit::Runtime::new()),
-                lazy_gnu_code: None,
-            };
-
-            let mut vm = crate::emacs_core::bytecode::Vm::from_context(ctx);
-            vm.execute(&bc, vec![])
-        }),
+        NativeFn::ContextVec(crate::emacs_core::builtins::builtin_byte_code),
         SubrArity::new(3, Some(3)),
     ));
     ctx.register_subr(
@@ -4747,7 +4679,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "make-char",
-        NativeFn::ContextVec(|_ctx, args| charset::builtin_make_char(args)),
+        NativeFn::ContextVec(charset::builtin_make_char_in_state),
         SubrArity::new(1, Some(5)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4862,12 +4794,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(SubrSpec::new(
         "open-font",
-        NativeFn::ContextVec(|_ctx, args| builtin_open_font(args)),
+        NativeFn::ContextVec(|ctx, args| builtin_open_font(args, ctx.symbol_mode())),
         SubrArity::new(1, Some(3)),
     ));
     ctx.register_subr(SubrSpec::new(
         "optimize-char-table",
-        NativeFn::ContextVec(|_ctx, args| builtin_optimize_char_table(args)),
+        NativeFn::ContextVec(|ctx, args| builtin_optimize_char_table(args, ctx.symbol_mode())),
         SubrArity::new(1, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4939,9 +4871,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "put-unicode-property-internal",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::chartable::builtin_put_unicode_property_internal(args)
-        }),
+        NativeFn::ContextVec(
+            crate::emacs_core::chartable::builtin_put_unicode_property_internal_in_state,
+        ),
         SubrArity::new(3, Some(3)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -5064,7 +4996,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "set-charset-plist",
-        NativeFn::ContextVec(|_ctx, args| builtin_set_charset_plist(args)),
+        NativeFn::ContextVec(|ctx, args| builtin_set_charset_plist(args, ctx.symbol_mode())),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -5242,7 +5174,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "unify-charset",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::charset::builtin_unify_charset(args)),
+        NativeFn::ContextVec(crate::emacs_core::charset::builtin_unify_charset_in_state),
         SubrArity::new(1, Some(3)),
     ));
     ctx.register_subr(
@@ -5603,7 +5535,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "treesit-pattern-expand",
-        NativeFn::ContextVec(|_ctx, args| builtin_treesit_pattern_expand(args)),
+        NativeFn::ContextVec(builtin_treesit_pattern_expand_in_state),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -5618,7 +5550,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "treesit-query-expand",
-        NativeFn::ContextVec(|_ctx, args| builtin_treesit_query_expand(args)),
+        NativeFn::ContextVec(builtin_treesit_query_expand_in_state),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -5716,7 +5648,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "define-hash-table-test",
-        NativeFn::ContextVec(|_ctx, args| builtin_define_hash_table_test(args)),
+        NativeFn::ContextVec(builtin_define_hash_table_test_in_state),
         SubrArity::new(3, Some(3)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -6015,9 +5947,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "top-level",
-            NativeFn::ContextVec(|_ctx, args| {
-                crate::emacs_core::minibuffer::builtin_top_level(args)
-            }),
+            NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_top_level),
             SubrArity::new(0, Some(0)),
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
@@ -7036,7 +6966,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // -- Vector --
     ctx.register_subr(SubrSpec::new(
         "make-vector",
-        NativeFn::ContextVec(|_ctx, args| builtin_make_vector(args)),
+        NativeFn::ContextVec(super::collections::builtin_make_vector_in_context),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -7047,7 +6977,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(SubrSpec::fixed2("aref", builtin_aref_2, FixedMin2::Two));
     ctx.register_subr(SubrSpec::new(
         "aset",
-        NativeFn::ContextSlice(|_ctx, args| builtin_aset_args(args)),
+        NativeFn::ContextSlice(builtin_aset_args_in_state),
         SubrArity::new(3, Some(3)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -7059,7 +6989,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // -- Hash table --
     ctx.register_subr(SubrSpec::new(
         "make-hash-table",
-        NativeFn::ContextSlice(|_ctx, args| builtin_make_hash_table_slice(args)),
+        NativeFn::ContextSlice(builtin_make_hash_table_in_state),
         SubrArity::new(0, None),
     ));
     ctx.register_subr(const {
@@ -7481,23 +7411,19 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // -- Case table --
     ctx.register_subr(SubrSpec::new(
         "case-table-p",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::casetab::builtin_case_table_p(args)),
+        NativeFn::ContextVec(crate::emacs_core::casetab::builtin_case_table_p_in_state),
         SubrArity::new(1, Some(1)),
     ));
 
     // -- Category --
     ctx.register_subr(SubrSpec::new(
         "category-table-p",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::category::builtin_category_table_p(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::category::builtin_category_table_p_in_state),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "copy-category-table",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::category::builtin_copy_category_table(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::category::builtin_copy_category_table_in_state),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -7523,16 +7449,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "set-char-table-range",
-        NativeFn::ContextVec(|ctx, args| {
-            crate::emacs_core::chartable::builtin_set_char_table_range(args, Some(&ctx.obarray))
-        }),
+        NativeFn::ContextVec(crate::emacs_core::chartable::builtin_set_char_table_range_in_state),
         SubrArity::new(3, Some(3)),
     ));
     ctx.register_subr(SubrSpec::new(
         "char-table-range",
-        NativeFn::ContextVec(|ctx, args| {
-            crate::emacs_core::chartable::builtin_char_table_range(args, Some(&ctx.obarray))
-        }),
+        NativeFn::ContextVec(crate::emacs_core::chartable::builtin_char_table_range_in_state),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -7577,9 +7499,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "make-bool-vector",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::chartable::builtin_make_bool_vector(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::boolvec::builtin_make_bool_vector_in_context),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -7654,28 +7574,22 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "set-charset-priority",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::charset::builtin_set_charset_priority(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::charset::builtin_set_charset_priority_in_state),
         SubrArity::new(1, None),
     ));
     ctx.register_subr(SubrSpec::new(
         "char-charset",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::charset::builtin_char_charset(args)),
+        NativeFn::ContextVec(crate::emacs_core::charset::builtin_char_charset_in_state),
         SubrArity::new(1, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
         "charset-id-internal",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::charset::builtin_charset_id_internal(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::charset::builtin_charset_id_internal_in_state),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "declare-equiv-charset",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::charset::builtin_declare_equiv_charset(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::charset::builtin_declare_equiv_charset_in_state),
         SubrArity::new(4, Some(4)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -7694,7 +7608,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "decode-char",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::charset::builtin_decode_char(args)),
+        NativeFn::ContextVec(crate::emacs_core::charset::builtin_decode_char_in_state),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -7713,7 +7627,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "encode-char",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::charset::builtin_encode_char(args)),
+        NativeFn::ContextVec(crate::emacs_core::charset::builtin_encode_char_in_state),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -8330,12 +8244,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // -- JSON --
     ctx.register_subr(SubrSpec::new(
         "json-serialize",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::json::builtin_json_serialize(args)),
+        NativeFn::ContextVec(crate::emacs_core::json::builtin_json_serialize_in_state),
         SubrArity::new(1, None),
     ));
     ctx.register_subr(SubrSpec::new(
         "json-parse-string",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::json::builtin_json_parse_string(args)),
+        NativeFn::ContextVec(crate::emacs_core::json::builtin_json_parse_string_in_state),
         SubrArity::new(1, None),
     ));
 

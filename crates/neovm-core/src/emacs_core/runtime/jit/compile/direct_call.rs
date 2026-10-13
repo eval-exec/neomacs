@@ -44,8 +44,8 @@
 
 use super::jit_layout::{
     BacktraceLayout, CONTEXT_ATTENTION_OFFSET, CONTEXT_DEPTH_OFFSET, CONTEXT_MAX_DEPTH_OFFSET,
-    CONTEXT_OBARRAY_OFFSET, CONTEXT_SPECPDL_OFFSET, EntryTemplate,
-    OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET, VecOffsets,
+    CONTEXT_SPECPDL_OFFSET, DISPATCH_DEBUG_FWD_OFFSET, DISPATCH_FUNCTION_EPOCH_OFFSET,
+    EntryTemplate, VecOffsets,
 };
 use super::lowering::{RtCtx, iadd_imm_p, icmp_imm_p, ishl_imm_p};
 use super::reg_abi::MAX_REG_ARGS;
@@ -54,6 +54,7 @@ use super::spec_slot::{
     SPEC_SLOT_LEAF_OFFSET,
 };
 use super::*;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use std::sync::atomic::AtomicU64;
 
 /// Direct sites a leaf may emit (design §3.9); later sites keep the shim.
@@ -253,21 +254,20 @@ impl DirectSite {
             return None;
         }
         let bc = Value::from_bits(expected as usize).bytecode_data_if_materialized()?;
+        let params = JitParamShape::try_from(bc).ok()?;
         let self_only = jit_direct_sites() == DirectSitesMode::SelfOnly;
         if self_only {
             let source = rt.self_direct_source?;
             if !self_only::expected_is_source(expected, source)
-                || bc.params.required.len() != nargs
-                || !bc.params.optional.is_empty()
-                || bc.params.rest.is_some()
+                || params.fixed_arity() != Some(nargs)
             {
                 return None;
             }
         }
         let callee = CalleeShape {
-            required: bc.params.required.len(),
-            nonrest: bc.params.required.len() + bc.params.optional.len(),
-            rest: bc.params.rest.is_some(),
+            required: params.required(),
+            nonrest: params.nonrest(),
+            rest: params.rest().is_present(),
         };
         let shapes = jit_direct_shapes();
         let callable = if callee.rest {
@@ -477,12 +477,13 @@ pub(crate) fn emit_direct_bytecode_call(
     // 3. Epoch: the function epoch a named slot was validated at, or the
     // leaf-slot epoch a source slot's leaf was armed under (a JIT-only
     // bake of a process address).
+    let dispatch = super::jit_layout::emit_dispatch_cells_base(fb, vmctx);
     let live_epoch = match callee {
         DirectCallee::Symbol { .. } => fb.ins().load(
             types::I64,
             flags,
-            vmctx,
-            (CONTEXT_OBARRAY_OFFSET + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
+            dispatch,
+            DISPATCH_FUNCTION_EPOCH_OFFSET as i32,
         ),
         DirectCallee::Source { .. } => {
             let epoch_addr = fb.ins().iconst(
@@ -498,19 +499,11 @@ pub(crate) fn emit_direct_bytecode_call(
     let stale = fb.ins().icmp(IntCC::NotEqual, live_epoch, armed_epoch);
     next(fb, stale);
     // 4. `debug-on-next-call` (the cell is never null).
-    let cell = fb.ins().load(
-        ptr_ty,
-        flags,
-        vmctx,
-        (CONTEXT_OBARRAY_OFFSET + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
-    );
-    let debug = fb.ins().uload8(
-        types::I64,
-        flags,
-        cell,
-        crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET as i32,
-    );
-    let armed_debugger = icmp_imm_p(fb, IntCC::NotEqual, debug, 0);
+    let cell = fb
+        .ins()
+        .load(ptr_ty, flags, dispatch, DISPATCH_DEBUG_FWD_OFFSET as i32);
+    let debug = super::atomic_forward::load_bool_byte(fb, cell);
+    let armed_debugger = debug.is_set(fb);
     next(fb, armed_debugger);
     // 5. Depth.
     let depth = fb

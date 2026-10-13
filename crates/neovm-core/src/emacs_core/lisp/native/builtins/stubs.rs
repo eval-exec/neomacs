@@ -5,6 +5,7 @@ use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::fontset;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::emacs_core::window_cmds::FrameDomain;
+use crate::tagged::SymbolMode;
 use neomacs_display_protocol::SelectionOwner;
 
 // =========================================================================
@@ -445,6 +446,7 @@ fn fringe_bits_rows(bits: &Value) -> Result<Vec<u32>, Flow> {
 /// be a symbol (`top`/`bottom`/`center`/nil) or a list `(ALIGN PERIODIC)`.
 fn parse_fringe_align(
     align: Option<&Value>,
+    symbol_mode: SymbolMode,
 ) -> Result<(super::fringe_bitmap::FringeBitmapAlign, bool), Flow> {
     use super::fringe_bitmap::FringeBitmapAlign;
     let Some(align) = align else {
@@ -462,10 +464,10 @@ fn parse_fringe_align(
     } else {
         (*align, false)
     };
-    let align_kind = match align_sym.as_symbol_name() {
-        Some("top") => FringeBitmapAlign::Top,
-        Some("bottom") => FringeBitmapAlign::Bottom,
-        Some("center") => FringeBitmapAlign::Center,
+    let align_kind = match align_sym.as_symbol_id(symbol_mode) {
+        Some(id) if id == intern("top") => FringeBitmapAlign::Top,
+        Some(id) if id == intern("bottom") => FringeBitmapAlign::Bottom,
+        Some(id) if id == intern("center") => FringeBitmapAlign::Center,
         _ if align_sym.is_nil() => FringeBitmapAlign::Center,
         _ => {
             return Err(signal("error", vec![Value::string("Bad align argument")]));
@@ -523,7 +525,7 @@ pub(crate) fn builtin_define_fringe_bitmap(
 
     // ALIGN: symbol or `(ALIGN PERIODIC)`. A periodic bitmap repeats its rows;
     // GNU then forces height to 255 and records the natural length as period.
-    let (align, periodic) = parse_fringe_align(args.get(4))?;
+    let (align, periodic) = parse_fringe_align(args.get(4), ctx.symbol_mode())?;
     let mut period: u8 = 0;
     if periodic {
         period = natural_height;
@@ -578,13 +580,19 @@ pub(crate) fn builtin_define_fringe_bitmap(
     }
 
     ctx.note_macro_expansion_mutation();
-    super::symbols::put_in_obarray_values(
-        ctx.obarray_mut(),
-        args[0],
-        Value::symbol("fringe"),
-        Value::fixnum(index as i64),
-        symbols_with_pos_enabled,
-    )?;
+    // SAFETY: the fringe registry/variable updates have completed; this phase
+    // only writes its symbol property and cannot invoke Lisp or dispatch writers.
+    unsafe {
+        ctx.obarray.with_legacy_value_write(|obarray| {
+            super::symbols::put_in_obarray_values(
+                obarray,
+                args[0],
+                Value::symbol("fringe"),
+                Value::fixnum(index as i64),
+                symbols_with_pos_enabled,
+            )
+        })
+    }?;
 
     Ok(args[0])
 }
@@ -626,13 +634,19 @@ pub(crate) fn builtin_destroy_fringe_bitmap(
     if user_defined {
         let remaining = fringe_bitmaps_without(ctx, args[0]);
         ctx.assign("fringe-bitmaps", remaining);
-        super::symbols::put_in_obarray_values(
-            ctx.obarray_mut(),
-            args[0],
-            Value::symbol("fringe"),
-            Value::NIL,
-            symbols_with_pos_enabled,
-        )?;
+        // SAFETY: callbacks/variable updates finished before this property-only
+        // removal. No Lisp or canonical metadata writer runs under this loan.
+        unsafe {
+            ctx.obarray.with_legacy_value_write(|obarray| {
+                super::symbols::put_in_obarray_values(
+                    obarray,
+                    args[0],
+                    Value::symbol("fringe"),
+                    Value::NIL,
+                    symbols_with_pos_enabled,
+                )
+            })
+        }?;
     }
     Ok(Value::NIL)
 }
@@ -663,6 +677,7 @@ pub(crate) fn builtin_external_debugging_output(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("external-debugging-output", &args, 1)?;
     let ch = expect_fixnum(&args[0])?;
     if ch < 0 {
@@ -695,7 +710,7 @@ pub(crate) fn builtin_external_debugging_output(
         }
     };
     let eol_conversion = eval.eol_conversion();
-    let bytes = match coding.as_symbol_name() {
+    let bytes = match coding.as_symbol_name(symbol_mode) {
         Some(name) => crate::encoding::encode_lisp_string(&internal, name, eol_conversion),
         None => internal.as_bytes().to_vec(),
     };
@@ -785,10 +800,10 @@ pub(crate) fn builtin_handle_save_session(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_init_image_library(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_init_image_library(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args("init-image-library", &args, 1)?;
     let available = args[0]
-        .as_symbol_name()
+        .as_symbol_name(symbol_mode)
         .is_some_and(super::super::image::is_supported_image_type);
     Ok(Value::bool_val(available))
 }
@@ -1049,7 +1064,10 @@ pub(crate) fn builtin_frame_internal_border_width(args: Vec<Value>) -> EvalResul
     Ok(Value::fixnum(0))
 }
 
-pub(crate) fn builtin_frame_or_buffer_changed_p(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_frame_or_buffer_changed_p(
+    args: Vec<Value>,
+    symbol_mode: SymbolMode,
+) -> EvalResult {
     expect_args_range("frame-or-buffer-changed-p", &args, 0, 1)?;
     let Some(symbol) = args.first() else {
         return Ok(Value::T);
@@ -1057,7 +1075,7 @@ pub(crate) fn builtin_frame_or_buffer_changed_p(args: Vec<Value>) -> EvalResult 
     if symbol.is_nil() {
         return Ok(Value::NIL);
     }
-    if symbol.as_symbol_name().is_none() {
+    if !symbol.is_symbol(symbol_mode) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), *symbol],

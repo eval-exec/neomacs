@@ -16,7 +16,11 @@ use crate::emacs_core::jit::opt::{
 use crate::emacs_core::value::{Value as LispValue, ValueKind, VecLikeType};
 
 fn prepared(source: &ByteCodeFunction, prefix: usize) -> Func {
-    let arity = source.params.required.len();
+    let arity = source
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     let cfg = analyze_cfg(
         source.executable_ops(),
         &source.constants,

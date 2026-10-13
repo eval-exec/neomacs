@@ -20,7 +20,7 @@ pub(super) struct SpaceInput {
 impl SpaceInput {
     pub(super) fn capture(value: Value) -> Option<Self> {
         use crate::emacs_core::display_spec::DisplaySpaceKey;
-        if !value.is_cons() || !value.cons_car().is_symbol_named("space") {
+        if !value.is_cons() || !value.cons_car().is_bare_symbol_named("space") {
             return None;
         }
         let items = crate::emacs_core::value::list_to_vec(&value)?;
@@ -94,8 +94,10 @@ impl PixelInput {
                     pending.push((cdr, Role::Arguments));
                     pending.push((car, Role::Expression));
                 }
-                Role::Expression if car.is_symbol_named("+") || car.is_symbol_named("-") => {
-                    tokens.push(if car.is_symbol_named("+") {
+                Role::Expression
+                    if car.is_bare_symbol_named("+") || car.is_bare_symbol_named("-") =>
+                {
+                    tokens.push(if car.is_bare_symbol_named("+") {
                         Token::Sum
                     } else {
                         Token::Difference
@@ -110,7 +112,7 @@ impl PixelInput {
                         pending.push((cdr, Role::Expression));
                     }
                 }
-                Role::Expression if car.is_symbol_named("image") => {
+                Role::Expression if car.is_bare_symbol_named("image") => {
                     tokens.push(
                         ImageSpecIdentity::from_lisp_spec(&value)
                             .map(Token::Image)

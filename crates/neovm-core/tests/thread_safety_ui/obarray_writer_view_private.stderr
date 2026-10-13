@@ -1,0 +1,5 @@
+error[E0616]: field `view` of struct `ObarrayWriteAccess` is private
+ --> tests/thread_safety_ui/obarray_writer_view_private.rs:5:24
+  |
+5 |     let _view = writer.view;
+  |                        ^^^^ private field

@@ -37,7 +37,7 @@ fn directory_files_accepts_nil_count_and_forwarded_optional_count() {
     match invalid.into_kind() {
         FlowKind::Signal(signal) => {
             assert_eq!(signal.symbol_name(), "wrong-type-argument");
-            assert_eq!(signal.data[0].as_symbol_name(), Some("wholenump"));
+            assert_eq!(signal.data[0].as_bare_symbol_name(), Some("wholenump"));
         }
         other => panic!("unexpected {other:?}"),
     }

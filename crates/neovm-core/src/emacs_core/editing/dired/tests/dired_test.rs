@@ -1003,7 +1003,7 @@ fn test_file_attributes_lessp_bad_args_match_gnu_order() {
     match err.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
-            assert_eq!(sig.data[0].as_symbol_name(), Some("listp"));
+            assert_eq!(sig.data[0].as_bare_symbol_name(), Some("listp"));
             assert_eq!(sig.data[1].as_str_owned().as_deref(), Some("beta"));
         }
         other => panic!("expected signal, got {other:?}"),

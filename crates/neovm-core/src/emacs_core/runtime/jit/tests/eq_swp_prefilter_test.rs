@@ -35,7 +35,7 @@ fn body(ops: Vec<Op>, constants: Vec<Value>, arity: usize, shape: Shape) -> Byte
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     f
 }
@@ -286,7 +286,7 @@ fn eq_prefilter_off_calls_the_shim_for_every_mismatch() {
             let want = interpret(&mut eval, &symbolp, &[a]);
             let (got, _, calls) = native(ctx_ptr, &symbolp_leaf, &[a]);
             assert_eq!(print_value(&got), print_value(&want), "(symbolp {an})");
-            assert_eq!(calls, usize::from(!a.is_symbol()), "(symbolp {an})");
+            assert_eq!(calls, usize::from(!a.is_bare_symbol()), "(symbolp {an})");
         }
     }
     force_eq_prefilter_for_test(true);

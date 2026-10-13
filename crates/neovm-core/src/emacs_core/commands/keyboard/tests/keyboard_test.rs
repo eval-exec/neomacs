@@ -9,7 +9,10 @@ use crate::emacs_core::value::Value;
 fn describe_int_key_succeeds() {
     crate::test_utils::init_test_tracing();
     let value = Value::fixnum(97);
-    assert_eq!(describe_single_key_value(&value, false).unwrap(), b"a");
+    assert_eq!(
+        describe_single_key_value(&value, false, crate::tagged::value::SymbolMode::Bare).unwrap(),
+        b"a"
+    );
 }
 
 #[test]
@@ -19,11 +22,11 @@ fn key_sequence_values_accept_string_and_list() {
     let list: Value =
         crate::emacs_core::value::Value::list(vec![Value::fixnum(97), Value::fixnum(98)]);
     assert_eq!(
-        key_sequence_values(&string).unwrap(),
+        key_sequence_values(&string, crate::tagged::value::SymbolMode::Bare).unwrap(),
         vec![Value::fixnum(97), Value::fixnum(98), Value::fixnum(99)]
     );
     assert_eq!(
-        key_sequence_values(&list).unwrap(),
+        key_sequence_values(&list, crate::tagged::value::SymbolMode::Bare).unwrap(),
         vec![Value::fixnum(97), Value::fixnum(98)]
     );
 }

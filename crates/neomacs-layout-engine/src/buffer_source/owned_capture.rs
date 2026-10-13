@@ -141,7 +141,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
             .and_then(|value| value.as_window_id())
             .is_some();
         if let Some(value) = invisible_lookup.effective_overlay_value(buffer, overlay) {
-            if !value.is_symbol() {
+            if !value.is_bare_symbol() {
                 return Err(RowProgramError::Unsupported);
             }
             has_invisible |= !value.is_nil();
@@ -184,7 +184,7 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
             return Err(RowProgramError::Budget);
         }
         if let Some(value) = invisible_lookup.text_value_at(buffer, pos) {
-            if !value.is_symbol() {
+            if !value.is_bare_symbol() {
                 return Err(RowProgramError::Unsupported);
             }
             has_invisible |= !value.is_nil();
@@ -423,7 +423,7 @@ fn literal_raise_or_nil(value: Value) -> bool {
     if value.is_nil() {
         return true;
     }
-    if !value.is_cons() || !value.cons_car().is_symbol_named("raise") {
+    if !value.is_cons() || !value.cons_car().is_bare_symbol_named("raise") {
         return false;
     }
     let tail = value.cons_cdr();

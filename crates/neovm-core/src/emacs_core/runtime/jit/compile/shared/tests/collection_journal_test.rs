@@ -27,6 +27,7 @@ impl Drop for Settings {
 
 fn groups(collection_journal: bool, tier2_profile: bool) -> ShimGroups {
     ShimGroups {
+        throw_flow: crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual,
         subr_spec: true,
         cbsym_spec: true,
         tier2_profile,

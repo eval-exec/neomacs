@@ -418,7 +418,6 @@ pub(super) use super::navigation;
 pub(super) use super::print;
 pub(super) use super::regex;
 pub(super) use super::subr_info;
-pub(super) use super::terminal;
 pub(super) use super::textprop;
 pub(super) use super::value;
 pub(super) use super::window_cmds;
@@ -452,6 +451,7 @@ pub(crate) use types::*;
 // primitive bodies (`builtin_point_0`, `builtin_char_after`, ...) by name
 // instead of reimplementing them (matches the sibling `navigation`/`editfns`/
 // `search` modules, already crate-visible).
+mod byte_code;
 mod file_notify;
 pub(crate) mod fringe_bitmap;
 pub(crate) mod fringe_standard_bitmaps;
@@ -463,6 +463,8 @@ mod lcms;
 pub(crate) mod misc_eval;
 pub(crate) mod search;
 mod stubs;
+pub(crate) use byte_code::builtin_byte_code;
+
 mod subrs;
 pub(crate) mod symbols;
 mod treesit;
@@ -524,7 +526,7 @@ pub(super) fn expect_string_comparison_operand(
     match value.kind() {
         ValueKind::String => Ok(from_value::StringDesignator::String(*value)),
         _ => value
-            .as_symbol_id()
+            .as_bare_symbol_id()
             .map(crate::emacs_core::intern::resolve_lisp_visible_symbol_name)
             .map(from_value::StringDesignator::SymbolName)
             .ok_or_else(|| {
@@ -610,7 +612,7 @@ fn dispatch_builtin_stateless_placeholder(
         NoEvalPolicy::Placeholder(NoEvalPlaceholder::Nil) => Value::NIL,
         NoEvalPolicy::Placeholder(NoEvalPlaceholder::FixnumZero) => Value::fixnum(0),
         NoEvalPolicy::Placeholder(NoEvalPlaceholder::WindowLineHeight) => {
-            if args.len() == 2 && args[1].as_symbol_name() == Some("window") {
+            if args.len() == 2 && args[1].as_bare_symbol_name() == Some("window") {
                 Value::NIL
             } else {
                 return None;
@@ -666,6 +668,9 @@ mod make_byte_code_literals_test;
 #[cfg(test)]
 #[path = "tests/make_closure_instance_test.rs"]
 mod make_closure_instance_test;
+#[cfg(test)]
+#[path = "tests/tsb_literal_size.rs"]
+mod tsb_literal_size_test;
 
 #[cfg(test)]
 #[path = "tests/obarray_growth_test.rs"]
@@ -721,12 +726,13 @@ mod rust_subrs_shadowed_by_lisp_test;
 /// Build it only when a subscriber is listening at DEBUG; the untraced path
 /// is the bare primitive.
 fn run_hooks_traced(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     if !tracing::enabled!(tracing::Level::DEBUG) {
         return builtin_run_hooks(eval, args);
     }
     let hook_names: Vec<String> = args
         .iter()
-        .filter_map(|a| a.as_symbol_name().map(|s| s.to_string()))
+        .filter_map(|a| a.as_symbol_name(symbol_mode).map(|s| s.to_string()))
         .collect();
     let dominated_by_noise = hook_names
         .iter()
@@ -772,25 +778,32 @@ fn message_traced(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResu
 }
 
 fn coding_system_aliases(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    super::coding::builtin_coding_system_aliases(&eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_coding_system_aliases(&eval.coding_systems, args, mode)
 }
 fn coding_system_plist(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    super::coding::builtin_coding_system_plist(&eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_coding_system_plist(&eval.coding_systems, args, mode)
 }
 fn coding_system_put(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    super::coding::builtin_coding_system_put(&mut eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_coding_system_put(&mut eval.coding_systems, args, mode)
 }
 fn coding_system_base(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    super::coding::builtin_coding_system_base(&eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_coding_system_base(&eval.coding_systems, args, mode)
 }
 fn coding_system_eol_type(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    super::coding::builtin_coding_system_eol_type(&eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_coding_system_eol_type(&eval.coding_systems, args, mode)
 }
 fn detect_coding_string(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    super::coding::builtin_detect_coding_string(&eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_detect_coding_string(&eval.coding_systems, args, mode)
 }
 fn detect_coding_region(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    super::coding::builtin_detect_coding_region(&eval.coding_systems, &eval.buffers, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_detect_coding_region(&eval.coding_systems, &eval.buffers, args, mode)
 }
 fn keyboard_coding_system(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     super::coding::builtin_keyboard_coding_system(&eval.coding_systems, args)
@@ -803,33 +816,57 @@ fn coding_system_priority_list(eval: &mut super::eval::Context, args: Vec<Value>
 }
 
 fn coding_system_p(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    super::coding::builtin_coding_system_p(&eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_coding_system_p(&eval.coding_systems, args, mode)
 }
 fn check_coding_system(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    super::coding::builtin_check_coding_system(&eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_check_coding_system(&eval.coding_systems, args, mode)
 }
 fn check_coding_systems_region(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     super::coding::builtin_check_coding_systems_region(eval, args)
 }
 fn define_coding_system_internal(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let mode = eval.symbol_mode();
     let result = super::coding::builtin_define_coding_system_internal(
         &mut eval.coding_systems,
         args.clone(),
+        mode,
     )?;
-    super::coding::record_lisp_define_coding_system_internal(&mut eval.obarray, &args);
+    // SAFETY: the completed coding-system registration is recorded only in
+    // symbol value/property cells. This helper is noncalling and preserves
+    // canonical dispatch metadata and manager storage identity.
+    unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            super::coding::record_lisp_define_coding_system_internal(obarray, &args, mode);
+        });
+    }
     Ok(result)
 }
 fn define_coding_system_alias(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let result =
-        super::coding::builtin_define_coding_system_alias(&mut eval.coding_systems, args.clone())?;
-    super::coding::record_lisp_define_coding_system_alias(&mut eval.obarray, &args);
+    let mode = eval.symbol_mode();
+    let result = super::coding::builtin_define_coding_system_alias(
+        &mut eval.coding_systems,
+        args.clone(),
+        mode,
+    )?;
+    // SAFETY: the completed coding-system registration is recorded only in
+    // symbol value/property cells. This helper is noncalling and preserves
+    // canonical dispatch metadata and manager storage identity.
+    unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            super::coding::record_lisp_define_coding_system_alias(obarray, &args, mode);
+        });
+    }
     Ok(result)
 }
 fn set_coding_system_priority(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let result = super::coding::builtin_set_coding_system_priority(&mut eval.coding_systems, args)?;
+    let mode = eval.symbol_mode();
+    let result =
+        super::coding::builtin_set_coding_system_priority(&mut eval.coding_systems, args, mode)?;
     // GNU `Fset_coding_system_priority` also rebuilds the `coding-category-list`
     // variable (coding.c) from the reordered category priorities.
-    let categories = super::coding::coding_category_priority_list(&eval.coding_systems);
+    let categories = super::coding::coding_category_priority_list(&eval.coding_systems, mode);
     let list = Value::list(categories.into_iter().map(Value::symbol).collect());
     eval.set_variable("coding-category-list", list);
     Ok(result)
@@ -838,19 +875,26 @@ fn set_keyboard_coding_system_internal(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    super::coding::builtin_set_keyboard_coding_system_internal(&mut eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_set_keyboard_coding_system_internal(&mut eval.coding_systems, args, mode)
 }
 fn set_safe_terminal_coding_system_internal(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    super::coding::builtin_set_safe_terminal_coding_system_internal(&mut eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_set_safe_terminal_coding_system_internal(
+        &mut eval.coding_systems,
+        args,
+        mode,
+    )
 }
 fn set_terminal_coding_system_internal(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    super::coding::builtin_set_terminal_coding_system_internal(&mut eval.coding_systems, args)
+    let mode = eval.symbol_mode();
+    super::coding::builtin_set_terminal_coding_system_internal(&mut eval.coding_systems, args, mode)
 }
 
 fn region_noncontiguous_interactive_spec() -> Value {
@@ -1095,3 +1139,11 @@ fn neovm_internal_panic(_eval: &mut super::eval::Context, args: Vec<Value>) -> E
         .unwrap_or_else(|| "neovm--internal-panic".to_string());
     panic!("{message}");
 }
+
+#[cfg(test)]
+#[path = "tests/gdl_format_test.rs"]
+mod gdl_format;
+
+#[cfg(test)]
+#[path = "tests/positioned_symbol_test.rs"]
+mod positioned_symbol_test;

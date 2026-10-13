@@ -17,14 +17,15 @@ fn loop_function(arity: usize, constants: Vec<Value>, ops: Vec<Op>) -> ByteCodeF
     f.lexical = true;
     f.constants = constants.into();
     f.ops = ops;
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     f
 }
 
 // Invoke an actual cached OSR entry, bypassing only the interpreter heat gate.
 fn run(ctx: &mut Context, f: &ByteCodeFunction, pc: usize, stack: &[Value]) -> NativeRun {
-    cache::try_run_osr(ctx, f, pc, stack, &[]).expect("loop must transfer into native OSR")
+    crate::emacs_core::jit::test_support::run_osr(ctx, f, pc, stack, &[])
+        .expect("loop must transfer into native OSR")
 }
 
 #[test]

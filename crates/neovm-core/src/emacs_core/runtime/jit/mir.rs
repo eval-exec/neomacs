@@ -82,7 +82,7 @@ impl LispType {
             LispType::Cons
         } else if v.is_string() {
             LispType::Str
-        } else if v.is_symbol() {
+        } else if v.is_bare_symbol() {
             LispType::Symbol
         } else if v.is_float() {
             LispType::Float
@@ -1128,7 +1128,7 @@ pub fn inline_pure_single_block_callees(
                     args,
                 } if args.len() == *n as usize + 1 => consts
                     .get(&args[0])
-                    .and_then(|sym| sym.as_symbol_id().map(|id| (*sym, id)))
+                    .and_then(|sym| sym.as_bare_symbol_id().map(|id| (*sym, id)))
                     .and_then(|(sym, id)| resolve(inst.pc, sym).map(|c| (c, id)))
                     .filter(|(c, _)| c.arity == *n as usize && callee_inlinable(c, max_insts))
                     .map(|(c, id)| (c, args[1..].to_vec(), id)),

@@ -132,8 +132,7 @@ pub(crate) fn draw_overlay_arrows<B: LayoutBufferView>(
 fn arrow_variables(evaluator: &Context) -> Vec<Value> {
     let Some(list) = evaluator
         .obarray()
-        .symbol_value("overlay-arrow-variable-list")
-        .copied()
+        .symbol_value_copied("overlay-arrow-variable-list")
     else {
         return Vec::new();
     };
@@ -141,7 +140,7 @@ fn arrow_variables(evaluator: &Context) -> Vec<Value> {
     let mut tail = list;
     while tail.is_cons() {
         let var = tail.cons_car();
-        if var.as_symbol_id().is_some() {
+        if var.as_bare_symbol_id().is_some() {
             vars.push(var);
         }
         tail = tail.cons_cdr();
@@ -152,8 +151,8 @@ fn arrow_variables(evaluator: &Context) -> Vec<Value> {
 /// 0-based buffer position of `var`'s marker, when it is a marker pointing
 /// into `buffer_id` (GNU additionally requires `current_buffer`).
 fn arrow_marker_charpos(evaluator: &Context, var: Value, buffer_id: BufferId) -> Option<usize> {
-    let sym = var.as_symbol_id()?;
-    let value = evaluator.obarray().symbol_value_id(sym).copied()?;
+    let sym = var.as_bare_symbol_id()?;
+    let value = evaluator.obarray().symbol_value_id_copied(sym)?;
     let marker = value.as_marker_data()?;
     (marker.buffer == Some(buffer_id)).then_some(marker.charpos)
 }
@@ -162,7 +161,7 @@ fn arrow_marker_charpos(evaluator: &Context, var: Value, buffer_id: BufferId) ->
 /// `overlay-arrow-string` property when it is a string, else the global
 /// `overlay-arrow-string`.
 fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
-    let sym = var.as_symbol_id()?;
+    let sym = var.as_bare_symbol_id()?;
     let prop_key = intern("overlay-arrow-string");
     neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(sym);
     let mut plist = evaluator.obarray().symbol_plist_id(sym);
@@ -172,7 +171,7 @@ fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
         if !rest.is_cons() {
             break;
         }
-        if key.as_symbol_id() == Some(prop_key)
+        if key.as_bare_symbol_id() == Some(prop_key)
             && let Some(text) = rest.cons_car().as_str_owned()
         {
             return Some(text);
@@ -181,7 +180,7 @@ fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
     }
     evaluator
         .obarray()
-        .symbol_value("overlay-arrow-string")
+        .symbol_value_copied("overlay-arrow-string")
         .and_then(|value| value.as_str_owned())
 }
 
@@ -196,7 +195,7 @@ fn resolve_fringe_bitmap_index<B: LayoutBufferView>(
     buffer: &B,
     var: Value,
 ) -> Option<u16> {
-    if let Some(sym) = var.as_symbol_id() {
+    if let Some(sym) = var.as_bare_symbol_id() {
         let bitmap_key = intern("overlay-arrow-bitmap");
         neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(sym);
         let mut plist = evaluator.obarray().symbol_plist_id(sym);
@@ -206,8 +205,8 @@ fn resolve_fringe_bitmap_index<B: LayoutBufferView>(
             if !rest.is_cons() {
                 break;
             }
-            if key.as_symbol_id() == Some(bitmap_key)
-                && let Some(name) = rest.cons_car().as_symbol_name()
+            if key.as_bare_symbol_id() == Some(bitmap_key)
+                && let Some(name) = rest.cons_car().as_bare_symbol_name()
                 && let Some(index) = evaluator.fringe_bitmap_index_for_name(name)
             {
                 return u16::try_from(index).ok();

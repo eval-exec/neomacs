@@ -49,7 +49,7 @@ pub(crate) fn thread_condition_case_continuation_parts(
     value: Value,
 ) -> Option<(Value, Value, Value, Value)> {
     let items = list_to_vec(&value)?;
-    if items.len() != 5 || !items[0].is_symbol_named(CONDITION_CASE_CONTINUATION_MARKER) {
+    if items.len() != 5 || !items[0].is_bare_symbol_named(CONDITION_CASE_CONTINUATION_MARKER) {
         return None;
     }
     Some((items[1], items[2], items[3], items[4]))
@@ -64,15 +64,14 @@ pub(crate) fn make_sleep_blocker(seconds: f64) -> Value {
 
 fn sleep_duration_from_blocker(value: Value) -> Option<Duration> {
     let items = list_to_vec(&value)?;
-    if items.len() != 2 || !items[0].is_symbol_named(SLEEP_BLOCKER_MARKER) {
+    if items.len() != 2 || !items[0].is_bare_symbol_named(SLEEP_BLOCKER_MARKER) {
         return None;
     }
-    let seconds = items[1].xfloat();
-    seconds
-        .is_finite()
-        .then_some(seconds)
-        .filter(|seconds| *seconds > 0.0)
-        .map(Duration::from_secs_f64)
+    match crate::emacs_core::timer::WaitTimeout::from(items[1].xfloat()) {
+        crate::emacs_core::timer::WaitTimeout::Poll => None,
+        crate::emacs_core::timer::WaitTimeout::For(duration) => Some(duration),
+        crate::emacs_core::timer::WaitTimeout::Forever => Some(Duration::MAX),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -347,7 +346,7 @@ impl ThreadManager {
         let data = thread.error_data;
         thread.error_symbol = Value::NIL;
         thread.error_data = Value::NIL;
-        let sym_id = symbol.as_symbol_id()?;
+        let sym_id = symbol.as_bare_symbol_id()?;
         Some(signal_with_data_id(sym_id, data))
     }
 
@@ -677,6 +676,9 @@ impl Default for ThreadManager {
 impl GcTrace for ThreadManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
         for thread in self.threads.values() {
+            if let Some(name) = &thread.name {
+                name.trace_roots(roots);
+            }
             roots.push(thread.function);
             roots.push(thread.result);
             roots.push(thread.buffer_disposition);
@@ -693,6 +695,20 @@ impl GcTrace for ThreadManager {
         }
         for value in self.thread_handles.values() {
             roots.push(*value);
+        }
+        // These Rust-owned names preserve Lisp text-property plists, just as
+        // GNU's scanned mutex/condition pseudovector name fields do.
+        for name in self
+            .mutexes
+            .values()
+            .filter_map(|mutex| mutex.name.as_ref())
+            .chain(
+                self.condition_vars
+                    .values()
+                    .filter_map(|condition| condition.name.as_ref()),
+            )
+        {
+            name.trace_roots(roots);
         }
         for value in self.mutex_handles.values() {
             roots.push(*value);
@@ -777,7 +793,7 @@ fn split_signal_binding_value(value: Value) -> Option<(Value, Value)> {
     };
     let pair_car = value.cons_car();
     let pair_cdr = value.cons_cdr();
-    pair_car.as_symbol_id()?;
+    pair_car.as_bare_symbol_id()?;
     Some((pair_car, pair_cdr))
 }
 
@@ -1110,6 +1126,7 @@ pub(crate) fn builtin_thread_signal(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     expect_args("thread-signal", &args, 3)?;
     let id = expect_thread_id(&ctx.threads, &args[0])?;
     if !ctx.threads.is_thread(id) {
@@ -1119,7 +1136,7 @@ pub(crate) fn builtin_thread_signal(
         ));
     }
     let error_symbol = args[1];
-    let Some(error_symbol_id) = error_symbol.as_symbol_id() else {
+    let Some(error_symbol_id) = error_symbol.as_symbol_id(symbol_mode) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), error_symbol],

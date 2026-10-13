@@ -1124,7 +1124,10 @@ fn test_kbd_macro_query_startup_is_autoloaded() {
         .obarray
         .symbol_function("kbd-macro-query")
         .expect("missing kbd-macro-query startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -1229,7 +1232,10 @@ fn test_insert_kbd_macro_startup_is_autoloaded() {
         .obarray
         .symbol_function("insert-kbd-macro")
         .expect("missing insert-kbd-macro startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]

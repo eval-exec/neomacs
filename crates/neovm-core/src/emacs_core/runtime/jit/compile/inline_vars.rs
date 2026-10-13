@@ -42,7 +42,7 @@
 //! BLV cons is inline only outside the window (P0.7c's owner test), or into
 //! a dumped default cell the compile entered into the dump remembered set
 //! ahead of time (`TaggedHeap::remember_mapped_cons_ahead_of_writes`) while
-//! the window is not ALL. Specpdl entries are written from the probed
+//! the window is not ALL. Specpdl entries are written from the fixed
 //! templates (`jit_layout::let_layout`), and the bind stack is kept exactly
 //! as the shims keep it, so deopt, OSR, handler unwinding and the backtrace
 //! walkers see the entries the shims would have pushed.
@@ -50,7 +50,10 @@
 //! JIT only: nothing here is emitted for an AOT leaf, and the shim set is
 //! unchanged, so the AOT ABI is untouched.
 
-use super::jit_layout::heap::{HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO};
+use super::jit_layout::heap::{
+    HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_EXCLUSION_LEN, HEAP_JIT_EXCLUSION_LO,
+    HEAP_JIT_SINGLE_CONS,
+};
 use super::jit_layout::{
     BLV_ALIST_EPOCH_OFFSET, BLV_DEFCELL_OFFSET, BLV_FOUND_OFFSET, BLV_FWD_OFFSET,
     BLV_LOCAL_IF_SET_OFFSET, BLV_VALCELL_OFFSET, BLV_WHERE_BUF_ID_OFFSET, CONS_CDR_OFFSET,
@@ -294,7 +297,7 @@ pub(crate) struct SpecLayout {
 }
 
 fn spec_layout() -> Option<SpecLayout> {
-    let lets = let_layout()?;
+    let lets = let_layout();
     Some(SpecLayout {
         spdl: specpdl_vec_offsets()?,
         jbs: jit_bind_stack_vec_offsets()?,
@@ -549,12 +552,98 @@ fn unbind_sites(
 /// Whether the baseline lowers OP with an inline variable write that reads
 /// the heap's barrier window (`heap_inline::hoist_heap_ptr` counts these
 /// with its own sites). JIT only.
+#[deny(clippy::wildcard_enum_match_arm)]
 pub(crate) fn op_reads_heap_window(op: &Op) -> bool {
     let knob = jit_inline_vars();
     match op {
         Op::VarSet(_) => knob.set,
         Op::VarBind(_) | Op::Unbind(_) => knob.bind,
-        _ => false,
+        Op::Constant(..)
+        | Op::Nil
+        | Op::True
+        | Op::Pop
+        | Op::Dup
+        | Op::StackRef(..)
+        | Op::StackSet(..)
+        | Op::DiscardN(..)
+        | Op::VarRef(..)
+        | Op::Call(..)
+        | Op::Apply(..)
+        | Op::Goto(..)
+        | Op::GotoIfNil(..)
+        | Op::GotoIfNotNil(..)
+        | Op::GotoIfNilElsePop(..)
+        | Op::GotoIfNotNilElsePop(..)
+        | Op::Switch
+        | Op::Return
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Rem
+        | Op::Add1
+        | Op::Sub1
+        | Op::Negate
+        | Op::Eqlsign
+        | Op::Gtr
+        | Op::Lss
+        | Op::Leq
+        | Op::Geq
+        | Op::Max
+        | Op::Min
+        | Op::Car
+        | Op::Cdr
+        | Op::Cons
+        | Op::List(..)
+        | Op::Length
+        | Op::Nth
+        | Op::Nthcdr
+        | Op::Setcar
+        | Op::Setcdr
+        | Op::CarSafe
+        | Op::CdrSafe
+        | Op::Elt
+        | Op::Nconc
+        | Op::Nreverse
+        | Op::Member
+        | Op::Memq
+        | Op::Assq
+        | Op::Symbolp
+        | Op::Consp
+        | Op::Stringp
+        | Op::Listp
+        | Op::Integerp
+        | Op::Numberp
+        | Op::Null
+        | Op::Not
+        | Op::Eq
+        | Op::Equal
+        | Op::Concat(..)
+        | Op::Substring
+        | Op::StringEqual
+        | Op::StringLessp
+        | Op::Aref
+        | Op::Aset
+        | Op::SymbolValue
+        | Op::SymbolFunction
+        | Op::Set
+        | Op::Fset
+        | Op::Get
+        | Op::Put
+        | Op::PushConditionCase(..)
+        | Op::PushConditionCaseRaw(..)
+        | Op::PushCatch(..)
+        | Op::PopHandler
+        | Op::UnwindProtectPop
+        | Op::Throw
+        | Op::SaveCurrentBuffer
+        | Op::SaveExcursion
+        | Op::SaveRestriction
+        | Op::SaveWindowExcursion
+        | Op::MakeClosure(..)
+        | Op::CallBuiltin(..)
+        | Op::CallBuiltinSym(..)
+        | Op::TrapOutOfRangeConstant(..) => false,
     }
 }
 
@@ -677,19 +766,121 @@ fn window_is(fb: &mut FunctionBuilder, cell: ClifValue, redirect: SymbolRedirect
 #[derive(Clone, Copy)]
 struct Window {
     heap: ClifValue,
-    len: ClifValue,
+    len: Option<ClifValue>,
 }
 
 fn barrier_window(fb: &mut FunctionBuilder, rt: &RtCtx) -> Window {
     let heap = super::heap_inline::heap_ptr(fb, rt);
     let len = load_word(fb, heap, HEAP_JIT_BARRIER_LEN);
-    Window { heap, len }
+    Window {
+        heap,
+        len: Some(len),
+    }
+}
+
+// This is compiler-owned state, not a new heap/Context field. Off, Eager,
+// and GEN1 still load LEN at exactly the original emission point. Observed
+// cons-only operations load it only if their learned gap refused the owner.
+fn observed_barrier_window(fb: &mut FunctionBuilder, rt: &RtCtx) -> Window {
+    if !rt.refs.observation_exclusions_enabled() {
+        return Window {
+            heap: super::heap_inline::heap_ptr(fb, rt),
+            len: None,
+        };
+    }
+    // This site-local heap view does not keep the entry's hoisted heap SSA
+    // live through the loop and its refusal paths. No Lisp callback or safe
+    // point intervenes between this load and the guarded stores.
+    let vmctx = load_vmctx(fb, rt);
+    let heap = super::heap_inline::load_heap_ptr(fb, vmctx);
+    Window { heap, len: None }
+}
+
+fn window_len(fb: &mut FunctionBuilder, window: Window) -> ClifValue {
+    window
+        .len
+        .unwrap_or_else(|| load_word(fb, window.heap, HEAP_JIT_BARRIER_LEN))
+}
+
+fn observed_cons_guards(rt: &RtCtx) -> bool {
+    !rt.generational_enabled()
+        && rt
+            .refs
+            .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
 }
 
 /// The window is not ALL: no concurrent mark and no owner tracking, so a
 /// symbol cell or forwarder may be stored without the seqlock or SATB note.
 fn not_marking(fb: &mut FunctionBuilder, window: Window) -> ClifValue {
-    ne_imm(fb, window.len, -1)
+    let len = window_len(fb, window);
+    ne_imm(fb, len, -1)
+}
+
+/// Compiler fact for a successful mark-idle guard in a no-safepoint region.
+/// Only PendingForwardStoreGate::guard constructs it. It cannot cross a
+/// compiler thread or be copied into an unrelated emission path. Callers
+/// finish stores before any poll, Lisp allocation, callback or collecting
+/// runtime call. Mixed unbinds may use the audited non-collecting collection
+/// journal helper; it cannot invalidate the inactive-mark fact.
+#[derive(Debug)]
+pub(super) struct MarkIdleStorePermit {
+    _compiler_thread: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_impl_all!(MarkIdleStorePermit: std::fmt::Debug);
+static_assertions::assert_not_impl_any!(MarkIdleStorePermit: Copy, Clone, Send, Sync);
+const _: () = assert!(std::mem::size_of::<MarkIdleStorePermit>() == 0);
+
+#[derive(Debug)]
+struct PendingForwardStoreGate {
+    condition: ClifValue,
+    _compiler_thread: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_impl_all!(PendingForwardStoreGate: std::fmt::Debug);
+static_assertions::assert_not_impl_any!(PendingForwardStoreGate: Copy, Clone, Send, Sync);
+
+impl PendingForwardStoreGate {
+    fn check(fb: &mut FunctionBuilder, window: Window) -> Self {
+        Self {
+            condition: not_marking(fb, window),
+            _compiler_thread: std::marker::PhantomData,
+        }
+    }
+
+    fn guard(
+        self,
+        fb: &mut FunctionBuilder,
+        conditions: &[ClifValue],
+        slow: Block,
+    ) -> MarkIdleStorePermit {
+        // Preserve existing conjunction order when it already contains the
+        // predicate; never issue a permit for a guard that omitted it.
+        let mut guarded: SmallVec<[ClifValue; 16]> = SmallVec::from_slice(conditions);
+        if !guarded.contains(&self.condition) {
+            guarded.push(self.condition);
+        }
+        let ok = all(fb, &guarded);
+        guard(fb, ok, slow);
+        MarkIdleStorePermit {
+            _compiler_thread: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Codegen probes contain no live heap. A constant open window still runs
+/// the production guard constructor; tests cannot fabricate the permit.
+#[cfg(test)]
+pub(super) fn guard_probe_mark_idle(fb: &mut FunctionBuilder, slow: Block) -> MarkIdleStorePermit {
+    let len = imm64(fb, 0);
+    let gate = PendingForwardStoreGate::check(
+        fb,
+        Window {
+            heap: len,
+            len: Some(len),
+        },
+    );
+    gate.guard(fb, &[], slow)
 }
 
 /// A plain store into the tagged cons CONS needs no barrier: its owner lies
@@ -698,32 +889,19 @@ fn not_marking(fb: &mut FunctionBuilder, window: Window) -> ClifValue {
 /// Callers select this predicate only for GEN0; GEN1 uses its cons barrier.
 fn cons_store_ok(
     fb: &mut FunctionBuilder,
-    rt: &RtCtx,
+    _rt: &RtCtx,
     window: Window,
     cons: ClifValue,
     remembered: Option<usize>,
 ) -> ClifValue {
-    if let Some(bits) = remembered
-        && rt
-            .refs
-            .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
-    {
-        return observed_remembered_cons_store_ok(fb, rt, window, cons, bits);
-    }
+    // Only the original Off/Eager GEN0 emitter calls this helper now.
+    let len = window.len.expect("the original barrier length is loaded");
     let lo = load_word(fb, window.heap, HEAP_JIT_BARRIER_LO);
     let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));
     let offset = fb.ins().isub(owner, lo);
     let outside = fb
         .ins()
-        .icmp(IntCC::UnsignedGreaterThanOrEqual, offset, window.len);
-    if rt
-        .refs
-        .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
-    {
-        // The complete operation guard owns the original shim refusal edge;
-        // that shim refines unobserved holes without a native boolean phi.
-        return outside;
-    }
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, offset, len);
     match remembered {
         None => outside,
         Some(bits) => {
@@ -735,37 +913,112 @@ fn cons_store_ok(
     }
 }
 
-/// A remembered dumped cell may bypass the ordinary owner window only while
-/// it is not ALL and the permanent exact observation word is unmarked. Keep
-/// the proof conjunctive: a dynamically selected local cell cannot inherit
-/// the dumped default's observation exemption. No cold helper is called here.
-/// Off mode retains the original emitter in `cons_store_ok` unchanged.
-fn observed_remembered_cons_store_ok(
+/// All operation shapes have already passed. Admit a proved empty gap
+/// directly into the original store body, without a returned boolean or
+/// live-through shape predicates. Each refusal below is a cold native edge;
+/// no helper, callback, safe point, or publication occurs inside this guard.
+/// Ordinary ALL publishes no single owner and a zero-length empty gap.
+/// A mapped remembered exemption still requires the actual selected owner,
+/// not-ALL, and its full-width Acquire observation bit to be unmarked.
+fn guard_observed_cons_store(
     fb: &mut FunctionBuilder,
-    _rt: &RtCtx,
     window: Window,
     cons: ClifValue,
-    remembered: usize,
-) -> ClifValue {
-    let proof = eq_imm(fb, cons, remembered as i64);
-    let open = not_marking(fb, window);
-    let proof = fb.ins().band(proof, open);
-    let (word, mask) = crate::tagged::gc::cons_collection_observed_word(remembered);
-    let address = baked(fb, word as *const std::sync::atomic::AtomicU64 as usize);
-    // Permanent metadata has no Lisp root or object-lifetime ownership. The
-    // full-width Acquire load matches atomic RMW publication; on x86-64 it
-    // lowers to MOV. An exact bit alone never bypasses ordinary GC's ALL.
-    let marked = fb.ins().atomic_load(types::I64, trusted(), address);
-    let marked = band_imm_p(fb, marked, mask as i64);
-    let unobserved = eq_imm(fb, marked, 0);
-    let skip = fb.ins().band(proof, unobserved);
-    let lo = load_word(fb, window.heap, HEAP_JIT_BARRIER_LO);
-    let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));
-    let offset = fb.ins().isub(owner, lo);
-    let outside = fb
-        .ins()
-        .icmp(IntCC::UnsignedGreaterThanOrEqual, offset, window.len);
-    fb.ins().bor(outside, skip)
+    remembered: Option<usize>,
+    slow: Block,
+) {
+    #[derive(Clone, Copy)]
+    enum Admission {
+        Gap,
+        Single,
+        Hull,
+    }
+
+    // This snapshot selects native check order only. A leaf compiled before
+    // any capture still probes negative proofs after an eventual hull hit;
+    // correctness does not depend on the process-wide observation flag.
+    let checks = if crate::tagged::gc::has_collection_observations() {
+        [Admission::Gap, Admission::Single, Admission::Hull]
+    } else {
+        [Admission::Hull, Admission::Gap, Admission::Single]
+    };
+    let done = fb.create_block();
+    let flags = MemFlagsData::new().with_notrap();
+    for (index, check) in checks.into_iter().enumerate() {
+        // Primary gap arithmetic may consume its untagged scratch. Cold
+        // refusals reconstruct the live Cons address with a distinct mask.
+        let accepted = match check {
+            Admission::Gap => {
+                let owner = if index == 0 {
+                    iadd_imm_p(fb, cons, -(TAG_CONS as i64))
+                } else {
+                    band_imm_p(fb, cons, !(TAG_MASK as i64))
+                };
+                let len = fb.ins().load(
+                    types::I64,
+                    flags,
+                    window.heap,
+                    HEAP_JIT_EXCLUSION_LEN as i32,
+                );
+                // Keep LO immediately adjacent to its only use so stock
+                // x86 lowering can sink it into SUB without crossing LEN.
+                let lo =
+                    fb.ins()
+                        .load(types::I64, flags, window.heap, HEAP_JIT_EXCLUSION_LO as i32);
+                let offset = fb.ins().isub(owner, lo);
+                fb.ins().icmp(IntCC::UnsignedLessThan, offset, len)
+            }
+            Admission::Single => {
+                let single =
+                    fb.ins()
+                        .load(types::I64, flags, window.heap, HEAP_JIT_SINGLE_CONS as i32);
+                // Recompute only this refused path's address. Keeping the
+                // tag constant out of this fallback also avoids extending
+                // its live range across BLV shape checks.
+                let owner = band_imm_p(fb, cons, !(TAG_MASK as i64));
+                fb.ins().icmp(IntCC::Equal, owner, single)
+            }
+            Admission::Hull => {
+                let owner = if index == 0 {
+                    iadd_imm_p(fb, cons, -(TAG_CONS as i64))
+                } else {
+                    band_imm_p(fb, cons, !(TAG_MASK as i64))
+                };
+                let len = window_len(fb, window);
+                let lo = load_word(fb, window.heap, HEAP_JIT_BARRIER_LO);
+                let offset = fb.ins().isub(owner, lo);
+                fb.ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, offset, len)
+            }
+        };
+        if index == 2 && remembered.is_none() {
+            fb.ins().brif(accepted, done, &[], slow, &[]);
+        } else {
+            let refused = fb.create_block();
+            fb.set_cold_block(refused);
+            fb.ins().brif(accepted, done, &[], refused, &[]);
+            fb.switch_to_block(refused);
+            fb.seal_block(refused);
+        }
+    }
+    if let Some(bits) = remembered {
+        let same = eq_imm(fb, cons, bits as i64);
+        let open = not_marking(fb, window);
+        let proof = fb.ins().band(same, open);
+        let mark_probe = fb.create_block();
+        fb.set_cold_block(mark_probe);
+        fb.ins().brif(proof, mark_probe, &[], slow, &[]);
+        fb.switch_to_block(mark_probe);
+        fb.seal_block(mark_probe);
+        let (word, mask) = crate::tagged::gc::cons_collection_observed_word(bits);
+        let address = baked(fb, word as *const std::sync::atomic::AtomicU64 as usize);
+        let marked = fb.ins().atomic_load(types::I64, trusted(), address);
+        let marked = band_imm_p(fb, marked, mask as i64);
+        let unobserved = eq_imm(fb, marked, 0);
+        fb.ins().brif(unobserved, done, &[], slow, &[]);
+    }
+    fb.switch_to_block(done);
+    fb.seal_block(done);
 }
 
 /// The current buffer's raw id (0 for none).
@@ -821,31 +1074,39 @@ fn blv_rule(
 fn fwd_load(fb: &mut FunctionBuilder, desc: ClifValue, kind: FwdKind) -> ClifValue {
     match kind {
         FwdKind::Bool => {
-            let flag = fb.ins().uload8(
-                types::I64,
-                trusted(),
-                desc,
-                LISP_BOOL_FWD_VALUE_OFFSET as i32,
-            );
-            let set = ne_imm(fb, flag, 0);
+            let flag = super::atomic_forward::load_bool_byte(fb, desc);
+            let set = flag.is_set(fb);
             let t = imm64(fb, Value::T.bits() as i64);
             let nil = imm64(fb, Value::NIL.bits() as i64);
             fb.ins().select(set, t, nil)
         }
-        _ => load_word(fb, desc, kind.value_offset()),
+        _ => super::atomic_forward::load_word(fb, desc, kind.value_offset()),
     }
 }
 
 /// `LispFwd::commit (store (v))` into the descriptor at DESC, for a V its
 /// rule accepts inline (an integer slot's caller checked for a fixnum).
-fn fwd_store(fb: &mut FunctionBuilder, desc: ClifValue, kind: FwdKind, v: ClifValue) {
+/// All three callers are dominated by the mark-idle guard; when marking is
+/// active they take the shim and its SATB preimage barrier before publication.
+/// There is no poll, allocation or Lisp callback between that guard and this
+/// store. Atomic publication does not itself replace that GC protocol.
+fn fwd_store(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    permit: &MarkIdleStorePermit,
+    desc: ClifValue,
+    kind: FwdKind,
+    v: ClifValue,
+) {
     match kind {
         FwdKind::Bool => {
             let flag = ne_imm(fb, v, Value::NIL.bits() as i64);
-            fb.ins()
-                .store(trusted(), flag, desc, LISP_BOOL_FWD_VALUE_OFFSET as i32);
+            rt.forward_atomics
+                .store_bool(fb, permit, desc, LISP_BOOL_FWD_VALUE_OFFSET, flag);
         }
-        _ => store_word(fb, v, desc, kind.value_offset()),
+        _ => rt
+            .forward_atomics
+            .store_word(fb, permit, desc, kind.value_offset(), v),
     }
 }
 
@@ -980,19 +1241,27 @@ fn emit_varset_fast(
             let default_loaded = eq(fb, valcell, defcell);
             let to_default = fb.ins().band(neither, default_loaded);
             let own_cell = fb.ins().bor(found, to_default);
-            let window = barrier_window(fb, rt);
-            let plain_store = (!rt.generational_enabled())
+            let observed = observed_cons_guards(rt);
+            let window = if observed {
+                observed_barrier_window(fb, rt)
+            } else {
+                barrier_window(fb, rt)
+            };
+            let plain_store = (!rt.generational_enabled() && !observed)
                 .then(|| cons_store_ok(fb, rt, window, valcell, remembered_defcell));
             let (rule_ok, stored) = blv_rule(fb, rule, val);
             let mut conds: SmallVec<[ClifValue; 8]> =
                 smallvec::smallvec![writable, same, hit, fwd_same, own_cell];
-            // Keep the original complete guard and its one slow edge. The
-            // compiled cached shim refines unobserved holes after selecting
-            // the actual owner; no returning helper keeps hot SSA values live.
+            // Off/Eager/GEN1 keep the original complete guard. Observed
+            // consumes every shape predicate before its branching owner
+            // admission, so only the selected owner/value remain live.
             conds.extend(plain_store);
             conds.extend(rule_ok);
             let ok = all(fb, &conds);
             guard(fb, ok, slow);
+            if observed {
+                guard_observed_cons_store(fb, window, valcell, remembered_defcell, slow);
+            }
             if rt.generational_enabled() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
@@ -1008,14 +1277,14 @@ fn emit_varset_fast(
             let desc = baked(fb, desc);
             let same = eq(fb, word, desc);
             let window = barrier_window(fb, rt);
-            let open = not_marking(fb, window);
+            let gate = PendingForwardStoreGate::check(fb, window);
+            let open = gate.condition;
             let mut conds: SmallVec<[ClifValue; 4]> = smallvec::smallvec![writable, same, open];
             if kind == FwdKind::Int {
                 conds.push(fixnum_p(fb, val));
             }
-            let ok = all(fb, &conds);
-            guard(fb, ok, slow);
-            fwd_store(fb, desc, kind, val);
+            let permit = gate.guard(fb, &conds, slow);
+            fwd_store(fb, rt, &permit, desc, kind, val);
         }
     }
     fb.ins().jump(cont, &[]);
@@ -1192,7 +1461,8 @@ fn emit_varbind_fast(
             let desc = baked(fb, desc);
             let same = eq(fb, word, desc);
             let window = barrier_window(fb, rt);
-            let open = not_marking(fb, window);
+            let gate = PendingForwardStoreGate::check(fb, window);
+            let open = gate.condition;
             let old = fwd_load(fb, desc, kind);
             let mut conds: SmallVec<[ClifValue; 6]> =
                 smallvec::smallvec![room, writable, same, open];
@@ -1203,11 +1473,10 @@ fn emit_varbind_fast(
                 FwdKind::Int => conds.push(fixnum_p(fb, val)),
                 FwdKind::Bool => {}
             }
-            let ok = all(fb, &conds);
-            guard(fb, ok, slow);
+            let permit = gate.guard(fb, &conds, slow);
             let header = imm64(fb, lets.let_.header_with(sym) as i64);
             push_binding(fb, rt, layout, &s, &lets.let_, header, &[old]);
-            fwd_store(fb, desc, kind, val);
+            fwd_store(fb, rt, &permit, desc, kind, val);
         }
         VarShape::Localized {
             blv,
@@ -1236,18 +1505,26 @@ fn emit_varbind_fast(
             let own_cell = fb.ins().bor(found, default_loaded);
             let old = load_word(fb, valcell, TAGGED_CONS_CDR);
             let bound = ne_imm(fb, old, Value::UNBOUND.bits() as i64);
-            let window = barrier_window(fb, rt);
-            let plain_store = (!rt.generational_enabled())
+            let observed = observed_cons_guards(rt);
+            let window = if observed {
+                observed_barrier_window(fb, rt)
+            } else {
+                barrier_window(fb, rt)
+            };
+            let plain_store = (!rt.generational_enabled() && !observed)
                 .then(|| cons_store_ok(fb, rt, window, valcell, remembered_defcell));
             let (rule_ok, stored) = blv_rule(fb, rule, val);
             let mut conds: SmallVec<[ClifValue; 5]> = smallvec::smallvec![own_cell, bound];
-            // Keep the original complete guard and its one slow edge. The
-            // compiled cached shim refines unobserved holes after selecting
-            // the actual owner; no returning helper keeps hot SSA values live.
+            // Off/Eager/GEN1 keep the original complete guard. Observed
+            // consumes every shape predicate before its branching owner
+            // admission, so only the selected owner/value remain live.
             conds.extend(plain_store);
             conds.extend(rule_ok);
             let ok = all(fb, &conds);
             guard(fb, ok, slow);
+            if observed {
+                guard_observed_cons_store(fb, window, valcell, remembered_defcell, slow);
+            }
             if rt.generational_enabled() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
@@ -1325,6 +1602,16 @@ enum Restore {
     Cons { cons: ClifValue, value: ClifValue },
 }
 
+/// One compilation's mutually exclusive cons-restore admission policy.
+/// Observed GEN0 and generational guards cannot be requested together.
+/// The selected policy contains no mutator state or generated-code metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConsRestoreBarrier {
+    Window,
+    Observed,
+    Generational,
+}
+
 /// The checks of one popped entry at ENTRY, bound by SITE, and the restore
 /// it makes -- `pop_simple_specpdl_suffix`'s arm for the entry, with the
 /// symbol's shape read now (a watcher or local made inside the binding
@@ -1349,7 +1636,7 @@ fn unbind_entry(
     cur: Option<ClifValue>,
     window: Window,
     conds: &mut SmallVec<[ClifValue; 16]>,
-    generational: bool,
+    cons_barrier: ConsRestoreBarrier,
 ) -> Restore {
     let cell = baked(fb, site.cell);
     let sym = site.sym;
@@ -1405,7 +1692,10 @@ fn unbind_entry(
                 .ins()
                 .uload8(types::I64, trusted(), blv, BLV_FOUND_OFFSET as i32);
             let found = ne_imm(fb, found, 0);
-            let local_store = (!generational).then(|| cons_store_ok(fb, rt, window, valcell, None));
+            let local_store = match cons_barrier {
+                ConsRestoreBarrier::Window => Some(cons_store_ok(fb, rt, window, valcell, None)),
+                ConsRestoreBarrier::Observed | ConsRestoreBarrier::Generational => None,
+            };
             let mut local_conds: SmallVec<[ClifValue; 5]> =
                 smallvec::smallvec![is_local, here, hit, found];
             local_conds.extend(local_store);
@@ -1424,8 +1714,12 @@ fn unbind_entry(
             let fwd_word = load_word(fb, blv, BLV_FWD_OFFSET);
             let fwd_same = eq_imm(fb, fwd_word, fwd as i64);
             let (rule_ok, ruled) = blv_rule(fb, rule, old);
-            let default_store =
-                (!generational).then(|| cons_store_ok(fb, rt, window, defcell, remembered_defcell));
+            let default_store = match cons_barrier {
+                ConsRestoreBarrier::Window => {
+                    Some(cons_store_ok(fb, rt, window, defcell, remembered_defcell))
+                }
+                ConsRestoreBarrier::Observed | ConsRestoreBarrier::Generational => None,
+            };
             let mut default_conds: SmallVec<[ClifValue; 4]> =
                 smallvec::smallvec![is_default, fwd_same];
             default_conds.extend(default_store);
@@ -1478,7 +1772,15 @@ fn emit_unbind_fast(
     }
     let consecutive = all(fb, &conds);
     guard(fb, consecutive, slow);
-    let window = barrier_window(fb, rt);
+    let observed = sites
+        .iter()
+        .any(|site| matches!(site.shape, VarShape::Localized { .. }))
+        && observed_cons_guards(rt);
+    let window = if observed {
+        observed_barrier_window(fb, rt)
+    } else {
+        barrier_window(fb, rt)
+    };
     let cur = sites
         .iter()
         .any(|site| matches!(site.shape, VarShape::Localized { .. }))
@@ -1486,13 +1788,24 @@ fn emit_unbind_fast(
     // Only localized restores write heap conses. Plain/forwarded restores
     // must not consult a possibly inactive allocation view during lowering.
     let generational = cur.is_some() && rt.generational_enabled();
+    let cons_barrier = if generational {
+        ConsRestoreBarrier::Generational
+    } else if observed {
+        ConsRestoreBarrier::Observed
+    } else {
+        ConsRestoreBarrier::Window
+    };
     let mut conds: SmallVec<[ClifValue; 16]> = SmallVec::new();
-    if sites
+    let gate = if sites
         .iter()
         .any(|site| !matches!(site.shape, VarShape::Localized { .. }))
     {
-        conds.push(not_marking(fb, window));
-    }
+        let gate = PendingForwardStoreGate::check(fb, window);
+        conds.push(gate.condition);
+        Some(gate)
+    } else {
+        None
+    };
     let mut restores: SmallVec<[Restore; MAX_UNBIND]> = SmallVec::new();
     for (site, &depth) in sites.iter().zip(&depths) {
         let entry = entry_at(fb, rt, layout, depth);
@@ -1505,14 +1818,37 @@ fn emit_unbind_fast(
             cur,
             window,
             &mut conds,
-            generational,
+            cons_barrier,
         ));
     }
     // Every shape and raw owner predicate is checked before any restore or
     // truncation. A refusal reaches the unchanged unbind call, whose compiled
     // cached arms select and refine each actual owner without native live-through.
-    let ok = all(fb, &conds);
-    guard(fb, ok, slow);
+    let permit = match gate {
+        Some(gate) => Some(gate.guard(fb, &conds, slow)),
+        None => {
+            let ok = all(fb, &conds);
+            guard(fb, ok, slow);
+            None
+        }
+    };
+    if observed {
+        for (site, restore) in sites.iter().zip(&restores) {
+            if let Restore::Cons { cons, .. } = restore {
+                let remembered = if site.projected {
+                    None
+                } else {
+                    match site.shape {
+                        VarShape::Localized {
+                            remembered_defcell, ..
+                        } => remembered_defcell,
+                        _ => None,
+                    }
+                };
+                guard_observed_cons_store(fb, window, *cons, remembered, slow);
+            }
+        }
+    }
     if generational {
         // All shapes are valid before touching a trailer, and every selected
         // restore is checked before any write. A later refusal cannot leave
@@ -1527,7 +1863,12 @@ fn emit_unbind_fast(
     for restore in restores {
         match restore {
             Restore::Cell { cell, value } => store_word(fb, value, cell, LISP_SYMBOL_VAL_OFFSET),
-            Restore::Fwd { desc, kind, value } => fwd_store(fb, desc, kind, value),
+            Restore::Fwd { desc, kind, value } => {
+                let permit = permit
+                    .as_ref()
+                    .expect("a forwarded restore issued a mark-idle permit");
+                fwd_store(fb, rt, permit, desc, kind, value);
+            }
             Restore::Cons { cons, value } => {
                 if !generational && super::jit_gen0_collection_journal_eager() {
                     let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));

@@ -501,7 +501,7 @@ pub(super) fn routed_row_overlay_scan<B: LayoutBufferView + ?Sized>(
             if !rest.is_cons() {
                 return None;
             }
-            let name = prop.as_symbol_name()?;
+            let name = prop.as_bare_symbol_name()?;
             if !ROUTE_SAFE_OVERLAY_PROPS.contains(&name) {
                 return None;
             }

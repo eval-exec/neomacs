@@ -25,8 +25,11 @@ fn hash_table_keys_values_basics() {
     let keys = builtin_hash_table_keys(vec![table]).unwrap();
     let keys = list_to_vec(&keys).expect("proper list");
     assert_eq!(keys.len(), 2);
-    assert!(keys.iter().any(|v| v.as_symbol_name() == Some("alpha")));
-    assert!(keys.iter().any(|v| v.as_symbol_name() == Some("beta")));
+    assert!(
+        keys.iter()
+            .any(|v| v.as_bare_symbol_name() == Some("alpha"))
+    );
+    assert!(keys.iter().any(|v| v.as_bare_symbol_name() == Some("beta")));
 
     let values = builtin_hash_table_values(vec![table]).unwrap();
     let values = list_to_vec(&values).expect("proper list");
@@ -964,8 +967,11 @@ fn unintern_requires_obarray_argument() {
         3,
         "expected (wrong-number-of-arguments unintern 1)"
     );
-    assert_eq!(parts[0].as_symbol_name(), Some("wrong-number-of-arguments"));
-    assert_eq!(parts[1].as_symbol_name(), Some("unintern"));
+    assert_eq!(
+        parts[0].as_bare_symbol_name(),
+        Some("wrong-number-of-arguments")
+    );
+    assert_eq!(parts[1].as_bare_symbol_name(), Some("unintern"));
     assert_eq!(parts[2].as_int(), Some(1));
 
     // Two-argument call (OBARRAY nil) still works and returns nil for an absent
@@ -1078,7 +1084,7 @@ fn remhash_default_eq_eql_tests_still_work() {
         .expect("eql remhash should evaluate");
     let eql_parts = list_to_vec(&eql_result).expect("proper list");
     assert!(eql_parts[0].is_nil());
-    assert_eq!(eql_parts[1].as_symbol_name(), Some("b"));
+    assert_eq!(eql_parts[1].as_bare_symbol_name(), Some("b"));
     assert_eq!(eql_parts[2].as_int(), Some(1));
 }
 
@@ -1120,7 +1126,7 @@ fn pending_dump_entries_hydrate_at_first_access() {
     assert_eq!(ht.data.get(&k2).copied(), Some(Value::fixnum(72)));
     assert_eq!(ht.data.len(), 2);
     assert_eq!(
-        ht.key_snapshot(&k2).and_then(|v| v.as_symbol_name()),
+        ht.key_snapshot(&k2).and_then(|v| v.as_bare_symbol_name()),
         Some("lazy-key")
     );
 

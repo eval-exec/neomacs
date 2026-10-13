@@ -833,10 +833,31 @@ impl std::ops::Index<&HashKey> for HashTableStorage {
 }
 
 impl HashTableStorage {
+    fn try_with_capacity(
+        capacity: crate::emacs_core::alloc::HashTableSize,
+    ) -> Result<Self, crate::emacs_core::error::Flow> {
+        use crate::emacs_core::alloc::AllocLen;
+        let mut slots = Vec::new();
+        slots
+            .try_reserve_exact(capacity.capacity())
+            .map_err(|_| crate::emacs_core::alloc::memory_exhausted())?;
+        Ok(Self::with_index_and_slots(
+            HashIndex::try_with_capacity(capacity.capacity())?,
+            slots,
+        ))
+    }
+
     fn with_capacity(capacity: usize) -> Self {
+        Self::with_index_and_slots(
+            HashIndex::with_capacity(capacity),
+            Vec::with_capacity(capacity),
+        )
+    }
+
+    fn with_index_and_slots(index: HashIndex, slots: Vec<Option<HashTableEntry>>) -> Self {
         Self {
-            index: HashIndex::with_capacity(capacity),
-            slots: Vec::with_capacity(capacity),
+            index,
+            slots,
             free_slots: Vec::new(),
             user_hashes: rustc_hash::FxHashMap::default(),
             user_buckets: rustc_hash::FxHashMap::default(),
@@ -1088,7 +1109,7 @@ impl HashTableStorage {
         const SCAN_SLOTS: usize = 32;
         if self.slots.len() > SCAN_SLOTS
             || symbols_with_pos_enabled
-            || !(value.is_fixnum() || value.is_symbol())
+            || !(value.is_fixnum() || value.is_bare_symbol())
         {
             return None;
         }
@@ -1608,7 +1629,7 @@ impl HashTableTest {
     }
 
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     pub fn name(self) -> &'static str {
@@ -1653,7 +1674,7 @@ impl HashTableWeakness {
     }
 
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     pub fn name(self) -> &'static str {
@@ -1678,7 +1699,7 @@ impl HashTableMakeKeyword {
     }
 
     pub(crate) fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1705,7 +1726,7 @@ impl HashTableLiteralKey {
     }
 
     pub(crate) fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -2117,18 +2138,14 @@ impl LispHashTable {
         rehash_size: f64,
         rehash_threshold: f64,
     ) -> Self {
-        Self {
+        Self::with_storage(
             test,
-            test_name: None,
-            user_cmp_function: None,
-            user_hash_function: None,
-            mutable: true,
             size,
             weakness,
             rehash_size,
             rehash_threshold,
-            data: HashTableStorage::default(),
-        }
+            HashTableStorage::default(),
+        )
     }
 
     pub fn new_with_options(
@@ -2137,6 +2154,24 @@ impl LispHashTable {
         weakness: Option<HashTableWeakness>,
         rehash_size: f64,
         rehash_threshold: f64,
+    ) -> Self {
+        Self::with_storage(
+            test,
+            size,
+            weakness,
+            rehash_size,
+            rehash_threshold,
+            HashTableStorage::with_capacity(size.max(0) as usize),
+        )
+    }
+
+    fn with_storage(
+        test: HashTableTest,
+        size: i64,
+        weakness: Option<HashTableWeakness>,
+        rehash_size: f64,
+        rehash_threshold: f64,
+        data: HashTableStorage,
     ) -> Self {
         Self {
             test,
@@ -2148,7 +2183,7 @@ impl LispHashTable {
             weakness,
             rehash_size,
             rehash_threshold,
-            data: HashTableStorage::with_capacity(size.max(0) as usize),
+            data,
         }
     }
 
@@ -2470,10 +2505,11 @@ impl TaggedValue {
     /// the value is outside the fixnum range.
     #[inline]
     pub fn make_int(value: i64) -> Self {
-        if (Self::MOST_NEGATIVE_FIXNUM..=Self::MOST_POSITIVE_FIXNUM).contains(&value) {
-            Self::fixnum(value)
-        } else {
-            Self::bignum_from_i64(value)
+        match crate::tagged::value::Fixnum::try_from(value) {
+            Ok(value) => Self::from_fixnum(value),
+            Err(crate::tagged::value::FixnumRangeError::OutOfRange(_)) => {
+                Self::bignum_from_i64(value)
+            }
         }
     }
 
@@ -2606,6 +2642,21 @@ impl TaggedValue {
         with_tagged_heap(|h| h.alloc_char_table(purpose, init, n_extras))
     }
 
+    /// Allocate Lisp-supplied extra slots only after GNU count validation.
+    pub(crate) fn try_char_table(
+        purpose: Value,
+        init: Value,
+        count: crate::emacs_core::alloc::CharTableExtras,
+    ) -> Result<Self, crate::emacs_core::error::Flow> {
+        use crate::emacs_core::alloc::{AllocLen, reserved_values};
+        let mut extras = reserved_values(count)?;
+        extras.resize(count.capacity(), init);
+        crate::emacs_core::chartable::bump_char_table_write_tick();
+        Ok(with_tagged_heap(|h| {
+            h.alloc_char_table_with_extras(purpose, init, extras)
+        }))
+    }
+
     /// Allocate a GNU-shaped sub-char-table.
     pub fn make_sub_char_table(depth: i32, min_char: i32, contents: Vec<Value>) -> Self {
         with_tagged_heap(|h| h.alloc_sub_char_table(depth, min_char, contents))
@@ -2698,9 +2749,33 @@ impl TaggedValue {
         })
     }
 
+    /// Allocate a hash table after validating the Lisp capacity and reserving
+    /// all of its backing storage through fallible collection APIs.
+    pub(crate) fn try_hash_table_with_options(
+        test: HashTableTest,
+        size: crate::emacs_core::alloc::HashTableSize,
+        weakness: Option<HashTableWeakness>,
+    ) -> Result<Self, crate::emacs_core::error::Flow> {
+        use crate::emacs_core::alloc::AllocLen;
+        let data = HashTableStorage::try_with_capacity(size)?;
+        let table =
+            LispHashTable::with_storage(test, size.capacity() as i64, weakness, 1.5, 0.8125, data);
+        Ok(with_tagged_heap(|h| h.alloc_hash_table(table)))
+    }
+
     /// Allocate a GNU-shaped obarray object.
     pub fn obarray(size: usize) -> Self {
         with_tagged_heap(|h| h.alloc_obarray(vec![Value::NIL; size]))
+    }
+
+    /// Allocate obarray buckets after validating GNU's size-hint boundary.
+    pub(crate) fn try_obarray(
+        size: crate::emacs_core::alloc::ObarrayBits,
+    ) -> Result<Self, crate::emacs_core::error::Flow> {
+        use crate::emacs_core::alloc::{AllocLen, reserved_values};
+        let mut buckets = reserved_values(size)?;
+        buckets.resize(size.capacity(), Value::NIL);
+        Ok(with_tagged_heap(|h| h.alloc_obarray(buckets)))
     }
 
     /// Allocate a marker.
@@ -3511,7 +3586,7 @@ impl TaggedValue {
                 crate::emacs_core::pdump::stub_params_required_only(ptr, data.closure_slot_count)
             });
         }
-        Some(data.params.optional.is_empty() && data.params.rest.is_none())
+        Some(data.params.fixed_arity().is_some())
     }
 
     /// The required-parameter count of a byte-code function that takes only
@@ -3528,8 +3603,7 @@ impl TaggedValue {
                 crate::emacs_core::pdump::stub_required_only_arity(ptr, data.closure_slot_count)
             };
         }
-        (data.params.optional.is_empty() && data.params.rest.is_none())
-            .then_some(data.params.required.len())
+        data.params.fixed_arity()
     }
 
     pub(crate) fn bytecode_interactive_probe(self) -> Option<BytecodeInteractiveProbe> {
@@ -3765,22 +3839,13 @@ impl TaggedValue {
         }
     }
 
-    /// Mutate a GNU-shaped char-table object.
-    pub fn with_char_table_mut<R>(self, f: impl FnOnce(&mut CharTableObj) -> R) -> Option<R> {
-        if !self.is_char_table() {
-            return None;
-        }
-        // Write barrier: char-tables are dumped (syntax/category/case tables)
-        // and mutated in place, so the GC remembered set must learn about
-        // dumped char-table → heap edges through this single mutation
-        // chokepoint. Fired before `f` (conservative: any `_mut` borrow may
-        // store a heap pointer). No-op unless write tracking is enabled.
-        mutate::LispCollectionRevision::changed(self);
-        note_heap_write(self, HeapWriteKind::CharTableData);
-        let ptr = self.as_veclike_ptr().unwrap() as *mut CharTableObj;
-        #[cfg(debug_assertions)]
-        let _guard = mutate::HeapMutClosureGuard::enter();
-        Some(f(unsafe { &mut *ptr }))
+    /// Write a char-table through its barriered fixed-slot capability.
+    /// The closure cannot expose mutable slots or resize the backing.
+    pub fn with_char_table_mut<R>(
+        self,
+        f: impl FnOnce(&mut mutate::CharTableWrite<'_>) -> R,
+    ) -> Option<R> {
+        mutate::with_char_table_write(self, f)
     }
 
     /// Borrow a GNU-shaped sub-char-table object.
@@ -3794,22 +3859,12 @@ impl TaggedValue {
         }
     }
 
-    /// Mutate a GNU-shaped sub-char-table object.
+    /// Write an interior node through its barriered fixed-slot capability.
     pub fn with_sub_char_table_mut<R>(
         self,
-        f: impl FnOnce(&mut SubCharTableObj) -> R,
+        f: impl FnOnce(&mut mutate::SubCharTableWrite<'_>) -> R,
     ) -> Option<R> {
-        if !self.is_sub_char_table() {
-            return None;
-        }
-        // Write barrier — see `with_char_table_mut`. Sub-char-tables are the
-        // dumped char-table interior nodes and are mutated the same way.
-        mutate::LispCollectionRevision::changed(self);
-        note_heap_write(self, HeapWriteKind::SubCharTableData);
-        let ptr = self.as_veclike_ptr().unwrap() as *mut SubCharTableObj;
-        #[cfg(debug_assertions)]
-        let _guard = mutate::HeapMutClosureGuard::enter();
-        Some(f(unsafe { &mut *ptr }))
+        mutate::with_sub_char_table_write(self, f)
     }
 
     /// Expose GNU's readable char-table slots:
@@ -4093,10 +4148,6 @@ impl TaggedValue {
         self.to_equal_key_depth_swp(0, &mut seen, symbols_with_pos_enabled)
     }
 
-    fn to_equal_key_depth(self, depth: usize, seen: &mut Vec<usize>) -> HashKey {
-        self.to_equal_key_depth_swp(depth, seen, false)
-    }
-
     fn to_equal_key_depth_swp(
         self,
         depth: usize,
@@ -4219,7 +4270,12 @@ impl TaggedValue {
                     return HashKey::Cycle(index as u32);
                 }
                 seen.push(ptr);
-                let key = closure_to_equal_key(self, depth + 1, seen);
+                let key = closure_to_equal_key(
+                    self,
+                    depth + 1,
+                    seen,
+                    crate::tagged::SymbolMode::from(symbols_with_pos_enabled),
+                );
                 seen.pop();
                 key
             }
@@ -4530,7 +4586,7 @@ fn equal_value_inner(
         return true;
     }
 
-    if left.is_fixnum() || right.is_fixnum() || left.is_symbol() || right.is_symbol() {
+    if left.is_fixnum() || right.is_fixnum() || left.is_bare_symbol() || right.is_bare_symbol() {
         return false;
     }
 
@@ -4808,7 +4864,7 @@ fn try_equal_value_inner(
         return Ok(true);
     }
 
-    if left.is_fixnum() || right.is_fixnum() || left.is_symbol() || right.is_symbol() {
+    if left.is_fixnum() || right.is_fixnum() || left.is_bare_symbol() || right.is_bare_symbol() {
         return Ok(false);
     }
 
@@ -5009,25 +5065,6 @@ fn try_equal_value_inner(
     }
 }
 
-fn closure_params_to_equal_key(params: &LambdaParams) -> HashKey {
-    let mut values = Vec::with_capacity(params.required.len() + params.optional.len() + 3);
-    values.push(HashKey::Text("params".into()));
-    for sym in &params.required {
-        values.push(HashKey::Symbol(*sym));
-    }
-    if !params.optional.is_empty() {
-        values.push(HashKey::Text("&optional".into()));
-        for sym in &params.optional {
-            values.push(HashKey::Symbol(*sym));
-        }
-    }
-    if let Some(rest) = params.rest {
-        values.push(HashKey::Text("&rest".into()));
-        values.push(HashKey::Symbol(rest));
-    }
-    HashKey::EqualVec(values.into_boxed_slice())
-}
-
 /// `equal`-table key for a byte-code object, derived from
 /// [`ByteCodeFunction::structural_parts`] so it agrees with [`bytecode_equal`]
 /// by construction: equal objects produce equal keys, and every difference
@@ -5074,23 +5111,32 @@ fn bytecode_to_equal_key(
     HashKey::ByteCode(keys.into_boxed_slice())
 }
 
-fn closure_to_equal_key(value: Value, depth: usize, seen: &mut Vec<usize>) -> HashKey {
+fn closure_to_equal_key(
+    value: Value,
+    depth: usize,
+    seen: &mut Vec<usize>,
+    symbol_mode: crate::tagged::SymbolMode,
+) -> HashKey {
+    let symbols_with_pos_enabled = match symbol_mode {
+        crate::tagged::SymbolMode::Bare => false,
+        crate::tagged::SymbolMode::Positioned => true,
+    };
     if depth > 200 {
         return HashKey::Text("#<lambda-depth-limit>".into());
     }
 
-    let Some(params) = value.closure_params() else {
+    let Some(arglist) = value.closure_slot(CLOSURE_ARGLIST) else {
         return HashKey::Text("#<invalid-lambda>".into());
     };
 
     let mut slots = vec![
         HashKey::Text("lambda".into()),
-        closure_params_to_equal_key(params),
-        value
-            .closure_body_value()
-            .map_or(HashKey::Nil, |body| body.to_equal_key_depth(0, seen)),
+        arglist.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled),
+        value.closure_body_value().map_or(HashKey::Nil, |body| {
+            body.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled)
+        }),
         match value.closure_env().unwrap_or(None) {
-            Some(env) => env.to_equal_key_depth(0, seen),
+            Some(env) => env.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled),
             None => HashKey::Text("dynamic".into()),
         },
     ];
@@ -5103,7 +5149,7 @@ fn closure_to_equal_key(value: Value, depth: usize, seen: &mut Vec<usize>) -> Ha
         // string value (valid UTF-8 -> text key, eight-bit -> eq key) instead of
         // the retired storage form, whose in-Unicode sentinels would collide a
         // real Private-Use glyph with a raw byte in the equal hash key.
-        let doc = doc_value.to_equal_key_depth(0, seen);
+        let doc = doc_value.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
         slots.push(doc);
     }
 
@@ -5118,11 +5164,20 @@ fn closure_equal(
     symbols_with_pos_enabled: bool,
     kind: EqualKind,
 ) -> bool {
-    let (Some(left_params), Some(right_params)) = (left.closure_params(), right.closure_params())
-    else {
+    let (Some(left_args), Some(right_args)) = (
+        left.closure_slot(CLOSURE_ARGLIST),
+        right.closure_slot(CLOSURE_ARGLIST),
+    ) else {
         return false;
     };
-    if left_params != right_params {
+    if !equal_value_inner(
+        &left_args,
+        &right_args,
+        depth + 1,
+        seen,
+        symbols_with_pos_enabled,
+        kind,
+    ) {
         return false;
     }
 
@@ -5176,11 +5231,20 @@ fn try_closure_equal(
     symbols_with_pos_enabled: bool,
     kind: EqualKind,
 ) -> Result<bool, Flow> {
-    let (Some(left_params), Some(right_params)) = (left.closure_params(), right.closure_params())
-    else {
+    let (Some(left_args), Some(right_args)) = (
+        left.closure_slot(CLOSURE_ARGLIST),
+        right.closure_slot(CLOSURE_ARGLIST),
+    ) else {
         return Ok(false);
     };
-    if left_params != right_params {
+    if !try_equal_value_inner(
+        &left_args,
+        &right_args,
+        depth + 1,
+        seen,
+        symbols_with_pos_enabled,
+        kind,
+    )? {
         return Ok(false);
     }
 

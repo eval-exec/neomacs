@@ -26,7 +26,7 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
     ops.push(Op::Return);
     f.ops = ops;
     f.constants = vec![Value::symbol(callee)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -290,7 +290,7 @@ fn a_leaf_signal_is_caught_in_the_calling_body() {
     ops.extend([Op::Constant(0), Op::StackRef(1), Op::List(2), Op::Return]);
     f.ops = ops;
     f.constants = vec![Value::symbol("caught"), Value::symbol("gethash")].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     set_knob(&mut ev, VmLeafKnob::ALL);
     let runs0 = super::vm_leaf::vm_leaf_calls_for_test();
     assert_eq!(

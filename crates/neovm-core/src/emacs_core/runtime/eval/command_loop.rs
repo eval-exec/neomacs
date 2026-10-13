@@ -8,6 +8,15 @@ use super::*;
 #[path = "gc_generational.rs"]
 mod gc_generational;
 
+/// The collection policy is selected before the admitted start mutates the heap.
+#[derive(Clone, Copy, Debug)]
+enum ConcurrentCycleKind {
+    Threshold,
+    FirstPartition,
+}
+
+static_assertions::assert_impl_all!(ConcurrentCycleKind: Send, Sync, Copy, Clone, std::fmt::Debug);
+
 impl Context {
     /// Initialize host termination policy after command-line mode selection.
     pub fn initialize_termination_signals(noninteractive: bool) {
@@ -114,7 +123,7 @@ impl Context {
         &mut self,
         value: Value,
     ) -> Result<CommandLoopExit, Flow> {
-        if value == Value::T {
+        if eq_value_swp(&value, &Value::T, self.symbols_with_pos_enabled) {
             return Ok(CommandLoopExit::Quit);
         }
         if value.is_string() {
@@ -190,7 +199,7 @@ impl Context {
                 Err(ref flow)
                     if let Some(thrown) = flow.as_throw()
                         && catches_exit
-                        && thrown.tag.is_symbol_named("exit") =>
+                        && thrown.matches_tag(Value::symbol("exit")) =>
                 {
                     let value = thrown.value;
                     match self.classify_command_loop_exit(value)? {
@@ -265,7 +274,7 @@ impl Context {
                     Ok(_) => self.command_loop_2(),
                     Err(ref flow)
                         if let Some(thrown) = flow.as_throw()
-                            && thrown.tag.is_symbol_named("top-level") =>
+                            && thrown.matches_tag(Value::symbol("top-level")) =>
                     {
                         // top-level throw inside top_level_1 — fall through
                         // to command_loop_2 just like GNU's two-catch flow.
@@ -286,7 +295,7 @@ impl Context {
                 Err(ref flow)
                     if let Some(thrown) = flow.as_throw()
                         && outermost_command_loop
-                        && thrown.tag.is_symbol_named("top-level") =>
+                        && thrown.matches_tag(Value::symbol("top-level")) =>
                 {
                     tracing::debug!("command_loop_inner: top-level throw, restarting loop");
                     continue;
@@ -321,8 +330,7 @@ impl Context {
     pub(super) fn command_loop_top_level_1(&mut self) -> EvalResult {
         let top_level = self
             .obarray
-            .symbol_value("top-level")
-            .copied()
+            .symbol_value_copied("top-level")
             .unwrap_or(Value::NIL);
 
         tracing::debug!("command_loop_top_level_1: top-level={}", top_level);
@@ -364,14 +372,12 @@ impl Context {
                 if cfg!(test) {
                     let last_phase = self
                         .obarray
-                        .symbol_value("neomacs--startup-last-phase")
-                        .copied()
+                        .symbol_value_copied("neomacs--startup-last-phase")
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     let last_call = self
                         .obarray
-                        .symbol_value("neomacs--startup-last-call")
-                        .copied()
+                        .symbol_value_copied("neomacs--startup-last-call")
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     eprintln!(
@@ -438,11 +444,27 @@ impl Context {
         tracing::info!(
             "startup-state phase={} command-line-args={} command-line-args-left={} command-line-processed={} window-system={} initial-window-system={} current-buffer={} selected-frame={:?} frames={:?}",
             phase,
-            format_startup_value(self.obarray.symbol_value("command-line-args")),
-            format_startup_value(self.obarray.symbol_value("command-line-args-left")),
-            format_startup_value(self.obarray.symbol_value("command-line-processed")),
-            format_startup_value(self.obarray.symbol_value("window-system")),
-            format_startup_value(self.obarray.symbol_value("initial-window-system")),
+            format_startup_value(
+                self.obarray
+                    .symbol_value_copied("command-line-args")
+                    .as_ref()
+            ),
+            format_startup_value(
+                self.obarray
+                    .symbol_value_copied("command-line-args-left")
+                    .as_ref()
+            ),
+            format_startup_value(
+                self.obarray
+                    .symbol_value_copied("command-line-processed")
+                    .as_ref()
+            ),
+            format_startup_value(self.obarray.symbol_value_copied("window-system").as_ref()),
+            format_startup_value(
+                self.obarray
+                    .symbol_value_copied("initial-window-system")
+                    .as_ref()
+            ),
             current_buffer,
             selected_frame,
             frames
@@ -1669,7 +1691,7 @@ impl Context {
         // (window.c:4116) specbinds this to t so any nested redisplay
         // triggered by a window-change hook is a no-op. Without this check
         // a hook that indirectly calls `redisplay` infinitely recurses.
-        let inhibit_redisplay = self.obarray.symbol_value("inhibit-redisplay");
+        let inhibit_redisplay = self.obarray.symbol_value_copied("inhibit-redisplay");
         if (!force || crate::emacs_core::xdisp::mode_line_flow_enabled())
             && inhibit_redisplay.as_ref().is_some_and(|v| v.is_truthy())
         {
@@ -1819,7 +1841,7 @@ impl Context {
     /// hook is demoted (GNU calls via `dsafe_calln`, and the lisp driver wraps
     /// each hook in `with-demoted-errors`).
     pub(super) fn run_pre_redisplay_function(&mut self, windows: Value) {
-        let Some(function) = self.obarray.symbol_value("pre-redisplay-function").copied() else {
+        let Some(function) = self.obarray.symbol_value_copied("pre-redisplay-function") else {
             return;
         };
         if function.is_nil() {
@@ -1847,7 +1869,7 @@ impl Context {
     pub(super) fn resize_minibuffer_only_frames(&mut self) {
         if !self
             .obarray
-            .symbol_value("resize-mini-frames")
+            .symbol_value_copied("resize-mini-frames")
             .is_some_and(|value| value.is_truthy())
         {
             return;
@@ -2008,7 +2030,7 @@ impl Context {
 
     pub(super) fn command_value_for_log(value: Value) -> String {
         value
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .map(str::to_owned)
             .unwrap_or_else(|| crate::emacs_core::print::print_value(&value))
     }
@@ -2016,9 +2038,13 @@ impl Context {
     pub(super) fn command_keys_for_log(keys: &[Value]) -> String {
         keys.iter()
             .map(|key| {
-                crate::emacs_core::keyboard::pure::describe_single_key_value(key, false)
-                    .map(|description| crate::emacs_core::emacs_char::to_utf8_lossy(&description))
-                    .unwrap_or_else(|_| crate::emacs_core::print::print_value(key))
+                crate::emacs_core::keyboard::pure::describe_single_key_value(
+                    key,
+                    false,
+                    crate::tagged::SymbolMode::Bare,
+                )
+                .map(|description| crate::emacs_core::emacs_char::to_utf8_lossy(&description))
+                .unwrap_or_else(|_| crate::emacs_core::print::print_value(key))
             })
             .collect::<Vec<_>>()
             .join(" ")
@@ -2131,7 +2157,7 @@ impl Context {
         // True only when a whole mark+sweep cycle finishes in this call, gating
         // the once-per-collection bookkeeping below.
         let cycle_completed;
-        // Safety: GC is stop-the-world with exclusive `&mut self`. Root
+        // SAFETY: GC is stop-the-world with exclusive `&mut self`. Root
         // enumeration only reads Context state while seeding the collector via
         // the raw heap pointer, which aliases `self.tagged_heap`.
         unsafe {
@@ -2227,30 +2253,62 @@ impl Context {
                 self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                 (*heap_ptr).complete_minor_collection();
                 return;
-            } else if (*heap_ptr).should_run_concurrent() {
-                // Concurrent start handshake: snapshot roots, hand the gray queue
-                // to the GC thread, and return — marking now overlaps the mutator.
-                self.start_concurrent_mark(heap_ptr);
-                return; // marking concurrent; cycle not done yet
-            } else if (*heap_ptr).is_partition_first_cycle() {
-                // FIRST PARTITION CYCLE, CONCURRENT: the dump-blackening
-                // bootstrap used to be the one big STW pause (a full trace of
-                // the mapped image — ~12-50ms). Armed, `begin_collection`
-                // seeds the veclike/string mapped children in the handshake
-                // and stages the (bulk) cons ranges for the GC thread, whose
-                // claim job DROPS span-inside children instead of deferring
-                // them. Promotion + blackening run when this cycle's sweep
-                // drains (`finish_first_partition_cycle` below).
-                (*heap_ptr).arm_first_cycle_concurrent();
-                self.start_concurrent_mark(heap_ptr);
-                return; // marking concurrent; cycle not done yet
             } else {
-                // Stop-the-world full collection (dump-less bootstrap): the
-                // only remaining non-concurrent threshold path, sized by the
-                // young heap alone.
-                (*heap_ptr).begin_stw_collection();
-                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                (*heap_ptr).complete_collection();
+                let concurrent_kind = if (*heap_ptr).should_run_concurrent() {
+                    Some(ConcurrentCycleKind::Threshold)
+                } else if (*heap_ptr).is_partition_first_cycle() {
+                    Some(ConcurrentCycleKind::FirstPartition)
+                } else {
+                    None
+                };
+                if let Some(kind) = concurrent_kind {
+                    match self.start_concurrent_mark(heap_ptr, kind) {
+                        Ok(()) => return,
+                        Err(crate::tagged::gc::ConcurrentMarkAdmissionError::Excluded(_)) => {
+                            // Held facade roots choose exact synchronous GC.
+                        }
+                        Err(crate::tagged::gc::ConcurrentMarkAdmissionError::ForeignHeap {
+                            ..
+                        }) => {
+                            // An exchanged heap cannot use this owner's old
+                            // census. Keep the incomplete cycle for explicit
+                            // owner recovery rather than tracing foreign roots.
+                            return;
+                        }
+                        Err(
+                            crate::tagged::gc::ConcurrentMarkAdmissionError::CollectorBusy
+                            | crate::tagged::gc::ConcurrentMarkAdmissionError::NotStarted,
+                        ) => {
+                            // A dropped or rejected capture keeps its gray work;
+                            // the synchronous recovery below must finish it.
+                        }
+                    }
+                }
+                if (*heap_ptr).mark_in_progress() {
+                    // SAFETY: this current owner's closed GC-driver extent
+                    // excludes heap/obarray/TLS writers and callbacks. The
+                    // complete owner census reseeds every external root before
+                    // the unlaunched cycle drains marking and sweep.
+                    let drain = (*heap_ptr).drain_to_quiescent(|heap| {
+                        self.seed_registered_mutator_roots_world_stopped(heap);
+                    });
+                    match drain {
+                        Ok(quiescent) => drop(quiescent),
+                        Err(error) => {
+                            // Preserve incomplete storage and work for explicit
+                            // retry; do not start or account another collection.
+                            if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+                                eprintln!("NEOVM_GC synchronous recovery pending: {error}");
+                            }
+                            return;
+                        }
+                    }
+                } else {
+                    // No concurrent state has been armed on exclusion rejection.
+                    (*heap_ptr).begin_stw_collection();
+                    self.seed_registered_mutator_roots_world_stopped(heap_ptr);
+                    (*heap_ptr).complete_collection();
+                }
                 cycle_completed = true;
             }
         }
@@ -2423,18 +2481,30 @@ impl Context {
     /// `NEOVM_GC_TRACE=1`. Size probes are refreshed AFTER the pause is
     /// stamped so probe collection never inflates the measured pause.
     ///
-    /// Safety: as `seed_all_context_roots`.
-    pub(super) unsafe fn start_concurrent_mark(
+    /// # Safety
+    /// As `seed_all_context_roots`: the current owner exclusively admits the
+    /// matching heap, Obarray and TLS writers without Lisp or allocation
+    /// safepoints through capture and launch. Rejection precedes blackening.
+    unsafe fn start_concurrent_mark(
         &mut self,
         heap_ptr: *mut crate::tagged::gc::TaggedHeap,
-    ) {
+        kind: ConcurrentCycleKind,
+    ) -> Result<(), crate::tagged::gc::ConcurrentMarkAdmissionError> {
         let start_t0 = std::time::Instant::now();
         let (obsnap_us, roots_breakdown, ob_slots, ob_chunks);
         // SAFETY: heap_ptr is this Context's owned heap, exclusively admitted
         // to the start handshake. No Lisp callback or allocation safepoint
         // runs during capture, seeding or publication of the marker job.
         unsafe {
-            (*heap_ptr).concurrent_begin();
+            let mut permit = (*heap_ptr).permit_concurrent_mark()?;
+            match kind {
+                ConcurrentCycleKind::Threshold => {}
+                ConcurrentCycleKind::FirstPartition => permit.arm_first_cycle(),
+            }
+            let mut capture = permit.begin();
+            // Renew the designator from the exclusive capture loan, rather
+            // than reusing the pointer that preceded that mutable reborrow.
+            let heap_ptr = capture.heap_mut() as *mut crate::tagged::gc::TaggedHeap;
             // CONCURRENT OBARRAY SCAN (Stage 1b). Capture the obarray chunk snapshot
             // at THIS world-stopped point — the same instant the cons snapshot is
             // taken (inside `launch_concurrent_mark`) and the roots are seeded — so
@@ -2459,7 +2529,7 @@ impl Context {
                 let _skip = crate::emacs_core::symbol::ObarraySymbolCellSkipGuard::new();
                 roots_breakdown = self.seed_registered_mutator_roots_world_stopped(heap_ptr);
             }
-            (*heap_ptr).launch_concurrent_mark();
+            capture.launch()?;
         }
         let total_us = start_t0.elapsed().as_micros() as u64;
         // Pause is stamped; stats bookkeeping + probes below are off-pause.
@@ -2472,6 +2542,8 @@ impl Context {
         let (jit_entries, jit_slots) = (0usize, 0usize);
         let bc_depth = self.bc_buf.len();
         let specpdl_depth = self.specpdl.len();
+        // SAFETY: the capture loan ended at launch; this current owner's
+        // original heap designator is again valid for exclusive statistics.
         let hs = unsafe { (*heap_ptr).handshake_stats_mut() };
         hs.last_start_obsnap_us = obsnap_us;
         hs.last_start_roots = roots_breakdown;
@@ -2514,6 +2586,7 @@ impl Context {
                 hs.format_probes(),
             );
         }
+        Ok(())
     }
 
     /// Terminate a concurrent mark stop-the-world: stop the GC thread and reclaim
@@ -2889,6 +2962,7 @@ impl Context {
     /// Mirrors `process_quit_flag` in GNU `eval.c`: clear `quit-flag`, then
     /// honor `throw-on-input`, `kill-emacs`, or signal `quit`.
     pub(super) fn process_quit_flag(&mut self) -> Result<(), Flow> {
+        let symbol_mode = self.symbol_mode();
         let flag = self.quit_flag;
         self.set_quit_flag_value(Value::NIL);
 
@@ -2896,7 +2970,7 @@ impl Context {
             .obarray
             .symbol_value_id_or_nil(self.throw_on_input_symbol);
 
-        if flag.as_symbol_id() == Some(self.kill_emacs_symbol) {
+        if flag.as_symbol_id(symbol_mode) == Some(self.kill_emacs_symbol) {
             // GNU keyboard.c process_quit_flag: (setq quit-flag 'kill-emacs)
             // calls Fkill_emacs, which runs the hooks and exits. Unwinding as
             // a quit signal instead would let condition-case swallow the exit.
@@ -2913,7 +2987,11 @@ impl Context {
                 has_matching_catch = self.has_active_catch(&throw_on_input),
                 "process_quit_flag: throwing for pending input"
             );
-            return Err(Flow::throw(throw_on_input, Value::T));
+            return Err(Flow::throw_with_symbols(
+                throw_on_input,
+                Value::T,
+                self.symbol_mode(),
+            ));
         }
 
         Err(signal(LispCondition::Quit, vec![]))
@@ -3020,8 +3098,9 @@ impl Context {
     /// against the signal's `add_user_signal` NAME, so the comparison really is
     /// on the printed name and a non-symbol really does select no arm.
     pub(crate) fn debug_on_event_signal_name(&self) -> Option<String> {
-        let value = self.obarray.symbol_value("debug-on-event").copied()?;
-        let name = value.as_symbol_lisp_string()?;
+        let symbol_mode = self.symbol_mode();
+        let value = self.obarray.symbol_value_copied("debug-on-event")?;
+        let name = value.as_symbol_lisp_string(symbol_mode)?;
         Some(crate::emacs_core::emacs_char::to_utf8_lossy(
             name.as_bytes(),
         ))
@@ -3129,8 +3208,7 @@ impl Context {
     pub(super) fn input_pending_filter(&self) -> crate::keyboard::InputPendingFilter {
         let configured = self
             .obarray
-            .symbol_value("input-pending-p-filter-events")
-            .copied()
+            .symbol_value_copied("input-pending-p-filter-events")
             .unwrap_or(Value::T)
             .is_truthy();
         crate::keyboard::InputPendingFilter::from_filter_events_variable(configured)
@@ -3151,24 +3229,27 @@ impl Context {
     }
 
     pub(super) fn should_ignore_while_no_input_symbol(&self, ignore_symbol: &str) -> bool {
+        let symbol_mode = self.symbol_mode();
         let ignore_list = self
             .obarray
-            .symbol_value("while-no-input-ignore-events")
-            .copied()
+            .symbol_value_copied("while-no-input-ignore-events")
             .unwrap_or(Value::NIL);
         super::super::value::list_to_vec(&ignore_list)
             .into_iter()
             .flatten()
-            .any(|value| value.is_symbol_named(ignore_symbol))
+            .any(|value| value.is_symbol_named(ignore_symbol, symbol_mode))
     }
 
     pub(crate) fn has_pending_command_input_for_query(&self) -> bool {
         let filter = self.input_pending_filter();
         self.command_loop
             .keyboard
-            .has_pending_command_input_for_query(filter, self.track_mouse_enabled(), |symbol| {
-                self.should_ignore_while_no_input_symbol(symbol)
-            })
+            .has_pending_command_input_for_query(
+                filter,
+                self.track_mouse_enabled(),
+                |symbol| self.should_ignore_while_no_input_symbol(symbol),
+                self.symbol_mode(),
+            )
     }
 
     pub(crate) fn has_pending_frontend_input_with_configured_filter(&self) -> bool {

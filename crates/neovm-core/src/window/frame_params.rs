@@ -102,7 +102,7 @@ impl FrameFullscreen {
         if value.is_nil() {
             return Some(Self::Windowed);
         }
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     pub fn name(self) -> &'static str {
@@ -121,7 +121,7 @@ pub enum FrameToolBarPosition {
 
 impl FrameToolBarPosition {
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     pub fn name(self) -> &'static str {
@@ -139,7 +139,7 @@ pub enum FrameZGroup {
 
 impl FrameZGroup {
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     pub fn name(self) -> &'static str {
@@ -162,7 +162,7 @@ impl CursorTypeSymbol {
     }
 
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_symbol_name(value.as_symbol_name()?)
+        Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
     pub fn name(self) -> &'static str {
@@ -272,7 +272,7 @@ impl FrameParamKey {
     }
 
     pub fn from_symbol_value(value: Value) -> Option<Self> {
-        value.as_symbol_id().map(Self::from_symbol_id)
+        value.as_bare_symbol_id().map(Self::from_symbol_id)
     }
 
     pub fn name(self) -> &'static str {

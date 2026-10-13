@@ -22,6 +22,51 @@ fn settled_point(
 use super::*;
 
 #[test]
+fn gc_preserves_parked_keyboard_prompt_interval_plists() {
+    let mut ctx = crate::emacs_core::Context::new();
+    let prompt = ctx
+        .eval_str("(propertize \"Key: \" 'face '(prompt-face))")
+        .unwrap()
+        .as_lisp_string()
+        .unwrap()
+        .clone();
+    let mut plists = Vec::new();
+    prompt.intervals().for_each_root(|root| plists.push(root));
+    assert!(!plists.is_empty());
+    let original_terminal = ctx.command_loop.keyboard.active_terminal_id;
+    ctx.command_loop.keyboard.kboard.key_echo_state = KeyEchoState::Immediate {
+        prompt: Some(prompt),
+    };
+    ctx.command_loop
+        .keyboard
+        .select_terminal(original_terminal + 1);
+    for _ in 0..3 {
+        ctx.gc_collect_exact();
+        for &plist in &plists {
+            assert!(
+                ctx.tagged_heap.owns_heap_value_for_test(plist),
+                "parked keyboard retained a reclaimed prompt interval plist"
+            );
+        }
+    }
+    ctx.command_loop.keyboard.select_terminal(original_terminal);
+    let KeyEchoState::Immediate {
+        prompt: Some(prompt),
+    } = &ctx.command_loop.keyboard.kboard.key_echo_state
+    else {
+        panic!("restoring the keyboard lost its prompt");
+    };
+    let face = prompt
+        .intervals()
+        .get_property_at_char_pos(crate::buffer::CharPos0::ZERO, Value::symbol("face"))
+        .unwrap();
+    assert_eq!(
+        crate::emacs_core::print::print_value(&face),
+        "(prompt-face)"
+    );
+}
+
+#[test]
 fn discrete_scroll_preserves_horizontal_direction_and_multiple_steps() {
     let mut eval = crate::emacs_core::Context::new();
     let buffer = eval.buffer_manager_mut().create_buffer("wheel-steps");
@@ -43,7 +88,7 @@ fn discrete_scroll_preserves_horizontal_direction_and_multiple_steps() {
         .unwrap()
         .unwrap();
     let parts = crate::emacs_core::value::list_to_vec(&event).unwrap();
-    assert_eq!(parts[0].as_symbol_name(), Some("wheel-right"));
+    assert_eq!(parts[0].as_bare_symbol_name(), Some("wheel-right"));
     assert_eq!(parts[3].as_fixnum(), Some(3));
     assert_eq!(
         parts.len(),
@@ -100,7 +145,7 @@ fn precise_scroll_is_a_lisp_wheel_command_with_pixel_payload() {
         .expect("precise scrolling must reach key binding dispatch");
     let parts = crate::emacs_core::value::list_to_vec(&event).unwrap();
     assert_eq!(parts.len(), 5, "GNU wheel event with pixel delta payload");
-    assert_eq!(parts[0].as_symbol_name(), Some("wheel-down"));
+    assert_eq!(parts[0].as_bare_symbol_name(), Some("wheel-down"));
     assert_eq!(parts[2].as_fixnum(), Some(1));
     assert_eq!(parts[4].cons_car().as_float(), Some(1.5));
     assert_eq!(parts[4].cons_cdr().as_float(), Some(-4.25));
@@ -225,12 +270,12 @@ fn presented_pointer_preserves_phase_and_installs_snapshot_posn_string() {
 
     let press_parts = crate::emacs_core::value::list_to_vec(&press).expect("press list");
     let release_parts = crate::emacs_core::value::list_to_vec(&release).expect("release list");
-    assert_eq!(press_parts[0].as_symbol_name(), Some("down-mouse-1"));
-    assert_eq!(release_parts[0].as_symbol_name(), Some("mouse-1"));
+    assert_eq!(press_parts[0].as_bare_symbol_name(), Some("down-mouse-1"));
+    assert_eq!(release_parts[0].as_bare_symbol_name(), Some("mouse-1"));
     for event in [press, release] {
         let parts = crate::emacs_core::value::list_to_vec(&event).expect("mouse event");
         let position = crate::emacs_core::value::list_to_vec(&parts[1]).expect("position");
-        assert_eq!(position[1].as_symbol_name(), Some("tab-bar"));
+        assert_eq!(position[1].as_bare_symbol_name(), Some("tab-bar"));
         assert_eq!(position[4], posn_string);
     }
 }
@@ -337,7 +382,7 @@ fn presented_tab_line_hit_joins_renderer_string_index_with_rooted_lisp_value() {
     let position = crate::emacs_core::Context::make_mouse_position(44.0, 8.0, frame_id.0, &eval);
     let parts = crate::emacs_core::value::list_to_vec(&position).expect("position");
     assert_eq!(parts[0], Value::make_window(window_id.0));
-    assert_eq!(parts[1].as_symbol_name(), Some("tab-line"));
+    assert_eq!(parts[1].as_bare_symbol_name(), Some("tab-line"));
     assert_eq!(parts[4], Value::cons(text, Value::fixnum(6)));
 }
 
@@ -566,7 +611,7 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
     let divider_event = crate::emacs_core::value::list_to_vec(&divider_event).unwrap();
     let divider_position = crate::emacs_core::value::list_to_vec(&divider_event[1]).unwrap();
     assert_eq!(
-        divider_position[1].as_symbol_name(),
+        divider_position[1].as_bare_symbol_name(),
         Some("right-divider"),
         "a right divider reports `right-divider`, not `vertical-line`"
     );
@@ -938,7 +983,7 @@ fn pointer_before_retirement_resolves_before_snapshot_is_released() {
         crate::emacs_core::value::list_to_vec(&pointer)
             .expect("mouse event")
             .first()
-            .and_then(|value| value.as_symbol_name()),
+            .and_then(|value| value.as_bare_symbol_name()),
         Some("down-mouse-1")
     );
     assert!(
@@ -1544,18 +1589,27 @@ fn key_sequence_translation_events_normalizes_vector_string_and_scalar() {
     crate::test_utils::init_test_tracing();
     let vector = Value::vector(vec![Value::fixnum('x' as i64), Value::fixnum('y' as i64)]);
     assert_eq!(
-        key_sequence_translation_events(vector),
+        key_sequence_translation_events(vector, crate::tagged::value::SymbolMode::Bare),
         Some(vec![Value::fixnum('x' as i64), Value::fixnum('y' as i64)])
     );
     assert_eq!(
-        key_sequence_translation_events(Value::string("ab")),
+        key_sequence_translation_events(
+            Value::string("ab"),
+            crate::tagged::value::SymbolMode::Bare
+        ),
         Some(vec![Value::fixnum('a' as i64), Value::fixnum('b' as i64)])
     );
     assert_eq!(
-        key_sequence_translation_events(Value::symbol("f1")),
+        key_sequence_translation_events(
+            Value::symbol("f1"),
+            crate::tagged::value::SymbolMode::Bare
+        ),
         Some(vec![Value::symbol("f1")])
     );
-    assert_eq!(key_sequence_translation_events(Value::NIL), None);
+    assert_eq!(
+        key_sequence_translation_events(Value::NIL, crate::tagged::value::SymbolMode::Bare),
+        None
+    );
 }
 
 #[test]

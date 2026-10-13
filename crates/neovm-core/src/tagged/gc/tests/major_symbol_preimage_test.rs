@@ -72,16 +72,38 @@ impl MarkPhase {
     }
 
     fn worker(heap: &mut TaggedHeap, roots: &[TaggedValue], first_partition: bool) -> Self {
+        Self::worker_with_obarray(heap, roots, first_partition, None)
+    }
+
+    fn worker_with_obarray(
+        heap: &mut TaggedHeap,
+        roots: &[TaggedValue],
+        first_partition: bool,
+        obarray: Option<&Obarray>,
+    ) -> Self {
         assert!(!heap.concurrent_mark_running);
+        // SAFETY: this fixture is the heap and matching obarray's sole writer.
+        // No callback, safepoint or ownership handoff occurs through publication.
+        let mut permit = unsafe { heap.permit_concurrent_mark() }.unwrap();
         if first_partition {
-            heap.arm_first_cycle_concurrent();
+            permit.arm_first_cycle();
         }
-        heap.concurrent_begin();
+        let mut capture = permit.begin();
+        if let Some(obarray) = obarray {
+            let snapshot = {
+                // SAFETY: snapshot capture is inside that same closed start
+                // loan and precedes the worker's first read of symbol cells.
+                let world =
+                    unsafe { scan_contract::SingleMutatorWorld::from_heap(capture.heap_mut()) };
+                obarray.scan_snapshot(&world)
+            };
+            capture.heap_mut().set_pending_obarray_scan(snapshot);
+        }
         for &root in roots {
-            heap.seed_root(root);
+            capture.heap_mut().seed_root(root);
         }
-        set_tagged_heap(heap);
-        heap.launch_concurrent_mark();
+        set_tagged_heap(capture.heap_mut());
+        capture.launch().unwrap();
         Self {
             heap,
             kind: PhaseKind::Worker,
@@ -372,13 +394,7 @@ fn major_symbol_join_merges_worker_and_mutator_results_after_publication_stops()
             roots.keep(heap.alloc_symbol_with_pos(positioned_key, TaggedValue::fixnum(4)));
         let mut obarray = Obarray::new();
         obarray.set_symbol_value("major-preimage-worker-owner", worker);
-        let snapshot = {
-            // SAFETY: capture occurs on this test's sole heap/obarray writer.
-            let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
-            obarray.scan_snapshot(&world)
-        };
-        heap.set_pending_obarray_scan(snapshot);
-        let _phase = MarkPhase::worker(&mut heap, &[], false);
+        let _phase = MarkPhase::worker_with_obarray(&mut heap, &[], false, Some(&obarray));
         note_root_overwrite(root);
         assert!(crate::tagged::mutate::set_cons_car(
             cons,
@@ -513,5 +529,43 @@ fn major_symbol_generic_cons_write_retraces_current_children_before_sweep() {
             assert!(heap.owns_heap_value_for_test(owner));
             assert_eq!(heap.marked_symbols.contains(id(key)), enabled);
         }
+    }
+}
+
+// Append inside tagged/gc/tests/major_symbol_preimage_test.rs. This reuses
+// that module's existing heap, MarkPhase and satb fixtures; no new GC seam.
+
+#[test]
+fn atomic_forwarder_stores_keep_root_preimages_before_publication() {
+    use crate::emacs_core::forward::{
+        LispInteger, alloc_intfwd, alloc_kboard_objfwd, alloc_objfwd,
+    };
+    for enabled in [false, true] {
+        let mut heap = heap(enabled);
+        set_tagged_heap(&mut heap);
+        let first = heap.alloc_cons(TaggedValue::fixnum(11), TaggedValue::NIL);
+        let second = heap.alloc_cons(TaggedValue::fixnum(22), TaggedValue::NIL);
+        let object = alloc_objfwd(first);
+        let keyboard = alloc_kboard_objfwd(second);
+        let integer = alloc_intfwd(LispInteger::from_i64(i64::MAX));
+        let integer_old = integer.get();
+        assert!(integer_old.is_bignum());
+        let phase = MarkPhase::synthetic(&mut heap);
+        object.set(TaggedValue::NIL);
+        keyboard.set(TaggedValue::T);
+        integer.set(LispInteger::from_i64(0));
+        assert_eq!(integer.get_i64(), 0);
+        assert!(object.get().is_nil());
+        assert_eq!(keyboard.get().bits(), TaggedValue::T.bits());
+        let old_roots = satb(&heap);
+        assert!(old_roots.iter().any(|value| value.bits() == first.bits()));
+        assert!(old_roots.iter().any(|value| value.bits() == second.bits()));
+        assert!(
+            old_roots
+                .iter()
+                .any(|value| value.bits() == integer_old.bits())
+        );
+        phase.stop_synthetic(&mut heap);
+        drop(phase);
     }
 }

@@ -10,7 +10,7 @@ fn nullary_fn(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     });
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -32,7 +32,13 @@ fn rejected_body_is_remembered_on_its_runtime() {
         "hot and unjudged: the dispatcher consults the cache"
     );
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[]
+        )
+        .unwrap(),
         None,
         "the rejected body falls back to the interpreter"
     );
@@ -62,7 +68,15 @@ fn fast_leaf_retiers_to_full_once_hot() {
     };
     let c = Value::make_int(7);
     let f = nullary_fn(vec![Op::Constant(0), Op::Return], vec![c]);
-    let run = || try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap();
+    let run = || {
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[],
+        )
+        .unwrap()
+    };
     assert_eq!(run(), Some(c.bits()));
     let id = f.jit_runtime().compiled_id().expect("compiled once");
     assert_eq!(compiled_regalloc_for_test(id), Some(RegallocChoice::Fast));
@@ -117,7 +131,10 @@ fn retier_unlinks_the_fast_leaf_from_callers_spec_slots() {
     crate::emacs_core::eval::push_scratch_gc_root(caller);
     let callee_data = callee.get_bytecode_data().expect("byte-code");
     let caller_data = caller.get_bytecode_data().expect("byte-code");
-    let run_caller = || try_run_compiled(ctx, caller_data, caller, &[]).unwrap();
+    crate::emacs_core::jit::test_support::prepare_entry(ctx, callee_data);
+    let run_caller = || {
+        crate::emacs_core::jit::test_support::run_compiled(ctx, caller_data, caller, &[]).unwrap()
+    };
     assert_eq!(run_caller(), Some(seven.bits()), "compiles the caller");
     assert_eq!(run_caller(), Some(seven.bits()), "arms its slot");
     let callee_id = callee_data
@@ -144,7 +161,7 @@ fn retier_unlinks_the_fast_leaf_from_callers_spec_slots() {
     // allocator.
     callee_data.jit_runtime().set_heat_for_test(retier_at);
     assert_eq!(
-        try_run_compiled(ctx, callee_data, callee, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(ctx, callee_data, callee, &[]).unwrap(),
         Some(seven.bits())
     );
     assert_eq!(
@@ -190,7 +207,10 @@ fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
     let f = body();
     let rt = f.jit_runtime();
     rt.set_hot_for_test();
-    assert_eq!(try_run_compiled(ctx, &f, Value::NIL, &[]).unwrap(), None);
+    assert_eq!(
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, Value::NIL, &[]).unwrap(),
+        None
+    );
     let id = rt.compiled_id().expect("id assigned");
     assert_eq!(cache_entry_kind_for_test(id), "not-compilable");
     assert!(matches!(rt.dispatch_sized(3), Plan::Interpret));
@@ -199,7 +219,10 @@ fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
     let f = body();
     let rt = f.jit_runtime();
     rt.set_hot_for_test();
-    assert_eq!(try_run_compiled(ctx, &f, Value::NIL, &[]).unwrap(), None);
+    assert_eq!(
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, Value::NIL, &[]).unwrap(),
+        None
+    );
     let id = rt.compiled_id().expect("id assigned");
     assert_eq!(cache_entry_kind_for_test(id), "deferred");
     assert!(
@@ -207,7 +230,7 @@ fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
         "deferred: no probe"
     );
     assert_eq!(
-        try_run_compiled(ctx, &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, Value::NIL, &[]).unwrap(),
         None,
         "a probe anyway: still deferred"
     );
@@ -218,7 +241,7 @@ fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
     // through the generic shim path — so the run's outcome is not asserted.)
     rt.set_heat_for_test(hot_threshold().saturating_mul(4));
     assert!(matches!(rt.dispatch_sized(3), Plan::Compiled));
-    let _ = try_run_compiled(ctx, &f, Value::NIL, &[]);
+    let _ = crate::emacs_core::jit::test_support::run_compiled(ctx, &f, Value::NIL, &[]);
     assert_eq!(cache_entry_kind_for_test(id), "compiled");
     // Call-heavy: the fast allocator, and no re-tier however hot.
     if forced_regalloc().is_none() && std::env::var_os("NEOVM_JIT_REGALLOC_CALLHEAVY").is_none() {
@@ -226,7 +249,7 @@ fn unprofitable_body_is_deferred_then_compiled_once_hot_enough() {
         assert_eq!(compiled_regalloc_for_test(id), Some(RegallocChoice::Fast));
         if let Some(retier_at) = crate::emacs_core::jit::retier_heat() {
             rt.set_heat_for_test(retier_at);
-            let _ = try_run_compiled(ctx, &f, Value::NIL, &[]);
+            let _ = crate::emacs_core::jit::test_support::run_compiled(ctx, &f, Value::NIL, &[]);
             assert_eq!(
                 compiled_regalloc_for_test(id),
                 Some(RegallocChoice::Fast),
@@ -267,7 +290,7 @@ fn level_b_inlined_bit_op_leaf_is_evicted_on_redefinition_without_panicking() {
     // The minimal harness defines no `logand` subr, so the native run may
     // signal void-function through the generic path; the compile — and the
     // dep it registered — is what this test is about.
-    let _ = try_run_compiled(ctx, &f, Value::NIL, &[]);
+    let _ = crate::emacs_core::jit::test_support::run_compiled(ctx, &f, Value::NIL, &[]);
     let id = f.jit_runtime().compiled_id().expect("compiled");
     assert_eq!(cache_entry_kind_for_test(id), "compiled");
     let inlined = INLINE_DEPS.with(|m| m.borrow().get(&logand).is_some_and(|s| s.contains(&id)));
@@ -284,12 +307,24 @@ fn runs_compilable_nullary_leaf() {
     let f = nullary_fn(vec![Op::Constant(0), Op::Return], vec![c]);
     // First call compiles + caches; result is the constant's bits.
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[]
+        )
+        .unwrap(),
         Some(c.bits())
     );
     // Second call hits the cache; same result.
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[]
+        )
+        .unwrap(),
         Some(c.bits())
     );
 }
@@ -302,11 +337,23 @@ fn returns_none_for_noncompilable_body() {
         vec![],
     );
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[]
+        )
+        .unwrap(),
         None
     );
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[]
+        )
+        .unwrap(),
         None
     );
 }
@@ -322,7 +369,13 @@ fn deopt_returns_none() {
         ],
     );
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[]
+        )
+        .unwrap(),
         None
     );
 }
@@ -333,7 +386,13 @@ fn metering_records_one_compile_per_cache_miss() {
     let c = Value::make_int(7);
     let f = nullary_fn(vec![Op::Constant(0), Op::Return], vec![c]);
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[]
+        )
+        .unwrap(),
         Some(c.bits())
     );
     let s = stats::compile_stats_snapshot();
@@ -349,7 +408,13 @@ fn metering_records_one_compile_per_cache_miss() {
     assert_eq!(s.histogram_us[stats::bucket_index(s.max_us)], 1);
     // Second call is a cache hit: no new compile is recorded.
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[]
+        )
+        .unwrap(),
         Some(c.bits())
     );
     assert_eq!(stats::compile_stats_snapshot().total_compiles, 1);
@@ -362,7 +427,13 @@ fn metering_aggregates_across_compiles() {
         let c = Value::make_int(i);
         let f = nullary_fn(vec![Op::Constant(0), Op::Return], vec![c]);
         assert_eq!(
-            try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+            crate::emacs_core::jit::test_support::run_compiled(
+                std::ptr::null_mut(),
+                &f,
+                Value::NIL,
+                &[]
+            )
+            .unwrap(),
             Some(c.bits())
         );
     }
@@ -382,7 +453,13 @@ fn metering_counts_noncompilable_outcome() {
         vec![],
     );
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[]
+        )
+        .unwrap(),
         None
     );
     let s = stats::compile_stats_snapshot();
@@ -416,10 +493,10 @@ fn runs_with_args_and_rejects_arity_mismatch() {
     });
     f.lexical = true;
     f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     // Correct arity -> native result.
     assert_eq!(
-        try_run_compiled(
+        crate::emacs_core::jit::test_support::run_compiled(
             std::ptr::null_mut(),
             &f,
             Value::NIL,
@@ -430,7 +507,13 @@ fn runs_with_args_and_rejects_arity_mismatch() {
     );
     // Wrong arity -> None (interpreter will signal wrong-number-of-arguments).
     assert_eq!(
-        try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[Value::make_int(40)]).unwrap(),
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[Value::make_int(40)]
+        )
+        .unwrap(),
         None
     );
 }
@@ -445,7 +528,7 @@ fn unary_add_one() -> ByteCodeFunction {
     f.lexical = true;
     f.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return];
     f.constants = vec![Value::make_int(1)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -466,7 +549,15 @@ fn jit_obs_retired_leaf_counts_survive_retier() {
         return;
     };
     let f = unary_add_one();
-    let run = |arg: Value| try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[arg]).unwrap();
+    let run = |arg: Value| {
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[arg],
+        )
+        .unwrap()
+    };
     assert_eq!(run(Value::make_int(1)), Some(Value::make_int(2).bits()));
     assert_eq!(run(Value::NIL), None, "a nil operand deopts");
     let id = f.jit_runtime().compiled_id().expect("compiled");
@@ -495,7 +586,15 @@ fn jit_obs_retired_leaf_counts_survive_retier() {
 #[test]
 fn jit_obs_clear_folds_counts_into_dropped_totals() {
     let f = unary_add_one();
-    let run = |arg: Value| try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[arg]).unwrap();
+    let run = |arg: Value| {
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[arg],
+        )
+        .unwrap()
+    };
     assert_eq!(run(Value::NIL), None);
     assert_eq!(run(Value::NIL), None);
     let id = f.jit_runtime().compiled_id().expect("compiled");
@@ -570,11 +669,11 @@ fn jit_obs_name_hint_rejects_mismatched_frame() {
     let mut ev = Context::new();
     let sym = Value::symbol("jit-obs-hint-fn");
     let other = Value::symbol("jit-obs-hint-other");
-    let sym_id = sym.as_symbol_id().unwrap();
+    let sym_id = sym.as_bare_symbol_id().unwrap();
     ev.obarray
         .set_symbol_function_id(sym_id, Value::make_bytecode(unary_add_one()));
     ev.obarray.set_symbol_function_id(
-        other.as_symbol_id().unwrap(),
+        other.as_bare_symbol_id().unwrap(),
         Value::make_bytecode(unary_add_one()),
     );
     let id = ev
@@ -642,7 +741,9 @@ fn retired_leaf_is_marked_and_its_constants_stay_rooted() {
     let f = nullary_fn(vec![Op::Constant(0), Op::Car, Op::Return], vec![payload]);
     let f_val = Value::make_bytecode(f.clone());
     f.jit_runtime().set_hot_for_test();
-    let got = try_run_compiled(std::ptr::null_mut(), &f, f_val, &[]).expect("runs");
+    let got =
+        crate::emacs_core::jit::test_support::run_compiled(std::ptr::null_mut(), &f, f_val, &[])
+            .expect("runs");
     let id = f.jit_runtime().compiled_id().expect("compiled");
     assert!(is_compiled_for_test(id), "the body compiles");
     assert!(got.is_some_and(|bits| Value::from_bits(bits).is_string()));
@@ -699,7 +800,7 @@ fn lexical_fn(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunc
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
 }
@@ -722,7 +823,7 @@ fn install_step(ev: &mut crate::emacs_core::eval::Context, name: &str) -> Value 
         1,
     );
     ev.obarray
-        .set_symbol_function_id(sym.as_symbol_id().unwrap(), Value::make_bytecode(step));
+        .set_symbol_function_id(sym.as_bare_symbol_id().unwrap(), Value::make_bytecode(step));
     sym
 }
 
@@ -799,7 +900,11 @@ fn unlink_spec_slots_clears_a_cached_callers_slot() {
     );
     let f_val = Value::make_bytecode(f.clone());
     let ctx = &mut ev as *mut crate::emacs_core::eval::Context;
-    let run = || try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]).expect("no signal");
+    crate::emacs_core::jit::test_support::prepare_named(ctx, &["unlink-walk-step"]);
+    let run = || {
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, f_val, &[Value::make_int(5)])
+            .expect("no signal")
+    };
     for _ in 0..3 {
         assert_eq!(run(), Some(Value::make_int(4).bits()));
     }

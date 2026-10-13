@@ -11,6 +11,8 @@ struct Settings;
 impl Settings {
     fn enter() -> Self {
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
+        force_opt_profit_for_test(Some(OptProfitMode::Off));
+        force_opt_passes_for_test(Some(OptPasses::default()));
         force_deopt_for_test(false);
         Self
     }
@@ -18,14 +20,17 @@ impl Settings {
 impl Drop for Settings {
     fn drop(&mut self) {
         force_opt_for_test(None, None);
+        force_opt_profit_for_test(None);
+        force_opt_passes_for_test(None);
         force_deopt_for_test(false);
     }
 }
 fn lower(f: &ByteCodeFunction, osr: Option<usize>) -> CompiledLeaf {
+    let shape = f.params.stack_shape().expect("fixture stack parameters");
     let params = ParamShape {
-        required: f.params.required.len(),
-        optional: f.params.optional.len(),
-        has_rest: f.params.rest.is_some(),
+        required: shape.required(),
+        optional: shape.optional().expect("consistent fixture parameters"),
+        has_rest: shape.rest().is_present(),
     };
     lower_leaf_full_osr_with_opt(
         f.executable_ops(),

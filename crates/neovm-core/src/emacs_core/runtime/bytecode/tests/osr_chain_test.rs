@@ -16,7 +16,7 @@ fn code(nargs: usize, ops: Vec<Op>, constants: Vec<Value>) -> Value {
     code.lexical = true;
     code.ops = ops;
     code.constants = constants.into();
-    code.max_stack = 16;
+    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     code.seal_hand_assembled_ops_for_test();
     Value::make_bytecode(code)
 }
@@ -242,13 +242,13 @@ fn osr_chain_in_place_error_leaves_physical_bindings_for_its_owner_to_unwind() {
     assert_eq!(vm.ctx.specpdl.len(), 1);
     assert_eq!(vm.ctx.bc_frames.len(), 1);
     assert_eq!(
-        vm.ctx.obarray.symbol_value_id(dynamic),
-        Some(&Value::fixnum(99))
+        vm.ctx.obarray.symbol_value_id_copied(dynamic),
+        Some(Value::fixnum(99))
     );
     vm.cleanup_bytecode_frame(Err(flow), 0, 0, 0).unwrap_err();
     assert_eq!(
-        vm.ctx.obarray.symbol_value_id(dynamic),
-        Some(&Value::fixnum(9))
+        vm.ctx.obarray.symbol_value_id_copied(dynamic),
+        Some(Value::fixnum(9))
     );
     assert!(vm.ctx.bc_buf.is_empty());
     assert!(vm.ctx.bc_frames.is_empty());

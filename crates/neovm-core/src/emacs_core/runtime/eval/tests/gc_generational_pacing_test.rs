@@ -13,8 +13,7 @@ struct CompletionCounts {
 fn integer(context: &Context, name: &str) -> i64 {
     context
         .obarray()
-        .symbol_value(name)
-        .copied()
+        .symbol_value_copied(name)
         .expect(name)
         .as_int()
         .expect("integer counter")
@@ -94,8 +93,7 @@ fn make_old_unreachable_sentinel(context: &mut Context) {
     });
     let sentinel = context
         .obarray()
-        .symbol_value("u34p-sentinel")
-        .copied()
+        .symbol_value_copied("u34p-sentinel")
         .unwrap();
     let before = counts(context);
     context.gc_collect_exact();
@@ -111,11 +109,7 @@ fn make_old_unreachable_sentinel(context: &mut Context) {
 fn weak_entries(context: &Context) -> usize {
     // The table stays rooted in its real symbol cell. Its count records the
     // mark-time decision even if hook allocations reuse a freed key address.
-    let table = context
-        .obarray()
-        .symbol_value("u34p-table")
-        .copied()
-        .unwrap();
+    let table = context.obarray().symbol_value_copied("u34p-table").unwrap();
     assert!(context.tagged_heap.owns_heap_value_for_test(table));
     table.as_hash_table().unwrap().data.len()
 }
@@ -240,8 +234,7 @@ fn generational_automatic_stress_is_synchronous_seven_minors_then_eighth_major()
     });
     let second = context
         .obarray()
-        .symbol_value("u34p-sentinel")
-        .copied()
+        .symbol_value_copied("u34p-sentinel")
         .unwrap();
     run_stress_cycle(&mut context); // cycle nine, first minor after major
     assert!(context.tagged_heap.value_is_old_for_test(second));
@@ -287,8 +280,7 @@ fn generational_explicit_collection_is_full_and_resets_automatic_stress_stride()
     });
     let second = context
         .obarray()
-        .symbol_value("u34p-sentinel")
-        .copied()
+        .symbol_value_copied("u34p-sentinel")
         .unwrap();
     run_stress_cycle(&mut context); // first new minor promotes it
     assert!(context.tagged_heap.value_is_old_for_test(second));

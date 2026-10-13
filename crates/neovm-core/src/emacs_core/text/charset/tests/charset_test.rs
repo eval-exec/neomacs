@@ -131,7 +131,7 @@ fn charset_list_returns_priority_order() {
     let r = builtin_charset_list(vec![]).unwrap();
     let items = list_to_vec(&r).unwrap();
     // GNU definition order: ascii is highest priority (charset.c:2444).
-    assert!(items[0].is_symbol_named("ascii"));
+    assert!(items[0].is_bare_symbol_named("ascii"));
     assert!(items.len() >= 2);
 }
 
@@ -139,7 +139,7 @@ fn charset_list_returns_priority_order() {
 fn unibyte_charset_returns_eight_bit() {
     crate::test_utils::init_test_tracing();
     let r = builtin_unibyte_charset(vec![]).unwrap();
-    assert!(r.is_symbol_named("eight-bit"));
+    assert!(r.is_bare_symbol_named("eight-bit"));
 }
 
 // -----------------------------------------------------------------------
@@ -153,7 +153,7 @@ fn charset_priority_list_full() {
     let items = list_to_vec(&r).unwrap();
     assert!(!items.is_empty());
     // First should be ascii (GNU definition order; charset.c:2444).
-    assert!(items[0].is_symbol_named("ascii"));
+    assert!(items[0].is_bare_symbol_named("ascii"));
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn charset_priority_list_highestp() {
     // GNU Fcharset_priority_list (charset.c:2163): HIGHESTP returns the
     // highest-priority charset's name SYMBOL itself, not a one-element list.
     let r = builtin_charset_priority_list(vec![Value::T]).unwrap();
-    assert!(r.is_symbol_named("ascii"));
+    assert!(r.is_bare_symbol_named("ascii"));
 }
 
 #[test]
@@ -219,21 +219,21 @@ fn set_charset_priority_rejects_unknown_charset() {
 fn char_charset_int() {
     crate::test_utils::init_test_tracing();
     let r = builtin_char_charset(vec![Value::fixnum(65)]).unwrap();
-    assert!(r.is_symbol_named("ascii"));
+    assert!(r.is_bare_symbol_named("ascii"));
 }
 
 #[test]
 fn char_charset_char() {
     crate::test_utils::init_test_tracing();
     let r = builtin_char_charset(vec![Value::char('A')]).unwrap();
-    assert!(r.is_symbol_named("ascii"));
+    assert!(r.is_bare_symbol_named("ascii"));
 }
 
 #[test]
 fn char_charset_with_restriction() {
     crate::test_utils::init_test_tracing();
     let r = builtin_char_charset(vec![Value::fixnum(65), Value::NIL]).unwrap();
-    assert!(r.is_symbol_named("ascii"));
+    assert!(r.is_bare_symbol_named("ascii"));
 }
 
 #[test]
@@ -243,11 +243,14 @@ fn char_charset_classifies_eight_bit_and_emacs_ranges() {
     // matching GNU `char_charset` (charset.c).
     for code in [0x3F_FF80, 0x3F_FFB0, 0x3F_FFFF] {
         let r = builtin_char_charset(vec![Value::fixnum(code)]).unwrap();
-        assert!(r.is_symbol_named("eight-bit"), "code {code:#x} -> {r:?}");
+        assert!(
+            r.is_bare_symbol_named("eight-bit"),
+            "code {code:#x} -> {r:?}"
+        );
     }
     // Codes above the Unicode max but within MAX_5_BYTE_CHAR are `emacs`.
     let r = builtin_char_charset(vec![Value::fixnum(0x11_0000)]).unwrap();
-    assert!(r.is_symbol_named("emacs"), "0x110000 -> {r:?}");
+    assert!(r.is_bare_symbol_named("emacs"), "0x110000 -> {r:?}");
 }
 
 #[test]
@@ -365,14 +368,22 @@ fn define_charset_internal_requires_exact_arity() {
 #[test]
 fn define_charset_internal_validates_name_arg() {
     crate::test_utils::init_test_tracing();
-    // arg[0] must be a symbol
-    let err = builtin_define_charset_internal(vec![Value::NIL; 17]).unwrap_err();
-    match err.into_kind() {
-        FlowKind::Signal(sig) => {
-            assert_eq!(sig.symbol_name(), "wrong-type-argument");
-            assert_eq!(sig.data, vec![Value::symbol("symbolp"), Value::NIL]);
+    // GNU charset.c CHECK_SYMBOL accepts nil; an invalid dimension is
+    // checked next. Keep a non-symbol name as the symbolp negative guard.
+    for (name, predicate, operand) in [
+        (Value::fixnum(42), "symbolp", Value::fixnum(42)),
+        (Value::NIL, "arrayp", Value::NIL),
+    ] {
+        let mut args = vec![Value::NIL; 17];
+        args[0] = name;
+        let err = builtin_define_charset_internal(args).unwrap_err();
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
+                assert_eq!(sig.symbol_name(), "wrong-type-argument");
+                assert_eq!(sig.data, vec![Value::symbol(predicate), operand]);
+            }
+            other => panic!("expected wrong-type-argument signal, got {other:?}"),
         }
-        other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 }
 
@@ -738,7 +749,7 @@ fn find_charset_region_ascii_default() {
         builtin_find_charset_region(&mut eval, vec![Value::fixnum(1), Value::fixnum(100)]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 1);
-    assert!(items[0].is_symbol_named("ascii"));
+    assert!(items[0].is_bare_symbol_named("ascii"));
 }
 
 #[test]
@@ -844,7 +855,7 @@ fn find_charset_string_ascii() {
     let r = builtin_find_charset_string(vec![Value::string("hello")]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 1);
-    assert!(items[0].is_symbol_named("ascii"));
+    assert!(items[0].is_bare_symbol_named("ascii"));
 }
 
 #[test]
@@ -862,7 +873,7 @@ fn find_charset_string_bmp() {
     let r = builtin_find_charset_string(vec![Value::string("é")]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 1);
-    assert!(items[0].is_symbol_named("unicode"));
+    assert!(items[0].is_bare_symbol_named("unicode"));
 }
 
 #[test]
@@ -871,7 +882,7 @@ fn find_charset_string_unicode_supplementary() {
     let r = builtin_find_charset_string(vec![Value::string("😀")]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 1);
-    assert!(items[0].is_symbol_named("unicode"));
+    assert!(items[0].is_bare_symbol_named("unicode"));
 }
 
 #[test]
@@ -891,9 +902,9 @@ fn find_charset_string_mixed_order_matches_oracle() {
     let r = builtin_find_charset_string(vec![s]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 3);
-    assert!(items[0].is_symbol_named("ascii"));
-    assert!(items[1].is_symbol_named("unicode"));
-    assert!(items[2].is_symbol_named("eight-bit"));
+    assert!(items[0].is_bare_symbol_named("ascii"));
+    assert!(items[1].is_bare_symbol_named("unicode"));
+    assert!(items[2].is_bare_symbol_named("eight-bit"));
 }
 
 #[test]
@@ -908,8 +919,8 @@ fn find_charset_string_unibyte_ascii_and_eight_bit() {
     let r = builtin_find_charset_string(vec![s]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 2);
-    assert!(items[0].is_symbol_named("ascii"));
-    assert!(items[1].is_symbol_named("eight-bit"));
+    assert!(items[0].is_bare_symbol_named("ascii"));
+    assert!(items[1].is_bare_symbol_named("eight-bit"));
 }
 
 #[test]
@@ -919,7 +930,7 @@ fn find_charset_string_raw_unibyte_value_reports_eight_bit() {
     let r = builtin_find_charset_string(vec![raw]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 1);
-    assert!(items[0].is_symbol_named("eight-bit"));
+    assert!(items[0].is_bare_symbol_named("eight-bit"));
 }
 
 #[test]
@@ -1275,7 +1286,7 @@ fn charset_after_default_returns_unicode() {
         ));
     }
     let r = builtin_charset_after(&mut eval, vec![]).unwrap();
-    assert!(r.is_symbol_named("unicode"));
+    assert!(r.is_bare_symbol_named("unicode"));
 }
 
 #[test]
@@ -1290,7 +1301,7 @@ fn charset_after_with_pos() {
         buf.insert("😀");
     }
     let r = builtin_charset_after(&mut eval, vec![Value::fixnum(1)]).unwrap();
-    assert!(r.is_symbol_named("unicode"));
+    assert!(r.is_bare_symbol_named("unicode"));
 }
 
 #[test]
@@ -1417,17 +1428,17 @@ fn char_charset_bmp_canonicalizes_to_unicode() {
     // GNU `char_charset` returns the dimension-3 parent on hitting the
     // non-preferred head, before ever reaching the `unicode-bmp` entry.
     let r = builtin_char_charset(vec![Value::fixnum(0x4E2D)]).unwrap();
-    assert!(r.is_symbol_named("unicode"), "?中 -> {r:?}");
+    assert!(r.is_bare_symbol_named("unicode"), "?中 -> {r:?}");
 
     // BMP é and astral 😀 both canonicalize to `unicode`.
     let r = builtin_char_charset(vec![Value::fixnum(0xE9)]).unwrap();
-    assert!(r.is_symbol_named("unicode"), "?é -> {r:?}");
+    assert!(r.is_bare_symbol_named("unicode"), "?é -> {r:?}");
     let r = builtin_char_charset(vec![Value::fixnum(0x1F600)]).unwrap();
-    assert!(r.is_symbol_named("unicode"), "?😀 -> {r:?}");
+    assert!(r.is_bare_symbol_named("unicode"), "?😀 -> {r:?}");
 
     // ASCII is still the `ascii` exception.
     let r = builtin_char_charset(vec![Value::fixnum(65)]).unwrap();
-    assert!(r.is_symbol_named("ascii"), "?A -> {r:?}");
+    assert!(r.is_bare_symbol_named("ascii"), "?A -> {r:?}");
 }
 
 #[test]
@@ -1439,7 +1450,7 @@ fn split_char_bmp_is_dimension_three_unicode() {
     let r = builtin_split_char(vec![Value::fixnum(0x4E2D)]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 4, "split-char ?中 -> {r:?}");
-    assert!(items[0].is_symbol_named("unicode"));
+    assert!(items[0].is_bare_symbol_named("unicode"));
     assert_eq!(items[1].as_fixnum(), Some(0));
     assert_eq!(items[2].as_fixnum(), Some(78));
     assert_eq!(items[3].as_fixnum(), Some(45));
@@ -1448,7 +1459,7 @@ fn split_char_bmp_is_dimension_three_unicode() {
     let r = builtin_split_char(vec![Value::fixnum(0x1F600)]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 4, "split-char ?😀 -> {r:?}");
-    assert!(items[0].is_symbol_named("unicode"));
+    assert!(items[0].is_bare_symbol_named("unicode"));
     assert_eq!(items[1].as_fixnum(), Some(1));
     assert_eq!(items[2].as_fixnum(), Some(246));
     assert_eq!(items[3].as_fixnum(), Some(0));
@@ -1457,7 +1468,7 @@ fn split_char_bmp_is_dimension_three_unicode() {
     let r = builtin_split_char(vec![Value::fixnum(65)]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 2, "split-char ?A -> {r:?}");
-    assert!(items[0].is_symbol_named("ascii"));
+    assert!(items[0].is_bare_symbol_named("ascii"));
     assert_eq!(items[1].as_fixnum(), Some(65));
 }
 
@@ -1487,7 +1498,7 @@ fn char_charset_restriction_walks_list_in_order() {
         ]),
     ])
     .unwrap();
-    assert!(r.is_symbol_named("unicode"), "?é restriction -> {r:?}");
+    assert!(r.is_bare_symbol_named("unicode"), "?é restriction -> {r:?}");
 
     // (char-charset ?中 '(ascii latin-iso8859-1)) => nil: 中 is in neither.
     let r = builtin_char_charset(vec![
@@ -1507,7 +1518,7 @@ fn char_charset_restriction_walks_list_in_order() {
         Value::list(vec![Value::symbol("ucs")]),
     ])
     .unwrap();
-    assert!(r.is_symbol_named("ucs"), "?中 '(ucs) -> {r:?}");
+    assert!(r.is_bare_symbol_named("ucs"), "?中 '(ucs) -> {r:?}");
 }
 
 #[test]

@@ -14,7 +14,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
 }
@@ -22,7 +22,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
 fn install(ev: &mut Context, name: &str, f: ByteCodeFunction) -> Value {
     let sym = Value::symbol(name);
     ev.obarray
-        .set_symbol_function_id(sym.as_symbol_id().unwrap(), Value::make_bytecode(f));
+        .set_symbol_function_id(sym.as_bare_symbol_id().unwrap(), Value::make_bytecode(f));
     sym
 }
 
@@ -84,7 +84,8 @@ fn jit_obs_tier_up_seam_deopt_is_counted_on_the_cached_leaf() {
     );
     let f_val = Value::make_bytecode(f.clone());
     let run = |arg: Value| {
-        crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[arg]).expect("no signal")
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, f_val, &[arg])
+            .expect("no signal")
     };
     assert_eq!(
         run(Value::make_int(41)),
@@ -115,8 +116,13 @@ fn jit_obs_force_deopt_counts_every_call() {
     );
     let f_val = Value::make_bytecode(f.clone());
     for i in 0..5 {
-        let got = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(i)])
-            .expect("no signal");
+        let got = crate::emacs_core::jit::test_support::run_compiled(
+            ctx,
+            &f,
+            f_val,
+            &[Value::make_int(i)],
+        )
+        .expect("no signal");
         assert!(
             got.is_none_or(|bits| bits == Value::make_int(i + 1).bits()),
             "a precise resume is exact; a rerun falls back to the caller"
@@ -181,6 +187,7 @@ fn jit_obs_direct_path_deopt_counted_once() {
         1,
     );
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    crate::emacs_core::jit::test_support::prepare_named(&mut ev, &["jit-obs-step"]);
     let ctx = &mut ev as *mut Context as *mut u8;
     for _ in 0..3 {
         assert_eq!(
@@ -190,7 +197,7 @@ fn jit_obs_direct_path_deopt_counted_once() {
     }
     let callee_id = ev
         .obarray
-        .symbol_function_id(step.as_symbol_id().unwrap())
+        .symbol_function_id(step.as_bare_symbol_id().unwrap())
         .and_then(|v| v.get_bytecode_data())
         .and_then(|bc| bc.jit_runtime().compiled_id())
         .expect("the speculated call compiled the callee");
@@ -247,6 +254,7 @@ fn jit_obs_signal_exit_counted() {
         1,
     );
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    crate::emacs_core::jit::test_support::prepare_named(&mut ev, &["jit-obs-signaller"]);
     let ctx = &mut ev as *mut Context as *mut u8;
     for _ in 0..2 {
         assert_eq!(leaf.call(ctx, &[Value::make_int(5)]), NativeRun::Signal);
@@ -255,7 +263,7 @@ fn jit_obs_signal_exit_counted() {
     assert_eq!(leaf.obs.signals.get(), 2, "the caller exits with it too");
     let g_id = ev
         .obarray
-        .symbol_function_id(g.as_symbol_id().unwrap())
+        .symbol_function_id(g.as_bare_symbol_id().unwrap())
         .and_then(|v| v.get_bytecode_data())
         .and_then(|bc| bc.jit_runtime().compiled_id())
         .expect("the speculated call compiled the callee");
@@ -359,9 +367,10 @@ fn jit_obs_inline_eviction_counted() {
         1,
     );
     let f_val = Value::make_bytecode(f.clone());
-    let r = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]);
+    let r =
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, f_val, &[Value::make_int(5)]);
     assert!(matches!(r, Ok(Some(b)) if b == Value::make_int(25).bits()));
-    let c_id = c_sym.as_symbol_id().unwrap();
+    let c_id = c_sym.as_bare_symbol_id().unwrap();
     assert_eq!(
         crate::emacs_core::jit::cache::inline_dependent_count_for_test(c_id),
         1,
@@ -407,7 +416,7 @@ fn jit_obs_label_names_symbol_callee() {
     );
     let callee_bc = ev
         .obarray
-        .symbol_function_id(named.as_symbol_id().unwrap())
+        .symbol_function_id(named.as_bare_symbol_id().unwrap())
         .and_then(|v| v.get_bytecode_data())
         .expect("bytecode");
     callee_bc.jit_runtime().set_hot_for_test();
@@ -421,6 +430,8 @@ fn jit_obs_label_names_symbol_callee() {
         .execute(&caller, vec![])
         .expect("runs");
     assert_eq!(out.bits(), Value::make_int(6).bits());
+    // Await the job produced by the original Bcall; retain its naming origin.
+    crate::emacs_core::jit::test_support::settle(&mut ev);
     let id = callee_bc
         .jit_runtime()
         .compiled_id()
@@ -443,8 +454,13 @@ fn jit_obs_label_falls_back_to_anon() {
         vec![Value::symbol("jit-obs-anon-const")],
         0,
     );
-    let got = crate::emacs_core::jit::try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[])
-        .expect("runs");
+    let got = crate::emacs_core::jit::test_support::run_compiled(
+        std::ptr::null_mut(),
+        &f,
+        Value::NIL,
+        &[],
+    )
+    .expect("runs");
     assert_eq!(got, Some(Value::symbol("jit-obs-anon-const").bits()));
     let id = f.jit_runtime().compiled_id().expect("compiled");
     let row = row_for(id, cache::LeafState::Live);
@@ -465,8 +481,13 @@ fn jit_obs_label_absent_without_naming() {
         vec![Value::make_int(3)],
         0,
     );
-    let got = crate::emacs_core::jit::try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[])
-        .expect("runs");
+    let got = crate::emacs_core::jit::test_support::run_compiled(
+        std::ptr::null_mut(),
+        &f,
+        Value::NIL,
+        &[],
+    )
+    .expect("runs");
     assert_eq!(got, Some(Value::make_int(3).bits()));
     let id = f.jit_runtime().compiled_id().expect("compiled");
     let row = row_for(id, cache::LeafState::Live);
@@ -543,11 +564,12 @@ fn jit_obs_entry_counter_counts_every_path() {
     let f_val = Value::make_bytecode(f.clone());
     let ctx = &mut ev as *mut Context;
     for i in 0..4 {
-        crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(i)])
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, f_val, &[Value::make_int(i)])
             .expect("no signal");
     }
     // A run that deopts was still an entry.
-    crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::NIL]).expect("no signal");
+    crate::emacs_core::jit::test_support::run_compiled(ctx, &f, f_val, &[Value::NIL])
+        .expect("no signal");
     let id = f.jit_runtime().compiled_id().expect("compiled");
     let obs = row_for(id, cache::LeafState::Live).obs;
     assert!(obs.entry_counted);
@@ -577,6 +599,7 @@ fn jit_obs_entry_counter_counts_every_path() {
         1,
     );
     let leaf = compile_bytecode_function_with(&caller, Some(&ev.obarray)).expect("compiles");
+    crate::emacs_core::jit::test_support::prepare_named(&mut ev, &["jit-obs-entry-step"]);
     let ctx = &mut ev as *mut Context as *mut u8;
     for _ in 0..3 {
         assert_eq!(
@@ -587,7 +610,7 @@ fn jit_obs_entry_counter_counts_every_path() {
     assert_eq!(leaf.obs.entries.get(), 3, "the caller, entered directly");
     let step_id = ev
         .obarray
-        .symbol_function_id(step.as_symbol_id().unwrap())
+        .symbol_function_id(step.as_bare_symbol_id().unwrap())
         .and_then(|v| v.get_bytecode_data())
         .and_then(|bc| bc.jit_runtime().compiled_id())
         .expect("the speculated call compiled the callee");

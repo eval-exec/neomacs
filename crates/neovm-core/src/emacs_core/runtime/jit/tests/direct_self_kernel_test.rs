@@ -50,6 +50,7 @@ fn self_kernel_recursion_executes_directly_and_declined_lookup_keeps_its_result(
     force_direct_self_kernel_for_test(Some(true));
     let mut ev = crate::test_utils::runtime_startup_context();
     ev.eval_str(PROGRAM).expect("defined");
+    crate::emacs_core::jit::test_support::prepare_named(&mut ev, &["neovm--self-rec"]);
     ev.eval_str("(dotimes (_ 1500) (neovm--self-rec 4))")
         .expect("warm arithmetic recursion");
     let leaf = cached(&ev, "neovm--self-rec");
@@ -73,9 +74,9 @@ fn self_kernel_recursion_executes_directly_and_declined_lookup_keeps_its_result(
     );
     assert_eq!(ev.depth, depth);
     assert_eq!(ev.specpdl.len(), bindings);
-    let result = ev
-        .eval_str(
-            "(progn
+    let result = eval_fixture_program(
+        &mut ev,
+        "(progn
            (defun neovm--self-lookup-run (key table)
              (if (gethash key table)
                  (gethash key table)
@@ -85,8 +86,8 @@ fn self_kernel_recursion_executes_directly_and_declined_lookup_keeps_its_result(
              (puthash 'key 7 table)
              (dotimes (_ 1500) (neovm--self-lookup-run 'key table))
              (neovm--self-lookup-run 'key table)))",
-        )
-        .expect("declined lookup executes");
+    )
+    .expect("declined lookup executes");
     assert_eq!(crate::emacs_core::print::print_value(&result), "7");
     let lookup = cached(&ev, "neovm--self-lookup-run");
     assert_eq!(lookup.abi, LeafAbi::Memory);

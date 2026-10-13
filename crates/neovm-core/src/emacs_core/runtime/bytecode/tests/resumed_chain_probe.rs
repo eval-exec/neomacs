@@ -301,7 +301,7 @@ impl<'a> Vm<'a> {
         }
         let aux_of = |depth: usize| -> (usize, Vec<usize>) {
             let aux = if depth == k {
-                Some(&aux_stack.current)
+                Some(&*aux_stack.current)
             } else {
                 aux_stack
                     .suspended
@@ -310,7 +310,10 @@ impl<'a> Vm<'a> {
                     .map(|suspended| &suspended.state)
             };
             aux.map_or((0, Vec::new()), |aux| {
-                (aux.handlers.len(), aux.bind_stack.iter().copied().collect())
+                (
+                    aux.handlers.len(),
+                    aux.bind_stack.as_slice().iter().copied().collect(),
+                )
             })
         };
         let mut snapshot = Vec::with_capacity(k + 1);
@@ -483,7 +486,7 @@ impl<'a> Vm<'a> {
         // Abandon the driver's frames: the chain owns them now.
         callers.frames.truncate(1);
         aux_stack.suspended.clear();
-        aux_stack.current = InterpreterFrameAux::empty();
+        *aux_stack.current = InterpreterFrameAux::empty();
         aux_stack.current_occupancy = InterpreterFrameAuxOccupancy::KnownEmpty;
 
         let physical = ChainFrame {

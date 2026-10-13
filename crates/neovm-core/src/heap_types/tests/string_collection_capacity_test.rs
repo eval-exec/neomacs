@@ -1,186 +1,165 @@
+//! Observation belongs to the atomic owner header, never to payload capacity.
 use super::LispString;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::tagged::gc::{
+    TaggedHeap, collection_observed, mark_collection_observed, set_tagged_heap,
+};
+use crate::tagged::header::StringObj;
+use crate::tagged::mutate::{set_string_byte_same_char_count, with_lisp_string_mut};
+use crate::tagged::value::TaggedValue;
+use std::sync::atomic::Ordering;
 
-fn encoded_capacity(string: &LispString) -> usize {
-    string.storage_capacity.load(Ordering::Acquire)
+fn string_owner(payload: LispString) -> (Box<TaggedHeap>, TaggedValue) {
+    crate::test_utils::init_test_tracing();
+    let mut heap = Box::new(TaggedHeap::new());
+    set_tagged_heap(&mut heap);
+    let owner = heap.alloc_string(payload);
+    assert!(!collection_observed(owner.bits()));
+    assert!(mark_collection_observed(owner.bits()));
+    (heap, owner)
 }
 
-fn assert_owned_mark(string: &LispString, observed: bool) {
-    let encoded = encoded_capacity(string);
-    assert!(string.has_owned_storage());
-    assert_eq!(
-        encoded & LispString::OWNED_STORAGE_COLLECTION_OBSERVED_MASK != 0,
-        observed
-    );
-    assert_eq!(
-        encoded & !LispString::OWNED_STORAGE_COLLECTION_OBSERVED_MASK,
-        string.owned_capacity()
-    );
-    assert_eq!((encoded as isize) > 0, !observed);
-    assert!(string.owned_capacity() >= string.sbytes() + 1);
-    assert!(string.has_trailing_nul());
+fn assert_owned_string(owner: TaggedValue) {
+    // SAFETY: the retained heap owns this object; no allocation or safepoint intervenes.
+    let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
+    assert!(object.header.collection_observed());
+    assert!(object.data.has_owned_storage());
+    assert_eq!(object.data.storage_capacity, object.data.owned_capacity());
+    assert!(object.data.owned_capacity() >= object.data.sbytes() + 1);
+    assert!(object.data.has_trailing_nul());
 }
 
 #[test]
-fn owned_string_observation_capacity_preserves_layout_and_accounting() {
-    assert_eq!(
-        std::mem::size_of::<AtomicUsize>(),
-        std::mem::size_of::<usize>()
-    );
-    assert_eq!(
-        std::mem::align_of::<AtomicUsize>(),
-        std::mem::align_of::<usize>()
-    );
+fn string_owner_observation_preserves_plain_capacity_and_layout() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(std::mem::offset_of!(LispString, storage_capacity), 32);
         assert_eq!(std::mem::size_of::<LispString>(), 40);
     }
-    let string = LispString::from_unibyte(b"abc".to_vec());
-    let capacity = string.owned_capacity();
-    assert_owned_mark(&string, false);
-    string.mark_owned_storage_collection_observed();
-    assert_owned_mark(&string, true);
-    assert_eq!(string.owned_capacity(), capacity);
-    assert_eq!(string.as_bytes(), b"abc");
-    string.mark_owned_storage_collection_observed();
-    assert_eq!(
-        encoded_capacity(&string),
-        capacity | LispString::OWNED_STORAGE_COLLECTION_OBSERVED_MASK
-    );
+    let payload = LispString::from_unibyte(b"abc".to_vec());
+    let capacity = payload.owned_capacity();
+    let (_heap, owner) = string_owner(payload);
+    // SAFETY: the retained heap owns this live string, and no safepoint intervenes.
+    let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
+    assert_eq!(object.data.storage_capacity, capacity);
+    assert!(!mark_collection_observed(owner.bits()));
+    assert_owned_string(owner);
 }
 
 #[test]
-fn observed_owned_string_capacity_survives_growth_shrink_and_replacement() {
-    let mut string = LispString::from_unibyte(b"abc".to_vec());
-    string.mark_owned_storage_collection_observed();
-    let initial_capacity = string.owned_capacity();
-    string.mutate_bytes(|bytes| bytes.resize(initial_capacity + 1024, b'x'));
-    assert_eq!(&string.as_bytes()[..3], b"abc");
-    assert!(string.owned_capacity() > initial_capacity);
-    assert_owned_mark(&string, true);
-    let grown_capacity = string.owned_capacity();
-    string.mutate_bytes(|bytes| {
-        bytes.truncate(2);
-        bytes.shrink_to_fit();
-    });
-    assert_eq!(string.as_bytes(), b"ab");
-    assert!(string.owned_capacity() < grown_capacity);
-    assert_owned_mark(&string, true);
-    string.set_from_str("replacement");
-    assert_eq!(string.as_bytes(), b"replacement");
-    assert_owned_mark(&string, true);
+fn string_owner_observation_survives_growth_shrink_and_replacement() {
+    let (_heap, owner) = string_owner(LispString::from_unibyte(b"abc".to_vec()));
+    let (_, reads) = crate::tagged::collection_reads::capture(|| owner.as_str_owned());
+    let reads = reads.expect("initial string dependency");
+    with_lisp_string_mut(owner, |string| {
+        let capacity = string.owned_capacity();
+        string.mutate_bytes(|bytes| bytes.resize(capacity + 1024, b'x'));
+        assert!(string.owned_capacity() > capacity);
+    })
+    .unwrap();
+    assert_owned_string(owner);
+    assert!(!reads.unchanged());
+    with_lisp_string_mut(owner, |string| {
+        string.mutate_bytes(|bytes| {
+            bytes.truncate(2);
+            bytes.shrink_to_fit();
+        });
+        assert_eq!(string.as_bytes(), b"ab");
+        string.set_from_str("replacement");
+    })
+    .unwrap();
+    assert_eq!(owner.as_str_owned().as_deref(), Some("replacement"));
+    assert_owned_string(owner);
 }
 
 #[test]
-fn owned_string_guard_preserves_observation_published_during_guard() {
-    let mut string = LispString::from_unibyte(b"abc".to_vec());
-    let initial_capacity = string.owned_capacity();
-    {
-        let mut data = string.owned_data_guard();
-        data.string.mark_owned_storage_collection_observed();
-        data.reserve_exact(initial_capacity + 128);
-    }
-    assert_eq!(string.as_bytes(), b"abc");
-    assert!(string.owned_capacity() > initial_capacity);
-    assert_owned_mark(&string, true);
-}
-
-#[test]
-fn owned_string_guard_unwind_preserves_observation_and_allocation() {
-    let mut string = LispString::from_unibyte(b"abc".to_vec());
-    let initial_capacity = string.owned_capacity();
+fn string_owner_observation_survives_storage_guard_unwind() {
+    let (_heap, owner) = string_owner(LispString::from_unibyte(b"abc".to_vec()));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut data = string.owned_data_guard();
-        data.string.mark_owned_storage_collection_observed();
-        data.reserve_exact(initial_capacity + 128);
-        panic!("unwind the owned storage guard");
+        with_lisp_string_mut(owner, |string| {
+            let capacity = string.owned_capacity();
+            let mut storage = string.owned_data_guard();
+            storage.reserve_exact(capacity + 128);
+            panic!("unwind owned storage guard");
+        });
     }));
     assert!(result.is_err());
-    assert_eq!(string.as_bytes(), b"abc");
-    assert!(string.owned_capacity() > initial_capacity);
-    assert_owned_mark(&string, true);
+    assert_eq!(owner.as_str_owned().as_deref(), Some("abc"));
+    assert_owned_string(owner);
 }
 
 #[test]
-fn observed_owned_string_clone_transfer_and_release_reset_the_mirror() {
-    let mut string = LispString::from_unibyte(b"abc".to_vec());
-    string.mark_owned_storage_collection_observed();
-    let cloned = string.clone();
-    assert_eq!(cloned.as_bytes(), b"abc");
-    assert_owned_mark(&cloned, false);
-    assert_owned_mark(&string, true);
-    string.clear_owned_storage_collection_observed();
-    assert_owned_mark(&string, false);
-    string.mark_owned_storage_collection_observed();
-    // Explicit release exercises masked allocator reconstruction; Drop then
-    // sees zero ownership and must not free the allocation a second time.
-    string.release_owned_storage();
-    assert_eq!(encoded_capacity(&string), 0);
-    assert_eq!(string.owned_capacity(), 0);
-    assert!(!string.has_owned_storage());
-    assert!(string.data.is_null());
-    drop(string);
-    drop(cloned);
+fn borrowed_string_owner_observation_survives_materialization() {
+    let (mut heap, owner) = string_owner(LispString::from_rodata_unibyte(b"abc\0"));
+    let alias = {
+        // SAFETY: the heap owns this live string; borrowing does not run a safepoint.
+        let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
+        assert_eq!(object.data.storage_capacity, 0);
+        object
+            .data
+            .borrowed_alias()
+            .expect("borrowed bytes may alias")
+    };
+    let alias = heap.alloc_string(alias);
+    assert!(
+        !collection_observed(alias.bits()),
+        "new owner has no observation"
+    );
+    let (_, reads) = crate::tagged::collection_reads::capture(|| owner.as_str_owned());
+    let reads = reads.expect("borrowed owner dependency");
+    assert!(set_string_byte_same_char_count(owner, 0, b'x'));
+    assert_eq!(owner.as_str_owned().as_deref(), Some("xbc"));
+    assert_eq!(alias.as_str_owned().as_deref(), Some("abc"));
+    assert!(!reads.unchanged());
+    assert_owned_string(owner);
 }
 
 #[test]
-fn borrowed_string_observation_keeps_raw_zero_and_alias_unmarked() {
-    let mut string = LispString::from_rodata_unibyte(b"abc\0");
-    string.mark_owned_storage_collection_observed();
-    assert_eq!(encoded_capacity(&string), 0);
-    assert_eq!(string.owned_capacity(), 0);
-    assert!(!string.has_owned_storage());
-    let alias = string.borrowed_alias().expect("unmarked borrowed alias");
-    assert_eq!(encoded_capacity(&alias), 0);
-    assert_eq!(alias.as_bytes(), b"abc");
-    string.set_byte_same_char_count(0, b'x');
-    assert_eq!(string.as_bytes(), b"xbc");
-    assert_owned_mark(&string, false);
-    assert_eq!(alias.as_bytes(), b"abc");
+fn string_clone_and_reclamation_keep_observation_on_owner_only() {
+    let (mut heap, owner) = string_owner(LispString::from_unibyte(b"abc".to_vec()));
+    let copy = {
+        // SAFETY: the heap retains this owner while its payload is cloned.
+        let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
+        object.data.clone()
+    };
+    let copy = heap.alloc_string(copy);
+    assert!(!collection_observed(copy.bits()));
+    heap.collect_exact(std::iter::once(copy));
+    // Metadata lookup never dereferences this reclaimed owner's address.
+    assert!(!crate::tagged::gc::collection_observed_metadata(
+        owner.bits()
+    ));
+    assert_eq!(copy.as_str_owned().as_deref(), Some("abc"));
+    assert!(!collection_observed(copy.bits()));
 }
 
 #[test]
-fn borrowed_string_owned_observer_runs_once_before_the_byte_write() {
-    let mut string = LispString::from_rodata_unibyte(b"abc\0");
-    let callbacks = std::cell::Cell::new(0);
-    string.set_byte_same_char_count_with_owned_observer(0, b'x', |owned| {
-        callbacks.set(callbacks.get() + 1);
-        assert_eq!(
-            owned.as_bytes(),
-            b"abc",
-            "conversion precedes the byte write"
-        );
-        assert_owned_mark(owned, false);
-        owned.mark_owned_storage_collection_observed();
+fn string_shared_observers_publish_header_without_touching_capacity() {
+    crate::test_utils::init_test_tracing();
+    let owner = Box::new(StringObj {
+        header: crate::tagged::header::GcHeader::new(crate::tagged::header::HeapObjectKind::String),
+        data: LispString::from_unibyte(b"abc".to_vec()),
     });
-    assert_eq!(callbacks.get(), 1);
-    assert_eq!(string.as_bytes(), b"xbc");
-    assert_owned_mark(&string, true);
-    string.set_byte_same_char_count_with_owned_observer(1, b'y', |_| {
-        panic!("owned byte store must not call the conversion observer");
-    });
-    assert_eq!(callbacks.get(), 1);
-    assert_eq!(string.as_bytes(), b"xyc");
-    assert_owned_mark(&string, true);
-}
-
-#[test]
-fn owned_string_shared_observers_publish_only_the_atomic_mirror() {
-    let string = LispString::from_unibyte(b"abc".to_vec());
-    let capacity = string.owned_capacity();
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+    let capacity = owner.data.storage_capacity;
+    // Derive the published byte from the header's own state transition.
+    // The real owner/metadata publisher is exercised by the mutator-local
+    // tests above; scoped workers share only this header's atomic byte.
+    assert!(owner.header.mark_collection_observed());
+    let observed_mark = owner.header.collection_observed.load(Ordering::Acquire);
+    owner.header.clear_collection_observed();
+    let observation = &owner.header.collection_observed;
     std::thread::scope(|scope| {
         for _ in 0..4 {
-            let capacity_word = &string.storage_capacity;
-            let barrier = std::sync::Arc::clone(&barrier);
             scope.spawn(move || {
-                barrier.wait();
-                LispString::mark_capacity_collection_observed(capacity_word);
+                // AtomicU8 is shared; neither Lisp values nor payload pointers
+                // cross threads, and the parent retains the header until join.
+                for _ in 0..1024 {
+                    observation.fetch_or(observed_mark, Ordering::Release);
+                }
             });
         }
     });
-    assert_eq!(string.owned_capacity(), capacity);
-    assert_eq!(string.as_bytes(), b"abc");
-    assert_owned_mark(&string, true);
+    assert!(owner.header.collection_observed());
+    assert_eq!(owner.data.storage_capacity, capacity);
+    assert_eq!(owner.data.as_bytes(), b"abc");
+    owner.header.clear_collection_observed();
 }

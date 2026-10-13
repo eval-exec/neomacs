@@ -1,5 +1,104 @@
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Build-script-only toolchain metadata. Cargo runs one build script per
+/// target; no Lisp runtime or mutator state is retained here.
+#[derive(Clone, Copy, Debug)]
+enum NativeCompilerFamily {
+    Unix,
+    Msvc,
+}
+
+fn target_native_tool(variable: &str, fallback: &str) -> std::ffi::OsString {
+    let target = std::env::var("TARGET").expect("Cargo target");
+    for name in [
+        format!("{variable}_{target}"),
+        format!("{variable}_{}", target.replace('-', "_")),
+        format!("TARGET_{variable}"),
+        variable.to_owned(),
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+        if let Some(tool) = std::env::var_os(&name) {
+            return tool;
+        }
+    }
+    fallback.into()
+}
+
+/// The bridge uses only standard C and the target C library. Compile with
+/// Cargo's target compiler/archiver, keeping the workspace dependency set
+/// unchanged. Integer promotion remains in C because Rust has no long-double ABI.
+fn compile_float_format(manifest: &Path) {
+    let family = if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        NativeCompilerFamily::Msvc
+    } else {
+        NativeCompilerFamily::Unix
+    };
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output directory"));
+    let source = manifest.join("build_support/float_format.c");
+    let optimization = std::env::var("OPT_LEVEL").expect("Cargo optimization level");
+    let (compiler, archiver, object, library) = match family {
+        NativeCompilerFamily::Unix => (
+            target_native_tool("CC", "cc"),
+            target_native_tool("AR", "ar"),
+            out.join("float_format.o"),
+            out.join("libneovm_float_format.a"),
+        ),
+        NativeCompilerFamily::Msvc => (
+            target_native_tool("CC", "cl"),
+            target_native_tool("AR", "lib"),
+            out.join("float_format.obj"),
+            out.join("neovm_float_format.lib"),
+        ),
+    };
+    let mut compile = Command::new(compiler);
+    match family {
+        NativeCompilerFamily::Unix => {
+            compile
+                .args(["-std=c11", "-fPIC", "-c"])
+                .arg(format!("-O{optimization}"))
+                .arg(&source)
+                .arg("-o")
+                .arg(&object);
+        }
+        NativeCompilerFamily::Msvc => {
+            let mut output = std::ffi::OsString::from("/Fo");
+            output.push(&object);
+            let target_features = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default();
+            let runtime = if target_features
+                .split(',')
+                .any(|feature| feature == "crt-static")
+            {
+                "/MT"
+            } else {
+                "/MD"
+            };
+            compile
+                .args(["/nologo", "/c"])
+                .arg(runtime)
+                .arg(if optimization == "0" { "/Od" } else { "/O2" })
+                .arg(output)
+                .arg(&source);
+        }
+    }
+    let status = compile.status().expect("run target C compiler");
+    assert!(status.success(), "target C compiler failed: {status}");
+    let mut archive = Command::new(archiver);
+    match family {
+        NativeCompilerFamily::Unix => {
+            archive.arg("crs").arg(&library).arg(&object);
+        }
+        NativeCompilerFamily::Msvc => {
+            let mut output = std::ffi::OsString::from("/OUT:");
+            output.push(&library);
+            archive.arg("/nologo").arg(output).arg(&object);
+        }
+    }
+    let status = archive.status().expect("run target archiver");
+    assert!(status.success(), "target archiver failed: {status}");
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=neovm_float_format");
+}
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
 // build generates lives in `build_support/generated_lisp.rs` and is included
@@ -39,12 +138,16 @@ fn main() {
         std::env::var("TARGET").expect("cargo sets TARGET for build scripts")
     );
 
+    // Rust has no C long-double ABI; this bridge retains GNU's exact integer
+    // float conversion instead of narrowing intmax/uintmax to double first.
+    println!("cargo:rerun-if-changed=build_support/float_format.c");
+    compile_float_format(&manifest_dir);
+
     detect_lcms2();
     detect_dbus();
     detect_wkwebview();
     ensure_generated_unicode_lisp(&project_root);
     ensure_generated_charset_lisp(&project_root);
-    generate_x11_color_table(&project_root, &manifest_dir);
 
     // R1c call-bearing AOT: export the host's `neovm_jit_*` shims
     // (`#[unsafe(no_mangle)] pub`, anchored by `JIT_SHIM_ANCHOR`) into the TEST
@@ -71,10 +174,6 @@ fn main() {
             println!("cargo:rustc-link-arg-tests=-Wl,--export-dynamic-symbol={shim}");
         }
     }
-    println!(
-        "cargo:rerun-if-changed={}",
-        project_root.join("etc/rgb.txt").display()
-    );
     println!(
         "cargo:rerun-if-changed={}",
         manifest_dir
@@ -281,73 +380,4 @@ fn lcms2_library_candidates(paths: &[PathBuf]) -> String {
     }
 
     candidates.join(":")
-}
-
-/// Parse etc/rgb.txt and generate a Rust source file with a static
-/// color lookup function. This gives us the full X11 color database
-/// (788 colors including grey0-grey100, DarkGoldenrod, etc.) with
-/// zero runtime file I/O — the table is compiled into the binary.
-fn generate_x11_color_table(project_root: &Path, _manifest_dir: &Path) {
-    let rgb_path = project_root.join("etc/rgb.txt");
-    println!("cargo:rerun-if-changed={}", rgb_path.display());
-
-    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
-    let out_path = out_dir.join("x11_colors.rs");
-
-    let content = fs::read_to_string(&rgb_path).unwrap_or_else(|e| {
-        eprintln!("cargo:warning=Cannot read {}: {}", rgb_path.display(), e);
-        String::new()
-    });
-
-    // Parse rgb.txt: "R G B\t\tColorName"
-    // Collect unique (lowercase_name -> (r, g, b)), also add no-space variants.
-    let mut colors: std::collections::BTreeMap<String, (u8, u8, u8)> =
-        std::collections::BTreeMap::new();
-
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
-            continue;
-        }
-        let mut parts = line.split_whitespace();
-        let r = parts.next().and_then(|s| s.parse::<u8>().ok());
-        let g = parts.next().and_then(|s| s.parse::<u8>().ok());
-        let b = parts.next().and_then(|s| s.parse::<u8>().ok());
-        // Remaining is the color name (may contain spaces)
-        let name: String = parts.collect::<Vec<_>>().join(" ");
-
-        if let (Some(r), Some(g), Some(b)) = (r, g, b)
-            && !name.is_empty()
-        {
-            let lower = name.to_lowercase();
-            let no_spaces = lower.replace(' ', "");
-            colors.entry(lower.clone()).or_insert((r, g, b));
-            if no_spaces != lower {
-                colors.entry(no_spaces).or_insert((r, g, b));
-            }
-        }
-    }
-
-    // Generate Rust source: a function with a match statement.
-    let mut code = String::new();
-    code.push_str("/// Auto-generated from etc/rgb.txt — do not edit.\n");
-    code.push_str("/// X11 color name lookup (case-insensitive).\n");
-    code.push_str("pub fn x11_color_lookup(name: &str) -> Option<(u8, u8, u8)> {\n");
-    code.push_str("    match name.to_lowercase().as_str() {\n");
-    for (name, (r, g, b)) in &colors {
-        code.push_str(&format!(
-            "        {:?} => Some(({}, {}, {})),\n",
-            name, r, g, b
-        ));
-    }
-    code.push_str("        _ => None,\n");
-    code.push_str("    }\n");
-    code.push_str("}\n");
-
-    fs::write(&out_path, &code).expect("Failed to write x11_colors.rs");
-    eprintln!(
-        "cargo:warning=Generated X11 color table: {} entries from {}",
-        colors.len(),
-        rgb_path.display()
-    );
 }

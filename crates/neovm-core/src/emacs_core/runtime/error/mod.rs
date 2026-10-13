@@ -11,9 +11,10 @@ use std::fmt::{self, Display, Formatter};
 use super::intern::{SymId, format_symbol_name_for_diagnostic, intern, resolve_sym};
 use super::print::PrintOptions;
 use super::string_escape::{format_lisp_string_bytes_emacs, format_lisp_string_emacs};
-use super::value::{Value, ValueKind, VecLikeType, get_string_text_properties_for_value};
+use super::value::{Value, ValueKind, VecLikeType};
 use crate::buffer::EmacsBytePos;
 use crate::emacs_core::eval::ResumeTarget;
+use crate::tagged::SymbolMode;
 use crate::window::WindowId;
 use strum::{EnumString, IntoStaticStr};
 
@@ -27,9 +28,10 @@ thread_local! {
 /// reason [`Flow`]'s payloads do: a boundary that holds an `EvalError` while
 /// more Lisp runs is holding Lisp values the precise collector cannot see. An
 /// enum variant cannot have a private FIELD (a variant's fields are as visible
-/// as the enum), so the pin is a field of a type that has no constructor
-/// outside this module — which makes the struct literal unwritable elsewhere
-/// and [`EvalError::signal`] / [`EvalError::uncaught_throw`] the only ways in.
+/// as the enum), so each owning state has no constructor outside this module.
+/// This makes struct literals unwritable elsewhere; [`EvalError::signal`] and
+/// [`EvalError::uncaught_throw`] remain the public constructors. The signal
+/// state also preserves delivery policy and completed handler selection.
 /// Existing `EvalError::Signal { symbol, data, .. }` patterns keep working
 /// unchanged; only construction sites move (DIVERGENCES.md 162).
 #[derive(Clone, Debug)]
@@ -38,12 +40,14 @@ pub enum EvalError {
         symbol: SymId,
         data: Vec<Value>,
         raw_data: Option<Value>,
-        /// Not constructible outside `error.rs`; see the type docs.
-        pin: InFlightRoots,
+        /// Rooted signal state, not constructible outside this module.
+        pin: EvalSignalState,
     },
     UncaughtThrow {
         tag: Value,
         value: Value,
+        /// GNU's selected catch equality survives loader/public boundaries.
+        symbol_mode: crate::tagged::SymbolMode,
         /// Not constructible outside `error.rs`; see the type docs.
         pin: InFlightRoots,
     },
@@ -51,29 +55,69 @@ pub enum EvalError {
     Shutdown(super::eval::ShutdownRequest),
 }
 
+/// Opaque signal state crossing the public error boundary. Its owning pin
+/// covers the payload and any original memory-exhaustion descriptor; delivery
+/// and completed handler selection stay with that pin through a roundtrip.
+/// Private fields prevent construction or extraction of unrooted metadata.
+#[derive(Clone, Debug)]
+pub struct EvalSignalState {
+    roots: InFlightRoots,
+    delivery: SignalDelivery,
+    selected_resume: Option<ResumeTarget>,
+    search_complete: bool,
+}
+
 impl EvalError {
-    /// The only way to build a signal error: pins the symbol and payload as GC
-    /// roots for as long as the error (or any clone of it) lives.
+    /// The only public way to build a signal error: pins the symbol and payload
+    /// as GC roots for as long as the error (or any clone of it) lives.
     pub fn signal(symbol: SymId, data: Vec<Value>, raw_data: Option<Value>) -> Self {
-        let pin = InFlightRoots::pin(
-            std::iter::once(Value::from_sym_id(symbol))
-                .chain(data.iter().copied())
-                .chain(raw_data),
-        );
+        Self::from_signal(SignalData::new(symbol, data, raw_data, false))
+    }
+
+    /// Transfer an existing signal without dropping its owning roots or
+    /// restarting delivery after loader cleanups cross this public boundary.
+    fn from_signal(signal: SignalData) -> Self {
+        let SignalData {
+            symbol,
+            data,
+            raw_data,
+            delivery,
+            selected_resume,
+            search_complete,
+            pin,
+        } = signal;
         Self::Signal {
             symbol,
             data,
             raw_data,
-            pin,
+            pin: EvalSignalState {
+                roots: pin,
+                delivery,
+                selected_resume,
+                search_complete,
+            },
         }
     }
 
     /// The only way to build an uncaught-throw error; pins tag and value.
     pub fn uncaught_throw(tag: Value, value: Value) -> Self {
+        Self::from_throw(ThrowData::new(tag, value))
+    }
+
+    /// Transfer the selected catch equality and owning roots together.
+    /// GNU eval.c:1477 selects the catch before eval.c:1449 unbinds.
+    fn from_throw(thrown: ThrowData) -> Self {
+        let ThrowData {
+            tag,
+            value,
+            symbol_mode,
+            pin,
+        } = thrown;
         Self::UncaughtThrow {
             tag,
             value,
-            pin: InFlightRoots::pin([tag, value]),
+            symbol_mode,
+            pin,
         }
     }
 }
@@ -119,9 +163,35 @@ pub(crate) fn flow_from_eval_error(err: EvalError) -> Flow {
             symbol,
             data,
             raw_data,
-            ..
-        } => Flow::signal_boxed(Box::new(SignalData::new(symbol, data, raw_data, false))),
-        EvalError::UncaughtThrow { tag, value, .. } => Flow::throw(tag, value),
+            pin,
+        } => {
+            let EvalSignalState {
+                roots,
+                delivery,
+                selected_resume,
+                search_complete,
+            } = pin;
+            Flow::signal_boxed(Box::new(SignalData {
+                symbol,
+                data,
+                raw_data,
+                delivery,
+                selected_resume,
+                search_complete,
+                pin: roots,
+            }))
+        }
+        EvalError::UncaughtThrow {
+            tag,
+            value,
+            symbol_mode,
+            pin,
+        } => Flow::from_kind(FlowKind::Throw(Box::new(ThrowData {
+            tag,
+            value,
+            symbol_mode,
+            pin,
+        }))),
         EvalError::Shutdown(request) => Flow::shutdown(request),
     }
 }
@@ -354,6 +424,19 @@ macro_rules! with_signal_result {
 }
 pub(crate) use with_signal_result;
 
+impl Flow {
+    /// Keep GNU's throw-time EQ policy while dynamic bindings unwind.
+    pub(crate) fn throw_with_symbols(
+        tag: Value,
+        value: Value,
+        mode: crate::tagged::SymbolMode,
+    ) -> Self {
+        Self::from_kind(FlowKind::Throw(Box::new(ThrowData::new_with_symbols(
+            tag, value, mode,
+        ))))
+    }
+}
+
 #[cfg(not(feature = "flow-word"))]
 impl Flow {
     /// The only way to build a `throw`: pins `tag` and `value` as GC roots for
@@ -424,11 +507,18 @@ pub(crate) trait InFlightPinned {
     fn in_flight_roots(&self) -> &InFlightRoots;
 }
 
+impl InFlightPinned for EvalSignalState {
+    fn in_flight_roots(&self) -> &InFlightRoots {
+        &self.roots
+    }
+}
+
 /// `(throw TAG VALUE)` in flight.
 #[derive(Clone, Debug)]
 pub struct ThrowData {
     pub tag: Value,
     pub value: Value,
+    symbol_mode: crate::tagged::SymbolMode,
     /// See [`SignalData::pin`]. PRIVATE, so `Flow::throw` is the only way in.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
     pin: InFlightRoots,
@@ -436,8 +526,28 @@ pub struct ThrowData {
 
 impl ThrowData {
     fn new(tag: Value, value: Value) -> Self {
+        Self::new_with_symbols(tag, value, crate::tagged::SymbolMode::Bare)
+    }
+
+    fn new_with_symbols(tag: Value, value: Value, symbol_mode: crate::tagged::SymbolMode) -> Self {
         let pin = InFlightRoots::pin([tag, value]);
-        Self { tag, value, pin }
+        Self {
+            tag,
+            value,
+            symbol_mode,
+            pin,
+        }
+    }
+
+    pub(crate) fn symbol_mode(&self) -> crate::tagged::SymbolMode {
+        self.symbol_mode
+    }
+
+    /// GNU eval.c:1477 selects the catch before unbinding the throwing extent.
+    pub(crate) fn matches_tag(&self, tag: Value) -> bool {
+        self.tag.bits() == tag.bits()
+            || (self.symbol_mode == crate::tagged::SymbolMode::Positioned
+                && self.symbol_mode.unwrap(self.tag).bits() == self.symbol_mode.unwrap(tag).bits())
     }
 }
 
@@ -476,48 +586,136 @@ impl InFlightPinned for ThreadBlockedData {
     }
 }
 
+/// A validated (SYMBOL . DATA) memory-signal-data object, retained unchanged
+/// through GNU's allocation-exhaustion delivery. This copied witness is
+/// confined to its mutator; SignalData pins the object while it is in flight.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MemorySignalBinding {
+    original: Value,
+    symbol: SymId,
+    tail: Value,
+}
+
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub(crate) enum MemorySignalBindingError {
+    #[error("memory-signal-data is not a cons")]
+    NotCons,
+    #[error("memory-signal-data has a non-symbol condition")]
+    NotSymbol,
+}
+
+impl TryFrom<(Value, SymbolMode)> for MemorySignalBinding {
+    type Error = MemorySignalBindingError;
+
+    fn try_from((original, symbol_mode): (Value, SymbolMode)) -> Result<Self, Self::Error> {
+        if !original.is_cons() {
+            return Err(MemorySignalBindingError::NotCons);
+        }
+        let symbol = original
+            .cons_car()
+            .as_symbol_id(symbol_mode)
+            .ok_or(MemorySignalBindingError::NotSymbol)?;
+        Ok(Self {
+            original,
+            symbol,
+            tail: original.cons_cdr(),
+        })
+    }
+}
+
+impl MemorySignalBinding {
+    fn from_signal_parts(symbol: SymId, tail: Value) -> Self {
+        Self {
+            original: Value::cons(Value::from_sym_id(symbol), tail),
+            symbol,
+            tail,
+        }
+    }
+
+    pub(crate) fn original(self) -> Value {
+        self.original
+    }
+}
+
+/// GNU eval.c:1948-1953 distinguishes allocation exhaustion from ordinary
+/// signals and hook-suppressed signals. Memory exhaustion retains the original
+/// error object and permits neither hook nor debugger reentry. This delivery
+/// policy travels with its signal; the memory-exhaustion variant retains
+/// mutator-bound Values whose lifetime is covered by SignalData's pin.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SignalDelivery {
+    Ordinary,
+    HookSuppressed,
+    MemoryExhausted(MemorySignalBinding),
+}
+
 #[derive(Clone, Debug)]
 pub struct SignalData {
     pub symbol: SymId,
     pub data: Vec<Value>,
     /// Original cdr payload when a signal uses non-list data.
     pub raw_data: Option<Value>,
-    pub(crate) suppress_signal_hook: bool,
+    delivery: SignalDelivery,
     pub(crate) selected_resume: Option<ResumeTarget>,
     pub(crate) search_complete: bool,
     /// Keeps `data` and `raw_data` reachable for the collector while this
     /// signal is in flight. PRIVATE on purpose: it is what makes an unrooted
     /// signal payload unrepresentable outside this module — a struct with a
     /// private field cannot be built from a literal elsewhere, so every
-    /// construction site has to go through [`SignalData::new`], which pins.
+    /// construction site has to go through the constructors below, which pin.
     /// See [`InFlightRoots`] for why the pin is needed at all.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
     pin: InFlightRoots,
 }
 
 impl SignalData {
-    /// The only way to build a signal payload: pins `data` and `raw_data` as
-    /// GC roots for as long as the returned value (or any clone of it) lives.
+    /// Compatibility constructor for ordinary or hook-suppressed signals.
+    /// Every constructor pins its payload for the lifetime of this value.
     pub(crate) fn new(
         symbol: SymId,
         data: Vec<Value>,
         raw_data: Option<Value>,
         suppress_signal_hook: bool,
     ) -> Self {
+        let delivery = if suppress_signal_hook {
+            SignalDelivery::HookSuppressed
+        } else {
+            SignalDelivery::Ordinary
+        };
+        Self::new_with_delivery(symbol, data, raw_data, delivery)
+    }
+
+    /// Build a signal with its typed delivery policy, pinning both the payload
+    /// and any original memory-exhaustion binding for the entire signal lifetime.
+    pub(crate) fn new_with_delivery(
+        symbol: SymId,
+        data: Vec<Value>,
+        raw_data: Option<Value>,
+        delivery: SignalDelivery,
+    ) -> Self {
+        let binding = match delivery {
+            SignalDelivery::Ordinary | SignalDelivery::HookSuppressed => None,
+            SignalDelivery::MemoryExhausted(binding) => Some(binding.original()),
+        };
         let pin = InFlightRoots::pin(
             std::iter::once(Value::from_sym_id(symbol))
                 .chain(data.iter().copied())
-                .chain(raw_data),
+                .chain(raw_data)
+                .chain(binding),
         );
         Self {
             symbol,
             data,
             raw_data,
-            suppress_signal_hook,
+            delivery,
             selected_resume: None,
             search_complete: false,
             pin,
         }
+    }
+
+    pub(crate) fn delivery(&self) -> SignalDelivery {
+        self.delivery
     }
 
     /// Resolve the signal symbol name via the interner.
@@ -688,7 +886,7 @@ impl InFlightRoots {
         if value.is_nil() || value.is_t() {
             return;
         }
-        if value.is_heap_object() || value.is_symbol() {
+        if value.is_heap_object() || value.is_bare_symbol() {
             values.push(PinnedWord::of(value));
         }
     }
@@ -825,6 +1023,14 @@ pub(crate) enum LispCondition {
     InvalidRegexp,
     #[strum(serialize = "malformed-keyword-arg-list")]
     MalformedKeywordArgList,
+    #[strum(serialize = "missing-module-init-function")]
+    MissingModuleInitFunction,
+    #[strum(serialize = "module-init-failed")]
+    ModuleInitFailed,
+    #[strum(serialize = "module-not-gpl-compatible")]
+    ModuleNotGplCompatible,
+    #[strum(serialize = "module-open-failed")]
+    ModuleOpenFailed,
     #[strum(serialize = "no-catch")]
     NoCatch,
     #[strum(serialize = "overflow-error")]
@@ -901,6 +1107,24 @@ pub(crate) fn signal(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
     signal_internal_id(symbol.condition_sym(), data, None, false)
 }
 
+/// GNU alloc.c:7474-7477's bootstrap memory exhaustion condition.
+/// Context-aware allocation paths use the live `memory-signal-data` instead.
+#[cold]
+pub(crate) fn memory_exhausted_error() -> Flow {
+    let symbol = LispCondition::Error.condition_sym();
+    let data = vec![Value::string(
+        "Memory exhausted--use M-x save-some-buffers then exit and restart Emacs",
+    )];
+    let tail = Value::list_from_slice(&data);
+    let binding = MemorySignalBinding::from_signal_parts(symbol, tail);
+    Flow::signal_boxed(Box::new(SignalData::new_with_delivery(
+        symbol,
+        data,
+        Some(tail),
+        SignalDelivery::MemoryExhausted(binding),
+    )))
+}
+
 /// Create a signal flow without running `signal-hook-function`.
 pub(crate) fn signal_suppressed(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
     signal_internal_id(symbol.condition_sym(), data, None, true)
@@ -957,12 +1181,8 @@ pub(crate) fn signal_with_data_id(symbol: SymId, data: Value) -> Flow {
 /// Convert internal flow to public EvalError.
 pub fn map_flow(flow: Flow) -> EvalError {
     match flow.into_kind() {
-        FlowKind::Signal(sig) => {
-            // `sig` (and with it the SignalData pin) stays alive until the new
-            // pin is taken, so the payload is never momentarily unrooted.
-            EvalError::signal(sig.symbol, sig.data.clone(), sig.raw_data)
-        }
-        FlowKind::Throw(thrown) => EvalError::uncaught_throw(thrown.tag, thrown.value),
+        FlowKind::Signal(sig) => EvalError::from_signal(*sig),
+        FlowKind::Throw(thrown) => EvalError::from_throw(*thrown),
         FlowKind::Shutdown(request) => EvalError::Shutdown(request),
         FlowKind::ThreadBlocked(blocked) => EvalError::signal(
             intern("error"),
@@ -977,6 +1197,10 @@ pub fn map_flow(flow: Flow) -> EvalError {
 
 /// Build the binding value for condition-case variable: (symbol . data)
 pub(crate) fn make_signal_binding_value(sig: &SignalData) -> Value {
+    match sig.delivery {
+        SignalDelivery::MemoryExhausted(binding) => return binding.original(),
+        SignalDelivery::Ordinary | SignalDelivery::HookSuppressed => {}
+    }
     if let Some(raw) = &sig.raw_data {
         return Value::cons(Value::symbol(sig.symbol), *raw);
     }
@@ -994,8 +1218,38 @@ pub(crate) fn signal_from_binding_value(value: Value) -> Option<Flow> {
     let pair_car = value.cons_car();
     let pair_cdr = value.cons_cdr();
     let tail = pair_cdr;
-    let symbol_id = pair_car.as_symbol_id()?;
+    let symbol_id = pair_car.as_bare_symbol_id()?;
     Some(signal_with_data_id(symbol_id, tail))
+}
+
+/// Deliver GNU alloc.c:4142's live memory-signal-data, keeping its original
+/// error object (including a dotted cdr) and the OOM delivery policy together.
+#[cold]
+pub(crate) fn memory_signal_from_binding_value(value: Value, symbol_mode: SymbolMode) -> Flow {
+    let binding = match MemorySignalBinding::try_from((value, symbol_mode)) {
+        Ok(binding) => binding,
+        // Fsignal turns a nil error symbol and non-cons data into an
+        // ordinary error (GNU eval.c:1924-1925), preserving its raw cdr.
+        Err(MemorySignalBindingError::NotCons) => {
+            return signal_with_data(LispCondition::Error, value);
+        }
+        // For an OOM cons, Fget checks its actual condition designator
+        // (GNU eval.c:1978; fns.c:2653). Validation must not silently replace
+        // an invalid user binding with the bootstrap exhaustion descriptor.
+        Err(MemorySignalBindingError::NotSymbol) => {
+            return signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), value.cons_car()],
+            );
+        }
+    };
+    let data = super::value::list_to_vec(&binding.tail).unwrap_or_else(|| vec![binding.tail]);
+    Flow::signal_boxed(Box::new(SignalData::new_with_delivery(
+        binding.symbol,
+        data,
+        Some(binding.tail),
+        SignalDelivery::MemoryExhausted(binding),
+    )))
 }
 
 /// Format an eval result for the compat test harness (TSV output).
@@ -1037,7 +1291,7 @@ fn format_signal_payload(raw_data: Option<&Value>, data: &[Value]) -> String {
     }
 }
 
-fn format_opaque_handle_in_state(
+pub(crate) fn format_opaque_handle_in_state(
     buffers: &crate::buffer::BufferManager,
     frames: &crate::window::FrameManager,
     threads: &super::threads::ThreadManager,
@@ -1169,8 +1423,7 @@ pub(crate) fn print_options_from_state(
         .is_some_and(|v| v.is_truthy());
     let print_level = obarray
         .value_in_buffer(buf, "print-level")
-        .and_then(|v| v.as_fixnum())
-        .filter(|&n| n >= 0);
+        .and_then(|v| v.as_fixnum());
     let print_length = obarray
         .value_in_buffer(buf, "print-length")
         .and_then(|v| v.as_fixnum())
@@ -1190,7 +1443,7 @@ pub(crate) fn print_options_from_state(
     let print_continuous_numbering = obarray
         .value_in_buffer(buf, "print-continuous-numbering")
         .is_some_and(|v| v.is_truthy());
-    let print_number_table = if print_continuous_numbering {
+    let print_number_table = if print_circle {
         obarray
             .value_in_buffer(buf, "print-number-table")
             .filter(|v| v.is_hash_table())
@@ -1198,6 +1451,12 @@ pub(crate) fn print_options_from_state(
         None
     };
     let mut opts = PrintOptions::new(print_gensym, print_circle, print_level, print_length);
+    opts.charset_text_property = obarray
+        .value_in_buffer(buf, "print-charset-text-property")
+        .map_or(super::print::CharsetTextProperty::Guessable, Into::into);
+    opts.unreadable_function = obarray
+        .value_in_buffer(buf, "print-unreadable-function")
+        .filter(|v| !v.is_nil());
     opts.print_quoted = print_quoted;
     opts.print_symbols_bare = print_symbols_bare;
     opts.print_escape_newlines = print_escape_newlines;
@@ -1317,7 +1576,9 @@ fn format_value_in_state_slow(
             let ls = value.as_lisp_string().expect("checked string");
             if options.print_noescape {
                 crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes())
-            } else if let Some(runs) = get_string_text_properties_for_value(*value) {
+            } else if let Some(runs) =
+                super::print::printed_string_property_runs(*value, options.charset_text_property)
+            {
                 let mut out = String::from("#(");
                 out.push_str(&format_lisp_string_emacs(ls, &options));
                 for run in runs {
@@ -1404,7 +1665,7 @@ enum PrintShorthandSymbol {
 
 impl PrintShorthandSymbol {
     fn from_lisp_value(value: &Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 
     fn string_form(
@@ -1470,7 +1731,7 @@ fn format_list_shorthand_in_state(
         return None;
     }
 
-    if items[0].as_symbol_name() == Some("make-hash-table-from-literal") {
+    if items[0].as_bare_symbol_name() == Some("make-hash-table-from-literal") {
         let payload = quote_payload(&items[1])?;
         return Some(format!(
             "#s{}",
@@ -1532,7 +1793,7 @@ fn format_cons_in_state(
                         m = m.saturating_mul(2);
                         n = m;
                         tortoise = cursor;
-                    } else if cursor == tortoise {
+                    } else if super::value::eq_value(&cursor, &tortoise) {
                         out.push_str(&format!(". #{tortoise_idx}"));
                         truncate_format_object_stack(stack_len);
                         return;
@@ -1613,6 +1874,13 @@ pub(crate) fn format_value_bytes_in_state_with_options(
     options: PrintOptions,
 ) -> Vec<u8> {
     let _print_guard = super::print::enter_print_call(&options);
+    if options.print_noescape
+        && let Some(id) = value.as_buffer_id()
+        && let Some(buffer) = buffers.get(id)
+        && let Some(name) = buffer.name_value().as_lisp_string()
+    {
+        return super::print::princ_string_bytes(name, options.princ_string_output()).into_owned();
+    }
     if let Some(handle) = format_opaque_handle_in_state(buffers, frames, threads, value) {
         return handle.into_bytes();
     }
@@ -1681,10 +1949,12 @@ fn format_string_bytes_in_state(
 ) -> Vec<u8> {
     let ls = value.as_lisp_string().expect("checked string");
     if options.print_noescape {
-        return ls.as_bytes().to_vec();
+        return super::print::princ_string_bytes(ls, options.princ_string_output()).into_owned();
     }
     let str_bytes = format_lisp_string_bytes_emacs(ls, &options);
-    let Some(runs) = get_string_text_properties_for_value(*value) else {
+    let Some(runs) =
+        super::print::printed_string_property_runs(*value, options.charset_text_property)
+    else {
         return str_bytes;
     };
     let mut out = Vec::new();
@@ -1798,7 +2068,7 @@ fn format_list_shorthand_bytes_in_state(
         return None;
     }
 
-    if items[0].as_symbol_name() == Some("make-hash-table-from-literal") {
+    if items[0].as_bare_symbol_name() == Some("make-hash-table-from-literal") {
         let payload = quote_payload(&items[1])?;
         let mut out = Vec::new();
         out.extend_from_slice(b"#s");
@@ -1881,7 +2151,7 @@ fn append_cons_bytes_in_state(
                         m = m.saturating_mul(2);
                         n = m;
                         tortoise = cursor;
-                    } else if cursor == tortoise {
+                    } else if super::value::eq_value(&cursor, &tortoise) {
                         out.extend_from_slice(format!(". #{tortoise_idx}").as_bytes());
                         truncate_format_object_stack(stack_len);
                         return;
@@ -2267,19 +2537,24 @@ impl super::eval::Context {
         data: Value,
         context: Value,
     ) -> Result<(), Flow> {
+        let symbol_mode = self.symbol_mode();
         let context_text = context.as_utf8_str().unwrap_or_default().to_string();
         let rendered = self.error_data_message(data);
         // GNU guards this branch with `!is_minibuffer_quit` (keyboard.c:1064):
         // aborting a minibuffer reports like any other quit but must never take
         // the session down, not even before the first frame is displayed.
         let is_minibuffer_quit = data.is_cons()
-            && data.cons_car().as_symbol_id().is_some_and(|symbol| {
-                super::errors::signal_matches_hierarchical_sym(
-                    &self.obarray,
-                    symbol,
-                    intern("minibuffer-quit"),
-                )
-            });
+            && data
+                .cons_car()
+                .as_symbol_id(symbol_mode)
+                .is_some_and(|symbol| {
+                    super::errors::signal_matches_hierarchical_sym(
+                        &self.obarray,
+                        symbol,
+                        intern("minibuffer-quit"),
+                        self.symbol_mode(),
+                    )
+                });
         if !is_minibuffer_quit && self.noninteractive() {
             eprintln!("{context_text}{rendered}");
             // GNU calls Fkill_emacs (-1) here, which runs kill-emacs-hook and
@@ -2322,3 +2597,11 @@ mod flow_word_tests;
 #[cfg(test)]
 #[path = "tests/flow_word_gc_test.rs"]
 mod flow_word_gc_tests;
+
+#[cfg(test)]
+#[path = "tests/memory_signal_policy_test.rs"]
+mod memory_signal_policy_tests;
+
+#[cfg(test)]
+#[path = "tests/issue554_throw_roundtrip.rs"]
+mod issue554_throw_roundtrip_tests;

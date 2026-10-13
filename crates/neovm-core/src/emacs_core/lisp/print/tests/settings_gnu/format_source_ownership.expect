@@ -1,0 +1,1 @@
+(("Q:Q:tail" "%s:%d:%d" 2) ("Q:tail" "%sX%d") ("Qétail" "%sé%d") ("Qétail" "%Sé%d") ((81 128 116 97 105 108) (37 115 255 37 100)) ("Q|tail" (tag after) (tag after)) ("W:tail" "%S:%d"))

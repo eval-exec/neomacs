@@ -85,8 +85,8 @@ fn mode_line_incremental_fresh_source_and_nested_payload_survive_sibling_gc() {
     );
     assert_eq!(output.value().as_utf8_str(), Some("AB"));
     assert_eq!(
-        eval.obarray.symbol_value("d5-root-evals"),
-        Some(&Value::fixnum(2))
+        eval.obarray.symbol_value_copied("d5-root-evals"),
+        Some(Value::fixnum(2))
     );
     let first = output
         .source_spans()
@@ -166,8 +166,8 @@ fn mode_line_incremental_resolved_symbol_survives_replacement_during_gc() {
     assert_eq!(value.as_utf8_str(), Some("XY"));
     assert_eq!(eval.gc_count, gc + 1);
     assert_eq!(
-        eval.obarray.symbol_value("d5-scalar-format"),
-        Some(&Value::NIL)
+        eval.obarray.symbol_value_copied("d5-scalar-format"),
+        Some(Value::NIL)
     );
     assert_eq!(save_scratch_gc_roots(), before);
 }
@@ -255,7 +255,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
         &[format],
         |form, _| {
             calls.push(*form);
-            if form.is_symbol_named("d5-state-first") {
+            if form.is_bare_symbol_named("d5-state-first") {
                 let fresh = Value::string("C");
                 set_string_text_properties_for_value(
                     fresh,
@@ -276,7 +276,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
                     ]),
                 ]))
             } else {
-                assert!(form.is_symbol_named("d5-state-second"));
+                assert!(form.is_bare_symbol_named("d5-state-second"));
                 eval.gc_collect_exact();
                 Ok(Value::string("B"))
             }

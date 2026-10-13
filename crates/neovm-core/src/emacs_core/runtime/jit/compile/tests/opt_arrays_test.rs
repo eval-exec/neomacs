@@ -25,6 +25,7 @@ struct Settings;
 impl Settings {
     fn enter() -> Self {
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
+        force_opt_profit_for_test(Some(OptProfitMode::Off));
         force_opt_passes_for_test(Some(OptPasses {
             range: true,
             ..OptPasses::default()
@@ -45,6 +46,7 @@ impl Settings {
 impl Drop for Settings {
     fn drop(&mut self) {
         force_opt_for_test(None, None);
+        force_opt_profit_for_test(None);
         force_opt_passes_for_test(None);
         force_tier2_for_test(None);
         crate::emacs_core::jit::feedback::force_feedback_mode_for_test(None);
@@ -70,7 +72,11 @@ fn plan(f: &ByteCodeFunction) -> ir::Func {
     plan_prefix(f, 0)
 }
 fn plan_prefix(f: &ByteCodeFunction, prefix: usize) -> ir::Func {
-    let arity = f.params.required.len();
+    let arity = f
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     let cfg = analyze_cfg(
         f.executable_ops(),
         &f.constants,
@@ -103,7 +109,10 @@ fn lower(f: &ByteCodeFunction, ir: &ir::Func) -> CompiledLeaf {
     let leaf = lower_opt_ir_for_test(
         f.executable_ops(),
         &f.constants,
-        f.params.required.len(),
+        f.params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         f.executable_gnu_byte_offset_map(),
         ir,
     )
@@ -351,7 +360,7 @@ fn opt_range_native_actual_vector_record_arefs_elide_current_bounds_and_keep_err
         let args = [array, index, payload];
         ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
         let expected = tier0(&mut ctx, &f, &args);
-        let expected_side = ctx.obarray.symbol_value("t34-o335-side").copied().unwrap();
+        let expected_side = ctx.obarray.symbol_value_copied("t34-o335-side").unwrap();
         ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
         // Original native errors are checked independently, including existing
         // baseline signal protocol; frame omissions are kept in frozen67 report.
@@ -377,7 +386,7 @@ fn opt_range_native_actual_vector_record_arefs_elide_current_bounds_and_keep_err
         assert_eq!(exit.pc, 4);
         assert_eq!(exit.stack, vec![array, index, payload, array, index]);
         assert_eq!(
-            ctx.obarray.symbol_value("t34-o335-side").copied(),
+            ctx.obarray.symbol_value_copied("t34-o335-side"),
             Some(expected_side)
         );
         let actual = resumed(&mut ctx, &f, &exit);

@@ -44,7 +44,7 @@ fn integer_negative() {
 fn integer_hex() {
     crate::test_utils::init_test_tracing();
     let v = read1("0xFF");
-    assert!(v.is_symbol_named("0xFF"));
+    assert!(v.is_bare_symbol_named("0xFF"));
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn c0_controls_and_no_break_space_separate_atoms_like_gnu() {
     assert_eq!(forms.len(), 2);
     assert_eq!(forms[0].as_number_f64(), Some(19.875));
     assert!(forms[0].is_float());
-    assert!(forms[1].is_symbol_named("tail"));
+    assert!(forms[1].is_bare_symbol_named("tail"));
 }
 
 #[test]
@@ -180,14 +180,14 @@ fn integer_trailing_dot_is_not_a_float() {
 fn symbol_simple() {
     crate::test_utils::init_test_tracing();
     let v = read1("foo");
-    assert!(v.is_symbol_named("foo"));
+    assert!(v.is_bare_symbol_named("foo"));
 }
 
 #[test]
 fn symbol_with_dashes() {
     crate::test_utils::init_test_tracing();
     let v = read1("some-symbol-name");
-    assert!(v.is_symbol_named("some-symbol-name"));
+    assert!(v.is_bare_symbol_named("some-symbol-name"));
 }
 
 #[test]
@@ -208,21 +208,21 @@ fn symbol_nil() {
 fn symbol_escaped() {
     crate::test_utils::init_test_tracing();
     let v = read1(r"a\ b");
-    assert!(v.is_symbol_named("a b"));
+    assert!(v.is_bare_symbol_named("a b"));
 }
 
 #[test]
 fn symbol_escaped_decimal_digits_are_not_numbers() {
     crate::test_utils::init_test_tracing();
     let v = read1(r"\12345678");
-    assert!(v.is_symbol_named("12345678"));
+    assert!(v.is_bare_symbol_named("12345678"));
 }
 
 #[test]
 fn symbol_escaped_hex_digits_are_not_numbers() {
     crate::test_utils::init_test_tracing();
     let v = read1(r"\0xFF");
-    assert!(v.is_symbol_named("0xFF"));
+    assert!(v.is_bare_symbol_named("0xFF"));
 }
 
 // ---------------------------------------------------------------------------
@@ -233,8 +233,8 @@ fn symbol_escaped_hex_digits_are_not_numbers() {
 fn keyword_simple() {
     crate::test_utils::init_test_tracing();
     let v = read1(":foo");
-    assert!(v.is_keyword());
-    let id = v.as_keyword_id().unwrap();
+    assert!(v.is_bare_keyword());
+    let id = v.as_bare_keyword_id().unwrap();
     assert_eq!(resolve_sym(id), ":foo");
 }
 
@@ -242,7 +242,7 @@ fn keyword_simple() {
 fn keyword_bare_colon() {
     crate::test_utils::init_test_tracing();
     let v = read1(":");
-    assert!(v.is_keyword());
+    assert!(v.is_bare_keyword());
 }
 
 // ---------------------------------------------------------------------------
@@ -499,9 +499,9 @@ fn quote_form() {
     // Should be (quote foo)
     assert!(v.is_cons());
     let car = v.cons_car();
-    assert!(car.is_symbol_named("quote"));
+    assert!(car.is_bare_symbol_named("quote"));
     let cadr = v.cons_cdr().cons_car();
-    assert!(cadr.is_symbol_named("foo"));
+    assert!(cadr.is_bare_symbol_named("foo"));
 }
 
 #[test]
@@ -510,7 +510,7 @@ fn backquote_form() {
     let v = read1("`foo");
     assert!(v.is_cons());
     let car = v.cons_car();
-    assert!(car.is_symbol_named("`"));
+    assert!(car.is_bare_symbol_named("`"));
 }
 
 #[test]
@@ -519,7 +519,7 @@ fn unquote_form() {
     let v = read1(",foo");
     assert!(v.is_cons());
     let car = v.cons_car();
-    assert!(car.is_symbol_named(","));
+    assert!(car.is_bare_symbol_named(","));
 }
 
 #[test]
@@ -528,7 +528,7 @@ fn splice_form() {
     let v = read1(",@foo");
     assert!(v.is_cons());
     let car = v.cons_car();
-    assert!(car.is_symbol_named(",@"));
+    assert!(car.is_bare_symbol_named(",@"));
 }
 
 #[test]
@@ -537,9 +537,9 @@ fn function_quote() {
     let v = read1("#'foo");
     assert!(v.is_cons());
     let car = v.cons_car();
-    assert!(car.is_symbol_named("function"));
+    assert!(car.is_bare_symbol_named("function"));
     let cadr = v.cons_cdr().cons_car();
-    assert!(cadr.is_symbol_named("foo"));
+    assert!(cadr.is_bare_symbol_named("foo"));
 }
 
 // ---------------------------------------------------------------------------
@@ -592,11 +592,11 @@ fn dotted_tail_before_unquote_without_whitespace() {
     crate::test_utils::init_test_tracing();
     let v = read1("(a .,_ )");
     assert!(v.is_cons());
-    assert!(v.cons_car().is_symbol_named("a"));
+    assert!(v.cons_car().is_bare_symbol_named("a"));
     let tail = v.cons_cdr();
     assert!(tail.is_cons());
-    assert!(tail.cons_car().is_symbol_named(","));
-    assert!(tail.cons_cdr().cons_car().is_symbol_named("_"));
+    assert!(tail.cons_car().is_bare_symbol_named(","));
+    assert!(tail.cons_cdr().cons_car().is_bare_symbol_named("_"));
 }
 
 #[test]
@@ -604,11 +604,11 @@ fn dotted_tail_before_reader_prefix_without_whitespace() {
     crate::test_utils::init_test_tracing();
     let v = read1("(a .`b)");
     assert!(v.is_cons());
-    assert!(v.cons_car().is_symbol_named("a"));
+    assert!(v.cons_car().is_bare_symbol_named("a"));
     let tail = v.cons_cdr();
     assert!(tail.is_cons());
-    assert!(tail.cons_car().is_symbol_named("`"));
-    assert!(tail.cons_cdr().cons_car().is_symbol_named("b"));
+    assert!(tail.cons_car().is_bare_symbol_named("`"));
+    assert!(tail.cons_cdr().cons_car().is_bare_symbol_named("b"));
 }
 
 #[test]
@@ -622,9 +622,9 @@ fn dot_before_close_paren_is_symbol() {
     crate::test_utils::init_test_tracing();
     let v = read1("(a .)");
     assert!(v.is_cons());
-    assert!(v.cons_car().is_symbol_named("a"));
+    assert!(v.cons_car().is_bare_symbol_named("a"));
     let second = v.cons_cdr().cons_car();
-    assert!(second.is_symbol_named("."));
+    assert!(second.is_bare_symbol_named("."));
     assert!(v.cons_cdr().cons_cdr().is_nil());
 }
 
@@ -634,10 +634,10 @@ fn nested_list() {
     let v = read1("(a (b c))");
     assert!(v.is_cons());
     let car = v.cons_car();
-    assert!(car.is_symbol_named("a"));
+    assert!(car.is_bare_symbol_named("a"));
     let inner = v.cons_cdr().cons_car();
     assert!(inner.is_cons());
-    assert!(inner.cons_car().is_symbol_named("b"));
+    assert!(inner.cons_car().is_bare_symbol_named("b"));
 }
 
 // ---------------------------------------------------------------------------
@@ -674,7 +674,7 @@ fn uninterned_symbol() {
     crate::test_utils::init_test_tracing();
     let v = read1("#:foo");
     // Should be a symbol (uninterned)
-    let name = v.as_symbol_name().unwrap();
+    let name = v.as_bare_symbol_name().unwrap();
     assert_eq!(name, "foo");
 }
 
@@ -682,7 +682,7 @@ fn uninterned_symbol() {
 fn empty_symbol() {
     crate::test_utils::init_test_tracing();
     let v = read1("##");
-    let name = v.as_symbol_name().unwrap();
+    let name = v.as_bare_symbol_name().unwrap();
     assert_eq!(name, "");
 }
 
@@ -793,7 +793,7 @@ fn read_all_skips_autoload_cookie_comment_before_defun() {
         forms[1]
     );
     assert!(
-        forms[1].cons_car().is_symbol_named("defun"),
+        forms[1].cons_car().is_bare_symbol_named("defun"),
         "expected second top-level form to be defun, got {:?}",
         forms[1].cons_car()
     );
@@ -835,7 +835,7 @@ fn defun_form() {
     crate::test_utils::init_test_tracing();
     let v = read1("(defun my-fn (x) (+ x 1))");
     assert!(v.is_cons());
-    assert!(v.cons_car().is_symbol_named("defun"));
+    assert!(v.cons_car().is_bare_symbol_named("defun"));
 }
 
 #[test]
@@ -944,7 +944,7 @@ fn hash_skip_doc_string_lands_after_us_terminator() {
     let form = forms[0];
     assert!(form.is_cons(), "form should be a cons, got {:?}", form);
     assert!(
-        form.cons_car().is_symbol_named("next-form"),
+        form.cons_car().is_bare_symbol_named("next-form"),
         "expected (next-form ...), got car {:?}",
         form.cons_car()
     );
@@ -990,7 +990,7 @@ fn hash_skip_doc_string_handles_high_bit_source_bytes() {
         .expect("read should succeed");
     assert_eq!(forms.len(), 1, "expected exactly one top-level form");
     assert!(
-        forms[0].cons_car().is_symbol_named("window-state-put"),
+        forms[0].cons_car().is_bare_symbol_named("window-state-put"),
         "expected (window-state-put), got car {:?}",
         forms[0].cons_car()
     );
@@ -1006,7 +1006,7 @@ fn hash_caret_reads_char_table_literal() {
     assert!(crate::emacs_core::chartable::is_char_table(&table));
     let ascii = crate::emacs_core::builtins::builtin_aref(vec![table, Value::fixnum(42)])
         .expect("aref should read char-table ASCII slot");
-    assert!(ascii.is_symbol_named("ascii"));
+    assert!(ascii.is_bare_symbol_named("ascii"));
 }
 
 #[test]
@@ -1021,7 +1021,7 @@ fn hash_caret_reads_nested_sub_char_table_literal() {
 
     let letter_a = crate::emacs_core::builtins::builtin_aref(vec![table, Value::fixnum(65)])
         .expect("aref should read nested sub-char-table value");
-    assert!(letter_a.is_symbol_named("letter-a"));
+    assert!(letter_a.is_bare_symbol_named("letter-a"));
 }
 
 #[test]
@@ -1191,7 +1191,7 @@ fn runtime_reader_steps_utf8_emacs_extended_chars_as_single_source_chars() {
         crate::emacs_core::value::list_to_vec(&form).expect("reader should return a proper list");
 
     assert_eq!(items.len(), 3);
-    assert!(items[0].is_symbol_named("list"));
+    assert!(items[0].is_bare_symbol_named("list"));
     assert_eq!(items[1].as_fixnum(), Some(code));
     assert_eq!(items[2].as_fixnum(), Some(1));
 }

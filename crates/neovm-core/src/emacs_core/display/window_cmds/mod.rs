@@ -7,6 +7,9 @@
 //! handles, while legacy integer designators are still accepted in resolver
 //! paths for compatibility.
 
+mod split_request;
+pub(crate) use split_request::SiblingResize;
+
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{SymId, intern, resolve_sym};
 use super::minibuffer::MinibufferManager;
@@ -40,7 +43,7 @@ pub(crate) use redisplay_core_defaults::restore_gnu_configuration_hook_default;
 
 fn navigation_transition_direction(value: Value) -> Result<TransitionDirection, Flow> {
     value
-        .as_symbol_name()
+        .as_bare_symbol_name()
         .and_then(|name| name.parse().ok())
         .ok_or_else(|| {
             signal(
@@ -561,10 +564,51 @@ pub(crate) fn builtin_set_window_new_pixel(
     expect_min_args("set-window-new-pixel", &args, 2)?;
     expect_max_args("set-window-new-pixel", &args, 3)?;
     let window = decode_valid_window_id(eval, args.first())?;
-    let size = expect_int(&args[1])?;
     let add = args.get(2).is_some_and(|value| value.is_truthy());
-    Ok(Value::fixnum(
-        eval.frames.set_window_new_pixel(window, size, add),
+    let operation = if add {
+        crate::window::WindowPixelOperation::Add(
+            crate::tagged::value::Fixnum::try_from(
+                eval.frames.window_new_pixel(window).unwrap_or(0),
+            )
+            .map_err(|error| match error {
+                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            })?,
+        )
+    } else {
+        crate::window::WindowPixelOperation::Set
+    };
+    let (size_min, size_max) = operation.bounds();
+    if !args[1].is_integer() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), args[1]],
+        ));
+    }
+    let integer = args[1].as_fixnum().or_else(|| {
+        args[1]
+            .as_bignum()
+            .and_then(|integer| i64::try_from(integer).ok())
+    });
+    let out_of_range = || {
+        signal(
+            LispCondition::ArgsOutOfRange,
+            vec![
+                args[1],
+                Value::make_int(size_min),
+                Value::make_int(size_max),
+            ],
+        )
+    };
+    let integer = integer.ok_or_else(out_of_range)?;
+    let size = crate::window::WindowPixelStage::try_from((integer, operation)).map_err(
+        |error| match error {
+            crate::window::WindowSizeError::OutOfRange => out_of_range(),
+        },
+    )?;
+    Ok(Value::from_fixnum(
+        eval.frames.set_window_new_pixel(window, size).into(),
     ))
 }
 
@@ -576,11 +620,28 @@ pub(crate) fn builtin_set_window_new_total(
     expect_min_args("set-window-new-total", &args, 2)?;
     expect_max_args("set-window-new-total", &args, 3)?;
     let window = decode_valid_window_id(eval, args.first())?;
-    let size = expect_fixnum(&args[1])?;
-    let add = args.get(2).is_some_and(|value| value.is_truthy());
-    Ok(Value::fixnum(
-        eval.frames.set_window_new_total(window, size, add),
-    ))
+    let size =
+        crate::window::WindowTotal::try_from(expect_fixnum(&args[1])?).map_err(
+            |error| match error {
+                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            },
+        )?;
+    let update = if args.get(2).is_some_and(|value| value.is_truthy()) {
+        crate::window::NewTotalUpdate::Add
+    } else {
+        crate::window::NewTotalUpdate::Replace
+    };
+    let stored = eval
+        .frames
+        .set_window_new_total(window, size, update)
+        .map_err(|error| match error {
+            crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                signal(LispCondition::OverflowError, vec![])
+            }
+        })?;
+    Ok(Value::from_fixnum(stored.into()))
 }
 
 /// `(set-window-new-normal WINDOW &optional SIZE)` -> SIZE.
@@ -646,7 +707,7 @@ fn window_body_unit_from_lisp(value: Option<&Value>) -> WindowBodyUnit {
     match value {
         None => WindowBodyUnit::CanonicalChars,
         Some(value) if value.is_nil() => WindowBodyUnit::CanonicalChars,
-        Some(value) if value.is_symbol_named("remap") => WindowBodyUnit::RemappedChars,
+        Some(value) if value.is_bare_symbol_named("remap") => WindowBodyUnit::RemappedChars,
         Some(_) => WindowBodyUnit::Pixels,
     }
 }
@@ -667,7 +728,7 @@ enum AllFramesSymbol {
 
 impl AllFramesSymbol {
     fn from_lisp_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+        value.as_bare_symbol_name()?.parse().ok()
     }
 }
 
@@ -710,7 +771,7 @@ impl SplitWindowSide {
             return Self::Right;
         }
         value
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .and_then(|name| name.parse().ok())
             .unwrap_or(Self::Below)
     }
@@ -1947,6 +2008,7 @@ pub(crate) fn builtin_neomacs_frame_edges(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_max_args("neomacs-frame-edges", &args, 2)?;
     let fid = resolve_frame_id(
         eval,
@@ -1974,7 +2036,7 @@ pub(crate) fn builtin_neomacs_frame_edges(
 
     if args
         .get(1)
-        .is_some_and(|value| value.is_symbol_named("inner-edges"))
+        .is_some_and(|value| value.is_symbol_named("inner-edges", symbol_mode))
     {
         let border = frame.internal_border_width().max(0);
         left = left.saturating_add(border);
@@ -2440,7 +2502,7 @@ fn is_valid_cursor_type(value: Value) -> bool {
     if matches!(value.kind(), crate::emacs_core::value::ValueKind::Cons) {
         let head_ok = value
             .cons_car()
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .and_then(CursorTypeSymbol::from_symbol_name)
             .is_some_and(CursorTypeSymbol::accepts_width_tail);
         let tail = value.cons_cdr();
@@ -2470,9 +2532,10 @@ pub(crate) fn builtin_set_window_parameter(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("set-window-parameter", &args, 3)?;
     let gnu_filtered_parameter = crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
-        && args[1].as_symbol_id().is_some_and(|parameter| {
+        && args[1].as_symbol_id(symbol_mode).is_some_and(|parameter| {
             eval.obarray.get_property_id(parameter, intern(":filtered")) == Some(Value::T)
         })
         && eval
@@ -2510,7 +2573,7 @@ pub(crate) fn builtin_set_window_parameter(
     // of the buffer-scoped triggers firing. GNU has no such override and so
     // needs no equivalent; here it is a window-scoped dirty event, the same
     // shape as `set-window-start`.
-    if let Some(name) = args[1].as_symbol_name()
+    if let Some(name) = args[1].as_symbol_name(symbol_mode)
         && crate::buffer::buffer::variable_affects_chrome(name)
     {
         eval.mark_chrome_dirty_window(wid);
@@ -3426,11 +3489,9 @@ pub(crate) fn builtin_scroll_left(eval: &mut super::eval::Context, args: Vec<Val
     } else {
         scroll_prefix_value(args.first().unwrap())
     };
-    let mut next = base as i128 + delta as i128;
-    if next < 0 {
-        next = 0;
-    }
-    let next = next.min(i64::MAX as i128) as i64;
+    let next = crate::window::HorizontalScroll::saturating(i128::from(base) + i128::from(delta));
+    let result = Value::from_fixnum(next.into());
+    let next = i64::from(next);
     // GNU `scroll-left` (src/window.c:7113): the optional second argument
     // SET-MINIMUM (non-nil in an interactive call via the `\np` spec) makes
     // the new scroll amount the lower bound for automatic hscrolling.
@@ -3456,7 +3517,7 @@ pub(crate) fn builtin_scroll_left(eval: &mut super::eval::Context, args: Vec<Val
     if next != base {
         eval.gnu_mark_window_redisplay(wid);
     }
-    Ok(Value::fixnum(next))
+    Ok(result)
 }
 /// `(scroll-right &optional SET-MINIMUM ARG)` -> new horizontal scroll amount.
 pub(crate) fn builtin_scroll_right(
@@ -3480,11 +3541,9 @@ pub(crate) fn builtin_scroll_right(
     } else {
         scroll_prefix_value(args.first().unwrap())
     };
-    let mut next = base as i128 - delta as i128;
-    if next < 0 {
-        next = 0;
-    }
-    let next = next.min(i64::MAX as i128) as i64;
+    let next = crate::window::HorizontalScroll::saturating(i128::from(base) - i128::from(delta));
+    let result = Value::from_fixnum(next.into());
+    let next = i64::from(next);
     // GNU `scroll-right` (src/window.c:7139): mirror of scroll-left.
     let set_minimum = args.get(1).is_some_and(|v| !v.is_nil());
     if let Some(Window::Leaf {
@@ -3506,7 +3565,7 @@ pub(crate) fn builtin_scroll_right(
     if next != base {
         eval.gnu_mark_window_redisplay(wid);
     }
-    Ok(Value::fixnum(next))
+    Ok(result)
 }
 /// `(window-vscroll &optional WINDOW PIXELWISE)` -> number.
 ///
@@ -4170,7 +4229,7 @@ pub(crate) fn window_total_height_impl(
         .map(|f| f.char_height)
         .unwrap_or(16.0);
     Ok(Value::fixnum(
-        match args.get(1).and_then(|value| value.as_symbol_name()) {
+        match args.get(1).and_then(|value| value.as_bare_symbol_name()) {
             Some("floor") => (w.bounds().height / ch.max(1.0)).floor() as i64,
             Some("ceiling") => (w.bounds().height / ch.max(1.0)).ceil() as i64,
             _ => window_height_lines(w, ch),
@@ -4201,7 +4260,7 @@ pub(crate) fn window_total_width_impl(
         .map(|f| f.char_width)
         .unwrap_or(8.0);
     Ok(Value::fixnum(
-        match args.get(1).and_then(|value| value.as_symbol_name()) {
+        match args.get(1).and_then(|value| value.as_bare_symbol_name()) {
             Some("floor") => (w.bounds().width / cw.max(1.0)).floor() as i64,
             Some("ceiling") => (w.bounds().width / cw.max(1.0)).ceil() as i64,
             _ => window_width_cols(w, cw),
@@ -4589,14 +4648,10 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
     side: Value,
     normal_size: Value,
     combination_limit: CombinationLimit,
+    sibling_resize: SiblingResize,
 ) -> EvalResult {
     let target = decode_valid_window_in_state(frames, buffers, Some(&window))?;
     let (fid, wid) = (target.frame(), target.window());
-
-    // GNU's `window_point` reads the selected window's live buffer point.  Keep
-    // the leaf cache in sync before cloning the window tree so a same-buffer
-    // split inherits that effective point, not a stale marker value.
-    remember_selected_window_point_in_state(frames, buffers, fid);
 
     // GNU `Fsplit_window_internal` treats SIDE t as `right`, and every value
     // it does not recognise -- nil, `below', an unrelated symbol, a fixnum,
@@ -4612,12 +4667,56 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
         SplitWindowSide::Below | SplitWindowSide::Right => SplitPlacement::AfterTarget,
     };
 
-    // Parse SIZE: positive means new window gets SIZE units, negative means
-    // old window keeps |SIZE| units, nil/0 means 50/50.
-    let size_opt: Option<i64> = match size.kind() {
-        ValueKind::Fixnum(n) if n != 0 => Some(n),
-        _ => None,
-    };
+    // Unlike the high-level `split-window` command, GNU's primitive takes
+    // a positive new-window pixel size. Validate before mutating either tree.
+    let size = expect_fixnum(&size)?;
+    if is_minibuffer_window(frames, fid, wid) {
+        return Err(signal(
+            LispCondition::Error,
+            vec![Value::string("Attempt to split minibuffer window")],
+        ));
+    }
+    let frame = frames.get(fid).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("Cannot split window")],
+        )
+    })?;
+    let request = split_request::SplitRequest::try_from(split_request::SplitRequestInput {
+        frame,
+        old: wid,
+        size,
+        direction,
+        limit: combination_limit,
+        sibling_resize,
+    })
+    .map_err(|error| {
+        // GNU temporarily reduces this staging slot while validating siblings.
+        // A rejected plan changes this slot but never changes physical geometry.
+        match error {
+            split_request::SplitRequestError::NewTooSmall => {}
+            split_request::SplitRequestError::OldResizeFailed => {}
+            split_request::SplitRequestError::SumDoesNotFit => {}
+            split_request::SplitRequestError::ParentResizeFailed { parent, pending } => {
+                if let Some(parent) = frames
+                    .get_mut(fid)
+                    .and_then(|frame| frame.find_window_mut(parent))
+                {
+                    parent.set_new_pixel(Some(i64::from(pending)));
+                }
+            }
+        }
+        signal(LispCondition::Error, vec![Value::string(error.to_string())])
+    })?;
+    if let Some(frame) = frames.get_mut(fid) {
+        request.prepare_tree_split(frame);
+    }
+    let size_opt = Some(request.size());
+
+    // GNU's `window_point` reads the selected window's live buffer point.  Keep
+    // the leaf cache in sync before cloning the window tree so a same-buffer
+    // split inherits that effective point, not a stale marker value.
+    remember_selected_window_point_in_state(frames, buffers, fid);
 
     // Use the same buffer as the window being split.
     let buf_id = {
@@ -4658,7 +4757,7 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
     // sibling, not just the split target, and `window.el' has already staged
     // each sibling's share -- so the primitive must apply that plan instead of
     // computing a layout of its own.
-    frames.apply_staged_split_sizes(fid, new_wid, size_opt, normal_size, direction);
+    frames.apply_staged_split_sizes(fid, new_wid, Some(request.size()), normal_size, direction);
 
     // GNU allocates independent start/point/old-point markers for the new
     // live leaf.  `FrameManager::split_window` intentionally clears marker IDs
@@ -4970,6 +5069,7 @@ pub(crate) fn select_window(
     norecord: Value,
     focus_tracking: FrameFocusTracking,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     // GNU `Fselect_window' does `CHECK_LIVE_WINDOW(window)': an internal
     // (non-leaf) window such as `(window-parent W)' is a valid window but not a
     // *live* one, so selecting it signals `wrong-type-argument window-live-p'.
@@ -4994,7 +5094,7 @@ pub(crate) fn select_window(
         eval.gnu_mark_selection(
             old_selected,
             wid,
-            norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay"),
+            norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay", symbol_mode),
         );
     }
     let (record_selection, run_buffer_list_hook, frame_changed, reset_input_frame) = {
@@ -5069,7 +5169,7 @@ pub(crate) fn select_window(
         // mark-for-redisplay. Temporary hook selection raises SOME through
         // gnu_mark_selection without invalidating retained mode-line output.
         if eval.gnu_redisplay_hooks_policy_enabled() {
-            if norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay") {
+            if norecord.is_nil() || norecord.is_symbol_named("mark-for-redisplay", symbol_mode) {
                 if let Some(old) = old_selected {
                     eval.mark_chrome_dirty_window(old);
                 }
@@ -5684,7 +5784,7 @@ pub(crate) fn parse_frame_size_param(value: Value) -> Option<FrameSizeParam> {
     if value.is_cons()
         && value
             .cons_car()
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .is_some_and(|name| name == "text-pixels")
     {
         return value
@@ -6028,7 +6128,7 @@ fn scroll_lines_in_state(
                 .and_then(|v| v.as_fixnum())
                 .unwrap_or(24);
             let ctx = obarray
-                .symbol_value("next-screen-context-lines")
+                .symbol_value_copied("next-screen-context-lines")
                 .and_then(|v| v.as_fixnum())
                 .unwrap_or(2);
             return -((wh - ctx).max(1) * direction);
@@ -6046,7 +6146,7 @@ fn scroll_lines_in_state(
         .and_then(|v| v.as_fixnum())
         .unwrap_or(24);
     let ctx = obarray
-        .symbol_value("next-screen-context-lines")
+        .symbol_value_copied("next-screen-context-lines")
         .and_then(|v| v.as_fixnum())
         .unwrap_or(2);
     (wh - ctx).max(1) * direction
@@ -6453,6 +6553,7 @@ enum RecenterRedraw {
 
 impl RecenterRedraw {
     fn from_call(eval: &super::eval::Context, args: &[Value]) -> Self {
+        let symbol_mode = eval.symbol_mode();
         let centers_without_prefix = args.first().is_none_or(|arg| arg.is_nil());
         let redisplay_requested = args.get(1).is_some_and(|value| value.is_truthy());
         if !centers_without_prefix || !redisplay_requested {
@@ -6463,7 +6564,7 @@ impl RecenterRedraw {
         if policy.is_nil() {
             return Self::Window;
         }
-        if policy.as_symbol_name() == Some("tty")
+        if policy.as_symbol_name(symbol_mode) == Some("tty")
             && eval
                 .frames
                 .selected_frame()
@@ -6515,8 +6616,10 @@ fn recenter_backward_origin(
             buffer_id, point, ..
         } => {
             if buffers.current_buffer_id() != Some(*buffer_id) {
-                let quoting_style =
-                    crate::emacs_core::coding::effective_text_quoting_style(&eval.obarray);
+                let quoting_style = crate::emacs_core::coding::effective_text_quoting_style(
+                    &eval.obarray,
+                    eval.symbol_mode(),
+                );
                 let message = crate::emacs_core::coding::requote_c_error_message(
                     "`recenter'ing a window that does not display current-buffer",
                     quoting_style,
@@ -6571,14 +6674,14 @@ fn resolve_child_shared_minibuffer(
         return Ok(ChildMinibuffer::Own);
     };
 
-    if minibuffer_param.is_nil() || matches!(minibuffer_param.as_symbol_name(), Some("none")) {
+    if minibuffer_param.is_nil() || matches!(minibuffer_param.as_bare_symbol_name(), Some("none")) {
         return Ok(frames
             .root_frame_id(parent_id)
             .and_then(|root_id| frames.get(root_id))
             .and_then(|root| root.minibuffer_window)
             .map_or(ChildMinibuffer::Own, ChildMinibuffer::Shared));
     }
-    if matches!(minibuffer_param.as_symbol_name(), Some("only")) {
+    if matches!(minibuffer_param.as_bare_symbol_name(), Some("only")) {
         return Ok(ChildMinibuffer::Only);
     }
 
@@ -6648,7 +6751,7 @@ pub(crate) fn make_frame_plain_on_terminal(
             if item.is_cons() {
                 let pair_car = item.cons_car();
                 let pair_cdr = item.cons_cdr();
-                if let Some(key) = pair_car.as_symbol_id() {
+                if let Some(key) = pair_car.as_bare_symbol_id() {
                     all_params.push((pair_car, pair_cdr));
                     match resolve_sym(key) {
                         "width" => {
@@ -6942,7 +7045,7 @@ fn parse_gui_frame_params(value: Option<&Value>) -> ParsedGuiFrameParams {
         };
         let pair_car = item.cons_car();
         let pair_cdr = item.cons_cdr();
-        let Some(key) = pair_car.as_symbol_id() else {
+        let Some(key) = pair_car.as_bare_symbol_id() else {
             continue;
         };
         // GNU frame arguments use assq: prepending an entry overrides older
@@ -7048,6 +7151,7 @@ pub(crate) fn builtin_x_create_frame(
     eval: &mut super::eval::Context,
     mut args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("x-create-frame", &args, 1)?;
     if eval.daemon.is_some() && eval.display_host.is_none() {
         return Err(signal(
@@ -7070,7 +7174,9 @@ pub(crate) fn builtin_x_create_frame(
         (FrameParam::ToolBarLines, "tool-bar-mode"),
     ] {
         let symbol = parameter.symbol();
-        let key = symbol.as_symbol_id().expect("known frame parameter symbol");
+        let key = symbol
+            .as_symbol_id(symbol_mode)
+            .expect("known frame parameter symbol");
         if !explicit.all.contains_key(&key) {
             let value = defaults.all.get(&key).copied().unwrap_or_else(|| {
                 let enabled = explicit.parent_frame.is_none()
@@ -7186,7 +7292,7 @@ pub(crate) fn x_create_frame_impl(
         args.first()
     );
     let explicit_font_value = Value::symbol("font")
-        .as_symbol_id()
+        .as_bare_symbol_id()
         .and_then(|font_key| parsed.all.get(&font_key).copied());
     let explicit_font = explicit_font_value.is_some();
     let parent_id = parsed

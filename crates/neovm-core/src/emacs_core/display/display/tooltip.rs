@@ -107,6 +107,7 @@ pub(super) fn menu_tooltips(
 }
 
 pub(crate) fn builtin_x_show_tip_eval(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     expect_args_range("x-show-tip", &args, 1, 6)?;
     let text = args[0]
         .as_str_owned()
@@ -184,7 +185,7 @@ pub(crate) fn builtin_x_show_tip_eval(ctx: &mut Context, args: Vec<Value>) -> Ev
         if entry.is_cons()
             && let Some(parameter) = entry
                 .cons_car()
-                .as_symbol_name()
+                .as_symbol_name(symbol_mode)
                 .and_then(|name| name.parse::<TooltipParameter>().ok())
         {
             parameter.apply(entry.cons_cdr(), &mut request)?;

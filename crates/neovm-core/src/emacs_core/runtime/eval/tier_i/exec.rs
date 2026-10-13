@@ -706,15 +706,16 @@ impl Context {
     #[cold]
     #[inline(never)]
     fn ti_resolve_alias(&self, func: Value) -> AliasTarget {
-        let Some(alias_id) = func.as_symbol_id() else {
+        let symbol_mode = self.symbol_mode();
+        let Some(alias_id) = func.as_symbol_id(symbol_mode) else {
             return AliasTarget::None;
         };
         let Some(resolved) = self.obarray.indirect_function_id(alias_id) else {
             return AliasTarget::None;
         };
-        if super::super::super::autoload::is_autoload_value(&resolved)
+        if super::super::super::autoload::is_autoload_value(&resolved, self.symbol_mode())
             || resolved.is_macro()
-            || cons_head_symbol_id(&resolved) == Some(macro_symbol())
+            || cons_head_symbol_id(&resolved, self.symbol_mode()) == Some(macro_symbol())
             || !self.function_value_is_callable(&resolved)
         {
             return AliasTarget::None;
@@ -1116,16 +1117,24 @@ impl Context {
             nargs += 1;
             let pair = pairs.get(index);
             index += 1;
+            let root_scope = (!symbol.is_bare_symbol()).then(|| self.save_eval_temp_roots());
+            if root_scope.is_some() {
+                self.push_eval_temp_root(symbol);
+            }
+            let value = match pair {
+                Some(pair) => self.ti_child(act, value_form, &pair.value),
+                None => self.ti_eval_island(act, value_form),
+            };
+            if let Some(scope) = root_scope {
+                self.restore_eval_temp_roots_to_sequence(scope);
+            }
+            let value = value?;
             let symbol = self.unwrap_symbol(symbol);
-            let Some(sym_id) = symbol.as_symbol_id() else {
+            let Some(sym_id) = symbol.as_bare_symbol_id() else {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("symbolp"), symbol],
                 ));
-            };
-            let value = match pair {
-                Some(pair) => self.ti_child(act, value_form, &pair.value)?,
-                None => self.ti_eval_island(act, value_form)?,
             };
             if sym_id == default_directory_symbol()
                 && value.is_string()
@@ -1195,103 +1204,111 @@ impl Context {
         let mut bindings = varlist;
         let mut index = 0;
 
-        // Callbacks may mutate the spine after validation. GNU eval.c:1158
-        // visits at most the original length and stops when it reaches an atom.
+        // GNU computes all initializers before its live binder pass.
+        context.push_eval_temp_root(tail);
         for _ in 0..varlist_len {
             if !bindings.is_cons() {
                 break;
             }
             let element = bindings.cons_car();
-            let binding = context.unwrap_symbol(element);
             bindings = bindings.cons_cdr();
-            // GNU advances before the initializer. A callback may detach this
-            // next cons, so the live cursor must remain rooted across GC.
             context.set_eval_temp_root_slot(bindings_slot, bindings);
-            let compiled = op.bindings.get(index);
+            let compiled = op
+                .bindings
+                .get(index)
+                .filter(|c| c.element.bits() == element.bits());
             index += 1;
-            if let Some(id) = binding.as_symbol_id() {
-                let slot = compiled
-                    .filter(|c| c.element.bits() == element.bits() && c.sym == id)
-                    .map(|c| c.slot);
-                if slot.is_none() {
+            let value = if element.is_symbol(context.symbol_mode()) {
+                Value::NIL
+            } else if element.is_cons() {
+                // A changed symbol invalidates lexical slot assumptions before
+                // its initializer runs, even though CHECK_SYMBOL comes later.
+                let compiled = compiled.filter(|c| {
+                    element.cons_car().as_symbol_id(context.symbol_mode()) == Some(c.sym)
+                });
+                if compiled.is_none() {
                     context.ti_untrust(act);
                 }
-                // A bare binder binds nil, which is never a keyword's own value.
-                if let Some(name) = let_constant_error_name(&context.obarray, id, Value::NIL) {
-                    if constant_binding_error.is_none() {
-                        constant_binding_error = Some(name);
-                    }
-                    continue;
-                }
-                if use_lexical
-                    && !context.obarray.is_special_id(id)
-                    && !context.ti_declared_special(act, id)
-                {
-                    lexical_bindings.push((id, Value::NIL, slot));
-                } else {
-                    dynamic_sym_ids.push((id, Value::NIL));
-                    dynamic_slots.extend(slot);
-                }
-                continue;
-            }
-            if !binding.is_cons() {
-                context.bc_buf.truncate(temps_base);
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), binding],
-                ));
-            }
-            let head = context.unwrap_symbol(binding.cons_car());
-            let Some(id) = head.as_symbol_id() else {
-                context.bc_buf.truncate(temps_base);
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("symbolp"), head],
-                ));
-            };
-            let compiled = compiled.filter(|c| c.element.bits() == element.bits() && c.sym == id);
-            if compiled.is_none() {
-                context.ti_untrust(act);
-            }
-            let mut value_tail = binding.cons_cdr();
-            let value = if value_tail.is_nil() {
-                Value::NIL
-            } else if value_tail.is_cons() {
-                let init_form = value_tail.cons_car();
-                value_tail = value_tail.cons_cdr();
-                if !value_tail.is_nil() {
-                    context.bc_buf.truncate(temps_base);
-                    return Err(signal(
-                        LispCondition::Error,
-                        vec![
-                            Value::string("`let' bindings can have only one value-form"),
-                            binding,
-                        ],
-                    ));
-                }
-                let init = match compiled.and_then(|c| c.init.as_ref()) {
-                    Some(node) => context.ti_child(act, init_form, node),
-                    None => context.ti_eval_island(act, init_form),
-                };
-                match init {
-                    Ok(value) => value,
-                    Err(err) => {
+                let mut value_tail = element.cons_cdr();
+                if value_tail.is_nil() {
+                    Value::NIL
+                } else if value_tail.is_cons() {
+                    let init_form = value_tail.cons_car();
+                    value_tail = value_tail.cons_cdr();
+                    if !value_tail.is_nil() {
                         context.bc_buf.truncate(temps_base);
-                        return Err(err);
+                        return Err(signal(
+                            LispCondition::Error,
+                            vec![
+                                Value::string("`let' bindings can have only one value-form"),
+                                element,
+                            ],
+                        ));
                     }
+                    let init = match compiled.and_then(|c| c.init.as_ref()) {
+                        Some(node) => context.ti_child(act, init_form, node),
+                        None => context.ti_eval_island(act, init_form),
+                    };
+                    match init {
+                        Ok(value) => value,
+                        Err(err) => {
+                            context.bc_buf.truncate(temps_base);
+                            return Err(err);
+                        }
+                    }
+                } else {
+                    context.bc_buf.truncate(temps_base);
+                    return Err(context.listp_error(element));
                 }
             } else {
                 context.bc_buf.truncate(temps_base);
-                return Err(context.listp_error(binding));
+                return Err(context.listp_error(element));
             };
             context.bc_buf.push(value);
+        }
+        if index != op.bindings.len() {
+            context.ti_untrust(act);
+        }
+        let nvars = context.bc_buf.len() - temps_base;
+        bindings = tail.cons_car();
+        for index in 0..nvars {
+            if !bindings.is_cons() {
+                context.ti_untrust(act);
+                break;
+            }
+            let element = bindings.cons_car();
+            bindings = bindings.cons_cdr();
+            let symbol = if element.is_symbol(context.symbol_mode()) {
+                element
+            } else if element.is_cons() {
+                element.cons_car()
+            } else {
+                context.bc_buf.truncate(temps_base);
+                return Err(context.listp_error(element));
+            };
+            let symbol = context.unwrap_symbol(symbol);
+            let Some(id) = symbol.as_bare_symbol_id() else {
+                context.bc_buf.truncate(temps_base);
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("symbolp"), symbol],
+                ));
+            };
+            let slot = op
+                .bindings
+                .get(index)
+                .filter(|c| c.element.bits() == element.bits() && c.sym == id)
+                .map(|c| c.slot);
+            if slot.is_none() {
+                context.ti_untrust(act);
+            }
+            let value = context.bc_buf[temps_base + index];
             if let Some(name) = let_constant_error_name(&context.obarray, id, value) {
                 if constant_binding_error.is_none() {
                     constant_binding_error = Some(name);
                 }
                 continue;
             }
-            let slot = compiled.map(|c| c.slot);
             if use_lexical
                 && !context.obarray.is_special_id(id)
                 && !context.ti_declared_special(act, id)
@@ -1399,6 +1416,7 @@ impl Context {
         val_temp_slot: usize,
         op: &LetOp,
     ) -> Result<(), Flow> {
+        let var_temp_slot = self.push_eval_temp_root_slot(Value::NIL);
         let tortoise_slot = self.push_eval_temp_root_slot(varlist);
         let bindings_slot = self.push_eval_temp_root_slot(varlist);
         let mut bindings = varlist;
@@ -1407,24 +1425,25 @@ impl Context {
         while bindings.is_cons() {
             self.set_eval_temp_root_slot(bindings_slot, bindings);
             let element = bindings.cons_car();
-            let binding = self.unwrap_symbol(element);
+            let binding = element;
             let compiled = op.bindings.get(index);
             index += 1;
-            let (id, value, slot) = if let Some(id) = binding.as_symbol_id() {
+            let (symbol, value, slot) = if binding.is_symbol(self.symbol_mode()) {
+                let id = self
+                    .unwrap_symbol(binding)
+                    .as_bare_symbol_id()
+                    .expect("projected symbol");
                 let slot = compiled
                     .filter(|c| c.element.bits() == element.bits() && c.sym == id)
                     .map(|c| c.slot);
-                (id, Value::NIL, slot)
+                (binding, Value::NIL, slot)
             } else if binding.is_cons() {
-                let head = self.unwrap_symbol(binding.cons_car());
-                let Some(id) = head.as_symbol_id() else {
-                    return Err(signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("symbolp"), head],
-                    ));
-                };
-                let compiled =
-                    compiled.filter(|c| c.element.bits() == element.bits() && c.sym == id);
+                let symbol = binding.cons_car();
+                self.set_eval_temp_root_slot(var_temp_slot, symbol);
+                let compiled = compiled.filter(|c| {
+                    c.element.bits() == element.bits()
+                        && symbol.as_symbol_id(self.symbol_mode()) == Some(c.sym)
+                });
                 if compiled.is_none() {
                     // Before the init runs: it may see this let*'s earlier
                     // binders, whose slots are no longer the compiled ones.
@@ -1452,11 +1471,21 @@ impl Context {
                 } else {
                     return Err(self.listp_error(binding));
                 };
-                (id, value, compiled.map(|c| c.slot))
+                let slot = compiled
+                    .filter(|c| symbol.as_symbol_id(self.symbol_mode()) == Some(c.sym))
+                    .map(|c| c.slot);
+                (symbol, value, slot)
             } else {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("listp"), binding],
+                ));
+            };
+            let symbol = self.unwrap_symbol(symbol);
+            let Some(id) = symbol.as_bare_symbol_id() else {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("symbolp"), symbol],
                 ));
             };
             if slot.is_none() {
@@ -1562,13 +1591,13 @@ impl Context {
                 Ok(dispatched) => Err(Flow::signal_boxed(dispatched)),
                 Err(ref flow)
                     if let Some(thrown) = flow.as_throw()
-                        && eq_value(&tag, &thrown.tag) =>
+                        && thrown.matches_tag(tag) =>
                 {
                     Ok(thrown.value)
                 }
                 Err(flow) => Err(flow),
             },
-            Err(FlowKind::Throw(ref thrown)) if eq_value(&tag, &thrown.tag) => Ok(thrown.value),
+            Err(FlowKind::Throw(ref thrown)) if thrown.matches_tag(tag) => Ok(thrown.value),
             Err(flow) => Err(Flow::from_kind(flow)),
         };
         self.pop_condition_frame();
@@ -1611,6 +1640,7 @@ impl Context {
         tail: Value,
         body_node: &Node,
     ) -> EvalResult {
+        let symbol_mode = self.symbol_mode();
         let nargs = self.value_list_len_or_error(tail)?;
         if nargs < 2 {
             return Err(signal(
@@ -1619,7 +1649,7 @@ impl Context {
             ));
         }
         let var = self.unwrap_symbol(tail.cons_car());
-        let Some(var_id) = var.as_symbol_id() else {
+        let Some(var_id) = var.as_symbol_id(symbol_mode) else {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), var],
@@ -1653,7 +1683,7 @@ impl Context {
                 ));
             }
             let head = handler.cons_car();
-            if !(head.is_symbol() || head.is_symbol_with_pos() || head.is_cons()) {
+            if !(head.is_symbol(symbol_mode) || head.is_cons()) {
                 return Err(signal(
                     "error",
                     vec![Value::string(format!(
@@ -1663,7 +1693,7 @@ impl Context {
                 ));
             }
             let head_unwrapped = self.unwrap_symbol(head);
-            if head_unwrapped.is_symbol_named(":success") {
+            if head_unwrapped.is_symbol_named(":success", symbol_mode) {
                 success_handler_idx = Some(handler_index);
             }
         }

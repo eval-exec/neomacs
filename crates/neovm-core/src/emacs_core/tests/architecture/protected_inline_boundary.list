@@ -48,6 +48,7 @@ never	emacs_core/lisp/native/builtins/symbols.rs	symbol_property_get	run_loop
 never	emacs_core/lisp/native/builtins/types.rs	builtin_equal_2	run_loop
 never	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as Clone>::clone	run_loop
 never	emacs_core/runtime/bytecode/chunk.rs	LazyGnuCode::decode	run_loop,apply1
+never	emacs_core/runtime/bytecode/vm.rs	<InterpreterFrameAuxStack as Drop>::drop	run_loop	# unique auxiliary-owner teardown; semantic unwind boundary, not an inferred protected-neutral tuning hint
 never	emacs_core/runtime/bytecode/vm.rs	Vm::assign_var_id	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::bytecode_depth_exceeded	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_arith_builtin_from_stack_args	run_loop
@@ -55,6 +56,7 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::call_fixed_builtin_direct	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function_debugged	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function_from_stack_args	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::apply_arguments_from_stack	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function_untraced_from_stack	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_resolved_builtin_from_stack_args	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::can_enter_interpreter_frame_iteratively	run_loop
@@ -62,7 +64,6 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::complete_interpreter_frame_chain	run
 never	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_call_builtin_sym	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_vm_builtin_by_id_from_stack	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::fast_path_var_ref	run_loop
-never	emacs_core/runtime/bytecode/vm.rs	Vm::maybe_writeback_mutating_first_arg	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_current_buffer	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_max	run_loop
@@ -70,7 +71,6 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_min	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::osr_transfer	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_stack_call_target	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resume_flow_out_of_line	run_loop
-never	emacs_core/runtime/bytecode/vm.rs	Vm::writeback_mutating_callable_names	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	invalid_bytecode_flow	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	resolve_switch_target	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	trace_invalid_bytecode_site	run_loop
@@ -144,16 +144,14 @@ always	emacs_core/runtime/bytecode/vm.rs	StackCursor::truncate	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::complete_interpreter_frame_value	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_bytecode_tier	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_interpreter_stack_call	run_loop,inline
-always	emacs_core/runtime/bytecode/vm.rs	Vm::enter_bytecode_call_depth	run_loop,inline
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::enter_published_bytecode_call_depth	run_loop,inline	# GNU published-depth entry replaces the old helper; retain its hint pending a new protected census
 always	emacs_core/runtime/bytecode/vm.rs	Vm::install_iterative_interpreter_frame	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::leave_bytecode_call_depth	run_loop,inline
-always	emacs_core/runtime/bytecode/vm.rs	Vm::mutates_first_arg_sym	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::push_dynamic_vm_root	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_interpreter_stack_call_target	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::run_interpreter_driver	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::uses_interpreter_only_tier	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::with_dynamic_vm_roots	run_loop,inline
-always	emacs_core/runtime/bytecode/vm.rs	fillarray_sym_id	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_ge	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_gt	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_le	run_loop,inline
@@ -206,7 +204,7 @@ always	tagged/gc/alloc_region.rs	TaggedHeap::take_cons_cell	run_loop,builtin_map
 always	tagged/gc/allocation.rs	TaggedHeap::alloc_cons	run_loop,inline
 always	tagged/header.rs	ConsCell::set_car	run_loop,builtin_mapcar_2,inline
 always	tagged/header.rs	ConsCell::set_cdr	run_loop,builtin_mapcar_2,inline
-always	tagged/value.rs	TaggedValue::as_symbol_id	run_loop,funcall_general_untraced,inline
+always	tagged/value.rs	TaggedValue::as_bare_symbol_id	run_loop,funcall_general_untraced,inline
 always	tagged/value.rs	TaggedValue::as_veclike_ptr	run_loop,apply1,funcall_general_untraced,builtin_mapcar_2,builtin_mapc_2,mapcar1_with_callee,inline
 always	tagged/value.rs	TaggedValue::cons_car	run_loop,funcall_general_untraced,mapcar1_with_callee,inline
 always	tagged/value.rs	TaggedValue::cons_cdr	run_loop,mapcar1_with_callee,inline
@@ -218,7 +216,7 @@ always	tagged/value.rs	TaggedValue::is_fixnum	run_loop,funcall_general_untraced,
 always	tagged/value.rs	TaggedValue::is_integer	run_loop,inline
 always	tagged/value.rs	TaggedValue::is_nil	run_loop,inline
 always	tagged/value.rs	TaggedValue::is_string	run_loop,inline
-always	tagged/value.rs	TaggedValue::is_symbol	run_loop,inline
+always	tagged/value.rs	TaggedValue::is_bare_symbol	run_loop,inline
 always	tagged/value.rs	TaggedValue::is_truthy	run_loop,inline
 always	tagged/value.rs	TaggedValue::is_veclike	run_loop,apply1,builtin_mapcar_2,builtin_mapc_2,mapcar1_with_callee,inline
 always	tagged/value.rs	TaggedValue::kind	run_loop,funcall_general_untraced,mapcar1_with_callee,inline
@@ -390,7 +388,7 @@ never	emacs_core/runtime/eval/apply.rs	Context::apply_subr_object	funcall_genera
 never	emacs_core/runtime/eval/apply.rs	Context::execute_bytecode_call	funcall_general_untraced
 never	emacs_core/runtime/eval/mod.rs	Context::apply_symbol_callable_untraced	funcall_general_untraced
 always	emacs_core/lisp/autoload/mod.rs	autoload_symbol_id	funcall_general_untraced,inline
-always	tagged/value.rs	TaggedValue::xsymbol_id	funcall_general_untraced,inline
+always	tagged/value.rs	TaggedValue::xbare_symbol_id	funcall_general_untraced,inline
 exempt	emacs_core/lisp/autoload/mod.rs	is_autoload_value	funcall_general_untraced,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/runtime/eval/mod.rs	cons_head_symbol_id	funcall_general_untraced,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 generated	emacs_core/runtime/eval/mod.rs	lambda_symbol	funcall_general_untraced	# generated by cached_symbol_id!(lambda_symbol, ...); checked as a macro invocation
@@ -440,3 +438,24 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::run_loop	root
 exempt	emacs_core/runtime/eval/apply.rs	Context::funcall_general_untraced	root	# protected function, but also inlined at one other site; #[inline(never)] would change that caller
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFunction::new	Vm::run_loop	# called by Vm::run_loop, but leaves no code at the protected site (folded, cfg-gated or debug-only)
 exempt	emacs_core/runtime/bytecode/vm.rs	RunLoopDepthGuard::enter	Vm::run_loop	# called by Vm::run_loop, but leaves no code at the protected site (folded, cfg-gated or debug-only)
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::cons_car_observed	run_loop	# intentional collection-capture slow path; retain #[cold] and #[inline(never)]; the new boundary awaits the lead's protected fat-build comparison
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::cons_cdr_observed	run_loop	# intentional collection-capture slow path; retain #[cold] and #[inline(never)]; the new boundary awaits the lead's protected fat-build comparison
+exempt	tagged/value.rs	TaggedValue::from_fixnum	run_loop,inline	# validated-domain constructor introduced after the reference census; retain #[inline]; extending the pinned subset requires protected pre-LTO comparisons
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::unbind_frame_target	run_loop,inline	# new frame-owned unbind helper outside the reference protected census; retain existing #[inline(always)]; pinning awaits the lead's protected fat-build comparison
+
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::finish_live_bytecode_depth_overflow	run_loop	# GNU rejected-depth dispatch publishes live operands; cold boundary pending a new protected census
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::bytecode_depth_exceeded_published	run_loop	# GNU depth dispatch with already-published operands; cold boundary pending a new protected census
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::check_live_bytecode_call_depth	run_loop	# Scalar depth rejection precedes signal allocation; cold boundary pending a new protected census
+exempt	window/mod.rs	FrameManager::selected_window	run_loop,inline	# new selected-window capture helper outside the reference census; fuse its bounded singleton read into the recorder; body remains scanned and lead fat comparison is required
+exempt	emacs_core/runtime/bytecode/vm.rs	RunLoopCursor::acquire	run_loop	# Round-3 sole-owner phase adds no pointer; retain inline(always), with instruction neutrality subject to the shipping R-access pair
+exempt	emacs_core/runtime/symbol/mod.rs	Obarray::publish_debug_on_next_call_descriptor	apply1,MapCallee::call	# Step-1 owner-coherent writer retirement intentionally separates discovery from publication; its #[inline(always)] is outside the protected-neutral hint subset
+exempt	emacs_core/runtime/bytecode/vm.rs	RunLoopCursor::into_parts	run_loop,inline	# Round-3 partitions the original two-word cursor and affine ZST policy proof; retain inline(always), pending the shipping census
+exempt	emacs_core/runtime/bytecode/vm.rs	RunLoopCursor::publish	run_loop,inline	# Round-3 sealed sole-owner phase; retain inline(always), outside the neutral hint subset until shipping R-access attribution
+exempt	emacs_core/runtime/bytecode/vm.rs	PublishedSolePhase::rejoin	run_loop,inline	# Round-3 sealed sole-owner phase; retain inline(always), outside the neutral hint subset until shipping R-access attribution
+exempt	emacs_core/runtime/bytecode/vm.rs	PublishedSolePhase::finish	run_loop,inline	# Round-3 sealed sole-owner phase; retain inline(always), outside the neutral hint subset until shipping R-access attribution
+
+exempt	emacs_core/lisp/native/builtins/collections.rs	builtin_aref_values_in_state	builtin_aref_2	# GNU policy-bearing accessor introduced by issue554; retain no inline attribute outside the verified protected-neutral subset
+exempt	emacs_core/lisp/native/builtins/cons_list.rs	bytecode_elt_values_in_state	builtin_elt_2	# GNU policy-bearing adapter introduced by issue554; retain no inline attribute pending the protected pre-LTO census
+exempt	emacs_core/runtime/eval/apply.rs	Context::save_specpdl_roots	funcall_general_untraced	# existing root helper reached only by the new positioned-function cold arm; retain existing attributes pending protected codegen census
+exempt	emacs_core/runtime/eval/apply.rs	Context::push_specpdl_root	funcall_general_untraced	# existing root helper reached only by the new positioned-function cold arm; retain existing attributes pending protected codegen census
+exempt	emacs_core/runtime/eval/apply.rs	Context::restore_specpdl_roots	funcall_general_untraced	# existing root helper reached only by the new positioned-function cold arm; retain existing attributes pending protected codegen census

@@ -11,3 +11,15 @@ CARGO_WORKSPACE_DIR = { value = "", relative = true, force = true }
 # stack, so we avoid stacker::maybe_grow (which creates separate mmap
 # segments invisible to the scanner) and use a large stack instead.
 RUST_MIN_STACK = "134217728"
+
+# Start every function on a 64-byte line. The bytecode interpreter's shared
+# dispatch block (36 bytes, a third of all executed VM blocks) is served by the
+# x86 uop cache one 64-byte window per cycle; whenever an unrelated edit moved
+# `Vm::run_loop` by 16 or 32 bytes, that block and several hot handlers began
+# straddling a line, and VM-tier cycles swung -12..+22% at identical
+# instruction counts. With 64-byte function starts, identical function code
+# always lands at the same line offsets. The padding sits between functions and
+# never executes. Cargo joins these flags with any `target.<triple>.rustflags`;
+# a RUSTFLAGS environment variable replaces them, so it must repeat this one.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-Cllvm-args=-align-all-functions=6"]

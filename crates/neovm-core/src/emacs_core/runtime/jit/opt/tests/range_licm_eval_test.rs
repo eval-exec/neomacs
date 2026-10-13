@@ -49,7 +49,7 @@ fn bytecode(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFu
         rest: None,
     });
     source.lexical = true;
-    source.max_stack = 128;
+    source.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(128);
     source.ops = ops;
     source.constants = constants.into();
     source
@@ -57,7 +57,11 @@ fn bytecode(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFu
 
 fn plan(source: &ByteCodeFunction, prefix: usize, osr: Option<(usize, usize)>) -> Func {
     let params = ParamShape {
-        required: source.params.required.len(),
+        required: source
+            .params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         ..ParamShape::default()
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
@@ -193,8 +197,7 @@ fn reset_side(ctx: &mut Context) {
 fn side(ctx: &Context) -> String {
     text(
         ctx.obarray
-            .symbol_value("t34-o335-side")
-            .copied()
+            .symbol_value_copied("t34-o335-side")
             .unwrap_or(LispValue::NIL),
     )
 }

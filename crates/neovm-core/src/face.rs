@@ -17,11 +17,9 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::HashMap;
 use strum::{EnumString, IntoStaticStr};
 
+mod dump_codes;
 mod remapping;
 pub use remapping::{FaceRemapEntry, FaceRemapping};
-
-// X11 color table generated at compile time from etc/rgb.txt
-include!(concat!(env!("OUT_DIR"), "/x11_colors.rs"));
 
 /// Identity of a GNU Lisp face in a frame's lface table.
 ///
@@ -217,28 +215,12 @@ impl RealizedColor {
     /// (16-bit channels) is what Emacs' `color-values`/blend math emits — e.g.
     /// indent-bars' computed bar colors like `#ffff33333333` — and dropping it
     /// left those faces with no foreground (rendered as the default black).
+    ///
+    /// The one implementation of that syntax lives in
+    /// [`neomacs_display_protocol::x11_hex_color`], shared with the XPM decoder:
+    /// a second copy here is how those two came to disagree (issue #545).
     pub fn from_hex(s: &str) -> Option<Self> {
-        let s = s.strip_prefix('#')?;
-        if s.is_empty() || s.len() % 3 != 0 {
-            return None;
-        }
-        let per = s.len() / 3;
-        if per > 4 {
-            return None;
-        }
-        let bits = 4 * per as u32;
-        let channel = |index: usize| -> Option<u8> {
-            let start = index * per;
-            let raw = u16::from_str_radix(&s[start..start + per], 16).ok()?;
-            Some(if bits >= 8 {
-                // Take the most-significant 8 bits (8/12/16-bit channels).
-                (raw >> (bits - 8)) as u8
-            } else {
-                // 4-bit `#RGB`: replicate the nibble so 0xf -> 0xff (== v*17).
-                ((raw << 4) | raw) as u8
-            })
-        };
-        Some(Color::rgb(channel(0)?, channel(1)?, channel(2)?))
+        neomacs_display_protocol::x11_hex_color(s).map(|(r, g, b)| Color::rgb(r, g, b))
     }
 
     /// Convert to "#RRGGBB" hex string.
@@ -246,18 +228,19 @@ impl RealizedColor {
         format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
 
-    /// Named color lookup (common X11/Emacs colors).
+    /// Named color lookup (the X11 `rgb.txt` database GNU resolves names from).
+    ///
+    /// [`neomacs_display_protocol::x11_color_lookup`] is the whole of the
+    /// database, shared with the image decoders that resolve names (XPM `c`
+    /// keys), so a face and an XPM carrying the same name cannot disagree.
     pub fn from_name(name: &str) -> Option<Self> {
-        x11_color_lookup(name).map(|(r, g, b)| Color::rgb(r, g, b))
+        neomacs_display_protocol::x11_color_lookup(name).map(|(r, g, b)| Color::rgb(r, g, b))
     }
 
-    /// Parse a color spec: hex string or named color.
+    /// Parse a color spec the way GNU's color hook does: a numeric form
+    /// (`#`-hex, `rgb:`, `rgbi:`) or a database name.
     pub fn parse(spec: &str) -> Option<Self> {
-        if spec.starts_with('#') {
-            Self::from_hex(spec)
-        } else {
-            Self::from_name(spec)
-        }
+        neomacs_display_protocol::x11_color_value(spec).map(|(r, g, b)| Color::rgb(r, g, b))
     }
 }
 
@@ -634,70 +617,15 @@ impl FontWeight {
     }
 
     pub fn from_dump_code(code: u16) -> Self {
-        match code {
-            100 => Self::Thin,
-            101 => Self::UltraLight,
-            102 => Self::Ultralight,
-            200 => Self::ExtraLight,
-            201 => Self::Extralight,
-            300 => Self::Light,
-            350 => Self::SemiLight,
-            351 => Self::Semilight,
-            352 => Self::Demilight,
-            401 => Self::Regular,
-            400 => Self::Normal,
-            402 => Self::Unspecified,
-            403 => Self::Book,
-            500 => Self::Medium,
-            600 => Self::SemiBold,
-            601 => Self::Semibold,
-            602 => Self::Demibold,
-            603 => Self::DemiBold,
-            604 => Self::Demi,
-            700 => Self::Bold,
-            800 => Self::ExtraBold,
-            801 => Self::Extrabold,
-            802 => Self::UltraBold,
-            803 => Self::Ultrabold,
-            900 => Self::Black,
-            901 => Self::Heavy,
-            950 => Self::UltraHeavy,
-            951 => Self::Ultraheavy,
-            other => Self::from_css_weight(other),
+        // Preserve the legacy CSS-weight fallback for unrecognized alias codes.
+        match dump_codes::FontWeightDumpCode::try_from(code) {
+            Ok(code) => code.into(),
+            Err(_) => Self::from_css_weight(code),
         }
     }
 
     pub fn dump_code(self) -> u16 {
-        match self {
-            Self::Thin => 100,
-            Self::UltraLight => 101,
-            Self::Ultralight => 102,
-            Self::ExtraLight => 200,
-            Self::Extralight => 201,
-            Self::Light => 300,
-            Self::SemiLight => 350,
-            Self::Semilight => 351,
-            Self::Demilight => 352,
-            Self::Regular => 401,
-            Self::Normal => 400,
-            Self::Unspecified => 402,
-            Self::Book => 403,
-            Self::Medium => 500,
-            Self::SemiBold => 600,
-            Self::Semibold => 601,
-            Self::Demibold => 602,
-            Self::DemiBold => 603,
-            Self::Demi => 604,
-            Self::Bold => 700,
-            Self::ExtraBold => 800,
-            Self::Extrabold => 801,
-            Self::UltraBold => 802,
-            Self::Ultrabold => 803,
-            Self::Black => 900,
-            Self::Heavy => 901,
-            Self::UltraHeavy => 950,
-            Self::Ultraheavy => 951,
-        }
+        u16::from(dump_codes::FontWeightDumpCode::from(self))
     }
 
     pub fn gnu_numeric(self) -> u16 {
@@ -982,7 +910,7 @@ fn face_symbol_value(name: &str) -> Value {
 }
 
 fn normalized_face_name_value(value: &Value) -> Option<Value> {
-    if let Some(name) = value.as_symbol_name() {
+    if let Some(name) = value.as_bare_symbol_name() {
         Some(face_symbol_value(name))
     } else if value.is_string() {
         value
@@ -1235,12 +1163,12 @@ impl Face {
                     }
                 }
                 "weight" => {
-                    if let Some(s) = val.as_symbol_name() {
+                    if let Some(s) = val.as_bare_symbol_name() {
                         face.weight = FontWeight::from_symbol(s);
                     }
                 }
                 "slant" => {
-                    if let Some(s) = val.as_symbol_name() {
+                    if let Some(s) = val.as_bare_symbol_name() {
                         face.slant = FontSlant::from_symbol(s);
                     }
                 }
@@ -1282,7 +1210,7 @@ impl Face {
                     // `merge_face_ref` (xfaces.c:2960-2980) which accepts
                     // any face_ref — symbol, list, or plist — and defers
                     // type dispatch to the recursive resolver.
-                    face.inherit = if val.is_nil() || val.is_symbol_named("nil") {
+                    face.inherit = if val.is_nil() || val.is_bare_symbol_named("nil") {
                         None
                     } else {
                         Some(*val)
@@ -1302,7 +1230,7 @@ impl Face {
                     }
                 }
                 "width" => {
-                    if let Some(s) = val.as_symbol_name() {
+                    if let Some(s) = val.as_bare_symbol_name() {
                         face.width = FontWidth::from_symbol(s);
                     }
                 }
@@ -1311,7 +1239,7 @@ impl Face {
                     // cons, a bitmap file name, or a symbol. Realized to a
                     // `StipplePattern` in the layout bridge, mirroring GNU's
                     // `LFACE_STIPPLE_INDEX`.
-                    face.stipple = if val.is_nil() || val.is_symbol_named("nil") {
+                    face.stipple = if val.is_nil() || val.is_bare_symbol_named("nil") {
                         None
                     } else {
                         Some(*val)
@@ -1339,7 +1267,11 @@ pub(crate) enum DecorationProperty {
 
 impl DecorationProperty {
     pub(crate) fn from_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.trim_start_matches(':').parse().ok()
+        value
+            .as_bare_symbol_name()?
+            .trim_start_matches(':')
+            .parse()
+            .ok()
     }
 
     pub(crate) fn applies_to(self, attribute: LFaceAttr) -> bool {
@@ -1399,7 +1331,7 @@ fn parse_underline_value(
                             .and_then(|spec| realize_color_spec(spec, palette));
                     }
                     Some(DecorationProperty::Style) => {
-                        if let Some(name) = item.as_symbol_name() {
+                        if let Some(name) = item.as_bare_symbol_name() {
                             style =
                                 UnderlineStyle::from_symbol(name).unwrap_or(UnderlineStyle::Line);
                         }
@@ -1476,7 +1408,7 @@ fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
                         color = parse_color_value(item);
                     }
                     Some(DecorationProperty::Style) => {
-                        if let Some(name) = item.as_symbol_name() {
+                        if let Some(name) = item.as_bare_symbol_name() {
                             style = BoxStyle::from_symbol(name).unwrap_or(BoxStyle::Flat);
                         }
                     }
@@ -1490,7 +1422,7 @@ fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
                 style,
             })
         }
-        _ if value.is_symbol_named("unspecified") => FaceDecoration::Unspecified,
+        _ if value.is_bare_symbol_named("unspecified") => FaceDecoration::Unspecified,
         _ => FaceDecoration::Unspecified,
     }
 }
@@ -1995,10 +1927,10 @@ impl FaceTable {
         if depth > 40 {
             return Face::default();
         }
-        if face_ref.is_nil() || face_ref.is_symbol_named("nil") {
+        if face_ref.is_nil() || face_ref.is_bare_symbol_named("nil") {
             return Face::default();
         }
-        if let Some(name) = face_ref.as_symbol_name() {
+        if let Some(name) = face_ref.as_bare_symbol_name() {
             return self.resolve_depth(name, depth);
         }
         let Some(items) = crate::emacs_core::value::list_to_vec(&face_ref) else {
@@ -2008,7 +1940,7 @@ impl FaceTable {
             return Face::default();
         }
         let first_is_keyword = items[0]
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .is_some_and(|s| s.starts_with(':'));
         if first_is_keyword {
             // Attribute plist. Parse own attributes, then recursively
@@ -2055,7 +1987,7 @@ impl FaceTable {
     pub fn face_list(&self) -> Vec<String> {
         self.faces
             .keys()
-            .filter_map(|value| value.as_symbol_name().map(str::to_string))
+            .filter_map(|value| value.as_bare_symbol_name().map(str::to_string))
             .collect()
     }
 
@@ -2072,7 +2004,7 @@ impl FaceTable {
     pub(crate) fn dump_faces_by_sym_id(&self) -> Vec<(SymId, Face)> {
         self.faces
             .iter()
-            .filter_map(|(name, face)| name.as_symbol_id().map(|id| (id, face.clone())))
+            .filter_map(|(name, face)| name.as_bare_symbol_id().map(|id| (id, face.clone())))
             .collect()
     }
 

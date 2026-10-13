@@ -1461,7 +1461,7 @@ impl ResizeMiniWindowsMode {
             return Self::Disabled;
         }
         value
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .and_then(|name| name.parse().ok())
             .unwrap_or(Self::Exact)
     }
@@ -1540,8 +1540,7 @@ fn eval_status_line_format_output(
                     // Fall back to the global default
                     evaluator
                         .obarray()
-                        .symbol_value(format_symbol)
-                        .copied()
+                        .symbol_value_copied(format_symbol)
                         .unwrap_or(Value::NIL)
                 })
         });
@@ -1587,11 +1586,14 @@ fn eval_status_line_format_output(
     }
 }
 
-fn tab_bar_menu_item(entry: Value) -> Option<(Value, Value, Value, Value)> {
+fn tab_bar_menu_item(
+    entry: Value,
+    symbol_mode: neovm_core::tagged::SymbolMode,
+) -> Option<(Value, Value, Value, Value)> {
     if let Some(items) = list_to_vec(&entry)
         && items
             .get(1)
-            .is_some_and(|value| KeymapMarker::MenuItem.is_value(*value))
+            .is_some_and(|value| KeymapMarker::MenuItem.is_value(*value, symbol_mode))
     {
         let caption = *items.get(2)?;
         let binding = *items.get(3)?;
@@ -1612,7 +1614,7 @@ fn tab_bar_menu_item(entry: Value) -> Option<(Value, Value, Value, Value)> {
     let items = list_to_vec(&pair_cdr)?;
     if !items
         .first()
-        .is_some_and(|value| KeymapMarker::MenuItem.is_value(*value))
+        .is_some_and(|value| KeymapMarker::MenuItem.is_value(*value, symbol_mode))
     {
         return None;
     }
@@ -1634,7 +1636,7 @@ fn tab_bar_item_enabled(evaluator: &mut Context, plist: Value) -> bool {
     };
     items
         .chunks_exact(2)
-        .find(|pair| MenuItemProperty::Enable.is_value(pair[0]))
+        .find(|pair| MenuItemProperty::Enable.is_value(pair[0], evaluator.symbol_mode()))
         .map(|pair| {
             evaluator
                 .eval_form(pair[1])
@@ -1715,15 +1717,17 @@ impl TabBarDisplaySource {
         let keymap_entries = list_to_vec(&keymap)?;
         let mut display_entries = Vec::new();
         for (index, entry) in keymap_entries.iter().enumerate() {
-            if index == 0 && KeymapMarker::Keymap.is_value(*entry) {
+            if index == 0 && KeymapMarker::Keymap.is_value(*entry, evaluator.symbol_mode()) {
                 continue;
             }
 
-            if is_list_keymap(entry) {
+            if is_list_keymap(entry, evaluator.symbol_mode()) {
                 break;
             }
 
-            if let Some((key, caption, binding, plist)) = tab_bar_menu_item(*entry) {
+            if let Some((key, caption, binding, plist)) =
+                tab_bar_menu_item(*entry, evaluator.symbol_mode())
+            {
                 display_entries.push(TabBarDisplayEntry {
                     caption,
                     key,
@@ -2331,7 +2335,7 @@ pub(crate) fn tab_bar_presented_pointer_plan(
                 hover: PointerDrawMode::Face(*mouse_face_id),
                 pressed: PointerDrawMode::Face(*mouse_face_id),
             })
-        } else if item.key.as_symbol_name() == Some("add-tab") {
+        } else if item.key.as_bare_symbol_name() == Some("add-tab") {
             last_mouse_face = None;
             let identity = *relief_by_item.entry(item_index).or_insert_with(|| {
                 let identity = PointerAppearanceRangeId::new(next_appearance);
@@ -2409,8 +2413,7 @@ pub(crate) fn build_tab_bar_display(
 pub(crate) fn max_mini_window_lines(evaluator: &Context, frame_rows: f32) -> f32 {
     let raw = evaluator
         .obarray()
-        .symbol_value("max-mini-window-height")
-        .copied()
+        .symbol_value_copied("max-mini-window-height")
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }
@@ -2424,8 +2427,7 @@ pub(crate) fn max_mini_window_lines_for_buffer<B: LayoutBufferView>(
         .or_else(|| {
             evaluator
                 .obarray()
-                .symbol_value("max-mini-window-height")
-                .copied()
+                .symbol_value_copied("max-mini-window-height")
         })
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)

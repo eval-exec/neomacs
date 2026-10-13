@@ -169,11 +169,16 @@ fn collect_space_image_operands(
     if depth > 256 || !value.is_cons() {
         return;
     }
-    if value.cons_car().is_symbol_named("image")
+    if value.cons_car().is_bare_symbol_named("image")
+        // The size path has only the face in hand: nothing is decoded from this
+        // context, it keys the catalog lookup, so the face stands in for the
+        // frame foreground it cannot name.
+
         && let Some(layout) = crate::display_spec::parse_display_image_layout(
             value,
             inputs.default_fg,
             inputs.default_bg,
+            inputs.default_fg,
         )
         && let Some(catalog) = inputs.catalog.as_ref()
     {
@@ -418,7 +423,7 @@ pub fn calc_pixel_width_or_height(
     }
 
     // GNU xdisp.c:30131 — symbol branch
-    if prop.is_symbol() {
+    if prop.is_bare_symbol() {
         return calc_symbol(ctx, prop, width_p, align_to, lnum_pixel_width);
     }
 
@@ -461,7 +466,7 @@ fn calc_symbol(
     mut align_to: Option<&mut i32>,
     _lnum_pixel_width: f64,
 ) -> Option<f64> {
-    let name = prop.as_symbol_name()?;
+    let name = prop.as_bare_symbol_name()?;
 
     // GNU xdisp.c:30133 — two-character unit symbols (in, mm, cm).
     if let Some(unit) = PixelCalcUnit::from_symbol_name(name) {
@@ -668,7 +673,7 @@ fn calc_cons(
     let cdr_raw = prop.cons_cdr();
 
     // GNU xdisp.c:30254 — `SYMBOLP (car)` branch
-    if let Some(head_name) = car.as_symbol_name() {
+    if let Some(head_name) = car.as_bare_symbol_name() {
         let head = PixelCalcConsHead::from_symbol_name(head_name);
         // GNU xdisp.c:30261 — `(image PROPS...)`. Requires image
         // infrastructure; return placeholder width.

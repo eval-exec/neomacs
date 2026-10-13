@@ -66,7 +66,7 @@ impl DisplayWhenConditions {
         if form.is_nil() {
             return DisplayWhenVerdict::Fails;
         }
-        if form.is_symbol_named("t") {
+        if form.is_bare_symbol_named("t") {
             return DisplayWhenVerdict::Holds;
         }
         match self {
@@ -349,7 +349,7 @@ fn collect_when_forms(
     specs.for_each(|spec| {
         if let Some((form, _)) = display_spec_when_parts(spec)
             && !form.is_nil()
-            && !form.is_symbol_named("t")
+            && !form.is_bare_symbol_named("t")
         {
             sites.push(DisplayWhenSite {
                 property: value,

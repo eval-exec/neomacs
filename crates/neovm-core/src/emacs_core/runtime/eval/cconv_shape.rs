@@ -217,7 +217,7 @@ impl FactsBuilder {
     }
 
     fn note(&mut self, value: Value, occurrence: Occurrence) -> Result<(), FactsRefusal> {
-        let Some(id) = value.as_symbol_id() else {
+        let Some(id) = value.as_bare_symbol_id() else {
             return Ok(());
         };
         if value.is_nil() {
@@ -331,7 +331,7 @@ impl ClosureFacts {
                     let head_id = if head.is_nil() {
                         None
                     } else {
-                        head.as_symbol_id()
+                        head.as_bare_symbol_id()
                     };
                     match head_id {
                         Some(id) if id == quote_symbol() => {}
@@ -342,7 +342,8 @@ impl ClosureFacts {
                                 Value::NIL
                             };
                             if target.is_cons()
-                                && target.cons_car().as_symbol_id() == Some(lambda_shape_symbol())
+                                && target.cons_car().as_bare_symbol_id()
+                                    == Some(lambda_shape_symbol())
                             {
                                 let lambda_rest = target.cons_cdr();
                                 if lambda_rest.is_cons() {
@@ -429,9 +430,9 @@ impl EnvSummary {
                 if var.is_nil() {
                     return None;
                 }
-                summary.lex.push(var.as_symbol_id()?);
+                summary.lex.push(var.as_bare_symbol_id()?);
             } else if !entry.is_nil() {
-                summary.dynamic.push(entry.as_symbol_id()?);
+                summary.dynamic.push(entry.as_bare_symbol_id()?);
             } else {
                 return None;
             }

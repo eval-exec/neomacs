@@ -81,8 +81,7 @@ fn assert_accumulated_property_survives(
         .expect("install rooted mode-line format");
     let format = eval
         .obarray
-        .symbol_value("u34-mode-line-gc-format")
-        .copied()
+        .symbol_value_copied("u34-mode-line-gc-format")
         .expect("installed mode-line format");
     let before = eval.gc_count;
     let (rendered, sources) = match entry {

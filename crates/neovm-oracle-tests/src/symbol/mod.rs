@@ -13,3 +13,19 @@ mod properties_advanced;
 mod property_semantics;
 mod value_edge_semantics;
 mod with_pos_semantics;
+
+mod issue554_positioned;
+
+mod issue554_runtime_boundaries;
+
+mod issue554_control;
+
+mod issue554_final_boundaries;
+
+mod issue554_elt;
+
+mod issue554_charset_dispatch;
+
+mod issue554_function_policy;
+
+mod issue554_throw_load;

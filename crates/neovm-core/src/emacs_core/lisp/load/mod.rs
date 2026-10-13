@@ -77,7 +77,7 @@ fn load_hist_file_name(
     let found_effective = load_found_effective(found);
     if !eval
         .obarray()
-        .symbol_value("purify-flag")
+        .symbol_value_copied("purify-flag")
         .is_some_and(|value| value.is_truthy())
     {
         return found_effective;
@@ -113,7 +113,7 @@ fn load_hist_file_name(
 fn record_preloaded_file(eval: &mut super::eval::Context, requested: &LispString) {
     if !eval
         .obarray()
-        .symbol_value("purify-flag")
+        .symbol_value_copied("purify-flag")
         .is_some_and(|value| value.is_truthy())
     {
         return;
@@ -127,8 +127,7 @@ fn record_preloaded_file(eval: &mut super::eval::Context, requested: &LispString
     // just above.
     let list = eval
         .obarray()
-        .symbol_value("preloaded-file-list")
-        .cloned()
+        .symbol_value_copied("preloaded-file-list")
         .unwrap_or(Value::NIL);
     eval.push_specpdl_root(list);
     let updated = Value::cons(entry, list);
@@ -331,7 +330,11 @@ fn should_log_load_form_error(eval: &super::eval::Context, err: &EvalError) -> b
         EvalError::Signal { .. } => true,
         // A shutdown is the normal end of a dump run, not a load failure.
         EvalError::Shutdown(_) => false,
-        EvalError::UncaughtThrow { tag, .. } => !eval.has_active_catch(tag),
+        EvalError::UncaughtThrow {
+            tag, symbol_mode, ..
+        } => eval
+            .matching_catch_resume_with_symbols(tag, *symbol_mode)
+            .is_none(),
     }
 }
 
@@ -508,7 +511,7 @@ fn cached_form_requires_eager_replay(form: Value) -> bool {
     form.is_cons()
         && form
             .cons_car()
-            .as_symbol_name()
+            .as_bare_symbol_name()
             .is_some_and(|name| matches!(name, "eval-and-compile" | "eval-when-compile"))
 }
 
@@ -540,10 +543,11 @@ fn try_eval_generated_loaddefs_form(
     eval: &mut super::eval::Context,
     form: Value,
 ) -> Result<Option<Value>, EvalError> {
+    let symbol_mode = eval.symbol_mode();
     let Some(items) = list_to_vec(&form) else {
         return Ok(None);
     };
-    let Some(head_sym) = items.first().and_then(|v| v.as_symbol_name()) else {
+    let Some(head_sym) = items.first().and_then(|v| v.as_symbol_name(symbol_mode)) else {
         return Ok(None);
     };
     let tail = &items[1..];
@@ -660,12 +664,14 @@ pub(crate) struct LoadSuffixPlan {
 impl LoadSuffixPlan {
     pub(crate) fn from_obarray(obarray: &super::symbol::Obarray) -> Result<Self, Flow> {
         let suffixes = strict_load_suffix_list(
-            obarray.symbol_value("load-suffixes"),
+            obarray.symbol_value_copied("load-suffixes").as_ref(),
             "load-suffixes",
             Some(default_load_suffixes()),
         )?;
         let representations = strict_load_suffix_list(
-            obarray.symbol_value("load-file-rep-suffixes"),
+            obarray
+                .symbol_value_copied("load-file-rep-suffixes")
+                .as_ref(),
             "load-file-rep-suffixes",
             Some(vec![Vec::new()]),
         )?;
@@ -674,8 +680,7 @@ impl LoadSuffixPlan {
         // value so irrelevant members (and even an otherwise-invalid value)
         // do not affect ordinary Elisp suffixes.
         let compressed_representations = obarray
-            .symbol_value("jka-compr-load-suffixes")
-            .copied()
+            .symbol_value_copied("jka-compr-load-suffixes")
             .unwrap_or(Value::NIL);
 
         let mut required = Vec::with_capacity(suffixes.len() * representations.len());
@@ -984,7 +989,7 @@ pub(crate) fn resolve_load_path_file_in_state(
         LoadCandidates::AppendSuffixes(suffixes) => (false, suffixes),
     };
     let prefer_newer = obarray
-        .symbol_value("load-prefer-newer")
+        .symbol_value_copied("load-prefer-newer")
         .is_some_and(|value| value.is_truthy());
     let load_path = get_load_path(obarray, buf);
 
@@ -1064,8 +1069,7 @@ pub fn get_load_path(
         .unwrap_or_else(|| LispString::from_unibyte(b".".to_vec()));
 
     let val = obarray
-        .symbol_value("load-path")
-        .cloned()
+        .symbol_value_copied("load-path")
         .unwrap_or(Value::NIL);
     super::value::list_to_vec(&val)
         .unwrap_or_default()
@@ -1586,12 +1590,15 @@ fn eager_expansion_falls_back(flow: &Flow) -> bool {
 /// into errors, which propagate (see [`EagerExpansionFailure`]).
 #[tracing::instrument(level = "debug", skip(eval))]
 pub(crate) fn get_eager_macroexpand_fn(eval: &super::eval::Context) -> Option<Value> {
+    let symbol_mode = eval.symbol_mode();
     // Respect the Elisp `macroexp--pending-eager-loads` variable.
     // When it starts with `skip`, eager expansion is suppressed (mirrors
     // the check in `internal-macroexpand-for-load` in macroexp.el).
-    if let Some(val) = eval.obarray().symbol_value("macroexp--pending-eager-loads")
+    if let Some(val) = eval
+        .obarray()
+        .symbol_value_copied("macroexp--pending-eager-loads")
         && val.is_cons()
-        && val.cons_car().is_symbol_named("skip")
+        && val.cons_car().is_symbol_named("skip", symbol_mode)
     {
         return None;
     }
@@ -1630,6 +1637,7 @@ pub(crate) fn eager_expand_toplevel_forms(
     macroexpand_fn: Value,
     sink: &mut impl FnMut(&mut super::eval::Context, Value, Value, bool) -> Result<Value, EvalError>,
 ) -> Result<Value, EvalError> {
+    let symbol_mode = eval.symbol_mode();
     let original_form = form_value;
     let mutation_epoch_before = eval.macro_expansion_mutation_epoch();
     // Step 1: one-level expand — val = (internal-macroexpand-for-load val nil)
@@ -1665,7 +1673,7 @@ pub(crate) fn eager_expand_toplevel_forms(
     if val.is_cons() {
         let car = val.cons_car();
         let cdr = val.cons_cdr();
-        if car.is_symbol_named("progn") {
+        if car.is_symbol_named("progn", symbol_mode) {
             let roots = eval.save_specpdl_roots();
             eval.push_specpdl_root(val);
             let result = (|| -> Result<Value, EvalError> {
@@ -1713,7 +1721,9 @@ pub(crate) fn eager_expand_toplevel_forms(
     eval.note_eager_macro_perf_step3(d3);
     if eval.macro_perf_enabled() && d3.as_millis() > 200 {
         let head = if val.is_cons() {
-            val.cons_car().as_symbol_name().unwrap_or("<non-symbol>")
+            val.cons_car()
+                .as_symbol_name(symbol_mode)
+                .unwrap_or("<non-symbol>")
         } else {
             "<atom>"
         };
@@ -1956,6 +1966,7 @@ fn streaming_readevalloop_lisp_source(
     shorthands: Option<&ReadSymbolShorthands>,
     macroexpand_fn: Option<Value>,
 ) -> Result<Value, EvalError> {
+    let symbol_mode = eval.symbol_mode();
     let file_name = path
         .file_name()
         .unwrap_or_default()
@@ -2047,9 +2058,8 @@ fn streaming_readevalloop_lisp_source(
             // path off the Lisp call route.
             let read_hook = eval
                 .obarray
-                .symbol_value("load-read-function")
-                .copied()
-                .filter(|hook| !hook.is_nil() && !hook.is_symbol_named("read"));
+                .symbol_value_copied("load-read-function")
+                .filter(|hook| !hook.is_nil() && !hook.is_symbol_named("read", symbol_mode));
             let (form, next_pos) = match read_hook {
                 Some(hook) => {
                     let hooked = eval
@@ -2192,8 +2202,9 @@ fn streaming_readevalloop_eager_expand_eval_inner(
     expanded: Value,
     macroexpand: Value,
 ) -> Result<Value, EvalError> {
+    let symbol_mode = eval.symbol_mode();
     // Step 2: if (progn ...), iterate subforms
-    if expanded.is_cons() && expanded.cons_car().is_symbol_named("progn") {
+    if expanded.is_cons() && expanded.cons_car().is_symbol_named("progn", symbol_mode) {
         let mut cursor = expanded.cons_cdr();
         let mut last_val = Value::NIL;
         while cursor.is_cons() {
@@ -2988,8 +2999,7 @@ fn build_load_history(eval: &mut super::eval::Context, filename: &LispString, en
     eval.push_specpdl_root(current_load_list);
     let history = eval
         .obarray()
-        .symbol_value("load-history")
-        .cloned()
+        .symbol_value_copied("load-history")
         .unwrap_or(Value::NIL);
     eval.push_specpdl_root(history);
     let filtered_history = if entire {
@@ -4032,7 +4042,7 @@ fn ensure_startup_compat_variables(eval: &mut super::eval::Context, project_root
         ),
     ];
     for (name, value) in defaults {
-        if eval.obarray().symbol_value(name).is_none() {
+        if eval.obarray().symbol_value_copied(name).is_none() {
             eval.set_variable(name, value);
         }
     }
@@ -4047,7 +4057,7 @@ fn ensure_startup_compat_variables(eval: &mut super::eval::Context, project_root
         eval.obarray.make_special(name);
     }
     {
-        let obarray = eval.obarray_mut();
+        let mut obarray = eval.obarray_mut();
         // GNU data.c installs these with DEFVAR_LISP, then assigns the
         // fixnum limit and calls make_symbol_constant.  Reassert this here so
         // cached bootstrap dumps from older builds regain the C bootstrap
@@ -4063,21 +4073,21 @@ fn ensure_startup_compat_variables(eval: &mut super::eval::Context, project_root
 }
 
 fn value_symbol_name(value: Value) -> Option<String> {
-    if let Some(name) = value.as_symbol_name() {
+    if let Some(name) = value.as_bare_symbol_name() {
         return Some(name.to_owned());
     }
     value_quoted_symbol_name(value)
 }
 
 fn value_quoted_symbol_name(value: Value) -> Option<String> {
-    if let Some(name) = value.as_symbol_name() {
+    if let Some(name) = value.as_bare_symbol_name() {
         return Some(name.to_owned());
     }
     // Handle (quote sym) form: a two-element list where the first element is
     // the symbol `quote` and the second is the symbol to extract.
     let items = list_to_vec(&value)?;
-    if items.len() == 2 && items[0].is_symbol_named("quote") {
-        return items[1].as_symbol_name().map(|s| s.to_owned());
+    if items.len() == 2 && items[0].is_bare_symbol_named("quote") {
+        return items[1].as_bare_symbol_name().map(|s| s.to_owned());
     }
     None
 }
@@ -4133,7 +4143,7 @@ fn collect_source_surface(form: Value, state: &mut SourceFileSurfaceState) {
     let Some(head) = items.first() else {
         return;
     };
-    let Some(head_name) = head.as_symbol_name() else {
+    let Some(head_name) = head.as_bare_symbol_name() else {
         return;
     };
 
@@ -4376,7 +4386,7 @@ fn collect_loaddefs_autoload_args(
     let Some(head) = items.first() else {
         return;
     };
-    if !head.is_symbol_named("autoload") {
+    if !head.is_bare_symbol_named("autoload") {
         return;
     }
 
@@ -4428,7 +4438,7 @@ fn collect_loaddefs_property_forms(
     let Some(head) = items.first() else {
         return;
     };
-    let Some(head_name) = head.as_symbol_name() else {
+    let Some(head_name) = head.as_bare_symbol_name() else {
         return;
     };
     if head_name != "function-put" && head_name != "put" && head_name != "define-symbol-prop" {
@@ -4453,7 +4463,7 @@ fn collect_loaddefs_property_forms(
 fn loaddefs_keymap_replay_target(expr: Value) -> Option<String> {
     let items = list_to_vec(&expr)?;
     let head = items.first()?;
-    match head.as_symbol_name()? {
+    match head.as_bare_symbol_name()? {
         "define-key" | "keymap-set" => items.get(1).and_then(|value| value_symbol_name(*value)),
         "if" | "progn" | "unless" | "when" => items
             .iter()
@@ -4484,7 +4494,7 @@ fn collect_loaddefs_keymap_defvar_form(expr: Value, state: &mut LoaddefsSurfaceS
     let Some(head) = items.first() else {
         return;
     };
-    if !head.is_symbol_named("defvar") {
+    if !head.is_bare_symbol_named("defvar") {
         return;
     }
     let Some(name) = items.get(1).and_then(|value| value_symbol_name(*value)) else {
@@ -4584,8 +4594,7 @@ fn loaded_source_paths(eval: &mut super::eval::Context) -> Vec<PathBuf> {
     {
         let history = eval
             .obarray()
-            .symbol_value("load-history")
-            .cloned()
+            .symbol_value_copied("load-history")
             .unwrap_or(Value::NIL);
         let mut paths = std::collections::BTreeSet::new();
 
@@ -4687,7 +4696,7 @@ fn collect_runtime_referenced_symbol_names(
     let mut seen = std::collections::BTreeSet::new();
 
     for id in eval.obarray().global_member_ids().collect::<Vec<_>>() {
-        if let Some(value) = eval.obarray().symbol_value_id(id).copied() {
+        if let Some(value) = eval.obarray().symbol_value_id_copied(id) {
             collect_value_symbol_names(value, &mut symbol_names, &mut seen);
         }
         if let Some(function) = eval.obarray().symbol_function_id(id) {
@@ -4903,6 +4912,7 @@ pub(crate) fn apply_ldefs_boot_autoloads_for_names(
     eval: &mut super::eval::Context,
     names: &[&str],
 ) -> Result<(), EvalError> {
+    let symbol_mode = eval.symbol_mode();
     let project_root = runtime_project_root();
     let ldefs_path = project_root.join("lisp/ldefs-boot.el");
     let bytes = fs::read(&ldefs_path).map_err(|err| {
@@ -4951,7 +4961,7 @@ pub(crate) fn apply_ldefs_boot_autoloads_for_names(
             let Some(head) = items.first() else {
                 continue;
             };
-            if head.is_symbol_named("autoload")
+            if head.is_symbol_named("autoload", symbol_mode)
                 && let Some(name) = items.get(1).and_then(|v| value_quoted_symbol_name(*v))
                 && wanted.contains(&name)
             {
@@ -4967,7 +4977,7 @@ pub(crate) fn apply_ldefs_boot_autoloads_for_names(
             let Some(head) = items.first() else {
                 continue;
             };
-            let Some(head_name) = head.as_symbol_name() else {
+            let Some(head_name) = head.as_symbol_name(symbol_mode) else {
                 continue;
             };
             if head_name != "function-put" && head_name != "put" {
@@ -5212,10 +5222,10 @@ fn normalize_bootstrap_runtime_surface(
                 .iter()
                 .chain(runtime_loaddefs_state.keymap_forms.iter())
             {
-                let Some(value) = eval.obarray().symbol_value(&replay.target) else {
+                let Some(value) = eval.obarray().symbol_value_copied(&replay.target) else {
                     continue;
                 };
-                if !is_list_keymap(value) {
+                if !is_list_keymap(&value, eval.symbol_mode()) {
                     continue;
                 }
                 eval_runtime_form(eval, replay.form)?;
@@ -5519,7 +5529,7 @@ fn finalize_cached_bootstrap_eval(
         use crate::buffer::buffer::BUFFER_SLOT_INFO;
         use crate::emacs_core::forward::alloc_buffer_objfwd;
         use crate::emacs_core::intern::intern;
-        let obarray = eval.obarray_mut();
+        let mut obarray = eval.obarray_mut();
         for info in BUFFER_SLOT_INFO {
             // Phase 10D holdouts 3/4/5: skip internal-only slots
             // (syntax-table / category-table / case-table) — they
@@ -5623,7 +5633,13 @@ fn finalize_cached_bootstrap_eval(
     // adoption at the runtime boundary so late-bound variables receive both
     // their forwarding storage and their declared-special flag. The pass is
     // idempotent for symbols restored intact from a pdump.
-    super::defvar_object::adopt(eval.obarray_mut());
+    // SAFETY: late DEFVAR adoption is noncalling and may reattach the canonical
+    // debugger descriptor through installation hooks. The admitted manager is
+    // not replaced, and all raw loans end before subsequent Lisp admissions.
+    unsafe {
+        eval.obarray
+            .with_legacy_storage_write(super::defvar_object::adopt);
+    }
     eval.clear_top_level_eval_state();
 
     Ok(())
@@ -5827,7 +5843,7 @@ fn restore_final_image_interpreted_closure_filter(eval: &mut super::eval::Contex
     let cconv_sym = super::intern::intern("cconv-make-interpreted-closure");
     let filter_is_nil = eval
         .obarray()
-        .symbol_value_id(filter_sym)
+        .symbol_value_id_copied(filter_sym)
         .is_none_or(|value| value.is_nil());
     let cconv_bound = eval
         .obarray()
@@ -5842,14 +5858,14 @@ fn restore_final_image_interpreted_closure_filter(eval: &mut super::eval::Contex
 }
 
 fn sync_runtime_interpreted_closure_filter(eval: &mut super::eval::Context) {
+    let symbol_mode = eval.symbol_mode();
     let closure_filter_sym = super::intern::intern("internal-make-interpreted-closure-function");
     let cconv_sym = super::intern::intern("cconv-make-interpreted-closure");
     let filter_fn = eval
         .obarray()
-        .symbol_value_id(closure_filter_sym)
-        .cloned()
+        .symbol_value_id_copied(closure_filter_sym)
         .and_then(|value| {
-            if value.as_symbol_id() == Some(cconv_sym) {
+            if value.as_symbol_id(symbol_mode) == Some(cconv_sym) {
                 eval.obarray().symbol_function_id(cconv_sym)
             } else {
                 None
@@ -6010,7 +6026,7 @@ fn maybe_trace_bootstrap_macro_perf(eval: &super::eval::Context) {
     if let Some(summary) = eval.macro_perf_summary() {
         let gc_elapsed = eval
             .obarray()
-            .symbol_value("gc-elapsed")
+            .symbol_value_copied("gc-elapsed")
             .and_then(|value| value.as_number_f64())
             .unwrap_or(0.0);
         eprintln!(
@@ -6113,8 +6129,7 @@ pub(crate) fn seed_loadup_dump_branch_state(eval: &mut super::eval::Context) {
     // loadup.el:115 saves the pre-dump value before :116 overwrites it.
     let previous = eval
         .obarray()
-        .symbol_value("load-prefer-newer")
-        .copied()
+        .symbol_value_copied("load-prefer-newer")
         .unwrap_or(Value::NIL);
     eval.set_variable("load--prefer-newer", previous);
     for name in LOADUP_DUMP_BRANCH_SEEDED_VARIABLES {

@@ -71,7 +71,7 @@ fn metadata_capture_symbol_checks_keep_disabled_and_wrong_type_dependencies() {
             symbol,
             Value::keyword(":metadata-capture"),
         ] {
-            assert_eq!(symbol_id_checked(&bare, enabled), bare.as_symbol_id());
+            assert_eq!(symbol_id_checked(&bare, enabled), bare.as_bare_symbol_id());
         }
         assert_eq!(symbol_id_checked(&Value::UNBOUND, enabled), None);
         assert_eq!(symbol_id_checked(&Value::fixnum(4), enabled), None);
@@ -81,15 +81,26 @@ fn metadata_capture_symbol_checks_keep_disabled_and_wrong_type_dependencies() {
         check_identity_dependency(positioned, || {
             assert_eq!(
                 symbol_id_checked(&positioned, enabled),
-                enabled.then(|| symbol.as_symbol_id().unwrap())
+                enabled.then(|| symbol.as_bare_symbol_id().unwrap())
             );
         });
     }
     check_identity_dependency(positioned, || {
-        assert_eq!(symbol_id(&positioned), symbol.as_symbol_id())
+        assert_eq!(
+            symbol_id(&positioned, crate::tagged::value::SymbolMode::Positioned),
+            symbol.as_bare_symbol_id()
+        )
     });
-    check_identity_dependency(vector, || assert_eq!(symbol_id(&vector), None));
-    assert_eq!(symbol_id(&Value::UNBOUND), None);
+    check_identity_dependency(vector, || {
+        assert_eq!(
+            symbol_id(&vector, crate::tagged::value::SymbolMode::Positioned),
+            None
+        )
+    });
+    assert_eq!(
+        symbol_id(&Value::UNBOUND, crate::tagged::value::SymbolMode::Bare),
+        None
+    );
 }
 
 #[test]

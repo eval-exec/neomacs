@@ -68,25 +68,20 @@ pub(crate) fn emit(
     // symbol mutation use the existing runtime's synchronization protocol;
     // this introduces no new shared cache or publication mechanism.
     use super::jit_layout::{
-        CONTEXT_OBARRAY_OFFSET, LISP_SYMBOL_FUNCTION_OFFSET, LISP_SYMBOL_SIZE, OBARRAY_CHUNK_BITS,
-        OBARRAY_CHUNK_SLOTS, OBARRAY_JIT_LEN_OFFSET, OBARRAY_JIT_SPINE_OFFSET,
+        LISP_SYMBOL_FUNCTION_OFFSET, LISP_SYMBOL_SIZE, OBARRAY_CHUNK_BITS, OBARRAY_CHUNK_SLOTS,
+        OBARRAY_JIT_LEN_OFFSET, OBARRAY_JIT_SPINE_OFFSET,
     };
-    let len = fb.ins().load(
-        types::I64,
-        flags,
-        ctx,
-        (CONTEXT_OBARRAY_OFFSET + OBARRAY_JIT_LEN_OFFSET) as i32,
-    );
+    let obarray = super::jit_layout::emit_obarray_base(fb, ctx);
+    let len = fb
+        .ins()
+        .load(types::I64, flags, obarray, OBARRAY_JIT_LEN_OFFSET as i32);
     let exists = fb
         .ins()
         .icmp_imm_u(IntCC::UnsignedGreaterThan, len, i64::from(sym.0));
     emit_guard(fb, identity, exists);
-    let spine = fb.ins().load(
-        types::I64,
-        flags,
-        ctx,
-        (CONTEXT_OBARRAY_OFFSET + OBARRAY_JIT_SPINE_OFFSET) as i32,
-    );
+    let spine = fb
+        .ins()
+        .load(types::I64, flags, obarray, OBARRAY_JIT_SPINE_OFFSET as i32);
     let chunk = fb.ins().load(
         types::I64,
         flags,

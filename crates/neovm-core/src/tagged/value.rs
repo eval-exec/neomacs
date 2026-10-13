@@ -33,6 +33,71 @@ use crate::emacs_core::intern::{
 };
 use crate::heap_types::LispString;
 
+/// An integer proven to fit the immediate fixnum payload.
+/// This immutable scalar contains no heap state and is safe between mutators.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Fixnum(i64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum FixnumRangeError {
+    #[error("integer {0} is outside the fixnum range")]
+    OutOfRange(i64),
+}
+
+impl TryFrom<i64> for Fixnum {
+    type Error = FixnumRangeError;
+
+    #[inline]
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        if (TaggedValue::MOST_NEGATIVE_FIXNUM..=TaggedValue::MOST_POSITIVE_FIXNUM).contains(&value)
+        {
+            Ok(Self(value))
+        } else {
+            Err(FixnumRangeError::OutOfRange(value))
+        }
+    }
+}
+
+impl From<Fixnum> for i64 {
+    #[inline]
+    fn from(value: Fixnum) -> Self {
+        value.0
+    }
+}
+
+impl Fixnum {
+    /// Truncating division whose result stays in the immediate domain.
+    /// Zero and the sole overflowing pair need Lisp's arithmetic slow path.
+    #[inline]
+    pub(crate) fn checked_div(self, rhs: Self) -> Option<Self> {
+        if rhs.0 == 0 || (self.0 == TaggedValue::MOST_NEGATIVE_FIXNUM && rhs.0 == -1) {
+            None
+        } else {
+            // Division cannot increase magnitude, except when negating MIN.
+            Some(Self(self.0 / rhs.0))
+        }
+    }
+
+    /// Interpret GNU's explicit fixnum payload bit pattern as a signed integer.
+    /// This operation is for representation-level callers, not Lisp integers.
+    #[inline]
+    pub(crate) const fn from_payload_bits(bits: u64) -> Self {
+        Self((bits.wrapping_shl(FIXNUM_SHIFT) as i64) >> FIXNUM_SHIFT)
+    }
+
+    #[inline]
+    pub(crate) fn saturating(value: i64) -> Self {
+        Self(value.clamp(
+            TaggedValue::MOST_NEGATIVE_FIXNUM,
+            TaggedValue::MOST_POSITIVE_FIXNUM,
+        ))
+    }
+}
+
+const _: () = assert!(size_of::<Fixnum>() == size_of::<i64>());
+static_assertions::assert_impl_all!(Fixnum: Send, Sync);
+
 use super::header::{
     BignumObj, ConsCell, FloatObj, ModuleFunctionObj, SqliteObj, StringObj, SubrObj,
     SymbolWithPosObj, UserPtrObj, VecLikeHeader, VecLikeType,
@@ -316,13 +381,21 @@ impl TaggedValue {
 
     // -- Fixnum --
 
-    /// Create a fixnum (62-bit signed integer, no heap allocation).
+    /// Create a Lisp integer, promoting computed values outside the fixnum range.
+    /// Proven immediate values may use `from_fixnum` to avoid another range check.
     #[inline(always)]
     pub fn fixnum(n: i64) -> Self {
-        // Encode: (n << 2) | 2. The low 2 bits are `10`, matching GNU's
-        // fixnum tags 010 and 110.
+        match Fixnum::try_from(n) {
+            Ok(value) => Self::from_fixnum(value),
+            Err(FixnumRangeError::OutOfRange(_)) => Self::make_int(n),
+        }
+    }
+
+    /// Encode a validated immediate integer without an additional range check.
+    #[inline]
+    pub(crate) fn from_fixnum(value: Fixnum) -> Self {
         Self(
-            ((n as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE,
+            ((value.0 as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE,
             PhantomData,
         )
     }
@@ -510,7 +583,7 @@ impl TaggedValue {
     /// Check if this value is a symbol. Keywords are symbols (name starts
     /// with `:`). nil and t are also symbols.
     #[inline(always)]
-    pub fn is_symbol(self) -> bool {
+    pub fn is_bare_symbol(self) -> bool {
         self.0 & TAG_MASK == TAG_SYMBOL
     }
 
@@ -560,8 +633,8 @@ impl TaggedValue {
 
     /// In GNU Emacs, keywords are symbols whose name starts with `:`.
     #[inline]
-    pub fn is_keyword(self) -> bool {
-        self.as_symbol_id()
+    pub fn is_bare_keyword(self) -> bool {
+        self.as_bare_symbol_id()
             .is_some_and(crate::emacs_core::intern::is_keyword_id)
     }
 
@@ -689,6 +762,13 @@ impl TaggedValue {
         }
     }
 
+    /// The fixnum payload as a [`Fixnum`]: decoding never leaves the fixnum
+    /// range, so callers need no further range check.
+    #[inline]
+    pub(crate) fn as_fixnum_value(self) -> Option<Fixnum> {
+        self.as_fixnum().map(Fixnum)
+    }
+
     /// Extract fixnum value without tag check. Caller must ensure `is_fixnum()`.
     #[inline(always)]
     pub fn xfixnum(self) -> i64 {
@@ -699,7 +779,7 @@ impl TaggedValue {
     /// Extract SymId for a symbol (including keywords, which are symbols
     /// Extract SymId for a symbol (including keywords). Returns None if not a symbol.
     #[inline(always)]
-    pub fn as_symbol_id(self) -> Option<SymId> {
+    pub fn as_bare_symbol_id(self) -> Option<SymId> {
         if self.0 & TAG_MASK == TAG_SYMBOL {
             Some(SymId((self.0 >> TAG_BITS) as u32))
         } else {
@@ -707,10 +787,10 @@ impl TaggedValue {
         }
     }
 
-    /// Extract SymId without tag check. Caller must ensure `is_symbol()`.
+    /// Extract SymId without tag check. Caller must ensure `is_bare_symbol()`.
     #[inline(always)]
-    pub fn xsymbol_id(self) -> SymId {
-        debug_assert!(self.is_symbol());
+    pub fn xbare_symbol_id(self) -> SymId {
+        debug_assert!(self.is_bare_symbol());
         SymId((self.0 >> TAG_BITS) as u32)
     }
 
@@ -735,9 +815,9 @@ impl TaggedValue {
     /// Extract keyword SymId. Returns None if not a keyword.
     /// Keywords are symbols with `:` prefix, so this extracts the symbol id.
     #[inline]
-    pub fn as_keyword_id(self) -> Option<SymId> {
-        if self.is_keyword() {
-            self.as_symbol_id()
+    pub fn as_bare_keyword_id(self) -> Option<SymId> {
+        if self.is_bare_keyword() {
+            self.as_bare_symbol_id()
         } else {
             None
         }
@@ -918,7 +998,7 @@ impl TaggedValue {
                 } else if self.is_unbound() {
                     ValueKind::Unbound
                 } else {
-                    ValueKind::Symbol(self.xsymbol_id())
+                    ValueKind::Symbol(self.xbare_symbol_id())
                 }
             }
             _ if self.is_fixnum() => ValueKind::Fixnum(self.xfixnum()),
@@ -1193,14 +1273,14 @@ impl TaggedValue {
     /// Get symbol name. Returns None if not a symbol.
     /// For keywords (which are symbols in GNU Emacs), returns the keyword name
     /// (e.g., ":foo").
-    pub fn as_symbol_name(self) -> Option<&'static str> {
-        self.as_symbol_lisp_string()
+    pub fn as_bare_symbol_name(self) -> Option<&'static str> {
+        self.as_bare_symbol_lisp_string()
             .and_then(LispString::as_utf8_str)
     }
 
     /// Get the exact Lisp-string storage for a symbol name.
-    pub fn as_symbol_lisp_string(self) -> Option<&'static LispString> {
-        self.as_symbol_id().map(resolve_sym_lisp_string)
+    pub fn as_bare_symbol_lisp_string(self) -> Option<&'static LispString> {
+        self.as_bare_symbol_id().map(resolve_sym_lisp_string)
     }
 
     /// Check if this symbol has the given name.
@@ -1208,10 +1288,10 @@ impl TaggedValue {
     /// Byte equality, not `as_symbol_name` — `name` is valid UTF-8, so
     /// equal bytes imply the symbol's name is too, and the old
     /// validate-then-compare paid a `from_utf8` walk per call (face
-    /// attribute merging asks `is_symbol_named("unspecified")` per
+    /// attribute merging asks `is_bare_symbol_named("unspecified")` per
     /// attribute per face).
-    pub fn is_symbol_named(self, name: &str) -> bool {
-        self.as_symbol_lisp_string()
+    pub fn is_bare_symbol_named(self, name: &str) -> bool {
+        self.as_bare_symbol_lisp_string()
             .is_some_and(|s| s.as_bytes() == name.as_bytes())
     }
 }
@@ -1219,6 +1299,95 @@ impl TaggedValue {
 // ---------------------------------------------------------------------------
 // ValueKind — exhaustive dispatch enum
 // ---------------------------------------------------------------------------
+
+/// GNU's `symbols-with-pos-enabled` policy, supplied by the owning Context.
+///
+/// This is a per-operation capability, not shared or cached Lisp state. Each
+/// mutator supplies its own Context's policy; physical heap/reader operations
+/// use the explicitly bare accessors instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SymbolMode {
+    Bare,
+    Positioned,
+}
+
+impl From<bool> for SymbolMode {
+    fn from(enabled: bool) -> Self {
+        if enabled {
+            Self::Positioned
+        } else {
+            Self::Bare
+        }
+    }
+}
+
+impl SymbolMode {
+    /// Mirror `maybe_remove_pos_from_symbol` without changing other values.
+    #[inline]
+    pub fn unwrap(self, value: TaggedValue) -> TaggedValue {
+        if value.is_bare_symbol() || self == Self::Bare {
+            value
+        } else {
+            value.as_symbol_with_pos_sym().unwrap_or(value)
+        }
+    }
+}
+
+impl TaggedValue {
+    /// GNU SYMBOLP/XSYMBOL projection. The bare tag wins before the policy
+    /// test; positioned heap data is observed only in enabled mode.
+    #[inline]
+    pub fn as_symbol_id(self, mode: SymbolMode) -> Option<SymId> {
+        if let Some(id) = self.as_bare_symbol_id() {
+            return Some(id);
+        }
+        match mode {
+            SymbolMode::Bare => None,
+            SymbolMode::Positioned => self
+                .as_symbol_with_pos_sym()
+                .and_then(TaggedValue::as_bare_symbol_id),
+        }
+    }
+
+    #[inline]
+    pub fn is_symbol(self, mode: SymbolMode) -> bool {
+        // GNU SYMBOLP tests the wrapper tag; XSYMBOL alone projects its
+        // payload. Keep the common bare tag ahead of the policy test.
+        if self.is_bare_symbol() {
+            return true;
+        }
+        match mode {
+            SymbolMode::Bare => false,
+            SymbolMode::Positioned => self.is_symbol_with_pos(),
+        }
+    }
+
+    pub fn as_symbol_lisp_string(self, mode: SymbolMode) -> Option<&'static LispString> {
+        self.as_symbol_id(mode).map(resolve_sym_lisp_string)
+    }
+
+    pub fn as_symbol_name(self, mode: SymbolMode) -> Option<&'static str> {
+        self.as_symbol_lisp_string(mode)
+            .and_then(LispString::as_utf8_str)
+    }
+
+    pub fn is_symbol_named(self, name: &str, mode: SymbolMode) -> bool {
+        self.as_symbol_lisp_string(mode)
+            .is_some_and(|s| s.as_bytes() == name.as_bytes())
+    }
+
+    #[inline]
+    pub fn is_keyword(self, mode: SymbolMode) -> bool {
+        self.as_symbol_id(mode)
+            .is_some_and(crate::emacs_core::intern::is_keyword_id)
+    }
+
+    #[inline]
+    pub fn as_keyword_id(self, mode: SymbolMode) -> Option<SymId> {
+        self.as_symbol_id(mode)
+            .filter(|id| crate::emacs_core::intern::is_keyword_id(*id))
+    }
+}
 
 /// Decoded value kind for `match` ergonomics.
 /// Use `value.kind()` to get this.
@@ -1273,3 +1442,7 @@ impl fmt::Debug for TaggedValue {
 #[cfg(test)]
 #[path = "value/tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "value/tests/fixnum_boundary.rs"]
+mod fixnum_boundary_tests;

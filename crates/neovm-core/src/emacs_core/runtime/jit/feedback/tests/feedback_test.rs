@@ -14,7 +14,7 @@ fn source(tag: i64) -> ByteCodeFunction {
     });
     f.ops = vec![Op::Constant(0), Op::Return];
     f.constants = vec![Value::make_int(tag)].into();
-    f.max_stack = 1;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     f
 }
 
@@ -37,7 +37,7 @@ fn a_symbol_site_is_monomorphic_until_a_second_symbol() {
     let a = Value::symbol("feedback-test-a");
     s.observe(a);
     s.observe(a);
-    assert!(matches!(s.target(), CallTarget::Sym(id) if Some(id) == a.as_symbol_id()));
+    assert!(matches!(s.target(), CallTarget::Sym(id) if Some(id) == a.as_bare_symbol_id()));
     s.observe(Value::symbol("feedback-test-b"));
     assert!(matches!(s.target(), CallTarget::Mega));
     // Mega is final.

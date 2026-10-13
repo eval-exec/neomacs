@@ -32,7 +32,7 @@ fn source(op: Op, arity: usize) -> ByteCodeFunction {
         rest: None,
     });
     function.lexical = true;
-    function.max_stack = 16;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     function.ops = if arity == 1 {
         vec![Op::StackRef(0), op, Op::Return]
     } else {
@@ -43,7 +43,11 @@ fn source(op: Op, arity: usize) -> ByteCodeFunction {
 }
 
 fn plan(source: &ByteCodeFunction) -> ir::Func {
-    let arity = source.params.required.len();
+    let arity = source
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
         source.executable_ops(),
         &source.constants,

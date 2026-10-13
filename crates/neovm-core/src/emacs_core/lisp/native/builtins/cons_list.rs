@@ -1,3 +1,4 @@
+use super::collections::{ArraySymbolPolicy, ArraySymbolSource};
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::value::{ValueKind, VecLikeType, eq_value};
@@ -352,7 +353,7 @@ pub(crate) fn bytecode_closure_slot(value: &Value, idx: usize) -> Option<Value> 
     }
     Some(match idx {
         crate::tagged::header::CLOSURE_ARGLIST => bc.arglist,
-        crate::tagged::header::CLOSURE_STACK_DEPTH => Value::fixnum(bc.max_stack as i64),
+        crate::tagged::header::CLOSURE_STACK_DEPTH => bc.max_stack.value(),
         crate::tagged::header::CLOSURE_DOC_STRING => bc
             .doc_form
             .or_else(|| bc.docstring.as_ref().map(|d| Value::heap_string(d.clone())))
@@ -406,7 +407,7 @@ pub fn parse_lambda_params_from_value(
         } else {
             *item
         };
-        if let Some(name) = item.as_symbol_name() {
+        if let Some(name) = item.as_bare_symbol_name() {
             match name {
                 "&optional" => {
                     mode = 1;
@@ -419,7 +420,7 @@ pub fn parse_lambda_params_from_value(
                 _ => {}
             }
         }
-        let sym_id = item.as_symbol_id().unwrap_or_else(|| intern("_"));
+        let sym_id = item.as_bare_symbol_id().unwrap_or_else(|| intern("_"));
         match mode {
             0 => required.push(sym_id),
             1 => optional.push(sym_id),
@@ -785,11 +786,6 @@ pub(crate) fn builtin_length_gt(args: Vec<Value>) -> EvalResult {
     Ok(Value::bool_val(sequence_length_greater_than(
         &args[0], target,
     )?))
-}
-
-pub(crate) fn builtin_nth(args: Vec<Value>) -> EvalResult {
-    expect_args("nth", &args, 2)?;
-    builtin_nth_values(args[0], args[1])
 }
 
 pub(crate) fn builtin_nth_2(
@@ -1449,7 +1445,7 @@ pub(crate) fn listp_error(list: Value) -> Flow {
 // 13.5% of compiling elb-smie.el). The same budgeted scan as the plain case.
 fn builtin_memq_values_swp_scan<const OBSERVED: bool>(target: Value, list: Value) -> EvalResult {
     let bare = positioned_symbol_scan::<OBSERVED>(target).unwrap_or(target);
-    if !bare.is_symbol() {
+    if !bare.is_bare_symbol() {
         return builtin_memq_values_scan::<OBSERVED>(target, list, false);
     }
     let mut tail = list;
@@ -1501,7 +1497,7 @@ fn memq_swp_exact(bare: Value, list: Value) -> EvalResult {
 #[cfg(test)]
 pub(crate) fn memq_exact_for_test(target: Value, list: Value, swp: bool) -> EvalResult {
     let bare = target.as_symbol_with_pos_sym().unwrap_or(target);
-    if swp && bare.is_symbol() {
+    if swp && bare.is_bare_symbol() {
         memq_swp_exact(bare, list)
     } else {
         memq_exact(target, list)
@@ -1763,7 +1759,7 @@ fn assq_exact(key: Value, list: Value) -> EvalResult {
 #[cfg(test)]
 pub(crate) fn assq_exact_for_test(key: Value, list: Value, swp: bool) -> EvalResult {
     let bare = key.as_symbol_with_pos_sym().unwrap_or(key);
-    if swp && bare.is_symbol() {
+    if swp && bare.is_bare_symbol() {
         assq_swp_exact(bare, list)
     } else {
         assq_exact(key, list)
@@ -1772,7 +1768,7 @@ pub(crate) fn assq_exact_for_test(key: Value, list: Value, swp: bool) -> EvalRes
 
 fn builtin_assq_values_swp_scan<const OBSERVED: bool>(key: Value, list: Value) -> EvalResult {
     let bare = positioned_symbol_scan::<OBSERVED>(key).unwrap_or(key);
-    if !bare.is_symbol() {
+    if !bare.is_bare_symbol() {
         return builtin_assq_values_scan::<OBSERVED>(key, list, false);
     }
     let mut tail = list;
@@ -1823,11 +1819,23 @@ pub(crate) fn builtin_copy_sequence(args: Vec<Value>) -> EvalResult {
     copy_sequence_value(args[0])
 }
 
-pub(crate) fn builtin_copy_sequence_1(_eval: &mut super::eval::Context, arg: Value) -> EvalResult {
-    copy_sequence_value(arg)
+pub(crate) fn builtin_copy_sequence_1(eval: &mut super::eval::Context, arg: Value) -> EvalResult {
+    copy_sequence_value_in_state(eval, arg)
+}
+
+pub(crate) fn copy_sequence_value_in_state(
+    eval: &mut super::eval::Context,
+    arg: Value,
+) -> EvalResult {
+    copy_sequence_value_with_source(ArraySymbolSource::Context(eval), arg)
 }
 
 pub(crate) fn copy_sequence_value(arg: Value) -> EvalResult {
+    copy_sequence_value_with_source(ArraySymbolSource::Bare, arg)
+}
+
+/// One sequence dispatch; only char-table copying resolves symbol policy.
+fn copy_sequence_value_with_source(symbols: ArraySymbolSource<'_>, arg: Value) -> EvalResult {
     match arg.kind() {
         ValueKind::Nil => Ok(Value::NIL),
         ValueKind::Cons => {
@@ -1866,12 +1874,13 @@ pub(crate) fn copy_sequence_value(arg: Value) -> EvalResult {
             Ok(Value::vector(elems))
         }
         ValueKind::Veclike(VecLikeType::CharTable) => {
-            crate::emacs_core::chartable::copy_char_table(arg).ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("sequencep"), arg],
-                )
-            })
+            crate::emacs_core::chartable::copy_char_table_with_symbols(arg, symbols.mode())
+                .ok_or_else(|| {
+                    signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("sequencep"), arg],
+                    )
+                })
         }
         ValueKind::Veclike(VecLikeType::Record) => {
             let items = arg.as_record_data().unwrap().clone();
@@ -2133,30 +2142,35 @@ pub(crate) fn builtin_delq_values(
     }
 }
 
-pub(crate) fn builtin_elt(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_elt_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("elt", &args, 2)?;
-    match args[0].kind() {
-        ValueKind::Cons | ValueKind::Nil => builtin_nth(vec![args[1], args[0]]),
-        ValueKind::Veclike(VecLikeType::Vector)
-        | ValueKind::Veclike(VecLikeType::CharTable)
-        | ValueKind::Veclike(VecLikeType::BoolVector)
-        | ValueKind::String => builtin_aref(vec![args[0], args[1]]),
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("sequencep"), args[0]],
-        )),
-    }
+    builtin_elt_values_in_state(eval, args[0], args[1])
 }
 
 /// The byte-code `elt` (`Op::Elt`): [`bytecode_elt_values`]. (The Lisp
-/// function `elt` is [`builtin_elt`], `Felt`.)
+/// function `elt` is [`builtin_elt_in_state`], `Felt`.)
 #[inline(always)]
 pub(crate) fn builtin_elt_2(
-    _eval: &mut super::eval::Context,
+    eval: &mut super::eval::Context,
     sequence: Value,
     n: Value,
 ) -> EvalResult {
-    bytecode_elt_values(sequence, n)
+    bytecode_elt_values_in_state(eval, sequence, n)
+}
+
+pub(crate) fn bytecode_elt_values_in_state(
+    eval: &super::eval::Context,
+    sequence: Value,
+    n: Value,
+) -> EvalResult {
+    bytecode_elt_values(
+        super::collections::ArraySymbolSource::Context(eval),
+        sequence,
+        n,
+    )
 }
 
 /// GNU `Belt` (`bytecode.c`), the byte-code `elt`: on a cons with a count
@@ -2165,25 +2179,45 @@ pub(crate) fn builtin_elt_2(
 /// with the whole list: byte-compiled `(elt '(1 . 2) 3)` is
 /// `(wrong-type-argument listp 2)` in GNU. Everything else is `Felt`'s.
 #[inline(never)]
-pub(crate) fn bytecode_elt_values(sequence: Value, n: Value) -> EvalResult {
+pub(crate) fn bytecode_elt_values(
+    source: super::collections::ArraySymbolSource<'_>,
+    sequence: Value,
+    n: Value,
+) -> EvalResult {
     if sequence.is_cons()
         && let Some(count) = n.as_fixnum()
         && (0..=127).contains(&count)
     {
         return bytecode_nth_values(n, sequence);
     }
-    builtin_elt_values(sequence, n)
+    builtin_elt_values(source, sequence, n)
 }
 
-/// `elt` over values alone: its list arm is `nth` and its array arm `aref`,
-/// neither of which touches the evaluator.
-pub(crate) fn builtin_elt_values(sequence: Value, n: Value) -> EvalResult {
+pub(crate) fn builtin_elt_values_in_state(
+    eval: &super::eval::Context,
+    sequence: Value,
+    n: Value,
+) -> EvalResult {
+    builtin_elt_values(
+        super::collections::ArraySymbolSource::Context(eval),
+        sequence,
+        n,
+    )
+}
+
+/// GNU fns.c:1855 validates SEQUENCE before Faref checks N. The source is
+/// passed through only for valid array shapes; list behavior stays Fnthcdr.
+pub(crate) fn builtin_elt_values(
+    source: super::collections::ArraySymbolSource<'_>,
+    sequence: Value,
+    n: Value,
+) -> EvalResult {
     match sequence.kind() {
         ValueKind::Cons | ValueKind::Nil => builtin_nth_values(n, sequence),
         ValueKind::Veclike(VecLikeType::Vector)
         | ValueKind::Veclike(VecLikeType::CharTable)
         | ValueKind::Veclike(VecLikeType::BoolVector)
-        | ValueKind::String => builtin_aref_values(sequence, n),
+        | ValueKind::String => builtin_aref_values(source, sequence, n),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("sequencep"), sequence],
@@ -2275,3 +2309,7 @@ mod collection_scan_capture;
 #[cfg(test)]
 #[path = "tests/gdn_equality_test.rs"]
 mod gdn_equality;
+
+#[cfg(test)]
+#[path = "tests/positioned_elt_test.rs"]
+mod positioned_elt;

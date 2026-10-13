@@ -33,6 +33,81 @@
 
 use super::*;
 
+/// Unaligned native-endian protocol words in the heap's trailing byte Cells.
+/// No pre-existing JitHeapState field or baked offset is extended here.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
+pub(crate) const HEAP_JIT_EXCLUSION_LO: usize =
+    std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_00);
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
+pub(crate) const HEAP_JIT_EXCLUSION_LEN: usize = HEAP_JIT_EXCLUSION_LO + size_of::<usize>();
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
+pub(crate) const HEAP_JIT_SINGLE_CONS: usize = HEAP_JIT_EXCLUSION_LO + 2 * size_of::<usize>();
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
+pub(crate) const HEAP_JIT_SLOT_BARRIER_LO: usize = HEAP_JIT_EXCLUSION_LO + 3 * size_of::<usize>();
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
+pub(crate) const HEAP_JIT_SLOT_BARRIER_LEN: usize = HEAP_JIT_EXCLUSION_LO + 4 * size_of::<usize>();
+
+// Each byte is independently within its own UnsafeCell. The executing mutator
+// sets them individually; native word loads use the whole heap's provenance.
+// Neither publisher nor generated code can observe a partial update because
+// there is no concurrent mutator, callback or safepoint during publication.
+const _: () = {
+    assert!(size_of::<Cell<u8>>() == 1);
+    assert!(std::mem::align_of::<Cell<u8>>() == 1);
+    assert!(5 * size_of::<usize>() <= 40);
+    let offsets = [
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_00),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_01),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_02),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_03),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_04),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_05),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_06),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_07),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_08),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_09),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_10),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_11),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_12),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_13),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_14),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_15),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_16),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_17),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_18),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_19),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_20),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_21),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_22),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_23),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_24),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_25),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_26),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_27),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_28),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_29),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_30),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_31),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_32),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_33),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_34),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_35),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_36),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_37),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_38),
+        std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_39),
+    ];
+    let mut byte = 0;
+    while byte < offsets.len() {
+        assert!(offsets[byte] == HEAP_JIT_EXCLUSION_LO + byte);
+        byte += 1;
+    }
+    assert!(
+        HEAP_JIT_EXCLUSION_LO
+            == std::mem::offset_of!(TaggedHeap, vec_scan) + size_of::<knobs::VecScanMode>()
+    );
+};
+
 /// An owner-address range tested with one wrapping subtraction and unsigned
 /// compare. A compiled observation range may wrap, excluding one empty gap.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,19 +118,24 @@ pub(crate) struct BarrierWindow {
 
 /// Prepared protocol geometry from the executing mutator's existing journal.
 /// The optional linear gap contains no locally observed owner and no mapped
-/// owner. Its complement fits the unchanged native wrapping window predicate.
+/// owner. Its complement may refine the unchanged native wrapping window
+/// predicate only when it retains the hull's existing exterior rejection.
 /// Contexts and certificates remain mutator-local; shared marks are atomic,
 /// while only the installed mutator publishes its JitHeapState Cells.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CompiledObservationGate {
     pub(crate) observed: [BarrierWindow; 2],
     pub(crate) excluded: Option<BarrierWindow>,
+    pub(crate) single_cons: usize,
+    pub(crate) slots: [BarrierWindow; 2],
 }
 
 impl CompiledObservationGate {
     pub(crate) const NONE: Self = Self {
         observed: [BarrierWindow::NONE; 2],
         excluded: None,
+        single_cons: 0,
+        slots: [BarrierWindow::NONE; 2],
     };
 }
 
@@ -87,6 +167,14 @@ impl BarrierWindow {
     #[inline(always)]
     pub(crate) fn covers(self, addr: usize) -> bool {
         addr.wrapping_sub(self.lo) < self.len
+    }
+
+    /// Whether every address in `other` is already covered by this arc.
+    /// Checking lengths first keeps the subtraction below non-wrapping;
+    /// the relative start still uses the native wrapping-address geometry.
+    pub(crate) fn contains_window(self, other: Self) -> bool {
+        other.len == 0
+            || (other.len <= self.len && other.lo.wrapping_sub(self.lo) <= self.len - other.len)
     }
 
     /// The window's first address (what compiled code subtracts).
@@ -161,61 +249,157 @@ impl TaggedHeap {
         }
     }
 
-    /// Native GEN0 stores share the existing window test with certificate
-    /// owners. The enclosing span is only a coarse rejection filter: its
-    /// outlined setter checks the exact sticky mark before journaling.
+    /// Native GEN0 and GEN1 stores share the existing window test with
+    /// certificate owners. The enclosing span is only a coarse rejection
+    /// filter: its outlined setter checks the exact sticky mark before
+    /// journaling. GEN1 keeps its remembered-set test after this window.
     pub(super) fn compiled_barrier_window(
         &self,
         ordinary: BarrierWindow,
         gate: CompiledObservationGate,
     ) -> BarrierWindow {
         let [below, above] = gate.observed;
-        if self.generational.enabled || (below.len == 0 && above.len == 0) {
+        if below.len == 0 && above.len == 0 {
             return ordinary;
         }
         if ordinary == BarrierWindow::ALL {
             return ordinary;
         }
+        let hull = if ordinary.len == 0 {
+            debug_assert_eq!(above.len, 0, "no dump uses one full observation hull");
+            below
+        } else {
+            let dump_hi = ordinary.lo + ordinary.len;
+            if below.len == 0 {
+                BarrierWindow::span(ordinary.lo, dump_hi.max(above.lo + above.len))
+            } else {
+                let below_hi = below.lo + below.len;
+                debug_assert!(below_hi <= ordinary.lo);
+                if above.len == 0 {
+                    // Retain the dump and lower heap observations, but exclude
+                    // the growth gap above the last observed heap owner.
+                    if below_hi == ordinary.lo {
+                        BarrierWindow::span(below.lo, dump_hi)
+                    } else {
+                        BarrierWindow::from_lo_len(ordinary.lo, below_hi.wrapping_sub(ordinary.lo))
+                    }
+                } else {
+                    debug_assert!(dump_hi <= above.lo);
+                    // Both sides contain required owners. Exclude the larger
+                    // empty inter-region gap, preserving the growth rejection.
+                    let lower_gap = ordinary.lo - below_hi;
+                    let upper_gap = above.lo - dump_hi;
+                    if lower_gap == 0 && upper_gap == 0 {
+                        BarrierWindow::span(below.lo, above.lo + above.len)
+                    } else if lower_gap >= upper_gap {
+                        BarrierWindow::from_lo_len(ordinary.lo, below_hi.wrapping_sub(ordinary.lo))
+                    } else {
+                        BarrierWindow::from_lo_len(above.lo, dump_hi.wrapping_sub(above.lo))
+                    }
+                }
+            }
+        };
         if let Some(gap) = gate.excluded {
             debug_assert_ne!(gap.len, 0);
             debug_assert!(ordinary.len == 0 || !gap.covers(ordinary.lo));
-            let hi = gap.lo + gap.len;
-            return BarrierWindow::from_lo_len(hi, gap.lo.wrapping_sub(hi));
+            let hi = gap.lo.wrapping_add(gap.len);
+            let refined = BarrierWindow::from_lo_len(hi, gap.lo.wrapping_sub(hi));
+            // A learned interior hole cannot replace the hull's exterior
+            // rejection: its complement would newly admit growth owners of
+            // every collection kind. Refine only by extending that existing
+            // exclusion, so every previously inline owner remains inline.
+            if hull.contains_window(refined) {
+                return refined;
+            }
         }
-        if ordinary.len == 0 {
-            debug_assert_eq!(above.len, 0, "no dump uses one full observation hull");
-            return below;
-        }
-        let dump_hi = ordinary.lo + ordinary.len;
-        if below.len == 0 {
-            return BarrierWindow::span(ordinary.lo, dump_hi.max(above.lo + above.len));
-        }
-        let below_hi = below.lo + below.len;
-        debug_assert!(below_hi <= ordinary.lo);
-        if above.len == 0 {
-            // Retain the dump and lower heap observations, but exclude the
-            // growth gap above the last observed heap owner. The native test
-            // already wraps, so a never-read allocation in that gap keeps
-            // precisely the old outside-window instruction path.
-            return if below_hi == ordinary.lo {
-                BarrierWindow::span(below.lo, dump_hi)
-            } else {
-                BarrierWindow::from_lo_len(ordinary.lo, below_hi.wrapping_sub(ordinary.lo))
-            };
-        }
-        debug_assert!(dump_hi <= above.lo);
-        // Both sides contain required owners. Exclude the larger of the two
-        // actual empty inter-region gaps; no required interval is split.
-        // This deliberately keeps a growth gap, not the shortest usize arc.
-        let lower_gap = ordinary.lo - below_hi;
-        let upper_gap = above.lo - dump_hi;
-        if lower_gap == 0 && upper_gap == 0 {
-            BarrierWindow::span(below.lo, above.lo + above.len)
-        } else if lower_gap >= upper_gap {
-            BarrierWindow::from_lo_len(ordinary.lo, below_hi.wrapping_sub(ordinary.lo))
+        hull
+    }
+
+    /// Publish native predicates under the installed mutator's exclusive
+    /// scope. Native execution cannot interleave these stores: there is no
+    /// callback or safepoint, and the GC worker never reads this protocol.
+    /// Both negative proofs remove owners from the hull, preserving all its
+    /// existing rejections. ALL and GEN1 disable them. The slot window uses
+    /// only the Vector/Record projections whose native stores depend on it.
+    pub(super) fn set_compiled_barrier_window(
+        &self,
+        ordinary: BarrierWindow,
+        gate: CompiledObservationGate,
+    ) {
+        let negatives_enabled = !self.generational.enabled
+            && ordinary != BarrierWindow::ALL
+            && gate.observed.iter().any(|range| range.len != 0);
+        let gap = if negatives_enabled {
+            gate.excluded.unwrap_or(BarrierWindow::NONE)
         } else {
-            BarrierWindow::from_lo_len(above.lo, dump_hi.wrapping_sub(above.lo))
-        }
+            BarrierWindow::NONE
+        };
+        let single = if negatives_enabled {
+            gate.single_cons
+        } else {
+            0
+        };
+        let slot_window = self.compiled_barrier_window(
+            ordinary,
+            CompiledObservationGate {
+                observed: gate.slots,
+                ..CompiledObservationGate::NONE
+            },
+        );
+        let mut bytes = [0; 40];
+        bytes[..size_of::<usize>()].copy_from_slice(&gap.lo.to_ne_bytes());
+        bytes[size_of::<usize>()..2 * size_of::<usize>()].copy_from_slice(&gap.len.to_ne_bytes());
+        bytes[2 * size_of::<usize>()..3 * size_of::<usize>()]
+            .copy_from_slice(&single.to_ne_bytes());
+        bytes[3 * size_of::<usize>()..4 * size_of::<usize>()]
+            .copy_from_slice(&slot_window.lo.to_ne_bytes());
+        bytes[4 * size_of::<usize>()..5 * size_of::<usize>()]
+            .copy_from_slice(&slot_window.len.to_ne_bytes());
+        // Safe writes stay within each Cell; no field-derived pointer is used
+        // to write across another field's bounds. LLVM may combine adjacent
+        // byte stores, but contiguity and mutator exclusion do not rely on it.
+        self.compiled_observation_exclusion_00.set(bytes[0]);
+        self.compiled_observation_exclusion_01.set(bytes[1]);
+        self.compiled_observation_exclusion_02.set(bytes[2]);
+        self.compiled_observation_exclusion_03.set(bytes[3]);
+        self.compiled_observation_exclusion_04.set(bytes[4]);
+        self.compiled_observation_exclusion_05.set(bytes[5]);
+        self.compiled_observation_exclusion_06.set(bytes[6]);
+        self.compiled_observation_exclusion_07.set(bytes[7]);
+        self.compiled_observation_exclusion_08.set(bytes[8]);
+        self.compiled_observation_exclusion_09.set(bytes[9]);
+        self.compiled_observation_exclusion_10.set(bytes[10]);
+        self.compiled_observation_exclusion_11.set(bytes[11]);
+        self.compiled_observation_exclusion_12.set(bytes[12]);
+        self.compiled_observation_exclusion_13.set(bytes[13]);
+        self.compiled_observation_exclusion_14.set(bytes[14]);
+        self.compiled_observation_exclusion_15.set(bytes[15]);
+        self.compiled_observation_exclusion_16.set(bytes[16]);
+        self.compiled_observation_exclusion_17.set(bytes[17]);
+        self.compiled_observation_exclusion_18.set(bytes[18]);
+        self.compiled_observation_exclusion_19.set(bytes[19]);
+        self.compiled_observation_exclusion_20.set(bytes[20]);
+        self.compiled_observation_exclusion_21.set(bytes[21]);
+        self.compiled_observation_exclusion_22.set(bytes[22]);
+        self.compiled_observation_exclusion_23.set(bytes[23]);
+        self.compiled_observation_exclusion_24.set(bytes[24]);
+        self.compiled_observation_exclusion_25.set(bytes[25]);
+        self.compiled_observation_exclusion_26.set(bytes[26]);
+        self.compiled_observation_exclusion_27.set(bytes[27]);
+        self.compiled_observation_exclusion_28.set(bytes[28]);
+        self.compiled_observation_exclusion_29.set(bytes[29]);
+        self.compiled_observation_exclusion_30.set(bytes[30]);
+        self.compiled_observation_exclusion_31.set(bytes[31]);
+        self.compiled_observation_exclusion_32.set(bytes[32]);
+        self.compiled_observation_exclusion_33.set(bytes[33]);
+        self.compiled_observation_exclusion_34.set(bytes[34]);
+        self.compiled_observation_exclusion_35.set(bytes[35]);
+        self.compiled_observation_exclusion_36.set(bytes[36]);
+        self.compiled_observation_exclusion_37.set(bytes[37]);
+        self.compiled_observation_exclusion_38.set(bytes[38]);
+        self.compiled_observation_exclusion_39.set(bytes[39]);
+        self.jit
+            .set_barrier_window(self.compiled_barrier_window(ordinary, gate));
     }
 
     /// THE publisher of the barrier window: recompute it from this heap's
@@ -227,8 +411,7 @@ impl TaggedHeap {
         let observed = super::super::collection_reads::compiled_observation_gate(
             self.collection_dump_window(),
         );
-        self.jit
-            .set_barrier_window(self.compiled_barrier_window(window, observed));
+        self.set_compiled_barrier_window(window, observed);
         TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(window));
         TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(self.cons_barrier_window(window)));
     }
@@ -269,8 +452,7 @@ pub(crate) fn publish_collection_observation_window(observed: CompiledObservatio
         // publishes JitHeapState Cells. The collector never reads that state.
         let heap = unsafe { &*heap };
         let ordinary = heap.barrier_window();
-        heap.jit
-            .set_barrier_window(heap.compiled_barrier_window(ordinary, observed));
+        heap.set_compiled_barrier_window(ordinary, observed);
     });
 }
 
@@ -284,15 +466,24 @@ pub(crate) fn publish_collection_observation_window(observed: CompiledObservatio
 #[inline(never)]
 pub(crate) extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) -> i8 {
     use super::super::collection_reads::{CompiledJournalMode, compiled_journal_mode};
-    if compiled_journal_mode() != CompiledJournalMode::Observed {
-        return 0;
-    }
     let bits = owner_bits as usize;
     let owner = TaggedValue::from_bits(bits);
     if !owner.is_cons() {
         return 0;
     }
     let address = bits & !super::super::value::TAG_MASK;
+    // An ordinary obligation cannot be discharged by an observation proof.
+    // This mirror is published at every protocol transition and heap install;
+    // the installed mutator exclusively owns it, just as in the Rust cons
+    // barrier. Returning zero grants no exemption: the caller still executes
+    // its setter and SATB barrier. ALL is the common concurrent-mark refusal,
+    // so reject it before reading policy or reconstructing the heap window.
+    if TAGGED_HEAP_BARRIER_WINDOW.with(|window| window.get().covers(address)) {
+        return 0;
+    }
+    if compiled_journal_mode() != CompiledJournalMode::Observed {
+        return 0;
+    }
     let eligible = TAGGED_HEAP.with(|slot| {
         let heap = slot.get();
         if heap.is_null() {
@@ -302,9 +493,37 @@ pub(crate) extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) 
         // mutator scope. The collector does not change these heap protocol
         // inputs; ordinary ALL preserves tracking and concurrent SATB writes.
         let heap = unsafe { &*heap };
-        !heap.generational.enabled && !heap.barrier_window().covers(address)
+        let ordinary = heap.barrier_window();
+        // GEN1 refines the same hull: its native gate keeps the remembered-set
+        // test after the window, so an excluded gap admits no unbarriered store.
+        if ordinary.covers(address) {
+            return false;
+        }
+        original_hull_covers_refused_owner(heap, ordinary, address)
     });
     i8::from(eligible && super::super::collection_reads::exclude_unobserved_compiled_cons(bits))
+}
+
+/// Keep geometry reconstruction out of the ordinary ALL refusal's frame.
+/// The installed mutator retains this heap, and no callback or safepoint
+/// separates the original eligibility check, this query and the store.
+#[cfg(feature = "jit")]
+#[cold]
+#[inline(never)]
+fn original_hull_covers_refused_owner(
+    heap: &TaggedHeap,
+    ordinary: BarrierWindow,
+    address: usize,
+) -> bool {
+    // A refused store already outside the original hull gains nothing
+    // from refinement. Do not let that exterior gap occupy the single
+    // useful interior slot. This is a cold native refusal; publication
+    // contains no callback or safepoint before the subsequent store.
+    let mut observed =
+        super::super::collection_reads::compiled_observation_gate(heap.collection_dump_window());
+    observed.excluded = None;
+    heap.compiled_barrier_window(ordinary, observed)
+        .covers(address)
 }
 
 /// Classify this mutator's observations against the currently installed
@@ -372,3 +591,7 @@ pub(crate) fn published_barrier_window() -> BarrierWindow {
 pub(crate) fn published_cons_barrier_window() -> BarrierWindow {
     TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.get())
 }
+
+#[cfg(all(test, target_pointer_width = "64"))]
+#[path = "tests/barrier_window_layout.rs"]
+mod layout_tests;

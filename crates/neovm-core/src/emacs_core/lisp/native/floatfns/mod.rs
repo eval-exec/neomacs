@@ -10,6 +10,7 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
 use crate::emacs_core::value::ValueKind;
 use malachite::base::num::conversion::traits::RoundingFrom;
+use malachite::base::num::logic::traits::SignificantBits;
 use malachite::base::rounding_modes::RoundingMode;
 
 // ---------------------------------------------------------------------------
@@ -21,8 +22,8 @@ use malachite::base::rounding_modes::RoundingMode;
 /// Mirrors GNU `extract_float` (`floatfns.c:81`) which accepts any
 /// `NUMBERP` value: fixnum, bignum, or float. Bignums are converted
 /// to `f64` via `mpz_get_d`, matching GNU's `XFLOATINT` semantics
-/// (precision loss is the caller's contract — `logb`, `frexp`, etc.
-/// are inherently float operations).
+/// (precision loss is the caller's contract for operations such as `frexp`;
+/// integer `logb` bypasses this helper to retain its exact bit length).
 fn extract_number(val: &Value) -> Result<f64, Flow> {
     use crate::emacs_core::value::VecLikeType;
     match val.kind() {
@@ -121,24 +122,17 @@ pub(crate) fn builtin_ldexp(args: Vec<Value>) -> EvalResult {
     let exponent = extract_fixnum(&args[1])?;
     let significand = extract_number(&args[0])?;
 
-    // Use ldexp equivalent: significand * 2.0^exponent
-    // Rust doesn't have ldexp in std, but we can use f64::exp2 approach
-    // or simply multiply. For correctness with large exponents, we use
-    // the powi approach clamped to avoid overflow in intermediate steps.
-    let result = if (0..=1023).contains(&exponent) {
-        significand * f64::from_bits(((exponent + 1023) as u64) << 52)
-    } else if (-1074..0).contains(&exponent) {
-        significand * 2.0f64.powi(exponent as i32)
-    } else if exponent > 1023 {
-        // Very large exponent: will be infinity for any non-zero significand
-        if significand == 0.0 {
-            0.0
-        } else {
-            significand * f64::INFINITY
-        }
+    // GNU src/floatfns.c:200-208 clamps to C int and calls ldexp.
+    // Scaling the significand inside libm preserves subnormals, signed zero,
+    // infinities and NaN payloads without intermediate under/overflow.
+    let exponent = LdexpExponent::from(exponent);
+    // Scaling either signed zero leaves its bits unchanged for every exponent.
+    // Keep both GNU argument checks above and allocate the ordinary fresh float.
+    let result = if significand == 0.0 {
+        significand
     } else {
-        // Very small exponent: will be 0.0
-        0.0
+        // SAFETY: ldexp is a pure C math function accepting every double/int pair.
+        unsafe { c_math::ldexp(significand, exponent.0) }
     };
 
     Ok(Value::make_float(result))
@@ -147,27 +141,57 @@ pub(crate) fn builtin_ldexp(args: Vec<Value>) -> EvalResult {
 /// (logb X) -- integer part of base-2 logarithm of |X|
 ///
 /// Returns the integer exponent from frexp, minus 1 (matching Emacs behavior).
-/// For X = 0, signals a domain error (like Emacs).
+/// For X = 0, returns negative infinity (like Emacs).
 pub(crate) fn builtin_logb(args: Vec<Value>) -> EvalResult {
     expect_args("logb", &args, 1)?;
-    let x = extract_number(&args[0])?;
-
-    if x == 0.0 {
-        // Emacs returns -infinity as a float for logb(0)
-        return Ok(Value::make_float(f64::NEG_INFINITY));
-    }
-    if x.is_infinite() {
-        return Ok(Value::make_float(f64::INFINITY));
-    }
-    if x.is_nan() {
-        return Ok(Value::make_float(x));
-    }
-
-    // logb returns floor(log2(|x|)) as an integer, which is the exponent
-    // from frexp minus 1 (since frexp normalizes to [0.5, 1.0)).
-    let abs_x = x.abs();
-    let result = abs_x.log2().floor() as i64;
-    Ok(Value::fixnum(result))
+    // GNU src/floatfns.c:313-331 preserves integer precision and extracts
+    // float exponents instead of taking a rounded logarithm.
+    let value = args[0];
+    let exponent = match value.kind() {
+        ValueKind::Fixnum(n) => {
+            if n == 0 {
+                return Ok(Value::make_float(f64::NEG_INFINITY));
+            }
+            i64::from(63 - n.unsigned_abs().leading_zeros())
+        }
+        ValueKind::Veclike(VecLikeType::Bignum) => {
+            let integer = value.as_bignum().ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("numberp"), value],
+                )
+            })?;
+            let magnitude = integer.unsigned_abs_ref();
+            magnitude.significant_bits().saturating_sub(1) as i64
+        }
+        ValueKind::Float => {
+            let x = value.xfloat();
+            if x == 0.0 {
+                return Ok(Value::make_float(f64::NEG_INFINITY));
+            }
+            if !x.is_finite() {
+                return Ok(if x < 0.0 {
+                    Value::make_float(-x)
+                } else {
+                    value
+                });
+            }
+            let bits = x.to_bits() & !(1u64 << 63);
+            let biased = (bits >> 52) as i64;
+            if biased == 0 {
+                i64::from(63 - bits.leading_zeros()) - 1074
+            } else {
+                biased - 1023
+            }
+        }
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("numberp"), value],
+            ));
+        }
+    };
+    Ok(Value::fixnum(exponent))
 }
 
 // ---------------------------------------------------------------------------
@@ -208,3 +232,33 @@ pub(crate) fn builtin_ftruncate(args: Vec<Value>) -> EvalResult {
 #[cfg(test)]
 #[path = "tests/floatfns_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/gdl_logb_exact_test.rs"]
+mod gdl_logb_exact;
+
+#[cfg(test)]
+#[path = "tests/gdl_ldexp_ieee_test.rs"]
+mod gdl_ldexp_ieee;
+
+/// An exponent clamped to the C math ABI's integer range. Pure value with no
+/// mutator state; it may be used concurrently by independent Lisp contexts.
+#[derive(Clone, Copy, Debug)]
+struct LdexpExponent(libc::c_int);
+
+static_assertions::assert_impl_all!(LdexpExponent: Send, Sync);
+
+impl From<i64> for LdexpExponent {
+    fn from(exponent: i64) -> Self {
+        Self(
+            exponent.clamp(i64::from(libc::c_int::MIN), i64::from(libc::c_int::MAX)) as libc::c_int,
+        )
+    }
+}
+
+mod c_math {
+    #[cfg_attr(unix, link(name = "m"))]
+    unsafe extern "C" {
+        pub(super) fn ldexp(value: f64, exponent: libc::c_int) -> f64;
+    }
+}

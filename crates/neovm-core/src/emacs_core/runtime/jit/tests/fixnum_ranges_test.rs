@@ -19,7 +19,7 @@ fn function(arity: usize, constants: Vec<Value>, ops: Vec<Op>) -> ByteCodeFuncti
     f.lexical = true;
     f.constants = constants.into();
     f.ops = ops;
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     f
 }
@@ -170,7 +170,7 @@ fn fixnum_range_osr_overflow_after_gc_poll_keeps_current_operands() {
         let collections = ctx.tagged_heap.gc_collections();
         reset_bytecode_branch_poll_count();
         ctx.gc_stress = true;
-        let result = cache::try_run_osr(&mut ctx, &f, 0, &snapshot, &[]);
+        let result = crate::emacs_core::jit::test_support::run_osr(&mut ctx, &f, 0, &snapshot, &[]);
         ctx.gc_stress = false;
         let Some(NativeRun::DeoptAt(resume)) = result else {
             panic!("OSR must run through a poll and then deopt on overflow");

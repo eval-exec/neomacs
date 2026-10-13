@@ -11,22 +11,12 @@ impl Context {
         &mut self,
         lexical_arg: Option<Value>,
     ) -> Result<ActiveEvalLexicalArgState, Flow> {
-        begin_eval_with_lexical_arg_in_state(
-            &mut self.obarray,
-            &mut self.lexenv,
-            &mut self.specpdl,
-            lexical_arg,
-        )
+        begin_eval_with_lexical_arg_in_state(&mut self.lexenv, &mut self.specpdl, lexical_arg)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(crate) fn finish_eval_with_lexical_arg(&mut self, state: ActiveEvalLexicalArgState) {
-        finish_eval_with_lexical_arg_in_state(
-            &mut self.obarray,
-            &mut self.lexenv,
-            &mut self.specpdl,
-            state,
-        );
+        finish_eval_with_lexical_arg_in_state(&mut self.lexenv, &mut self.specpdl, state);
     }
 
     pub(crate) fn begin_macro_expansion_scope(

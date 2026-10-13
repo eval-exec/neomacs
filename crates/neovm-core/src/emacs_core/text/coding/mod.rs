@@ -26,6 +26,7 @@ use crate::emacs_core::emacs_char::EmacsChar;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::heap_types::LispString;
+use crate::tagged::value::SymbolMode;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::{HashMap, HashSet};
 use strum::{EnumString, IntoStaticStr};
@@ -91,8 +92,8 @@ fn coding_system_name(val: &Value) -> Result<String, Flow> {
 
 /// Extract a coding system name from a symbol-like argument.
 /// Accepts symbols, keywords, nil, and t.
-fn coding_symbol_name(val: &Value) -> Result<String, Flow> {
-    match val.as_symbol_name() {
+fn coding_symbol_name(val: &Value, mode: SymbolMode) -> Result<String, Flow> {
+    match val.as_symbol_name(mode) {
         Some(name) => Ok(name.to_string()),
         None => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -144,8 +145,8 @@ impl EolType {
         }
     }
 
-    pub fn from_specified_symbol_value(value: &Value) -> Option<Self> {
-        Self::from_specified_symbol_name(value.as_symbol_name()?)
+    pub fn from_specified_symbol_value(value: &Value, mode: SymbolMode) -> Option<Self> {
+        Self::from_specified_symbol_name(value.as_symbol_name(mode)?)
     }
 
     pub fn name(self) -> &'static str {
@@ -496,8 +497,8 @@ pub(crate) enum TextQuotingStyle {
 }
 
 impl TextQuotingStyle {
-    pub(crate) fn from_symbol_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+    pub(crate) fn from_symbol_value(value: Value, mode: SymbolMode) -> Option<Self> {
+        value.as_symbol_name(mode)?.parse().ok()
     }
 
     pub(crate) fn symbol_name(self) -> &'static str {
@@ -514,15 +515,17 @@ impl TextQuotingStyle {
 /// `straight', and `curve' are returned verbatim; nil (and any other value)
 /// resolve to `curve' (the display-capability fallback always picks `curve'
 /// in batch/UTF-8, matching `builtin_text_quoting_style').
-pub(crate) fn effective_text_quoting_style(obarray: &Obarray) -> TextQuotingStyle {
+pub(crate) fn effective_text_quoting_style(
+    obarray: &Obarray,
+    mode: SymbolMode,
+) -> TextQuotingStyle {
     let var = obarray
-        .symbol_value("text-quoting-style")
-        .copied()
+        .symbol_value_copied("text-quoting-style")
         .unwrap_or(Value::NIL);
     if var.is_nil() {
         return TextQuotingStyle::Curve;
     }
-    TextQuotingStyle::from_symbol_value(var).unwrap_or(TextQuotingStyle::Curve)
+    TextQuotingStyle::from_symbol_value(var, mode).unwrap_or(TextQuotingStyle::Curve)
 }
 
 /// Requote the grave accent (`` ` ``) and apostrophe (`'`) in a C-level error
@@ -550,11 +553,11 @@ pub(crate) fn requote_c_error_message(msg: &str, style: TextQuotingStyle) -> Str
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn non_nil_symbol_id(value: &Value) -> Option<SymId> {
+fn non_nil_symbol_id(value: &Value, mode: SymbolMode) -> Option<SymId> {
     if value.is_nil() {
         None
     } else {
-        value.as_symbol_id()
+        value.as_symbol_id(mode)
     }
 }
 
@@ -568,10 +571,10 @@ fn non_nil_symbol_id(value: &Value) -> Option<SymId> {
 /// so e.g. `(define-coding-system … :post-read-conversion (lambda …))` defined
 /// without error and then ignored the hook, whereas GNU rejects it at
 /// definition time.
-fn check_symbol_hook_arg(value: &Value) -> Result<Option<SymId>, Flow> {
+fn check_symbol_hook_arg(value: &Value, mode: SymbolMode) -> Result<Option<SymId>, Flow> {
     if value.is_nil() {
         Ok(None)
-    } else if let Some(id) = value.as_symbol_id() {
+    } else if let Some(id) = value.as_symbol_id(mode) {
         Ok(Some(id))
     } else {
         Err(signal(
@@ -688,7 +691,7 @@ impl Iso2022Spec {
 }
 
 /// Parse a coding system's stored ISO-2022 designation/flags data, if present.
-pub(crate) fn iso2022_spec(info: &CodingSystemInfo) -> Option<Iso2022Spec> {
+pub(crate) fn iso2022_spec(info: &CodingSystemInfo, mode: SymbolMode) -> Option<Iso2022Spec> {
     let initial_val = info.int_properties.get(&ISO2022_KEY_INITIAL)?;
     let request_val = info.int_properties.get(&ISO2022_KEY_REQUEST)?;
     let flags_bits = info.int_properties.get(&ISO2022_KEY_FLAGS)?.as_int()?;
@@ -699,7 +702,7 @@ pub(crate) fn iso2022_spec(info: &CodingSystemInfo) -> Option<Iso2022Spec> {
             *slot = if elem.is_nil() {
                 None
             } else {
-                elem.as_symbol_id()
+                elem.as_symbol_id(mode)
             };
         }
     }
@@ -708,7 +711,7 @@ pub(crate) fn iso2022_spec(info: &CodingSystemInfo) -> Option<Iso2022Spec> {
     if let Some(pairs) = super::value::list_to_vec(request_val) {
         for pair in pairs {
             if let (Some(cs), Some(reg)) =
-                (pair.cons_car().as_symbol_id(), pair.cons_cdr().as_int())
+                (pair.cons_car().as_symbol_id(mode), pair.cons_cdr().as_int())
                 && (0..4).contains(&reg)
             {
                 request.push((cs, reg as u8));
@@ -1300,12 +1303,12 @@ impl CodingSystemManager {
     /// Unknown coding systems are treated as ASCII-compatible (the byte-faithful
     /// default), matching how `call-process` only downgrades to `raw-text` when
     /// it can prove the coding is not ASCII-compatible.
-    pub fn is_ascii_compatible(&self, name: &str) -> bool {
+    pub fn is_ascii_compatible(&self, name: &str, mode: SymbolMode) -> bool {
         let resolved = self
             .canonical_runtime_name(name)
             .unwrap_or_else(|| name.to_string());
         match runtime_bucket_name(self, &resolved).and_then(|bucket| self.get(&bucket)) {
-            Some(info) => compute_coding_ascii_compat(info),
+            Some(info) => compute_coding_ascii_compat(info, mode),
             None => true,
         }
     }
@@ -1557,11 +1560,15 @@ fn record_coding_system_name(obarray: &mut Obarray, name: SymId) {
 /// `Vcoding_system_list` and `Vcoding_system_alist` in `src/coding.c`.
 /// When EOL is unspecified, GNU records the three subsidiary systems first
 /// and then the base coding system, all by consing onto the front.
-pub(crate) fn record_lisp_define_coding_system_internal(obarray: &mut Obarray, args: &[Value]) {
+pub(crate) fn record_lisp_define_coding_system_internal(
+    obarray: &mut Obarray,
+    args: &[Value],
+    mode: SymbolMode,
+) {
     if args.len() < 13 {
         return;
     }
-    let Some(name_id) = args[0].as_symbol_id() else {
+    let Some(name_id) = args[0].as_symbol_id(mode) else {
         return;
     };
     let name = resolve_sym(name_id);
@@ -1576,11 +1583,15 @@ pub(crate) fn record_lisp_define_coding_system_internal(obarray: &mut Obarray, a
 
 /// Mirror GNU `define-coding-system-alias`: append alias metadata in the
 /// runtime registry, then cons the alias onto the Lisp-visible list and alist.
-pub(crate) fn record_lisp_define_coding_system_alias(obarray: &mut Obarray, args: &[Value]) {
+pub(crate) fn record_lisp_define_coding_system_alias(
+    obarray: &mut Obarray,
+    args: &[Value],
+    mode: SymbolMode,
+) {
     if args.len() != 2 {
         return;
     }
-    let Some(alias_id) = args[0].as_symbol_id() else {
+    let Some(alias_id) = args[0].as_symbol_id(mode) else {
         return;
     };
     record_coding_system_name(obarray, alias_id);
@@ -1619,7 +1630,11 @@ fn plist_push_key(plist: &mut Vec<Value>, key: SymId, value: Value) {
 /// reconstructs the computed part of the plist, then applies each stored
 /// override with the same `plist_put` semantics to match GNU's ordering for
 /// both built-in (`define-coding-system-internal`) and reconstructed systems.
-fn apply_put_overrides(info: &CodingSystemInfo, mut reconstructed: Vec<Value>) -> Value {
+fn apply_put_overrides(
+    info: &CodingSystemInfo,
+    mut reconstructed: Vec<Value>,
+    mode: SymbolMode,
+) -> Value {
     let Some(overrides) = info.int_properties.get(&PUT_OVERRIDES_KEY) else {
         return Value::list(reconstructed);
     };
@@ -1632,7 +1647,12 @@ fn apply_put_overrides(info: &CodingSystemInfo, mut reconstructed: Vec<Value>) -
     let mut plist = Value::list(std::mem::take(&mut reconstructed));
     let mut i = 0;
     while i + 1 < pairs.len() {
-        if let Ok((next, _)) = super::plist::plist_put(plist, pairs[i], pairs[i + 1]) {
+        if let Ok((next, _)) = super::plist::plist_put_swp(
+            plist,
+            pairs[i],
+            pairs[i + 1],
+            matches!(mode, SymbolMode::Positioned),
+        ) {
             plist = next;
         }
         i += 2;
@@ -1699,6 +1719,7 @@ pub(crate) fn builtin_coding_system_list(
 pub(crate) fn builtin_coding_system_aliases(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_args("coding-system-aliases", &args, 1)?;
     if args[0].is_string() {
@@ -1707,7 +1728,7 @@ pub(crate) fn builtin_coding_system_aliases(
             vec![Value::symbol("symbolp"), args[0]],
         ));
     }
-    let raw_name = coding_symbol_name(&args[0])?;
+    let raw_name = coding_symbol_name(&args[0], mode)?;
     let resolved_name = resolve_runtime_name(mgr, &raw_name)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
     let base = strip_eol_suffix(&resolved_name);
@@ -1750,9 +1771,13 @@ pub(crate) fn builtin_coding_system_aliases(
 /// Recognized built-in properties: :name, :type, :mnemonic, :eol-type.
 /// Other properties are looked up from the per-system property list.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_coding_system_get(mgr: &CodingSystemManager, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_coding_system_get(
+    mgr: &CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("coding-system-get", &args, 2)?;
-    let coding_name = coding_symbol_name(&args[0])?;
+    let coding_name = coding_symbol_name(&args[0], mode)?;
     let resolved_name = resolve_runtime_name(mgr, &coding_name)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
     let bucket = runtime_bucket_name(mgr, &resolved_name)
@@ -1761,7 +1786,7 @@ pub(crate) fn builtin_coding_system_get(mgr: &CodingSystemManager, args: Vec<Val
         .get(&bucket)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
 
-    if let Some(prop_id) = args[1].as_symbol_id() {
+    if let Some(prop_id) = args[1].as_symbol_id(mode) {
         let prop_name = resolve_sym(prop_id);
         if let Some(value) = property_lookup(info, prop_id) {
             return Ok(value);
@@ -1957,7 +1982,7 @@ fn coding_is_iso2022_full_support(info: &CodingSystemInfo) -> bool {
 
 /// Compute the detector category symbol for a coding system, mirroring GNU's
 /// `Fdefine_coding_system_internal` (coding.c).
-fn compute_coding_category(info: &CodingSystemInfo) -> &'static str {
+fn compute_coding_category(info: &CodingSystemInfo, mode: SymbolMode) -> &'static str {
     match resolve_sym(info.coding_type) {
         "charset" => "coding-category-charset",
         "ccl" => "coding-category-ccl",
@@ -1971,7 +1996,7 @@ fn compute_coding_category(info: &CodingSystemInfo) -> &'static str {
             let little = info
                 .properties
                 .get(&intern(":endian"))
-                .and_then(|v| v.as_symbol_id())
+                .and_then(|v| v.as_symbol_id(mode))
                 .map(resolve_sym)
                 == Some("little");
             match coding_bom_kind(info) {
@@ -1983,7 +2008,7 @@ fn compute_coding_category(info: &CodingSystemInfo) -> &'static str {
             }
         }
         "iso-2022" => {
-            let Some(spec) = iso2022_spec(info) else {
+            let Some(spec) = iso2022_spec(info, mode) else {
                 return "coding-category-undecided";
             };
             let full = coding_is_iso2022_full_support(info);
@@ -2022,14 +2047,18 @@ fn compute_coding_category(info: &CodingSystemInfo) -> &'static str {
 /// GNU's `XFIXNUM (CODING_ATTR_CATEGORY (attrs))` in coding.c.
 ///
 /// Returns `None` if `name` does not resolve to a known coding system.
-fn coding_category_of(mgr: &CodingSystemManager, name: &str) -> Option<&'static str> {
+fn coding_category_of(
+    mgr: &CodingSystemManager,
+    name: &str,
+    mode: SymbolMode,
+) -> Option<&'static str> {
     let resolved = resolve_runtime_name(mgr, name)?;
     let bucket = runtime_bucket_name(mgr, &resolved)?;
     let info = mgr.get(&bucket)?;
     // Systems defined via `define-coding-system-internal` carry a verbatim
     // plist; their category is computed from the full coding-type info.
     if info.int_properties.contains_key(&PLIST_VERBATIM_KEY) {
-        return Some(compute_coding_category(info));
+        return Some(compute_coding_category(info, mode));
     }
     // Built-in `no-conversion`/`undecided` and the statically registered
     // systems fall back to the per-coding-type mapping used by the generic
@@ -2045,7 +2074,7 @@ fn coding_category_of(mgr: &CodingSystemManager, name: &str) -> Option<&'static 
 
 /// Compute `:ascii-compatible-p` for a coding system, mirroring GNU's
 /// per-type overrides (the stored value is the `:ascii-compatible-p` argument).
-fn compute_coding_ascii_compat(info: &CodingSystemInfo) -> bool {
+fn compute_coding_ascii_compat(info: &CodingSystemInfo, mode: SymbolMode) -> bool {
     let charsets = &info.charset_list;
     let any_ascii = || {
         charsets
@@ -2067,7 +2096,7 @@ fn compute_coding_ascii_compat(info: &CodingSystemInfo) -> bool {
         "utf-8" => coding_explicit_ascii_compat(info).unwrap_or_else(|| !coding_has_bom(info)),
         "utf-16" => false,
         "iso-2022" => matches!(
-            compute_coding_category(info),
+            compute_coding_category(info, mode),
             "coding-category-iso-8-1" | "coding-category-iso-8-2"
         ),
         "emacs-mule" | "raw-text" => true,
@@ -2146,23 +2175,28 @@ fn c_init_coding_system_plist(name: &str) -> Option<Vec<Value>> {
 pub(crate) fn builtin_coding_system_plist(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     // Memoized per coding-system symbol (see `CodingLookupCache`); an
     // argument that is not a symbol, and any error, takes the full path.
-    let key = args.first().and_then(|value| value.as_symbol_id());
+    let key = args.first().and_then(|value| value.as_symbol_id(mode));
     if let Some(key) = key
         && let Some(value) = mgr.lookup_cache.borrow().plist.get(&key)
     {
         return Ok(*value);
     }
-    let value = builtin_coding_system_plist_uncached(mgr, args)?;
+    let value = builtin_coding_system_plist_uncached(mgr, args, mode)?;
     if let Some(key) = key {
         mgr.lookup_cache.borrow_mut().plist.insert(key, value);
     }
     Ok(value)
 }
 
-fn builtin_coding_system_plist_uncached(mgr: &CodingSystemManager, args: Vec<Value>) -> EvalResult {
+fn builtin_coding_system_plist_uncached(
+    mgr: &CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("coding-system-plist", &args, 1)?;
     if args[0].is_string() {
         return Err(signal(
@@ -2171,7 +2205,7 @@ fn builtin_coding_system_plist_uncached(mgr: &CodingSystemManager, args: Vec<Val
         ));
     }
 
-    let coding_name = coding_symbol_name(&args[0])?;
+    let coding_name = coding_symbol_name(&args[0], mode)?;
     let resolved_name = resolve_runtime_name(mgr, &coding_name)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
     let bucket = runtime_bucket_name(mgr, &resolved_name)
@@ -2187,18 +2221,18 @@ fn builtin_coding_system_plist_uncached(mgr: &CodingSystemManager, args: Vec<Val
     if let Some(verbatim) = info.int_properties.get(&PLIST_VERBATIM_KEY) {
         let mut plist = vec![
             Value::symbol(":ascii-compatible-p"),
-            if compute_coding_ascii_compat(info) {
+            if compute_coding_ascii_compat(info, mode) {
                 Value::T
             } else {
                 Value::NIL
             },
             Value::symbol(":category"),
-            Value::symbol(compute_coding_category(info)),
+            Value::symbol(compute_coding_category(info, mode)),
         ];
         if let Some(items) = super::value::list_to_vec(verbatim) {
             plist.extend(items);
         }
-        return Ok(apply_put_overrides(info, plist));
+        return Ok(apply_put_overrides(info, plist, mode));
     }
 
     // `no-conversion` and `undecided` are built in C (coding.c `syms_of_coding`)
@@ -2206,7 +2240,7 @@ fn builtin_coding_system_plist_uncached(mgr: &CodingSystemManager, args: Vec<Val
     // (specific field order, the doubled `:ascii-compatible-p`, the multi-line
     // docstring, and `:eol-type`). Emit GNU's exact plist for them.
     if let Some(plist) = c_init_coding_system_plist(&resolved_name) {
-        return Ok(apply_put_overrides(info, plist));
+        return Ok(apply_put_overrides(info, plist, mode));
     }
 
     let base = strip_eol_suffix(&resolved_name);
@@ -2289,13 +2323,14 @@ fn builtin_coding_system_plist_uncached(mgr: &CodingSystemManager, args: Vec<Val
     // Fold in caller-provided properties from `coding-system-put`, preserving
     // GNU's `plist_put` ordering (in-place update for keys already present,
     // append at the tail for new keys).
-    Ok(apply_put_overrides(info, plist))
+    Ok(apply_put_overrides(info, plist, mode))
 }
 
 /// `(coding-system-put CODING-SYSTEM PROP VAL)` -- set a property of a coding system.
 pub(crate) fn builtin_coding_system_put(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_args("coding-system-put", &args, 3)?;
     let val = args[2];
@@ -2307,7 +2342,7 @@ pub(crate) fn builtin_coding_system_put(
         ));
     }
 
-    let coding_name = coding_symbol_name(&args[0])?;
+    let coding_name = coding_symbol_name(&args[0], mode)?;
     let resolved_name = resolve_runtime_name(mgr, &coding_name)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
     let bucket = runtime_bucket_name(mgr, &resolved_name)
@@ -2316,7 +2351,7 @@ pub(crate) fn builtin_coding_system_put(
         .get_mut(&bucket)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
 
-    if let Some(prop_id) = args[1].as_symbol_id() {
+    if let Some(prop_id) = args[1].as_symbol_id(mode) {
         let prop_name = resolve_sym(prop_id);
         // GNU `Fcoding_system_put` validates the conversion hooks with
         // CHECK_SYMBOL (src/coding.c:11562, 11567): a non-symbol (e.g. a lambda)
@@ -2329,7 +2364,19 @@ pub(crate) fn builtin_coding_system_put(
                 | ":pre-write-conversion"
                 | "pre-write-conversion"
         ) {
-            check_symbol_hook_arg(&val)?;
+            check_symbol_hook_arg(&val, mode)?;
+        }
+        if matches!(
+            prop_name,
+            ":decode-translation-table" | ":encode-translation-table"
+        ) && !val.is_char_table()
+            && !val.is_cons()
+            && val.as_symbol_id(mode).is_none()
+        {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), val],
+            ));
         }
         // GNU coerces a `:mnemonic` string to its first character (coding.c
         // `Fcoding_system_put`), and the stored value is the coerced one.
@@ -2345,13 +2392,13 @@ pub(crate) fn builtin_coding_system_put(
             val
         };
         info.properties.insert(prop_id, stored_val);
-        record_put_override(info, args[1], stored_val);
+        record_put_override(info, args[1], stored_val, mode);
         return Ok(stored_val);
     }
 
     if let Some(int_key) = args[1].as_int() {
         info.int_properties.insert(int_key, val);
-        record_put_override(info, args[1], val);
+        record_put_override(info, args[1], val, mode);
         return Ok(val);
     }
 
@@ -2362,13 +2409,15 @@ pub(crate) fn builtin_coding_system_put(
 /// semantics (in-place update of an existing key, append for a new one), so
 /// `coding-system-plist` (and the `coding-system-get` defun that reads it)
 /// surfaces it in the same order as GNU's shared spec plist.
-fn record_put_override(info: &mut CodingSystemInfo, prop: Value, val: Value) {
+fn record_put_override(info: &mut CodingSystemInfo, prop: Value, val: Value, mode: SymbolMode) {
     let current = info
         .int_properties
         .get(&PUT_OVERRIDES_KEY)
         .copied()
         .unwrap_or(Value::NIL);
-    if let Ok((updated, _)) = super::plist::plist_put(current, prop, val) {
+    if let Ok((updated, _)) =
+        super::plist::plist_put_swp(current, prop, val, matches!(mode, SymbolMode::Positioned))
+    {
         info.int_properties.insert(PUT_OVERRIDES_KEY, updated);
     }
 }
@@ -2378,25 +2427,30 @@ fn record_put_override(info: &mut CodingSystemInfo, prop: Value, val: Value) {
 pub(crate) fn builtin_coding_system_base(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     // Memoized per coding-system symbol (see `CodingLookupCache`); an
     // argument that is not a symbol, and any error, takes the full path.
-    let key = args.first().and_then(|value| value.as_symbol_id());
+    let key = args.first().and_then(|value| value.as_symbol_id(mode));
     if let Some(key) = key
         && let Some(value) = mgr.lookup_cache.borrow().base.get(&key)
     {
         return Ok(*value);
     }
-    let value = builtin_coding_system_base_uncached(mgr, args)?;
+    let value = builtin_coding_system_base_uncached(mgr, args, mode)?;
     if let Some(key) = key {
         mgr.lookup_cache.borrow_mut().base.insert(key, value);
     }
     Ok(value)
 }
 
-fn builtin_coding_system_base_uncached(mgr: &CodingSystemManager, args: Vec<Value>) -> EvalResult {
+fn builtin_coding_system_base_uncached(
+    mgr: &CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("coding-system-base", &args, 1)?;
-    let name = coding_symbol_name(&args[0])?;
+    let name = coding_symbol_name(&args[0], mode)?;
     let resolved_name = resolve_runtime_name(mgr, &name)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
     Ok(Value::symbol(display_base_name(strip_eol_suffix(
@@ -2410,16 +2464,17 @@ fn builtin_coding_system_base_uncached(mgr: &CodingSystemManager, args: Vec<Valu
 pub(crate) fn builtin_coding_system_eol_type(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     // Memoized per coding-system symbol (see `CodingLookupCache`); an
     // argument that is not a symbol, and any error, takes the full path.
-    let key = args.first().and_then(|value| value.as_symbol_id());
+    let key = args.first().and_then(|value| value.as_symbol_id(mode));
     if let Some(key) = key
         && let Some(value) = mgr.lookup_cache.borrow().eol_type.get(&key)
     {
         return Ok(*value);
     }
-    let value = builtin_coding_system_eol_type_uncached(mgr, args)?;
+    let value = builtin_coding_system_eol_type_uncached(mgr, args, mode)?;
     if let Some(key) = key
         && value.is_fixnum()
     {
@@ -2431,9 +2486,10 @@ pub(crate) fn builtin_coding_system_eol_type(
 fn builtin_coding_system_eol_type_uncached(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_args("coding-system-eol-type", &args, 1)?;
-    let Some(name) = args[0].as_symbol_name() else {
+    let Some(name) = args[0].as_symbol_name(mode) else {
         return Ok(Value::NIL);
     };
     let resolved_name = match resolve_runtime_name(mgr, name) {
@@ -2476,6 +2532,7 @@ fn builtin_coding_system_eol_type_uncached(
 pub(crate) fn coding_inherit_eol_type_unix(
     mgr: &CodingSystemManager,
     coding_system: Value,
+    mode: SymbolMode,
 ) -> Value {
     // GNU: NILP (coding_system) -> coding_system = Qraw_text.
     let coding_system = if coding_system.is_nil() {
@@ -2483,7 +2540,7 @@ pub(crate) fn coding_inherit_eol_type_unix(
     } else {
         coding_system
     };
-    let Some(name) = coding_system.as_symbol_name() else {
+    let Some(name) = coding_system.as_symbol_name(mode) else {
         return coding_system;
     };
     let Some(resolved_name) = resolve_runtime_name(mgr, name) else {
@@ -2512,25 +2569,30 @@ pub(crate) fn coding_inherit_eol_type_unix(
 pub(crate) fn builtin_coding_system_type(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     // Memoized per coding-system symbol (see `CodingLookupCache`); an
     // argument that is not a symbol, and any error, takes the full path.
-    let key = args.first().and_then(|value| value.as_symbol_id());
+    let key = args.first().and_then(|value| value.as_symbol_id(mode));
     if let Some(key) = key
         && let Some(value) = mgr.lookup_cache.borrow().coding_type.get(&key)
     {
         return Ok(*value);
     }
-    let value = builtin_coding_system_type_uncached(mgr, args)?;
+    let value = builtin_coding_system_type_uncached(mgr, args, mode)?;
     if let Some(key) = key {
         mgr.lookup_cache.borrow_mut().coding_type.insert(key, value);
     }
     Ok(value)
 }
 
-fn builtin_coding_system_type_uncached(mgr: &CodingSystemManager, args: Vec<Value>) -> EvalResult {
+fn builtin_coding_system_type_uncached(
+    mgr: &CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("coding-system-type", &args, 1)?;
-    let name = coding_symbol_name(&args[0])?;
+    let name = coding_symbol_name(&args[0], mode)?;
     let resolved_name = resolve_runtime_name(mgr, &name)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
     let base = strip_eol_suffix(&resolved_name);
@@ -2556,9 +2618,12 @@ enum EolConversionRequest {
 
 impl EolConversionRequest {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    fn from_lisp_value(value: Value) -> Self {
+    fn from_lisp_value(value: Value, mode: SymbolMode) -> Self {
         if value.is_nil() {
             return Self::Nil;
+        }
+        if let Some(eol) = EolType::from_specified_symbol_value(&value, mode) {
+            return Self::Integer(eol.to_int());
         }
         match value.kind() {
             ValueKind::Fixnum(n) => Self::Integer(n),
@@ -2566,9 +2631,6 @@ impl EolConversionRequest {
                 value,
                 number: value.xfloat(),
             },
-            ValueKind::Symbol(_) => EolType::from_specified_symbol_value(&value)
-                .map(|eol| Self::Integer(eol.to_int()))
-                .unwrap_or(Self::NonNumber(value)),
             _ => Self::NonNumber(value),
         }
     }
@@ -2625,6 +2687,7 @@ fn eol_vector_ref(vector: Value, request: EolConversionRequest) -> EvalResult {
 pub(crate) fn builtin_coding_system_change_eol_conversion(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_args("coding-system-change-eol-conversion", &args, 2)?;
     if args[0].is_string() {
@@ -2633,14 +2696,14 @@ pub(crate) fn builtin_coding_system_change_eol_conversion(
             vec![Value::symbol("symbolp"), args[0]],
         ));
     }
-    let raw_name = coding_symbol_name(&args[0])?;
+    let raw_name = coding_symbol_name(&args[0], mode)?;
     if resolve_runtime_name(mgr, &raw_name).is_none() {
         return Err(signal(LispCondition::CodingSystemError, vec![args[0]]));
     }
 
-    let request = EolConversionRequest::from_lisp_value(args[1]);
-    let base = builtin_coding_system_base(mgr, vec![args[0]])?;
-    let orig_eol_type = builtin_coding_system_eol_type(mgr, vec![args[0]])?;
+    let request = EolConversionRequest::from_lisp_value(args[1], mode);
+    let base = builtin_coding_system_base(mgr, vec![args[0]], mode)?;
+    let orig_eol_type = builtin_coding_system_eol_type(mgr, vec![args[0]], mode)?;
 
     if matches!(
         orig_eol_type.kind(),
@@ -2663,7 +2726,7 @@ pub(crate) fn builtin_coding_system_change_eol_conversion(
         return Ok(args[0]);
     }
 
-    let base_eol_type = builtin_coding_system_eol_type(mgr, vec![base])?;
+    let base_eol_type = builtin_coding_system_eol_type(mgr, vec![base], mode)?;
     if matches!(
         base_eol_type.kind(),
         ValueKind::Veclike(VecLikeType::Vector)
@@ -2680,12 +2743,13 @@ pub(crate) fn builtin_coding_system_change_eol_conversion(
 pub(crate) fn builtin_coding_system_change_text_conversion(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_args("coding-system-change-text-conversion", &args, 2)?;
     let first_eol = match args[0].kind() {
         ValueKind::Nil => Some(0),
         ValueKind::String => None,
-        _ => match args[0].as_symbol_name() {
+        _ => match args[0].as_symbol_name(mode) {
             Some("nil") => Some(0),
             Some(name) => {
                 if let Some(resolved) = resolve_runtime_name(mgr, name) {
@@ -2704,7 +2768,7 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
         },
     };
 
-    let text_raw = coding_symbol_name(&args[1])?;
+    let text_raw = coding_symbol_name(&args[1], mode)?;
     let text_name = if text_raw == "nil" {
         "undecided".to_string()
     } else {
@@ -2736,13 +2800,18 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
 
 /// `(coding-system-p OBJECT)` -- return t when OBJECT names a known coding
 /// system or alias, nil otherwise.
-pub(crate) fn builtin_coding_system_p(mgr: &CodingSystemManager, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_coding_system_p(
+    mgr: &CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("coding-system-p", &args, 1)?;
-    let known = match args[0].as_symbol_name() {
-        Some("nil") => true,
-        Some(name) => is_known_or_derived_coding_system(mgr, name),
-        None => false,
-    };
+    // GNU coding.c:8604-8611: NILP is a raw identity check; only the
+    // coding-system hash/SYMBOLP branch unwraps positioned symbols.
+    let known = args[0].is_nil()
+        || args[0]
+            .as_symbol_name(mode)
+            .is_some_and(|name| is_known_or_derived_coding_system(mgr, name));
     Ok(Value::bool_val(known))
 }
 
@@ -2751,32 +2820,31 @@ pub(crate) fn builtin_coding_system_p(mgr: &CodingSystemManager, args: Vec<Value
 pub(crate) fn builtin_check_coding_system(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_args("check-coding-system", &args, 1)?;
-    match args[0].kind() {
-        ValueKind::Nil => Ok(Value::NIL),
-        ValueKind::Symbol(id) => {
-            if is_known_or_derived_coding_system(mgr, resolve_sym(id)) {
-                Ok(args[0])
-            } else {
-                Err(signal(LispCondition::CodingSystemError, vec![args[0]]))
-            }
-        }
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), args[0]],
-        )),
+    // Fcheck_coding_system uses Fget/CHECK_SYMBOL, then returns its original
+    // argument (GNU coding.c:8659-8668), including a positioned symbol.
+    if args[0].is_nil() {
+        return Ok(Value::NIL);
+    }
+    let name = coding_symbol_name(&args[0], mode)?;
+    if is_known_or_derived_coding_system(mgr, &name) {
+        Ok(args[0])
+    } else {
+        Err(signal(LispCondition::CodingSystemError, vec![args[0]]))
     }
 }
 
 fn validate_coding_system_list_cars_for_non_ascii(
     mgr: &CodingSystemManager,
     coding_systems: Value,
+    mode: SymbolMode,
 ) -> Result<(), Flow> {
     let mut tail = coding_systems;
     while tail.is_cons() {
         let coding_system = tail.cons_car();
-        let Some(name) = coding_system.as_symbol_name() else {
+        let Some(name) = coding_system.as_symbol_name(mode) else {
             return Err(signal(
                 LispCondition::CodingSystemError,
                 vec![coding_system],
@@ -2797,11 +2865,15 @@ fn validate_coding_system_list_cars_for_non_ascii(
 /// mirroring `CODING_ATTR_CHARSET_LIST` / what `coding-system-get :charset-list`
 /// returns.  Used by the encodability scan of `check-coding-systems-region` and
 /// `unencodable-char-position`.  Returns `None` for an unknown coding system.
-fn coding_system_charset_list_syms(mgr: &CodingSystemManager, name: &str) -> Option<Vec<SymId>> {
+fn coding_system_charset_list_syms(
+    mgr: &CodingSystemManager,
+    name: &str,
+    mode: SymbolMode,
+) -> Option<Vec<SymId>> {
     let resolved_name = resolve_runtime_name(mgr, name)?;
     let base = strip_eol_suffix(&resolved_name);
     if let Some(list) = coding_charset_list_for_base(base) {
-        return Some(list.iter().filter_map(|v| v.as_symbol_id()).collect());
+        return Some(list.iter().filter_map(|v| v.as_symbol_id(mode)).collect());
     }
     let bucket = runtime_bucket_name(mgr, &resolved_name)?;
     let info = mgr.get(&bucket)?;
@@ -2818,8 +2890,8 @@ struct CodingRepertoire {
 }
 
 impl CodingRepertoire {
-    fn for_coding_system(mgr: &CodingSystemManager, name: &str) -> Option<Self> {
-        let charsets = coding_system_charset_list_syms(mgr, name)?;
+    fn for_coding_system(mgr: &CodingSystemManager, name: &str, mode: SymbolMode) -> Option<Self> {
+        let charsets = coding_system_charset_list_syms(mgr, name, mode)?;
         let ascii_compatible = charsets
             .iter()
             .any(|&charset| super::charset::charset_is_ascii_compatible(charset));
@@ -2924,7 +2996,11 @@ pub(crate) fn builtin_check_coding_systems_region(
 
     // Validate the coding-system list (GNU `CODING_SYSTEM_SPEC` would signal
     // `coding-system-error` for a non-coding-system) before scanning.
-    validate_coding_system_list_cars_for_non_ascii(&eval.coding_systems, args[2])?;
+    validate_coding_system_list_cars_for_non_ascii(
+        &eval.coding_systems,
+        args[2],
+        eval.symbol_mode(),
+    )?;
 
     // For each coding system, collect the positions of unencodable characters.
     // GNU builds the result preserving the input list order, with positions
@@ -2935,10 +3011,11 @@ pub(crate) fn builtin_check_coding_systems_region(
     while tail.is_cons() {
         let coding_system = tail.cons_car();
         tail = tail.cons_cdr();
-        let Some(name) = coding_system.as_symbol_name() else {
+        let Some(name) = coding_system.as_symbol_name(eval.symbol_mode()) else {
             continue;
         };
-        let Some(repertoire) = CodingRepertoire::for_coding_system(&eval.coding_systems, name)
+        let Some(repertoire) =
+            CodingRepertoire::for_coding_system(&eval.coding_systems, name, eval.symbol_mode())
         else {
             continue;
         };
@@ -2971,7 +3048,7 @@ pub(crate) fn builtin_unencodable_char_position(
     // GNU calls `setup_coding_system (Fcheck_coding_system (coding_system))`:
     // validate first (signalling on an unknown coding system), then short-circuit
     // for raw-text which encodes every byte verbatim.
-    let coding_name = coding_symbol_name(&args[2])?;
+    let coding_name = coding_symbol_name(&args[2], eval.symbol_mode())?;
     if !is_known_or_derived_coding_system(&eval.coding_systems, &coding_name) {
         return Err(signal(LispCondition::CodingSystemError, vec![args[2]]));
     }
@@ -2980,7 +3057,8 @@ pub(crate) fn builtin_unencodable_char_position(
     if coding_type_for_base(strip_eol_suffix(&resolved)) == Some("raw-text") {
         return Ok(Value::NIL);
     }
-    let Some(repertoire) = CodingRepertoire::for_coding_system(&eval.coding_systems, &coding_name)
+    let Some(repertoire) =
+        CodingRepertoire::for_coding_system(&eval.coding_systems, &coding_name, eval.symbol_mode())
     else {
         return Ok(Value::NIL);
     };
@@ -3150,11 +3228,12 @@ pub(crate) fn builtin_find_coding_system(
 pub(crate) fn builtin_define_coding_system_internal(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_min_args("define-coding-system-internal", &args, 13)?;
 
     // arg[0]: name (symbol)
-    let name = coding_symbol_name_required(&args[0])?;
+    let name = coding_symbol_name_required(&args[0], mode)?;
 
     // arg[1]: mnemonic (char)
     let mnemonic = match args[1].kind() {
@@ -3163,34 +3242,44 @@ pub(crate) fn builtin_define_coding_system_internal(
     };
 
     // arg[2]: coding-type (symbol)
-    let coding_type = match args[2].kind() {
-        ValueKind::Symbol(id) => id,
-        _ => intern("undecided"),
-    };
+    let coding_type = args[2].as_symbol_id(mode).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), args[2]],
+        )
+    })?;
 
     // arg[3]: charset-list (list of symbols, or special symbol like 'iso-2022)
-    let charset_list = match args[3].kind() {
-        ValueKind::Symbol(id) => vec![id],
-        _ => {
-            if let Some(items) = super::value::list_to_vec(&args[3]) {
-                items.iter().filter_map(|v| v.as_symbol_id()).collect()
-            } else {
-                Vec::new()
-            }
-        }
+    let charset_list = if let Some(id) = args[3].as_symbol_id(mode).filter(|_| !args[3].is_nil()) {
+        vec![id]
+    } else if let Some(items) = super::value::list_to_vec(&args[3]) {
+        items.iter().filter_map(|v| v.as_symbol_id(mode)).collect()
+    } else {
+        Vec::new()
     };
 
     // arg[4]: ascii-compatible-p
     let ascii_compatible_p = args[4].is_truthy();
 
-    // arg[5]: decode-translation-table (ignored for now)
-    // arg[6]: encode-translation-table (ignored for now)
+    // GNU coding.c:11071-11079 accepts a char-table/cons, otherwise
+    // CHECK_SYMBOL. Keep the operand for any wrong-type signal.
+    for translation_table in &args[5..7] {
+        if !translation_table.is_char_table()
+            && !translation_table.is_cons()
+            && translation_table.as_symbol_id(mode).is_none()
+        {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), *translation_table],
+            ));
+        }
+    }
 
     // arg[7]: post-read-conversion (GNU `CHECK_SYMBOL`, coding.c:11083)
-    let post_read_conversion = check_symbol_hook_arg(&args[7])?;
+    let post_read_conversion = check_symbol_hook_arg(&args[7], mode)?;
 
     // arg[8]: pre-write-conversion (GNU `CHECK_SYMBOL`, coding.c:11087)
-    let pre_write_conversion = check_symbol_hook_arg(&args[8])?;
+    let pre_write_conversion = check_symbol_hook_arg(&args[8], mode)?;
 
     // arg[9]: default-char
     let default_char = match args[9].kind() {
@@ -3206,7 +3295,7 @@ pub(crate) fn builtin_define_coding_system_internal(
     if let Some(items) = super::value::list_to_vec(&args[11]) {
         let mut i = 0;
         while i + 1 < items.len() {
-            if let Some(key) = items[i].as_symbol_id() {
+            if let Some(key) = items[i].as_symbol_id(mode) {
                 properties.insert(key, items[i + 1]);
             }
             i += 2;
@@ -3214,12 +3303,11 @@ pub(crate) fn builtin_define_coding_system_internal(
     }
 
     // arg[12]: eol-type (symbol: unix/dos/mac, nil, or vector for auto-detect)
-    let eol_type = match args[12].kind() {
-        ValueKind::Nil => EolType::Undecided,
-        ValueKind::Symbol(_) => EolType::from_specified_symbol_value(&args[12])
-            .ok_or_else(|| signal("error", vec![Value::string("Invalid eol-type")]))?,
-        ValueKind::Veclike(VecLikeType::Vector) => EolType::Undecided,
-        _ => return Err(signal("error", vec![Value::string("Invalid eol-type")])),
+    let eol_type = if args[12].is_nil() || args[12].as_vector_data().is_some() {
+        EolType::Undecided
+    } else {
+        EolType::from_specified_symbol_value(&args[12], mode)
+            .ok_or_else(|| signal("error", vec![Value::string("Invalid eol-type")]))?
     };
 
     // Build the base coding system info.
@@ -3283,14 +3371,8 @@ pub(crate) fn builtin_define_coding_system_internal(
 }
 
 /// Extract a coding system name from a symbol argument, signaling on non-symbol.
-fn coding_symbol_name_required(val: &Value) -> Result<String, Flow> {
-    match val.kind() {
-        ValueKind::Symbol(id) => Ok(resolve_sym(id).to_owned()),
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), *val],
-        )),
-    }
+fn coding_symbol_name_required(val: &Value, mode: SymbolMode) -> Result<String, Flow> {
+    coding_symbol_name(val, mode)
 }
 
 /// `(define-coding-system-alias ALIAS CODING-SYSTEM)` -- register ALIAS for
@@ -3298,35 +3380,19 @@ fn coding_symbol_name_required(val: &Value) -> Result<String, Flow> {
 pub(crate) fn builtin_define_coding_system_alias(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_args("define-coding-system-alias", &args, 2)?;
 
-    let alias = match args[0].kind() {
-        ValueKind::Symbol(id) => resolve_sym(id).to_owned(),
-        ValueKind::Nil => "nil".to_string(),
-        _ => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("symbolp"), args[0]],
-            ));
-        }
-    };
-
-    let target = match args[1].kind() {
-        ValueKind::Symbol(id) => resolve_sym(id).to_owned(),
-        ValueKind::Nil => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("coding-system-p"), Value::NIL],
-            ));
-        }
-        _ => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("symbolp"), args[1]],
-            ));
-        }
-    };
+    let alias = coding_symbol_name(&args[0], mode)?;
+    // GNU CHECK_CODING_SYSTEM_GET_SPEC preserves the raw NILP special case.
+    if args[1].is_nil() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("coding-system-p"), args[1]],
+        ));
+    }
+    let target = coding_symbol_name(&args[1], mode)?;
 
     let canonical = mgr.resolve(&target).ok_or_else(|| {
         signal(
@@ -3348,6 +3414,7 @@ pub(crate) fn builtin_define_coding_system_alias(
 pub(crate) fn builtin_set_coding_system_priority(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     if args.is_empty() {
         return Ok(Value::NIL);
@@ -3363,7 +3430,7 @@ pub(crate) fn builtin_set_coding_system_priority(
                 vec![Value::symbol("coding-system-p"), Value::NIL],
             ));
         }
-        let Some(name) = arg.as_symbol_name().map(|s| s.to_string()) else {
+        let Some(name) = arg.as_symbol_name(mode).map(|s| s.to_string()) else {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), *arg],
@@ -3372,7 +3439,7 @@ pub(crate) fn builtin_set_coding_system_priority(
         // Resolve through aliases / EOL variants; GNU prefers the base name.
         resolve_runtime_name(mgr, &name)
             .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![*arg]))?;
-        let category = coding_category_of(mgr, &name)
+        let category = coding_category_of(mgr, &name, mode)
             .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![*arg]))?;
         // GNU stores the coding system's *base* name in the priority list.
         let base = coding_system_base_name(mgr, &name);
@@ -3383,7 +3450,7 @@ pub(crate) fn builtin_set_coding_system_priority(
     let entry_categories: Vec<Option<&'static str>> = mgr
         .priority
         .iter()
-        .map(|&sym| coding_category_of(mgr, resolve_sym(sym)))
+        .map(|&sym| coding_category_of(mgr, resolve_sym(sym), mode))
         .collect();
 
     // Front part: requested categories, first occurrence wins (GNU `changed[]`).
@@ -3524,10 +3591,14 @@ fn coding_cat_name(cat: usize) -> Option<&'static str> {
 /// systems; we map each to its category (first occurrence wins) and append any
 /// categories not represented, in enum order, so the result always covers all
 /// `CODING_CAT_MAX` categories like GNU's fixed-size `coding_priorities` array.
-pub(crate) fn coding_category_priority_list(mgr: &CodingSystemManager) -> Vec<SymId> {
+pub(crate) fn coding_category_priority_list(
+    mgr: &CodingSystemManager,
+    mode: SymbolMode,
+) -> Vec<SymId> {
     let mut order: Vec<usize> = Vec::with_capacity(CODING_CAT_MAX);
     for &sym in &mgr.priority {
-        if let Some(cat) = coding_category_of(mgr, resolve_sym(sym)).and_then(coding_cat_index)
+        if let Some(cat) =
+            coding_category_of(mgr, resolve_sym(sym), mode).and_then(coding_cat_index)
             && !order.contains(&cat)
         {
             order.push(cat);
@@ -4154,10 +4225,10 @@ struct CharsetDetectionPlan {
 }
 
 impl CharsetDetectionPlan {
-    fn for_coding_system(mgr: &CodingSystemManager, name: SymId) -> Option<Self> {
+    fn for_coding_system(mgr: &CodingSystemManager, name: SymId, mode: SymbolMode) -> Option<Self> {
         let resolved = canonical_runtime_name(mgr, resolve_sym(name))?;
-        let charsets = coding_system_charset_list_syms(mgr, &resolved)?;
-        let ascii_compatible = mgr.is_ascii_compatible(&resolved);
+        let charsets = coding_system_charset_list_syms(mgr, &resolved, mode)?;
+        let ascii_compatible = mgr.is_ascii_compatible(&resolved, mode);
         let mut code_spaces: Vec<_> = charsets
             .into_iter()
             .filter_map(super::charset::charset_code_space)
@@ -4472,11 +4543,16 @@ struct CodingDetectionBindings {
     charset: Option<CharsetDetectionPlan>,
 }
 
-fn coding_category_bindings(mgr: &CodingSystemManager) -> CodingDetectionBindings {
+fn coding_category_bindings(
+    mgr: &CodingSystemManager,
+    mode: SymbolMode,
+) -> CodingDetectionBindings {
     let mut cat_system: [Option<SymId>; CODING_CAT_MAX] = [None; CODING_CAT_MAX];
     let mut priorities: Vec<usize> = Vec::with_capacity(CODING_CAT_MAX);
     for &sym in &mgr.priority {
-        if let Some(cat) = coding_category_of(mgr, resolve_sym(sym)).and_then(coding_cat_index) {
+        if let Some(cat) =
+            coding_category_of(mgr, resolve_sym(sym), mode).and_then(coding_cat_index)
+        {
             if cat_system[cat].is_none() {
                 cat_system[cat] = Some(sym);
             }
@@ -4491,7 +4567,7 @@ fn coding_category_bindings(mgr: &CodingSystemManager) -> CodingDetectionBinding
         }
     }
     let charset = cat_system[CodingCat::Charset as usize]
-        .and_then(|name| CharsetDetectionPlan::for_coding_system(mgr, name));
+        .and_then(|name| CharsetDetectionPlan::for_coding_system(mgr, name, mode));
     CodingDetectionBindings {
         priorities,
         systems: cat_system,
@@ -4506,8 +4582,9 @@ fn detect_coding_systems(
     text: &LispString,
     highest: bool,
     block: SourceBlock,
+    mode: SymbolMode,
 ) -> Value {
-    let bindings = coding_category_bindings(mgr);
+    let bindings = coding_category_bindings(mgr, mode);
     let bytes = text.as_bytes();
 
     let detected = detect_categories(
@@ -4548,8 +4625,9 @@ pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
     mgr: &CodingSystemManager,
     bytes: &[u8],
     block: SourceBlock,
+    mode: SymbolMode,
 ) -> Option<SymId> {
-    let bindings = coding_category_bindings(mgr);
+    let bindings = coding_category_bindings(mgr, mode);
     let scan = scan_undecided(
         &bindings,
         bytes,
@@ -4558,7 +4636,8 @@ pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
         block,
         WalkStop::AtFirstFound,
     );
-    let base = match detect_coding_found(mgr, &bindings.priorities, &bindings.systems, &scan) {
+    let base = match detect_coding_found(mgr, &bindings.priorities, &bindings.systems, &scan, mode)
+    {
         DetectedBase::Rebase(sym) => Value::symbol(resolve_sym(sym)),
         // GNU leaves `coding` alone; this engine's spelling of that is the name
         // the caller already holds, which for every caller of this function is
@@ -4568,7 +4647,7 @@ pub(crate) fn detect_highest_coding_system_for_unibyte_bytes(
     let detected = apply_detected_eol(mgr, base, bytes, true);
     (!detected.is_nil()).then(|| {
         detected
-            .as_symbol_id()
+            .as_symbol_id(mode)
             .expect("a non-nil coding-system detection result is a symbol")
     })
 }
@@ -4643,7 +4722,7 @@ fn apply_detected_eol(
         return detected;
     };
     let rewrite = |sym: Value| -> Value {
-        let Some(name) = sym.as_symbol_name() else {
+        let Some(name) = sym.as_bare_symbol_name() else {
             return sym;
         };
         // A coding system that already names a concrete EOL is left untouched
@@ -4876,6 +4955,7 @@ fn detect_coding_found(
     priorities: &[usize],
     cat_system: &[Option<SymId>; CODING_CAT_MAX],
     scan: &UndecidedScan,
+    mode: SymbolMode,
 ) -> DetectedBase {
     if let Some(cat) = scan.found_at {
         let Some(this) = cat_system[cat] else {
@@ -4887,7 +4967,7 @@ fn detect_coding_found(
         // (src/coding.c:6649-6680); only a non-cons `:bom` falls back to the
         // category's own name.
         if cat == CodingCat::Utf8Auto as usize {
-            return DetectedBase::Rebase(match coding_bom_auto_pair(mgr, this) {
+            return DetectedBase::Rebase(match coding_bom_auto_pair(mgr, this, mode) {
                 Some((sig, nosig)) => {
                     if scan.di.found & cat_mask(CodingCat::Utf8Sig) != 0 {
                         sig
@@ -4899,7 +4979,7 @@ fn detect_coding_found(
             });
         }
         if cat == CodingCat::Utf16Auto as usize {
-            return match coding_bom_auto_pair(mgr, this) {
+            return match coding_bom_auto_pair(mgr, this, mode) {
                 Some((le, be)) => {
                     if scan.di.found & cat_mask(CodingCat::Utf16Le) != 0 {
                         DetectedBase::Rebase(le)
@@ -4947,7 +5027,11 @@ fn detect_coding_found(
 /// the pair `define-coding-system`'s `:bom` argument stores, e.g.
 /// `(utf-16le-with-signature . utf-16be-with-signature)` for `utf-16`
 /// (lisp/international/mule-conf.el:1463).  `None` is GNU's `! CONSP`.
-fn coding_bom_auto_pair(mgr: &CodingSystemManager, name: SymId) -> Option<(SymId, SymId)> {
+fn coding_bom_auto_pair(
+    mgr: &CodingSystemManager,
+    name: SymId,
+    mode: SymbolMode,
+) -> Option<(SymId, SymId)> {
     let bom = *mgr
         .get(resolve_sym(name))?
         .properties
@@ -4956,8 +5040,8 @@ fn coding_bom_auto_pair(mgr: &CodingSystemManager, name: SymId) -> Option<(SymId
         return None;
     }
     Some((
-        bom.cons_car().as_symbol_id()?,
-        bom.cons_cdr().as_symbol_id()?,
+        bom.cons_car().as_symbol_id(mode)?,
+        bom.cons_cdr().as_symbol_id(mode)?,
     ))
 }
 
@@ -5083,6 +5167,7 @@ fn run_detector(
 pub(crate) fn builtin_detect_coding_string(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_min_args("detect-coding-string", &args, 1)?;
     expect_max_args("detect-coding-string", &args, 2)?;
@@ -5095,7 +5180,13 @@ pub(crate) fn builtin_detect_coding_string(
     let highest = args.get(1).is_some_and(|v| v.is_truthy());
     // A string is complete by construction, which is GNU setting
     // `CODING_MODE_LAST_BLOCK` in `Fdetect_coding_string` (src/coding.c:8716).
-    Ok(detect_coding_systems(mgr, s, highest, SourceBlock::Last))
+    Ok(detect_coding_systems(
+        mgr,
+        s,
+        highest,
+        SourceBlock::Last,
+        mode,
+    ))
 }
 
 /// `(detect-coding-region START END &optional HIGHEST)` -- detect the encoding
@@ -5126,6 +5217,7 @@ pub(crate) fn builtin_detect_coding_region(
     mgr: &CodingSystemManager,
     buffers: &BufferManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_min_args("detect-coding-region", &args, 2)?;
     expect_max_args("detect-coding-region", &args, 3)?;
@@ -5153,6 +5245,7 @@ pub(crate) fn builtin_detect_coding_region(
         &string,
         highest,
         SourceBlock::Last,
+        mode,
     ))
 }
 
@@ -5182,6 +5275,7 @@ pub(crate) fn builtin_terminal_coding_system(
 pub(crate) fn builtin_set_keyboard_coding_system(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_min_args("set-keyboard-coding-system", &args, 1)?;
     expect_max_args("set-keyboard-coding-system", &args, 2)?;
@@ -5189,7 +5283,7 @@ pub(crate) fn builtin_set_keyboard_coding_system(
         mgr.keyboard_coding = intern("no-conversion");
         return Ok(Value::NIL);
     }
-    let Some(name) = args[0].as_symbol_name().map(|s| s.to_string()) else {
+    let Some(name) = args[0].as_symbol_name(mode).map(|s| s.to_string()) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],
@@ -5232,6 +5326,7 @@ pub(crate) fn builtin_set_keyboard_coding_system(
 pub(crate) fn builtin_set_terminal_coding_system(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_min_args("set-terminal-coding-system", &args, 1)?;
     expect_max_args("set-terminal-coding-system", &args, 3)?;
@@ -5239,7 +5334,7 @@ pub(crate) fn builtin_set_terminal_coding_system(
         mgr.terminal_coding = intern("nil");
         return Ok(Value::NIL);
     }
-    let Some(name) = args[0].as_symbol_name().map(|s| s.to_string()) else {
+    let Some(name) = args[0].as_symbol_name(mode).map(|s| s.to_string()) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[0]],
@@ -5258,10 +5353,11 @@ pub(crate) fn builtin_set_terminal_coding_system(
 pub(crate) fn builtin_set_keyboard_coding_system_internal(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_min_args("set-keyboard-coding-system-internal", &args, 1)?;
     expect_max_args("set-keyboard-coding-system-internal", &args, 2)?;
-    let _ = builtin_set_keyboard_coding_system(mgr, args)?;
+    let _ = builtin_set_keyboard_coding_system(mgr, args, mode)?;
     Ok(Value::NIL)
 }
 
@@ -5270,10 +5366,11 @@ pub(crate) fn builtin_set_keyboard_coding_system_internal(
 pub(crate) fn builtin_set_terminal_coding_system_internal(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_min_args("set-terminal-coding-system-internal", &args, 1)?;
     expect_max_args("set-terminal-coding-system-internal", &args, 2)?;
-    let _ = builtin_set_terminal_coding_system(mgr, args)?;
+    let _ = builtin_set_terminal_coding_system(mgr, args, mode)?;
     Ok(Value::NIL)
 }
 
@@ -5282,9 +5379,10 @@ pub(crate) fn builtin_set_terminal_coding_system_internal(
 pub(crate) fn builtin_set_safe_terminal_coding_system_internal(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_args("set-safe-terminal-coding-system-internal", &args, 1)?;
-    let _ = builtin_set_terminal_coding_system(mgr, args)?;
+    let _ = builtin_set_terminal_coding_system(mgr, args, mode)?;
     Ok(Value::NIL)
 }
 
@@ -5316,7 +5414,7 @@ pub(crate) fn builtin_text_quoting_style(
         // detection is a separate task.
         return Ok(TextQuotingStyle::Curve.to_symbol());
     }
-    if let Some(style) = TextQuotingStyle::from_symbol_value(var) {
+    if let Some(style) = TextQuotingStyle::from_symbol_value(var, eval.symbol_mode()) {
         return Ok(style.to_symbol());
     }
     Ok(TextQuotingStyle::Curve.to_symbol())
@@ -5602,11 +5700,15 @@ fn coding_exclude_list(exclude: Option<Value>) -> Result<Option<Vec<Value>>, Flo
     }
 }
 
-fn raw_coding_candidates(mgr: &CodingSystemManager, exclude: Option<&[Value]>) -> Vec<String> {
+fn raw_coding_candidates(
+    mgr: &CodingSystemManager,
+    exclude: Option<&[Value]>,
+    mode: SymbolMode,
+) -> Vec<String> {
     let excluded: HashSet<String> = exclude
         .unwrap_or(&[])
         .iter()
-        .filter_map(|value| value.as_symbol_name().map(|name| name.to_string()))
+        .filter_map(|value| value.as_symbol_name(mode).map(|name| name.to_string()))
         .collect();
 
     let mut names: Vec<String> = mgr
@@ -5633,6 +5735,7 @@ fn safe_coding_systems_for_text(
     mgr: &CodingSystemManager,
     text: &LispString,
     exclude: Option<Value>,
+    mode: SymbolMode,
 ) -> Result<Value, Flow> {
     if !text.is_multibyte() || text.as_bytes().is_ascii() {
         return Ok(Value::T);
@@ -5653,8 +5756,8 @@ fn safe_coding_systems_for_text(
     chars.sort_unstable();
     chars.dedup();
     let mut safe_codings = Vec::new();
-    for coding in raw_coding_candidates(mgr, exclude.as_deref()) {
-        let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, &coding) else {
+    for coding in raw_coding_candidates(mgr, exclude.as_deref(), mode) {
+        let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, &coding, mode) else {
             continue;
         };
         if chars.iter().all(|&ch| repertoire.encodes(ch)) {
@@ -5687,7 +5790,12 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
     expect_max_args("find-coding-systems-region-internal", &args, 3)?;
 
     if let Some(text) = args[0].as_lisp_string() {
-        return safe_coding_systems_for_text(&eval.coding_systems, text, args.get(2).copied());
+        return safe_coding_systems_for_text(
+            &eval.coding_systems,
+            text,
+            args.get(2).copied(),
+            eval.symbol_mode(),
+        );
     }
 
     let start = marker_or_integer_position(&args[0])?;
@@ -5715,7 +5823,12 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(end)),
     );
     let text = buffer.buffer_substring_lisp_string_range(byte_range);
-    safe_coding_systems_for_text(&eval.coding_systems, &text, args.get(2).copied())
+    safe_coding_systems_for_text(
+        &eval.coding_systems,
+        &text,
+        args.get(2).copied(),
+        eval.symbol_mode(),
+    )
 }
 
 // ===========================================================================
@@ -5819,3 +5932,7 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
 #[cfg(test)]
 #[path = "tests/coding_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/positioned_symbol_test.rs"]
+mod positioned_symbol_tests;

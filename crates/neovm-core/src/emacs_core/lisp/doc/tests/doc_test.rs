@@ -23,7 +23,13 @@ fn bootstrap_eval_all(src: &str) -> Vec<String> {
 /// therefore answered in a state where GNU answers nothing.
 fn snarfed_context() -> Context {
     let mut eval = Context::new();
-    super::snarf_variable_documentation(&mut eval.obarray);
+    unsafe {
+        // SAFETY: this DOC fixture scan only reads bound metadata and writes
+        // documentation properties; it cannot call Lisp, collect, replace
+        // storage, publish dispatch metadata or return an interior reference.
+        eval.obarray
+            .with_legacy_value_write(super::snarf_variable_documentation)
+    };
     eval
 }
 
@@ -101,7 +107,10 @@ fn documentation_preserves_uninterned_autoload_symbol_identity() {
 
     let function = resolve_documentation_function_value(eval.obarray(), sym, false)
         .expect("documentation resolver should find uninterned symbol function");
-    assert!(crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -328,7 +337,10 @@ fn help_function_arglist_is_real_lisp_function_after_bootstrap() {
         .obarray
         .symbol_function("help-function-arglist")
         .expect("missing help-function-arglist bootstrapped function cell");
-    assert!(!crate::emacs_core::autoload::is_autoload_value(&function));
+    assert!(!crate::emacs_core::autoload::is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]
@@ -1880,7 +1892,14 @@ fn snarfing_the_doc_image_interns_nothing() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
     let before = evaluator.obarray().len();
-    let installed = super::snarf_variable_documentation(&mut evaluator.obarray);
+    let installed = unsafe {
+        // SAFETY: this DOC fixture scan only reads bound metadata and writes
+        // documentation properties; it cannot call Lisp, collect, replace
+        // storage, publish dispatch metadata or return an interior reference.
+        evaluator
+            .obarray
+            .with_legacy_value_write(super::snarf_variable_documentation)
+    };
     assert!(installed > 700, "installed {installed} records");
     assert_eq!(evaluator.obarray().len(), before);
     assert!(
@@ -1908,7 +1927,14 @@ fn snarf_documentation_overwrites_a_docstring_already_on_the_plist() {
         )
         .unwrap();
 
-    super::snarf_variable_documentation(&mut evaluator.obarray);
+    unsafe {
+        // SAFETY: this DOC fixture scan only reads bound metadata and writes
+        // documentation properties; it cannot call Lisp, collect, replace
+        // storage, publish dispatch metadata or return an interior reference.
+        evaluator
+            .obarray
+            .with_legacy_value_write(super::snarf_variable_documentation)
+    };
 
     let result = builtin_documentation_property(
         &mut evaluator,

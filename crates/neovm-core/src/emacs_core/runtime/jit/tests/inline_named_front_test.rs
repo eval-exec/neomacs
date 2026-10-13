@@ -14,7 +14,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 32;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -52,7 +52,7 @@ fn named_front_preserves_symbol_and_roots_observed_object() {
     let symbol = Value::symbol("named-front-id");
     let target = Value::make_bytecode(function(vec![Op::StackRef(0), Op::Return], vec![]));
     ev.obarray
-        .set_symbol_function_id(symbol.as_symbol_id().unwrap(), target);
+        .set_symbol_function_id(symbol.as_bare_symbol_id().unwrap(), target);
     let body = fuse(&ev, &caller(symbol)).unwrap();
     assert_eq!(body.constants[0], symbol);
     assert!(body.constants.contains(&target));
@@ -60,7 +60,7 @@ fn named_front_preserves_symbol_and_roots_observed_object() {
     assert_eq!(
         body.v2.as_ref().unwrap().region_kind[0],
         inline::RegionKind::Named {
-            symbol: symbol.as_symbol_id().unwrap()
+            symbol: symbol.as_bare_symbol_id().unwrap()
         }
     );
     assert!(body.v2.as_ref().unwrap().materialize_at.is_empty());
@@ -73,7 +73,7 @@ fn named_front_refuses_symbol_aliases_and_unbound_cells() {
     let symbol = Value::symbol("named-front-alias");
     assert!(fuse(&ev, &caller(symbol)).is_none());
     ev.obarray
-        .set_symbol_function_id(symbol.as_symbol_id().unwrap(), Value::symbol("car"));
+        .set_symbol_function_id(symbol.as_bare_symbol_id().unwrap(), Value::symbol("car"));
     assert!(fuse(&ev, &caller(symbol)).is_none());
 }
 
@@ -86,7 +86,7 @@ fn named_front_refuses_observing_callees() {
         vec![Op::VarRef(0), Op::Return],
     ] {
         ev.obarray.set_symbol_function_id(
-            symbol.as_symbol_id().unwrap(),
+            symbol.as_bare_symbol_id().unwrap(),
             Value::make_bytecode(function(ops, vec![Value::symbol("named-front-observed")])),
         );
         assert!(fuse(&ev, &caller(symbol)).is_none());
@@ -102,7 +102,7 @@ fn named_front_enforces_fused_growth_budget() {
     ops.extend(std::iter::repeat_n(Op::Pop, 10));
     ops.push(Op::Return);
     ev.obarray.set_symbol_function_id(
-        symbol.as_symbol_id().unwrap(),
+        symbol.as_bare_symbol_id().unwrap(),
         Value::make_bytecode(function(ops, vec![])),
     );
     assert!(fuse(&ev, &caller(symbol)).is_none());
@@ -113,12 +113,19 @@ fn named_front_requires_matching_required_arity() {
     let mut ev = Context::new();
     let symbol = Value::symbol("named-front-arity");
     let mut callee = function(vec![Op::StackRef(0), Op::Return], vec![]);
-    callee
+    let mut params = callee
         .params
+        .named()
+        .expect("named fixture parameters")
+        .clone();
+    params
         .optional
         .push(crate::emacs_core::intern::intern("named-front-extra"));
-    ev.obarray
-        .set_symbol_function_id(symbol.as_symbol_id().unwrap(), Value::make_bytecode(callee));
+    callee.params = params.into();
+    ev.obarray.set_symbol_function_id(
+        symbol.as_bare_symbol_id().unwrap(),
+        Value::make_bytecode(callee),
+    );
     assert!(fuse(&ev, &caller(symbol)).is_none());
 }
 
@@ -140,7 +147,7 @@ fn named_front_off_compile_has_no_named_chains() {
     let mut ev = Context::new();
     let symbol = Value::symbol("named-front-off");
     ev.obarray.set_symbol_function_id(
-        symbol.as_symbol_id().unwrap(),
+        symbol.as_bare_symbol_id().unwrap(),
         Value::make_bytecode(function(
             vec![Op::StackRef(0), Op::Add1, Op::Return],
             vec![],
@@ -164,7 +171,7 @@ fn named_front_all_preserves_static_and_hof_sites_in_a_mixed_caller() {
     let symbol = Value::symbol("named-front-mixed");
     let target = Value::make_bytecode(function(vec![Op::StackRef(0), Op::Return], vec![]));
     ev.obarray
-        .set_symbol_function_id(symbol.as_symbol_id().unwrap(), target);
+        .set_symbol_function_id(symbol.as_bare_symbol_id().unwrap(), target);
     let f = function(
         vec![
             Op::Constant(0),
@@ -209,7 +216,7 @@ fn named_front_all_rebases_closure_prefix_after_appended_named_targets() {
     let symbol = Value::symbol("named-front-mixed-capture");
     let target = Value::make_bytecode(function(vec![Op::StackRef(0), Op::Return], vec![]));
     ev.obarray
-        .set_symbol_function_id(symbol.as_symbol_id().unwrap(), target);
+        .set_symbol_function_id(symbol.as_bare_symbol_id().unwrap(), target);
     let template = Value::make_bytecode(function(
         vec![Op::Constant(0), Op::StackRef(1), Op::Add, Op::Return],
         vec![Value::make_int(99)],

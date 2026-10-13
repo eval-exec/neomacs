@@ -412,7 +412,7 @@ fn create_image_file() {
 
     let plist = image_spec_plist(&spec);
     let img_type = plist_get(&plist, &Value::keyword("type"));
-    assert_eq!(img_type.as_symbol_name(), Some("png"));
+    assert_eq!(img_type.as_bare_symbol_name(), Some("png"));
 
     let file = plist_get(&plist, &Value::keyword("file"));
     assert_eq!(file.as_utf8_str(), Some("test.png"));
@@ -469,7 +469,7 @@ fn create_image_default_type() {
 
     let plist = image_spec_plist(&spec);
     let img_type = plist_get(&plist, &Value::keyword("type"));
-    assert_eq!(img_type.as_symbol_name(), Some("png"));
+    assert_eq!(img_type.as_bare_symbol_name(), Some("png"));
 }
 
 #[test]
@@ -481,7 +481,7 @@ fn create_image_default_type_from_jpg_extension() {
 
     let plist = image_spec_plist(&spec);
     let img_type = plist_get(&plist, &Value::keyword("type"));
-    assert_eq!(img_type.as_symbol_name(), Some("jpeg"));
+    assert_eq!(img_type.as_bare_symbol_name(), Some("jpeg"));
 }
 
 #[test]
@@ -512,7 +512,7 @@ fn create_image_infers_unavailable_gnu_filename_types() {
         let plist = image_spec_plist(&spec);
         let img_type = plist_get(&plist, &Value::keyword("type"));
         assert_eq!(
-            img_type.as_symbol_name(),
+            img_type.as_bare_symbol_name(),
             Some(expected_type),
             "type inferred for {file_name}"
         );
@@ -1487,7 +1487,7 @@ fn image_type_png() {
     crate::test_utils::init_test_tracing();
     let result = builtin_image_type(vec![Value::string("test.png")]);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().as_symbol_name(), Some("png"));
+    assert_eq!(result.unwrap().as_bare_symbol_name(), Some("png"));
 }
 
 #[test]
@@ -1495,7 +1495,7 @@ fn image_type_svg() {
     crate::test_utils::init_test_tracing();
     let result = builtin_image_type(vec![Value::string("icon.svg")]);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().as_symbol_name(), Some("svg"));
+    assert_eq!(result.unwrap().as_bare_symbol_name(), Some("svg"));
 }
 
 #[test]
@@ -1517,7 +1517,7 @@ fn image_type_from_filename_extension() {
     crate::test_utils::init_test_tracing();
     let result = builtin_image_type(vec![Value::string("foo.JPG")]);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().as_symbol_name(), Some("jpeg"));
+    assert_eq!(result.unwrap().as_bare_symbol_name(), Some("jpeg"));
 }
 
 #[test]
@@ -1529,7 +1529,7 @@ fn image_type_explicit_type() {
         Value::NIL,
     ]);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().as_symbol_name(), Some("png"));
+    assert_eq!(result.unwrap().as_bare_symbol_name(), Some("png"));
 }
 
 #[test]
@@ -1649,7 +1649,7 @@ fn plist_get_basic() {
         Value::string("test.png"),
     ]);
     let val = plist_get(&plist, &Value::keyword("type"));
-    assert_eq!(val.as_symbol_name(), Some("png"));
+    assert_eq!(val.as_bare_symbol_name(), Some("png"));
 
     let file = plist_get(&plist, &Value::keyword("file"));
     assert_eq!(file.as_utf8_str(), Some("test.png"));
@@ -1770,7 +1770,7 @@ fn image_spec_plist_with_image_prefix() {
     ]);
     let plist = image_spec_plist(&spec);
     let val = plist_get(&plist, &Value::keyword("type"));
-    assert_eq!(val.as_symbol_name(), Some("png"));
+    assert_eq!(val.as_bare_symbol_name(), Some("png"));
 }
 
 #[test]
@@ -1779,7 +1779,7 @@ fn image_spec_plist_bare() {
     let spec = Value::list(vec![Value::keyword("type"), Value::symbol("jpeg")]);
     let plist = image_spec_plist(&spec);
     let val = plist_get(&plist, &Value::keyword("type"));
-    assert_eq!(val.as_symbol_name(), Some("jpeg"));
+    assert_eq!(val.as_bare_symbol_name(), Some("jpeg"));
 }
 
 #[test]
@@ -1790,7 +1790,7 @@ fn round_trip_create_then_type() {
         builtin_create_image(vec![Value::string("photo.jpg"), Value::symbol("jpeg")]).unwrap();
     let plist = image_spec_plist(&spec);
     let img_type = plist_get(&plist, &Value::keyword("type"));
-    assert_eq!(img_type.as_symbol_name(), Some("jpeg"));
+    assert_eq!(img_type.as_bare_symbol_name(), Some("jpeg"));
 }
 
 #[test]
@@ -1799,8 +1799,7 @@ fn image_types_bootstrap_list_matches_gnu_linux_order() {
     let eval = crate::emacs_core::Context::new();
     let image_types = eval
         .obarray()
-        .symbol_value("image-types")
-        .copied()
+        .symbol_value_copied("image-types")
         .expect("image-types should be bound");
     assert_eq!(
         image_types,

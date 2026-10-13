@@ -27,7 +27,9 @@ use neomacs_display_protocol::font::{
     CharFontTable, FontCatalogGeneration, FontReplay, FontSlantKind, FrameFontBindings,
     ResolvedFont, ResolvedFontId, ResolvedFontTable, ResolvedGlyph, ShapedClusterTable,
 };
+use neomacs_display_protocol::font::{FontFileAsset, FontOutlineAsset};
 use neomacs_font_materializer::FontFileCache;
+use neomacs_font_materializer::{ColorGlyphRaster, ColorGlyphRasterizer, ColorGlyphRequest, Tag};
 use neomacs_layout_engine::font::subpixel::{FontconfigSubpixelOrder, default_subpixel_order};
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Angle, Format, Transform, Vector};
@@ -450,6 +452,102 @@ fn normalize_subpixel_mask(
 use pages::{GlyphAtlasPages, PageAllocResult};
 use types::*;
 
+/// Fold a face foreground into a glyph identity.
+///
+/// Color rasters can resolve palette index 0xFFFF to the text foreground, so
+/// they must not be shared across faces that differ only in colour.
+fn mix_foreground(identity: u64, foreground: u64) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    identity.hash(&mut hasher);
+    foreground.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The variation settings a color raster is painted with.
+///
+/// The resolved instance's own coordinates come first: they are the exact
+/// instance the outline path is scaled for, including axes beyond weight.  A
+/// face resolved without coordinates falls back to the one axis Swash scaling
+/// applies, `wght`, so a weight-only font behaves as before.
+fn color_variation_settings(
+    coordinates: &neomacs_display_protocol::font::FontVariationSet,
+    weight: u16,
+) -> Vec<(Tag, f32)> {
+    if coordinates.as_slice().is_empty() {
+        return vec![(Tag::from_bytes(b"wght"), f32::from(weight))];
+    }
+    coordinates
+        .as_slice()
+        .iter()
+        .map(|coordinate| (Tag(coordinate.tag()), coordinate.value()))
+        .collect()
+}
+
+/// Hash every channel of a face foreground.
+fn hash_foreground(foreground: neomacs_display_protocol::Color) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    foreground.r.to_bits().hash(&mut hasher);
+    foreground.g.to_bits().hash(&mut hasher);
+    foreground.b.to_bits().hash(&mut hasher);
+    foreground.a.to_bits().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// One rasterized glyph image, in the atlas's internal convention.
+///
+/// The Swash-backed sources and the layered-color rasterizer both produce
+/// this, so placement handling and pixel-kind classification have exactly one
+/// implementation downstream of rasterization.
+struct RasterGlyphImage {
+    /// Horizontal offset from the pen to the bitmap's left column.
+    left: i32,
+    /// Offset from the baseline to the bitmap's top row, positive upwards.
+    top: i32,
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+    content: RasterContent,
+}
+
+/// Pixel interpretation of a [`RasterGlyphImage`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RasterContent {
+    /// 8-bit coverage.
+    Mask,
+    /// Three-channel coverage, one byte per sub-pixel sample.
+    SubpixelMask,
+    /// Straight-alpha sRGB RGBA.
+    Color,
+}
+
+impl RasterGlyphImage {
+    fn from_swash(image: cosmic_text::SwashImage) -> Self {
+        Self {
+            left: image.placement.left,
+            top: image.placement.top,
+            width: image.placement.width,
+            height: image.placement.height,
+            data: image.data,
+            content: match image.content {
+                cosmic_text::SwashContent::Mask => RasterContent::Mask,
+                cosmic_text::SwashContent::SubpixelMask => RasterContent::SubpixelMask,
+                cosmic_text::SwashContent::Color => RasterContent::Color,
+            },
+        }
+    }
+
+    fn from_color(raster: ColorGlyphRaster) -> Self {
+        Self {
+            left: raster.left,
+            top: raster.top,
+            width: raster.width,
+            height: raster.height,
+            data: raster.rgba,
+            content: RasterContent::Color,
+        }
+    }
+}
+
 /// Wgpu-based glyph atlas for text rendering
 pub struct WgpuGlyphAtlas {
     // FxHashMap, not std SipHash: these are looked up once per glyph every
@@ -512,6 +610,25 @@ pub struct WgpuGlyphAtlas {
     /// Valid for the fontdb's lifetime (fonts are only ever appended by
     /// priming); dropped by [`Self::clear`] with the rest of the caches.
     resolved_fontdb_ids: HashMap<ResolvedFontId, Option<fontdb::ID>>,
+    /// The reverse of [`Self::resolved_fontdb_ids`] for the faces that have
+    /// one: a fontdb id names the resolved instance whose variation
+    /// coordinates a color raster must be painted with.  Maintained where the
+    /// forward entry is created and dropped by [`Self::clear`].
+    resolved_fonts_by_fontdb: HashMap<fontdb::ID, ResolvedFontId>,
+    /// Source asset per fontdb face, for the color stages Swash does not
+    /// implement (COLR version 1 paint graphs). Exact pins register theirs;
+    /// a face that arrived through semantic fallback gets one derived from
+    /// fontdb's own file source on first use. Either way a glyph never
+    /// re-resolves a file.
+    color_font_assets: FxHashMap<fontdb::ID, FontOutlineAsset>,
+    /// Rasterizes color glyphs from those assets, caching opened faces.
+    color_glyph_rasterizer: ColorGlyphRasterizer,
+    /// Resolved fonts whose rasters can resolve the text foreground (palette
+    /// index 0xFFFF).  Populated when a frame's fonts are installed, so every
+    /// identity computed for a glyph — the atlas's own and the row-reuse
+    /// keys the renderer builds — agrees on whether the foreground belongs in
+    /// it.
+    color_font_ids: FxHashSet<ResolvedFontId>,
     /// Total GUI text lookups whose face had no layout-resolved font and no
     /// font-file bridge — i.e. the renderer had to make a semantic font
     /// decision on its own (design §10 "emergency fallback"). Must stay 0
@@ -615,6 +732,10 @@ impl WgpuGlyphAtlas {
             frame_font_bindings_identity: FrameFontBindingsIdentity::default(),
             font_catalog_generation: None,
             resolved_fontdb_ids: HashMap::new(),
+            resolved_fonts_by_fontdb: HashMap::new(),
+            color_font_assets: FxHashMap::default(),
+            color_glyph_rasterizer: ColorGlyphRasterizer::new(),
+            color_font_ids: FxHashSet::default(),
             unresolved_face_text_total: 0,
             unresolved_face_warned: HashSet::new(),
             cache_hits_this_frame: 0,
@@ -765,9 +886,11 @@ impl WgpuGlyphAtlas {
                     }
                 }
 
-                if let Some(image) = self.render_cache_key_image(cache_key, enable_subpixel) {
-                    let width = image.placement.width;
-                    let height = image.placement.height;
+                if let Some(image) =
+                    self.glyph_image(cache_key, face, font_size, enable_subpixel, None)
+                {
+                    let width = image.width;
+                    let height = image.height;
 
                     if width == 0 || height == 0 {
                         continue;
@@ -779,8 +902,8 @@ impl WgpuGlyphAtlas {
                     // composite at the origin, collapsing a shaped Arabic/Indic
                     // run (or base + combining marks) into ~one glyph width.
                     // Single glyphs have pen x == 0, so they are unaffected.
-                    let bearing_x = physical_glyph.x as f32 + image.placement.left as f32;
-                    let bearing_y = image.placement.top as f32;
+                    let bearing_x = physical_glyph.x as f32 + image.left as f32;
+                    let bearing_y = image.top as f32;
 
                     let font_family_str = face.map(|f| f.font_family.as_str()).unwrap_or("(none)");
                     tracing::debug!(
@@ -815,19 +938,19 @@ impl WgpuGlyphAtlas {
         )
     }
 
-    /// Convert a rendered swash image into a sub-glyph payload
+    /// Convert a rendered glyph image into a sub-glyph payload
     /// (pixel data + color/subpixel classification).
     fn image_sub_glyph_payload(
         &self,
-        image: &cosmic_text::SwashImage,
+        image: &RasterGlyphImage,
         width: u32,
         height: u32,
         enable_subpixel: bool,
     ) -> (Vec<u8>, GlyphPixelKind) {
         match image.content {
-            cosmic_text::SwashContent::Mask => (image.data.clone(), GlyphPixelKind::AlphaMask),
-            cosmic_text::SwashContent::Color => (image.data.clone(), GlyphPixelKind::ColorRgba),
-            cosmic_text::SwashContent::SubpixelMask => {
+            RasterContent::Mask => (image.data.clone(), GlyphPixelKind::AlphaMask),
+            RasterContent::Color => (image.data.clone(), GlyphPixelKind::ColorRgba),
+            RasterContent::SubpixelMask => {
                 if self.render_mode(enable_subpixel) == GlyphRenderMode::Subpixel {
                     (
                         normalize_subpixel_mask(
@@ -1242,6 +1365,7 @@ impl WgpuGlyphAtlas {
                     return self
                         .rasterize_resolved_cluster(
                             &[glyph],
+                            face,
                             font_size,
                             x_bin,
                             y_bin,
@@ -1264,7 +1388,7 @@ impl WgpuGlyphAtlas {
         &mut self,
         cache_key: cosmic_text::CacheKey,
         enable_subpixel: bool,
-    ) -> Option<cosmic_text::SwashImage> {
+    ) -> Option<RasterGlyphImage> {
         let render_mode = self.render_mode(enable_subpixel);
         let font = self
             .font_system
@@ -1304,22 +1428,165 @@ impl WgpuGlyphAtlas {
             Format::Alpha
         };
 
-        Render::new(&[
-            Source::ColorOutline(0),
-            Source::ColorBitmap(StrikeWith::BestFit),
-            Source::Outline,
-        ])
-        .format(format)
-        .offset(offset)
-        .transform(if cache_key.flags.contains(CacheKeyFlags::FAKE_ITALIC) {
-            Some(Transform::skew(
-                Angle::from_degrees(14.0),
-                Angle::from_degrees(0.0),
-            ))
-        } else {
-            None
-        })
-        .render(&mut scaler, cache_key.glyph_id)
+        // Layered color outlines are NOT in this chain: Swash implements only
+        // COLR version 0, so every COLR face is painted by
+        // `color_glyph_image` before this function is reached. Keeping one
+        // implementation for both versions is the only way they cannot drift.
+        Render::new(&[Source::ColorBitmap(StrikeWith::BestFit), Source::Outline])
+            .format(format)
+            .offset(offset)
+            .transform(if cache_key.flags.contains(CacheKeyFlags::FAKE_ITALIC) {
+                Some(Transform::skew(
+                    Angle::from_degrees(14.0),
+                    Angle::from_degrees(0.0),
+                ))
+            } else {
+                None
+            })
+            .render(&mut scaler, cache_key.glyph_id)
+            .map(RasterGlyphImage::from_swash)
+    }
+
+    /// Rasterize one glyph from its exact face: color sources first, then the
+    /// Swash chain.
+    ///
+    /// Layered color outlines come first because Swash has no COLR version 1
+    /// implementation, and a version 1 face normally has no outline under its
+    /// emoji glyphs either — the Swash chain would return an empty bitmap.
+    /// The color sources ignore the synthetic-italic skew: engines skew
+    /// outlines, not color artwork.
+    fn glyph_image(
+        &mut self,
+        cache_key: cosmic_text::CacheKey,
+        face: Option<&Face>,
+        font_size: f32,
+        enable_subpixel: bool,
+        resolved: Option<ResolvedFontId>,
+    ) -> Option<RasterGlyphImage> {
+        if let Some(image) = self.color_glyph_image(
+            cache_key.font_id,
+            cache_key.glyph_id,
+            font_size,
+            face,
+            cache_key.x_bin,
+            cache_key.y_bin,
+            resolved,
+        ) {
+            return Some(image);
+        }
+        self.render_cache_key_image(cache_key, enable_subpixel)
+    }
+
+    /// Whether one raster holds any color glyph, which makes the whole
+    /// cluster foreground-dependent (the same rule single glyphs follow).
+    fn composed_cluster_has_color_font(&self, face: &Face, text: &str) -> bool {
+        self.frame_shaped_clusters
+            .get(&face.id)
+            .and_then(|by_text| by_text.get(text))
+            .is_some_and(|glyphs| {
+                glyphs
+                    .iter()
+                    .any(|glyph| self.color_font_ids.contains(&glyph.resolved_font_id))
+            })
+    }
+
+    /// The layered-color source behind a fontdb face, when it has one.
+    ///
+    /// Exact pins register their asset up front.  A face that arrived through
+    /// semantic fallback (`prime_file`) has no recorded asset, but fontdb
+    /// still names the file it loaded, which is all the rasterizer needs: the
+    /// derivation is cached so a face is read once.
+    fn color_asset_for(&mut self, fontdb_id: fontdb::ID) -> Option<FontOutlineAsset> {
+        if let Some(asset) = self.color_font_assets.get(&fontdb_id) {
+            return Some(asset.clone());
+        }
+        let derived = {
+            let face = self.font_system.db().face(fontdb_id)?;
+            let path = match &face.source {
+                fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => path,
+                // A binary face has no durable source outside its pin.
+                fontdb::Source::Binary(_) => return None,
+            };
+            let asset = FontFileAsset::new(path.to_string_lossy().into_owned(), face.index)?;
+            FontOutlineAsset::File(asset)
+        };
+        self.color_font_assets.insert(fontdb_id, derived.clone());
+        Some(derived)
+    }
+
+    /// Rasterize `glyph_id` from the face's layered color source, when the
+    /// face has one. Returns `None` for every other face, which keeps the
+    /// Swash path free of table checks.
+    #[allow(clippy::too_many_arguments)]
+    fn color_glyph_image(
+        &mut self,
+        fontdb_id: fontdb::ID,
+        glyph_id: u16,
+        font_size: f32,
+        face: Option<&Face>,
+        x_bin: SubpixelBin,
+        y_bin: SubpixelBin,
+        resolved: Option<ResolvedFontId>,
+    ) -> Option<RasterGlyphImage> {
+        let asset = self.color_asset_for(fontdb_id)?;
+        let foreground = face
+            .map(|face| face.foreground)
+            .map(|color| {
+                [
+                    (color.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
+                    (color.a.clamp(0.0, 1.0) * 255.0).round() as u8,
+                ]
+            })
+            .unwrap_or([0, 0, 0, 255]);
+        let weight = face.map(|face| face.font_weight).unwrap_or(400);
+        // The caller's resolved instance comes first: two file-backed
+        // instances of the same face share one fontdb id, so the reverse map
+        // cannot tell them apart.  It remains the fallback for callers that
+        // only have the id (the reverse map keeps the latest binding).
+        let coordinates = resolved
+            .and_then(|resolved_id| self.frame_fonts.get(&resolved_id))
+            .map(|font| font.identity.variation_coords.clone())
+            .or_else(|| {
+                self.resolved_fonts_by_fontdb
+                    .get(&fontdb_id)
+                    .and_then(|resolved_id| self.frame_fonts.get(resolved_id))
+                    .map(|font| font.identity.variation_coords.clone())
+            })
+            .unwrap_or_default();
+        let variations = color_variation_settings(&coordinates, weight);
+        let request = ColorGlyphRequest {
+            glyph_id,
+            px_size: font_size * self.scale_factor,
+            palette: 0,
+            foreground,
+            offset: (x_bin.as_float(), y_bin.as_float()),
+            variations: &variations,
+        };
+        match self.color_glyph_rasterizer.rasterize(&asset, &request) {
+            Ok(Some(raster)) => {
+                tracing::debug!(
+                    target: "font_boundary",
+                    glyph_id,
+                    source = ?raster.source,
+                    width = raster.width,
+                    height = raster.height,
+                    "painted a glyph from a layered color source"
+                );
+                Some(RasterGlyphImage::from_color(raster))
+            }
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(
+                    target: "font_boundary",
+                    glyph_id,
+                    %error,
+                    "layered color glyph rasterization failed"
+                );
+                None
+            }
+        }
     }
 
     /// Reset the per-character table at the start of a render pass.
@@ -1365,6 +1632,13 @@ impl WgpuGlyphAtlas {
             frame_font_bindings_identity(faces, fonts, char_fonts, shaped_clusters);
     }
 
+    /// Upsert one frame's resolved fonts, and classify which of them carry a
+    /// color source this atlas paints itself.
+    ///
+    /// The classification opens each font's file once per font-database
+    /// generation and feeds [`Self::color_font_ids`], which decides whether a
+    /// glyph's identity must fold in the text foreground (palette index
+    /// `0xFFFF` resolves to it).
     fn install_resolved_fonts<'a>(
         &mut self,
         fonts: impl Iterator<Item = &'a ResolvedFont> + Clone,
@@ -1379,6 +1653,11 @@ impl WgpuGlyphAtlas {
             self.clear();
         }
         for font in fonts {
+            if let Some(asset) = font.replay.outline_asset()
+                && self.color_glyph_rasterizer.has_color_sources(asset)
+            {
+                self.color_font_ids.insert(font.id);
+            }
             self.frame_fonts.insert(font.id, font.clone());
         }
     }
@@ -1479,6 +1758,17 @@ impl WgpuGlyphAtlas {
             glyph.resolved_font_id.hash(&mut hasher);
             glyph.glyph_id.hash(&mut hasher);
         }
+        // A color raster can resolve palette index 0xFFFF to the text
+        // foreground and is drawn untinted, so faces that differ only in
+        // colour must not share glyph identities.  Mask glyphs are excluded:
+        // their colour is applied when the mask is drawn, so their identities
+        // (and cache hit rates) stay colour-independent.
+        if let Some(face) = face
+            && let Some(font) = self.resolved_font_for_char(c, face)
+            && self.color_font_ids.contains(&font.id)
+        {
+            hash_foreground(face.foreground).hash(&mut hasher);
+        }
         hasher.finish()
     }
 
@@ -1507,11 +1797,25 @@ impl WgpuGlyphAtlas {
     fn pin_outline_as_family(
         &mut self,
         asset: &neomacs_display_protocol::font::FontOutlineAsset,
+        resolved_font_id: ResolvedFontId,
     ) -> Option<&'static str> {
-        self.font_file_cache
+        let pinned = self
+            .font_file_cache
             .pin_exact_asset(&mut self.font_system, asset)
-            .ok()
-            .map(neomacs_font_materializer::PinnedFontFace::family)
+            .ok()?;
+        // Faces pinned here are shaped through their synthetic family, so the
+        // glyphs later rasterized carry THIS fontdb id.  The color stage must
+        // be able to resolve the asset — and the resolved instance's
+        // variation coordinates — from it, or a color face shaped on this
+        // path would rasterize as a monochrome outline, or as the default
+        // instance.
+        let fontdb_id = pinned.fontdb_id();
+        self.color_font_assets
+            .entry(fontdb_id)
+            .or_insert_with(|| asset.clone());
+        self.resolved_fonts_by_fontdb
+            .insert(fontdb_id, resolved_font_id);
+        Some(pinned.family())
     }
 
     fn exact_attrs_for_resolved_font(&mut self, font: &ResolvedFont) -> Option<Attrs<'static>> {
@@ -1521,7 +1825,7 @@ impl WgpuGlyphAtlas {
         // Every resolved file face is exact, not merely variable fonts: TTC
         // faces and same-family static files are equally capable of being
         // re-selected incorrectly by semantic attributes.
-        let synthetic = self.pin_outline_as_family(asset)?;
+        let synthetic = self.pin_outline_as_family(asset, font.id)?;
         let mut attrs = Attrs::new()
             .family(Family::Name(synthetic))
             .weight(Weight(font.weight));
@@ -1726,6 +2030,10 @@ impl WgpuGlyphAtlas {
         self.cached_char_width = None;
         self.cached_font_ascent = None;
         self.resolved_fontdb_ids.clear();
+        self.resolved_fonts_by_fontdb.clear();
+        self.color_font_assets.clear();
+        self.color_glyph_rasterizer.clear();
+        self.color_font_ids.clear();
         // A missing/replaced platform font can become available after the
         // render-side generation reset. Keep successful fontdb registrations,
         // but let the shared materializer retry only its failed observations.
@@ -1768,6 +2076,11 @@ impl WgpuGlyphAtlas {
             .pin_exact_asset(&mut self.font_system, asset)
             .ok()
             .map(neomacs_font_materializer::PinnedFontFace::fontdb_id);
+        if let Some(fontdb_id) = found {
+            self.color_font_assets.insert(fontdb_id, asset.clone());
+            self.resolved_fonts_by_fontdb
+                .insert(fontdb_id, resolved_font_id);
+        }
         self.resolved_fontdb_ids.insert(resolved_font_id, found);
         found
     }
@@ -1778,6 +2091,7 @@ impl WgpuGlyphAtlas {
     fn rasterize_resolved_cluster(
         &mut self,
         glyphs: &[ResolvedGlyph],
+        face: Option<&Face>,
         font_size: f32,
         x_bin: SubpixelBin,
         y_bin: SubpixelBin,
@@ -1802,15 +2116,21 @@ impl WgpuGlyphAtlas {
                         font_weight: fontdb::Weight(font.weight),
                         flags: CacheKeyFlags::empty(),
                     };
-                    let image = self.render_cache_key_image(cache_key, enable_subpixel)?;
-                    let width = image.placement.width;
-                    let height = image.placement.height;
+                    let image = self.glyph_image(
+                        cache_key,
+                        face,
+                        font_size,
+                        enable_subpixel,
+                        Some(glyph.resolved_font_id),
+                    )?;
+                    let width = image.width;
+                    let height = image.height;
                     if width == 0 || height == 0 {
                         continue;
                     }
                     let pen_x = (glyph.x * scale).round();
-                    let bearing_x = pen_x + image.placement.left as f32;
-                    let bearing_y = (glyph.y * scale).round() + image.placement.top as f32;
+                    let bearing_x = pen_x + image.left as f32;
+                    let bearing_y = (glyph.y * scale).round() + image.top as f32;
                     let (pixel_data, pixel_kind) =
                         self.image_sub_glyph_payload(&image, width, height, enable_subpixel);
                     sub_glyphs.push(SampledSubGlyph {
@@ -1866,7 +2186,14 @@ impl WgpuGlyphAtlas {
         let face = face?;
         let glyphs = self.frame_shaped_clusters.get(&face.id)?.get(text)?.clone();
         let font_size = effective_font_size(Some(face.font_size), self.default_font_size);
-        self.rasterize_resolved_cluster(&glyphs, font_size, x_bin, y_bin, enable_subpixel)
+        self.rasterize_resolved_cluster(
+            &glyphs,
+            Some(face),
+            font_size,
+            x_bin,
+            y_bin,
+            enable_subpixel,
+        )
     }
 
     /// Update the scale factor and clear the cache so glyphs are
@@ -2585,11 +2912,17 @@ impl WgpuGlyphAtlas {
         y_bin: SubpixelBin,
         subpixel: SubpixelRequest,
     ) -> Result<Vec<GlyphAtlasHandle>, GlyphAtlasError> {
+        let mut font_identity = glyph_font_identity(face);
+        if let Some(face) = face
+            && self.composed_cluster_has_color_font(face, text)
+        {
+            font_identity = mix_foreground(font_identity, hash_foreground(face.foreground));
+        }
         let key = ComposedGlyphKey {
             text: text.into(),
             face_id,
             font_size_bits,
-            font_identity: glyph_font_identity(face),
+            font_identity,
             glyph_stream_identity: self.glyph_stream_identity_for_composed(face, text),
             x_bin,
             y_bin,

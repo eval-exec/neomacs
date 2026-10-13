@@ -75,7 +75,7 @@ fn leaf_active_asserts_at_every_safe_point() {
                     crate::emacs_core::bytecode::opcode::Op::Nil,
                     crate::emacs_core::bytecode::opcode::Op::Return,
                 ];
-                f.max_stack = 2;
+                f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
                 let _ = crate::emacs_core::bytecode::Vm::from_context(ctx).execute(&f, vec![]);
             }),
         ),

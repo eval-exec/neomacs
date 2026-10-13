@@ -26,9 +26,9 @@ impl SymbolPropertyRevision {
     }
 
     pub fn observe_category_property(property: Value, value: Value) {
-        if property.is_symbol_named("category")
+        if property.is_bare_symbol_named("category")
             && !value.is_nil()
-            && let Some(symbol) = value.as_symbol_id()
+            && let Some(symbol) = value.as_bare_symbol_id()
         {
             Self::observe(symbol);
         }

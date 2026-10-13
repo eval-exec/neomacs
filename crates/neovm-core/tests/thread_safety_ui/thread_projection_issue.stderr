@@ -1,0 +1,13 @@
+error[E0432]: unresolved import `neovm_core::emacs_core::forward::ThreadProjectionTable`
+ --> tests/thread_safety_ui/thread_projection_issue.rs:2:5
+  |
+2 | use neovm_core::emacs_core::forward::ThreadProjectionTable;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ThreadProjectionTable` in `emacs_core::forward`
+  |
+note: found an item that was configured out
+ --> src/emacs_core/runtime/forward/mod.rs
+  |
+  | #[cfg(test)]
+  |       ---- the item is gated here
+  | pub use thread_projection::ThreadProjectionTable;
+  |                            ^^^^^^^^^^^^^^^^^^^^^

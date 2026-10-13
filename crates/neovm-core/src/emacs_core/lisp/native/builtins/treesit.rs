@@ -19,6 +19,7 @@ use crate::emacs_core::treesit::{
     ParserReparseKind, ParserTagFilter, QUERY_SLOT_LANGUAGE, QUERY_SLOT_SOURCE,
 };
 use crate::heap_types::LispString;
+use crate::tagged::value::SymbolMode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
@@ -50,8 +51,8 @@ enum TreesitBuiltinPredicate {
 }
 
 impl TreesitBuiltinPredicate {
-    fn from_symbol_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+    fn from_symbol_value(value: Value, mode: SymbolMode) -> Option<Self> {
+        value.as_symbol_name(mode)?.parse().ok()
     }
 
     fn matches_node(self, node: tree_sitter::Node<'_>) -> bool {
@@ -76,8 +77,8 @@ enum TreesitBooleanPredicate {
 }
 
 impl TreesitBooleanPredicate {
-    fn from_symbol_value(value: Value) -> Option<Self> {
-        value.as_symbol_name()?.parse().ok()
+    fn from_symbol_value(value: Value, mode: SymbolMode) -> Option<Self> {
+        value.as_symbol_name(mode)?.parse().ok()
     }
 
     #[cfg(test)]
@@ -210,11 +211,11 @@ fn posix_versioned_candidates(base: &str, suffix: &str) -> Vec<String> {
     }
 }
 
-fn parse_symbol_arg(name: &str, value: &Value) -> Result<SymId, Flow> {
+fn parse_symbol_arg(name: &str, value: &Value, mode: SymbolMode) -> Result<SymId, Flow> {
     if value.is_nil() {
         return Ok(NIL_SYM_ID);
     }
-    value.as_symbol_id().ok_or_else(|| {
+    value.as_symbol_id(mode).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), *value, Value::symbol(name)],
@@ -222,8 +223,8 @@ fn parse_symbol_arg(name: &str, value: &Value) -> Result<SymId, Flow> {
     })
 }
 
-fn expect_symbol_or_nil(name: &str, value: Value) -> Result<Value, Flow> {
-    if value.is_nil() || value.as_symbol_name().is_some() {
+fn expect_symbol_or_nil(name: &str, value: Value, mode: SymbolMode) -> Result<Value, Flow> {
+    if value.is_nil() || value.as_symbol_name(mode).is_some() {
         Ok(value)
     } else {
         Err(signal(
@@ -375,11 +376,11 @@ fn list_value_to_strings(value: Option<Value>) -> Vec<String> {
         .collect()
 }
 
-fn list_assoc_symbol_key(value: Option<Value>, key: SymId) -> Option<Vec<Value>> {
+fn list_assoc_symbol_key(value: Option<Value>, key: SymId, mode: SymbolMode) -> Option<Vec<Value>> {
     let list = crate::emacs_core::value::list_to_vec(&value?)?;
     for entry in list {
         let items = crate::emacs_core::value::list_to_vec(&entry)?;
-        let Some(lang) = items.first().and_then(|v| v.as_symbol_id()) else {
+        let Some(lang) = items.first().and_then(|v| v.as_symbol_id(mode)) else {
             continue;
         };
         if lang == key {
@@ -392,12 +393,12 @@ fn list_assoc_symbol_key(value: Option<Value>, key: SymId) -> Option<Vec<Value>>
 fn maybe_remap_language(eval: &super::eval::Context, language: SymId) -> SymId {
     let remapped =
         super::misc_eval::dynamic_or_global_symbol_value(eval, "treesit-language-remap-alist");
-    let Some(items) = list_assoc_symbol_key(remapped, language) else {
+    let Some(items) = list_assoc_symbol_key(remapped, language, eval.symbol_mode()) else {
         return language;
     };
     items
         .get(1)
-        .and_then(|v| v.as_symbol_id())
+        .and_then(|v| v.as_symbol_id(eval.symbol_mode()))
         .unwrap_or(language)
 }
 
@@ -412,7 +413,11 @@ fn language_requires_linecol_tracking(eval: &super::eval::Context, language: Sym
     crate::emacs_core::value::list_to_vec(&languages)
         .unwrap_or_default()
         .into_iter()
-        .any(|value| value.as_symbol_id().is_some_and(|name| name == remapped))
+        .any(|value| {
+            value
+                .as_symbol_id(eval.symbol_mode())
+                .is_some_and(|name| name == remapped)
+        })
 }
 
 fn treesit_override_names(
@@ -421,7 +426,7 @@ fn treesit_override_names(
 ) -> Option<(String, String)> {
     let overrides =
         super::misc_eval::dynamic_or_global_symbol_value(eval, "treesit-load-name-override-list");
-    let items = list_assoc_symbol_key(overrides, language)?;
+    let items = list_assoc_symbol_key(overrides, language, eval.symbol_mode())?;
     let lib_name = items.get(1)?.as_str_owned()?;
     let c_symbol = items.get(2)?.as_str_owned()?;
     Some((lib_name, c_symbol))
@@ -921,9 +926,9 @@ fn ensure_query_compiled(eval: &mut super::eval::Context, query: Value) -> Resul
     }
 
     let language = query_record_slot(query, QUERY_SLOT_LANGUAGE)?;
-    let language_sym = parse_symbol_arg("treesit-query-compile", &language)?;
+    let language_sym = parse_symbol_arg("treesit-query-compile", &language, eval.symbol_mode())?;
     let source = query_record_slot(query, QUERY_SLOT_SOURCE)?;
-    let source_string = expand_query_value("treesit-query-compile", source)?;
+    let source_string = expand_query_value("treesit-query-compile", source, eval.symbol_mode())?;
 
     let (lang, _) = load_language(eval, language_sym).map_err(|_| {
         treesit_query_error(format!(
@@ -972,8 +977,10 @@ fn pattern_keyword_expansion(name: &str) -> Option<&'static str> {
     TreesitPatternKeyword::from_symbol_name(name).map(TreesitPatternKeyword::expansion)
 }
 
-fn expand_pattern_value(pattern: Value) -> Result<String, Flow> {
-    if let Some(name) = pattern.as_symbol_name()
+// GNU treesit.el matches pattern keywords with pcase structural equality,
+// rather than SYMBOLP/XSYMBOL; positioned atoms retain their printed form.
+fn expand_pattern_value(pattern: Value, mode: SymbolMode) -> Result<String, Flow> {
+    if let Some(name) = pattern.as_bare_symbol_name()
         && let Some(expanded) = pattern_keyword_expansion(name)
     {
         return Ok(expanded.to_string());
@@ -986,7 +993,7 @@ fn expand_pattern_value(pattern: Value) -> Result<String, Flow> {
     if let Some(items) = pattern.as_vector_data() {
         let mut pieces = Vec::with_capacity(items.len());
         for item in items {
-            pieces.push(expand_pattern_value(*item)?);
+            pieces.push(expand_pattern_value(*item, mode)?);
         }
         return Ok(format!("[{}]", pieces.join(" ")));
     }
@@ -1001,7 +1008,7 @@ fn expand_pattern_value(pattern: Value) -> Result<String, Flow> {
     {
         let mut pieces = Vec::with_capacity(items.len());
         for item in items {
-            pieces.push(expand_pattern_value(item)?);
+            pieces.push(expand_pattern_value(item, mode)?);
         }
         return Ok(format!("({})", pieces.join(" ")));
     }
@@ -1009,14 +1016,14 @@ fn expand_pattern_value(pattern: Value) -> Result<String, Flow> {
     Ok(crate::emacs_core::print::print_value(&pattern))
 }
 
-fn expand_query_value(caller: &str, query: Value) -> Result<String, Flow> {
+fn expand_query_value(caller: &str, query: Value, mode: SymbolMode) -> Result<String, Flow> {
     if let Some(source) = query.as_str_owned() {
         return Ok(source);
     }
     if let Some(items) = crate::emacs_core::value::list_to_vec(&query) {
         let mut pieces = Vec::with_capacity(items.len());
         for item in items {
-            pieces.push(expand_pattern_value(item)?);
+            pieces.push(expand_pattern_value(item, mode)?);
         }
         return Ok(pieces.join(" "));
     }
@@ -1116,7 +1123,7 @@ fn resolve_compiled_query_value(
     query: Value,
     caller: &str,
 ) -> Result<Value, Flow> {
-    let language_sym = parse_symbol_arg(caller, &language_symbol)?;
+    let language_sym = parse_symbol_arg(caller, &language_symbol, eval.symbol_mode())?;
     let compiled_query = if runtime::is_compiled_query(query) {
         query
     } else {
@@ -1183,7 +1190,7 @@ fn resolve_node_input(
         return resolve_node_input(eval, node_value, caller);
     }
 
-    if value.as_symbol_name().is_some() {
+    if value.as_symbol_name(eval.symbol_mode()).is_some() {
         let parser =
             builtin_treesit_parser_create(eval, vec![value, Value::NIL, Value::NIL, Value::NIL])?;
         return resolve_node_input(eval, parser, caller);
@@ -1197,14 +1204,14 @@ fn lookup_thing_definition(
     language_symbol: Value,
     thing_symbol: Value,
 ) -> Option<Value> {
-    let language_name = language_symbol.as_symbol_name()?;
-    let thing_name = thing_symbol.as_symbol_name()?;
+    let language_name = language_symbol.as_symbol_name(eval.symbol_mode())?;
+    let thing_name = thing_symbol.as_symbol_name(eval.symbol_mode())?;
     let settings =
         super::misc_eval::dynamic_or_global_symbol_value(eval, "treesit-thing-settings")?;
     let find_entry = |mut alist: Value, key: &str| {
         while alist.is_cons() {
             let entry = alist.cons_car();
-            if entry.is_cons() && entry.cons_car().as_symbol_name() == Some(key) {
+            if entry.is_cons() && entry.cons_car().as_symbol_name(eval.symbol_mode()) == Some(key) {
                 return Some(entry);
             }
             alist = alist.cons_cdr();
@@ -1237,11 +1244,8 @@ fn predicate_function_p(eval: &super::eval::Context, predicate: Value) -> bool {
     if predicate.is_nil() {
         return false;
     }
-    if predicate.as_symbol_name().is_some() {
-        return eval
-            .obarray()
-            .symbol_function_of_value(&predicate)
-            .is_some();
+    if let Some(symbol) = predicate.as_symbol_id(eval.symbol_mode()) {
+        return eval.obarray().symbol_function_id(symbol).is_some();
     }
     true
 }
@@ -1274,7 +1278,8 @@ fn predicate_matches_node(
             .map_err(|err| treesit_invalid_predicate(err.to_string(), predicate));
     }
 
-    if let Some(builtin) = TreesitBuiltinPredicate::from_symbol_value(predicate) {
+    if let Some(builtin) = TreesitBuiltinPredicate::from_symbol_value(predicate, eval.symbol_mode())
+    {
         return Ok(builtin.matches_node(node));
     }
 
@@ -1294,7 +1299,9 @@ fn predicate_matches_node(
         );
     }
 
-    if predicate.as_symbol_name().is_some() && !predicate_function_p(eval, predicate) {
+    if predicate.as_symbol_name(eval.symbol_mode()).is_some()
+        && !predicate_function_p(eval, predicate)
+    {
         return if ignore_missing {
             Ok(false)
         } else {
@@ -1315,7 +1322,9 @@ fn predicate_matches_node(
 
     let head = predicate.cons_car();
     let tail = predicate.cons_cdr();
-    if let Some(boolean_predicate) = TreesitBooleanPredicate::from_symbol_value(head) {
+    if let Some(boolean_predicate) =
+        TreesitBooleanPredicate::from_symbol_value(head, eval.symbol_mode())
+    {
         return match boolean_predicate {
             TreesitBooleanPredicate::Not => {
                 let args = crate::emacs_core::value::list_to_vec(&tail).ok_or_else(|| {
@@ -1678,7 +1687,11 @@ pub(crate) fn builtin_treesit_language_abi_version(
     if language_arg.is_nil() {
         return Ok(Value::NIL);
     }
-    let language = parse_symbol_arg("treesit-language-abi-version", language_arg)?;
+    let language = parse_symbol_arg(
+        "treesit-language-abi-version",
+        language_arg,
+        eval.symbol_mode(),
+    )?;
     match load_language(eval, language) {
         Ok((loaded, _)) => Ok(Value::fixnum(loaded.abi_version() as i64)),
         Err(_) => Ok(Value::NIL),
@@ -1690,7 +1703,7 @@ pub(crate) fn builtin_treesit_language_available_p(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("treesit-language-available-p", &args, 1, 2)?;
-    let language = parse_symbol_arg("treesit-language-available-p", &args[0])?;
+    let language = parse_symbol_arg("treesit-language-available-p", &args[0], eval.symbol_mode())?;
     let detail = args.get(1).is_some_and(|value| !value.is_nil());
     match load_language(eval, language) {
         Ok(_) if detail => Ok(Value::cons(Value::T, Value::NIL)),
@@ -1717,7 +1730,7 @@ pub(crate) fn builtin_treesit_node_check(
     if args[0].is_nil() {
         return Ok(Value::NIL);
     }
-    let property_name = args[1].as_symbol_name().ok_or_else(|| {
+    let property_name = args[1].as_symbol_name(eval.symbol_mode()).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![
@@ -2122,7 +2135,7 @@ pub(crate) fn builtin_treesit_parser_add_notifier(
 ) -> EvalResult {
     expect_args("treesit-parser-add-notifier", &args, 2)?;
     let _ = expect_live_parser_id(eval, "treesit-parser-add-notifier", args[0])?;
-    if args[1].as_symbol_name().is_none() {
+    if args[1].as_symbol_name(eval.symbol_mode()).is_none() {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[1]],
@@ -2161,10 +2174,11 @@ pub(crate) fn builtin_treesit_parser_create(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("treesit-parser-create", &args, 1, 4)?;
-    let language = parse_symbol_arg("treesit-parser-create", &args[0])?;
+    let language = parse_symbol_arg("treesit-parser-create", &args[0], eval.symbol_mode())?;
     let tag = expect_symbol_or_nil(
         "treesit-parser-create",
         args.get(3).copied().unwrap_or(Value::NIL),
+        eval.symbol_mode(),
     )?;
     if tag.is_t() {
         return Err(signal(
@@ -2271,13 +2285,17 @@ pub(crate) fn builtin_treesit_parser_list(
     let (orig_buffer_id, root_buffer_id, _) = resolve_buffer_ids(eval, args.first())?;
     let language = match args.get(1).copied().unwrap_or(Value::NIL) {
         value if value.is_nil() => None,
-        value => Some(parse_symbol_arg("treesit-parser-list", &value)?),
+        value => Some(parse_symbol_arg(
+            "treesit-parser-list",
+            &value,
+            eval.symbol_mode(),
+        )?),
     };
     let tag = args.get(2).copied().unwrap_or(Value::NIL);
     let tag_filter = if tag.is_t() {
         ParserTagFilter::Any
     } else {
-        expect_symbol_or_nil("treesit-parser-list", tag)?;
+        expect_symbol_or_nil("treesit-parser-list", tag, eval.symbol_mode())?;
         ParserTagFilter::Exact(tag)
     };
     let items =
@@ -2310,7 +2328,7 @@ pub(crate) fn builtin_treesit_parser_remove_notifier(
 ) -> EvalResult {
     expect_args("treesit-parser-remove-notifier", &args, 2)?;
     let _ = expect_live_parser_id(eval, "treesit-parser-remove-notifier", args[0])?;
-    if args[1].as_symbol_name().is_none() {
+    if args[1].as_symbol_name(eval.symbol_mode()).is_none() {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), args[1]],
@@ -2471,9 +2489,21 @@ pub(crate) fn builtin_treesit_parser_tag(
     parser_record_slot(args[0], PARSER_SLOT_TAG)
 }
 
+#[cfg(test)]
 pub(crate) fn builtin_treesit_pattern_expand(args: Vec<Value>) -> EvalResult {
+    builtin_treesit_pattern_expand_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_treesit_pattern_expand_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_treesit_pattern_expand_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_treesit_pattern_expand_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("treesit-pattern-expand", &args, 1)?;
-    Ok(Value::string(expand_pattern_value(args[0])?))
+    Ok(Value::string(expand_pattern_value(args[0], mode)?))
 }
 
 #[derive(Clone, Copy)]
@@ -2960,7 +2990,7 @@ pub(crate) fn builtin_treesit_query_compile(
         return Err(query_type_error("treesit-query-compile", query));
     }
 
-    let language = expect_symbol_or_nil("treesit-query-compile", args[0])?;
+    let language = expect_symbol_or_nil("treesit-query-compile", args[0], eval.symbol_mode())?;
     let eager = args.get(2).is_some_and(|value| !value.is_nil());
 
     if runtime::is_compiled_query(query) {
@@ -2970,7 +3000,7 @@ pub(crate) fn builtin_treesit_query_compile(
         return Ok(query);
     }
 
-    let language_sym = parse_symbol_arg("treesit-query-compile", &language)?;
+    let language_sym = parse_symbol_arg("treesit-query-compile", &language, eval.symbol_mode())?;
     let id = eval.treesit.insert_query(language_sym);
     let value = runtime::make_query_value(id, language, query);
     if eager {
@@ -2994,7 +3024,19 @@ pub(crate) fn builtin_treesit_query_eagerly_compiled_p(
     Ok(if compiled { Value::T } else { Value::NIL })
 }
 
+#[cfg(test)]
 pub(crate) fn builtin_treesit_query_expand(args: Vec<Value>) -> EvalResult {
+    builtin_treesit_query_expand_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_treesit_query_expand_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_treesit_query_expand_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_treesit_query_expand_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("treesit-query-expand", &args, 1)?;
     let source = match args[0] {
         value if runtime::is_compiled_query(value) => query_record_slot(value, QUERY_SLOT_SOURCE)?,
@@ -3003,6 +3045,7 @@ pub(crate) fn builtin_treesit_query_expand(args: Vec<Value>) -> EvalResult {
     Ok(Value::string(expand_query_value(
         "treesit-query-expand",
         source,
+        mode,
     )?))
 }
 
@@ -3120,7 +3163,7 @@ pub(crate) fn builtin_treesit_grammar_location(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("treesit-grammar-location", &args, 1)?;
-    let language = parse_symbol_arg("treesit-grammar-location", &args[0])?;
+    let language = parse_symbol_arg("treesit-grammar-location", &args[0], eval.symbol_mode())?;
     match load_language(eval, language) {
         Ok((_, filename)) => Ok(filename.map_or(Value::NIL, Value::string)),
         Err(_) => Ok(Value::NIL),
@@ -3195,7 +3238,7 @@ pub(crate) fn builtin_treesit_parse_string(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("treesit-parse-string", &args, 2)?;
-    let language = expect_symbol_or_nil("treesit-parse-string", args[1])?;
+    let language = expect_symbol_or_nil("treesit-parse-string", args[1], eval.symbol_mode())?;
     if language.is_nil() {
         return Err(query_type_error("treesit-parse-string", language));
     }
@@ -3207,8 +3250,10 @@ pub(crate) fn builtin_treesit_parse_string(
     let text = args[0].expect_lisp_string_in(&eval.tagged_heap)?;
     let name = format!(" *treesit-parse-string-{}*", eval.treesit.roots().len() + 1);
     let buffer_id = eval.buffers.create_buffer_with_hook_inhibition(&name, true);
-    let saved_current = eval.buffers.current_buffer_id();
-    let _ = eval.buffers.switch_current(buffer_id);
+    // GNU selects the scratch buffer only around `insert1` and selects the
+    // caller's buffer again BEFORE creating the parser (treesit.c:2874-2879),
+    // so a failing parser creation leaves the caller's buffer current. The
+    // insertion here names its buffer, so nothing needs selecting at all.
     let _ = eval.buffers.insert_lisp_string_into_buffer(buffer_id, text);
     let parser = builtin_treesit_parser_create(
         eval,
@@ -3223,9 +3268,6 @@ pub(crate) fn builtin_treesit_parse_string(
         && let Some(entry) = eval.treesit.parser_mut(parser_id)
     {
         entry.need_to_gc_buffer = true;
-    }
-    if let Some(saved) = saved_current {
-        let _ = eval.buffers.switch_current(saved);
     }
     builtin_treesit_parser_root_node(eval, vec![parser])
 }

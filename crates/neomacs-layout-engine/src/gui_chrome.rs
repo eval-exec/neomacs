@@ -48,8 +48,7 @@ impl ToolBarIconTheme {
 
 pub fn compact_bar_mode_enabled(eval: &Context) -> bool {
     eval.obarray()
-        .symbol_value("compact-bar-mode")
-        .copied()
+        .symbol_value_copied("compact-bar-mode")
         .unwrap_or(Value::NIL)
         .is_truthy()
 }
@@ -88,14 +87,20 @@ pub fn collect_gui_tool_bar_items(eval: &mut Context) -> Vec<ToolBarItem> {
     // `eval` is borrowed mutably inside the closure, so the obarray cannot also
     // be borrowed across it; a tool-bar keymap is built by `define-key` and never
     // has a symbol spine tail for `get_keymap` to resolve.
-    list_keymap_for_each_binding(&keymap, None, |key, def| {
-        let key_name = key_symbol_name(&key);
-        let def = normalize_binding_def(&def);
-        let Some(item) = parse_tool_bar_item(eval, &key_name, &def, items.len() as u32) else {
-            return;
-        };
-        items.push(item);
-    });
+    let symbol_mode = eval.symbol_mode();
+    list_keymap_for_each_binding(
+        &keymap,
+        None,
+        |key, def| {
+            let key_name = key_symbol_name(&key);
+            let def = normalize_binding_def(&def);
+            let Some(item) = parse_tool_bar_item(eval, &key_name, &def, items.len() as u32) else {
+                return;
+            };
+            items.push(item);
+        },
+        symbol_mode,
+    );
     items
 }
 
@@ -397,8 +402,7 @@ fn current_tool_bar_map(eval: &Context) -> Value {
         return local;
     }
     eval.obarray()
-        .default_value_id(intern("tool-bar-map"))
-        .copied()
+        .default_value_id_copied(intern("tool-bar-map"))
         .unwrap_or(Value::NIL)
 }
 
@@ -425,7 +429,8 @@ fn parse_tool_bar_item(
     def: &Value,
     index: u32,
 ) -> Option<ToolBarItem> {
-    if key_name.starts_with("separator") || def.as_symbol_name() == Some("menu-bar-separator") {
+    if key_name.starts_with("separator") || def.as_bare_symbol_name() == Some("menu-bar-separator")
+    {
         return Some(ToolBarItem {
             index,
             key: key_name.to_string(),
@@ -440,28 +445,28 @@ fn parse_tool_bar_item(
     }
 
     let (mut label, plist) = extract_menu_item_label_and_plist(eval, def)?;
-    if let Some(visible) = plist_lookup(&plist, MenuItemProperty::Visible)
+    if let Some(visible) = plist_lookup(&plist, MenuItemProperty::Visible, eval.symbol_mode())
         && !eval_menu_property(eval, visible).is_truthy()
     {
         return None;
     }
     if label.is_empty() {
-        label = plist_lookup(&plist, MenuItemProperty::Label)
+        label = plist_lookup(&plist, MenuItemProperty::Label, eval.symbol_mode())
             .and_then(|value| value.as_runtime_string_owned())
             .unwrap_or_default();
     }
-    let image = plist_lookup(&plist, MenuItemProperty::Image)
+    let image = plist_lookup(&plist, MenuItemProperty::Image, eval.symbol_mode())
         .and_then(|image| tool_bar_image_source(eval, &image));
-    let help = plist_lookup(&plist, MenuItemProperty::Help)
+    let help = plist_lookup(&plist, MenuItemProperty::Help, eval.symbol_mode())
         .and_then(|value| value.as_runtime_string_owned())
         .unwrap_or_default();
-    let enabled = plist_lookup(&plist, MenuItemProperty::Enable)
+    let enabled = plist_lookup(&plist, MenuItemProperty::Enable, eval.symbol_mode())
         .map(|value| eval_menu_property(eval, value).is_truthy())
         .unwrap_or(true);
-    let (item_type, selected) = plist_lookup(&plist, MenuItemProperty::Button)
+    let (item_type, selected) = plist_lookup(&plist, MenuItemProperty::Button, eval.symbol_mode())
         .and_then(|value| button_state(eval, value))
         .unwrap_or((ToolBarItemType::Button, false));
-    let wrap = plist_lookup(&plist, MenuItemProperty::Wrap)
+    let wrap = plist_lookup(&plist, MenuItemProperty::Wrap, eval.symbol_mode())
         .map(|value| eval_menu_property(eval, value).is_truthy())
         .unwrap_or(false);
 
@@ -485,7 +490,7 @@ fn extract_menu_item_label_and_plist(eval: &mut Context, def: &Value) -> Option<
     let car = def.cons_car();
     let cdr = def.cons_cdr();
 
-    if KeymapMarker::MenuItem.is_value(car) && cdr.is_cons() {
+    if KeymapMarker::MenuItem.is_value(car, eval.symbol_mode()) && cdr.is_cons() {
         let label = menu_caption_string(eval, cdr.cons_car())?;
         let mut rest = cdr.cons_cdr();
         if !rest.is_cons() {
@@ -514,7 +519,7 @@ fn button_state(eval: &mut Context, value: Value) -> Option<(ToolBarItemType, bo
     if !value.is_cons() {
         return None;
     }
-    let name = value.cons_car().as_symbol_name()?;
+    let name = value.cons_car().as_bare_symbol_name()?;
     let item_type = match MenuButtonKind::from_keyword(name)? {
         MenuButtonKind::Radio => ToolBarItemType::Radio,
         MenuButtonKind::Toggle => ToolBarItemType::Toggle,
@@ -523,8 +528,12 @@ fn button_state(eval: &mut Context, value: Value) -> Option<(ToolBarItemType, bo
     Some((item_type, selected))
 }
 
-fn plist_lookup(plist: &Value, wanted: MenuItemProperty) -> Option<Value> {
-    plist_lookup_by_symbol(plist, |key| wanted.is_value(key))
+fn plist_lookup(
+    plist: &Value,
+    wanted: MenuItemProperty,
+    symbol_mode: neovm_core::tagged::SymbolMode,
+) -> Option<Value> {
+    plist_lookup_by_symbol(plist, |key| wanted.is_value(key, symbol_mode))
 }
 
 fn plist_lookup_by_symbol(
@@ -556,7 +565,7 @@ fn tool_bar_image_source(eval: &Context, value: &Value) -> Option<ToolBarImageSo
 }
 
 fn image_file_from_spec(value: &Value) -> Option<String> {
-    let plist = if value.is_cons() && value.cons_car().as_symbol_name() == Some("image") {
+    let plist = if value.is_cons() && value.cons_car().as_bare_symbol_name() == Some("image") {
         value.cons_cdr()
     } else {
         *value
@@ -649,8 +658,8 @@ fn themed_tool_bar_image_path(eval: &Context, path: &str) -> String {
 
 fn current_tool_bar_icon_theme(eval: &Context) -> ToolBarIconTheme {
     eval.obarray()
-        .symbol_value("neomacs-toolbar-icon-theme")
-        .and_then(|value| value.as_symbol_name())
+        .symbol_value_copied("neomacs-toolbar-icon-theme")
+        .and_then(|value| value.as_bare_symbol_name())
         .and_then(|name| ToolBarIconTheme::from_str(name).ok())
         .unwrap_or(ToolBarIconTheme::VscodeLike)
 }
@@ -658,7 +667,7 @@ fn current_tool_bar_icon_theme(eval: &Context) -> ToolBarIconTheme {
 fn custom_tool_bar_icon_path(eval: &Context, icon_name: &str) -> Option<String> {
     let directory = eval
         .obarray()
-        .symbol_value("neomacs-toolbar-icon-directory")
+        .symbol_value_copied("neomacs-toolbar-icon-directory")
         .and_then(|value| value.as_runtime_string_owned())?;
     let directory = directory.trim();
     if directory.is_empty() {
@@ -786,24 +795,24 @@ fn tool_bar_image_load_candidates(path: &Path) -> Vec<PathBuf> {
 }
 
 fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
-    if is_keymap(value) {
+    if is_keymap(value, eval.symbol_mode()) {
         return Some(*value);
     }
-    if let Some(name) = value.as_symbol_name()
-        && let Some(symbol_value) = eval.obarray().symbol_value(name)
-        && is_keymap(symbol_value)
+    if let Some(name) = value.as_symbol_name(eval.symbol_mode())
+        && let Some(symbol_value) = eval.obarray().symbol_value_copied(name)
+        && is_keymap(&symbol_value, eval.symbol_mode())
     {
-        return Some(*symbol_value);
+        return Some(symbol_value);
     }
     None
 }
 
-fn is_keymap(value: &Value) -> bool {
-    value.is_cons() && KeymapMarker::Keymap.is_value(value.cons_car())
+fn is_keymap(value: &Value, symbol_mode: neovm_core::tagged::SymbolMode) -> bool {
+    value.is_cons() && KeymapMarker::Keymap.is_value(value.cons_car(), symbol_mode)
 }
 
 fn key_symbol_name(key: &Value) -> String {
-    key.as_symbol_name()
+    key.as_bare_symbol_name()
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("{key:?}"))
 }

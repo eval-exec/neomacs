@@ -50,6 +50,7 @@ use crate::emacs_core::jit::stats::{self, CompilePhase, enter_phase};
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use super::code_arena::CodeArena;
 
+pub(crate) mod batch;
 pub(crate) mod split;
 
 /// Leaves defined into one module before it is replaced (bounds the
@@ -382,6 +383,7 @@ impl SharedJit {
                     config.default_call_conv,
                     config.pointer_type(),
                     ShimGroups {
+                        throw_flow: crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual,
                         subr_spec: true,
                         cbsym_spec: true,
                         tier2_profile: tier2_profile || has_profile,
@@ -408,6 +410,8 @@ impl SharedJit {
             config.default_call_conv,
             config.pointer_type(),
             ShimGroups {
+                throw_flow:
+                    crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual,
                 subr_spec: true,
                 cbsym_spec: true,
                 tier2_profile,
@@ -735,6 +739,8 @@ impl SharedJit {
             shared.shims,
             super::shim_refs::SelectedShimGroups {
                 main: ShimGroups {
+                    throw_flow:
+                        crate::emacs_core::jit::compile::shim_refs::ThrowShimSelection::Contextual,
                     subr_spec: true,
                     cbsym_spec: true,
                     tier2_profile,

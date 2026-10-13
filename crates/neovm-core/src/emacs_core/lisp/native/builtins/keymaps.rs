@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
 use crate::emacs_core::symbol::Obarray;
+use crate::tagged::SymbolMode;
 
 // ===========================================================================
 // Keymap builtins
@@ -16,8 +17,8 @@ use super::keymap::{
 };
 use super::symbols::cache_event_symbol_value_properties_in_obarray;
 
-fn map_keymap_binding_value(binding: Value) -> Value {
-    if binding == Value::T {
+fn map_keymap_binding_value(binding: Value, symbol_mode: SymbolMode) -> Value {
+    if eq_value_swp(&binding, &Value::T, symbol_mode == SymbolMode::Positioned) {
         Value::NIL
     } else {
         binding
@@ -28,8 +29,12 @@ fn map_keymap_binding_value(binding: Value) -> Value {
 /// Accepts:
 /// - Cons cells starting with 'keymap
 /// - Symbols whose function definition is a keymap
-pub(crate) fn expect_keymap_in_obarray(obarray: &Obarray, value: &Value) -> Result<Value, Flow> {
-    get_keymap_in_obarray(obarray, value, true)
+pub(crate) fn expect_keymap_in_obarray(
+    obarray: &Obarray,
+    value: &Value,
+    symbol_mode: SymbolMode,
+) -> Result<Value, Flow> {
+    get_keymap_in_obarray(obarray, value, true, symbol_mode)
 }
 
 fn expect_keymap(eval: &mut super::eval::Context, value: &Value) -> EvalResult {
@@ -72,7 +77,10 @@ fn call_help_describe_map_tree(
 /// For vectors, integer and symbol elements are used directly as emacs event
 /// codes (preserving all modifier bits including Alt and Hyper).  For strings,
 /// each character is treated as a raw key event.
-pub(crate) fn expect_key_events(value: &Value) -> Result<Vec<Value>, Flow> {
+pub(crate) fn expect_key_events(
+    value: &Value,
+    symbol_mode: SymbolMode,
+) -> Result<Vec<Value>, Flow> {
     match value.kind() {
         // Vectors: use elements directly — integers are already emacs event codes,
         // symbols are already event symbols.
@@ -80,7 +88,7 @@ pub(crate) fn expect_key_events(value: &Value) -> Result<Vec<Value>, Flow> {
             let items = value.as_vector_data().unwrap().clone();
             let mut events = Vec::with_capacity(items.len());
             for item in &items {
-                match item.kind() {
+                match symbol_mode.unwrap(*item).kind() {
                     // Integer event codes (character + modifier bits)
                     ValueKind::Fixnum(_) => events.push(*item),
                     // Symbol events (function keys, remap, etc.)
@@ -95,7 +103,7 @@ pub(crate) fn expect_key_events(value: &Value) -> Result<Vec<Value>, Flow> {
                     // list; those remain parameterized events and key lookup
                     // matches on their car.
                     ValueKind::Cons => {
-                        if let Some(event) = convert_lucid_event_type_list(item) {
+                        if let Some(event) = convert_lucid_event_type_list(item, symbol_mode) {
                             // GNU `Fdefine_key` converts a Lucid event type list
                             // such as `(shift tab)` via `Fevent_convert_list`
                             // (src/keymap.c:1156-1157, 1264-1265).  That routine
@@ -132,18 +140,26 @@ fn cache_key_event_symbol_properties(
     eval: &mut super::eval::Context,
     events: &[Value],
 ) -> EvalResult {
-    for event in events {
-        cache_event_symbol_value_properties_in_obarray(eval.obarray_mut(), *event)?;
+    let symbol_mode = eval.symbol_mode();
+    // SAFETY: this loop only parses event designators and writes their cached
+    // properties. It invokes no Lisp or canonical dispatch producer and leaves
+    // no manager/interior reference outside its single cohesive phase.
+    unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            for event in events {
+                cache_event_symbol_value_properties_in_obarray(obarray, *event, symbol_mode)?;
+            }
+            Ok(Value::NIL)
+        })
     }
-    Ok(Value::NIL)
 }
 
-fn lucid_event_type_list_p(value: &Value) -> bool {
+fn lucid_event_type_list_p(value: &Value, symbol_mode: SymbolMode) -> bool {
     if !value.is_cons() {
         return false;
     }
     if let Some("help-echo" | "vertical-line" | "mode-line" | "tab-line" | "header-line") =
-        value.cons_car().as_symbol_name()
+        value.cons_car().as_symbol_name(symbol_mode)
     {
         return false;
     }
@@ -152,7 +168,7 @@ fn lucid_event_type_list_p(value: &Value) -> bool {
     while cursor.is_cons() {
         let elt = cursor.cons_car();
         if !matches!(
-            elt.kind(),
+            symbol_mode.unwrap(elt).kind(),
             ValueKind::Fixnum(_) | ValueKind::Symbol(_) | ValueKind::Nil | ValueKind::T
         ) {
             return false;
@@ -162,25 +178,25 @@ fn lucid_event_type_list_p(value: &Value) -> bool {
     cursor.is_nil()
 }
 
-fn convert_lucid_event_type_list(value: &Value) -> Option<Value> {
-    if !lucid_event_type_list_p(value) {
+fn convert_lucid_event_type_list(value: &Value, symbol_mode: SymbolMode) -> Option<Value> {
+    if !lucid_event_type_list_p(value, symbol_mode) {
         return None;
     }
 
     let mut items = Vec::new();
     let mut cursor = *value;
     while cursor.is_cons() {
-        items.push(cursor.cons_car());
+        items.push(symbol_mode.unwrap(cursor.cons_car()));
         cursor = cursor.cons_cdr();
     }
-    crate::emacs_core::keyboard::pure::convert_lucid_event_list(&items)
+    crate::emacs_core::keyboard::pure::convert_lucid_event_list(&items, SymbolMode::Bare)
 }
 
 /// GNU `Fdefine_key` treats a vector whose first element is a cons as an
 /// XEmacs-style keyboard macro and canonicalizes each Lucid event list in it.
 /// Keep that compatibility conversion at the `define-key` boundary so stored
 /// definitions, lookup results, and command-loop execution share one shape.
-fn normalize_keyboard_macro_definition(definition: Value) -> Value {
+fn normalize_keyboard_macro_definition(definition: Value, symbol_mode: SymbolMode) -> Value {
     let Some(items) = definition.as_vector_data() else {
         return definition;
     };
@@ -191,7 +207,7 @@ fn normalize_keyboard_macro_definition(definition: Value) -> Value {
     Value::vector(
         items
             .iter()
-            .map(|item| convert_lucid_event_type_list(item).unwrap_or(*item))
+            .map(|item| convert_lucid_event_type_list(item, symbol_mode).unwrap_or(*item))
             .collect(),
     )
 }
@@ -215,15 +231,20 @@ pub(super) fn builtin_accessible_keymaps(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_accessible_keymaps_impl(eval.obarray(), &args)
+    let symbol_mode = eval.symbol_mode();
+    builtin_accessible_keymaps_impl(eval.obarray(), &args, symbol_mode)
 }
 
-pub(crate) fn builtin_accessible_keymaps_impl(obarray: &Obarray, args: &[Value]) -> EvalResult {
+pub(crate) fn builtin_accessible_keymaps_impl(
+    obarray: &Obarray,
+    args: &[Value],
+    symbol_mode: SymbolMode,
+) -> EvalResult {
     use crate::emacs_core::value::{ValueKind, VecLikeType};
 
     expect_min_args("accessible-keymaps", args, 1)?;
     expect_max_args("accessible-keymaps", args, 2)?;
-    let keymap = expect_keymap_in_obarray(obarray, &args[0])?;
+    let keymap = expect_keymap_in_obarray(obarray, &args[0], symbol_mode)?;
 
     // GNU starts the walk AT the map PREFIX reaches rather than enumerating
     // everything and filtering: the two differ, because the walk metizes a key
@@ -233,7 +254,7 @@ pub(crate) fn builtin_accessible_keymaps_impl(obarray: &Obarray, args: &[Value])
         None => Vec::new(),
         Some(prefix_arg) if prefix_arg.is_nil() => Vec::new(),
         Some(prefix_arg) => match prefix_arg.kind() {
-            ValueKind::String => expect_key_events(prefix_arg)?,
+            ValueKind::String => expect_key_events(prefix_arg, symbol_mode)?,
             ValueKind::Veclike(VecLikeType::Vector) => prefix_arg.as_vector_data().unwrap().clone(),
             // Lists are not valid as key sequences for prefix
             ValueKind::Cons => {
@@ -252,7 +273,13 @@ pub(crate) fn builtin_accessible_keymaps_impl(obarray: &Obarray, args: &[Value])
     };
 
     let mut all_out = Vec::new();
-    list_keymap_accessible(keymap, &prefix_events, Some(obarray), &mut all_out);
+    list_keymap_accessible(
+        keymap,
+        &prefix_events,
+        Some(obarray),
+        &mut all_out,
+        symbol_mode,
+    );
 
     Ok(Value::list(all_out))
 }
@@ -299,32 +326,45 @@ pub(super) fn builtin_make_sparse_keymap(
 
 /// `(copy-keymap KEYMAP)` -> keymap copy.
 pub(super) fn builtin_copy_keymap(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    builtin_copy_keymap_impl(eval.obarray(), &args)
+    let symbol_mode = eval.symbol_mode();
+    builtin_copy_keymap_impl(eval.obarray(), &args, symbol_mode)
 }
 
-pub(crate) fn builtin_copy_keymap_impl(obarray: &Obarray, args: &[Value]) -> EvalResult {
+pub(crate) fn builtin_copy_keymap_impl(
+    obarray: &Obarray,
+    args: &[Value],
+    symbol_mode: SymbolMode,
+) -> EvalResult {
     expect_args("copy-keymap", args, 1)?;
-    let keymap = expect_keymap_in_obarray(obarray, &args[0])?;
-    Ok(list_keymap_copy(&keymap))
+    let keymap = expect_keymap_in_obarray(obarray, &args[0], symbol_mode)?;
+    Ok(list_keymap_copy(&keymap, symbol_mode))
 }
 
 /// (define-key KEYMAP KEY DEF &optional REMOVE) -> DEF
 pub(super) fn builtin_define_key(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_min_args("define-key", &args, 3)?;
     expect_max_args("define-key", &args, 4)?;
     let keymap = expect_keymap(eval, &args[0])?;
-    let mut events = expect_key_events(&args[1])?;
+    let mut events = expect_key_events(&args[1], symbol_mode)?;
     cache_key_event_symbol_properties(eval, &events)?;
-    let def = normalize_keyboard_macro_definition(args[2]);
+    let def = normalize_keyboard_macro_definition(args[2], symbol_mode);
     let remove = args.get(3).is_some_and(|v| v.is_truthy());
     // Expand meta-prefixed events to ESC + base, matching GNU Emacs
     // Fdefine_key's metized handling.
-    if let Some(expanded) = expand_meta_prefix_char_events_in_obarray(eval.obarray(), &events) {
+    if let Some(expanded) =
+        expand_meta_prefix_char_events_in_obarray(eval.obarray(), &events, symbol_mode)
+    {
         events = expanded;
     }
-    if let Err(msg) =
-        list_keymap_define_seq_in_obarray_ex(eval.obarray(), keymap, &events, def, remove)
-    {
+    if let Err(msg) = list_keymap_define_seq_in_obarray_ex(
+        eval.obarray(),
+        keymap,
+        &events,
+        def,
+        remove,
+        symbol_mode,
+    ) {
         return Err(signal("error", vec![Value::string(msg)]));
     }
     Ok(def)
@@ -332,10 +372,11 @@ pub(super) fn builtin_define_key(eval: &mut super::eval::Context, args: Vec<Valu
 
 /// (lookup-key KEYMAP KEY &optional ACCEPT-DEFAULTS) -> binding or nil
 pub(super) fn builtin_lookup_key(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_min_args("lookup-key", &args, 2)?;
     expect_max_args("lookup-key", &args, 3)?;
     let t_ok = args.get(2).is_some_and(|v| v.is_truthy());
-    let events = expect_key_events(&args[1])?;
+    let events = expect_key_events(&args[1], symbol_mode)?;
     cache_key_event_symbol_properties(eval, &events)?;
     let keymaps = resolve_lookup_keymaps_in_runtime(eval, &args[0])?;
 
@@ -366,8 +407,9 @@ fn lookup_key_with_menu_compat_runtime(
     events: &[Value],
     t_ok: bool,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let found = lookup_key_in_keymaps_in_obarray_runtime(eval, keymaps, events, t_ok)?;
-    if is_defined_lookup_result(&found) || !is_menu_bar_key(events) {
+    if is_defined_lookup_result(&found) || !is_menu_bar_key(events, symbol_mode) {
         return Ok(found);
     }
 
@@ -375,7 +417,7 @@ fn lookup_key_with_menu_compat_runtime(
         .iter()
         .map(|event| {
             event
-                .as_symbol_name()
+                .as_symbol_name(symbol_mode)
                 .map(|name| Value::symbol(name.to_lowercase()))
                 .unwrap_or(*event)
         })
@@ -389,7 +431,7 @@ fn lookup_key_with_menu_compat_runtime(
         .iter()
         .map(|event| {
             event
-                .as_symbol_name()
+                .as_symbol_name(symbol_mode)
                 .filter(|name| name.contains(' '))
                 .map(|name| Value::symbol(name.replace(' ', "-")))
                 .unwrap_or(*event)
@@ -407,10 +449,10 @@ fn is_defined_lookup_result(value: &Value) -> bool {
     !value.is_nil() && !value.is_fixnum()
 }
 
-fn is_menu_bar_key(events: &[Value]) -> bool {
+fn is_menu_bar_key(events: &[Value], symbol_mode: SymbolMode) -> bool {
     events
         .first()
-        .and_then(|event| event.as_symbol_name())
+        .and_then(|event| event.as_symbol_name(symbol_mode))
         .is_some_and(|name| name == "menu-bar")
 }
 
@@ -418,14 +460,18 @@ fn resolve_lookup_keymaps_in_runtime(
     eval: &mut super::eval::Context,
     value: &Value,
 ) -> Result<Vec<Value>, Flow> {
-    if is_list_keymap(value) {
+    let symbol_mode = eval.symbol_mode();
+    if is_list_keymap(value, symbol_mode) {
         return Ok(vec![*value]);
     }
     if value.is_nil() {
         return Ok(vec![Value::NIL]);
     }
     if value.is_cons()
-        && is_list_keymap(&maybe_keymap_in_runtime(eval, &value.cons_car(), true)?)
+        && is_list_keymap(
+            &maybe_keymap_in_runtime(eval, &value.cons_car(), true)?,
+            symbol_mode,
+        )
         && let Some(items) = list_to_vec(value)
     {
         if items.is_empty() {
@@ -519,6 +565,7 @@ pub(super) fn builtin_describe_buffer_bindings(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args_range("describe-buffer-bindings", &args, 1, 3)?;
     if !args[0].is_buffer() {
         return Err(signal(
@@ -564,7 +611,7 @@ pub(super) fn builtin_describe_buffer_bindings(
     let buffer_point = buf.point_lisp_char_pos().as_i64();
     let major_mode_name = buf
         .get_buffer_local("major-mode")
-        .and_then(|value| value.as_symbol_name())
+        .and_then(|value| value.as_symbol_name(symbol_mode))
         .unwrap_or("fundamental-mode")
         .to_string();
 
@@ -659,6 +706,7 @@ pub(super) fn builtin_help_describe_vector(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("help--describe-vector", &args, 7)?;
     let vector = args[0];
     let prefix = args[1];
@@ -702,13 +750,17 @@ pub(super) fn builtin_help_describe_vector(
 
         let raw = if is_char_table {
             let (val, _from, run_end) =
-                crate::emacs_core::chartable::char_table_ref_and_range(&vector, starting_i)?;
+                crate::emacs_core::chartable::char_table_ref_and_range_with_symbols(
+                    &vector,
+                    starting_i,
+                    symbol_mode,
+                )?;
             i = run_end.min(stop - 1).max(starting_i);
             val
         } else {
             vector.as_vector_data().unwrap()[starting_i as usize]
         };
-        let definition = crate::emacs_core::keymap::get_keyelt(raw);
+        let definition = crate::emacs_core::keymap::get_keyelt(raw, symbol_mode);
         if definition.is_nil() {
             i += 1;
             continue;
@@ -716,8 +768,8 @@ pub(super) fn builtin_help_describe_vector(
 
         // Don't mention suppressed commands.
         if partial
-            && definition.is_symbol()
-            && let Some(name) = definition.as_symbol_name()
+            && definition.is_symbol(symbol_mode)
+            && let Some(name) = definition.as_symbol_name(symbol_mode)
             && eval
                 .obarray
                 .get_property(name, "suppress-keymap")
@@ -768,7 +820,8 @@ pub(super) fn builtin_help_describe_vector(
         if !is_char_table {
             let data = vector.as_vector_data().unwrap();
             while i + 1 < stop {
-                let next = crate::emacs_core::keymap::get_keyelt(data[(i + 1) as usize]);
+                let next =
+                    crate::emacs_core::keymap::get_keyelt(data[(i + 1) as usize], symbol_mode);
                 if next.is_nil() || !equal_value(&next, &definition, 0) {
                     break;
                 }
@@ -780,11 +833,11 @@ pub(super) fn builtin_help_describe_vector(
         // GNU truncates it at the first member that is not (bug#9293).
         let check_ranges = eval
             .obarray
-            .symbol_value("describe-bindings-check-shadowing-in-ranges")
-            .copied()
+            .symbol_value_copied("describe-bindings-check-shadowing-in-ranges")
             .unwrap_or(Value::NIL);
-        let skip_self_insert = check_ranges.as_symbol_name() == Some("ignore-self-insert")
-            && definition.as_symbol_name() == Some("self-insert-command");
+        let skip_self_insert = check_ranges.as_symbol_name(symbol_mode)
+            == Some("ignore-self-insert")
+            && definition.as_symbol_name(symbol_mode) == Some("self-insert-command");
         if check_ranges.is_truthy() && is_char_table && i != starting_i && !skip_self_insert {
             let shadowed_by = match shadowing {
                 RowShadowing::Mentioned { shadowed_by } => shadowed_by,
@@ -813,7 +866,7 @@ pub(super) fn builtin_help_describe_vector(
             let point = eval.apply(Value::symbol("point"), vec![])?;
             let before_newline = Value::fixnum(point.as_fixnum().unwrap_or(1) - 1);
             eval.apply(Value::symbol("goto-char"), vec![before_newline])?;
-            let note = match shadowed_by.as_symbol_name() {
+            let note = match shadowed_by.as_symbol_name(symbol_mode) {
                 Some(name) => format!("  (currently shadowed by `{name}')"),
                 // Could be a keymap, a lambda, or a keyboard macro.
                 None => "  (currently shadowed)".to_string(),
@@ -862,7 +915,7 @@ fn insert_describe_text(eval: &mut super::eval::Context, text: &str) -> EvalResu
 /// GNU `describe_key_maybe_fontify` with `keymap_p` true: the key description,
 /// carrying the `help-key-binding` face that `*Help*` renders keys in.
 fn insert_fontified_key(eval: &mut super::eval::Context, key: Value, prefix: Value) -> EvalResult {
-    let description = builtin_key_description(vec![key, prefix])?;
+    let description = builtin_key_description(vec![key, prefix], eval.symbol_mode())?;
     let length = eval.apply(Value::symbol("length"), vec![description])?;
     eval.apply(
         Value::symbol("add-text-properties"),
@@ -921,11 +974,11 @@ fn describe_buffer_binding_sections(
     buffer_point: i64,
     major_mode_name: &str,
 ) -> Result<Vec<BindingSection>, Flow> {
+    let symbol_mode = eval.symbol_mode();
     let mut sections = Vec::new();
     let named_map = |name: &str| -> Option<Value> {
         eval.obarray
-            .symbol_value(name)
-            .copied()
+            .symbol_value_copied(name)
             .filter(|map| !map.is_nil())
     };
 
@@ -957,6 +1010,7 @@ fn describe_buffer_binding_sections(
             buffer_point,
             crate::emacs_core::keymap::LocalMapProperty::Keymap,
             buffer_keymap,
+            symbol_mode,
         )?;
         if !keymap_property.is_nil() {
             sections.push(BindingSection {
@@ -973,6 +1027,7 @@ fn describe_buffer_binding_sections(
             &[],
             &eval.buffers,
             Some(buffer_id),
+            symbol_mode,
         ) {
             sections.push(BindingSection {
                 title: format!("\u{c}\n`{}' Minor Mode Bindings", resolve_sym(mode)),
@@ -990,6 +1045,7 @@ fn describe_buffer_binding_sections(
             buffer_point,
             crate::emacs_core::keymap::LocalMapProperty::LocalMap,
             buffer_keymap,
+            symbol_mode,
         )?;
         if !local_map.is_nil() {
             // A `local-map' property REPLACES the buffer's own keymap, so the
@@ -1067,12 +1123,14 @@ pub(crate) fn builtin_current_minor_mode_maps_impl(
     ctx: &crate::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     expect_args("current-minor-mode-maps", args, 0)?;
     let maps = collect_minor_mode_maps_in_state(
         &ctx.obarray,
         &[],
         &ctx.buffers,
         ctx.buffers.current_buffer_id(),
+        symbol_mode,
     );
     if maps.is_empty() {
         Ok(Value::NIL)
@@ -1086,10 +1144,10 @@ pub(crate) struct KeymapIterationPlan {
     pub(crate) parent: Value,
 }
 
-pub(crate) fn plan_keymap_iteration(keymap: Value) -> KeymapIterationPlan {
+pub(crate) fn plan_keymap_iteration(keymap: Value, symbol_mode: SymbolMode) -> KeymapIterationPlan {
     let mut bindings = Vec::new();
     let mut parent = Value::NIL;
-    let mut cursor = if is_list_keymap(&keymap) {
+    let mut cursor = if is_list_keymap(&keymap, symbol_mode) {
         keymap.cons_cdr()
     } else {
         keymap
@@ -1102,19 +1160,19 @@ pub(crate) fn plan_keymap_iteration(keymap: Value) -> KeymapIterationPlan {
             break;
         }
 
-        if is_list_keymap(&cursor) {
+        if is_list_keymap(&cursor, symbol_mode) {
             parent = cursor;
             break;
         }
 
         let entry = cursor.cons_car();
-        if is_list_keymap(&entry) {
+        if is_list_keymap(&entry, symbol_mode) {
             parent = entry;
             break;
         }
 
         if crate::emacs_core::chartable::is_char_table(&entry) {
-            let _ = crate::emacs_core::chartable::for_each_char_table_mapping(
+            let _ = crate::emacs_core::chartable::for_each_char_table_mapping_with_symbols(
                 &entry,
                 |event, binding| {
                     // GNU `map_keymap_char_table_item`: "make a copy since
@@ -1127,23 +1185,24 @@ pub(crate) fn plan_keymap_iteration(keymap: Value) -> KeymapIterationPlan {
                     } else {
                         event
                     };
-                    bindings.push((event, map_keymap_binding_value(binding)));
+                    bindings.push((event, map_keymap_binding_value(binding, symbol_mode)));
                     Ok(())
                 },
+                symbol_mode,
             );
         } else {
             match entry.kind() {
                 ValueKind::Cons => {
                     let pair_car = entry.cons_car();
                     let pair_cdr = entry.cons_cdr();
-                    bindings.push((pair_car, map_keymap_binding_value(pair_cdr)));
+                    bindings.push((pair_car, map_keymap_binding_value(pair_cdr, symbol_mode)));
                 }
                 ValueKind::Veclike(VecLikeType::Vector) => {
                     let items = entry.as_vector_data().unwrap().clone();
                     for (idx, binding) in items.iter().enumerate() {
                         bindings.push((
                             Value::fixnum(idx as i64),
-                            map_keymap_binding_value(*binding),
+                            map_keymap_binding_value(*binding, symbol_mode),
                         ));
                     }
                 }
@@ -1173,6 +1232,7 @@ pub(crate) fn execute_keymap_iteration_callbacks(
 /// Call FUNCTION for each binding in KEYMAP and its parents.
 /// FUNCTION receives two arguments: the event and the binding definition.
 pub(super) fn builtin_map_keymap(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_min_args("map-keymap", &args, 2)?;
     expect_max_args("map-keymap", &args, 3)?;
     let function = args[0];
@@ -1193,6 +1253,7 @@ pub(super) fn builtin_map_keymap(eval: &mut super::eval::Context, args: Vec<Valu
             };
             bindings.push((event, binding));
         },
+        symbol_mode,
     );
     let holder = Value::list(
         bindings
@@ -1230,7 +1291,8 @@ fn map_keymap_internal_impl(
     function: Value,
     keymap: Value,
 ) -> EvalResult {
-    let plan = plan_keymap_iteration(keymap);
+    let symbol_mode = eval.symbol_mode();
+    let plan = plan_keymap_iteration(keymap, symbol_mode);
     // The planned (event, binding) pairs and the parent keymap live in a
     // Rust Vec while FUNCTION runs per entry — arbitrary Lisp that can GC.
     // Unrooted, the first callback's collection frees the remaining
@@ -1259,9 +1321,10 @@ pub(super) fn builtin_keymap_parent(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("keymap-parent", &args, 1)?;
     let keymap = get_keymap_in_runtime(eval, &args[0], true, true)?;
-    Ok(list_keymap_parent(&keymap))
+    Ok(list_keymap_parent(&keymap, symbol_mode))
 }
 
 /// (set-keymap-parent KEYMAP PARENT) -> PARENT
@@ -1269,6 +1332,7 @@ pub(super) fn builtin_set_keymap_parent(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args("set-keymap-parent", &args, 2)?;
     let keymap = get_keymap_in_runtime(eval, &args[0], true, true)?;
     let parent = if args[1].is_nil() {
@@ -1276,22 +1340,27 @@ pub(super) fn builtin_set_keymap_parent(
     } else {
         get_keymap_in_runtime(eval, &args[1], true, false)?
     };
-    if !parent.is_nil() && list_keymap_inherits_from(&parent, &keymap) {
+    if !parent.is_nil() && list_keymap_inherits_from(&parent, &keymap, symbol_mode) {
         return Err(signal(
             "error",
             vec![Value::string("Cyclic keymap inheritance")],
         ));
     }
-    list_keymap_set_parent(keymap, parent);
+    list_keymap_set_parent(keymap, parent, symbol_mode);
     Ok(parent)
 }
 
 /// (keymapp OBJ) -> t or nil
 pub(super) fn builtin_keymapp(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    builtin_keymapp_impl(eval.obarray(), &args)
+    let symbol_mode = eval.symbol_mode();
+    builtin_keymapp_impl(eval.obarray(), &args, symbol_mode)
 }
 
-pub(crate) fn builtin_keymapp_impl(obarray: &Obarray, args: &[Value]) -> EvalResult {
+pub(crate) fn builtin_keymapp_impl(
+    obarray: &Obarray,
+    args: &[Value],
+    symbol_mode: SymbolMode,
+) -> EvalResult {
     expect_args("keymapp", args, 1)?;
     // GNU Fkeymapp is `!NILP (get_keymap (object, false, false))`, and
     // get_keymap with error_if_not_keymap=false answers a symbol whose
@@ -1299,7 +1368,7 @@ pub(crate) fn builtin_keymapp_impl(obarray: &Obarray, args: &[Value]) -> EvalRes
     // ITSELF -- so keymapp is t for e.g. kmacro-keymap before kmacro.el
     // loads.  help.el's describe-map relies on that to suppress the bare
     // prefix row and descend via map-keymap instead (ledger entry 61).
-    let resolved = get_keymap_in_obarray(obarray, &args[0], false)?;
+    let resolved = get_keymap_in_obarray(obarray, &args[0], false, symbol_mode)?;
     Ok(if resolved.is_nil() {
         Value::NIL
     } else {
@@ -1308,7 +1377,7 @@ pub(crate) fn builtin_keymapp_impl(obarray: &Obarray, args: &[Value]) -> EvalRes
 }
 
 /// `(event-convert-list EVENT-DESC)` -> event object or nil
-pub(crate) fn builtin_event_convert_list(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_event_convert_list(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args("event-convert-list", &args, 1)?;
     let Some(items) = list_to_vec(&args[0]) else {
         return Ok(Value::NIL);
@@ -1316,7 +1385,7 @@ pub(crate) fn builtin_event_convert_list(args: Vec<Value>) -> EvalResult {
     if items.is_empty() {
         return Ok(Value::NIL);
     }
-    convert_lucid_event_list(&items)
+    convert_lucid_event_list(&items, symbol_mode)
         .ok_or_else(|| signal("error", vec![Value::string("Invalid event description")]))
 }
 
@@ -1389,23 +1458,28 @@ fn key_description_string(bytes: Vec<u8>) -> Value {
 }
 
 /// `(single-key-description KEY &optional NO-ANGLES)` -> string
-pub(super) fn builtin_single_key_description(args: Vec<Value>) -> EvalResult {
+pub(super) fn builtin_single_key_description(
+    args: Vec<Value>,
+    symbol_mode: SymbolMode,
+) -> EvalResult {
     expect_args_range("single-key-description", &args, 1, 2)?;
     let no_angles = args.get(1).is_some_and(|v| v.is_truthy());
     Ok(key_description_string(describe_single_key_value(
-        &args[0], no_angles,
+        &args[0],
+        no_angles,
+        symbol_mode,
     )?))
 }
 
 /// `(key-description KEYS &optional PREFIX)` -> string
-pub(crate) fn builtin_key_description(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_key_description(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args_range("key-description", &args, 1, 2)?;
     let mut events = if let Some(prefix) = args.get(1) {
-        key_sequence_values(prefix)?
+        key_sequence_values(prefix, symbol_mode)?
     } else {
         vec![]
     };
-    events.extend(key_sequence_values(&args[0])?);
+    events.extend(key_sequence_values(&args[0], symbol_mode)?);
 
     // Mirror GNU `Fkey_description`: a lone `meta_prefix_char` (ESC, 27) folds
     // the meta bit onto the FOLLOWING event, so e.g. [27 97] -> "M-a".  When the
@@ -1426,6 +1500,7 @@ pub(crate) fn builtin_key_description(args: Vec<Value>) -> EvalResult {
                     rendered.push(describe_single_key_value(
                         &Value::fixnum(code | KEY_CHAR_META),
                         false,
+                        symbol_mode,
                     )?);
                     add_meta = false;
                     continue;
@@ -1434,6 +1509,7 @@ pub(crate) fn builtin_key_description(args: Vec<Value>) -> EvalResult {
                     rendered.push(describe_single_key_value(
                         &Value::fixnum(META_PREFIX_CHAR),
                         false,
+                        symbol_mode,
                     )?);
                     if event_fixnum == Some(META_PREFIX_CHAR) {
                         // Leave `add_meta` set: the next event still folds.
@@ -1446,12 +1522,13 @@ pub(crate) fn builtin_key_description(args: Vec<Value>) -> EvalResult {
             add_meta = true;
             continue;
         }
-        rendered.push(describe_single_key_value(event, false)?);
+        rendered.push(describe_single_key_value(event, false, symbol_mode)?);
     }
     if add_meta {
         rendered.push(describe_single_key_value(
             &Value::fixnum(META_PREFIX_CHAR),
             false,
+            symbol_mode,
         )?);
     }
     Ok(key_description_string(rendered.join(&b' ')))

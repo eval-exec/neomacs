@@ -132,7 +132,10 @@ impl Context {
         &mut self,
         value: Value,
     ) -> Result<Option<Value>, Flow> {
-        if !value.is_cons() || value.cons_car().as_symbol_name() != Some(":documentation") {
+        let symbol_mode = self.symbol_mode();
+        if !value.is_cons()
+            || value.cons_car().as_symbol_name(symbol_mode) != Some(":documentation")
+        {
             return Ok(None);
         }
 
@@ -516,6 +519,75 @@ impl Context {
         }
     }
 
+    /// Keep deferred-cleanup backtraces independent of the argument stores
+    /// a contained-panic recovery is about to retire. GNU's backtrace walk
+    /// reports the original evaluated values (eval.c:4026-4031), not whatever
+    /// later calls happen to write into the same indexed slots.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn retain_backtrace_args_for_recovery(
+        &mut self,
+        retained_bc_len: usize,
+        retained_args_len: usize,
+    ) {
+        struct RetainedFrame {
+            index: usize,
+            function: Value,
+            args: LispArgVec,
+            debug_on_exit: bool,
+        }
+        let mut retained = Vec::new();
+        for (index, entry) in self.specpdl.iter().enumerate() {
+            let SpecBinding::Backtrace {
+                function,
+                args,
+                debug_on_exit,
+            } = entry
+            else {
+                continue;
+            };
+            let loses_storage = match args.view() {
+                BacktraceArgsView::Unevalled(_) | BacktraceArgsView::Evaluated0 => false,
+                BacktraceArgsView::Evaluated(index) => index >= retained_args_len,
+                BacktraceArgsView::EvaluatedBcStack(span) => {
+                    span.start().saturating_add(span.len()) > retained_bc_len
+                }
+            };
+            if loses_storage {
+                retained.push(RetainedFrame {
+                    index,
+                    function: *function,
+                    args: self.backtrace_args_values(args),
+                    debug_on_exit: *debug_on_exit,
+                });
+            }
+        }
+        // Only Rust allocation occurs while these temporary copies are not
+        // traced: no Lisp allocation, collection or safepoint is permitted.
+        // Read every old descriptor before truncation, then republish in
+        // specpdl order so owned vectors still unwind in LIFO order.
+        self.backtrace_args_stack.truncate(retained_args_len);
+        for frame in retained {
+            self.specpdl[frame.index] = match frame.args.as_slice() {
+                [arg] => SpecBinding::Backtrace1 {
+                    function: frame.function,
+                    arg: *arg,
+                    debug_on_exit: frame.debug_on_exit,
+                },
+                [arg0, arg1] if !frame.debug_on_exit => SpecBinding::Backtrace2 {
+                    function: frame.function,
+                    arg0: *arg0,
+                    arg1: *arg1,
+                },
+                _ => SpecBinding::Backtrace {
+                    function: frame.function,
+                    args: self.backtrace_args_from_owned(frame.args),
+                    debug_on_exit: frame.debug_on_exit,
+                },
+            };
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn evaluated_backtrace_from_slice(
         &mut self,
@@ -553,11 +625,9 @@ impl Context {
     #[inline(never)]
     pub(super) fn release_owned_backtrace_args(&mut self, index: usize) {
         if index >= self.backtrace_args_stack.len() {
-            // Healed residue: a panic contained at a JIT-shim/module boundary
-            // truncated `backtrace_args_stack` while the panicked extent's
-            // Backtrace specpdl entries survive for the deferred depth-based
-            // unwind (`restore_jit_shim_boundary` doc). Their slots are
-            // already gone; releasing degrades to a no-op by design.
+            // A boundary may already have retired this slot. JIT recovery
+            // normally retains surviving frames' values in new owned slots
+            // before retiring the old argument stores.
             return;
         }
         debug_assert_eq!(
@@ -573,7 +643,7 @@ impl Context {
     }
 
     /// Test-only: observed depth of the backtrace args stack (containment
-    /// regression tests assert healed residue leaves it at base).
+    /// regression tests assert deferred unwind returns it to its base).
     #[cfg(test)]
     pub(crate) fn backtrace_args_stack_len_for_test(&self) -> usize {
         self.backtrace_args_stack.len()
@@ -1196,9 +1266,10 @@ impl Context {
     #[inline(never)]
     pub(crate) fn record_save_excursion(&mut self) -> Option<usize> {
         let buffer_id = self.buffers.current_buffer_id()?;
-        let (marker, marker_id) =
+        let (marker, _marker_id) =
             super::super::marker::make_registered_point_marker(&mut self.buffers, buffer_id)
                 .expect("the current buffer is live, so its point marker registers");
+        let saved_window = super::ExcursionWindow::capture(&self.frames, buffer_id);
         let count = self.specpdl.len();
         // Reserve before constructing the entry so it is written directly
         // into its final slot. Vec::push built a 32-byte stack temporary;
@@ -1206,7 +1277,7 @@ impl Context {
         self.specpdl.reserve(1);
         self.specpdl.spare_capacity_mut()[0].write(SpecBinding::SaveExcursion {
             _saved_buffer_id: buffer_id,
-            _saved_marker_id: marker_id,
+            saved_window,
             marker,
         });
         // SAFETY: reserve ensured a spare slot and write initialized it above.
@@ -1506,20 +1577,30 @@ impl Context {
         // more (a buffer-local or forwarded `let`, a watched symbol, an
         // `unwind-protect`, ...) hands the remaining suffix -- in the same
         // top-down order -- to the general unwinder.
-        let quitf = self.quit_flag_value();
-        if !quitf.is_nil() {
-            self.set_quit_flag_value(Value::NIL);
+        if !self.quit_flag_value().is_nil() {
+            return self.unbind_suffix_suspending_quit(count, result);
         }
+        // No quit pending: GNU's bracket saves and puts back nil, so there is
+        // nothing to suspend, root or restore.
+        self.unbind_suffix_to(count, result)
+    }
+
+    #[inline(always)]
+    fn unbind_suffix_to(&mut self, count: usize, result: EvalResult) -> EvalResult {
         self.pop_simple_specpdl_suffix(count);
-        let result = if self.specpdl.len() > count {
+        if self.specpdl.len() > count {
             self.drain_unwind_to(count, result)
         } else {
             result
-        };
-        if !quitf.is_nil() && self.quit_flag_value().is_nil() {
-            self.set_quit_flag_value(quitf);
         }
-        result
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn unbind_suffix_suspending_quit(&mut self, count: usize, result: EvalResult) -> EvalResult {
+        let mut quit_scope = super::specpdl::UnwindQuitScope::enter(self);
+        let result = quit_scope.context().unbind_suffix_to(count, result);
+        quit_scope.finish(result)
     }
 
     /// Pop entries from the top of the specpdl down toward COUNT while each
@@ -1538,6 +1619,7 @@ impl Context {
     /// is a store; `drain_unwind_to` is the path that roots them.  The symbol's shape is read when the entry is popped, not
     /// when it was pushed: a watcher added or a local made inside the `let`
     /// body sends that entry to the general path, as in GNU.
+    #[inline(always)]
     pub(crate) fn pop_simple_specpdl_suffix(&mut self, count: usize) {
         use crate::emacs_core::symbol::{SymbolRedirect, SymbolTrappedWrite};
         while self.specpdl.len() > count {
@@ -1628,6 +1710,33 @@ impl Context {
                     // nothing (const-asserted beside `trivial_spec_binding_pop`).
                     unsafe { self.specpdl.set_len(top_idx) };
                 }
+                SpecBinding::SaveCurrentBuffer { buffer_id }
+                    if self.buffers.current_buffer_id() == Some(*buffer_id) =>
+                {
+                    // GNU set_buffer_internal_1 returns immediately when this
+                    // buffer is still current (buffer.c:2333-2334). There is
+                    // no callback, allocation or runtime synchronization to
+                    // protect, so retain RESULT without opening a root frame.
+                    // SAFETY: this variant owns only a BufferId, whose lack
+                    // of drop glue is const-asserted beside the trivial pops.
+                    unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+                }
+                SpecBinding::SaveExcursion {
+                    marker,
+                    saved_window,
+                    ..
+                } => {
+                    let (marker, saved_window) = (*marker, *saved_window);
+                    match self.restore_excursion_in_current_buffer(marker, saved_window) {
+                        super::specpdl::ExcursionStorageRestore::Completed => {
+                            // SAFETY: restoration completed while the original
+                            // entry still rooted MARKER. All three payload
+                            // types are const-asserted to have no drop glue.
+                            unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+                        }
+                        super::specpdl::ExcursionStorageRestore::NeedsRuntime => break,
+                    }
+                }
                 other => match trivial_spec_binding_pop(other) {
                     Some(TrivialSpecBindingPop::BacktraceArgs(args)) => {
                         self.release_backtrace_args(&args);
@@ -1656,15 +1765,16 @@ impl Context {
         // GNU eval.c `unbind_to(count, value)` carries VALUE through cleanup.
         // In Rust the value is not on the C stack/register root set, so keep
         // all heap payloads rooted while unwind-protect/watchers may allocate.
-        let root_scope = self.save_vm_roots();
-        self.push_eval_result_roots(&result);
+        let mut roots = super::specpdl::UnwindVmRootsScope::enter(self);
+        let context = roots.context();
+        context.push_eval_result_roots(&result);
         let mut cleanup_error = None;
-        while self.specpdl.len() > count {
-            match self.unbind_to_result(count) {
+        while context.specpdl.len() > count {
+            match context.unbind_to_result(count) {
                 Ok(()) => break,
                 Err(flow) => {
                     let rooted_error: EvalResult = Err(flow);
-                    self.push_eval_result_roots(&rooted_error);
+                    context.push_eval_result_roots(&rooted_error);
                     cleanup_error = rooted_error.err();
                     // A cleanup nonlocal exit has already popped its own
                     // specbinding. Continue toward COUNT so lower dynamic
@@ -1673,7 +1783,7 @@ impl Context {
                 }
             }
         }
-        self.restore_vm_roots(root_scope);
+        roots.finish();
         if let Some(flow) = cleanup_error {
             return Err(flow);
         }
@@ -2017,23 +2127,36 @@ impl Context {
         A: Into<LispArgVec>,
     {
         let specpdl_count = self.specpdl.len();
-        let result = (|| {
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-redisplay"), Value::T)?;
-            // GNU's catch-all internal condition handler prevents the debugger
-            // from running. Neomacs dispatches signals on function return, so
-            // an explicit binding provides the same boundary before we demote
-            // the resulting Flow::Signal below.
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-debugger"), Value::T)?;
-            self.apply(function, args)
-        })();
-        let result = self.unbind_to_with_result(specpdl_count, result);
-        match result.kinded() {
-            Err(FlowKind::Signal(flow)) => {
+        self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-redisplay"), Value::T)?;
+        let condition_stack_base = self.condition_stack_len();
+        let resume = ResumeTarget::SafeFuncall {
+            condition_stack_base,
+        };
+        // GNU internal_condition_case_n installs Qt on the handler stack
+        // (eval.c:1782, 3239). This stops the search before outer handler-bind
+        // handlers and suppresses the ordinary signal debugger. The callback
+        // still observes its caller's inhibit-debugger binding, and GNU's
+        // debug-on-signal override remains effective (eval.c:2044).
+        // The barrier is owned by this Context's mutator, as is condition_stack;
+        // no Lisp state is shared with another concurrently executing Context.
+        self.push_condition_frame(ConditionFrame::ConditionCase {
+            conditions: Value::T,
+            resume: resume.clone(),
+        });
+        let result = self.apply(function, args);
+        let result = self.dispatch_signal_result_if_needed(result);
+        self.truncate_condition_stack(condition_stack_base);
+        let result = match result.kinded() {
+            Err(FlowKind::Signal(flow)) if flow.selected_resume.as_ref() == Some(&resume) => {
                 tracing::debug!(?flow, "error muted by safe_funcall");
                 Ok(Value::NIL)
             }
             other => other.map_err(Flow::from_kind),
-        }
+        };
+        // GNU removes the condition handler before the callback's error is
+        // muted and before safe_funcall restores inhibit-redisplay
+        // (eval.c:1787-1788, 1794, 3241). Errors from this restoration escape.
+        self.unbind_to_with_result(specpdl_count, result)
     }
 
     /// Apply from GNU's Lisp-visible `apply` / `funcall` subrs.
@@ -2311,7 +2434,8 @@ impl Context {
     /// compiler overrides).
     #[inline(never)]
     pub(crate) fn resolve_mapped_subr_callee(&mut self, function: Value) -> Option<(Value, u64)> {
-        let sym_id = function.as_symbol_id()?;
+        let symbol_mode = self.symbol_mode();
+        let sym_id = function.as_symbol_id(symbol_mode)?;
         if self.compiler_function_overrides_active()
             || !super::builtins::is_canonical_symbol_id(sym_id)
         {
@@ -2322,7 +2446,7 @@ impl Context {
         };
         let (_, entry) = subr_entry_from_value(subr)?;
         (entry.dispatch_kind == SubrDispatchKind::Builtin)
-            .then(|| (subr, self.obarray.function_epoch()))
+            .then(|| (subr, self.dispatch_projection().function_epoch()))
     }
 
     /// `apply1` of DESIGNATOR, a symbol [`Self::resolve_mapped_subr_callee`]
@@ -2357,7 +2481,7 @@ impl Context {
                 Err(flow) => Err(flow),
                 Ok(()) => self.maybe_grow_eval_stack(|ctx| {
                     let args = [arg0];
-                    if ctx.obarray.function_epoch() != epoch
+                    if ctx.dispatch_projection().function_epoch() != epoch
                         || ctx.compiler_function_overrides_active()
                     {
                         return ctx
@@ -2405,7 +2529,7 @@ impl Context {
                     // `LispArgVec` was copied 16 bytes wide over these two
                     // 8-byte stores (a store-forward block per call).
                     let args = [arg0, arg1];
-                    if ctx.obarray.function_epoch() != epoch
+                    if ctx.dispatch_projection().function_epoch() != epoch
                         || ctx.compiler_function_overrides_active()
                     {
                         return ctx
@@ -2897,17 +3021,63 @@ impl Context {
                 vec![Value::symbol("nil")],
             )),
             _ if function.is_symbol_with_pos() => {
-                // Transparently unwrap symbol-with-pos → bare symbol for funcall dispatch.
-                let bare = function.as_symbol_with_pos_sym().unwrap();
-                self.funcall_general_untraced(bare, args)
+                // GNU eval.c:3153 projects symbols only under live SYMBOLP policy.
+                // Preserve the original function operand when the wrapper is disabled.
+                let Some(symbol) = function.as_symbol_id(self.symbol_mode()) else {
+                    return Err(signal(LispCondition::InvalidFunction, vec![function]));
+                };
+                // A named function cell can stop owning this wrapper during
+                // autoload or Lisp execution. Retain original_fun until any
+                // replacement signal has pinned its payload.
+                let root_scope = self.save_specpdl_roots();
+                self.push_specpdl_root(function);
+                let canonical = Value::from_sym_id(symbol);
+                // Resolution failures name GNU original_fun. Snapshot before
+                // execution: a valid callee can redefine its own cell and then
+                // deliberately signal either of these conditions.
+                let callable_before = if canonical.is_t() || canonical.is_nil() {
+                    // The shared classifier treats these as constants, while
+                    // enabled nonnil wrappers enter GNU's function-cell lookup.
+                    Some(
+                        self.obarray
+                            .symbol_function_id(symbol)
+                            .is_some_and(|cell| self.function_value_is_callable(&cell)),
+                    )
+                } else {
+                    self.callable_before_call_snapshot(&canonical)
+                };
+                // This wrapper is physically nonnil even when XSYMBOL is nil.
+                // Keep the bare Nil arm's void-function behavior separate.
+                let result = self.apply_symbol_callable_untraced(symbol, args, true);
+                let result = match result.kinded_ref() {
+                    Err(FlowRef::Signal(sig))
+                        if (sig.symbol == invalid_function_symbol()
+                            || sig.symbol == intern("void-function"))
+                            && !sig.data.first().is_some_and(|operand| operand.is_subr())
+                            && !callable_before
+                                .unwrap_or_else(|| self.function_value_is_callable(&canonical)) =>
+                    {
+                        let condition = if sig.symbol == invalid_function_symbol() {
+                            LispCondition::InvalidFunction
+                        } else {
+                            LispCondition::VoidFunction
+                        };
+                        Err(signal(condition, vec![function]))
+                    }
+                    _ => result,
+                };
+                self.restore_specpdl_roots(root_scope);
+                result
             }
             ValueKind::Cons => {
-                if super::super::autoload::is_autoload_value(&function) {
+                if super::super::autoload::is_autoload_value(&function, self.symbol_mode()) {
                     Err(signal(
                         LispCondition::WrongTypeArgument,
                         vec![Value::symbol("symbolp"), function],
                     ))
-                } else if cons_head_symbol_id(&function) == Some(lambda_symbol()) {
+                } else if cons_head_symbol_id(&function, self.symbol_mode())
+                    == Some(lambda_symbol())
+                {
                     self.apply_lambda(function, args)
                 } else {
                     Err(signal(LispCondition::InvalidFunction, vec![function]))
@@ -2921,6 +3091,7 @@ impl Context {
     /// `Value::Lambda`.  This mirrors GNU Emacs's `funcall_lambda` which
     /// handles both forms.  Used by both the interpreter and the bytecode VM.
     pub(crate) fn instantiate_callable_cons_form(&mut self, function: Value) -> EvalResult {
+        let symbol_mode = self.symbol_mode();
         if !function.is_cons() {
             return Err(signal(LispCondition::InvalidFunction, vec![function]));
         }
@@ -2931,7 +3102,7 @@ impl Context {
         // Unwrap symbol-with-pos on the car so (lambda ...) / (closure ...)
         // forms with position-wrapped heads are recognized.
         let head_val = self.unwrap_symbol(function.cons_car());
-        let Some(head_id) = head_val.as_symbol_id() else {
+        let Some(head_id) = head_val.as_symbol_id(symbol_mode) else {
             return Err(signal(LispCondition::InvalidFunction, vec![function]));
         };
         let mut tail = function.cons_cdr();
@@ -2997,7 +3168,7 @@ impl Context {
         while tail.is_cons() {
             let item = tail.cons_car();
             if !item.is_cons()
-                || item.cons_car().as_symbol_id() != Some(declare_symbol())
+                || item.cons_car().as_symbol_id(symbol_mode) != Some(declare_symbol())
                 || list_length(&item).is_none()
             {
                 break;
@@ -3007,7 +3178,9 @@ impl Context {
 
         let iform_value = if tail.is_cons() {
             let item = tail.cons_car();
-            if item.is_cons() && item.cons_car().as_symbol_id() == Some(interactive_symbol_id()) {
+            if item.is_cons()
+                && item.cons_car().as_symbol_id(symbol_mode) == Some(interactive_symbol_id())
+            {
                 tail = tail.cons_cdr();
                 item
             } else {
@@ -3451,7 +3624,7 @@ impl Context {
     #[inline]
     pub(super) fn resolve_named_call_target_by_id(&mut self, sym_id: SymId) -> NamedCallTarget {
         let compiler_overrides_active = self.compiler_function_overrides_active();
-        let function_epoch = self.obarray.function_epoch();
+        let function_epoch = self.dispatch_projection().function_epoch();
         if !compiler_overrides_active {
             // Fast path: a HashMap lookup that returns the cached target
             // when the function epoch hasn't moved.  An epoch mismatch
@@ -3465,30 +3638,31 @@ impl Context {
             }
         }
 
-        let target =
-            if let Some(func) = compiler_function_override_in_obarray(&self.obarray, sym_id) {
-                NamedCallTarget::Obarray(func)
-            } else if let Some(func) = self.obarray.symbol_function_id(sym_id) {
-                match func.kind() {
-                    ValueKind::Nil => NamedCallTarget::Void,
-                    // `(fset 'foo (symbol-function 'foo))` writes `#<subr foo>` into
-                    // the function cell. Treat this as the canonical callable
-                    // object, not an obarray indirection cycle.
-                    ValueKind::Subr(sid) if sid == sym_id => {
-                        NamedCallTarget::Subr(Value::subr_from_sym_id(sid))
-                    }
-                    ValueKind::Veclike(VecLikeType::Subr) if func.as_subr_id() == Some(sym_id) => {
-                        NamedCallTarget::Subr(func)
-                    }
-                    _ => NamedCallTarget::Obarray(func),
+        let target = if let Some(func) =
+            compiler_function_override_in_obarray(&self.obarray, sym_id, self.symbol_mode())
+        {
+            NamedCallTarget::Obarray(func)
+        } else if let Some(func) = self.obarray.symbol_function_id(sym_id) {
+            match func.kind() {
+                ValueKind::Nil => NamedCallTarget::Void,
+                // `(fset 'foo (symbol-function 'foo))` writes `#<subr foo>` into
+                // the function cell. Treat this as the canonical callable
+                // object, not an obarray indirection cycle.
+                ValueKind::Subr(sid) if sid == sym_id => {
+                    NamedCallTarget::Subr(Value::subr_from_sym_id(sid))
                 }
-            } else if self.obarray.is_function_unbound_id(sym_id) {
-                NamedCallTarget::Void
-            } else if lookup_global_subr_entry(sym_id).is_some() {
-                NamedCallTarget::Subr(Value::subr_from_sym_id(sym_id))
-            } else {
-                NamedCallTarget::Void
-            };
+                ValueKind::Veclike(VecLikeType::Subr) if func.as_subr_id() == Some(sym_id) => {
+                    NamedCallTarget::Subr(func)
+                }
+                _ => NamedCallTarget::Obarray(func),
+            }
+        } else if self.obarray.is_function_unbound_id(sym_id) {
+            NamedCallTarget::Void
+        } else if lookup_global_subr_entry(sym_id).is_some() {
+            NamedCallTarget::Subr(Value::subr_from_sym_id(sym_id))
+        } else {
+            NamedCallTarget::Void
+        };
 
         if !compiler_overrides_active {
             // Cap the cache to avoid unbounded growth on pathologic
@@ -3517,7 +3691,7 @@ impl Context {
     #[inline]
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(super) fn store_named_call_cache(&mut self, symbol: SymId, target: NamedCallTarget) {
-        let function_epoch = self.obarray.function_epoch();
+        let function_epoch = self.dispatch_projection().function_epoch();
         if self.named_call_cache.len() < NAMED_CALL_CACHE_CAPACITY {
             self.named_call_cache.insert(
                 symbol,
@@ -3577,7 +3751,7 @@ impl Context {
     ) -> EvalResult {
         match self.resolve_named_call_target_by_id(sym_id) {
             NamedCallTarget::Obarray(func) => {
-                if super::super::autoload::is_autoload_value(&func) {
+                if super::super::autoload::is_autoload_value(&func, self.symbol_mode()) {
                     return self.apply_named_autoload_callable_by_id(
                         sym_id,
                         func,
@@ -3625,7 +3799,7 @@ impl Context {
     ) -> EvalResult {
         match self.resolve_named_call_target(name) {
             NamedCallTarget::Obarray(func) => {
-                if super::super::autoload::is_autoload_value(&func) {
+                if super::super::autoload::is_autoload_value(&func, self.symbol_mode()) {
                     return self.apply_named_autoload_callable(
                         name,
                         func,
@@ -3750,7 +3924,7 @@ impl Context {
 
         Ok(if loaded.is_nil() {
             NamedAutoloadCallStep::Void
-        } else if super::super::autoload::is_autoload_value(&loaded) {
+        } else if super::super::autoload::is_autoload_value(&loaded, self.symbol_mode()) {
             NamedAutoloadCallStep::RetrySymbol {
                 autoload_form: loaded,
             }
@@ -3778,7 +3952,7 @@ impl Context {
                 let tag = args[0];
                 let value = args[1];
                 if self.has_active_catch(&tag) {
-                    Err(Flow::throw(tag, value))
+                    Err(Flow::throw_with_symbols(tag, value, self.symbol_mode()))
                 } else {
                     Err(signal(LispCondition::NoCatch, vec![tag, value]))
                 }
@@ -3801,7 +3975,7 @@ impl Context {
         arglist: Value,
         args: &[Value],
     ) -> Result<(), Flow> {
-        walk_lambda_formals(fun, arglist, args, |sym, arg| self.try_specbind(sym, arg))
+        walk_lambda_formals(fun, arglist, args, &mut DynamicFormalBindings(self))
     }
 
     #[inline(never)]
@@ -3832,7 +4006,7 @@ impl Context {
         // installed with one `LexicalEnv` entry (GNU's one `specbind` of
         // `internal-interpreter-environment`) and retired inline.
         if !raw_cons_lambda && let Some(env) = env {
-            let new_env = match bind_lexical_formals(env, func_value, arglist, &args) {
+            let new_env = match bind_lexical_formals(env, func_value, arglist, &args, self) {
                 Ok(new_env) => new_env,
                 Err(flow) => return self.unbind_to_with_result(root_count, Err(flow)),
             };
@@ -3902,6 +4076,7 @@ impl Context {
             func,
             arglist,
             &self.bc_buf[first_arg..first_arg + nargs],
+            self,
         )?;
         if self.tier_i.engaged() {
             return self.tier_i_run_lexical_body(arglist, new_env, body);
@@ -3957,6 +4132,69 @@ impl Context {
     }
 }
 
+/// Formal binding owns its policy source so dynamic binding and the next
+/// formal's projection cannot borrow the same Context independently.
+trait FormalBindings {
+    fn symbol_mode(&self) -> crate::tagged::SymbolMode;
+    fn bind(&mut self, symbol: SymId, argument: Value) -> Result<(), Flow>;
+
+    fn symbol_id(&self, value: Value) -> Option<SymId> {
+        // Canonical formals need neither a flag read nor a policy enum.
+        if let Some(symbol) = value.as_bare_symbol_id() {
+            return Some(symbol);
+        }
+        // Read live policy only after the physical tag fails. A previous
+        // dynamic binder or its watcher may have changed it.
+        value.as_symbol_id(self.symbol_mode())
+    }
+}
+
+struct DynamicFormalBindings<'a>(&'a mut Context);
+
+impl std::fmt::Debug for DynamicFormalBindings<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicFormalBindings")
+            .finish_non_exhaustive()
+    }
+}
+
+impl FormalBindings for DynamicFormalBindings<'_> {
+    fn symbol_mode(&self) -> crate::tagged::SymbolMode {
+        self.0.symbol_mode()
+    }
+
+    fn bind(&mut self, symbol: SymId, argument: Value) -> Result<(), Flow> {
+        self.0.try_specbind(symbol, argument)
+    }
+}
+
+struct LexicalFormalBindings<'a> {
+    context: &'a Context,
+    lexenv: Value,
+}
+
+impl std::fmt::Debug for LexicalFormalBindings<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LexicalFormalBindings")
+            .field("lexenv", &self.lexenv)
+            .finish_non_exhaustive()
+    }
+}
+
+impl FormalBindings for LexicalFormalBindings<'_> {
+    fn symbol_mode(&self) -> crate::tagged::SymbolMode {
+        self.context.symbol_mode()
+    }
+
+    fn bind(&mut self, symbol: SymId, argument: Value) -> Result<(), Flow> {
+        self.lexenv = Value::make_cons(
+            Value::make_cons(lexenv_binding_symbol_value(symbol), argument),
+            self.lexenv,
+        );
+        Ok(())
+    }
+}
+
 /// GNU `funcall_lambda`'s arglist walk: validate FUN's ARGLIST against ARGS
 /// and hand each formal its value -- the next argument, nil for a missing
 /// `&optional` one, the list of the rest for `&rest`. `invalid-function`
@@ -3966,7 +4204,7 @@ fn walk_lambda_formals(
     fun: Value,
     arglist: Value,
     args: &[Value],
-    mut bind: impl FnMut(SymId, Value) -> Result<(), Flow>,
+    bindings: &mut impl FormalBindings,
 ) -> Result<(), Flow> {
     // Two string interns per interpreted lambda application: 423,456 of
     // them on one rust-lsp-typing capture, for two symbols whose ids are
@@ -3983,7 +4221,7 @@ fn walk_lambda_formals(
     while syms_left.is_cons() {
         let next = syms_left.cons_car();
         syms_left = syms_left.cons_cdr();
-        let Some(next_id) = bare_lambda_arg_symbol_id(next) else {
+        let Some(next_id) = bindings.symbol_id(next) else {
             return Err(signal(LispCondition::InvalidFunction, vec![fun]));
         };
 
@@ -4015,7 +4253,7 @@ fn walk_lambda_formals(
             } else {
                 Value::NIL
             };
-            bind(next_id, arg)?;
+            bindings.bind(next_id, arg)?;
             previous_rest = false;
         }
     }
@@ -4045,16 +4283,14 @@ fn bind_lexical_formals(
     fun: Value,
     arglist: Value,
     args: &[Value],
+    context: &Context,
 ) -> Result<Value, Flow> {
-    let mut lexenv = env;
-    walk_lambda_formals(fun, arglist, args, |sym, arg| {
-        lexenv = Value::make_cons(
-            Value::make_cons(lexenv_binding_symbol_value(sym), arg),
-            lexenv,
-        );
-        Ok(())
-    })?;
-    Ok(lexenv)
+    let mut bindings = LexicalFormalBindings {
+        context,
+        lexenv: env,
+    };
+    walk_lambda_formals(fun, arglist, args, &mut bindings)?;
+    Ok(bindings.lexenv)
 }
 
 /// How many argument words a `BacktraceNative` entry records, as the shapes

@@ -50,8 +50,10 @@ fn observe(ev: &mut Context, call: &str) -> (String, String) {
 #[test]
 fn speculated_calls_record_the_called_symbol_in_their_frames() {
     crate::test_utils::init_test_tracing();
+    // Native frame engagement, not the profitability threshold, is observed.
+    force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(CHAIN).expect("chain defined and warmed");
+    eval_fixture_program(&mut ev, CHAIN).expect("chain defined and warmed");
     let (seen, frames) = observe(&mut ev, "(neovm--fr-outer 'show 7)");
     assert_eq!(
         seen, "((neovm--fr-show nil) (neovm--fr-inner (show)) (neovm--fr-outer (show 7)))",
@@ -77,8 +79,10 @@ fn speculated_calls_record_the_called_symbol_in_their_frames() {
 #[test]
 fn a_running_function_outlives_its_redefinition_and_a_collection() {
     crate::test_utils::init_test_tracing();
+    force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(
+    eval_fixture_program(
+        &mut ev,
         r#"(progn
   (defvar neovm--pin-tab (make-hash-table :test 'eq :weakness 'key))
   (defvar neovm--pin-armed nil)
@@ -144,7 +148,8 @@ fn an_armed_call_the_leaf_declines_records_the_symbol_in_its_frame() {
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(
+    eval_fixture_program(
+        &mut ev,
         r#"(progn
   (defvar neovm--decl-seen nil)
   (defun neovm--decl-one (x) (if x x 0))

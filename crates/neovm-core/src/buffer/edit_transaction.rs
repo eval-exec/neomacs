@@ -16,6 +16,159 @@ use crate::buffer::{
 use crate::emacs_core::value::Value;
 use crate::heap_types::LispString;
 
+/// Native buffer-edit failure; this immutable data contains no Lisp handles or mutation
+/// authority and may cross threads. Every mutating lease remains !Send/!Sync.
+/// Lisp callers map these causes to their existing GNU-visible conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+pub(crate) enum BufferEditError {
+    #[error("buffer is unavailable")]
+    BufferUnavailable,
+}
+static_assertions::assert_impl_all!(BufferEditError: Send, Sync);
+const _: () = assert!(
+    std::mem::size_of::<Result<(), BufferEditError>>() == std::mem::size_of::<Option<()>>()
+);
+
+/// The text state a range was measured in: its buffer and that buffer's
+/// character-modification tick. A range measured at a tick stays coherent
+/// for as long as the tick is unchanged. Plain data; it grants nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TextMeasurement {
+    buffer: BufferId,
+    chars_tick: i64,
+}
+
+impl TextMeasurement {
+    /// The current text state of BUFFER, or None for a dead buffer.
+    #[inline]
+    pub(crate) fn of(buffers: &BufferManager, buffer: BufferId) -> Option<Self> {
+        buffers.get(buffer).map(|live| Self {
+            buffer,
+            chars_tick: live.chars_modified_tick(),
+        })
+    }
+
+    #[inline]
+    pub(crate) fn buffer(self) -> BufferId {
+        self.buffer
+    }
+}
+
+/// A measured physical buffer range leased to one mutator until mutation.
+///
+/// Construction validates character bounds against the live buffer text and
+/// derives its character/Emacs-byte coordinate pair together. The exclusive
+/// BufferManager borrow excludes edits and Lisp callbacks through this manager,
+/// including its managed indirect buffers. Cloned managers own distinct mutable
+/// text storage. Buffer-module code must keep shared_clone aliases attached to
+/// their owning manager and must not mutate a detached alias while a lease lives.
+/// This lease introduces no process-global or thread-local state.
+#[must_use = "consume the prepared lease to mutate, or drop it to cancel"]
+pub(crate) struct PreparedBufferEdit<'a> {
+    buffers: &'a mut BufferManager,
+    buffer: BufferId,
+    range: TextEditRange,
+    _mutator: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_not_impl_any!(PreparedBufferEdit<'static>: Send, Sync);
+
+impl std::fmt::Debug for PreparedBufferEdit<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedBufferEdit")
+            .field("buffer", &self.buffer)
+            .field("range", &self.range)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> PreparedBufferEdit<'a> {
+    /// No narrowing policy is imposed here: GNU's edit commands determine
+    /// their accessible range after hooks, while this boundary proves that
+    /// the final physical range is still live and coordinate-coherent.
+    #[inline]
+    pub(in crate::buffer) fn new(
+        buffers: &'a mut BufferManager,
+        buffer: BufferId,
+        chars: crate::buffer::CharRange,
+    ) -> Option<Self> {
+        let range = {
+            let live = buffers.get(buffer)?;
+            if chars.start() > chars.end() || chars.end() > live.total_char_end_pos() {
+                return None;
+            }
+            live.edit_range_for_char_range(chars)
+        };
+        Some(Self {
+            buffers,
+            buffer,
+            range,
+            _mutator: std::marker::PhantomData,
+        })
+    }
+
+    /// Lease a range measured while the buffer's text had `measured_at`.
+    /// Unchanged text keeps a measured character/byte pair coherent, so it is
+    /// reused without a text walk; changed text is measured again from the
+    /// range's characters, with the same validation as [`Self::new`].
+    #[inline]
+    pub(in crate::buffer) fn measured(
+        buffers: &'a mut BufferManager,
+        buffer: BufferId,
+        range: TextEditRange,
+        measured_at: TextMeasurement,
+    ) -> Option<Self> {
+        let live = buffers.get(buffer)?;
+        if measured_at.buffer != buffer || measured_at.chars_tick != live.chars_modified_tick() {
+            return Self::new(buffers, buffer, range.char_range());
+        }
+        if range.char_end() > live.total_char_end_pos() {
+            return None;
+        }
+        Some(Self {
+            buffers,
+            buffer,
+            range,
+            _mutator: std::marker::PhantomData,
+        })
+    }
+
+    /// Read-only measured geometry for notifications; this value alone
+    /// cannot authorize mutation outside the buffer implementation.
+    #[inline]
+    pub(crate) fn range(&self) -> TextEditRange {
+        self.range
+    }
+
+    #[cfg(test)]
+    pub(crate) fn buffer_id(&self) -> BufferId {
+        self.buffer
+    }
+
+    /// Delete the leased range. An empty range is a successful no-op.
+    ///
+    /// # Errors
+    /// Returns BufferUnavailable if the manager cannot find the leased buffer.
+    #[inline]
+    pub(crate) fn delete(self) -> Result<(), BufferEditError> {
+        self.buffers
+            .delete_buffer_measured_region(self.buffer, self.range)
+            .ok_or(BufferEditError::BufferUnavailable)
+    }
+
+    #[inline]
+    pub(crate) fn delete_and_extract(self) -> Option<LispString> {
+        self.buffers
+            .delete_and_extract_buffer_measured_region(self.buffer, self.range)
+    }
+
+    #[inline]
+    pub(crate) fn replace(self, text: &LispString) -> Option<TextExtent> {
+        self.buffers
+            .replace_buffer_measured_region_lisp_string(self.buffer, self.range, text)
+    }
+}
+
 #[inline]
 pub(in crate::buffer) fn lisp_string_from_buffer_bytes(
     bytes: Vec<u8>,
@@ -92,6 +245,47 @@ pub(in crate::buffer) fn convert_lisp_string_for_buffer_mode(
         }
     }
     converted
+}
+
+/// One source character whose case mapping grows in character count.
+/// Positions are relative to the original region, never byte offsets. The
+/// validating constructor excludes unchanged extents. This value contains no
+/// Lisp state and may be shared between mutators; edits retain buffer ownership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CasifyExpansion {
+    source: CharPos0,
+    replacement_len: CharLen,
+}
+
+/// Whether each source character preserves both coordinate extents. Aggregate
+/// equality alone cannot prove that interior marker byte anchors remain valid.
+/// A call-local value projection, with no shared mutable or Lisp state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CasifyStorageShape {
+    PerCharacterExtentPreserved,
+    Changed,
+}
+
+static_assertions::assert_impl_all!(CasifyExpansion: Send, Sync);
+static_assertions::assert_impl_all!(CasifyStorageShape: Send, Sync);
+
+impl CasifyExpansion {
+    pub(crate) fn new(source: CharPos0, replacement_len: CharLen) -> Option<Self> {
+        (replacement_len.get() > 1).then_some(Self {
+            source,
+            replacement_len,
+        })
+    }
+
+    pub(crate) fn source_pos(self) -> CharPos0 {
+        self.source
+    }
+
+    pub(crate) fn growth(self) -> CharLen {
+        // Construction proves that the replacement contains at least two
+        // characters for the single source character.
+        CharLen::new(self.replacement_len.get() - 1)
+    }
 }
 
 impl Buffer {
@@ -383,13 +577,19 @@ impl Buffer {
     pub(in crate::buffer) fn execute_casify_replace_text_plan(
         &mut self,
         plan: ReplaceTextPlan,
-    ) -> TextReplacement {
+        expansions: &[CasifyExpansion],
+        storage_shape: CasifyStorageShape,
+        properties: &crate::buffer::text_props::CasingPropertyMode<'_>,
+    ) -> Result<TextReplacement, crate::emacs_core::error::Flow> {
         let old_range = plan.old_range();
         debug_assert!(
             !old_range.is_empty(),
             "casify replace requires a non-empty range"
         );
 
+        let prepared =
+            self.text
+                .prepare_casify_properties(old_range.char_start(), expansions, properties)?;
         let old_point = self.point_anchor();
         let deleted_text = self.buffer_region_lisp_string(old_range.byte_range());
 
@@ -410,49 +610,115 @@ impl Buffer {
         }
 
         let replacement = plan.replacement();
-        if replacement.old_byte_len() == replacement.new_byte_len() {
-            // Same byte length: GNU `casify_region` overwrites the bytes in
-            // place (`memcpy`) without moving point, markers, or overlays.  Use
-            // the same-length mutation path so interior markers are preserved.
+        if matches!(
+            storage_shape,
+            CasifyStorageShape::PerCharacterExtentPreserved
+        ) {
             self.text
                 .replace_same_len_measured_range(replacement, plan.bytes());
             self.apply_same_len_edit_side_effects(
-                MeasuredSameLenEdit::covering(replacement.old_range()),
+                MeasuredSameLenEdit::covering(old_range),
                 SameLenModifiedStatePolicy::RecordChange,
             );
-        } else {
-            // Byte length changed (e.g. a Unicode case mapping with a different
-            // encoding length): fall back to the general replacement so markers
-            // and overlays past the change are shifted.
-            self.text.replace_measured_range(replacement, plan.bytes());
-            self.apply_replace_side_effects(
-                MeasuredReplaceEdit::new(replacement),
-                ReplaceSideEffectPolicy::current_buffer(),
-            );
+            return Ok(replacement);
         }
-        if replacement.old_char_len() == replacement.new_char_len() {
-            // Every character kept its count, so each interval still spans
-            // the same characters: GNU `casify_region` overwrites a
-            // same-size character in place (`memcpy`) and replaces any other
-            // through `replace_range_2`, whose `offset_intervals` shift is
-            // zero here -- either way the text properties stay exactly as
-            // they were. Re-seating them from the (property-less) cased
-            // string stripped every property in the region.
-        } else if let Some(text_properties) = plan.text_properties() {
-            self.text.text_props_append_shifted_at_emacs_byte_pos(
-                text_properties,
-                replacement.byte_start(),
-            );
-        } else if !plan.new_extent().chars().is_empty() {
-            self.text.text_props_set_properties_in_emacs_byte_range(
-                EmacsByteRange::from_start_len(
-                    replacement.byte_start(),
-                    plan.new_extent().emacs_bytes(),
+        let snapshot = self.casify_state_snapshot();
+        self.text.replace_measured_range(replacement, plan.bytes());
+        self.text.resync_marker_byte_positions();
+        self.text.install_casify_properties(prepared);
+        self.finish_casify_edit(
+            replacement,
+            expansions,
+            snapshot,
+            BufferStateFieldUpdatePolicy::Update,
+        );
+
+        Ok(replacement)
+    }
+
+    fn casify_state_snapshot(&self) -> CasifyBufferSnapshot {
+        let overlays = self
+            .overlays
+            .overlays_in_gnu_lists_order()
+            .into_iter()
+            .filter_map(|overlay| {
+                let start = self.overlays.overlay_start_emacs_byte_pos(overlay)?;
+                let end = self.overlays.overlay_end_emacs_byte_pos(overlay)?;
+                Some((
+                    overlay,
+                    self.text.emacs_byte_pos_to_char_pos(start),
+                    self.text.emacs_byte_pos_to_char_pos(end),
+                ))
+            })
+            .collect();
+        CasifyBufferSnapshot {
+            state: self.edit_state(),
+            overlays,
+            mutator: std::marker::PhantomData,
+        }
+    }
+
+    fn finish_casify_edit(
+        &mut self,
+        replacement: TextReplacement,
+        expansions: &[CasifyExpansion],
+        snapshot: CasifyBufferSnapshot,
+        state_fields: BufferStateFieldUpdatePolicy,
+    ) {
+        // GNU insdel.c:1786-1803 keeps overlay and marker character positions.
+        for (overlay, start, end) in snapshot.overlays {
+            self.overlays.move_overlay_to_emacs_byte_range(
+                overlay,
+                EmacsByteRange::new(
+                    self.text.char_pos_to_emacs_byte_pos(start),
+                    self.text.char_pos_to_emacs_byte_pos(end),
                 ),
-                Vec::new(),
             );
         }
-        replacement
+        if state_fields.update_state_fields() {
+            let shifted = |position: CharPos0| {
+                let mut result = position;
+                for expansion in expansions {
+                    let source = replacement
+                        .old_range()
+                        .char_start()
+                        .add_len(CharLen::new(expansion.source.get()));
+                    if position > source {
+                        result = result.add_len(expansion.growth());
+                    }
+                }
+                result
+            };
+            let anchor = |position| {
+                TextPositionAnchor::new(position, self.text.char_pos_to_emacs_byte_pos(position))
+            };
+            let state = snapshot.state;
+            // GNU replace_range_2 always grows ZV by the replacement's
+            // character delta (insdel.c:1738-1745,1764-1776). A before hook
+            // can narrow ZV before a later expansion in the physical range.
+            // Re-derive its byte position so the paired anchor stays coherent.
+            let growth = expansions.iter().fold(CharLen::ZERO, |growth, expansion| {
+                growth.add_len(expansion.growth())
+            });
+            self.set_edit_state(BufferEditState::new(
+                anchor(shifted(state.point().char_pos())),
+                anchor(state.begv().char_pos()),
+                anchor(state.zv().char_pos().add_len(growth)),
+            ));
+        }
+        let old_range = replacement.old_range();
+        self.record_char_modification(old_range.char_len());
+        // GNU modify_text (insdel.c:2084-2093) records the unchanged suffix
+        // before casing expands it. Preserve that suffix length after the
+        // replacement, so redisplay includes every added character.
+        let old_z = self.text.char_count().get() as i64
+            - replacement.new_extent().chars().get() as i64
+            + old_range.char_len().get() as i64;
+        self.text.note_changed_char_region(
+            old_range.char_start().get() as i64,
+            old_range.char_end().get() as i64,
+            old_z,
+        );
     }
 
     fn apply_byte_insert_side_effects(
@@ -907,6 +1173,48 @@ impl Buffer {
 }
 
 impl BufferManager {
+    pub(in crate::buffer) fn execute_shared_casify_edit(
+        &mut self,
+        id: BufferId,
+        plan: ReplaceTextPlan,
+        expansions: &[CasifyExpansion],
+        storage_shape: CasifyStorageShape,
+        properties: &crate::buffer::text_props::CasingPropertyMode<'_>,
+    ) -> Result<(), crate::emacs_core::error::Flow> {
+        let missing = || {
+            crate::emacs_core::error::signal(
+                crate::emacs_core::error::LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        };
+        let scope = self.shared_text_edit_scope(id).ok_or_else(missing)?;
+        let siblings = scope
+            .siblings()
+            .map(|id| {
+                let update = self.shared_sibling_state_update(id);
+                self.get(id)
+                    .map(|buffer| (id, update, buffer.casify_state_snapshot()))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(missing)?;
+        let replacement = self
+            .buffer_mut(id)
+            .ok_or_else(missing)?
+            .execute_casify_replace_text_plan(plan, expansions, storage_shape, properties)?;
+        for (id, update, snapshot) in siblings {
+            let fields = BufferStateFieldUpdatePolicy::from_shared_update(update);
+            self.buffer_mut(id).ok_or_else(missing)?.finish_casify_edit(
+                replacement,
+                expansions,
+                snapshot,
+                fields,
+            );
+            self.refresh_shared_buffer_state_cache(id, update)
+                .ok_or_else(missing)?;
+        }
+        Ok(())
+    }
+
     pub(in crate::buffer) fn execute_shared_text_edit<T>(
         &mut self,
         edited_id: BufferId,
@@ -2047,6 +2355,15 @@ impl<T> SharedTextEditOutcome<T> {
     }
 }
 
+/// A per-buffer view saved before a shared text edit; no global/TLS state.
+/// Values remain owned by the live overlay index throughout the buffer edit.
+#[derive(Debug)]
+struct CasifyBufferSnapshot {
+    state: BufferEditState,
+    overlays: Vec<(Value, CharPos0, CharPos0)>,
+    mutator: std::marker::PhantomData<*const ()>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::buffer) enum BufferStateFieldUpdatePolicy {
     Update,
@@ -2200,3 +2517,7 @@ mod tests;
 #[cfg(test)]
 #[path = "edit_transaction/tests/transpose_gnu_test.rs"]
 mod transpose_gnu;
+
+#[cfg(test)]
+#[path = "edit_transaction/tests/casify_extent.rs"]
+mod casify_extent_tests;

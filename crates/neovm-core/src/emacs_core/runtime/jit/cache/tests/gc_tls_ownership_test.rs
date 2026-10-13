@@ -11,13 +11,18 @@ fn cache_payload() -> Value {
     });
     function.ops = vec![Op::Constant(0), Op::Car, Op::Return];
     function.constants = vec![payload].into();
-    function.max_stack = 16;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     function.jit_runtime().set_hot_for_test();
     let object = Value::make_bytecode(function.clone());
     assert!(
-        try_run_compiled(std::ptr::null_mut(), &function, object, &[])
-            .unwrap()
-            .is_some()
+        crate::emacs_core::jit::test_support::run_compiled(
+            std::ptr::null_mut(),
+            &function,
+            object,
+            &[]
+        )
+        .unwrap()
+        .is_some()
     );
     payload
 }

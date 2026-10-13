@@ -3,10 +3,12 @@
 //! Subcommand numbers are GNU's `CCL_ReadMultibyteChar2` through
 //! `CCL_LookupCharConstTbl` in `src/ccl.c`.
 
+use crate::tagged::value::SymbolMode;
+
 use super::super::charset::{
     char_charset_name, charset_decode_char, charset_encode_char, charset_id_of, charset_sym_by_id,
 };
-use super::super::chartable::char_table_ref_and_range;
+use super::super::chartable::char_table_ref_and_range_with_symbols;
 use super::{
     Flow, TranslationHashLookup, ccl_reg, code_conversion_map, invalid_ccl_program_at,
     next_ccl_i32, program_words_by_symbol, translation_hash_lookup, translation_table,
@@ -68,6 +70,7 @@ pub(super) fn execute_extension(
     map_state: &mut MapMultipleState,
     read_character: &mut dyn FnMut(&mut i64) -> Result<Option<bool>, Flow>,
     write_character: &mut dyn FnMut(i64) -> Result<(), Flow>,
+    mode: SymbolMode,
 ) -> Result<ExtensionStep, Flow> {
     let Some(command) = u8::try_from(field1 >> 6)
         .ok()
@@ -106,6 +109,7 @@ pub(super) fn execute_extension(
             value_register,
             i64::from(ccl_reg(registers, third_register)),
             error_at,
+            mode,
         ),
         ExtendedCommand::TranslateConst => {
             let table_id = i64::from(next_ccl_i32(words, instruction, error_at)?);
@@ -115,6 +119,7 @@ pub(super) fn execute_extension(
                 value_register,
                 table_id,
                 instruction.saturating_sub(1),
+                mode,
             )
         }
         ExtendedCommand::LookupInteger => {
@@ -163,6 +168,7 @@ pub(super) fn execute_extension(
                 map_id,
                 *instruction,
                 instruction.saturating_sub(1),
+                mode,
             )
         }
         ExtendedCommand::IterateMultipleMap => iterate_multiple_map(
@@ -172,6 +178,7 @@ pub(super) fn execute_extension(
             status_register,
             value_register,
             error_at,
+            mode,
         ),
         ExtendedCommand::MapMultiple => map_multiple(
             words,
@@ -182,6 +189,7 @@ pub(super) fn execute_extension(
             error_at,
             call_depth,
             map_state,
+            mode,
         ),
     }
 }
@@ -193,7 +201,7 @@ fn encode_character(
     character: i64,
 ) {
     let name = char_charset_name(character);
-    let Some(symbol) = super::Value::symbol(name).as_symbol_id() else {
+    let Some(symbol) = super::Value::symbol(name).as_bare_symbol_id() else {
         return;
     };
     let charset_id = charset_id_of(symbol).unwrap_or(0);
@@ -223,6 +231,7 @@ fn translate_character(
     code_register: usize,
     table_id: i64,
     error_at: usize,
+    mode: SymbolMode,
 ) -> Result<ExtensionStep, Flow> {
     let Some(table) = translation_table(table_id) else {
         return Err(invalid_ccl_program_at(error_at));
@@ -231,15 +240,15 @@ fn translate_character(
     // GNU `translate_char` in `src/character.c`: a cons table walks a list of
     // char tables recursively, and a result that fails `CHARACTERP` leaves the
     // character untouched. Anything else is not a table and no-ops.
-    let mapped = translate_char(&table, character);
+    let mapped = translate_char(&table, character, mode);
     encode_character(registers, charset_register, code_register, mapped);
     Ok(ExtensionStep::Continue)
 }
 
-fn translate_char(table: &super::Value, character: i64) -> i64 {
+fn translate_char(table: &super::Value, character: i64, mode: SymbolMode) -> i64 {
     use super::super::chartable::is_char_table;
     if is_char_table(table) {
-        if let Ok((mapped, _, _)) = char_table_ref_and_range(table, character)
+        if let Ok((mapped, _, _)) = char_table_ref_and_range_with_symbols(table, character, mode)
             && let Some(mapped) = mapped.as_int().filter(|mapped| is_emacs_character(*mapped))
         {
             return mapped;
@@ -252,7 +261,7 @@ fn translate_char(table: &super::Value, character: i64) -> i64 {
         if !cursor.is_cons() {
             break;
         }
-        character = translate_char(&cursor.cons_car(), character);
+        character = translate_char(&cursor.cons_car(), character, mode);
         cursor = cursor.cons_cdr();
     }
     character
@@ -267,12 +276,13 @@ fn map_single(
     map_id: i64,
     resume_at: usize,
     call_error_at: usize,
+    mode: SymbolMode,
 ) -> Result<ExtensionStep, Flow> {
     let Some(map) = code_conversion_map(map_id) else {
         registers[status_register] = -1;
         return Ok(ExtensionStep::Continue);
     };
-    let slots = vector_slots(&map);
+    let slots = vector_slots(&map, mode);
     let value = ccl_reg(registers, value_register);
     let Some(start) = slots.first().and_then(ValueSlot::as_int) else {
         registers[status_register] = -1;
@@ -290,6 +300,7 @@ fn map_single(
         value_register,
         resume_at,
         call_error_at,
+        mode,
     )
 }
 
@@ -300,6 +311,7 @@ fn iterate_multiple_map(
     status_register: usize,
     value_register: usize,
     error_at: usize,
+    mode: SymbolMode,
 ) -> Result<ExtensionStep, Flow> {
     let count = i64::from(next_ccl_i32(words, instruction, error_at)?);
     let start = *instruction;
@@ -318,7 +330,7 @@ fn iterate_multiple_map(
     let value = i64::from(ccl_reg(registers, value_register));
     for offset in i64::from(from)..count {
         let map_id = i64::from(words[start + offset as usize]);
-        match lookup_map_slot(map_id, value) {
+        match lookup_map_slot(map_id, value, mode) {
             MapHit::Number(mapped) => {
                 registers[status_register] = offset;
                 registers[value_register] = mapped;
@@ -334,7 +346,7 @@ fn iterate_multiple_map(
             // A symbol calls that CCL program and resumes after this map list,
             // not back at the iterate instruction.
             MapHit::Call(symbol) => {
-                return match resolve_map_call(symbol) {
+                return match resolve_map_call(symbol, mode) {
                     MapCallResolution::Called(program) => {
                         *instruction = end;
                         Ok(ExtensionStep::Call {
@@ -370,6 +382,7 @@ fn map_multiple(
     error_at: usize,
     call_depth: i32,
     state: &mut MapMultipleState,
+    mode: SymbolMode,
 ) -> Result<ExtensionStep, Flow> {
     if state.call_mark > 0 {
         if state.call_mark <= call_depth {
@@ -465,7 +478,7 @@ fn map_multiple(
             rest = span;
             registers[value_register] = op;
         } else {
-            match lookup_map_slot(point, op) {
+            match lookup_map_slot(point, op, mode) {
                 MapHit::Miss => {}
                 MapHit::Invalid => {
                     // GNU signals `CCL_INVALID_CMD` once the content fails
@@ -497,7 +510,7 @@ fn map_multiple(
                         return Err(invalid_ccl_program_at(error_at));
                     }
                     let saved_value = ccl_reg(registers, value_register);
-                    return match resolve_map_call(symbol) {
+                    return match resolve_map_call(symbol, mode) {
                         MapCallResolution::Called(program) => {
                             state.stack.push((rest as i32, saved_value));
                             state.stack.push((rest as i32, op as i32));
@@ -569,18 +582,18 @@ enum MapCallResolution {
     Invalid,
 }
 
-fn resolve_map_call(symbol: crate::emacs_core::SymId) -> MapCallResolution {
-    match program_words_by_symbol(symbol) {
+fn resolve_map_call(symbol: crate::emacs_core::SymId, mode: SymbolMode) -> MapCallResolution {
+    match program_words_by_symbol(symbol, mode) {
         Some(words) => MapCallResolution::Called(words),
         None => MapCallResolution::Invalid,
     }
 }
 
-fn lookup_map_slot(map_id: i64, value: i64) -> MapHit {
+fn lookup_map_slot(map_id: i64, value: i64, mode: SymbolMode) -> MapHit {
     let Some(map) = code_conversion_map(map_id) else {
         return MapHit::Miss;
     };
-    let slots = vector_slots(&map);
+    let slots = vector_slots(&map, mode);
     if slots.len() <= 1 {
         return MapHit::Miss;
     }
@@ -624,6 +637,7 @@ fn apply_map_content(
     value_register: usize,
     resume_at: usize,
     call_error_at: usize,
+    mode: SymbolMode,
 ) -> Result<ExtensionStep, Flow> {
     match content {
         ValueSlot::Nil => {
@@ -646,7 +660,7 @@ fn apply_map_content(
             registers[status_register] = 0;
             Ok(ExtensionStep::Continue)
         }
-        ValueSlot::Symbol(symbol) => match resolve_map_call(*symbol) {
+        ValueSlot::Symbol(symbol) => match resolve_map_call(*symbol, mode) {
             MapCallResolution::Called(words) => Ok(ExtensionStep::Call { words, resume_at }),
             MapCallResolution::Invalid => Err(invalid_ccl_program_at(call_error_at)),
         },
@@ -675,14 +689,17 @@ impl ValueSlot {
     }
 }
 
-fn vector_slots(value: &super::Value) -> Vec<ValueSlot> {
+fn vector_slots(value: &super::Value, mode: SymbolMode) -> Vec<ValueSlot> {
     let Some(data) = value.as_vector_data() else {
         return Vec::new();
     };
-    data.iter().copied().map(classify_slot).collect()
+    data.iter()
+        .copied()
+        .map(|word| classify_slot(word, mode))
+        .collect()
 }
 
-fn classify_slot(value: super::Value) -> ValueSlot {
+fn classify_slot(value: super::Value, mode: SymbolMode) -> ValueSlot {
     if let Some(number) = value.as_int() {
         return ValueSlot::Int(number);
     }
@@ -701,13 +718,13 @@ fn classify_slot(value: super::Value) -> ValueSlot {
     if value.is_nil() {
         return ValueSlot::Nil;
     }
-    if value.is_t() {
+    if mode.unwrap(value).is_t() {
         return ValueSlot::True;
     }
-    if value.as_symbol_id() == super::Value::symbol("lambda").as_symbol_id() {
+    if value.as_symbol_id(mode) == super::Value::symbol("lambda").as_symbol_id(mode) {
         return ValueSlot::Lambda;
     }
-    if let Some(symbol) = value.as_symbol_id() {
+    if let Some(symbol) = value.as_symbol_id(mode) {
         return ValueSlot::Symbol(symbol);
     }
     ValueSlot::Other

@@ -3,6 +3,7 @@
 //! Moved out of `gc.rs` unchanged; a child module so it keeps the
 //! parent's view of its private items (`use super::*`).
 
+use super::mapped_veclike_scan::MappedVeclikeScanItem;
 use super::*;
 
 // Rendezvous installed only on dedicated test worker threads. Production jobs
@@ -91,16 +92,14 @@ pub(super) struct ConcurrentMarkJob {
     /// `None` for every later cycle (the image is black; young children come
     /// from the remembered set).
     pub(super) mapped_cons_ranges: Option<Vec<(usize, usize)>>,
-    /// FIRST PARTITION CYCLE: mapped veclike header addresses, staged like
-    /// the cons ranges. Scanned on the GC thread by
-    /// [`concurrent_trace_mapped_veclike`]: every arm reads slots through
-    /// the Phase-1 atomic loads (`iter_atomic`/`load_value_atomic` — the
-    /// same accessors `trace_veclike` uses), mapped `LispValueVec` backings
-    /// are retire-on-write (immutable in place), and any kind the
-    /// GC-thread tracer does not port (hash tables: mutator-side weak
-    /// registry + non-atomic map iteration) defers the OBJECT to the
-    /// termination's full `mark_value`.
-    pub(super) mapped_veclikes: Option<Vec<usize>>,
+    /// FIRST PARTITION CYCLE: stopped-start mapped veclike descriptors.
+    /// [`concurrent_trace_mapped_veclike`] reads captured spans and fixed
+    /// char-table slots with Acquire; it never rereads a live `LispValueVec`
+    /// enum while the mutator promotes its mapped backing. Mappings remain
+    /// immutable, owned vectors retire before replacement, and char-table
+    /// backings keep fixed lengths. Owned records (which have no retirement
+    /// hook) and unported kinds defer to termination's full `mark_value`.
+    pub(super) mapped_veclikes: Option<MappedVeclikeScanSnapshot>,
 }
 
 /// CONCURRENT CLAIM DISPATCHER (task 01) per-cycle state: everything
@@ -240,10 +239,10 @@ impl WorkerSymbolMarks for SymbolMarkBits {
     #[inline(always)]
     fn note(&mut self, value: TaggedValue, symbols: &mut Vec<SymId>) -> bool {
         // Exclude identities, never mutable intern membership or namesakes.
-        if !value.is_symbol() || value.bits() <= TaggedValue::UNBOUND.bits() {
+        if !value.is_bare_symbol() || value.bits() <= TaggedValue::UNBOUND.bits() {
             return false;
         }
-        let id = value.xsymbol_id();
+        let id = value.xbare_symbol_id();
         if self.insert_if_absent(id) {
             symbols.push(id);
         }
@@ -793,8 +792,8 @@ fn concurrent_try_mark_owned_with_symbols<
         //  (a) fresh claim: THIS arm gray-pushes exactly the fields
         //      `trace_veclike`'s ByteCode arm traces (the two `aref` slot
         //      objects, arglist, constants, env, doc_form, interactive,
-        //      extra_slots; `params` carries only SymIds — untraced by
-        //      design), and the drain traces them
+        //      extra_slots and the Dynamic parameter child; Stack/Named
+        //      parameters carry no heap children), and the drain traces them
         //      to the fixpoint (a mid-drain stop hands residual gray to the
         //      termination).
         //  (b) mid-cycle-ALLOCATED bytecode in a NEW page: not in the
@@ -862,6 +861,9 @@ fn concurrent_try_mark_owned_with_symbols<
                     "arena bytecode must never be a lazy pdump stub"
                 );
                 logs.queue_child::<SYMBOLS>(data.arglist, gray);
+                if let Some(child) = data.params.heap_child() {
+                    logs.queue_child::<SYMBOLS>(child, gray);
+                }
                 for &c in &data.constants {
                     logs.queue_child::<SYMBOLS>(c, gray);
                 }
@@ -1032,7 +1034,7 @@ impl ClaimExtension for EnabledClaims {
 /// through the claim dispatcher. Kinds with mutator-only side effects
 /// (hash tables) defer the whole OBJECT to the termination.
 fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtension>(
-    ptr: *mut VecLikeHeader,
+    snapshot: &MappedVeclikeScanSnapshot,
     job: &mut ConcurrentMarkJob,
     extension: &E,
     seen_symbols: &mut FxHashSet<usize>,
@@ -1047,7 +1049,7 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
             if addr < job.claims.dump_lo || addr >= job.claims.dump_hi {
                 job.gray.push(child);
             }
-        } else if child.is_symbol() {
+        } else if child.is_bare_symbol() {
             if SYMBOLS {
                 logs.note_symbol(child);
             } else if seen_symbols.insert(child.bits()) {
@@ -1065,62 +1067,21 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
             job.deferred.lock().unwrap().push(MarkWord::of(child));
         }
     };
-    match unsafe { (*ptr).type_tag } {
-        VecLikeType::Vector => {
-            let obj = ptr as *const VectorObj;
-            for val in unsafe { (*obj).data.iter_atomic() } {
-                route(val, job, seen_symbols, logs);
+    // SAFETY: stopped-start capture admitted these same-heap initialized
+    // spans. The owning job retains the image and every required backing
+    // until this worker joins or the heap conservatively abandons storage.
+    // Concurrent slot writes follow atomic pointee publication; no mutable
+    // storage enum or growable live Vec header is borrowed here.
+    unsafe {
+        snapshot.scan(|item| match item {
+            MappedVeclikeScanItem::Child(value) => route(value, job, seen_symbols, logs),
+            MappedVeclikeScanItem::Deferred(owner) => {
+                // Direct push bypasses the dispatcher, so its first-cycle
+                // dump-child shortcut cannot discard termination-only owners.
+                job.deferred.lock().unwrap().push(owner);
             }
-        }
-        VecLikeType::Record | VecLikeType::WindowConfiguration => {
-            let obj = ptr as *const RecordObj;
-            for val in unsafe { (*obj).data.iter_atomic() } {
-                route(val, job, seen_symbols, logs);
-            }
-        }
-        VecLikeType::SubCharTable => {
-            let obj = unsafe { &*(ptr as *const SubCharTableObj) };
-            for val in obj.contents.iter_atomic() {
-                route(val, job, seen_symbols, logs);
-            }
-        }
-        VecLikeType::CharTable => {
-            let obj = unsafe { &*(ptr as *const CharTableObj) };
-            for value in [
-                load_value_atomic(&obj.defalt),
-                load_value_atomic(&obj.parent),
-                load_value_atomic(&obj.purpose),
-                load_value_atomic(&obj.ascii),
-            ] {
-                route(value, job, seen_symbols, logs);
-            }
-            for slot in &obj.contents {
-                route(load_value_atomic(slot), job, seen_symbols, logs);
-            }
-            for val in obj.extras.iter_atomic() {
-                route(val, job, seen_symbols, logs);
-            }
-        }
-        _ => {
-            // Not ported (hash tables, anything exotic): the whole object
-            // goes to the termination's `mark_value`, which marks the side
-            // table and runs the mutator-side `trace_veclike`. Direct push
-            // bypasses the dispatcher so `drop_dump_children` cannot eat it.
-            //
-            // TRIPWIRE: porting ByteCode into concurrent mapped tracing is
-            // FORBIDDEN while lazy pdump stubs exist without atomic payload
-            // publication — the mutator materializes a stub with a plain
-            // whole-data write, safe today only because this arm defers all
-            // mapped bytecode to the mutator side.
-            // SAFETY: the start-handshake mapped-veclike registry supplies a
-            // live, aligned header retained through this cycle. This only tags
-            // its address; payload tracing remains on the termination mutator.
-            job.deferred
-                .lock()
-                .unwrap()
-                .push(MarkWord::of(unsafe { TaggedValue::from_veclike_ptr(ptr) }));
-        }
-    }
+        })
+    };
 }
 
 pub(super) fn run_concurrent_mark(job: ConcurrentMarkJob) {
@@ -1257,19 +1218,17 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
             }
         }
     }
-    // FIRST PARTITION CYCLE: flat scan of the mapped veclike headers (see
-    // the job-field doc for the safety envelope; unported kinds defer).
-    if let Some(addrs) = job.mapped_veclikes.take() {
+    // FIRST PARTITION CYCLE: scan stopped-start mapped backing descriptors
+    // (see the job-field safety envelope; unsafe mutable backings defer).
+    if let Some(snapshot) = job.mapped_veclikes.take() {
         let mut seen_symbols: FxHashSet<usize> = FxHashSet::default();
-        for addr in addrs {
-            concurrent_trace_mapped_veclike::<MAJOR, SYMBOLS, E>(
-                addr as *mut VecLikeHeader,
-                &mut job,
-                &extension,
-                &mut seen_symbols,
-                &mut logs,
-            );
-        }
+        concurrent_trace_mapped_veclike::<MAJOR, SYMBOLS, E>(
+            &snapshot,
+            &mut job,
+            &extension,
+            &mut seen_symbols,
+            &mut logs,
+        );
     }
     // FIRST PARTITION CYCLE: flat scan of the mapped cons ranges — the
     // concurrent replacement for `seed_all_mapped_children`'s cons half (the
@@ -1299,7 +1258,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                         if addr < job.claims.dump_lo || addr >= job.claims.dump_hi {
                             job.gray.push(child);
                         }
-                    } else if child.is_symbol() {
+                    } else if child.is_bare_symbol() {
                         // Deduped symbol hand-off: `mark_symbol` is
                         // mutator-only, and an uninterned dumped symbol is
                         // reachable only through image data, so each UNIQUE
@@ -1466,6 +1425,9 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
 
 /// Set the thread-local tagged heap pointer.
 pub fn set_tagged_heap(heap: &mut TaggedHeap) {
+    if !tagged_heap_is_current(heap) {
+        super::super::collection_reads::reset_recent_reads_for_heap_installation();
+    }
     TAGGED_HEAP.with(|h| h.set(heap as *mut TaggedHeap));
     TAGGED_HEAP_ID.with(|identity| identity.set(Some(heap.identity())));
     TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(heap.write_tracking_mode()));
@@ -1484,8 +1446,7 @@ pub fn set_tagged_heap(heap: &mut TaggedHeap) {
     let window = heap.barrier_window();
     let observed =
         super::super::collection_reads::compiled_observation_gate(heap.collection_dump_window());
-    heap.jit
-        .set_barrier_window(heap.compiled_barrier_window(window, observed));
+    heap.set_compiled_barrier_window(window, observed);
     TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(window));
     TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(heap.cons_barrier_window(window)));
     // The remembered cache belongs to this heap's mutator. Reinstallation
@@ -1512,6 +1473,7 @@ pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
     let owned = heap as *const TaggedHeap as *mut TaggedHeap;
     let _ = TAGGED_HEAP.try_with(|h| {
         if h.get() == owned {
+            super::super::collection_reads::reset_recent_reads_for_heap_installation();
             h.set(std::ptr::null_mut());
             let _ = TAGGED_HEAP_ID.try_with(|identity| identity.set(None));
             let _ = TAGGED_HEAP_WRITE_TRACKING_MODE
@@ -1926,6 +1888,10 @@ pub(crate) fn note_string_interval_preimage(
 #[cfg(test)]
 #[path = "tests/concurrent_major_worker_test.rs"]
 mod concurrent_major_worker_tests;
+
+#[cfg(test)]
+#[path = "tests/chartable_concurrent_write_test.rs"]
+mod chartable_concurrent_write_tests;
 
 #[cfg(test)]
 #[path = "tests/concurrent_leaf_claim_tests.rs"]

@@ -282,7 +282,9 @@ fn rust_subrs_shadowed_by_preloaded_lisp_match_the_reviewed_list() {
     // COMMAND is lisp/simple.el:7614 and is gone, but the VARIABLE is
     // DEFVAR_LISP at src/buffer.c:5835 and must still be bound.
     assert!(
-        eval.obarray.symbol_value("transient-mark-mode").is_some(),
+        eval.obarray
+            .symbol_value_copied("transient-mark-mode")
+            .is_some(),
         "transient-mark-mode the VARIABLE is DEFVAR_LISP in GNU \
          (src/buffer.c:5835); deleting the Lisp COMMAND must not remove it",
     );

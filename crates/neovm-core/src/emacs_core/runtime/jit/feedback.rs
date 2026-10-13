@@ -394,7 +394,7 @@ const STATE_MEGA: u64 = 0b100;
 /// or `Mega` for anything else (a pdump stub has identity 0).
 #[inline(always)]
 fn target_key(target: Value) -> u64 {
-    if let Some(id) = target.as_symbol_id() {
+    if let Some(id) = target.as_bare_symbol_id() {
         return (u64::from(id.0) << 3) | TAG_SYM;
     }
     #[cfg(not(feature = "jit"))]
@@ -744,7 +744,7 @@ fn classify_call_sites(ops: &[Op], constants: &[Value]) -> Vec<Option<SiteShape>
             };
             shapes[pc] = match constant {
                 None => Some(SiteShape::Callee),
-                Some(c) => match c.as_symbol_id() {
+                Some(c) => match c.as_bare_symbol_id() {
                     Some(id) if id == *apply && nargs >= 1 => Some(SiteShape::ApplyArg),
                     Some(id) if mapping.contains(&id) && nargs >= 1 => Some(SiteShape::CallbackArg),
                     // Any other constant callee: the compile reads it.

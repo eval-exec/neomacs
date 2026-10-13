@@ -519,7 +519,7 @@ fn convert_tl_top_node(
 fn is_comment_node(value: &Value) -> bool {
     super::value::list_to_vec(value)
         .and_then(|items| items.first().copied())
-        .and_then(|head| head.as_symbol_name())
+        .and_then(|head| head.as_bare_symbol_name())
         .is_some_and(|name| name == "comment")
 }
 

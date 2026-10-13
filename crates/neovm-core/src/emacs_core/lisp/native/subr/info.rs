@@ -11,6 +11,7 @@ use super::intern::{SymId, intern, resolve_sym};
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::tagged::SymbolMode;
 use crate::tagged::header::{SubrDispatchKind, SubrObj};
 
 // ---------------------------------------------------------------------------
@@ -30,7 +31,7 @@ use crate::tagged::header::{SubrDispatchKind, SubrObj};
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn is_evaluator_special_form_name(name: &str) -> bool {
     super::eval::evaluator_dispatch_kind(name) == Some(SubrDispatchKind::SpecialForm)
-        || matches!(name, "lambda" | "byte-code-literal" | "byte-code")
+        || matches!(name, "lambda" | "byte-code-literal")
 }
 
 /// Returns true for special forms exposed by `special-form-p`.
@@ -63,15 +64,22 @@ fn arity_unevalled(min: usize) -> Value {
     Value::cons(Value::fixnum(min as i64), Value::symbol("unevalled"))
 }
 
-fn macro_wrapper_payload(function: Value) -> Option<Value> {
-    if function.is_cons() && function.cons_car().as_symbol_name() == Some("macro") {
+fn macro_wrapper_payload(function: Value, symbol_mode: SymbolMode) -> Option<Value> {
+    if function.is_cons() && function.cons_car().as_symbol_id(symbol_mode) == Some(intern("macro"))
+    {
         Some(function.cons_cdr())
     } else {
         None
     }
 }
 
-fn lambda_arity_from_arglist(function: Value, arglist: Value) -> EvalResult {
+fn lambda_arity_from_arglist(
+    function: Value,
+    arglist: Value,
+    symbol_mode: SymbolMode,
+) -> EvalResult {
+    use crate::emacs_core::bytecode::function_slots::{FormalMarkers, FormalRole};
+    let markers = FormalMarkers::canonical();
     let mut syms_left = arglist;
     let mut minargs = 0;
     let mut maxargs = 0;
@@ -80,19 +88,14 @@ fn lambda_arity_from_arglist(function: Value, arglist: Value) -> EvalResult {
     while syms_left.is_cons() {
         let next = syms_left.cons_car();
         syms_left = syms_left.cons_cdr();
-        let next = if next.is_symbol_with_pos() {
-            next.as_symbol_with_pos_sym().unwrap_or(next)
-        } else {
-            next
-        };
-        let Some(name) = next.as_symbol_name() else {
+        let Some(symbol) = next.as_symbol_id(symbol_mode) else {
             return Err(signal(LispCondition::InvalidFunction, vec![function]));
         };
 
-        match name {
-            "&rest" => return Ok(arity_cons(minargs, None)),
-            "&optional" => optional = true,
-            _ => {
+        match markers.classify(symbol) {
+            FormalRole::RestMarker => return Ok(arity_cons(minargs, None)),
+            FormalRole::OptionalMarker => optional = true,
+            FormalRole::Variable => {
                 if !optional {
                     minargs += 1;
                 }
@@ -108,12 +111,12 @@ fn lambda_arity_from_arglist(function: Value, arglist: Value) -> EvalResult {
     Ok(arity_cons(minargs, Some(maxargs)))
 }
 
-fn lambda_arity_from_cons(function: Value) -> EvalResult {
+fn lambda_arity_from_cons(function: Value, symbol_mode: SymbolMode) -> EvalResult {
     let syms_left = function.cons_cdr();
     if !syms_left.is_cons() {
         return Err(signal(LispCondition::InvalidFunction, vec![function]));
     }
-    lambda_arity_from_arglist(function, syms_left.cons_car())
+    lambda_arity_from_arglist(function, syms_left.cons_car(), symbol_mode)
 }
 
 pub(crate) fn dispatch_subr_arity_value(name: &str) -> Value {
@@ -214,9 +217,9 @@ pub(crate) fn builtin_interpreted_function_p(args: Vec<Value>) -> EvalResult {
 /// contains a subr with max_args == UNEVALLED.  NeoVM checks the symbol
 /// name against the evaluator's special-form table.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_special_form_p(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_special_form_p(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args("special-form-p", &args, 1)?;
-    let result = match args[0].kind() {
+    let result = match symbol_mode.unwrap(args[0]).kind() {
         ValueKind::Symbol(id) => {
             super::eval::evaluator_dispatch_kind(resolve_sym(id))
                 == Some(SubrDispatchKind::SpecialForm)
@@ -274,10 +277,11 @@ pub(crate) fn builtin_func_arity_ctx(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
     expect_args("func-arity", &args, 1)?;
     let original = args[0];
-    let function = macro_wrapper_payload(original).unwrap_or(original);
-    if super::autoload::is_autoload_value(&function) {
+    let function = macro_wrapper_payload(original, symbol_mode).unwrap_or(original);
+    if super::autoload::is_autoload_value(&function, symbol_mode) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), function],
@@ -285,16 +289,32 @@ pub(crate) fn builtin_func_arity_ctx(
     }
     match function.kind() {
         ValueKind::Veclike(VecLikeType::Lambda) => {
-            let params = function.closure_params().unwrap();
-            let min = params.min_arity();
-            let max = params.max_arity();
-            Ok(arity_cons(min, max))
+            // GNU lambda_arity reads the live formal list under SYMBOLP/EQ.
+            // The cached LambdaParams projection is independent of that policy.
+            let arglist = function
+                .closure_slot(crate::tagged::header::CLOSURE_ARGLIST)
+                .unwrap_or(Value::NIL);
+            lambda_arity_from_arglist(function, arglist, symbol_mode)
         }
         ValueKind::Veclike(VecLikeType::ByteCode) => {
             let bc = function.get_bytecode_data().unwrap();
-            let min = bc.params.min_arity();
-            let max = bc.params.max_arity();
-            Ok(arity_cons(min, max))
+            use crate::emacs_core::bytecode::function_slots::FunctionParams;
+            match &bc.params {
+                FunctionParams::Stack(template) => Ok(Value::cons(
+                    Value::fixnum(template.mandatory() as i64),
+                    if template.rest().is_present() {
+                        Value::symbol("many")
+                    } else {
+                        Value::fixnum(template.nonrest())
+                    },
+                )),
+                FunctionParams::Dynamic(arglist) => {
+                    lambda_arity_from_arglist(function, arglist.value(), symbol_mode)
+                }
+                FunctionParams::Named(params) => {
+                    Ok(arity_cons(params.min_arity(), params.max_arity()))
+                }
+            }
         }
         ValueKind::Subr(id) => Ok(subr_arity_from_registry(ctx, id)),
         ValueKind::Veclike(VecLikeType::Subr) => {
@@ -302,13 +322,17 @@ pub(crate) fn builtin_func_arity_ctx(
             Ok(subr_arity_from_registry(ctx, id))
         }
         ValueKind::Veclike(VecLikeType::Macro) => {
-            let params = function.closure_params().unwrap();
-            let min = params.min_arity();
-            let max = params.max_arity();
-            Ok(arity_cons(min, max))
+            // GNU lambda_arity reads the live formal list under SYMBOLP/EQ.
+            // The cached LambdaParams projection is independent of that policy.
+            let arglist = function
+                .closure_slot(crate::tagged::header::CLOSURE_ARGLIST)
+                .unwrap_or(Value::NIL);
+            lambda_arity_from_arglist(function, arglist, symbol_mode)
         }
-        ValueKind::Cons if function.cons_car().as_symbol_name() == Some("lambda") => {
-            lambda_arity_from_cons(function)
+        ValueKind::Cons
+            if function.cons_car().as_symbol_id(symbol_mode) == Some(intern("lambda")) =>
+        {
+            lambda_arity_from_cons(function, symbol_mode)
         }
         _other => Err(signal(LispCondition::InvalidFunction, vec![original])),
     }

@@ -59,6 +59,7 @@ use super::stats::asm_dump::{self, PendingAsm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::SymId;
 
+mod affinity;
 mod queue;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod worker;
@@ -176,13 +177,17 @@ pub(crate) fn worker_nice() -> Option<i32> {
 }
 
 /// `NEOVM_JIT_BG_AFFINITY=<cpu>[,<cpu>...]`: pin the workers (measurement).
-pub(crate) fn worker_affinity() -> Option<Vec<usize>> {
+/// Returned CPU indices are validated for the platform's mask storage.
+pub(crate) fn worker_affinity() -> Option<Vec<affinity::WorkerCpu>> {
     let value = std::env::var("NEOVM_JIT_BG_AFFINITY").ok()?;
-    let cpus: Vec<usize> = value
-        .split(',')
-        .filter_map(|c| c.trim().parse().ok())
-        .collect();
-    (!cpus.is_empty()).then_some(cpus)
+    match affinity::parse(&value) {
+        Ok(cpus) => cpus,
+        Err(error) => {
+            tracing::warn!(target: "neovm_jit::bg", ?error,
+                "NEOVM_JIT_BG_AFFINITY does not fit the platform mask; keeping inherited affinity");
+            None
+        }
+    }
 }
 
 /// `NEOVM_JIT_BG_CLASSES=<class>[,<class>...]` (`osr`, `first_sight`,
@@ -781,6 +786,10 @@ pub(crate) struct BgReport {
     pub(crate) worker_panics: u64,
     pub(crate) worker_code_bytes: u64,
     pub(crate) worker_backend_max_us: u64,
+    pub(crate) worker_batches: u64,
+    pub(crate) worker_failed_batches: u64,
+    pub(crate) worker_published_modules_finalized: u64,
+    pub(crate) worker_published_arena_seals: u64,
 }
 
 impl BgReport {
@@ -800,6 +809,14 @@ impl BgReport {
             worker_panics: WORKER_STATS.panics.load(Ordering::Relaxed),
             worker_code_bytes: WORKER_STATS.code_bytes.load(Ordering::Relaxed),
             worker_backend_max_us: WORKER_STATS.backend_max_us.load(Ordering::Relaxed),
+            worker_batches: WORKER_STATS.batches.load(Ordering::Relaxed),
+            worker_failed_batches: WORKER_STATS.failed_batches.load(Ordering::Relaxed),
+            worker_published_modules_finalized: WORKER_STATS
+                .published_modules_finalized
+                .load(Ordering::Relaxed),
+            worker_published_arena_seals: WORKER_STATS
+                .published_arena_seals
+                .load(Ordering::Relaxed),
         })
     }
 
@@ -832,7 +849,8 @@ impl BgReport {
             "mode={} workers={} enqueued={} installed={} discarded={discarded} backend_us={} \
              backend_max_us={} queue_wait_us={} latency_hist_us[<100,<250,<500,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={latency} \
              pending_probes={} osr_waits={} refused={} interp_calls_while_pending={} native_calls_while_pending={} spec_restamps={} in_flight_at_exit={} worker_jobs={} \
-             worker_skipped={} worker_panics={} worker_code_bytes={} worker_backend_max_us={}",
+             worker_skipped={} worker_panics={} worker_code_bytes={} worker_backend_max_us={} \
+             worker_batches={} worker_failed_batches={} worker_published_modules_finalized={} worker_published_arena_seals={}",
             self.mode,
             self.workers,
             by_class(&self.stats.enqueued),
@@ -852,6 +870,10 @@ impl BgReport {
             self.worker_panics,
             self.worker_code_bytes,
             self.worker_backend_max_us,
+            self.worker_batches,
+            self.worker_failed_batches,
+            self.worker_published_modules_finalized,
+            self.worker_published_arena_seals,
         )
     }
 }
@@ -963,18 +985,46 @@ pub(crate) enum DeferRoute {
 }
 
 /// The class and route the leaf being built may hand its backend under, or
-/// `None` to compile it in line and install it at once. Taking it closes
-/// the scope: one compile defers at most one leaf.
-pub(crate) fn defer_route() -> Option<(JobClass, DeferRoute)> {
+/// `None` to compile it in line and install it at once. `insts` is the
+/// finished function's CLIF instruction count. Taking it closes the scope:
+/// one compile defers at most one leaf.
+pub(crate) fn defer_route(insts: u64) -> Option<(JobClass, DeferRoute)> {
     let class = DEFER_SCOPE.with(|c| c.take())?;
     if deferred_install_for_test() {
         return Some((class, DeferRoute::InLine));
     }
     match mode() {
         BgMode::Legacy | BgMode::Sync => None,
+        BgMode::Threaded if osr_backend_in_line(class, insts) => None,
         BgMode::Threaded => Some((class, DeferRoute::Worker)),
     }
 }
+
+/// Whether an OSR leaf's backend runs in line although a worker could take
+/// it: its function is at most [`osr_in_line_insts`] CLIF instructions.
+/// The loop that asked for it is running now and interprets until the leaf
+/// installs, so a small backend costs less in line than the wait it saves.
+/// A size, never a clock: the same function always takes the same route.
+fn osr_backend_in_line(class: JobClass, insts: u64) -> bool {
+    class == JobClass::Osr && insts <= osr_in_line_insts()
+}
+
+/// `NEOVM_JIT_BG_OSR_INLINE_INSTS`: the largest OSR function (CLIF
+/// instructions) whose backend runs in line under `NEOVM_JIT_BG=on`
+/// (default [`OSR_INLINE_INSTS`]; `0` defers every OSR backend).
+fn osr_in_line_insts() -> u64 {
+    #[cfg(test)]
+    if let Some(limit) = OSR_INLINE_INSTS_TEST.with(Cell::get) {
+        return limit;
+    }
+    static LIMIT: OnceLock<u64> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        knob_count("NEOVM_JIT_BG_OSR_INLINE_INSTS", OSR_INLINE_INSTS as usize) as u64
+    })
+}
+
+/// See [`osr_in_line_insts`].
+pub(crate) const OSR_INLINE_INSTS: u64 = 1024;
 
 /// Start worker `index` for `pool` (x86-64 Linux only; see
 /// [`workers_supported`]).
@@ -1012,10 +1062,22 @@ pub(crate) fn enqueue(class: JobClass, payload: JobPayload) -> Result<(), JobPay
     };
     match queue::pool().push(job) {
         Ok(()) => {
+            super::stats::front_diag::handoff(
+                super::stats::front_diag::Route::WorkerPushOk,
+                seq,
+                enqueued_at,
+            );
             stash_deferred(cell, class, enqueued_at, seq, false);
             Ok(())
         }
-        Err(job) => Err(job.payload),
+        Err(job) => {
+            super::stats::front_diag::handoff(
+                super::stats::front_diag::Route::WorkerFallback,
+                seq,
+                enqueued_at,
+            );
+            Err(job.payload)
+        }
     }
 }
 
@@ -1031,6 +1093,15 @@ pub(crate) struct WorkerStats {
     pub(crate) code_bytes: AtomicU64,
     /// The longest backend run, µs.
     pub(crate) backend_max_us: AtomicU64,
+    /// Batches with at least one attempted backend definition.
+    pub(crate) batches: AtomicU64,
+    /// Attempted batches discarded after an error or panic.
+    pub(crate) failed_batches: AtomicU64,
+    /// Module finalizers of wholly successful published batches; partial
+    /// finalization on a discarded batch is intentionally excluded.
+    pub(crate) published_modules_finalized: AtomicU64,
+    /// Arena seals of wholly successful published batches.
+    pub(crate) published_arena_seals: AtomicU64,
 }
 
 pub(crate) static WORKER_STATS: WorkerStats = WorkerStats {
@@ -1039,6 +1110,10 @@ pub(crate) static WORKER_STATS: WorkerStats = WorkerStats {
     panics: AtomicU64::new(0),
     code_bytes: AtomicU64::new(0),
     backend_max_us: AtomicU64::new(0),
+    batches: AtomicU64::new(0),
+    failed_batches: AtomicU64::new(0),
+    published_modules_finalized: AtomicU64::new(0),
+    published_arena_seals: AtomicU64::new(0),
 };
 
 /// A test asked the next worker job to panic.
@@ -1143,6 +1218,7 @@ pub(crate) fn defer_in_line(
     let cell = JobCell::new();
     let enqueued_at = Instant::now();
     let seq = NEXT_SEQ.fetch_add(1, Ordering::Relaxed);
+    super::stats::front_diag::handoff(super::stats::front_diag::Route::Inline, seq, enqueued_at);
     let cpu_started = (class == JobClass::Upgrade).then(super::tier2::cpu_time_us);
     #[cfg(test)]
     let result = if FAIL_BACKEND_TEST.with(|c| c.replace(false)) {
@@ -1243,6 +1319,7 @@ thread_local! {
     static DEFERRED_INSTALL_TEST: Cell<bool> = const { Cell::new(false) };
     static FAIL_BACKEND_TEST: Cell<bool> = const { Cell::new(false) };
     static QUEUE_CAP_TEST: Cell<Option<usize>> = const { Cell::new(None) };
+    static OSR_INLINE_INSTS_TEST: Cell<Option<u64>> = const { Cell::new(None) };
     static HOLD_PUBLISH_TEST: Cell<bool> = const { Cell::new(false) };
     static HELD_TEST: RefCell<Vec<(Arc<JobCell>, BackendOut)>> = const { RefCell::new(Vec::new()) };
 }
@@ -1263,6 +1340,13 @@ pub(crate) fn note_served_for_test(class: JobClass, seq: u64, cancelled: bool) {
 #[cfg(test)]
 pub(crate) fn take_served_for_test() -> Vec<(JobClass, u64, bool)> {
     std::mem::take(&mut *SERVED_TEST.lock().unwrap_or_else(|p| p.into_inner()))
+}
+
+/// Pin [`osr_in_line_insts`] for this thread (tests only); `None` returns to
+/// the knob.
+#[cfg(test)]
+pub(crate) fn force_osr_inline_insts_for_test(limit: Option<u64>) {
+    OSR_INLINE_INSTS_TEST.with(|c| c.set(limit));
 }
 
 /// Cap the queue at `cap` jobs for pushes and admissions from this thread
@@ -1367,3 +1451,40 @@ mod queue_tests;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/soak_test.rs"]
 mod soak_tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "bg/tests/mutator_test.rs"]
+mod mutator_tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "bg/tests/osr_size_test.rs"]
+mod osr_size_tests;
+
+/// Scoped ownership for tests of a particular backend's thread-local module.
+/// Native execution fixtures should await the real worker instead.
+#[cfg(test)]
+#[must_use]
+pub(crate) struct TestModeScope {
+    prior: Option<BgMode>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl TestModeScope {
+    pub(crate) fn enter(mode: BgMode) -> Self {
+        // Backend ownership is mutator-local; do not snapshot or rewrite
+        // the separate process-wide stress knob across independent mutators.
+        let prior = MODE_TEST_OVERRIDE.with(|override_| override_.replace(Some(mode)));
+        Self {
+            prior,
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestModeScope {
+    fn drop(&mut self) {
+        MODE_TEST_OVERRIDE.with(|override_| override_.set(self.prior));
+    }
+}

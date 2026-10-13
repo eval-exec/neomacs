@@ -1784,6 +1784,7 @@ fn make_process_stores_pipe_stderr_process_value() {
             Value::string("*proc-stderr-buffer*"),
         ],
         true,
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-process");
     let id = process.as_process_id().expect("expected process object id");
@@ -1944,6 +1945,7 @@ fn make_process_stderr_pipe_name_preserves_raw_unibyte_owner_bytes() {
             Value::string("*proc-stderr-raw-buffer*"),
         ],
         true,
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-process");
     let id = process.as_process_id().expect("expected process object id");
@@ -1986,6 +1988,7 @@ fn make_process_accepts_existing_pipe_process_for_stderr() {
             Value::keyword(":buffer"),
             Value::string("*proc-existing-stderr-buffer*"),
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-pipe-process");
     let process = builtin_make_process_impl(
@@ -2001,6 +2004,7 @@ fn make_process_accepts_existing_pipe_process_for_stderr() {
             stderrproc,
         ],
         true,
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-process");
     let id = process.as_process_id().expect("expected process object id");
@@ -2026,6 +2030,7 @@ fn make_process_merges_stderr_when_deleted_stderr_pipe_is_stale() {
             Value::keyword(":buffer"),
             Value::NIL,
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-pipe-process");
     let stderr_id = stderrproc.as_process_id().expect("stderr pipe process id");
@@ -2046,6 +2051,7 @@ fn make_process_merges_stderr_when_deleted_stderr_pipe_is_stale() {
             Value::symbol("pipe"),
         ],
         false,
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("stale :stderr should merge stderr into stdout");
     let owner_id = process.as_process_id().expect("owner process id");
@@ -2085,6 +2091,7 @@ fn make_process_merges_stderr_when_pipe_writer_was_already_consumed() {
             Value::keyword(":buffer"),
             Value::NIL,
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-pipe-process");
 
@@ -2103,6 +2110,7 @@ fn make_process_merges_stderr_when_pipe_writer_was_already_consumed() {
             Value::symbol("pipe"),
         ],
         false,
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("first make-process");
     let first_id = first.as_process_id().expect("first process id");
@@ -2122,6 +2130,7 @@ fn make_process_merges_stderr_when_pipe_writer_was_already_consumed() {
             Value::symbol("pipe"),
         ],
         false,
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("reusing a consumed stderr pipe should merge stderr");
     let second_id = second.as_process_id().expect("second process id");
@@ -2167,6 +2176,7 @@ fn stderr_pipe_uses_child_stdout_as_its_live_source() {
             Value::keyword(":buffer"),
             Value::NIL,
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-pipe-process");
     let stderr_id = stderrproc.as_process_id().expect("stderr pipe process id");
@@ -2185,6 +2195,7 @@ fn stderr_pipe_uses_child_stdout_as_its_live_source() {
             Value::symbol("pipe"),
         ],
         false,
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-process");
     let owner_id = process.as_process_id().expect("owner process id");
@@ -2338,6 +2349,7 @@ fn module_pipe_service_polling_is_nonblocking_before_write_and_services_data() {
                 Value::keyword(":buffer"),
                 Value::make_buffer(buffer_id),
             ],
+            crate::tagged::value::SymbolMode::Bare,
         )
         .expect("make-pipe-process");
         let id = process.as_process_id().expect("pipe process id");
@@ -2418,6 +2430,7 @@ fn module_channel_writes_to_make_pipe_process() {
             Value::keyword(":buffer"),
             Value::NIL,
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-pipe-process");
     let id = process.as_process_id().expect("pipe process id");
@@ -2520,6 +2533,7 @@ fn stderr_pipe_writer_is_restored_after_pipe_spawn_failure() {
             Value::keyword(":buffer"),
             Value::NIL,
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-pipe-process");
     let result = builtin_make_process_impl(
@@ -2537,6 +2551,7 @@ fn stderr_pipe_writer_is_restored_after_pipe_spawn_failure() {
             Value::symbol("pipe"),
         ],
         false,
+        crate::tagged::value::SymbolMode::Bare,
     );
     assert!(result.is_err());
 
@@ -2595,6 +2610,7 @@ fn stderr_pipe_writer_is_restored_after_pty_spawn_failure() {
             Value::keyword(":buffer"),
             Value::NIL,
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("make-pipe-process");
     let result = builtin_make_process_impl(
@@ -2610,6 +2626,7 @@ fn stderr_pipe_writer_is_restored_after_pty_spawn_failure() {
             stderrproc,
         ],
         true,
+        crate::tagged::value::SymbolMode::Bare,
     );
     assert!(result.is_err());
 
@@ -2792,13 +2809,16 @@ fn start_process_missing_absolute_program_defers_exit_127() {
 fn start_process_buffer_name_program_and_arg_contracts_match_oracle() {
     crate::test_utils::init_test_tracing();
     let cat = find_bin("cat");
+    // GNU process.c:7045-7056 checks an active descriptor and may return t
+    // when terminal control cannot be queried. Probe the live child before
+    // EOF can close its tty or retire its buffer association.
     let results = eval_all(&format!(
         r#"(with-temp-buffer
              (let ((p (start-process "neo-sp-contract-buffer" (current-buffer) "{cat}")))
                (unwind-protect
                    (list (processp p)
-                         (null (condition-case err (process-send-eof nil) (error err)))
-                         (null (condition-case err (process-running-child-p nil) (error err))))
+                         (null (condition-case err (process-running-child-p nil) (error err)))
+                         (null (condition-case err (process-send-eof nil) (error err))))
                  (ignore-errors (delete-process p)))))
            (condition-case err (start-process 'neo-sp-contract-name nil "{cat}") (error err))
            (condition-case err (start-process t nil "{cat}") (error err))
@@ -2915,34 +2935,45 @@ fn call_process_program_resolution_errors_match_gnu_report_file_error() {
             .expect("chmod 0644");
     }
 
-    let results = eval_all(&format!(
-        r#"(condition-case e (call-process "/nonexistent/program/xyzzy" nil nil nil) (error e))
-           (condition-case e (call-process "{dir}") (error e))
-           (condition-case e (call-process "") (error e))
-           (let ((exec-path (list "{noexec_dir}")))
-             (condition-case e (call-process "noexecprog") (error e)))"#,
-    ));
-
-    // ENOENT: missing program — file-missing with the strerror middle element.
-    assert_eq!(
-        results[0],
-        r#"OK (file-missing "Searching for program" "No such file or directory" "/nonexistent/program/xyzzy")"#
-    );
-    // EISDIR: an absolute directory is not runnable — file-error "Is a directory".
-    assert_eq!(
-        results[1],
-        format!(r#"OK (file-error "Searching for program" "Is a directory" "{dir}")"#)
-    );
-    // Empty program name expands to default-directory (a directory) -> EISDIR.
-    assert_eq!(
-        results[2],
-        r#"OK (file-error "Searching for program" "Is a directory" "")"#
-    );
-    // EACCES: a found-but-unrunnable file -> permission-denied "Permission denied".
-    assert_eq!(
-        results[3],
-        r#"OK (permission-denied "Searching for program" "Permission denied" "noexecprog")"#
-    );
+    // Keep every lookup local: ambient exec-path entries and root-level
+    // nonexistent names can traverse network mounts on Darwin. GNU openp
+    // (lread.c) only needs these four filesystem outcomes, not startup Lisp.
+    let missing = format!("{dir}/missing-program");
+    let mut eval = Context::new();
+    eval.set_variable("default-directory", Value::string(format!("{dir}/")));
+    eval.set_variable("exec-path", Value::list(vec![Value::string(&noexec_dir)]));
+    eval.set_variable("exec-suffixes", Value::NIL);
+    let cases = [
+        (
+            "missing program",
+            format!(r#"(call-process "{missing}" nil nil nil)"#),
+            format!(
+                r#"OK (file-missing "Searching for program" "No such file or directory" "{missing}")"#
+            ),
+        ),
+        (
+            "directory program",
+            format!(r#"(call-process "{dir}")"#),
+            format!(r#"OK (file-error "Searching for program" "Is a directory" "{dir}")"#),
+        ),
+        (
+            "empty program",
+            r#"(call-process "")"#.to_owned(),
+            r#"OK (file-error "Searching for program" "Is a directory" "")"#.to_owned(),
+        ),
+        (
+            "non-executable program",
+            r#"(call-process "noexecprog")"#.to_owned(),
+            r#"OK (permission-denied "Searching for program" "Permission denied" "noexecprog")"#
+                .to_owned(),
+        ),
+    ];
+    for (case, form, expected) in cases {
+        tracing::warn!(case, "checking call-process executable lookup error");
+        let result =
+            eval_one_in_context(&mut eval, &format!("(condition-case e {form} (error e))"));
+        assert_eq!(result, expected, "{case}");
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&noexec_dir);
@@ -4373,6 +4404,7 @@ fn process_output_read_errors_remain_distinct_from_clean_eof() {
         ProcessReadOutcome::from_stream_read(&failed_read),
         &[],
         1,
+        crate::tagged::value::SymbolMode::Bare,
     );
     assert!(matches!(result, ProcessBytesRead::Failed));
 
@@ -4397,6 +4429,7 @@ fn process_output_read_errors_remain_distinct_from_clean_eof() {
         ProcessReadOutcome::from_pty_read(&Ok(0)),
         &[],
         1,
+        crate::tagged::value::SymbolMode::Bare,
     );
     assert!(matches!(pty_result, ProcessBytesRead::Eof));
     assert!(
@@ -4972,9 +5005,10 @@ fn make_serial_process_gnu_keywords_update_observable_state() {
 #[test]
 fn serial_configuration_keywords_update_contact_state() {
     crate::test_utils::init_test_tracing();
-    let result = eval_one(
+    let pty = SerialTestPty::open();
+    let result = eval_one(&format!(
         r#"(let ((p (make-serial-process
-                    :port "/dev/ptmx"
+                    :port "{port}"
                     :speed 9600
                     :bytesize nil
                     :parity 'even
@@ -5002,10 +5036,12 @@ fn serial_configuration_keywords_update_contact_state() {
                                (process-contact p :summary))
                          (process-contact p)))
                (ignore-errors (delete-process p))))"#,
-    );
+        port = pty.slave_path,
+    ));
     assert_eq!(
         result,
-        "OK ((9600 8 even 2 hw \"8E2\") (9600 7 odd 1 sw \"7O1\") (\"/dev/ptmx\" 9600))"
+        "OK ((9600 8 even 2 hw \"8E2\") (9600 7 odd 1 sw \"7O1\") (\"{PORT}\" 9600))"
+            .replace("{PORT}", &pty.slave_path)
     );
 }
 
@@ -5013,9 +5049,10 @@ fn serial_configuration_keywords_update_contact_state() {
 #[test]
 fn serial_configuration_validates_option_domains() {
     crate::test_utils::init_test_tracing();
-    let result = eval_one(
+    let pty = SerialTestPty::open();
+    let result = eval_one(&format!(
         r#"(let ((p (make-serial-process
-                    :port "/dev/ptmx"
+                    :port "{port}"
                     :speed 9600)))
              (unwind-protect
                  (list
@@ -5038,7 +5075,8 @@ fn serial_configuration_validates_option_domains() {
                       (serial-process-configure :process p :speed "fast")
                     (error err)))
                (ignore-errors (delete-process p))))"#,
-    );
+        port = pty.slave_path,
+    ));
     assert_eq!(
         result,
         "OK ((error \":bytesize must be nil (8), 7, or 8\") (error \":parity must be nil (no parity), `even', or `odd'\") (error \":stopbits must be nil (1 stopbit), 1, or 2\") (error \":flowcontrol must be nil (no flowcontrol), `hw', or `sw'\") (wrong-type-argument fixnump nil) (wrong-type-argument fixnump \"fast\"))"
@@ -5049,19 +5087,21 @@ fn serial_configuration_validates_option_domains() {
 #[test]
 fn serial_process_configure_resolves_buffer_and_port_designators() {
     crate::test_utils::init_test_tracing();
-    let result = eval_one(
+    let by_port = SerialTestPty::open();
+    let by_buffer = SerialTestPty::open();
+    let result = eval_one(&format!(
         r#"(let ((by-port (make-serial-process
-                           :port "/dev/ptmx"
+                           :port "{by_port}"
                            :speed 9600))
                  (by-buffer (make-serial-process
-                             :port "/dev/ptmx"
+                             :port "{by_buffer}"
                              :name "neo-serial-by-buffer-process"
                              :buffer "neo-serial-by-buffer"
                              :speed 9600)))
              (unwind-protect
                  (progn
                    (serial-process-configure
-                    :port "/dev/ptmx"
+                    :port "{by_port}"
                     :bytesize 7)
                    (serial-process-configure
                     :buffer "neo-serial-by-buffer"
@@ -5070,7 +5110,9 @@ fn serial_process_configure_resolves_buffer_and_port_designators() {
                          (process-contact by-buffer :parity)))
                (ignore-errors (delete-process by-port))
                (ignore-errors (delete-process by-buffer))))"#,
-    );
+        by_port = by_port.slave_path,
+        by_buffer = by_buffer.slave_path,
+    ));
     assert_eq!(result, "OK (7 even)");
 }
 
@@ -5317,12 +5359,15 @@ fn signal_process_observes_stop_continue_output_and_exit_like_gnu() {
                (kill-buffer buffer)))"#
     ));
 
-    assert_eq!(
-        result,
+    // GNU process.c:780-811 uses the host's strsignal text; both branches
+    // were observed with GNU 31.1 on their respective platforms.
+    let expected = if cfg!(target_os = "macos") {
+        "OK (t t exit \"resumed\n\" ((stop \"suspended (signal): 17\n\") (run \"run\") (exit \"finished\n\")))"
+    } else {
         "OK (t t exit \"resumed\n\" ((stop \"stopped (signal)\n\") (run \"run\") (exit \"finished\n\")))"
-    );
+    };
+    assert_eq!(result, expected);
 }
-
 #[test]
 fn connection_process_signal_controls_match_gnu_errors() {
     crate::test_utils::init_test_tracing();
@@ -5394,8 +5439,7 @@ fn process_stale_control_matrix_matches_oracle() {
 #[test]
 fn process_attributes_runtime_shape_matches_oracle() {
     crate::test_utils::init_test_tracing();
-    let result = eval_one(
-        r#"(let ((attrs (process-attributes (emacs-pid))))
+    let source = r#"(let ((attrs (process-attributes (emacs-pid))))
              (list
               (listp attrs)
               (null (assq 'pid attrs))
@@ -5448,12 +5492,24 @@ fn process_attributes_runtime_shape_matches_oracle() {
               (condition-case err (process-attributes 1.5) (error err))
               (condition-case err (process-attributes #x80000000) (error err))
               (condition-case err (process-attributes #x100000000000000000000) (error err))
-              (process-attributes 999999999)))"#,
-    );
-    assert_eq!(
-        result,
+              (process-attributes 999999999)))"#;
+    let source = if cfg!(target_os = "macos") {
+        // GNU only emits ttname when a controlling terminal exists.
+        source.replace(
+            "(and (consp pair) (stringp (cdr pair))))\n              (process-attributes -1)",
+            "(or (null pair) (stringp (cdr pair))))\n              (process-attributes -1)",
+        )
+    } else {
+        source.to_owned()
+    };
+    let result = eval_one(&source);
+    // GNU sysdep.c:4273-4459 omits Linux-only counters and absent tty names.
+    let expected = if cfg!(target_os = "macos") {
+        "OK (t t t t t t t t t t nil t nil t nil nil nil t t t t t nil nil nil t (wrong-type-argument numberp x) (error \"Not an in-range integer, integral float, or cons of integers\") (error \"Not an in-range integer, integral float, or cons of integers\") (error \"Not an in-range integer, integral float, or cons of integers\") nil)"
+    } else {
         "OK (t t t t t t t t t t t t t t t t t t t t t t nil nil nil t (wrong-type-argument numberp x) (error \"Not an in-range integer, integral float, or cons of integers\") (error \"Not an in-range integer, integral float, or cons of integers\") (error \"Not an in-range integer, integral float, or cons of integers\") nil)"
-    );
+    };
+    assert_eq!(result, expected);
 }
 
 #[test]
@@ -5467,8 +5523,7 @@ fn process_attributes_pipe_child_args_ttname_and_running_child_match_oracle() {
     // racing it; the bracketed form is the precise, self-limiting signal that
     // it has not. (Lengthening the child's sleep does NOT fix this, which is
     // why it now sleeps only long enough to outlive the polling window.)
-    let result = eval_one(
-        r#"(let ((proc (make-process
+    let source = r#"(let ((proc (make-process
                         :name "neo-attrs-pipe-child"
                         :command '("/bin/sh" "-c" "sleep 300")
                         :connection-type 'pipe)))
@@ -5491,8 +5546,20 @@ fn process_attributes_pipe_child_args_ttname_and_running_child_match_oracle() {
                             (equal args "sleep 300"))
                         (equal ttname "")))
                (when (process-live-p proc)
-                 (delete-process proc))))"#,
-    );
+                 (delete-process proc))))"#;
+    // GNU sysdep.c:4420-4456 joins Darwin argv without Linux backslash
+    // quoting and omits ttname when the process has no controlling terminal.
+    let source = if cfg!(target_os = "macos") {
+        source
+            .replace(
+                r#"(equal args "/bin/sh -c sleep\\ 300")"#,
+                r#"(equal args "/bin/sh -c sleep 300")"#,
+            )
+            .replace(r#"(equal ttname "")"#, "(null ttname)")
+    } else {
+        source.to_owned()
+    };
+    let result = eval_one(&source);
     assert_eq!(result, "OK t");
 }
 
@@ -5526,7 +5593,13 @@ fn process_attributes_timing_memory_shape_matches_oracle() {
                 (and (consp pair) (stringp (cdr pair))))
               (null (assq 'pid attrs))))"#,
     );
-    assert_eq!(result, "OK (t t t t t t t t t t t t)");
+    // GNU's Darwin backend has no child CPU times or Linux percentages.
+    let expected = if cfg!(target_os = "macos") {
+        "OK (t t t nil nil nil t t nil nil t t)"
+    } else {
+        "OK (t t t t t t t t t t t t)"
+    };
+    assert_eq!(result, expected);
 }
 
 #[test]
@@ -6801,7 +6874,7 @@ fn accept_process_output_discards_output_when_filter_is_t() {
     while ev
         .processes
         .get(pid)
-        .is_some_and(|process| process.status.is_symbol_named("run"))
+        .is_some_and(|process| process.status.is_bare_symbol_named("run"))
     {
         builtin_accept_process_output(
             &mut ev,
@@ -6855,7 +6928,7 @@ fn process_filter_t_suspends_output_until_filter_is_resumed() {
     while ev
         .processes
         .get(pid)
-        .is_some_and(|process| process.status.is_symbol_named("run"))
+        .is_some_and(|process| process.status.is_bare_symbol_named("run"))
     {
         builtin_accept_process_output(
             &mut ev,
@@ -7285,12 +7358,15 @@ fn kill_buffer_hangups_attached_real_process() {
         ),
     );
 
-    assert_eq!(
-        result,
+    // GNU process.c:780-811 lowercases the native strsignal message.
+    // GNU 31.1 Darwin reports "hangup: 1" for SIGHUP.
+    let expected = if cfg!(target_os = "macos") {
+        "OK (signal nil t nil nil ((\"hangup: 1\n\" signal nil)))"
+    } else {
         "OK (signal nil t nil nil ((\"hangup\n\" signal nil)))"
-    );
+    };
+    assert_eq!(result, expected);
 }
-
 #[test]
 fn accept_process_output_restores_current_buffer_and_match_data() {
     crate::test_utils::init_test_tracing();
@@ -7775,9 +7851,14 @@ fn wait_until_respects_inhibit_quit() {
 #[test]
 fn process_mark_type_thread_send_and_running_child_runtime_surface() {
     crate::test_utils::init_test_tracing();
-    let cat = find_bin("cat");
+    let shell = find_bin("sh");
+    // GNU sends literal EOT to a PTY (process.c:7465-7466), so cat may
+    // exit before the next send. Keep the slave open independently of cat:
+    // this tests send semantics rather than the child-exit scheduling race.
+    // The existing unwind-protect kills the owned process group; sleep also
+    // bounds the post-EOF fixture lifetime to five seconds if cleanup fails.
     let results = eval_all(&format!(
-        r#"(let ((p (start-process "proc-mark-type-thread-send" nil "{cat}")))
+        r#"(let ((p (start-process "proc-mark-type-thread-send" nil "{shell}" "-c" "cat; exec sleep 5")))
              (unwind-protect
                  (list
                   (processp p)
@@ -8166,7 +8247,8 @@ fn process_keyword_arg_lists_match_gnu_malformed_pair_handling() {
 #[test]
 fn process_constructors_duplicate_keywords_use_first_value_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let result = eval_one(
+    let pty = SerialTestPty::open();
+    let result = eval_one(&format!(
         r#"(list
             (let ((p (make-process
                       :name "neo-dup-make"
@@ -8207,7 +8289,7 @@ fn process_constructors_duplicate_keywords_use_first_value_like_gnu() {
                         (process-plist p))
                 (ignore-errors (delete-process p))))
             (let ((p (make-serial-process
-                      :port "/dev/ptmx"
+                      :port "{port}"
                       :port 1
                       :speed 9600
                       :speed "bad"
@@ -8263,12 +8345,13 @@ fn process_constructors_duplicate_keywords_use_first_value_like_gnu() {
               (error (car err)))
             (condition-case err
                 (make-serial-process
-                 :port 1 :port "/dev/ptmx" :speed 9600)
+                 :port 1 :port "{port}" :speed 9600)
               (error (car err))))"#,
-    );
+        port = pty.slave_path,
+    ));
     assert_eq!(
         result,
-        "OK ((\"neo-dup-make\" nil nil nil) (\"neo-dup-pipe\" nil nil stop ignore (:a 1)) ((\"/dev/ptmx\" 9600) 7 even 2 hw \"7E2\") (\"neo-dup-network\" nil stop t t ignore (:n 1)) error error error wrong-type-argument)"
+        "OK ((\"neo-dup-make\" nil nil nil) (\"neo-dup-pipe\" nil nil stop ignore (:a 1)) ((\"{PORT}\" 9600) 7 even 2 hw \"7E2\") (\"neo-dup-network\" nil stop t t ignore (:n 1)) error error error wrong-type-argument)".replace("{PORT}", &pty.slave_path)
     );
 }
 
@@ -8474,9 +8557,35 @@ fn set_network_process_option_rejects_bad_values_like_gnu() {
     );
 }
 
+/// GNU advertises HAVE_SEQPACKET when local/datagram sockets exist
+/// (process.c:250-251); the actual socket call can still reject it.
+#[cfg(unix)]
+fn local_seqpacket_creation_error() -> Option<i32> {
+    match socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::SEQPACKET, None) {
+        Ok(_) => None,
+        Err(error) => {
+            let errno = error.raw_os_error().expect("native socket errno");
+            assert!(
+                [
+                    libc::EPROTONOSUPPORT,
+                    libc::ESOCKTNOSUPPORT,
+                    libc::EOPNOTSUPP
+                ]
+                .contains(&errno),
+                "unexpected seqpacket fixture error: {error}"
+            );
+            Some(errno)
+        }
+    }
+}
+
 #[test]
 fn make_network_process_validates_gnu_keyword_domains() {
     crate::test_utils::init_test_tracing();
+    let seqpacket_error = cfg_select! {
+        unix => { local_seqpacket_creation_error() }
+        _ => { None::<i32> }
+    };
     let results = eval_all(
         r#"(condition-case err
               (make-network-process :name "np-nowait" :server t :nowait t :service 0)
@@ -8502,7 +8611,14 @@ fn make_network_process_validates_gnu_keyword_domains() {
                       (process-status p))
                   (when p (delete-process p))
                   (ignore-errors (delete-file path))))
-             (error err))
+             (error
+              (let ((contact (nthcdr 3 err)))
+                (list (car err) (cadr err) (caddr err)
+                      (equal (plist-get contact :name) "np-seqpacket")
+                      (eq (plist-get contact :server) t)
+                      (stringp (plist-get contact :service))
+                      (eq (plist-get contact :type) 'seqpacket)
+                      (eq (plist-get contact :family) 'local)))))
            (condition-case err
               (let* ((srv (make-network-process
                            :name "np-nowait-srv" :server t :service 0 :host 'local))
@@ -8525,7 +8641,19 @@ fn make_network_process_validates_gnu_keyword_domains() {
     );
     assert_eq!(results[1], "OK (error \"Unsupported connection type\")");
     assert_eq!(results[2], "OK open");
-    assert_eq!(results[3], "OK listen");
+    match seqpacket_error {
+        None => assert_eq!(results[3], "OK listen"),
+        #[cfg(unix)]
+        Some(errno) => assert_eq!(
+            results[3],
+            format!(
+                "OK (file-error \"make server process failed\" \"{}\" t t t t t)",
+                native_errno_message(errno)
+            )
+        ),
+        #[cfg(not(unix))]
+        Some(_) => unreachable!(),
+    }
     assert_eq!(results[4], "OK connect");
     assert_eq!(results[5], "OK (error \"Unknown address family\")");
 }
@@ -8560,7 +8688,12 @@ fn make_network_process_numeric_family_constants_match_gnu() {
 
     assert_eq!(
         result,
-        "OK ((listen t t t t) wrong-type-argument (error \"127.0.0.1/0 ai_family not supported\"))"
+        format!(
+            "OK ((listen t t t t) wrong-type-argument (error \"127.0.0.1/0 {}\"))",
+            // SAFETY: gai_strerror returns a static NUL-terminated error message.
+            unsafe { std::ffi::CStr::from_ptr(libc::gai_strerror(libc::EAI_FAMILY)) }
+                .to_string_lossy()
+        )
     );
 }
 
@@ -9243,6 +9376,41 @@ fn make_network_process_local_datagram_loopback_like_gnu() {
 #[test]
 fn make_network_process_local_seqpacket_loopback_like_gnu() {
     crate::test_utils::init_test_tracing();
+    if let Some(errno) = local_seqpacket_creation_error() {
+        // GNU connect_network_socket records socket's errno, then reports the
+        // server/client message and original contact (process.c:3474-3478,
+        // 3694-3712). Verify both roles without assuming a working protocol.
+        let result = eval_one(
+            r#"(let ((before (length (process-list))))
+                 (list
+                  (condition-case err
+                      (make-network-process :name "unsupported-seq-server"
+                       :type 'seqpacket :family 'local :server t
+                       :service "/nonexistent/neomacs-seqpacket")
+                    (error err))
+                  (condition-case err
+                      (make-network-process :name "unsupported-seq-client"
+                       :type 'seqpacket :family 'local
+                       :service "/nonexistent/neomacs-seqpacket")
+                    (error err))
+                  (= before (length (process-list)))))"#,
+        );
+        assert_eq!(
+            result,
+            format!(
+                concat!(
+                    "OK ((file-error \"make server process failed\" \"{message}\" ",
+                    ":name \"unsupported-seq-server\" :type seqpacket :family local :server t ",
+                    ":service \"/nonexistent/neomacs-seqpacket\") ",
+                    "(file-error \"make client process failed\" \"{message}\" ",
+                    ":name \"unsupported-seq-client\" :type seqpacket :family local ",
+                    ":service \"/nonexistent/neomacs-seqpacket\") t)"
+                ),
+                message = native_errno_message(errno)
+            )
+        );
+        return;
+    }
     let results = eval_all(
         r#"(let ((path (make-temp-file "neomacs-local-seqpacket-"))
                  (srv nil) (cli nil) (recv nil) (events nil))
@@ -9828,7 +9996,14 @@ fn network_lookup_literal_family_filtering_helpers() {
     assert!(!v4_any.is_empty());
     assert_eq!(v4_any, v4_only);
     assert_eq!(v4_any[0], loopback_v4);
-    assert!(v4_rejected.is_empty());
+    // GNU process.c:4765-4802 forwards AF_INET6 to native getaddrinfo and
+    // preserves returned IPv6 addresses. Darwin can satisfy this hint with an
+    // IPv4-mapped IPv6 address; EAI_ADDRFAMILY is not a portable invariant.
+    assert!(v4_rejected.iter().all(|address| {
+        address
+            .as_vector_data()
+            .is_some_and(|elements| elements.len() == 9)
+    }));
 
     let v6_any = resolve_network_lookup_addresses("::1", None, None);
     let v6_only = resolve_network_lookup_addresses("::1", Some(NetworkAddressFamily::Ipv6), None);
@@ -10024,7 +10199,14 @@ fn process_network_interface_and_signal_runtime_surface() {
                 (and (equal v4-any v4-only)
                      (consp v4-only)
                      (equal (car v4-only) [127 0 0 1 0])))
-              (null (network-lookup-address-info "127.0.0.1" 'ipv6))
+              ;; GNU retains native IPv6 answers, including mapped addresses.
+              (let ((entries (network-lookup-address-info "127.0.0.1" 'ipv6))
+                    (ok t))
+                (while (and ok entries)
+                  (setq ok (and (vectorp (car entries))
+                                (= (length (car entries)) 9)))
+                  (setq entries (cdr entries)))
+                ok)
               (let* ((v6-any (network-lookup-address-info "::1"))
                      (v6-only (network-lookup-address-info "::1" 'ipv6)))
                 (and (equal v6-any v6-only)
@@ -10488,107 +10670,262 @@ fn an_interactive_filter_error_is_reported_without_exiting_like_gnu() {
     assert_eq!(eval.shutdown_request(), None);
 }
 
-/// Ledger entry 54: the implicit `:stderr` pipe is `closed`, and still
-/// attached, when the owner's sentinel runs.
-///
-/// GNU splits this across two phases. The fd-scan loop retires a pipe
-/// connection the moment its read returns 0 -- `tick++`, `deactivate_process`,
-/// and status `(exit 0)` if it was still running (src/process.c:6072-6080),
-/// which `process-status` reports as `closed` for a pipe
-/// (src/process.c:1193) -- while the SENTINEL runs later, from `status_notify`
-/// (src/process.c:7873), which the fd loop calls only after it finishes.
-/// `status_notify` walks the process alist newest-first, so the owner, created
-/// after its stderr pipe, is notified first and sees the pipe closed but not
-/// yet removed.
-///
-/// The consequence is Lisp-visible: `process-kill-buffer-query-function`
-/// (lisp/subr.el:3542) prompts only for a process whose status is one of
-/// `run stop open listen`, so a sentinel that kills the stderr buffer -- what
-/// Magit's blame sentinel does -- prompts on `open` and is silent on `closed`.
-/// In batch that prompt reads EOF from stdin and kills the session.
-///
-/// Twelve iterations, both empty and non-empty stderr payloads, because the
-/// divergence was timing-dependent: GNU answers `closed` 12/12; before this
-/// fix neomacs answered `GONE` 10/12 (the pipe reaped out of the alist ahead
-/// of the owner's sentinel) and `open` 2/12 (EOF discarded entirely).
-///
-/// GNU's tie-break holds only when the pipe's EOF and the owner's exit are
-/// pending TOGETHER. The kernel closes a dying child's descriptors before it
-/// signals the parent, so a parent that polls inside that window sees the EOF
-/// alone and correctly retires the pipe first: pinned to a CPU shared with 12
-/// busy loops, GNU 31 answered `(closed GONE)` in 1 of 3 runs of this exact
-/// form, and the gate (which runs alongside a build) failed on it the same way.
-/// So each iteration lets the child finish exiting before the first poll.
+/// Observe only this fixture's child, leaving its status for the runtime reaper.
+/// ECHILD is a failed precondition, not evidence that the child is still running.
+#[cfg(unix)]
+fn stderr_fixture_exit_status(pid: u32) -> std::io::Result<Option<i32>> {
+    #[cfg(target_os = "macos")]
+    loop {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: pid belongs to this test; info is writable and WNOWAIT does
+        // not consume the status that the process runtime must collect.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            tracing::warn!(pid, waitid_result = result, errno = ?error.raw_os_error(),
+                           "stderr fixture waitid failed");
+            return Err(error);
+        }
+        // SAFETY: siginfo_t admits zero values and successful waitid fills it.
+        let info = unsafe { info.assume_init() };
+        if info.si_pid == 0 {
+            return Ok(None);
+        }
+        tracing::warn!(
+            pid,
+            waitid_result = result,
+            errno = 0,
+            reported_pid = info.si_pid,
+            si_code = info.si_code,
+            si_status = info.si_status,
+            "stderr fixture waitid exit"
+        );
+        if info.si_pid != pid as libc::pid_t || info.si_code != libc::CLD_EXITED {
+            return Err(std::io::Error::other("owned fixture did not exit normally"));
+        }
+        return Ok(Some(info.si_status));
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(pw187_is_zombie(pid, 0).then_some(0))
+}
+
+/// Prove exit before servicing either event. Pipe stdio makes this independent
+/// of PTY startup/line-discipline behaviour; the assertion concerns stderr EOF.
+#[cfg(unix)]
+fn wait_for_stderr_fixture_exit(eval: &mut Context, owner: Value) {
+    use std::io::Write;
+    let id = owner.as_process_id().expect("fixture owner is a process");
+    // Hold the child at read(0) until every sentinel/global is installed. A
+    // quick child can otherwise be reaped by a readiness wait during setup.
+    // Write through the owned stdin without entering any Lisp readiness wait.
+    eval.processes
+        .get_mut(id)
+        .expect("fixture process exists")
+        .live_io
+        .child
+        .stdin_mut()
+        .expect("fixture uses pipe stdin")
+        .write_all(b"ready\n")
+        .expect("release fixture child");
+    let child = &eval
+        .processes
+        .get(id)
+        .expect("fixture process exists")
+        .live_io
+        .child;
+    let pid = child
+        .pid_if_unreaped()
+        .expect("fixture owns a live child pid");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match stderr_fixture_exit_status(pid) {
+            Ok(Some(status)) => {
+                assert_eq!(status, 0, "owned stderr fixture exit status");
+                return;
+            }
+            Err(error) => panic!("stderr fixture child {pid} ({child:?}): {error}"),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    pid,
+                    waitid_result = 0,
+                    errno = 0,
+                    reported_pid = 0,
+                    ?child,
+                    "stderr fixture exit watchdog"
+                );
+                panic!("owned stderr fixture child must exit before polling");
+            }
+        }
+    }
+}
+
+/// Run the fixture's assertions, then settle its owned child before either a
+/// successful return or resuming a panic. No blocking wait is used in cleanup.
+#[cfg(unix)]
+fn with_stderr_fixture_child<T>(
+    eval: &mut Context,
+    owner: Value,
+    body: impl FnOnce(&mut Context) -> T,
+) -> T {
+    let id = owner.as_process_id().expect("fixture owner is a process");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(eval)));
+    if let Some(process) = eval.processes.get_mut(id) {
+        let child = &mut process.live_io.child;
+        child.poll_status();
+        if child.pid_if_unreaped().is_some() {
+            child.kill_handle();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while child.pid_if_unreaped().is_some() && Instant::now() < deadline {
+                child.poll_status();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            if let Some(pid) = child.pid_if_unreaped() {
+                // Last-resort test-only containment: a defective OS/kill path
+                // must not enter the runtime's blocking teardown wait. Retain
+                // the unreaped handle rather than invoking another destructor.
+                tracing::error!(pid, "stderr fixture kill/reap exceeded its deadline");
+                std::mem::forget(std::mem::take(child));
+            }
+        }
+    }
+    match outcome {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn stderr_fixture_assertion_failure_kills_and_reaps_its_owned_child() {
+    let sh = find_bin("sh");
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let owner = eval
+        .eval_str(&format!(
+            r#"(make-process :name "stderr-cleanup" :connection-type 'pipe :noquery t
+                         :command '("{sh}" "-c" "exec sleep 60"))"#,
+        ))
+        .expect("create cleanup fixture child");
+    let id = owner.as_process_id().expect("fixture owner is a process");
+    let started = Instant::now();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_stderr_fixture_child(&mut eval, owner, |_| {
+            panic!("injected stderr fixture assertion failure");
+        });
+    }));
+    assert!(failure.is_err());
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(
+        eval.processes
+            .get(id)
+            .expect("fixture process exists")
+            .live_io
+            .child
+            .pid_if_unreaped()
+            .is_none(),
+        "fixture child must be reaped"
+    );
+}
+
+/// When EOF and child exit are pending together, GNU's fd scan closes the
+/// stderr pipe before status_notify calls the newer owner's sentinel. The
+/// older pipe remains attached until its own notification (process.c:6072-6080,
+/// 7885-7943). An elapsed-time delay cannot establish this precondition on a
+/// busy host; observe this fixture's child without consuming its wait status.
+#[cfg(unix)]
 #[test]
 fn the_stderr_pipe_is_closed_and_attached_when_the_owner_sentinel_runs() {
     crate::test_utils::init_test_tracing();
     let sh = find_bin("sh");
-    let result = eval_one(&format!(
-        r#"(let ((seen nil))
-             (dolist (payload '("" "boom"))
-               (dotimes (_ 6)
-                 (let* ((out (generate-new-buffer " *p14-out*"))
-                        (err (generate-new-buffer " *p14-err*"))
-                        (done nil))
-                   (let ((p (make-process
-                             :name "p14"
-                             :buffer out
-                             :stderr err
-                             :command (list "{sh}" "-c"
-                                            (format "printf '%%s' '%%s' 1>&2; printf 'x'"
-                                                    payload)))))
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.set_variable("f3-stderr-seen", Value::NIL);
+    for payload in ["", "boom"] {
+        for _ in 0..6 {
+            let owner = eval
+                .eval_str(&format!(
+                    r#"(let* ((out (generate-new-buffer " *p14-out*"))
+                          (err (generate-new-buffer " *p14-err*"))
+                          (p (make-process
+                              :name "p14" :buffer out :stderr err :connection-type 'pipe
+                              :command (list "{sh}" "-c" "read -r ready; printf '{payload}' >&2; printf 'x'"))))
+                     (setq f3-stderr-done nil f3-stderr-buffer err)
                      (set-process-sentinel
                       p (lambda (pr _e)
                           (when (memq (process-status pr) '(exit signal))
-                            (let ((sp (get-buffer-process err)))
-                              (push (if sp (process-status sp) 'GONE) seen))
-                            (setq done t))))
-                     ;; No polling until the child has exited: its EOF and
-                     ;; its exit are then pending together.
-                     (let ((end (+ (float-time) 0.2)))
-                       (while (< (float-time) end)))
-                     (while (not done) (accept-process-output nil 0.05))))))
-             (delete-dups (nreverse seen)))"#
-    ));
-
-    assert_eq!(result, "OK (closed)");
+                            (let ((sp (get-buffer-process f3-stderr-buffer)))
+                              (push (if sp (process-status sp) 'GONE) f3-stderr-seen))
+                            (setq f3-stderr-done t))))
+                     p)"#
+                ))
+                .expect("create owned stderr fixture");
+            with_stderr_fixture_child(&mut eval, owner, |eval| {
+                wait_for_stderr_fixture_exit(eval, owner);
+                let delivered = eval_one_in_context(
+                    eval,
+                    r#"(let ((deadline (+ (float-time) 5)))
+                         (while (and (not f3-stderr-done) (< (float-time) deadline))
+                           (accept-process-output nil 0.05))
+                         f3-stderr-done)"#,
+                );
+                assert_eq!(delivered, "OK t", "owner sentinel must run");
+            });
+        }
+    }
+    assert_eq!(
+        eval_one_in_context(&mut eval, "(delete-dups (nreverse f3-stderr-seen))"),
+        "OK (closed)"
+    );
 }
 
-/// The deferred half of the same split: the pipe's own sentinel still runs,
-/// after the owner's. GNU's `status_notify` reaches the older stderr pipe on
-/// the same pass, so retiring it early in the fd loop must not cost it its
-/// notification. The order is only defined when the child's EOF and its exit
-/// are pending together, so -- as in the row above -- nothing polls until the
-/// child has surely exited (a busy machine could otherwise deliver the EOF a
-/// pass earlier, running the pipe's sentinel first, as GNU would too).
+/// The older pipe's sentinel follows the owner's in the same GNU status pass.
+/// Confirm the child has exited before the first poll instead of depending on
+/// a fixed sleep or on the host's readiness-event order.
+#[cfg(unix)]
 #[test]
 fn the_stderr_pipe_sentinel_still_runs_after_the_owners() {
     crate::test_utils::init_test_tracing();
     let sh = find_bin("sh");
-    let result = eval_one(&format!(
-        r#"(let* ((order nil)
-                  (out (generate-new-buffer " *p14b-out*"))
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let owner = eval
+        .eval_str(&format!(
+            r#"(let* ((out (generate-new-buffer " *p14b-out*"))
                   (err (generate-new-buffer " *p14b-err*"))
-                  (done nil)
-                  (p (make-process
-                      :name "p14b"
-                      :buffer out
-                      :stderr err
-                      :command (list "{sh}" "-c" "printf 'e' 1>&2; printf 'x'"))))
+                  (p (make-process :name "p14b" :buffer out :stderr err :connection-type 'pipe
+                                   :command (list "{sh}" "-c" "read -r ready; printf 'e' 1>&2; printf 'x'"))))
+             (setq f3-stderr-order nil f3-stderr-done nil)
              (set-process-sentinel (get-buffer-process err)
-                                   (lambda (&rest _) (push 'stderr order)))
+                                   (lambda (&rest _) (push 'stderr f3-stderr-order)))
              (set-process-sentinel
               p (lambda (pr _e)
                   (when (memq (process-status pr) '(exit signal))
-                    (push 'owner order)
-                    (setq done t))))
-             (let ((end (+ (float-time) 0.5)))
-               (while (< (float-time) end)))
-             (while (not done) (accept-process-output nil 0.05))
-             (dotimes (_ 4) (accept-process-output nil 0.05))
-             (nreverse order))"#
-    ));
-
+                    (push 'owner f3-stderr-order)
+                    (setq f3-stderr-done t))))
+             p)"#
+        ))
+        .expect("create owned stderr fixture");
+    let result = with_stderr_fixture_child(&mut eval, owner, |eval| {
+        wait_for_stderr_fixture_exit(eval, owner);
+        eval_one_in_context(
+            eval,
+            r#"(let ((deadline (+ (float-time) 5)))
+                 (while (and (not f3-stderr-done) (< (float-time) deadline))
+                   (accept-process-output nil 0.05))
+                 (dotimes (_ 4) (accept-process-output nil 0.05))
+                 (nreverse f3-stderr-order))"#,
+        )
+    });
     assert_eq!(result, "OK (owner stderr)");
 }
 
@@ -11088,21 +11425,26 @@ fn make_pipe_process_stderr_bytes_go_through_the_pipes_own_chain() {
 /// `default-process-coding-system` (there is no arm that reads it), and its
 /// unibyte-buffer short circuit cannot change an answer that is already nil.
 ///
-/// `/dev/ptmx` is the port because it is a real character device that
-/// `serial_open` + `tcgetattr` accept on any Linux, which is what GNU needs to
-/// get as far as the coding chain: `/dev/null` fails `tcgetattr` and a
-/// nonexistent path signals `file-missing`.  Every expected value below was
-/// measured on that port under GNU Emacs 31.0.90.
+/// Allocated pty slaves provide real tty devices on every Unix. Each row
+/// owns a fresh device because GNU serial_open requests exclusive access
+/// (src/sysdep.c:2985-2987). The masters stay open through evaluation.
 #[cfg(unix)]
 #[test]
 fn make_serial_process_coding_is_the_overrides_and_nothing_else() {
     crate::test_utils::init_test_tracing();
-    let result = eval_one(
+    let ptys: Vec<_> = (0..11).map(|_| SerialTestPty::open()).collect();
+    let ports = ptys
+        .iter()
+        .map(|pty| format!("\"{}\"", pty.slave_path))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let result = eval_one(&format!(
         r#"(progn
              (defvar pw137-n 0)
+             (setq pw137-ports (list {ports}))
              (defun pw137-serial-cs (&rest args)
                (setq pw137-n (1+ pw137-n))
-               (let ((p (apply #'make-serial-process :port "/dev/ptmx" :speed 9600
+               (let ((p (apply #'make-serial-process :port (pop pw137-ports) :speed 9600
                                :name (format "pw137s-%d" pw137-n) :noquery t
                                :sentinel #'ignore args)))
                  (prog1 (process-coding-system p) (delete-process p))))
@@ -11139,7 +11481,7 @@ fn make_serial_process_coding_is_the_overrides_and_nothing_else() {
               ;; error here, because a serial process never looks at it.
               (let ((default-process-coding-system '(no-such-xyz . no-such-xyz)))
                 (pw137-serial-cs :buffer (generate-new-buffer " *mb*")))))"#,
-    );
+    ));
 
     assert_eq!(
         result,
@@ -11924,50 +12266,93 @@ fn inhibit_eol_conversion_is_read_when_process_output_arrives_not_when_it_is_res
 /// quirk DIVERGENCES.md entry 139 found.  The master stays open for the whole
 /// test and is closed by `Drop`.
 #[cfg(unix)]
+fn native_errno_message(errno: i32) -> String {
+    // GNU report_file_error uses the platform's strerror text.
+    // SAFETY: strerror returns a NUL-terminated string for every errno below;
+    // copy it immediately, without modifying its storage.
+    unsafe { std::ffi::CStr::from_ptr(libc::strerror(errno)) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(unix)]
 struct SerialTestPty {
     master: std::os::fd::OwnedFd,
+    // Darwin needs a live slave for master writes and for queued output to
+    // survive the serial process closing its own descriptor.
+    _slave: std::os::fd::OwnedFd,
     slave_path: String,
 }
 
 #[cfg(unix)]
 impl SerialTestPty {
     fn open() -> Self {
-        use std::os::fd::FromRawFd;
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
         // SAFETY: each call takes only the descriptor it was handed, and
-        // `ptsname`'s result is copied out before any other libc call runs.
+        // `ptsname`'s static result is copied while its fixture lock is held.
         unsafe {
-            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            let master = libc::posix_openpt(
+                libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            );
             assert!(
                 master >= 0,
                 "posix_openpt: {}",
                 std::io::Error::last_os_error()
             );
-            assert_eq!(libc::grantpt(master), 0, "grantpt");
-            assert_eq!(libc::unlockpt(master), 0, "unlockpt");
-            let name = libc::ptsname(master);
-            assert!(!name.is_null(), "ptsname");
-            let slave_path = std::ffi::CStr::from_ptr(name)
-                .to_str()
-                .expect("pty slave path is ASCII")
-                .to_owned();
+            // Own the descriptor immediately so fixture failures also close it.
+            let master = OwnedFd::from_raw_fd(master);
+            assert_eq!(libc::grantpt(master.as_raw_fd()), 0, "grantpt");
+            assert_eq!(libc::unlockpt(master.as_raw_fd()), 0, "unlockpt");
+            let slave_path = {
+                // ptsname may use shared static storage. These tests allocate
+                // devices concurrently, so serialize the call and owned copy.
+                static PTY_NAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+                let _guard = PTY_NAME_LOCK
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let name = libc::ptsname(master.as_raw_fd());
+                assert!(!name.is_null(), "ptsname");
+                std::ffi::CStr::from_ptr(name)
+                    .to_str()
+                    .expect("pty slave path is ASCII")
+                    .to_owned()
+            };
+            // Darwin initializes the tty only when its slave is first opened;
+            // tcgetattr on the master before that reports ENOTTY. GNU also
+            // opens the slave with O_NOCTTY (process.c:2187) before configuring
+            // its tty. Retain this slave throughout the fixture lifetime;
+            // closing the last slave makes Darwin master I/O fail with EIO.
+            let slave_name =
+                std::ffi::CString::new(slave_path.as_bytes()).expect("pty slave path has no NUL");
+            let slave = libc::open(
+                slave_name.as_ptr(),
+                libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+            );
+            assert!(
+                slave >= 0,
+                "open pty slave: {}",
+                std::io::Error::last_os_error()
+            );
+            let slave = OwnedFd::from_raw_fd(slave);
             // Raw BEFORE the first write: the line discipline processes input
             // as it is written to the master, so `ICRNL` would turn this
             // fixture's CR LF into LF LF before any coding system sees it.
             let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
             assert_eq!(
-                libc::tcgetattr(master, attributes.as_mut_ptr()),
+                libc::tcgetattr(master.as_raw_fd(), attributes.as_mut_ptr()),
                 0,
                 "tcgetattr"
             );
             let mut attributes = attributes.assume_init();
             libc::cfmakeraw(&raw mut attributes);
             assert_eq!(
-                libc::tcsetattr(master, libc::TCSANOW, &raw const attributes),
+                libc::tcsetattr(master.as_raw_fd(), libc::TCSANOW, &raw const attributes),
                 0,
                 "tcsetattr"
             );
             Self {
-                master: std::os::fd::OwnedFd::from_raw_fd(master),
+                master,
+                _slave: slave,
                 slave_path,
             }
         }
@@ -12026,7 +12411,26 @@ impl SerialTestPty {
 #[test]
 fn make_serial_process_open_failures_beat_everything_downstream() {
     crate::test_utils::init_test_tracing();
-    let result = eval_one(
+    use std::os::unix::fs::PermissionsExt;
+    let pty = SerialTestPty::open();
+    // GNU 31.1 Darwin reports ENODEV for tcgetattr(/dev/null), as observed
+    // natively; GNU serial_configure passes that errno through (sysdep.c:3164-3166).
+    #[cfg(target_os = "macos")]
+    let not_a_terminal = libc::ENODEV;
+    #[cfg(not(target_os = "macos"))]
+    let not_a_terminal = libc::ENOTTY;
+    let directory = tempfile::tempdir().expect("denied serial fixture directory");
+    let denied = directory.path().join("denied-port");
+    std::fs::write(&denied, b"").expect("create denied serial fixture");
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0))
+        .expect("deny access to serial fixture");
+    let denied_error = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&denied)
+        .expect_err("fixture must deny the serial open");
+    assert_eq!(denied_error.raw_os_error(), Some(libc::EACCES));
+    let result = eval_one(&format!(
         r#"(progn
              (defun pw147-try (thunk) (condition-case err (funcall thunk) (error err)))
              (list
@@ -12037,7 +12441,7 @@ fn make_serial_process_open_failures_beat_everything_downstream() {
                                                    :speed 9600 :name "a" :noquery t)))
               (pw147-try (lambda () (make-serial-process :port "/dev" :speed 9600
                                                    :name "b" :noquery t)))
-              (pw147-try (lambda () (make-serial-process :port "/proc/1/mem" :speed 9600
+              (pw147-try (lambda () (make-serial-process :port "{denied}" :speed 9600
                                                    :name "c" :noquery t)))
               ;; `:speed nil' means "do not configure", so an open that succeeds
               ;; on a device that is not a tty succeeds -- and the same port with
@@ -12066,7 +12470,7 @@ fn make_serial_process_open_failures_beat_everything_downstream() {
                                             :buffer (generate-new-buffer " *h*")))))
               (pw147-try (lambda ()
                      (let ((coding-system-for-read 'pw147-no-such))
-                       (make-serial-process :port "/dev/ptmx" :speed 9600 :bytesize 5
+                       (make-serial-process :port "{port}" :speed 9600 :bytesize 5
                                             :name "i" :noquery t
                                             :buffer (generate-new-buffer " *i*")))))
               ;; `tcgetattr' beats every keyword domain check, because GNU reads
@@ -12084,27 +12488,34 @@ fn make_serial_process_open_failures_beat_everything_downstream() {
                                                   :name "m" :noquery t)))
               (pw147-try (lambda () (make-serial-process :port "/nonexistent/pw147-tty"
                                                    :speed "x" :name "n" :noquery t)))))"#,
-    );
+        denied = denied.display(),
+        port = pty.slave_path,
+    ));
 
     assert_eq!(
         result,
         concat!(
             "OK (",
-            "(file-missing \"Opening serial port\" \"No such file or directory\" \"/nonexistent/pw147-tty\") ",
-            "(file-error \"Opening serial port\" \"Is a directory\" \"/dev\") ",
-            "(permission-denied \"Opening serial port\" \"Permission denied\" \"/proc/1/mem\") ",
-            "(file-error \"Failed tcgetattr\" \"Inappropriate ioctl for device\") ",
+            "(file-missing \"Opening serial port\" \"{ENOENT}\" \"/nonexistent/pw147-tty\") ",
+            "(file-error \"Opening serial port\" \"{EISDIR}\" \"/dev\") ",
+            "(permission-denied \"Opening serial port\" \"{EACCES}\" \"{denied}\") ",
+            "(file-error \"Failed tcgetattr\" \"{ENOTTY}\") ",
             "(open (:port \"/dev/null\" :speed nil :name \"e\" :noquery t)) ",
-            "(file-missing \"Opening serial port\" \"No such file or directory\" \"/nonexistent/pw147-tty\") ",
-            "(file-missing \"Opening serial port\" \"No such file or directory\" \"/nonexistent/pw147-tty\") ",
+            "(file-missing \"Opening serial port\" \"{ENOENT}\" \"/nonexistent/pw147-tty\") ",
+            "(file-missing \"Opening serial port\" \"{ENOENT}\" \"/nonexistent/pw147-tty\") ",
             "(coding-system-error pw147-no-such) ",
             "(coding-system-error pw147-no-such) ",
-            "(file-error \"Failed tcgetattr\" \"Inappropriate ioctl for device\") ",
-            "(file-error \"Failed tcgetattr\" \"Inappropriate ioctl for device\") ",
+            "(file-error \"Failed tcgetattr\" \"{ENOTTY}\") ",
+            "(file-error \"Failed tcgetattr\" \"{ENOTTY}\") ",
             "(error \"No port specified\") ",
             "(wrong-type-argument stringp 1) ",
             "(wrong-type-argument fixnump \"x\"))",
         )
+        .replace("{denied}", &denied.to_string_lossy())
+        .replace("{ENOENT}", &native_errno_message(libc::ENOENT))
+        .replace("{EISDIR}", &native_errno_message(libc::EISDIR))
+        .replace("{EACCES}", &native_errno_message(libc::EACCES))
+        .replace("{ENOTTY}", &native_errno_message(not_a_terminal))
     );
 }
 
@@ -12120,7 +12531,9 @@ fn make_serial_process_open_failures_beat_everything_downstream() {
 #[test]
 fn a_failed_make_serial_process_leaks_nothing_but_its_buffer() {
     crate::test_utils::init_test_tracing();
-    let result = eval_one(
+    let configure_pty = SerialTestPty::open();
+    let coding_pty = SerialTestPty::open();
+    let result = eval_one(&format!(
         r#"(progn
              (defun pw147-aftermath (tag thunk)
                (let ((before (length (process-list))))
@@ -12134,13 +12547,13 @@ fn a_failed_make_serial_process_leaks_nothing_but_its_buffer() {
                                                          :speed 9600 :name "pw147a"
                                                          :noquery t)))
               (pw147-aftermath "pw147b"
-                         (lambda () (make-serial-process :port "/dev/ptmx" :speed 9600
+                         (lambda () (make-serial-process :port "{configure_port}" :speed 9600
                                                          :bytesize 5 :name "pw147b"
                                                          :noquery t)))
               (pw147-aftermath "pw147c"
                          (lambda ()
                            (let ((coding-system-for-read 'pw147-no-such))
-                             (make-serial-process :port "/dev/ptmx" :speed 9600
+                             (make-serial-process :port "{coding_port}" :speed 9600
                                                   :name "pw147c" :noquery t))))
               (pw147-aftermath "pw147d"
                          (lambda () (make-serial-process :port "/dev/null" :speed 9600
@@ -12151,7 +12564,9 @@ fn a_failed_make_serial_process_leaks_nothing_but_its_buffer() {
                        (make-serial-process :port "/nonexistent/pw147-tty" :speed 9600
                                             :name "pw147e" :buffer "pw147-buf" :noquery t))
                      (and (get-buffer "pw147-buf") t))))"#,
-    );
+        configure_port = configure_pty.slave_path,
+        coding_port = coding_pty.slave_path,
+    ));
 
     assert_eq!(
         result,
@@ -13325,12 +13740,17 @@ fn delete_process_sentinel_sees_its_process_removed_by_default_like_gnu() {
              seen)"#
     ));
 
+    // GNU process.c:780-811 uses native strsignal and lowercases its first
+    // character. Darwin libc includes the signal number in that description.
+    #[cfg(target_os = "macos")]
+    let event = "killed: 9";
+    #[cfg(not(target_os = "macos"))]
+    let event = "killed";
     assert_eq!(
         result,
-        concat!(
-            "OK (:event \"killed\" :get-buffer-process nil :get-process nil ",
-            ":in-process-list nil :process-status signal)",
-        )
+        format!(
+            "OK (:event \"{event}\" :get-buffer-process nil :get-process nil :in-process-list nil :process-status signal)"
+        ),
     );
 }
 
@@ -13623,10 +14043,48 @@ fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
 /// every child is `setsid`-ed into one (`isolate_child_command`), which is
 /// also GNU's arrangement.  Signal 0 throughout, so nothing is signalled.
 /// Ledger 169 residual 5, ledger 175.
+#[cfg(unix)]
 #[test]
 fn signal_process_takes_a_negative_integer_as_a_process_group_like_gnu() {
+    use std::os::unix::process::CommandExt;
+
     crate::test_utils::init_test_tracing();
     let sh = find_bin("sh");
+    // A fixed numeric group can exist on a busy host. Create our own group,
+    // with no descendants, and reap its only member before checking absence.
+    let mut child = std::process::Command::new(&sh)
+        .args(["-c", "exit 0"])
+        .process_group(0)
+        .spawn()
+        .expect("spawn the temporary process-group leader");
+    let pgid = libc::pid_t::try_from(child.id()).expect("child ID fits pid_t");
+    assert!(
+        pgid > 1,
+        "a negative group ID must not select all processes"
+    );
+    assert!(
+        child
+            .wait()
+            .expect("reap the temporary group leader")
+            .success()
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: This probes our reaped child's group. Signal 0 delivers no
+        // signal; pgid > 1 excludes kill's special -1 target.
+        if unsafe { libc::kill(-pgid, 0) } == -1 {
+            let error = std::io::Error::last_os_error();
+            assert_eq!(error.raw_os_error(), Some(libc::ESRCH), "{error}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "process group {pgid} still exists"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let absent_group = -pgid;
     let result = eval_one(&format!(
         r#"(let* ((p (make-process
                       :name "pw175-siggroup"
@@ -13638,7 +14096,7 @@ fn signal_process_takes_a_negative_integer_as_a_process_group_like_gnu() {
                          (condition-case e (funcall thunk)
                            (error (list 'error (car e) (cadr e)))))))
              (prog1
-                 (list :absent-group (funcall try (lambda () (signal-process -99999 0)))
+                 (list :absent-group (funcall try (lambda () (signal-process {absent_group} 0)))
                        :own-group    (funcall try (lambda ()
                                                     (signal-process (- (process-id p)) 0)))
                        :own-pid      (funcall try (lambda () (signal-process (process-id p) 0)))
@@ -14341,9 +14799,9 @@ fn an_exited_child_is_a_zombie_here_and_reaped_in_gnu() {
 /// as a function this port can call.  It is not wired to any Lisp entry
 /// point (see `UpdateStatusSite::recording` and the pin above), so this test
 /// is what keeps it honest: it drives a `ProcessManager` with no wait loop
-/// at all, waits until `/proc` says the child is a ZOMBIE -- exited and not
-/// reaped -- and asserts that the sweep, and only the sweep, turns `run`
-/// into `(exit . 7)`.
+/// at all, waits until the kernel reports the child exited without reaping
+/// it, and asserts that the sweep, and only the sweep, turns `run` into
+/// `(exit . 7)`. Linux uses `/proc`; Darwin uses `waitid` with `WNOWAIT`.
 ///
 /// The second half is ledger 165's inversion as a compile-time fact rather
 /// than a comment: `handle_child_signal` passes `p->pid` to
@@ -14385,6 +14843,7 @@ fn gnus_sigchld_sweep_records_an_exited_child_and_cannot_reach_a_pidless_process
     // Wait for the kernel, not for the clock: a zombie is exited-and-unreaped,
     // which is the exact state GNU's handler would have found.
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    #[cfg(not(target_os = "macos"))]
     let is_zombie = |pid: u32| {
         std::fs::read_to_string(format!("/proc/{pid}/stat"))
             .ok()
@@ -14398,6 +14857,32 @@ fn gnus_sigchld_sweep_records_an_exited_child_and_cannot_reach_a_pidless_process
                     .map(str::to_string)
             })
             .is_some_and(|state| state == "Z")
+    };
+    #[cfg(target_os = "macos")]
+    let is_zombie = |pid: u32| {
+        // Darwin has no /proc. GNU's handler consumes the owned child's
+        // wait status (process.c:7741-7748; sysdep.c:471,515-517), so this
+        // fixture must leave it available for the sweep's first reap.
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: pid is this test's unreaped child; info points to writable
+        // storage. WNOWAIT reports its exit without consuming the status.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            assert_eq!(error.raw_os_error(), Some(libc::EINTR), "waitid: {error}");
+            return false;
+        }
+        // SAFETY: siginfo_t's integer and pointer fields admit zero values;
+        // the successful waitid writes its report into the zeroed storage.
+        let info = unsafe { info.assume_init() };
+        info.si_pid == pid as libc::pid_t && info.si_code == libc::CLD_EXITED && info.si_status == 7
     };
     while std::time::Instant::now() < deadline && !is_zombie(os_pid) {
         std::thread::sleep(Duration::from_millis(1));
@@ -14497,11 +14982,11 @@ fn a_reaped_child_leaves_no_pid_for_the_kill_path_like_gnu() {
     // Wait for the kernel, not the clock: a zombie is exited-and-unreaped,
     // so the reap below is this port's FIRST and the state is unambiguous.
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    while std::time::Instant::now() < deadline && !pw187_is_zombie(os_pid) {
+    while std::time::Instant::now() < deadline && !pw187_is_zombie(os_pid, 7) {
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(
-        pw187_is_zombie(os_pid),
+        pw187_is_zombie(os_pid, 7),
         "the child must be exited and unreaped before anything reaps it"
     );
 
@@ -14511,7 +14996,7 @@ fn a_reaped_child_leaves_no_pid_for_the_kill_path_like_gnu() {
         crate::emacs_core::wait::WaitStatusNotifySite::for_a_unit_test_of_the_walk_itself(),
     );
     assert!(
-        !pw187_is_zombie(os_pid),
+        !pw187_is_zombie(os_pid, 7),
         "record_child_status_changes must have reaped the child"
     );
 
@@ -14608,7 +15093,7 @@ fn deleting_a_reaped_child_does_not_kill_its_process_group_like_gnu() {
     // this fix and in one without it.  A run whose child had not been reaped
     // would agree with itself.
     assert!(
-        !pw187_is_zombie(os_pid),
+        !pw187_is_zombie(os_pid, 0),
         "the child must be REAPED before the delete path runs, or this pin \
          proves nothing"
     );
@@ -14645,18 +15130,64 @@ fn pw187_kill_path_pid(
         .and_then(|proc| proc.live_io.child.pid_if_unreaped())
 }
 
+/// Observe only a child created by the calling test, without consuming the
+/// wait status GNU's child_status_changed must later collect.
+#[cfg(target_os = "macos")]
+fn owned_child_has_unreaped_exit(pid: u32, expected_exit: i32) -> bool {
+    loop {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: every caller passes its own child pid. info is writable;
+        // WNOWAIT leaves an exited child's status available for the first reap.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::EINTR) => continue,
+                Some(libc::ECHILD) => return false,
+                _ => panic!("waitid for owned child {pid}: {error}"),
+            }
+        }
+        // SAFETY: siginfo_t admits zero values, and a successful waitid writes
+        // its report into the zeroed storage (si_pid remains zero if running).
+        let info = unsafe { info.assume_init() };
+        if info.si_pid != pid as libc::pid_t {
+            return false;
+        }
+        assert_eq!(
+            info.si_code,
+            libc::CLD_EXITED,
+            "owned child must exit normally"
+        );
+        assert_eq!(info.si_status, expected_exit, "owned child exit status");
+        return true;
+    }
+}
+
 #[cfg(unix)]
-fn pw187_is_zombie(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            let after_comm = stat.rfind(')').map(|i| i + 1)?;
-            stat[after_comm..]
-                .split_whitespace()
-                .next()
-                .map(str::to_string)
-        })
-        .is_some_and(|state| state == "Z")
+fn pw187_is_zombie(pid: u32, expected_exit: i32) -> bool {
+    cfg_select! {
+        target_os = "macos" => { owned_child_has_unreaped_exit(pid, expected_exit) }
+        _ => {
+            let _ = expected_exit;
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|stat| {
+                    let after_comm = stat.rfind(')').map(|i| i + 1)?;
+                    stat[after_comm..]
+                        .split_whitespace()
+                        .next()
+                        .map(str::to_string)
+                })
+                .is_some_and(|state| state == "Z")
+        }
+    }
 }
 
 /// GNU's `update_status` call sites, enumerated, and how each one gets its
@@ -14934,7 +15465,7 @@ fn process_send_eof_rejects_a_finished_process_like_gnu() {
 /// first half perfectly.
 ///
 /// **The control is asked of the KERNEL and not of this port** (ledger 187's
-/// rule): the child must be a `/proc` ZOMBIE -- exited and unreaped -- before
+/// rule): the child must be exited and unreaped before
 /// the spin begins, so a run in which the child had not actually exited fails
 /// on the control rather than agreeing with itself.
 #[cfg(unix)]
@@ -14963,18 +15494,7 @@ fn the_child_status_record_is_the_waits_work_and_maybe_quit_never_does_it() {
         .and_then(|proc| proc.os_pid)
         .expect("a spawned child has an OS pid");
 
-    let is_zombie = |pid: u32| {
-        std::fs::read_to_string(format!("/proc/{pid}/stat"))
-            .ok()
-            .and_then(|stat| {
-                let after_comm = stat.rfind(')').map(|i| i + 1)?;
-                stat[after_comm..]
-                    .split_whitespace()
-                    .next()
-                    .map(str::to_string)
-            })
-            .is_some_and(|state| state == "Z")
-    };
+    let is_zombie = |pid: u32| pw187_is_zombie(pid, 7);
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     while std::time::Instant::now() < deadline && !is_zombie(os_pid) {
         std::thread::sleep(Duration::from_millis(1));
@@ -16084,7 +16604,10 @@ fn application_send_from_a_handshake_timer_returns_without_waiting_for_tls() {
 #[test]
 fn nested_tls_waits_preserve_suspension_and_deliver_queued_data() {
     use crate::emacs_core::tls_test::loopback;
-    let peer = loopback::TlsPeer::spawn(1, Duration::from_millis(100), true);
+    // The assertion concerns suspension and verified application delivery,
+    // not an abrupt peer close racing the final transport write.
+    let peer =
+        loopback::FramedEchoPeer::spawn(b"queued encrypted data\n", Duration::from_millis(100));
     let ca = loopback::resources().join("ca.pem");
     let result = eval_one(&format!(
         r#"
@@ -16115,7 +16638,10 @@ fn nested_tls_waits_preserve_suspension_and_deliver_queued_data() {
         (progn
           (with-timeout (2 (error "TLS completion watchdog"))
             (while (not outcome) (accept-process-output nil 0.05)))
-          (accept-process-output client 0.5)
+          (with-timeout (2 (error "queued TLS echo watchdog"))
+            (while (with-current-buffer (process-buffer client)
+                     (not (string-prefix-p "queued encrypted data\n" (buffer-string))))
+              (accept-process-output client 0.05)))
           (list outcome nested slept-efficiently
                 (with-current-buffer (process-buffer client) (string-prefix-p "queued encrypted data\n" (buffer-string)))))
       (delete-process client)
@@ -16124,6 +16650,8 @@ fn nested_tls_waits_preserve_suspension_and_deliver_queued_data() {
         peer.port,
         ca.display()
     ));
+    peer.finish()
+        .expect("framed TLS peer received and echoed the complete message");
     assert_eq!(result, "OK (\"rooted sentinel\" t t t)");
 }
 
@@ -16216,7 +16744,7 @@ fn application_filter_suspension_does_not_suspend_tls_verification() {
 #[test]
 fn nowait_tls_queues_early_application_data_until_verification() {
     use crate::emacs_core::tls_test::loopback;
-    let peer = loopback::TlsPeer::spawn(1, Duration::ZERO, true);
+    let peer = loopback::FramedEchoPeer::spawn(b"encrypted from the start\n", Duration::ZERO);
     let result = eval_one(&format!(
         r#"
 (require 'timer)
@@ -16236,6 +16764,8 @@ fn nowait_tls_queues_early_application_data_until_verification() {
         peer.port,
         loopback::resources().join("ca.pem").display()
     ));
+    peer.finish()
+        .expect("framed TLS peer received and echoed the complete message");
     assert_eq!(result, "OK t");
 }
 

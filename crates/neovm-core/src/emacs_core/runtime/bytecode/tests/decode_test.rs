@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::intern::resolve_sym;
+use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::HashTableTest;
 
 #[test]
@@ -278,39 +278,45 @@ fn decode_buffer_op_save_current_buffer() {
 fn parse_arglist_descriptor_no_rest() {
     crate::test_utils::init_test_tracing();
     // 2 mandatory, 3 total → 1 optional
-    let params = parse_arglist_descriptor(2 | (3 << 8));
-    assert_eq!(params.required.len(), 2);
-    assert_eq!(params.optional.len(), 1);
-    assert!(params.rest.is_none());
+    let params = parse_arglist_descriptor(2 | (3 << 8))
+        .stack_shape()
+        .unwrap();
+    assert_eq!(params.required(), 2);
+    assert_eq!(params.optional().unwrap(), 1);
+    assert!(!params.rest().is_present());
 }
 
 #[test]
 fn parse_arglist_descriptor_with_rest() {
     crate::test_utils::init_test_tracing();
     // 1 mandatory + &rest, with 1 non-rest slot total.
-    let params = parse_arglist_descriptor(1 | (1 << 8) | 128);
-    assert_eq!(params.required.len(), 1);
-    assert_eq!(params.optional.len(), 0);
-    assert!(params.rest.is_some());
+    let params = parse_arglist_descriptor(1 | (1 << 8) | 128)
+        .stack_shape()
+        .unwrap();
+    assert_eq!(params.required(), 1);
+    assert_eq!(params.optional().unwrap(), 0);
+    assert!(params.rest().is_present());
 }
 
 #[test]
 fn parse_arglist_descriptor_with_optional_and_rest_slot() {
     crate::test_utils::init_test_tracing();
     // GNU lexical bytecode can carry both optional args and a hidden rest slot.
-    let params = parse_arglist_descriptor(3 | (4 << 8) | 128);
-    assert_eq!(params.required.len(), 3);
-    assert_eq!(params.optional.len(), 1);
-    assert!(params.rest.is_some());
+    let params = parse_arglist_descriptor(3 | (4 << 8) | 128)
+        .stack_shape()
+        .unwrap();
+    assert_eq!(params.required(), 3);
+    assert_eq!(params.optional().unwrap(), 1);
+    assert!(params.rest().is_present());
 }
 
 #[test]
 fn parse_arglist_descriptor_zero_args() {
     crate::test_utils::init_test_tracing();
-    let params = parse_arglist_descriptor(0);
-    assert_eq!(params.required.len(), 0);
-    assert_eq!(params.optional.len(), 0);
-    assert!(params.rest.is_none());
+    let params = parse_arglist_descriptor(0).stack_shape().unwrap();
+    assert_eq!(params.required(), 0);
+    assert_eq!(params.optional().unwrap(), 0);
+    assert!(!params.rest().is_present());
 }
 
 #[test]
@@ -324,22 +330,33 @@ fn parse_arglist_value_from_list() {
         Value::symbol("&rest"),
         Value::symbol("z"),
     ]);
-    let params = parse_arglist_value(&arglist);
-    assert_eq!(params.required.len(), 1);
-    assert_eq!(resolve_sym(params.required[0]), "x");
-    assert_eq!(params.optional.len(), 1);
-    assert_eq!(resolve_sym(params.optional[0]), "y");
-    assert!(params.rest.is_some());
-    assert_eq!(resolve_sym(params.rest.unwrap()), "z");
+    let params = parse_arglist_value(&arglist).unwrap();
+    let super::super::FunctionParams::Dynamic(params) = params else {
+        panic!("list arglist remains dynamic");
+    };
+    use super::super::function_slots::FormalBinding;
+    let mut cursor = params.invocation();
+    for expected in [
+        FormalBinding::Required(intern("x")),
+        FormalBinding::Optional(intern("y")),
+        FormalBinding::Rest(intern("z")),
+    ] {
+        assert_eq!(cursor.next_binding().unwrap(), Some(expected));
+        cursor.finish_binding().unwrap();
+    }
+    assert_eq!(cursor.next_binding().unwrap(), None);
 }
 
 #[test]
 fn parse_arglist_value_int() {
     crate::test_utils::init_test_tracing();
-    let params = parse_arglist_value(&Value::fixnum(1 | (2 << 8)));
-    assert_eq!(params.required.len(), 1);
-    assert_eq!(params.optional.len(), 1);
-    assert!(params.rest.is_none());
+    let params = parse_arglist_value(&Value::fixnum(1 | (2 << 8)))
+        .unwrap()
+        .stack_shape()
+        .unwrap();
+    assert_eq!(params.required(), 1);
+    assert_eq!(params.optional().unwrap(), 1);
+    assert!(!params.rest().is_present());
 }
 
 // ---------------------------------------------------------------------------

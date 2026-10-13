@@ -30,7 +30,7 @@ fn surface_error(message: impl Into<String>) -> super::error::Flow {
 fn plist_get(args: &[Value], key: &str) -> Option<Value> {
     let mut i = 0;
     while i + 1 < args.len() {
-        if args[i].as_symbol_name() == Some(key) {
+        if args[i].as_bare_symbol_name() == Some(key) {
             return Some(args[i + 1]);
         }
         i += 2;
@@ -81,7 +81,7 @@ fn parse_uniform_entry(entry: Value) -> Result<ShaderSurfaceUniformInit, super::
     }
     let name_value = entry.cons_car();
     let name = name_value
-        .as_symbol_name()
+        .as_bare_symbol_name()
         .map(str::to_owned)
         .or_else(|| {
             name_value
@@ -134,13 +134,14 @@ fn resolve_channel_value(
     eval: &mut Context,
     value: Value,
 ) -> Result<(SurfaceChannelKind, u32), super::error::Flow> {
+    let symbol_mode = eval.symbol_mode();
     if let Some(id) = surface_id_from_value(value) {
         return Ok((SurfaceChannelKind::Surface, id));
     }
     let head = value
         .is_cons()
         .then(|| value.cons_car())
-        .and_then(|car| car.as_symbol_name().map(str::to_owned));
+        .and_then(|car| car.as_symbol_name(symbol_mode).map(str::to_owned));
     match head.as_deref() {
         Some("image") => {
             let environment = image_scale_environment_for_frame(eval, None).unwrap_or_default();
@@ -362,10 +363,11 @@ fn available(eval: &mut Context, _args: Vec<Value>) -> EvalResult {
 /// `neomacs-frame-shader-set-uniform`. nil SOURCE removes the shader.
 /// Signals on compile errors.
 fn set_frame_shader(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     let language = match args.get(1).copied().filter(|value| !value.is_nil()) {
         None => ShaderSurfaceLanguage::Wgsl,
-        Some(value) if value.is_symbol_named("wgsl") => ShaderSurfaceLanguage::Wgsl,
-        Some(value) if value.is_symbol_named("glsl") => ShaderSurfaceLanguage::Glsl,
+        Some(value) if value.is_symbol_named("wgsl", symbol_mode) => ShaderSurfaceLanguage::Wgsl,
+        Some(value) if value.is_symbol_named("glsl", symbol_mode) => ShaderSurfaceLanguage::Glsl,
         Some(_) => {
             return Err(surface_error(
                 "neomacs-frame-shader: LANGUAGE must be `wgsl' or `glsl'",

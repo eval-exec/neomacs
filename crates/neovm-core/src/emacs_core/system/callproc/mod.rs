@@ -418,7 +418,7 @@ fn configure_subprocess_environment(
 }
 
 fn is_file_keyword(value: &Value) -> bool {
-    value.as_keyword_id().is_some_and(|k| {
+    value.as_bare_keyword_id().is_some_and(|k| {
         let n = resolve_sym(k);
         n == ":file" || n == "file"
     })
@@ -597,6 +597,7 @@ fn write_output_target_in_state(
                 // GNU's state when it sets `CODING_MODE_LAST_BLOCK` at the
                 // end of `Fcall_process`'s read loop (src/callproc.c:796).
                 crate::emacs_core::coding::SourceBlock::Last,
+                eval.symbol_mode(),
             );
             // And then decodes through `decode_coding_c_string`
             // (src/callproc.c:856) -- the same macro, and so the same
@@ -966,7 +967,7 @@ fn obarray_lisp_string_variable(
     name: &str,
     fallback: &str,
 ) -> Result<LispString, Flow> {
-    let value = obarray.symbol_value(name).copied().unwrap_or(Value::NIL);
+    let value = obarray.symbol_value_copied(name).unwrap_or(Value::NIL);
     if value.is_nil() {
         Ok(LispString::from_utf8(fallback))
     } else {
@@ -1061,7 +1062,10 @@ fn resolve_call_process_arg_coding(eval: &super::eval::Context, cmd_args: &[Lisp
             .unwrap_or_else(|| "utf-8-unix".to_string())
     };
 
-    if eval.coding_systems.is_ascii_compatible(&resolved) {
+    if eval
+        .coding_systems
+        .is_ascii_compatible(&resolved, eval.symbol_mode())
+    {
         resolved
     } else {
         raw_text()
@@ -1116,7 +1120,11 @@ fn resolve_call_process_output_decoding(
     // GNU `Fcheck_coding_system (val)` (src/callproc.c:753).  nil is a valid
     // coding system there (`Fcoding_system_p` accepts it), so this only
     // rejects a name that no coding system defines.
-    super::coding::builtin_check_coding_system(&eval.coding_systems, vec![resolved])?;
+    super::coding::builtin_check_coding_system(
+        &eval.coding_systems,
+        vec![resolved],
+        eval.symbol_mode(),
+    )?;
 
     let decoding = ProcessOutputDecoding::for_coding(resolved);
     if destination_buffer_is_multibyte(eval, &destination.stdout) {

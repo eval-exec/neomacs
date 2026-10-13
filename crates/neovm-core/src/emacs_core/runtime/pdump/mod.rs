@@ -156,7 +156,8 @@ use crate::emacs_core::value;
 // the image carries their slot value and rebuilds the descriptor -- the same
 // contract v56 and v57 gave Boolean and integer slots, and the same two new
 // kinds for a BLV that `make_blv` copied one of them into.
-const FORMAT_VERSION: u32 = 59;
+// v60: full-width bytecode depth and explicit parameter-domain codecs.
+const FORMAT_VERSION: u32 = 60;
 
 const FINGERPRINT_PLACEHOLDER: [u8; 32] = *b"NEOMACS_PDUMP_FINGERPRINT_SLOT!!";
 
@@ -269,6 +270,12 @@ pub enum DumpError {
     InvalidFontWidth(#[from] num_enum::TryFromPrimitiveError<types::DumpFontWidth>),
     #[error("invalid font slant: {0}")]
     InvalidFontSlant(#[from] num_enum::TryFromPrimitiveError<types::DumpFontSlant>),
+    #[error("invalid bytecode stack depth: {0}")]
+    BytecodeStackDepth(#[source] crate::emacs_core::bytecode::StackDepthError),
+    #[error("invalid bytecode parameter kind: {0}")]
+    BytecodeParameterKind(#[source] num_enum::TryFromPrimitiveError<types::DumpFunctionParamsKind>),
+    #[error("bytecode parameter kind and original arglist disagree")]
+    BytecodeParameterShape,
 }
 
 fn empty_lisp_string() -> types::DumpLispString {
@@ -790,7 +797,11 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         features,
         require_stack,
         loads_in_progress,
-        load_buffer_manager(&mut decoder, &state.buffers),
+        crate::buffer::buffer::OwnedBufferStorageParts::try_from(load_buffer_manager(
+            &mut decoder,
+            &state.buffers,
+        ))
+        .map_err(|error| DumpError::DeserializationError(error.to_string()))?,
         load_autoload_manager(&mut decoder, &state.autoloads),
         load_custom_manager(&state.custom),
         load_mode_registry(&mut decoder, &state.modes),
@@ -823,7 +834,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         use crate::buffer::buffer::BUFFER_SLOT_INFO;
         use crate::emacs_core::forward::alloc_buffer_objfwd;
         use crate::emacs_core::intern::intern;
-        let obarray = eval.obarray_mut();
+        let mut obarray = eval.obarray_mut();
         for info in BUFFER_SLOT_INFO {
             if !info.install_as_forwarder {
                 continue;

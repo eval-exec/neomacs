@@ -77,7 +77,7 @@ impl FaceRemapping {
             let Some(face_name) = normalized_face_name_value(&cell_car) else {
                 continue;
             };
-            if face_name.is_symbol_named("nil") {
+            if face_name.is_bare_symbol_named("nil") {
                 continue;
             }
 
@@ -98,7 +98,7 @@ impl FaceRemapping {
             // Simple symbol remap: (FACE . other-face)
             ValueKind::Symbol(_) | ValueKind::T | ValueKind::String => {
                 if let Some(name) = normalized_face_name_value(spec)
-                    && !name.is_symbol_named("nil")
+                    && !name.is_bare_symbol_named("nil")
                 {
                     return vec![FaceRemapEntry::RemapFace(name)];
                 }
@@ -115,7 +115,7 @@ impl FaceRemapping {
                 }
 
                 // Check if it's a plist (starts with keyword)
-                if items[0].as_keyword_id().is_some() {
+                if items[0].as_bare_keyword_id().is_some() {
                     let face = Face::from_plist("--remap--", &items);
                     return vec![FaceRemapEntry::RemapAttrs(face)];
                 }
@@ -126,14 +126,14 @@ impl FaceRemapping {
                     match item.kind() {
                         ValueKind::Symbol(_) | ValueKind::T | ValueKind::String => {
                             if let Some(name) = normalized_face_name_value(item)
-                                && !name.is_symbol_named("nil")
+                                && !name.is_bare_symbol_named("nil")
                             {
                                 entries.push(FaceRemapEntry::RemapFace(name));
                             }
                         }
                         ValueKind::Cons => {
                             if let Some(sub_items) = list_to_vec(item)
-                                && sub_items.first().is_some_and(|v| v.is_keyword())
+                                && sub_items.first().is_some_and(|v| v.is_bare_keyword())
                             {
                                 let face = Face::from_plist("--remap--", &sub_items);
                                 entries.push(FaceRemapEntry::RemapAttrs(face));
@@ -218,7 +218,7 @@ impl FaceTable {
             for entry in entries.iter().rev() {
                 let contribution = match entry {
                     FaceRemapEntry::RemapFace(target) => {
-                        let Some(target_name) = target.as_symbol_name() else {
+                        let Some(target_name) = target.as_bare_symbol_name() else {
                             continue;
                         };
                         self.resolve_remapped(target_name, remapping, seen, depth + 1, base)

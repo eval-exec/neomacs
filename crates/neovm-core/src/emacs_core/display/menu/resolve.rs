@@ -14,6 +14,7 @@ pub(super) fn parse(
     is_tty: bool,
     roots: &MenuRoots,
 ) -> Result<Option<(PopupMenuEntry, Option<Value>)>, Flow> {
+    let symbol_mode = ctx.symbol_mode();
     if !def.is_cons() {
         return Ok(None);
     }
@@ -26,7 +27,7 @@ pub(super) fn parse(
     let mut filter = None;
     let car = def.cons_car();
     let tail = def.cons_cdr();
-    if KeymapMarker::MenuItem.is_value(car) && tail.is_cons() {
+    if KeymapMarker::MenuItem.is_value(car, symbol_mode) && tail.is_cons() {
         name = roots.keep(tail.cons_car());
         let tail = tail.cons_cdr();
         command = roots.keep(if tail.is_cons() {
@@ -50,7 +51,7 @@ pub(super) fn parse(
             }
             let value = roots.keep(props.cons_car());
             props = roots.keep(props.cons_cdr());
-            match MenuItemProperty::from_value(keyword) {
+            match MenuItemProperty::from_value(keyword, symbol_mode) {
                 Some(MenuItemProperty::Visible) if property(ctx, value)?.is_nil() => {
                     return Ok(None);
                 }
@@ -66,7 +67,7 @@ pub(super) fn parse(
                     };
                 }
                 Some(MenuItemProperty::KeySequence)
-                    if value.is_symbol() || value.is_string() || value.is_vector() =>
+                    if value.is_symbol(symbol_mode) || value.is_string() || value.is_vector() =>
                 {
                     keys.sequence = Some(value)
                 }
@@ -82,7 +83,7 @@ pub(super) fn parse(
                 }
                 Some(MenuItemProperty::Filter) => filter = Some(value),
                 Some(MenuItemProperty::Button) if value.is_cons() => {
-                    button = MenuButtonKind::from_value(value.cons_car())
+                    button = MenuButtonKind::from_value(value.cons_car(), symbol_mode)
                         .map(|kind| (kind, roots.keep(value.cons_cdr())));
                 }
                 _ => {}
@@ -110,7 +111,7 @@ pub(super) fn parse(
         if ctx
             .eval_symbol("enable-disabled-menus-and-buttons")?
             .is_nil()
-            && let Some(symbol) = command.as_symbol_name()
+            && let Some(symbol) = command.as_symbol_name(symbol_mode)
             && let Some(form) = ctx.obarray().get_property(symbol, "menu-enable")
             && !form.is_nil()
         {

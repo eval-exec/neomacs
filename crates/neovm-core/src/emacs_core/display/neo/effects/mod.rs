@@ -153,11 +153,12 @@ fn apply(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 }
 
 fn names(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
     expect_args_range("neomacs-effect-names", &args, 0, 1)?;
     let names = match args.first() {
         None => eval.visual_config.effect_names(),
         Some(value) if value.is_nil() => eval.visual_config.effect_names(),
-        Some(value) => match value.as_symbol_name() {
+        Some(value) => match value.as_symbol_name(symbol_mode) {
             Some("shader") => eval.visual_config.effects.effect_names(),
             Some("cursor") => eval
                 .visual_config

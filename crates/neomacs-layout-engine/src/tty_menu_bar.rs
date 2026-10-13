@@ -185,7 +185,7 @@ pub fn collect_tty_menu_bar_items_for_frame(
 /// append any new items into `items` (deduping by key).
 fn collect_from_keymap(eval: &Context, keymap: &Value, items: &mut Vec<TtyMenuBarItem>) {
     let menu_bar_sym = Value::symbol("menu-bar");
-    let raw_binding = list_keymap_lookup_one_unresolved(keymap, &menu_bar_sym);
+    let raw_binding = list_keymap_lookup_one_unresolved(keymap, &menu_bar_sym, eval.symbol_mode());
     if raw_binding.is_nil() {
         return;
     }
@@ -198,9 +198,9 @@ fn collect_from_keymap(eval: &Context, keymap: &Value, items: &mut Vec<TtyMenuBa
     let mut current = menu_bar_keymap;
     let mut seen_keys = HashSet::new();
     for _ in 0..64 {
-        collect_menu_bar_keymap_bindings(&current, items, &mut seen_keys);
-        let parent = list_keymap_parent(&current);
-        if !is_keymap(&parent) {
+        collect_menu_bar_keymap_bindings(&current, items, &mut seen_keys, eval.symbol_mode());
+        let parent = list_keymap_parent(&current, eval.symbol_mode());
+        if !is_keymap(&parent, eval.symbol_mode()) {
             break;
         }
         current = parent;
@@ -211,39 +211,45 @@ fn collect_menu_bar_keymap_bindings(
     menu_bar_keymap: &Value,
     items: &mut Vec<TtyMenuBarItem>,
     seen_keys: &mut HashSet<String>,
+    symbol_mode: neovm_core::tagged::SymbolMode,
 ) {
     // No obarray in the layout engine: a spine tail that merely NAMES a keymap
     // stays unresolved here (GNU would follow it). Menu-bar keymaps are built by
     // `define-key` and do not use that shape.
-    list_keymap_for_each_binding_recursive(menu_bar_keymap, None, |key, def| {
-        let key_str = key_symbol_name(&key);
-        if !seen_keys.insert(key_str.clone()) {
-            return;
-        }
+    list_keymap_for_each_binding_recursive(
+        menu_bar_keymap,
+        None,
+        |key, def| {
+            let key_str = key_symbol_name(&symbol_mode.unwrap(key));
+            if !seen_keys.insert(key_str.clone()) {
+                return;
+            }
 
-        match MenuBarBindingContribution::from_definition(&def) {
-            MenuBarBindingContribution::Suppress => {
-                // GNU `menu_bar_item` removes a contribution from an earlier
-                // active map when a later map explicitly binds the same key
-                // to `undefined` (keyboard.c).  Calendar relies on this to
-                // hide the global Edit menu.
-                items.retain(|item| item.key != key_str);
-            }
-            MenuBarBindingContribution::Item { label } => {
-                // Active maps are walked global-first, like GNU.  A later
-                // valid definition augments the existing menu's map list but
-                // retains the first user-visible label.
-                if !items.iter().any(|item| item.key == key_str) {
-                    items.push(TtyMenuBarItem {
-                        label,
-                        key: key_str,
-                        hpos: 0,
-                    });
+            match MenuBarBindingContribution::from_definition(&def, symbol_mode) {
+                MenuBarBindingContribution::Suppress => {
+                    // GNU `menu_bar_item` removes a contribution from an earlier
+                    // active map when a later map explicitly binds the same key
+                    // to `undefined` (keyboard.c).  Calendar relies on this to
+                    // hide the global Edit menu.
+                    items.retain(|item| item.key != key_str);
                 }
+                MenuBarBindingContribution::Item { label } => {
+                    // Active maps are walked global-first, like GNU.  A later
+                    // valid definition augments the existing menu's map list but
+                    // retains the first user-visible label.
+                    if !items.iter().any(|item| item.key == key_str) {
+                        items.push(TtyMenuBarItem {
+                            label,
+                            key: key_str,
+                            hpos: 0,
+                        });
+                    }
+                }
+                MenuBarBindingContribution::NoItem => {}
             }
-            MenuBarBindingContribution::NoItem => {}
-        }
-    });
+        },
+        symbol_mode,
+    );
 }
 
 /// The three semantically distinct outcomes of GNU's `menu_bar_item` parser.
@@ -260,10 +266,10 @@ enum MenuBarBindingContribution {
 }
 
 impl MenuBarBindingContribution {
-    fn from_definition(definition: &Value) -> Self {
-        if definition.as_symbol_name() == Some("undefined") {
+    fn from_definition(definition: &Value, symbol_mode: neovm_core::tagged::SymbolMode) -> Self {
+        if definition.as_symbol_name(symbol_mode) == Some("undefined") {
             Self::Suppress
-        } else if let Some(label) = extract_menu_label(definition) {
+        } else if let Some(label) = extract_menu_label(definition, symbol_mode) {
             Self::Item { label }
         } else {
             Self::NoItem
@@ -274,14 +280,14 @@ impl MenuBarBindingContribution {
 /// Resolve a keymap reference: either a `(keymap ...)` cons or a symbol
 /// whose value is such a cons.
 fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
-    if is_keymap(value) {
+    if is_keymap(value, eval.symbol_mode()) {
         return Some(*value);
     }
-    if let Some(name) = value.as_symbol_name()
-        && let Some(symbol_value) = eval.obarray().symbol_value(name)
-        && is_keymap(symbol_value)
+    if let Some(name) = value.as_symbol_name(eval.symbol_mode())
+        && let Some(symbol_value) = eval.obarray().symbol_value_copied(name)
+        && is_keymap(&symbol_value, eval.symbol_mode())
     {
-        return Some(*symbol_value);
+        return Some(symbol_value);
     }
     None
 }
@@ -291,8 +297,8 @@ fn resolve_keymap(eval: &Context, value: &Value) -> Option<Value> {
 /// the current end.  The declared list therefore defines the final items'
 /// order; this is not a stable partition of their source-keymap order.
 fn move_final_items_to_end(eval: &Context, items: &mut Vec<TtyMenuBarItem>) {
-    let final_items = match eval.obarray().symbol_value("menu-bar-final-items") {
-        Some(value) => *value,
+    let final_items = match eval.obarray().symbol_value_copied("menu-bar-final-items") {
+        Some(value) => value,
         None => return,
     };
     if final_items.is_nil() {
@@ -302,7 +308,7 @@ fn move_final_items_to_end(eval: &Context, items: &mut Vec<TtyMenuBarItem>) {
     let mut tail = final_items;
     while tail.is_cons() {
         let head = tail.cons_car();
-        if let Some(name) = head.as_symbol_name()
+        if let Some(name) = head.as_bare_symbol_name()
             && let Some(index) = items.iter().position(|item| item.key == name)
         {
             let item = items.remove(index);
@@ -322,7 +328,7 @@ fn move_final_items_to_end(eval: &Context, items: &mut Vec<TtyMenuBarItem>) {
 ///   which can be a string or a Lisp form that evaluates to a string. We
 ///   only honour string labels for the MVP; deferred Lisp evaluation of
 ///   dynamic labels is a TODO matching GNU's `Feval (label, ...)` path.
-fn extract_menu_label(def: &Value) -> Option<String> {
+fn extract_menu_label(def: &Value, symbol_mode: neovm_core::tagged::SymbolMode) -> Option<String> {
     if !def.is_cons() {
         return None;
     }
@@ -330,7 +336,7 @@ fn extract_menu_label(def: &Value) -> Option<String> {
     let cdr = def.cons_cdr();
 
     // (menu-item LABEL ...)
-    if KeymapMarker::MenuItem.is_value(car) && cdr.is_cons() {
+    if KeymapMarker::MenuItem.is_value(car, symbol_mode) && cdr.is_cons() {
         let label = cdr.cons_car();
         if let Some(s) = label.as_runtime_string_owned() {
             return Some(s);
@@ -347,16 +353,16 @@ fn extract_menu_label(def: &Value) -> Option<String> {
 }
 
 /// True if `value` looks like a keymap (`(keymap ...)`).
-fn is_keymap(value: &Value) -> bool {
+fn is_keymap(value: &Value, symbol_mode: neovm_core::tagged::SymbolMode) -> bool {
     if !value.is_cons() {
         return false;
     }
-    KeymapMarker::Keymap.is_value(value.cons_car())
+    KeymapMarker::Keymap.is_value(value.cons_car(), symbol_mode)
 }
 
 /// Render a menu-bar key value as a printable identifier.
 fn key_symbol_name(key: &Value) -> String {
-    if let Some(name) = key.as_symbol_name() {
+    if let Some(name) = key.as_bare_symbol_name() {
         return name.to_string();
     }
     format!("{:?}", key)

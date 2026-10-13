@@ -3,6 +3,63 @@ use super::*;
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt};
 use crate::heap_types::LispString;
 
+fn retained_name_survives_gc(factory: &str, getter: &str) {
+    let mut ctx = Context::new();
+    ctx.eval_str(&format!("(setq retained-name-object {factory})"))
+        .unwrap();
+    let name = ctx
+        .eval_str(&format!("({getter} retained-name-object)"))
+        .unwrap();
+    let mut plists = Vec::new();
+    name.as_lisp_string()
+        .unwrap()
+        .intervals()
+        .for_each_root(|plist| plists.push(plist));
+    assert!(!plists.is_empty());
+    for _ in 0..3 {
+        ctx.gc_collect_exact();
+        for &plist in &plists {
+            assert!(
+                ctx.tagged_heap.owns_heap_value_for_test(plist),
+                "{getter} retained a reclaimed name interval plist"
+            );
+        }
+    }
+    let face = ctx
+        .eval_str(&format!(
+            "(get-text-property 0 'face ({getter} retained-name-object))"
+        ))
+        .unwrap();
+    assert_eq!(
+        crate::emacs_core::print::print_value(&face),
+        "(retained-face)"
+    );
+}
+
+#[test]
+fn gc_preserves_thread_name_interval_plists() {
+    retained_name_survives_gc(
+        "(make-thread (lambda () nil) (propertize \"thread name\" 'face '(retained-face)))",
+        "thread-name",
+    );
+}
+
+#[test]
+fn gc_preserves_mutex_name_interval_plists() {
+    retained_name_survives_gc(
+        "(make-mutex (propertize \"mutex name\" 'face '(retained-face)))",
+        "mutex-name",
+    );
+}
+
+#[test]
+fn gc_preserves_condition_variable_name_interval_plists() {
+    retained_name_survives_gc(
+        "(make-condition-variable (make-mutex) (propertize \"condition name\" 'face '(retained-face)))",
+        "condition-name",
+    );
+}
+
 // -- ThreadManager unit tests -------------------------------------------
 
 #[test]
@@ -364,7 +421,7 @@ fn test_main_thread_variable_matches_current_thread() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
-    let main_thread = eval.obarray.symbol_value("main-thread").copied().unwrap();
+    let main_thread = eval.obarray.symbol_value_copied("main-thread").unwrap();
     assert!(eq_value(&current, &main_thread));
 }
 
@@ -1368,3 +1425,7 @@ fn threads_mutexes_and_condition_variables_are_opaque_objects_not_conses() {
         "(nil nil thread nil nil mutex nil nil condition-variable wrong-type-argument wrong-type-argument)"
     );
 }
+
+#[cfg(test)]
+#[path = "numeric_boundaries.rs"]
+mod numeric_boundaries;

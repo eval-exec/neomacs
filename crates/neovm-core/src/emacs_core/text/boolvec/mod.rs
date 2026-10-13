@@ -15,7 +15,9 @@ use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::tagged::header::BoolVectorObj;
-use std::mem::size_of;
+use std::alloc::Layout;
+use std::num::NonZeroUsize;
+use std::ptr::NonNull;
 
 // ---------------------------------------------------------------------------
 // Reading
@@ -171,6 +173,90 @@ pub(crate) fn make_bool_vector_filled(nbits: usize, init: bool) -> Value {
     make_bool_vector_from_words(nbits, vec![pattern; BoolVectorObj::words_for(nbits)])
 }
 
+/// Checked backing extent in u64 words. Nonempty layouts have exactly the
+/// size and alignment of `words` u64 elements; empty storage never reaches
+/// the allocator. This witness retains no Lisp or mutator state and can be
+/// shared between mutators without a thread-local allocator assumption.
+#[derive(Clone, Copy, Debug)]
+enum BoolVectorWordLayout {
+    Empty,
+    Nonempty { words: NonZeroUsize, layout: Layout },
+}
+
+static_assertions::assert_impl_all!(BoolVectorWordLayout: Send, Sync);
+
+impl TryFrom<usize> for BoolVectorWordLayout {
+    type Error = crate::emacs_core::alloc::AllocationFailure;
+
+    #[inline]
+    fn try_from(words: usize) -> Result<Self, Self::Error> {
+        let Some(words) = NonZeroUsize::new(words) else {
+            return Ok(Self::Empty);
+        };
+        let layout = Layout::array::<u64>(words.get())?;
+        Ok(Self::Nonempty { words, layout })
+    }
+}
+
+/// Allocate initialized zero words through the global allocator, preserving
+/// GNU's clear-backing path (alloc.c:2145-2169, 2183-2190). Layout and null
+/// failures remain typed until the caller selects its live memory condition.
+/// Immediate Vec ownership supplies ordinary RAII reclamation; u64 storage
+/// contains no Lisp references or mutator-confined state.
+#[inline]
+#[deny(clippy::wildcard_enum_match_arm)]
+fn allocate_zeroed_bool_vector_words(
+    extent: BoolVectorWordLayout,
+) -> Result<Vec<u64>, crate::emacs_core::alloc::AllocationFailure> {
+    match extent {
+        BoolVectorWordLayout::Empty => Ok(Vec::new()),
+        BoolVectorWordLayout::Nonempty { words, layout } => {
+            // SAFETY: the witness validated this nonzero u64 array's size and
+            // alignment. alloc_zeroed uses Rust's global allocator; null is
+            // handled before the allocation is adopted or dereferenced.
+            let pointer = unsafe { std::alloc::alloc_zeroed(layout) };
+            let pointer = NonNull::new(pointer)
+                .ok_or(crate::emacs_core::alloc::AllocationFailure::NullAllocation)?
+                .cast::<u64>();
+            // SAFETY: this unique global allocation has exactly Vec<u64>'s
+            // layout for capacity words. Every element is initialized, since
+            // all-zero bits are valid u64 values. Immediate adoption has no
+            // alias, intervening fallible step or mismatched deallocator.
+            Ok(unsafe { Vec::from_raw_parts(pointer.as_ptr(), words.get(), words.get()) })
+        }
+    }
+}
+
+/// Allocate empty u64 word backing for the truthy fill path (GNU
+/// alloc.c:2145-2169, 2183-2190). The checked extent is arithmetic-only and
+/// allocator-independent; the storage contains no Lisp or mutator state.
+/// Vec owns the Global allocation immediately, with zero initialized words;
+/// the existing resize supplies all-one words before bool-vector adoption.
+/// InvalidLayout and NullAllocation remain typed for live memory delivery.
+#[inline]
+#[deny(clippy::wildcard_enum_match_arm)]
+fn allocate_bool_vector_word_capacity(
+    extent: BoolVectorWordLayout,
+) -> Result<Vec<u64>, crate::emacs_core::alloc::AllocationFailure> {
+    match extent {
+        BoolVectorWordLayout::Empty => Ok(Vec::new()),
+        BoolVectorWordLayout::Nonempty { words, layout } => {
+            // SAFETY: the witness checked this nonzero Layout::array::<u64>,
+            // including alignment and isize size limits. alloc uses the
+            // Global allocator; null is handled before storage adoption.
+            let pointer = unsafe { std::alloc::alloc(layout) };
+            let pointer = NonNull::new(pointer)
+                .ok_or(crate::emacs_core::alloc::AllocationFailure::NullAllocation)?
+                .cast::<u64>();
+            // SAFETY: unique Global storage has exactly Vec<u64>'s layout for
+            // capacity words. Length zero exposes no uninitialized word.
+            // Immediate ownership has no alias or intervening fallible step;
+            // Vec growth and Drop retain the same allocator and exact layout.
+            Ok(unsafe { Vec::from_raw_parts(pointer.as_ptr(), 0, words.get()) })
+        }
+    }
+}
+
 /// A new bool-vector holding `bits`.
 pub(crate) fn bool_vector_from_bits(bits: &[bool]) -> Value {
     let mut words = vec![0u64; BoolVectorObj::words_for(bits.len())];
@@ -236,17 +322,6 @@ pub(crate) fn copy_bool_vector(value: &Value) -> Option<Value> {
     ))
 }
 
-/// GNU's `memory_full` signal (`alloc.c:4104`): `memory-signal-data`'s
-/// `(error "Memory exhausted--...")`.
-fn memory_exhausted() -> Flow {
-    signal(
-        LispCondition::Error,
-        vec![Value::string(
-            "Memory exhausted--use M-x save-some-buffers then exit and restart Emacs",
-        )],
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -294,15 +369,32 @@ fn optional_arg(args: &[Value], index: usize) -> Value {
 
 /// `(make-bool-vector LENGTH INIT)`.
 pub(crate) fn builtin_make_bool_vector(args: Vec<Value>) -> EvalResult {
+    make_bool_vector(args).map_err(crate::emacs_core::alloc::AllocationFailure::into_flow)
+}
+
+pub(crate) fn builtin_make_bool_vector_in_context(
+    context: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    make_bool_vector(args).map_err(|failure| failure.into_flow_in_context(context))
+}
+
+fn make_bool_vector(
+    args: Vec<Value>,
+) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
     expect_args("make-bool-vector", &args, 2)?;
     let length = check_fixnat(&args[0])? as usize;
-    // GNU allows any fixnum length and reports `memory_full` when the
-    // allocation fails; a request whose byte size cannot even be named
-    // fails here the same way instead of aborting the process.
-    if BoolVectorObj::words_for(length) > isize::MAX as usize / size_of::<u64>() {
-        return Err(memory_exhausted());
-    }
-    Ok(make_bool_vector_filled(length, args[1].is_truthy()))
+    // GNU alloc.c:2183-2190: failed backing storage is memory_full.
+    let nwords = BoolVectorObj::words_for(length);
+    let words = if args[1].is_truthy() {
+        let mut words =
+            allocate_bool_vector_word_capacity(BoolVectorWordLayout::try_from(nwords)?)?;
+        words.resize(nwords, u64::MAX);
+        words
+    } else {
+        allocate_zeroed_bool_vector_words(BoolVectorWordLayout::try_from(nwords)?)?
+    };
+    Ok(make_bool_vector_from_words(length, words))
 }
 
 /// `(bool-vector &rest OBJECTS)`.
@@ -526,3 +618,7 @@ pub(crate) fn builtin_bool_vector_count_consecutive(args: Vec<Value>) -> EvalRes
 #[cfg(test)]
 #[path = "tests/boolvec_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/zeroed_storage_test.rs"]
+mod zeroed_storage_tests;

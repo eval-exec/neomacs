@@ -10,6 +10,7 @@
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
 
 use super::boolvec::{self, BoolVectorView};
@@ -231,13 +232,13 @@ fn category_set_with_member(
     intern_category_set(table, updated)
 }
 
-fn is_category_table_value(value: &Value) -> Result<bool, Flow> {
+fn is_category_table_value_with_symbols(value: &Value, mode: SymbolMode) -> Result<bool, Flow> {
     let is_char_table = super::chartable::builtin_char_table_p(vec![*value])?;
     if !is_char_table.is_truthy() {
         return Ok(false);
     }
     let subtype = super::chartable::builtin_char_table_subtype(vec![*value])?;
-    Ok(subtype.is_symbol_named("category-table"))
+    Ok(subtype.is_symbol_named("category-table", mode))
 }
 
 fn make_category_table_object() -> EvalResult {
@@ -275,8 +276,8 @@ pub(crate) fn ensure_standard_category_table_object() -> EvalResult {
     })
 }
 
-fn deep_copy_category_table(source: &Value) -> EvalResult {
-    if !is_category_table_value(source)? {
+fn deep_copy_category_table_with_symbols(source: &Value, mode: SymbolMode) -> EvalResult {
+    if !is_category_table_value_with_symbols(source, mode)? {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("category-table-p"), *source],
@@ -287,6 +288,9 @@ fn deep_copy_category_table(source: &Value) -> EvalResult {
     // duplicates the char-table structure before copying the category
     // payloads. Building a fresh category table object here avoids
     // aliasing the original table's nested chartable vectors.
+    // Validation establishes category-table purpose, which cannot select
+    // char-code-property-table compression. Its payloads are bool-vectors;
+    // the remaining bare storage walks have identical EQ in both modes.
     let copy = make_category_table_object()?;
     let default = super::chartable::builtin_char_table_range(vec![*source, Value::NIL], None)?;
     if boolvec::is_bool_vector(&default) {
@@ -398,15 +402,16 @@ fn current_buffer_category_table_in_buffers(
     Ok(fallback)
 }
 
-fn check_category_table_in_buffers(
+fn check_category_table_in_buffers_with_symbols(
     buffers: &mut crate::buffer::BufferManager,
     table: Option<Value>,
+    mode: SymbolMode,
 ) -> Result<Value, Flow> {
     match table {
         None => current_buffer_category_table_in_buffers(buffers),
         Some(t) if t.is_nil() => current_buffer_category_table_in_buffers(buffers),
         Some(table) => {
-            if !is_category_table_value(&table)? {
+            if !is_category_table_value_with_symbols(&table, mode)? {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("category-table-p"), table],
@@ -421,7 +426,8 @@ fn check_category_table(
     eval: &mut super::eval::Context,
     table: Option<Value>,
 ) -> Result<Value, Flow> {
-    check_category_table_in_buffers(&mut eval.buffers, table)
+    let mode = eval.symbol_mode();
+    check_category_table_in_buffers_with_symbols(&mut eval.buffers, table, mode)
 }
 
 fn set_current_buffer_category_table_in_buffers(
@@ -455,15 +461,6 @@ fn category_set_contains(category_set: &Value, category: char) -> Result<bool, F
     Ok(index < view.len() && view.get(index))
 }
 
-pub(crate) fn char_has_category_in_table(
-    table: Value,
-    ch: char,
-    category: u8,
-) -> Result<bool, Flow> {
-    let category_set = super::chartable::ct_lookup(&table, ch as i64)?;
-    category_set_contains(&category_set, category as char)
-}
-
 pub(crate) fn active_category_table_for_buffer(
     buffer: Option<&crate::buffer::Buffer>,
 ) -> Result<Value, Flow> {
@@ -491,9 +488,19 @@ fn set_category_set_member(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn builtin_category_table_p(args: Vec<Value>) -> EvalResult {
+    builtin_category_table_p_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_category_table_p_with_symbols(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_args("category-table-p", &args, 1)?;
-    Ok(Value::bool_val(is_category_table_value(&args[0])?))
+    Ok(Value::bool_val(is_category_table_value_with_symbols(
+        &args[0], mode,
+    )?))
 }
 
 pub(crate) fn builtin_make_category_table(args: Vec<Value>) -> EvalResult {
@@ -501,14 +508,22 @@ pub(crate) fn builtin_make_category_table(args: Vec<Value>) -> EvalResult {
     make_category_table_object()
 }
 
+#[cfg(test)]
 pub(crate) fn builtin_copy_category_table(args: Vec<Value>) -> EvalResult {
+    builtin_copy_category_table_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_copy_category_table_with_symbols(
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
     expect_max_args("copy-category-table", &args, 1)?;
 
     let source = match args.first() {
         None => ensure_standard_category_table_object()?,
         Some(t) if t.is_nil() => ensure_standard_category_table_object()?,
         Some(table) => {
-            if !is_category_table_value(table)? {
+            if !is_category_table_value_with_symbols(table, mode)? {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("category-table-p"), *table],
@@ -518,7 +533,7 @@ pub(crate) fn builtin_copy_category_table(args: Vec<Value>) -> EvalResult {
         }
     };
 
-    deep_copy_category_table(&source)
+    deep_copy_category_table_with_symbols(&source, mode)
 }
 
 pub(crate) fn builtin_make_category_set(args: Vec<Value>) -> EvalResult {
@@ -715,7 +730,11 @@ pub(crate) fn builtin_char_category_set(
     expect_args("char-category-set", &args, 1)?;
     let _ = extract_char_code(&args[0], "char-category-set")?;
     let table = current_buffer_category_table_in_buffers(&mut eval.buffers)?;
-    super::chartable::builtin_char_table_range(vec![table, args[0]], None)
+    super::chartable::builtin_char_table_range_with_symbols(
+        vec![table, args[0]],
+        None,
+        eval.symbol_mode(),
+    )
 }
 
 pub(crate) fn builtin_category_table(
@@ -745,16 +764,19 @@ pub(crate) fn builtin_set_category_table(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_set_category_table_in_buffers(&mut eval.buffers, args)
+    let mode = eval.symbol_mode();
+    builtin_set_category_table_in_buffers_with_symbols(&mut eval.buffers, args, mode)
 }
 
-pub(crate) fn builtin_set_category_table_in_buffers(
+pub(crate) fn builtin_set_category_table_in_buffers_with_symbols(
     buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
+    mode: SymbolMode,
 ) -> EvalResult {
     expect_args("set-category-table", &args, 1)?;
 
-    let installed = check_category_table_in_buffers(buffers, args.first().copied())?;
+    let installed =
+        check_category_table_in_buffers_with_symbols(buffers, args.first().copied(), mode)?;
     set_current_buffer_category_table_in_buffers(buffers, installed)?;
     Ok(installed)
 }
@@ -766,3 +788,27 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+pub(crate) fn builtin_category_table_p_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_category_table_p_with_symbols(args, eval.symbol_mode())
+}
+
+pub(crate) fn builtin_copy_category_table_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_copy_category_table_with_symbols(args, eval.symbol_mode())
+}
+
+pub(crate) fn char_has_category_in_table_with_symbols(
+    table: Value,
+    c: char,
+    category: u8,
+    mode: SymbolMode,
+) -> Result<bool, Flow> {
+    let category_set = super::chartable::ct_lookup_with_symbols(&table, c as i64, mode)?;
+    category_set_contains(&category_set, category as char)
+}

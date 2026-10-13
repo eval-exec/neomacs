@@ -60,7 +60,7 @@ fn transitive_bare_symbol_cycle(claims: bool, generational: bool, ancestor: Symb
     set_tagged_heap(&mut heap);
 
     let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-transitive-worker-weak-key"));
-    let id = symbol.as_symbol_id().unwrap();
+    let id = symbol.as_bare_symbol_id().unwrap();
     let child = match ancestor {
         SymbolAncestor::Cons => heap.alloc_cons(symbol, TaggedValue::NIL),
         SymbolAncestor::Bytecode => {
@@ -388,7 +388,10 @@ fn tier_h_actual_worker_stop_mid_scan_hands_off_every_child_before_termination()
         // normal join. Reseeding the already-marked owner cannot repair an
         // incomplete hash scan, so survival proves its complete child handoff.
         finish_cycle(&mut heap, &[owner, weak]);
-        assert!(heap.marked_symbols.contains(symbol.as_symbol_id().unwrap()));
+        assert!(
+            heap.marked_symbols
+                .contains(symbol.as_bare_symbol_id().unwrap())
+        );
         assert_eq!(weak.as_hash_table().unwrap().data.len(), 1);
         for &record in &records {
             assert!(heap.owns_heap_value_for_test(record));

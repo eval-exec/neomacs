@@ -5,6 +5,30 @@ use super::*;
 mod input_wait;
 
 #[cfg(test)]
+#[path = "gd_b_native.rs"]
+mod gd_b_native;
+
+#[cfg(test)]
+#[path = "gd_b_backtrace.rs"]
+mod gd_b_backtrace;
+
+#[cfg(test)]
+#[path = "gd_b_condition_var.rs"]
+mod gd_b_condition_var;
+
+#[cfg(test)]
+#[path = "gd_b_safe_call.rs"]
+mod gd_b_safe_call;
+
+#[cfg(test)]
+#[path = "gd_b_signal_room.rs"]
+mod gd_b_signal_room;
+
+#[cfg(test)]
+#[path = "gd_b_signals.rs"]
+mod gd_b_signals;
+
+#[cfg(test)]
 #[path = "gc_generational_test.rs"]
 mod gc_generational;
 
@@ -81,9 +105,9 @@ fn c_level_defsym_hook_names_are_in_global_obarray() {
         "mouse-leave-buffer-hook should be globally interned like GNU DEFVAR_LISP"
     );
     assert_eq!(
-        *ev.obarray()
-            .symbol_value("mouse-leave-buffer-hook")
-            .unwrap_or(&Value::UNBOUND),
+        ev.obarray()
+            .symbol_value_copied("mouse-leave-buffer-hook")
+            .unwrap_or(Value::UNBOUND),
         Value::NIL
     );
 }
@@ -423,7 +447,12 @@ fn symbol_with_pos_property_keys_follow_gnu_eq_rules() {
 fn skip_debugger_matches_raw_unibyte_ignored_error_regex() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    crate::emacs_core::errors::init_standard_errors(&mut ev.obarray);
+    // SAFETY: the native standard-error fixture writes only properties,
+    // with no Lisp/collection, canonical dispatch changes or escaping loan.
+    unsafe {
+        ev.obarray
+            .with_legacy_value_write(crate::emacs_core::errors::init_standard_errors);
+    }
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
     ev.obarray
         .set_symbol_value("debug-ignored-errors", Value::list(vec![raw]));
@@ -449,7 +478,12 @@ fn skip_debugger_matches_raw_unibyte_ignored_error_regex() {
 fn command_error_severity_follows_gnus_debug_ignored_errors() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    crate::emacs_core::errors::init_standard_errors(&mut ev.obarray);
+    // SAFETY: the native standard-error fixture writes only properties,
+    // with no Lisp/collection, canonical dispatch changes or escaping loan.
+    unsafe {
+        ev.obarray
+            .with_legacy_value_write(crate::emacs_core::errors::init_standard_errors);
+    }
     let signal_of =
         |name: &str, data: Vec<Value>| match crate::emacs_core::error::signal(name, data)
             .into_kind()
@@ -531,7 +565,12 @@ fn command_error_severity_follows_gnus_debug_ignored_errors() {
 fn command_error_severity_never_signals_on_a_bad_ignore_list() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    crate::emacs_core::errors::init_standard_errors(&mut ev.obarray);
+    // SAFETY: the native standard-error fixture writes only properties,
+    // with no Lisp/collection, canonical dispatch changes or escaping loan.
+    unsafe {
+        ev.obarray
+            .with_legacy_value_write(crate::emacs_core::errors::init_standard_errors);
+    }
     ev.eval_str(r#"(setq debug-ignored-errors '("[" end-of-buffer))"#)
         .expect("install a broken regexp entry");
     let sig = match crate::emacs_core::error::signal("end-of-buffer", vec![]).into_kind() {
@@ -985,8 +1024,9 @@ fn recursive_edit_without_input_receiver_still_runs_noninteractive_top_level() {
         })
     );
     assert_eq!(
-        ev.obarray().symbol_value("neomacs--batch-no-input-probe"),
-        Some(&Value::fixnum(42))
+        ev.obarray()
+            .symbol_value_copied("neomacs--batch-no-input-probe"),
+        Some(Value::fixnum(42))
     );
 }
 
@@ -1069,7 +1109,10 @@ fn clear_top_level_eval_state_discards_stale_named_call_cache_entries() {
     match ev.resolve_named_call_target_by_id(sym) {
         NamedCallTarget::Obarray(function) => {
             assert!(
-                crate::emacs_core::autoload::is_autoload_value(&function),
+                crate::emacs_core::autoload::is_autoload_value(
+                    &function,
+                    crate::tagged::value::SymbolMode::Bare
+                ),
                 "expected autoload function cell, got {function}"
             );
         }
@@ -1122,8 +1165,7 @@ fn runtime_macro_expansion_repeats_across_equivalent_explicit_environments() {
     assert_eq!(ev.macro_expand_calls - calls0, 2);
     assert_eq!(
         ev.obarray()
-            .symbol_value("runtime-cache-count")
-            .copied()
+            .symbol_value_copied("runtime-cache-count")
             .unwrap_or(Value::NIL),
         Value::fixnum(2)
     );
@@ -1168,8 +1210,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_strings_in_environment() {
     assert_eq!(ev.macro_expand_calls - calls0, 2);
     assert_eq!(
         ev.obarray()
-            .symbol_value("runtime-cache-count")
-            .copied()
+            .symbol_value_copied("runtime-cache-count")
             .unwrap_or(Value::NIL),
         Value::fixnum(2)
     );
@@ -1213,8 +1254,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_string_arguments() {
     assert_eq!(ev.macro_expand_calls - calls0, 2);
     assert_eq!(
         ev.obarray()
-            .symbol_value("runtime-cache-bytes-count")
-            .copied()
+            .symbol_value_copied("runtime-cache-bytes-count")
             .unwrap_or(Value::NIL),
         Value::fixnum(2)
     );
@@ -1592,6 +1632,7 @@ fn read_char_applies_keyboard_coding_system_to_raw_tty_bytes() {
     crate::emacs_core::coding::builtin_set_keyboard_coding_system(
         &mut ev.coding_systems,
         vec![Value::symbol("iso-latin-9")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("set keyboard coding system");
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -1610,6 +1651,7 @@ fn read_char_preserves_emacs_internal_raw_byte_characters() {
     crate::emacs_core::coding::builtin_set_keyboard_coding_system(
         &mut ev.coding_systems,
         vec![Value::symbol("emacs-internal")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("set keyboard coding system");
     let raw = crate::emacs_core::emacs_char::EmacsChar::from_byte8(0xa4);
@@ -1642,6 +1684,7 @@ fn read_char_streams_multibyte_keyboard_coding_across_host_reads() {
     crate::emacs_core::coding::builtin_set_keyboard_coding_system(
         &mut ev.coding_systems,
         vec![Value::symbol("chinese-big5")],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("set keyboard coding system");
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -1665,6 +1708,7 @@ fn read_key_sequence_translates_raw_tty_csi_through_input_decode_map() {
         global_map,
         &[Value::symbol("up")],
         Value::symbol("neomacs-test-up-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define up command");
     let input_decode_map = ev
@@ -1678,6 +1722,7 @@ fn read_key_sequence_translates_raw_tty_csi_through_input_decode_map() {
             Value::fixnum('A' as i64),
         ],
         Value::vector(vec![Value::symbol("up")]),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define CSI translation");
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -2093,12 +2138,14 @@ fn redisplay_runs_resize_mini_frame_for_minibuffer_only_frame() {
     ev.redisplay_with_force(true).expect("redisplay");
 
     assert_eq!(
-        ev.obarray().symbol_value("neo-resize-mini-frame-calls"),
-        Some(&Value::fixnum(1))
+        ev.obarray()
+            .symbol_value_copied("neo-resize-mini-frame-calls"),
+        Some(Value::fixnum(1))
     );
     assert_eq!(
-        ev.obarray().symbol_value("neo-resize-mini-frame-arg"),
-        Some(&Value::make_frame(frame_id.0))
+        ev.obarray()
+            .symbol_value_copied("neo-resize-mini-frame-arg"),
+        Some(Value::make_frame(frame_id.0))
     );
 }
 
@@ -2507,6 +2554,7 @@ fn nested_recursive_edit_propagates_top_level_and_runs_unwind_cleanup() {
         global_map,
         &[Value::fixnum('q' as i64)],
         Value::symbol("neo-throw-top-level"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define top-level test command");
     ev.command_loop
@@ -2586,6 +2634,7 @@ fn command_loop_runs_initial_post_command_hook_before_first_command() {
         global_map,
         &[Value::fixnum('q' as i64)],
         Value::symbol("neo-exit-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define exit command");
     ev.command_loop
@@ -3244,12 +3293,14 @@ fn read_key_sequence_prefers_bound_gui_return_before_ascii_fallback() {
         global_map,
         &[Value::symbol("return")],
         Value::symbol("gui-return-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define symbolic Return binding");
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
         &[Value::fixnum('\r' as i64)],
         Value::symbol("ascii-ret-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define ASCII RET binding");
     let local_function_key_map = ev
@@ -3259,6 +3310,7 @@ fn read_key_sequence_prefers_bound_gui_return_before_ascii_fallback() {
         local_function_key_map,
         &[Value::symbol("return")],
         Value::vector(vec![Value::fixnum('\r' as i64)]),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define GNU Return fallback");
 
@@ -3285,12 +3337,14 @@ fn read_key_sequence_prefers_bound_gui_tab_before_ascii_fallback() {
         global_map,
         &[Value::symbol("tab")],
         Value::symbol("gui-tab-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define symbolic Tab binding");
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
         &[Value::fixnum('\t' as i64)],
         Value::symbol("ascii-tab-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define ASCII TAB binding");
     let local_function_key_map = ev
@@ -3300,6 +3354,7 @@ fn read_key_sequence_prefers_bound_gui_tab_before_ascii_fallback() {
         local_function_key_map,
         &[Value::symbol("tab")],
         Value::vector(vec![Value::fixnum('\t' as i64)]),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define GNU Tab fallback");
 
@@ -3326,6 +3381,7 @@ fn read_key_sequence_falls_back_from_unbound_gui_return_to_ascii_ret() {
         global_map,
         &[Value::fixnum('\r' as i64)],
         Value::symbol("ascii-ret-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define ASCII RET binding");
     let local_function_key_map = ev
@@ -3335,6 +3391,7 @@ fn read_key_sequence_falls_back_from_unbound_gui_return_to_ascii_ret() {
         local_function_key_map,
         &[Value::symbol("return")],
         Value::vector(vec![Value::fixnum('\r' as i64)]),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define GNU Return fallback");
 
@@ -3361,6 +3418,7 @@ fn read_key_sequence_falls_back_from_unbound_gui_tab_to_ascii_tab() {
         global_map,
         &[Value::fixnum('\t' as i64)],
         Value::symbol("ascii-tab-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define ASCII TAB binding");
     let local_function_key_map = ev
@@ -3370,6 +3428,7 @@ fn read_key_sequence_falls_back_from_unbound_gui_tab_to_ascii_tab() {
         local_function_key_map,
         &[Value::symbol("tab")],
         Value::vector(vec![Value::fixnum('\t' as i64)]),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define GNU Tab fallback");
 
@@ -3396,12 +3455,14 @@ fn read_key_sequence_prefers_bound_gui_escape_before_ascii_fallback() {
         global_map,
         &[Value::symbol("escape")],
         Value::symbol("gui-escape-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define symbolic Escape binding");
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
         &[Value::fixnum(27)],
         Value::symbol("ascii-esc-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define ASCII ESC binding");
     let local_function_key_map = ev
@@ -3411,6 +3472,7 @@ fn read_key_sequence_prefers_bound_gui_escape_before_ascii_fallback() {
         local_function_key_map,
         &[Value::symbol("escape")],
         Value::vector(vec![Value::fixnum(27)]),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define GNU Escape fallback");
 
@@ -3437,6 +3499,7 @@ fn read_key_sequence_falls_back_from_unbound_gui_escape_to_ascii_esc() {
         global_map,
         &[Value::fixnum(27)],
         Value::symbol("ascii-esc-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define ASCII ESC binding");
     let local_function_key_map = ev
@@ -3446,6 +3509,7 @@ fn read_key_sequence_falls_back_from_unbound_gui_escape_to_ascii_esc() {
         local_function_key_map,
         &[Value::symbol("escape")],
         Value::vector(vec![Value::fixnum(27)]),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define GNU Escape fallback");
 
@@ -3483,6 +3547,7 @@ fn read_key_sequence_function_translation_receives_prompt() {
         global_map,
         &[Value::symbol("f1")],
         Value::symbol("neomacs-test-read-key-sequence-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define translated command");
 
@@ -3493,6 +3558,7 @@ fn read_key_sequence_function_translation_receives_prompt() {
         key_translation_map,
         &[Value::fixnum('a' as i64)],
         Value::symbol("neomacs-test-key-translation"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define translation");
 
@@ -3541,6 +3607,7 @@ fn read_key_sequence_stops_at_an_exhausted_kbd_macro_boundary() {
         global_map,
         &[Value::fixnum('x' as i64)],
         prefix_map,
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define prefix key");
     // The probes' contract: the Lisp-visible macro value forces the exit.
@@ -3609,6 +3676,7 @@ fn read_key_sequence_prompt_preserves_text_properties_in_echo_area() {
         global_map,
         &[Value::fixnum('a' as i64)],
         Value::symbol("neomacs-test-prompt-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define prompt test command");
 
@@ -3658,6 +3726,7 @@ fn read_key_sequence_continues_through_pending_suffix_translation_prefix() {
         global_map,
         &[Value::fixnum('a' as i64), Value::symbol("f1")],
         Value::symbol("neomacs-test-suffix-translation-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define suffix command");
 
@@ -3668,6 +3737,7 @@ fn read_key_sequence_continues_through_pending_suffix_translation_prefix() {
         input_decode_map,
         &[Value::fixnum('b' as i64), Value::fixnum('c' as i64)],
         Value::vector(vec![Value::symbol("f1")]),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define input-decode suffix translation");
 
@@ -3717,6 +3787,7 @@ fn fast_read_key_sequence_does_not_publish_or_log_a_prefix_echo() {
         global_map,
         &events,
         Value::symbol("neomacs-test-prefix-target-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define prefix command");
     for event in events {
@@ -3762,6 +3833,7 @@ fn prefix_without_a_blocking_input_source_is_not_eagerly_echoed() {
         global_map,
         &[Value::fixnum(' ' as i64), Value::fixnum('f' as i64)],
         Value::symbol("neomacs-test-prefix-target-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define prefix command");
     ev.command_loop
@@ -3793,6 +3865,7 @@ fn help_prefix_without_a_blocking_input_source_is_not_eagerly_echoed() {
         global_map,
         &[Value::fixnum(8), Value::fixnum('?' as i64)],
         Value::symbol("neomacs-test-help-target-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define help prefix command");
     ev.command_loop
@@ -3822,6 +3895,7 @@ fn read_key_sequence_shift_translates_uppercase_binding() {
         global_map,
         &[Value::fixnum('a' as i64)],
         Value::symbol("neomacs-test-shift-translation-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define lowercase command");
 
@@ -3861,6 +3935,7 @@ fn read_key_sequence_dont_downcase_last_restores_original_event() {
         global_map,
         &[Value::fixnum('a' as i64)],
         Value::symbol("neomacs-test-shift-translation-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define lowercase command");
 
@@ -3933,6 +4008,7 @@ fn read_key_sequence_shift_translates_shifted_function_key() {
         global_map,
         &[Value::symbol("f1")],
         Value::symbol("neomacs-test-shifted-function-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define function-key command");
 
@@ -4071,6 +4147,7 @@ fn read_key_sequence_defers_switch_frame_until_after_current_key_sequence() {
         global_map,
         &[Value::fixnum('a' as i64), Value::fixnum('b' as i64)],
         Value::symbol("neomacs-test-switch-frame-deferred-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define command");
 
@@ -4125,6 +4202,7 @@ fn read_key_sequence_can_return_switch_frame_at_sequence_start() {
         global_map,
         &[Value::symbol("switch-frame")],
         Value::symbol("handle-switch-frame"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define switch-frame binding");
 
@@ -4168,24 +4246,28 @@ fn special_event_map_bootstraps_delete_frame_and_focus_handlers() {
         &[special_event_map],
         &[Value::symbol("delete-frame")],
         true,
+        crate::tagged::SymbolMode::Bare,
     );
     let focus_in = crate::emacs_core::keymap::lookup_key_in_keymaps_in_obarray(
         ev.obarray(),
         &[special_event_map],
         &[Value::symbol("focus-in")],
         true,
+        crate::tagged::SymbolMode::Bare,
     );
     let focus_out = crate::emacs_core::keymap::lookup_key_in_keymaps_in_obarray(
         ev.obarray(),
         &[special_event_map],
         &[Value::symbol("focus-out")],
         true,
+        crate::tagged::SymbolMode::Bare,
     );
     let file_notify = crate::emacs_core::keymap::lookup_key_in_keymaps_in_obarray(
         ev.obarray(),
         &[special_event_map],
         &[Value::symbol("file-notify")],
         true,
+        crate::tagged::SymbolMode::Bare,
     );
 
     assert_eq!(delete_frame, Value::symbol("handle-delete-frame"));
@@ -4317,6 +4399,7 @@ fn read_key_sequence_defers_select_window_until_after_current_key_sequence() {
         global_map,
         &[Value::fixnum('a' as i64), Value::fixnum('b' as i64)],
         Value::symbol("neomacs-test-select-window-deferred-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define command");
 
@@ -4385,6 +4468,7 @@ fn read_key_sequence_can_return_select_window_at_sequence_start() {
         global_map,
         &[Value::symbol("select-window")],
         Value::symbol("neomacs-test-handle-select-window"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define select-window binding");
 
@@ -4561,6 +4645,7 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
         local_map,
         &[Value::symbol("mouse-1")],
         Value::symbol("neomacs-mouse-click-target-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define mouse binding");
 
@@ -4674,6 +4759,7 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
         local_map,
         &[Value::symbol("mouse-1")],
         Value::symbol("neomacs-mouse-click-target-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define mouse binding");
 
@@ -4786,6 +4872,7 @@ fn read_key_sequence_drops_unbound_menu_bar_down_mouse_before_bound_click() {
         global_map,
         &[Value::symbol("menu-bar"), Value::symbol("mouse-1")],
         Value::symbol("neomacs-menu-bar-click-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define menu-bar mouse binding");
 
@@ -4853,11 +4940,13 @@ fn read_key_sequence_dispatches_gui_tool_bar_click_by_item_key() {
             Value::symbol(":image"),
             Value::string("open.svg"),
         ]),
+        crate::tagged::SymbolMode::Bare,
     );
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
         &[Value::symbol("tool-bar"), Value::symbol("open-file")],
         Value::symbol("neomacs-tool-bar-click-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define tool-bar binding");
 
@@ -4916,6 +5005,7 @@ fn read_key_sequence_dispatches_gui_tool_bar_click_from_owning_frame() {
             Value::symbol(":image"),
             Value::string("primary.svg"),
         ]),
+        crate::tagged::SymbolMode::Bare,
     );
     crate::emacs_core::keymap::list_keymap_define(
         secondary_tool_bar_map,
@@ -4927,11 +5017,13 @@ fn read_key_sequence_dispatches_gui_tool_bar_click_from_owning_frame() {
             Value::symbol(":image"),
             Value::string("secondary.svg"),
         ]),
+        crate::tagged::SymbolMode::Bare,
     );
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
         &[Value::symbol("tool-bar"), Value::symbol("secondary-action")],
         Value::symbol("neomacs-secondary-tool-bar-click-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define secondary tool-bar binding");
 
@@ -4999,6 +5091,7 @@ fn read_key_sequence_gui_tool_bar_frame_fallback_ignores_current_buffer_local_ma
             Value::symbol(":image"),
             Value::string("primary-local.svg"),
         ]),
+        crate::tagged::SymbolMode::Bare,
     );
     crate::emacs_core::keymap::list_keymap_define(
         default_tool_bar_map,
@@ -5010,11 +5103,13 @@ fn read_key_sequence_gui_tool_bar_frame_fallback_ignores_current_buffer_local_ma
             Value::symbol(":image"),
             Value::string("default.svg"),
         ]),
+        crate::tagged::SymbolMode::Bare,
     );
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
         &[Value::symbol("tool-bar"), Value::symbol("default-action")],
         Value::symbol("neomacs-default-tool-bar-click-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define default tool-bar binding");
 
@@ -5060,6 +5155,7 @@ fn read_key_sequence_dispatches_gui_menu_bar_click_with_frame_id() {
         global_map,
         &[Value::symbol("menu-bar"), Value::symbol("mouse-1")],
         Value::symbol("neomacs-menu-bar-click-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define menu-bar binding");
 
@@ -5139,12 +5235,14 @@ fn read_key_sequence_drops_unbound_down_mouse_without_losing_keyboard_prefix() {
         global_map,
         &[Value::fixnum('a' as i64)],
         prefix_map,
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define prefix");
     crate::emacs_core::keymap::list_keymap_define_seq(
         prefix_map,
         &[Value::symbol("mouse-1")],
         Value::symbol("neomacs-prefixed-mouse-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define mouse binding");
 
@@ -5192,6 +5290,7 @@ fn read_key_sequence_reduces_unbound_triple_mouse_to_bound_click() {
         global_map,
         &[Value::symbol("mouse-1")],
         Value::symbol("neomacs-triple-mouse-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define mouse binding");
 
@@ -5251,6 +5350,7 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
         minor_map,
         &[Value::symbol("mouse-1")],
         Value::symbol("neomacs-mouse-minor-mode-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define minor mode binding");
     ev.assign(
@@ -5368,6 +5468,7 @@ fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
         local_map,
         &[Value::symbol("mode-line"), Value::symbol("mouse-1")],
         Value::symbol("neomacs-mode-line-click-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define mode-line mouse binding");
 
@@ -7314,7 +7415,7 @@ fn bootstrap_does_not_prebind_lisp_derived_mode_tables() {
         "minibuffer-mode-abbrev-table",
     ] {
         assert_eq!(
-            ev.obarray.symbol_value(name),
+            ev.obarray.symbol_value_copied(name),
             None,
             "{name} must remain void until Lisp define-derived-mode creates it"
         );
@@ -11414,7 +11515,7 @@ fn run_window_scroll_functions_uses_scrolled_window_buffer_context() {
                   (buf2 (get-buffer-create \"scroll-b\")))
              (set-buffer buf1)
              (set-window-buffer (selected-window) buf1)
-             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+             (let ((w2 ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (set-window-buffer w2 buf2)
                (set-buffer buf2)
                (setq window-scroll-functions
@@ -11437,7 +11538,7 @@ fn run_window_scroll_functions_reads_displayed_buffer_local_hook() {
                   (buf2 (get-buffer-create \"scroll-local-b\")))
              (set-buffer buf1)
                (set-window-buffer (selected-window) buf1)
-               (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+               (let ((w2 ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                  (set-window-buffer w2 buf2)
                (let ((orig (current-buffer)))
                  (set-buffer buf2)
@@ -11604,7 +11705,7 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
     )
     .expect("selected window buffer");
     let split_window = ev
-        .eval_str("(split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)")
+        .eval_str("((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)")
         .expect("split window");
     crate::emacs_core::window_cmds::builtin_set_window_buffer(
         &mut ev,
@@ -11663,7 +11764,7 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
     let items = list_to_vec(&hook_log).expect("hook log list");
     let names: Vec<String> = items
         .iter()
-        .map(|value| value.as_symbol_name().expect("symbol").to_string())
+        .map(|value| value.as_bare_symbol_name().expect("symbol").to_string())
         .collect();
     assert!(names.iter().any(|name| name == "wcch-a"), "names={names:?}");
     assert!(names.iter().any(|name| name == "wcch-b"), "names={names:?}");
@@ -11719,7 +11820,7 @@ fn redisplay_runs_window_change_functions_with_selected_frame_context() {
            (let* ((buf1 (get-buffer-create \"wcf-a\"))
                   (buf2 (get-buffer-create \"wcf-b\")))
              (set-window-buffer (selected-window) buf1)
-             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+             (let ((w2 ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (set-window-buffer w2 buf2)
                (setq window-size-change-functions
                      (list (lambda (frame)
@@ -13299,7 +13400,7 @@ fn save_window_excursion_restores_window_layout_after_split() {
             (let ((wconfig (current-window-configuration)))
               (unwind-protect
                   (progn
-                    (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
+                    ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
                     (length (window-list)))
                 (set-window-configuration wconfig)))
             (length (window-list))
@@ -13359,7 +13460,7 @@ fn set_window_configuration_reconciles_restored_batch_frame_geometry() {
                               (pw61-pixel-edges (frame-root-window)))))
                    (let ((configuration (current-window-configuration)))
                      (unwind-protect
-                         (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
+                         ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
                        (set-window-configuration configuration)))
                    (list before
                          (window-total-height (frame-root-window))
@@ -13649,7 +13750,7 @@ fn set_window_configuration_commits_point_from_a_disconnected_nonselected_window
                          (set-buffer original-buffer)
                          (let ((configuration (current-window-configuration))
                                (extra-window
-                                (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+                                ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                            (set-window-buffer extra-window extra-buffer)
                            (set-window-point extra-window 7)
                            (set-buffer extra-buffer)
@@ -13708,7 +13809,7 @@ fn current_window_configuration_owns_independent_window_point_markers() {
                          (insert "abcdefghij")
                          (set-buffer original-buffer)
                          (let ((window
-                                (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+                                ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                            (set-window-buffer window buffer)
                            (set-window-point window 3)
                            (let ((configuration
@@ -15478,7 +15579,7 @@ fn jit_tierup_executes_through_funcall_seam() {
         });
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.jit_runtime().set_hot_for_test();
         Value::make_bytecode(f)
     };
@@ -15522,7 +15623,7 @@ fn jit_tierup_executes_through_funcall_seam() {
     });
     addf.lexical = true;
     addf.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    addf.max_stack = 16;
+    addf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     addf.jit_runtime().set_hot_for_test();
     let addv = Value::make_bytecode(addf);
     assert_eq!(
@@ -15562,7 +15663,7 @@ fn jit_cons_through_funcall_seam() {
     });
     f.lexical = true;
     f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return];
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.jit_runtime().set_hot_for_test();
     let fv = Value::make_bytecode(f);
 
@@ -15597,7 +15698,7 @@ fn jit_call_through_funcall_seam() {
     dbl.lexical = true;
     dbl.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Mul, Op::Return];
     dbl.constants = vec![Value::make_int(2)].into();
-    dbl.max_stack = 16;
+    dbl.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let dbl_sym = Value::symbol("jit-e2e-double");
     let ValueKind::Symbol(dbl_id) = dbl_sym.kind() else {
         panic!("symbol expected");
@@ -15622,7 +15723,7 @@ fn jit_call_through_funcall_seam() {
             Op::Return,
         ];
         f.constants = vec![Value::symbol("jit-e2e-double")].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -15671,7 +15772,7 @@ fn jit_call_through_funcall_seam() {
     callee.lexical = true;
     callee.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Mul, Op::Return];
     callee.constants = vec![Value::make_int(3)].into();
-    callee.max_stack = 16;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     callee.jit_runtime().set_hot_for_test();
     let callee_sym = Value::symbol("jit-e2e-triple-hot");
     let ValueKind::Symbol(callee_id) = callee_sym.kind() else {
@@ -15693,7 +15794,7 @@ fn jit_call_through_funcall_seam() {
         Op::Return,
     ];
     nested.constants = vec![callee_sym].into();
-    nested.max_stack = 16;
+    nested.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     nested.jit_runtime().set_hot_for_test();
     let nested_v = Value::make_bytecode(nested);
     assert_eq!(
@@ -15712,7 +15813,7 @@ fn jit_call_through_funcall_seam() {
     sig.lexical = true;
     sig.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
     sig.constants = vec![Value::symbol("jit-e2e-no-such-function")].into();
-    sig.max_stack = 16;
+    sig.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     sig.jit_runtime().set_hot_for_test();
     let sig_v = Value::make_bytecode(sig);
     assert!(
@@ -15749,7 +15850,7 @@ fn jit_handlers_through_funcall_seam() {
         f.lexical = true;
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16006,7 +16107,7 @@ fn jit_switch_through_funcall_seam() {
             Value::make_int(0),
         ]
         .into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16053,7 +16154,7 @@ fn jit_named_builtins_through_funcall_seam() {
         f.lexical = true;
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16150,7 +16251,7 @@ fn jit_save_window_excursion_through_funcall_seam() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::SaveWindowExcursion, Op::Return];
         f.constants = vec![body].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16176,7 +16277,7 @@ fn jit_save_window_excursion_through_funcall_seam() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::SaveWindowExcursion, Op::Return];
         f.constants = vec![bad_body].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16226,7 +16327,7 @@ fn jit_direct_call_speculation_tracks_redefinition() {
             Op::Return,
         ];
         f.constants = vec![Value::make_int(k)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         Value::make_bytecode(f)
     };
     let g_sym = Value::symbol("jit-spec-g");
@@ -16246,7 +16347,7 @@ fn jit_direct_call_speculation_tracks_redefinition() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
         f.constants = vec![g_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16335,7 +16436,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
     h2.lexical = true;
     h2.ops = vec![Op::Constant(0), Op::Return];
     h2.constants = vec![Value::make_int(2)].into();
-    h2.max_stack = 16;
+    h2.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let h2_val = Value::make_bytecode(h2);
     // h1: (lambda () (fset 'jit-spec-h h2) 1) — redefines itself, returns 1.
     let mut h1 = ByteCodeFunction::new(LambdaParams {
@@ -16354,7 +16455,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
         Op::Return,
     ];
     h1.constants = vec![Value::symbol("fset"), h_sym, h2_val, Value::make_int(1)].into();
-    h1.max_stack = 16;
+    h1.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     ev.obarray
         .set_symbol_function_id(h_id, Value::make_bytecode(h1));
 
@@ -16376,7 +16477,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
             Op::Return,
         ];
         f.constants = vec![h_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16413,7 +16514,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
         Op::Return,
     ];
     h1b.constants = vec![Value::symbol("fset"), h_sym, h2_val, Value::make_int(1)].into();
-    h1b.max_stack = 16;
+    h1b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     ev.obarray
         .set_symbol_function_id(h_id, Value::make_bytecode(h1b));
     let r = ev
@@ -16447,7 +16548,7 @@ fn jit_subr_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     ops.push(Op::Return);
     f.ops = ops;
     f.constants = vec![Value::symbol(name)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     if hot {
         f.jit_runtime().set_hot_for_test();
     }
@@ -17696,7 +17797,7 @@ fn jit_cbsym_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     ops.push(Op::Return);
     f.ops = ops;
     f.constants = Vec::new().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     if hot {
         f.jit_runtime().set_hot_for_test();
     }
@@ -17866,7 +17967,7 @@ fn jit_cbsym_buffer_loop_tiers_with_profit_gate_on() {
             Op::Return,        // 16
         ];
         f.constants = vec![Value::make_int(0), Value::make_int(1)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18048,7 +18149,7 @@ fn jit_cbsym_spec_adds_no_eval_depth_level() {
             Op::Return,    // 7
         ];
         f.constants = vec![Value::symbol("cbsym-depth"), f_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18403,7 +18504,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
             Op::Return,       // 17
         ];
         f.constants = vec![Value::make_int(2), fib_sym, Value::make_int(1)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18441,7 +18542,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
     });
     ident.lexical = true;
     ident.ops = vec![Op::StackRef(0), Op::Return];
-    ident.max_stack = 16;
+    ident.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     ev.obarray
         .set_symbol_function_id(id_id, Value::make_bytecode(ident));
     let mk_loop = |hot: bool| {
@@ -18466,7 +18567,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
             Op::Return,        // 11
         ];
         f.constants = vec![Value::make_int(0), id_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18512,7 +18613,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
         Op::StackRef(1),  // 6: a           [a b a]
         Op::Return,       // 7
     ];
-    callee.max_stack = 16;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let c_sym = Value::symbol("jit-n2n-opt");
     let ValueKind::Symbol(c_id) = c_sym.kind() else {
         panic!("symbol expected");
@@ -18539,7 +18640,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
             Op::Return,
         ];
         f.constants = vec![c_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18555,7 +18656,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
         f.constants = vec![c_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18630,7 +18731,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
             Op::Return,
         ];
         f.constants = vec![Value::make_int(k)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         Value::make_bytecode(f)
     };
     let g_sym = Value::symbol("jit-v3-g");
@@ -18648,7 +18749,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
         f.constants = vec![g_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.jit_runtime().set_hot_for_test();
         Value::make_bytecode(f)
     };
@@ -18730,7 +18831,7 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
             Op::Return,
         ];
         f.constants = vec![Value::make_int(k)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         Value::make_bytecode(f)
     };
     let g_sym = Value::symbol("jit-recycled-g");
@@ -18746,7 +18847,7 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
     caller.lexical = true;
     caller.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
     caller.constants = vec![g_sym].into();
-    caller.max_stack = 16;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     caller.jit_runtime().set_hot_for_test();
     let hot = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(hot);
@@ -18828,7 +18929,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
         f.lexical = true;
         f.ops = ops;
         f.constants = constants.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -19126,7 +19227,7 @@ fn optional_arity_callees_take_the_spec_fast_path() {
         f.lexical = true;
         f.ops = ops;
         f.constants = constants.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -19244,7 +19345,7 @@ fn jit_bench_fib_value(sym_name: &str, tier: BenchTier) -> Value {
         Op::Return,
     ];
     f.constants = vec![Value::make_int(2), fib_sym, Value::make_int(1)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19287,7 +19388,7 @@ fn jit_bench_loop_value(tier: BenchTier) -> Value {
         Op::Return,
     ];
     f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19373,7 +19474,7 @@ fn jit_bench_big_body_value(tier: BenchTier) -> Value {
         Value::make_int(-1),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19563,7 +19664,7 @@ fn jit_bench_call_bound_caller(tier: BenchTier) -> Value {
         Op::Return,        // 25
     ];
     f.constants = vec![Value::make_int(0), Value::symbol("jit-bench-cbleaf")].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19601,7 +19702,7 @@ fn jit_bench_call_bound_loop() {
         Op::StackRef(0),  // 4  x (else)
         Op::Return,       // 5
     ];
-    leaf.max_stack = 8;
+    leaf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     leaf.jit_runtime().set_hot_for_test();
     let ValueKind::Symbol(cbleaf_id) = Value::symbol("jit-bench-cbleaf").kind() else {
         panic!("symbol")
@@ -19671,7 +19772,7 @@ fn jit_bench_builtin_bound_caller(tier: BenchTier) -> Value {
         Op::Return,                 // 21
     ];
     f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19775,7 +19876,7 @@ fn aot_bench_compute_loop() {
     aot_fn.lexical = true;
     aot_fn.ops = ops.clone();
     aot_fn.constants = constants.clone().into();
-    aot_fn.max_stack = 16;
+    aot_fn.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let aot_val = Value::make_bytecode(aot_fn.clone());
 
     let cold = jit_bench_loop_value(BenchTier::Cold);
@@ -19893,7 +19994,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
     let bc = fn_val
         .get_bytecode_data()
         .expect("scan must be byte-compiled to a bytecode object");
-    let arity = bc.params.required.len();
+    let arity = bc.params.fixed_arity().expect("fixed test arity");
 
     // Shape report: op histogram (documents that this really is call-heavy).
     let (mut n_call, mut n_cbsym, mut n_arith) = (0usize, 0usize, 0usize);
@@ -20038,7 +20139,7 @@ fn jit_bench_spec_call_dispatch_upper_bound() {
     let bc = fn_val
         .get_bytecode_data()
         .expect("microloop must be byte-compiled");
-    let arity = bc.params.required.len();
+    let arity = bc.params.fixed_arity().expect("fixed test arity");
     assert!(
         compile::has_op_call_spec_sites(bc.executable_ops(), &bc.constants, arity, &ev.obarray),
         "microloop must carry the looking-at Op::Call Many-spec site"
@@ -20193,7 +20294,7 @@ fn aot_bench_real_algorithm() {
     aot_fn.lexical = true;
     aot_fn.ops = ops.clone();
     aot_fn.constants = constants.clone().into();
-    aot_fn.max_stack = 16;
+    aot_fn.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let aot_val = Value::make_bytecode(aot_fn.clone());
 
     // Interp copy: force-COLD via the shared BenchTier mechanism, never tiers
@@ -20206,7 +20307,7 @@ fn aot_bench_real_algorithm() {
     cold_f.lexical = true;
     cold_f.ops = ops.clone();
     cold_f.constants = constants.clone().into();
-    cold_f.max_stack = 16;
+    cold_f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     BenchTier::Cold.apply(cold_f.jit_runtime());
     let cold_val = Value::make_bytecode(cold_f);
 
@@ -20689,7 +20790,7 @@ fn vm_bench_call_loop_caller(callee_designator: Value) -> Value {
         Op::Return,
     ];
     f.constants = vec![Value::make_int(0), callee_designator].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -20758,7 +20859,7 @@ fn vm_bench_call_dispatch_closure_sym_vs_val() {
     });
     callee.lexical = true;
     callee.ops = vec![Op::Add1, Op::Return];
-    callee.max_stack = 4;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     let callee_val = Value::make_bytecode(callee);
 
     let ValueKind::Symbol(callee_sym) = Value::symbol("vm-bench-callee").kind() else {
@@ -20820,7 +20921,7 @@ fn vm_bench_varref_loop_caller(var_sym: Value) -> Value {
         Op::Return,
     ];
     f.constants = vec![Value::make_int(0), var_sym].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -20894,7 +20995,7 @@ fn varref_reader_fn(sym: Value) -> Value {
     f.lexical = true;
     f.ops = vec![Op::VarRef(1), Op::Return];
     f.constants = vec![Value::NIL, sym].into();
-    f.max_stack = 4;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -21096,7 +21197,7 @@ fn jit_bench_cbsym_value(tier: BenchTier) -> Value {
         Value::list_from_slice(&[Value::symbol("a"), Value::symbol("b"), Value::symbol("c")]),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21161,7 +21262,7 @@ fn jit_bench_cbsym_goto_value(tier: BenchTier) -> Value {
         Op::Return,        // 12
     ];
     f.constants = vec![Value::make_int(0), Value::make_int(1)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21230,7 +21331,7 @@ fn jit_bench_subr_value(tier: BenchTier) -> Value {
         Value::list_from_slice(&[Value::symbol("a"), Value::symbol("b"), Value::symbol("c")]),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21310,7 +21411,7 @@ fn jit_bench_many_value(tier: BenchTier) -> Value {
         Value::string("(defun\\|[a-z]+"),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21392,7 +21493,7 @@ fn jit_bench_pred_value(tier: BenchTier) -> Value {
         Value::list_from_slice(&[Value::symbol("a"), Value::symbol("b"), Value::symbol("c")]),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21457,7 +21558,7 @@ fn jit_bench_cons_value(tier: BenchTier) -> Value {
         Op::Return,        // 13
     ];
     f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21554,8 +21655,7 @@ fn macro_expansion_scope_uses_lexenv_dynvars() {
 
     let dynvars = ev
         .obarray
-        .symbol_value_id(macroexp_dynvars_symbol())
-        .copied()
+        .symbol_value_id_copied(macroexp_dynvars_symbol())
         .expect("macroexp--dynvars should be bound inside macro expansion scope");
     let dynvars = list_to_vec(&dynvars).expect("macroexp--dynvars should stay a proper list");
     assert!(dynvars.contains(&Value::T), "{dynvars:?}");
@@ -22239,7 +22339,7 @@ fn gc_safe_point_runs_post_gc_hook_when_incremental_collection_finishes() {
         ev.gc_safe_point();
     }
     assert!(ev.gc_count > 0);
-    let hook_log = ev.obarray().symbol_value("gc-hook-log").copied();
+    let hook_log = ev.obarray().symbol_value_copied("gc-hook-log");
     assert!(hook_log.is_some());
     let entries = list_to_vec(&hook_log.unwrap()).expect("gc-hook-log list");
     assert!(!entries.is_empty());
@@ -23141,13 +23241,13 @@ fn bootstrap_window_system_modes_match_gnu_defaults() {
     crate::test_utils::init_test_tracing();
     let eval = Context::new();
     assert_eq!(
-        eval.obarray().symbol_value("menu-bar-mode"),
-        Some(&Value::T),
+        eval.obarray().symbol_value_copied("menu-bar-mode"),
+        Some(Value::T),
         "GNU initializes menu-bar-mode to t in frame.c"
     );
     assert_eq!(
-        eval.obarray().symbol_value("tool-bar-mode"),
-        Some(&Value::T),
+        eval.obarray().symbol_value_copied("tool-bar-mode"),
+        Some(Value::T),
         "GNU initializes tool-bar-mode to t for window-system builds"
     );
 }
@@ -23402,6 +23502,7 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
             global_map,
             &[Value::symbol(key)],
             Value::symbol(command),
+            crate::tagged::SymbolMode::Bare,
         )
         .expect("define signaling command");
         ev.command_loop.unread_event(Value::symbol(key));
@@ -23410,6 +23511,7 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
         global_map,
         &[Value::fixnum('q' as i64)],
         Value::symbol("neo-stop-command-loop-error-test-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .expect("define stop command");
     ev.command_loop.unread_event(Value::fixnum('q' as i64));
@@ -23957,16 +24059,23 @@ fn command_loop_dispatches_select_window_before_following_key() {
         SubrArity::new(0, Some(0)),
     ));
 
+    // The 80x24-pixel test frame is shorter than two 16-pixel lines, so a
+    // GNU-checked vertical split is too small; split it side by side.
     let target_window = ev
         .eval_str(
             r#"(let* ((w1 (selected-window))
                       (buf (get-buffer-create "select-window-command-loop-target"))
-                      (w2 (split-window-internal w1 (/ (window-pixel-height w1) 2) nil nil)))
+                      (w2 ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) w1 (/ (window-pixel-width w1) 2) 'right nil)))
                  (set-window-buffer w2 buf)
                  (setq neo-select-window-target w2)
                  w2)"#,
         )
-        .expect("create second window");
+        .unwrap_or_else(|error| {
+            panic!(
+                "create second window: {}",
+                crate::emacs_core::error::format_eval_result(&Err(error))
+            )
+        });
     let target_window_id = target_window
         .as_window_id()
         .expect("target value should be a window");
@@ -24183,7 +24292,7 @@ fn bench_jit_vs_vm_loop() {
         });
         f.ops = ops.clone();
         f.constants = constants.clone().into();
-        f.max_stack = 64;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
         if hot {
             f.jit_runtime().set_hot_for_test();
         } else {
@@ -24214,7 +24323,7 @@ fn bench_jit_vs_vm_loop() {
         });
         probe.ops = ops.clone();
         probe.constants = constants.clone().into();
-        probe.max_stack = 64;
+        probe.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
         crate::emacs_core::jit::compile::compile_bytecode_function(&probe)
             .expect("loop body must compile to native (no unsupported op / CFG bail)");
     }
@@ -24337,7 +24446,7 @@ fn jit_bench_threshold_economics() {
         });
         f.ops = ops.clone();
         f.constants = constants.clone().into();
-        f.max_stack = 64;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
         Value::make_bytecode(f)
     };
 
@@ -25803,7 +25912,7 @@ fn plain_let_takes_one_obarray_visit_per_bind_and_pop() {
     ev.unbind_to_with_result(base, Ok(Value::NIL)).expect("pop");
     assert_eq!(plain_value_slot_visits(), 1, "one visit for the pop");
     assert_eq!(
-        ev.obarray.symbol_value_id(sym).map(|v| v.bits()),
+        ev.obarray.symbol_value_id_copied(sym).map(|v| v.bits()),
         Some(Value::fixnum(1).bits()),
         "the pop restored the old value"
     );
@@ -26182,8 +26291,8 @@ fn kill_emacs_abandons_unwind_protect_cleanup_forms_like_gnus_noreturn_exit() {
         "kill-emacs must propagate its own shutdown request, got {flow:?}"
     );
     assert_eq!(
-        eval.obarray().symbol_value("l203-cleanup-ran"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("l203-cleanup-ran"),
+        Some(Value::NIL),
         "GNU's Fkill_emacs is `noreturn`: the cleanup form is abandoned, not run"
     );
     assert_eq!(
@@ -26336,7 +26445,7 @@ fn jit_cached_leaf_fixture(ev: &mut Context, name: &str) -> Value {
     });
     f.ops = vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Return];
     f.constants = vec![Value::make_int(40), Value::make_int(2)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.jit_runtime().set_hot_for_test();
     let fv = Value::make_bytecode(f);
     crate::emacs_core::builtins::builtin_fset(ev, vec![Value::symbol(name), fv])
@@ -26434,7 +26543,7 @@ fn jit_closure_prototype(
     f.lexical = true;
     f.ops = ops;
     f.constants = consts.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -27017,8 +27126,7 @@ fn cached_throw_on_input_tracks_every_write_path() {
     let agrees = |ev: &Context, where_: &str| {
         let obarray = ev
             .obarray()
-            .symbol_value("throw-on-input")
-            .copied()
+            .symbol_value_copied("throw-on-input")
             .unwrap_or(Value::NIL);
         assert!(
             crate::emacs_core::value::eq_value(&ev.cached_throw_on_input_for_test(), &obarray),
@@ -27148,7 +27256,7 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
         f.lexical = true;
         f.ops = ops;
         f.constants = constants.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.jit_runtime().set_hot_for_test();
         Value::make_bytecode(f)
     };
@@ -27251,7 +27359,9 @@ fn native_calls_marshal_optional_and_rest_arguments() {
         });
         f.lexical = true;
         f.ops = vec![Op::List(slots as u16), Op::Return];
-        f.max_stack = slots as u16 + 1;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(
+            usize::try_from(slots + 1).expect("test frame fits host"),
+        );
         f.jit_runtime().set_hot_for_test();
         let v = Value::make_bytecode(f);
         crate::emacs_core::eval::push_scratch_gc_root(v);
@@ -27280,7 +27390,7 @@ fn native_calls_marshal_optional_and_rest_arguments() {
         Op::Return,
     ];
     caller.constants = vec![Value::symbol("apply"), Value::make_int(1)].into();
-    caller.max_stack = 16;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     caller.jit_runtime().set_hot_for_test();
     let caller = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller);
@@ -27360,7 +27470,7 @@ fn jit_apply_enters_a_compiled_callee_natively() {
         });
         f.lexical = true;
         f.ops = ops;
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.jit_runtime().set_hot_for_test();
         let v = Value::make_bytecode(f);
         crate::emacs_core::eval::push_scratch_gc_root(v);
@@ -27409,7 +27519,7 @@ fn jit_apply_enters_a_compiled_callee_natively() {
         Op::Return,
     ];
     caller.constants = vec![Value::symbol("apply"), Value::make_int(1)].into();
-    caller.max_stack = 16;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     caller.jit_runtime().set_hot_for_test();
     let caller = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller);
@@ -27981,6 +28091,7 @@ fn native_input_progress_waits_through_command_hooks_and_finalization() {
         global_map,
         &[Value::fixnum('q' as i64)],
         Value::symbol("neo-stop-command-loop-error-test-command"),
+        crate::tagged::SymbolMode::Bare,
     )
     .unwrap();
     let stream = neomacs_display_protocol::input_progress::InputStream::default();
@@ -28048,3 +28159,222 @@ fn fontset_changes_invalidate_redisplay_skip_signature() {
 #[cfg(test)]
 #[path = "circular_lists_test.rs"]
 mod circular_lists;
+
+#[cfg(test)]
+mod function_slots;
+
+#[cfg(test)]
+mod runtime_constants;
+
+#[cfg(test)]
+mod byte_code_function;
+
+#[cfg(test)]
+#[path = "marker_identity.rs"]
+mod marker_identity;
+
+#[test]
+fn current_buffer_scope_finish_watcher_panic_restores_popped_binding_and_roots() {
+    use crate::emacs_core::error::EvalResult;
+    use crate::emacs_core::eval::CurrentBufferScope;
+    use crate::emacs_core::intern::intern;
+    use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    fn panic_during_unlet(_: &mut Context, args: Vec<Value>) -> EvalResult {
+        if args.get(2) == Some(&Value::symbol("unlet")) {
+            panic!("exercise Rust panic in explicit scope finish");
+        }
+        Ok(Value::NIL)
+    }
+    let mut ctx = Context::new();
+    let original = ctx.buffers.current_buffer_id().unwrap();
+    let other = ctx.buffers.create_buffer("scope-finish-watcher-other");
+    let symbol = intern("scope-finish-watcher-value");
+    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    ctx.register_subr(SubrSpec::new(
+        "scope-finish-watcher-panic",
+        NativeFn::ContextVec(panic_during_unlet),
+        SubrArity::new(4, Some(4)),
+    ));
+    let depth = ctx.specpdl.len();
+    let root_depth = ctx.vm_root_frames.len();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut scope = CurrentBufferScope::enter(&mut ctx);
+        scope
+            .context()
+            .set_current_buffer_unrecorded(other)
+            .unwrap();
+        scope
+            .context()
+            .try_specbind(symbol, Value::fixnum(20))
+            .unwrap();
+        crate::emacs_core::advice::builtin_add_variable_watcher(
+            scope.context(),
+            vec![
+                Value::from_sym_id(symbol),
+                Value::symbol("scope-finish-watcher-panic"),
+            ],
+        )
+        .unwrap();
+        let _ = scope.finish(Ok(Value::NIL));
+    }));
+    assert!(outcome.is_err());
+    assert_eq!(
+        ctx.obarray.symbol_value_id_or_nil(symbol),
+        Value::fixnum(10),
+        "a popped Let must remain owned while its watcher can panic"
+    );
+    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.specpdl.len(), depth);
+    assert_eq!(ctx.vm_root_frames.len(), root_depth);
+    assert!(!ctx.active_variable_watchers.contains(&symbol));
+}
+
+/// Rust watcher panic must release temporary unwind roots and reinstate GNU's
+/// pending-quit bracket independently of restoring the popped variable cell.
+#[test]
+fn unbind_watcher_panic_restores_quit_and_vm_roots() {
+    use crate::emacs_core::error::EvalResult;
+    use crate::emacs_core::intern::intern;
+    use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    fn watcher(_: &mut Context, args: Vec<Value>) -> EvalResult {
+        if args.get(2) == Some(&Value::symbol("unlet")) {
+            panic!("contained watcher panic while unwind roots are owned");
+        }
+        Ok(Value::NIL)
+    }
+    let mut ctx = Context::new();
+    let symbol = intern("unwind-roots-independent-value");
+    let depth = ctx.specpdl.len();
+    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    ctx.try_specbind(symbol, Value::fixnum(20)).unwrap();
+    ctx.register_subr(SubrSpec::new(
+        "unwind-roots-independent-watcher",
+        NativeFn::ContextVec(watcher),
+        SubrArity::new(4, Some(4)),
+    ));
+    crate::emacs_core::advice::builtin_add_variable_watcher(
+        &mut ctx,
+        vec![
+            Value::from_sym_id(symbol),
+            Value::symbol("unwind-roots-independent-watcher"),
+        ],
+    )
+    .unwrap();
+    let frame_count = ctx.vm_root_frames.len();
+    let root_count = ctx.vm_root_frames.last().map(|frame| frame.roots.len());
+    let pending = Value::fixnum(7);
+    ctx.set_quit_flag_value(pending);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = ctx.unbind_to_with_result(depth, Ok(Value::NIL));
+    }));
+    assert!(caught.is_err());
+    assert_eq!(ctx.quit_flag_value(), pending);
+    assert_eq!(ctx.vm_root_frames.len(), frame_count);
+    assert_eq!(
+        ctx.vm_root_frames.last().map(|frame| frame.roots.len()),
+        root_count
+    );
+}
+
+#[cfg(test)]
+#[path = "issue554_binding_policy.rs"]
+mod issue554_binding_policy;
+
+#[test]
+fn issue554_interpreted_closure_formals_follow_live_symbol_policy() {
+    assert_eq!(
+        bootstrap_eval_one(
+            r#"(let* ((symbols-with-pos-enabled t)
+                   (fn (make-interpreted-closure
+                        (list (position-symbol 'arg 0)) '(arg) nil)))
+              (list (func-arity fn)
+                    (condition-case err
+                        (let ((symbols-with-pos-enabled nil)) (func-arity fn))
+                      (error (car err)))
+                    (condition-case err
+                        (let ((symbols-with-pos-enabled nil)) (funcall fn 7))
+                      (error (car err)))))"#
+        ),
+        "OK ((1 . 1) invalid-function invalid-function)"
+    );
+}
+
+#[test]
+fn issue554_dynamic_formals_update_symbol_policy_after_each_binding() {
+    assert_eq!(
+        bootstrap_eval_one(
+            r#"(let* ((symbols-with-pos-enabled t)
+                   (fn (list 'lambda
+                             (list 'symbols-with-pos-enabled (position-symbol 'n 0))
+                             'n)))
+              (list (condition-case err (funcall fn nil 7) (error (car err)))
+                    (condition-case err (funcall fn t 7) (error (car err)))))"#
+        ),
+        "OK (invalid-function 7)"
+    );
+}
+
+#[test]
+fn issue554_closure_equal_and_hash_keys_follow_symbol_policy() {
+    assert_eq!(
+        bootstrap_eval_one(
+            r#"(let* ((arg (position-symbol 'n 0))
+                   (a (make-interpreted-closure (list arg) '(n) nil))
+                   (b (make-interpreted-closure '(n) '(n) nil)))
+              (mapcar (lambda (enabled)
+                        (let ((symbols-with-pos-enabled enabled)
+                              (table (make-hash-table :test 'equal)))
+                          (puthash a 1 table)
+                          (puthash b 2 table)
+                          (list (equal a b) (hash-table-count table)
+                                (gethash a table) (gethash b table)))) '(nil t)))"#
+        ),
+        "OK ((nil 2 1 2) (t 1 2 2))"
+    );
+}
+
+#[test]
+fn issue554_watcher_membership_follow_symbol_policy() {
+    assert_eq!(
+        bootstrap_eval_one(
+            r#"(let* ((a (make-interpreted-closure (list (position-symbol 'n 0)) '(n) nil))
+                   (b (make-interpreted-closure '(n) '(n) nil)))
+              (mapcar (lambda (enabled)
+                        (let ((symbols-with-pos-enabled enabled)
+                              (variable (make-symbol "issue554-watcher")))
+                          (add-variable-watcher variable a)
+                          (add-variable-watcher variable b)
+                          (let ((added (length (get-variable-watchers variable))))
+                            (remove-variable-watcher variable b)
+                            (list added (length (get-variable-watchers variable)))))) '(nil t)))"#
+        ),
+        "OK ((2 1) (1 0))"
+    );
+}
+
+#[test]
+fn issue554_formal_watchers_change_policy_before_the_next_formal() {
+    // GNU eval.c:3399-3405/3439: observe each preceding specbind/watcher.
+    assert_eq!(
+        bootstrap_eval_one(
+            r#"(mapcar
+ (lambda (initial)
+   (let* ((symbols-with-pos-enabled initial)
+          (variable (make-symbol "issue554-watched-formal"))
+          (target (not initial))
+          (watcher (list 'lambda '(_symbol _newval operation _where)
+                         (list 'if '(eq operation 'let)
+                               (list 'setq 'symbols-with-pos-enabled target))))
+          (function (list 'lambda
+                          (list variable (position-symbol 'n 0)) 'n)))
+     (unwind-protect
+         (progn
+           (add-variable-watcher variable watcher)
+           (condition-case err (funcall function 1 7)
+             (error (car err))))
+       (remove-variable-watcher variable watcher))))
+ '(nil t))"#
+        ),
+        "OK (7 invalid-function)"
+    );
+}

@@ -1,0 +1,11 @@
+error[E0451]: fields `heap`, `heap_identity` and `_owner` of struct `ConcurrentMarkPermit` are private
+ --> tests/p0s3_ui/permit_cannot_be_constructed.rs:7:9
+  |
+6 |     ConcurrentMarkPermit {
+  |     -------------------- in this type
+7 |         heap,
+  |         ^^^^ private field
+8 |         heap_identity,
+  |         ^^^^^^^^^^^^^ private field
+9 |         _owner: PhantomData,
+  |         ^^^^^^ private field

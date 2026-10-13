@@ -10,16 +10,20 @@ use crate::emacs_core::jit::inline::{FusedScope, force_inline_for_test, fuse_cal
 use crate::emacs_core::value::LambdaParams;
 use std::rc::Rc;
 
+/// Threading: scalar inline configuration belongs to this fixture's compiler
+/// thread; no Lisp state or mutator cache is stored. The returned backend guard
+/// restores the enclosing mode while keeping the legacy v2 producer selected.
 struct Knobs;
 
 impl Knobs {
-    fn enter(mode: Inline2Mode) -> Self {
+    fn enter(mode: Inline2Mode) -> (Self, impl Drop) {
+        let backend = compile::opt_mode_scope_for_test(compile::OptMode::Legacy);
         force_inline_for_test(Some(true));
         compile::force_inline2_for_test(Some(mode));
         compile::force_gate_relax_for_test(false);
         compile::force_profit_gate_for_test(false);
         compile::force_deopt_for_test(false);
-        Self
+        (Self, backend)
     }
 }
 
@@ -35,7 +39,7 @@ fn lexical(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f

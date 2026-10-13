@@ -89,6 +89,7 @@ impl Context {
         &self,
         designator: Value,
     ) -> Option<ResolvedAssocPredicate> {
+        let symbol_mode = self.symbol_mode();
         if self.compiler_function_overrides_active() {
             return None;
         }
@@ -99,7 +100,7 @@ impl Context {
         // This is a speculative optimization, so declining a long chain is
         // preferable to introducing an indirection error or an infinite loop.
         for _ in 0..32 {
-            if let Some(symbol) = function.as_symbol_id() {
+            if let Some(symbol) = function.as_symbol_id(symbol_mode) {
                 function = self.unwrap_symbol(builtins::symbol_function_cell_in_obarray(
                     self.obarray(),
                     symbol,

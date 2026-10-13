@@ -62,11 +62,11 @@ impl FramePositionSpec {
     pub(crate) fn from_lisp(value: Value) -> Option<Self> {
         let kind = if let Some(integer) = value.as_int() {
             return Some(Self::signed_edges(i32::try_from(integer).ok()?));
-        } else if value.as_symbol_name() == Some("-") {
+        } else if value.as_bare_symbol_name() == Some("-") {
             PositionKind::FarEdge(0)
         } else if value.is_cons() && value.cons_cdr().is_cons() {
             let offset = i32::try_from(value.cons_cdr().cons_car().as_int()?).ok()?;
-            match value.cons_car().as_symbol_name()? {
+            match value.cons_car().as_bare_symbol_name()? {
                 "+" => PositionKind::Absolute(offset),
                 "-" if offset != i32::MIN => PositionKind::FarEdge(-i64::from(offset)),
                 _ => return None,

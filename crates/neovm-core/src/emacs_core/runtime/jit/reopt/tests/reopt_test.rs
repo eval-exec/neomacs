@@ -26,7 +26,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
 }
@@ -236,7 +236,8 @@ fn census_counts_a_tier_up_seam_deopt_once() {
     );
     let f_val = Value::make_bytecode(f.clone());
     let run = |arg: Value| {
-        crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[arg]).expect("no signal")
+        crate::emacs_core::jit::test_support::run_compiled(ctx, &f, f_val, &[arg])
+            .expect("no signal")
     };
     assert_eq!(run(Value::make_int(41)), Some(Value::make_int(42).bits()));
     let before = census();
@@ -260,7 +261,7 @@ fn census_counts_a_direct_path_deopt_once() {
     // (lambda (n) (if n (1- n) 0))
     let step = Value::symbol("reopt-census-step");
     ev.obarray.set_symbol_function_id(
-        step.as_symbol_id().unwrap(),
+        step.as_bare_symbol_id().unwrap(),
         Value::make_bytecode(function(
             vec![
                 Op::StackRef(0),
@@ -284,6 +285,8 @@ fn census_counts_a_direct_path_deopt_once() {
     let leaf =
         crate::emacs_core::jit::compile::compile_bytecode_function_with(&f, Some(&ev.obarray))
             .expect("compiles");
+    // Install the real worker's callee before the original calls arm its site.
+    crate::emacs_core::jit::test_support::prepare_named(&mut ev, &["reopt-census-step"]);
     let ctx = &mut ev as *mut Context as *mut u8;
     for _ in 0..3 {
         assert_eq!(
@@ -336,6 +339,7 @@ fn census_counts_an_osr_deopt_once() {
     let mut ev = Context::new();
     crate::emacs_core::jit::force_osr_for_test(true);
     f.jit_runtime().set_hot_for_test();
+    crate::emacs_core::jit::test_support::prepare_osr(&mut ev, &f, 2);
     let before = census();
     let osr_before = stats::compile_stats_snapshot().deopt_osr;
     let start = Value::make_int(Value::MOST_POSITIVE_FIXNUM - 1500);
@@ -499,7 +503,7 @@ fn ceiling_interpreter_refuses_entry_and_osr_compiles() {
     let rt = f.jit_runtime();
     rt.set_reopt_level_for_test(ReoptLevel::Interpreter);
     rt.set_hot_for_test();
-    let got = crate::emacs_core::jit::try_run_compiled(
+    let got = crate::emacs_core::jit::test_support::run_compiled(
         ctx,
         &f,
         f_val,
@@ -543,6 +547,9 @@ fn ceiling_interpreter_refuses_entry_and_osr_compiles() {
     lp.jit_runtime()
         .set_reopt_level_for_test(ReoptLevel::Speculative);
     let lp2 = function(lp.ops.clone(), vec![Value::make_int(0)], 1);
+    // The refusal above remains a production probe; await only this admitted
+    // positive control, without transferring before its original observation.
+    crate::emacs_core::jit::test_support::prepare_osr(ctx, &lp2, 1);
     assert!(
         crate::emacs_core::jit::cache::try_run_osr(ctx, &lp2, 1, &snapshot, &[]).is_some(),
         "the same loop transfers below Interpreter"
@@ -623,7 +630,7 @@ fn no_inline_bit_skips_the_mir_inliner() {
     // (defun reopt-sq (x) (* x x))
     let sq = Value::symbol("reopt-sq");
     ev.obarray.set_symbol_function_id(
-        sq.as_symbol_id().unwrap(),
+        sq.as_bare_symbol_id().unwrap(),
         Value::make_bytecode(function(
             vec![Op::StackRef(0), Op::Dup, Op::Mul, Op::Return],
             vec![],
@@ -640,7 +647,11 @@ fn no_inline_bit_skips_the_mir_inliner() {
     };
     let f = mk();
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
-    assert_eq!(leaf.inline_deps(), &[sq.as_symbol_id().unwrap()], "inlined");
+    assert_eq!(
+        leaf.inline_deps(),
+        &[sq.as_bare_symbol_id().unwrap()],
+        "inlined"
+    );
     let g = mk();
     g.jit_runtime()
         .mark_call_site_no_inline(2, g.executable_ops().len());

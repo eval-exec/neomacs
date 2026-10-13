@@ -5,7 +5,9 @@
 
 use super::heap::*;
 use super::*;
+use crate::buffer::BufferId;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
+use crate::emacs_core::eval::{SavedBindingValue, SavedBufferId};
 use crate::emacs_core::value::LambdaParams;
 
 /// The word at `base + offset`.
@@ -15,13 +17,146 @@ fn words_at(base: *const u8, offset: usize) -> usize {
     unsafe { base.add(offset).cast::<usize>().read_unaligned() }
 }
 
-fn entry_words(entry: &SpecBinding) -> [u64; ENTRY_WORDS] {
-    // SAFETY: a live entry of `ENTRY_WORDS` aligned words, read as bits.
+/// An aligned atomic forwarder word at its pinned JIT offset.
+fn atomic_word_at(base: *const u8, offset: usize) -> usize {
+    // SAFETY: callers pass a live descriptor's pinned, aligned AtomicValue
+    // field; repr(transparent) puts its AtomicUsize at offset zero.
     unsafe {
-        std::ptr::from_ref(entry)
-            .cast::<[u64; ENTRY_WORDS]>()
-            .read()
+        (&*base.add(offset).cast::<std::sync::atomic::AtomicUsize>())
+            .load(std::sync::atomic::Ordering::Acquire)
     }
+}
+
+/// Inspect initialized fields only. A typed enum's padding is never an
+/// initialized integer image, even if its destination was zeroed first.
+fn entry_words(entry: &SpecBinding) -> [u64; ENTRY_WORDS] {
+    let tag = SpecBindingTag::from(entry);
+    let frames = backtrace_layout().expect("fixed frame records");
+    let binds = let_layout();
+    let mut words = [0u64; ENTRY_WORDS];
+    words[0] = tag as u64;
+    let (template, small, fields): (EntryTemplate, u32, Vec<(*const u8, u64)>) = match entry {
+        SpecBinding::Let { sym_id, old_value } => (
+            binds.let_,
+            sym_id.0,
+            vec![(
+                std::ptr::from_ref(old_value).cast(),
+                old_value.as_plain().bits() as u64,
+            )],
+        ),
+        SpecBinding::LetLocal {
+            sym_id,
+            old_value,
+            buffer_id,
+        } => (
+            binds.let_local,
+            sym_id.0,
+            vec![
+                (
+                    std::ptr::from_ref(old_value).cast(),
+                    old_value.bits() as u64,
+                ),
+                (std::ptr::from_ref(buffer_id).cast(), buffer_id.0),
+            ],
+        ),
+        SpecBinding::LetDefault {
+            sym_id,
+            old_value,
+            buffer_id,
+        } => (
+            binds.let_default,
+            sym_id.0,
+            vec![
+                (
+                    std::ptr::from_ref(old_value).cast(),
+                    old_value.as_plain().bits() as u64,
+                ),
+                (
+                    std::ptr::from_ref(buffer_id).cast(),
+                    buffer_id.get().map_or(0, |b| b.0),
+                ),
+            ],
+        ),
+        SpecBinding::Backtrace1 {
+            function,
+            arg,
+            debug_on_exit,
+        } => (
+            frames.bt1,
+            u32::from(*debug_on_exit),
+            vec![
+                (std::ptr::from_ref(function).cast(), function.bits() as u64),
+                (std::ptr::from_ref(arg).cast(), arg.bits() as u64),
+            ],
+        ),
+        SpecBinding::Backtrace2 {
+            function,
+            arg0,
+            arg1,
+        } => (
+            frames.bt2,
+            0,
+            vec![
+                (std::ptr::from_ref(function).cast(), function.bits() as u64),
+                (std::ptr::from_ref(arg0).cast(), arg0.bits() as u64),
+                (std::ptr::from_ref(arg1).cast(), arg1.bits() as u64),
+            ],
+        ),
+        SpecBinding::BacktraceNative {
+            function,
+            args_ptr,
+            nargs,
+        } => (
+            frames.native,
+            *nargs,
+            vec![
+                (std::ptr::from_ref(function).cast(), function.bits() as u64),
+                (
+                    std::ptr::from_ref(args_ptr).cast(),
+                    *args_ptr as usize as u64,
+                ),
+            ],
+        ),
+        // Debugger promotion changes the tag to an owned Backtrace. Its
+        // header must refuse the lean template; no payload read is needed.
+        _ => return words,
+    };
+    let small_at: Option<(*const u8, usize)> = match entry {
+        SpecBinding::Let { sym_id, .. }
+        | SpecBinding::LetLocal { sym_id, .. }
+        | SpecBinding::LetDefault { sym_id, .. } => Some((
+            std::ptr::from_ref(sym_id).cast(),
+            size_of::<crate::emacs_core::intern::SymId>(),
+        )),
+        SpecBinding::Backtrace1 { debug_on_exit, .. } => {
+            Some((std::ptr::from_ref(debug_on_exit).cast(), size_of::<bool>()))
+        }
+        SpecBinding::BacktraceNative { nargs, .. } => {
+            Some((std::ptr::from_ref(nargs).cast(), size_of::<u32>()))
+        }
+        _ => None,
+    };
+    let base = std::ptr::from_ref(entry).cast::<u8>() as usize;
+    if let Some((address, size)) = small_at {
+        let offset = address as usize - base;
+        assert_eq!(template.small_shift, Some((offset * 8) as u32));
+        assert_eq!(
+            template.header_mask,
+            u8::MAX as u64 | (((1u64 << (size * 8)) - 1) << (offset * 8))
+        );
+    }
+    // SAFETY: repr(u8) guarantees an initialized tag byte at offset zero.
+    assert_eq!(
+        unsafe { std::ptr::from_ref(entry).cast::<u8>().read() },
+        tag as u8
+    );
+    assert_eq!(template.header, tag as u64);
+    words[0] = template.header_with(small);
+    for (i, &(address, bits)) in fields.iter().enumerate() {
+        assert_eq!(address as usize - base, template.field(i) as usize);
+        words[template.field(i) as usize / WORD] = bits;
+    }
+    words
 }
 
 #[test]
@@ -68,9 +203,26 @@ fn the_context_words_are_the_fields_they_name() {
     let base = std::ptr::from_ref(&ev).cast::<u8>();
     assert_eq!(words_at(base, CONTEXT_DEPTH_OFFSET), 0x1234);
     assert_eq!(words_at(base, CONTEXT_MAX_DEPTH_OFFSET), 0x5678);
+    let obarray = words_at(base, CONTEXT_OBARRAY_OFFSET) as *const u8;
+    assert_eq!(obarray, std::ptr::from_ref(ev.obarray()).cast::<u8>());
     assert_eq!(
-        words_at(base, CONTEXT_OBARRAY_OFFSET + OBARRAY_FUNCTION_EPOCH_OFFSET) as u64,
+        words_at(obarray, OBARRAY_FUNCTION_EPOCH_OFFSET) as u64,
         ev.obarray.function_epoch()
+    );
+    // SAFETY: the repr-pinned offset names the initialized inline owner header,
+    // not a pointer slot. This shared phase excludes header retirement.
+    let dispatch = unsafe { base.add(CONTEXT_DISPATCH_CELLS_OFFSET) };
+    assert_eq!(
+        words_at(dispatch, DISPATCH_FUNCTION_EPOCH_OFFSET) as u64,
+        ev.obarray.function_epoch()
+    );
+    assert_eq!(
+        words_at(dispatch, DISPATCH_DEBUG_FWD_OFFSET),
+        words_at(obarray, OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET)
+    );
+    assert_eq!(
+        words_at(base, CONTEXT_TAGGED_HEAP_OFFSET),
+        std::ptr::from_ref(&*ev.tagged_heap) as usize
     );
     ev.depth = 0;
 }
@@ -81,7 +233,7 @@ fn the_context_words_are_the_fields_they_name() {
 /// `backtrace_entry_values` and the balanced pop.
 #[test]
 fn backtrace_templates_match_the_shim_and_decode_in_rust() {
-    let layout = backtrace_layout().expect("the backtrace layout probe succeeds");
+    let layout = backtrace_layout().expect("the fixed backtrace records are supported");
     let mut ev = Context::new();
     let function = Value::symbol("neovm--jl-f");
     for nargs in 0..=6usize {
@@ -112,8 +264,9 @@ fn backtrace_templates_match_the_shim_and_decode_in_rust() {
         };
         let image = template.image(small, &fields);
         ev.specpdl.reserve(1);
-        // SAFETY: spare capacity for one entry; the image is a valid entry
-        // (the probe round-tripped it), written before the length covers it.
+        // SAFETY: spare capacity for one entry. The fixed tag and record
+        // offsets place valid Value words and the live args pointer/count
+        // in the chosen variant, written before the length covers it.
         unsafe {
             ev.specpdl
                 .as_mut_ptr()
@@ -139,7 +292,7 @@ fn backtrace_templates_match_the_shim_and_decode_in_rust() {
 /// call's inline pop sends the return to the exit debugger.
 #[test]
 fn a_flagged_frame_does_not_match_its_template() {
-    let layout = backtrace_layout().expect("probe");
+    let layout = backtrace_layout().expect("fixed backtrace records");
     let mut ev = Context::new();
     let args: Vec<i64> = (0..3).map(|i| Value::fixnum(i).bits() as i64).collect();
     for nargs in [1usize, 2, 3] {
@@ -163,11 +316,10 @@ fn a_flagged_frame_does_not_match_its_template() {
     assert_ne!(layout.bt2.header, layout.native.header_with(0));
 }
 
-/// P1.4's `let` templates: a Rust-built entry matches, and the probe's
-/// round trip already decoded the JIT image through a `match`.
+/// P1.4's `let` templates: every record field agrees with its Rust-built entry.
 #[test]
 fn let_templates_match_rust_built_entries() {
-    let layout = let_layout().expect("the let layout probe succeeds");
+    let layout = let_layout();
     let sym = crate::emacs_core::intern::intern("neovm--jl-let");
     let entry = SpecBinding::Let {
         sym_id: sym,
@@ -198,6 +350,41 @@ fn let_templates_match_rust_built_entries() {
     assert_eq!(words[layout.let_default.field(1) as usize / WORD], 4);
 }
 
+/// Exercise the full-word saved-value sentinel and the optional buffer's
+/// zero niche through actual JIT-shaped images, including high symbol IDs.
+#[test]
+fn binding_record_images_preserve_unbound_values_and_optional_buffers() {
+    let layout = let_layout();
+    for sym_id in [0, 0x0012_3457, u32::MAX] {
+        for old_value in [Value::NIL, Value::UNBOUND, Value::fixnum(-71)] {
+            for buffer in [None, Some(BufferId(1)), Some(BufferId(u64::MAX))] {
+                let entry = SpecBinding::LetDefault {
+                    sym_id: crate::emacs_core::intern::SymId(sym_id),
+                    old_value: crate::emacs_core::eval::SavedBindingValue::from_plain(old_value),
+                    buffer_id: crate::emacs_core::eval::SavedBufferId::from_option(buffer),
+                };
+                let image = entry_words(&entry);
+                assert!(layout.let_default.matches(&image, sym_id));
+                // SAFETY: the fixed tag, initialized symbol/value words,
+                // and valid zero-or-NonZero buffer bits form a LetDefault.
+                let decoded = unsafe { &*image.as_ptr().cast::<SpecBinding>() };
+                let SpecBinding::LetDefault {
+                    sym_id: got_sym,
+                    old_value: got_value,
+                    buffer_id: got_buffer,
+                } = decoded
+                else {
+                    panic!("the JIT image must decode as LetDefault");
+                };
+                assert_eq!(got_sym.0, sym_id);
+                assert_eq!(got_value.as_plain(), old_value);
+                assert_eq!(got_buffer.get(), buffer);
+                assert_eq!(entry_words(decoded), image);
+            }
+        }
+    }
+}
+
 #[test]
 fn the_symbol_function_cell_is_the_word_compiled_code_reads() {
     let ev = Context::new();
@@ -222,7 +409,7 @@ fn tiny_function() -> Value {
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::Return];
     f.constants = vec![Value::fixnum(41), Value::fixnum(42)].into();
-    f.max_stack = 1;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     f.seal_hand_assembled_ops();
     Value::make_bytecode(f)
 }
@@ -361,6 +548,13 @@ fn variable_words_are_where_compiled_code_reads_them() {
         words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET),
         buffer.0 as usize
     );
+    assert_eq!(
+        words_at(
+            ctx,
+            CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_PTR_OFFSET
+        ),
+        std::ptr::from_ref(ev.buffers.current_buffer().expect("a current buffer")) as usize
+    );
     let other = ev.buffers.create_buffer("neovm--jl-other");
     ev.buffers.switch_current(other);
     let ctx = std::ptr::from_ref(&ev).cast::<u8>();
@@ -368,10 +562,24 @@ fn variable_words_are_where_compiled_code_reads_them() {
         words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET),
         other.0 as usize
     );
+    assert_eq!(
+        words_at(
+            ctx,
+            CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_PTR_OFFSET
+        ),
+        std::ptr::from_ref(ev.buffers.current_buffer().expect("a switched buffer")) as usize
+    );
     ev.buffers.kill_buffer(other);
     assert_eq!(ev.buffers.current_buffer_id(), None);
     let ctx = std::ptr::from_ref(&ev).cast::<u8>();
     assert_eq!(words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET), 0);
+    assert_eq!(
+        words_at(
+            ctx,
+            CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_PTR_OFFSET
+        ),
+        0
+    );
     // Forwarders' own slots.
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     ev.obarray
@@ -380,13 +588,15 @@ fn variable_words_are_where_compiled_code_reads_them() {
     let bool_fwd = ev.obarray.forwarder(intern("neovm--jl-bool")).expect("fwd");
     let int_fwd = ev.obarray.forwarder(intern("neovm--jl-int")).expect("fwd");
     let bool_base = std::ptr::from_ref(bool_fwd).cast::<u8>();
-    // SAFETY: a live Boolean descriptor's flag byte.
+    // SAFETY: the offset is pinned to this live AtomicBool field.
+    let bool_slot = unsafe {
+        &*bool_base
+            .add(LISP_BOOL_FWD_VALUE_OFFSET)
+            .cast::<std::sync::atomic::AtomicBool>()
+    };
+    assert!(bool_slot.load(std::sync::atomic::Ordering::Relaxed));
     assert_eq!(
-        unsafe { bool_base.add(LISP_BOOL_FWD_VALUE_OFFSET).read() },
-        1
-    );
-    assert_eq!(
-        words_at(
+        atomic_word_at(
             std::ptr::from_ref(int_fwd).cast(),
             LISP_INT_FWD_VALUE_OFFSET
         ),
@@ -394,12 +604,12 @@ fn variable_words_are_where_compiled_code_reads_them() {
     );
     let obj = crate::emacs_core::forward::alloc_objfwd(Value::fixnum(9));
     assert_eq!(
-        words_at(std::ptr::from_ref(obj).cast(), LISP_OBJ_FWD_VALUE_OFFSET),
+        atomic_word_at(std::ptr::from_ref(obj).cast(), LISP_OBJ_FWD_VALUE_OFFSET),
         Value::fixnum(9).bits()
     );
     let kbd = crate::emacs_core::forward::alloc_kboard_objfwd(Value::fixnum(11));
     assert_eq!(
-        words_at(
+        atomic_word_at(
             std::ptr::from_ref(kbd).cast(),
             LISP_KBOARD_OBJ_FWD_VALUE_OFFSET
         ),

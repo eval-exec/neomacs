@@ -89,17 +89,21 @@ fn cl2_local_move_preserves_gnu_topology_after_order_and_shift_changes() {
         assert_eq!(index.move_to(moving, next), Some(original));
         if original.start() != next.start() {
             let identity = OverlayIdentity::of(moving);
-            assert!(reference.remove(identity));
-            assert!(reference.insert_by(identity, |existing| {
-                next.start().cmp(
-                    &index
-                        .intervals
-                        .read()
-                        .range_by_identity(existing)
-                        .unwrap()
-                        .start(),
-                )
-            }));
+            assert!(reference.remove(identity).is_ok());
+            assert!(
+                reference
+                    .insert_by(identity, |existing| {
+                        next.start().cmp(
+                            &index
+                                .intervals
+                                .read()
+                                .range_by_identity(existing)
+                                .unwrap()
+                                .start(),
+                        )
+                    })
+                    .is_ok()
+            );
         }
         assert_eq!(
             index.gnu_order.subset_in_preorder(&identities),
@@ -265,17 +269,21 @@ fn cl2_local_move_attempts_consume_one_attachment_order_and_keep_equal_start_ord
                 "a rejected local attempt must not consume a second attachment"
             );
             let identity = OverlayIdentity::of(moving);
-            assert!(reference.remove(identity));
-            assert!(reference.insert_by(identity, |existing| {
-                next.start().cmp(
-                    &index
-                        .intervals
-                        .read()
-                        .range_by_identity(existing)
-                        .unwrap()
-                        .start(),
-                )
-            }));
+            assert!(reference.remove(identity).is_ok());
+            assert!(
+                reference
+                    .insert_by(identity, |existing| {
+                        next.start().cmp(
+                            &index
+                                .intervals
+                                .read()
+                                .range_by_identity(existing)
+                                .unwrap()
+                                .start(),
+                        )
+                    })
+                    .is_ok()
+            );
         } else {
             assert_eq!(record.key, previous_record.key);
             assert_eq!(
@@ -391,18 +399,20 @@ fn cl2_local_moves_preserve_gnu_topology_after_deletion_collapses_distinct_start
     ] {
         let previous = index.range(moving).unwrap();
         let mut reference = index.gnu_order.clone();
-        assert!(reference.remove(OverlayIdentity::of(moving)));
+        assert!(reference.remove(OverlayIdentity::of(moving)).is_ok());
         assert!(
-            reference.insert_by(OverlayIdentity::of(moving), |existing| {
-                next.start().cmp(
-                    &index
-                        .intervals
-                        .read()
-                        .range_by_identity(existing)
-                        .unwrap()
-                        .start(),
-                )
-            })
+            reference
+                .insert_by(OverlayIdentity::of(moving), |existing| {
+                    next.start().cmp(
+                        &index
+                            .intervals
+                            .read()
+                            .range_by_identity(existing)
+                            .unwrap()
+                            .start(),
+                    )
+                })
+                .is_ok()
         );
         assert_eq!(index.move_to(moving, next), Some(previous));
         assert_eq!(

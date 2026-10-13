@@ -38,7 +38,7 @@ fn run_minor(context: &mut Context) {
 }
 
 fn global(context: &Context, name: &str) -> Value {
-    context.obarray().symbol_value(name).copied().expect(name)
+    context.obarray().symbol_value_copied(name).expect(name)
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn compiled_old_cons_stores_remember_young_children_each_cycle() {
         });
         function.lexical = true;
         function.ops = vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return];
-        function.max_stack = 8;
+        function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
         let leaf = compile_bytecode_function(&function).expect("cons store compiles");
         let child_roots = context.save_specpdl_roots();
         let child = Value::cons(Value::fixnum(71 + index as i64), Value::NIL);

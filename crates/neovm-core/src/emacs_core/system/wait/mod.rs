@@ -183,9 +183,14 @@ impl WaitDeadline {
         duration: Duration,
         timer_deadline: GnuTimerTimestamp,
     ) -> Self {
+        let Some(instant) = Instant::now().checked_add(duration) else {
+            // GNU saturated timespec waits have no representable Rust Instant.
+            // Keep servicing events with the explicit indefinite-wait state.
+            return Self::Forever;
+        };
         Self::until_with_timer_deadline(
-            Instant::now() + duration,
-            monotonic_coarse_now().map(|now| now + duration),
+            instant,
+            monotonic_coarse_now().and_then(|now| now.checked_add(duration)),
             timer_deadline,
         )
     }

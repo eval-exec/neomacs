@@ -132,7 +132,7 @@ fn output_trace(setup: &str, enabled: bool, borrowed: bool, order: PropertyOrder
     for span in output.source_spans() {
         eval.push_specpdl_root(span.source());
     }
-    let input_source = eval.obarray.symbol_value("d5-plain-field-source").copied();
+    let input_source = eval.obarray.symbol_value_copied("d5-plain-field-source");
     let mut identities = Vec::new();
     let text = string_trace(&mut eval, output.value(), order);
     let sources = output
@@ -160,8 +160,7 @@ fn output_trace(setup: &str, enabled: bool, borrowed: bool, order: PropertyOrder
         .collect();
     let eval_count = eval
         .obarray
-        .symbol_value("d5-plain-field-evals")
-        .copied()
+        .symbol_value_copied("d5-plain-field-evals")
         .and_then(Value::as_fixnum)
         .expect("eval counter");
     let point = eval

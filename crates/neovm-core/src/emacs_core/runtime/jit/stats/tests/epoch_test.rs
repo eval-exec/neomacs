@@ -43,7 +43,7 @@ fn jit_fn_epoch_bumps_are_attributed_per_writer() {
     assert_eq!(delta(&base).unchanged_writes, unchanged_before + 1);
     assert_eq!(delta(&base).bumps_for(FunctionEpochBump::Fset), 2);
 
-    let id = sym.as_symbol_id().expect("symbol");
+    let id = sym.as_bare_symbol_id().expect("symbol");
     ev.obarray.clear_function_silent_id(id);
     assert_eq!(delta(&base).bumps_for(FunctionEpochBump::SilentClear), 1);
 

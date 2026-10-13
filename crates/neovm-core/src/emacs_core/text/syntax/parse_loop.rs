@@ -280,7 +280,10 @@ pub(super) fn run_parse_loop<M: ScanMode>(
     // such a scan.  Hoisting that fact here replaces three `Cell` loads plus
     // two compares per character — unhoistable by the compiler, since interior
     // mutability forces a reload after every call — with one register test.
-    let props_prop_free_everywhere = matches!(props, SyntaxProperties::Ignore);
+    let props_prop_free_everywhere = matches!(
+        props,
+        SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore
+    );
 
     // Memoized end of the current prop-free run (see
     // `SyntaxPropRange::prop_free_run_end`): positions below it are known

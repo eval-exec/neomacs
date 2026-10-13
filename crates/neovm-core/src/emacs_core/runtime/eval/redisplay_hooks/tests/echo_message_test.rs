@@ -77,8 +77,7 @@ fn fixture() -> (Context, FrameId, WindowId, Rc<Cell<f32>>, Rc<Cell<usize>>) {
 fn pre_targets(eval: &Context) -> Vec<Value> {
     let pres = eval
         .obarray
-        .symbol_value("d5-message-pres")
-        .copied()
+        .symbol_value_copied("d5-message-pres")
         .expect("pre log");
     crate::emacs_core::value::list_to_vec(&pres).expect("pre observations")
 }

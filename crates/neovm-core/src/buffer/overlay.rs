@@ -1092,7 +1092,7 @@ impl OverlayList {
         if !self.index.may_contain_property(property) {
             return false;
         }
-        let Some(symbol) = property.as_symbol_id() else {
+        let Some(symbol) = property.as_bare_symbol_id() else {
             return true;
         };
         let mut absent = self.absent_properties.get();
@@ -2103,7 +2103,7 @@ fn plist_get_by_symbol_id(plist: Value, prop: crate::emacs_core::intern::SymId) 
         if !pair_cdr.is_cons() {
             return None;
         };
-        if pair_car.as_symbol_id() == Some(prop) {
+        if pair_car.as_bare_symbol_id() == Some(prop) {
             return Some(pair_cdr.cons_car());
         }
         tail = pair_cdr.cons_cdr();

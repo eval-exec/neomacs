@@ -45,7 +45,7 @@ fn context(generational: bool) -> Context {
 }
 
 fn global(context: &Context, name: &str) -> Value {
-    context.obarray().symbol_value(name).copied().expect(name)
+    context.obarray().symbol_value_copied(name).expect(name)
 }
 
 fn minor(context: &mut Context) {
@@ -79,7 +79,7 @@ fn store_function(op: Op) -> ByteCodeFunction {
     });
     function.lexical = true;
     function.ops = vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return];
-    function.max_stack = 8;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     function
 }
 
@@ -239,7 +239,7 @@ fn bare_uninterned_symbol_store_logs_owner_once_before_a_minor() {
         )
         .expect("weak key setup");
     let key = global(&context, "u34-inline-key");
-    assert!(key.is_symbol());
+    assert!(key.is_bare_symbol());
     assert!(!key.is_heap_object(), "the symbol needs side-table marking");
     assert!(context.tagged_heap.value_is_old_for_test(owner));
     assert!(!context.tagged_heap.is_remembered_for_test(owner));
@@ -522,3 +522,7 @@ mod gen0_observed_multi_unbind;
 #[cfg(test)]
 #[path = "gen0_observed_blv_cold_capture_test.rs"]
 mod gen0_observed_blv_cold_capture;
+
+#[cfg(test)]
+#[path = "gen0_observed_interior_gap.rs"]
+mod gen0_observed_interior_gap;

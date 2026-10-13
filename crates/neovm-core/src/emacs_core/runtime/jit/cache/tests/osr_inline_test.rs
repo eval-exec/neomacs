@@ -35,7 +35,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -167,7 +167,7 @@ fn osr_inline_dependencies_evict_a_source_whose_entry_leaf_inlines_nothing() {
     let symbol = crate::emacs_core::intern::intern("osr-only-inline-dependency");
     let mut osr = compile_osr_leaf(&ctx.obarray, &physical, 0, id, None).unwrap();
     Rc::get_mut(&mut osr.leaf).unwrap().inline_deps = Box::from([symbol]);
-    register_osr_inline_deps(id, 0, &osr.leaf);
+    register_osr_inline_deps(id, 0, &osr.leaf, EntryLeaves::Cached);
     OSR_CACHE.with(|cache| cache.borrow_mut().insert((id, 0), Some(osr)));
     assert!(INLINE_DEPS.with(|deps| deps.borrow().get(&symbol).unwrap().contains(&id)));
     evict_inline_dependents(symbol);
@@ -189,7 +189,7 @@ fn osr_inline_dependency_union_survives_rebuilding_the_entry_leaf() {
     let obsolete = crate::emacs_core::intern::intern("obsolete-entry-union-dependency");
     let mut osr = compile_osr_leaf(&ctx.obarray, &physical, 0, id, None).unwrap();
     Rc::get_mut(&mut osr.leaf).unwrap().inline_deps = Box::from([osr_symbol]);
-    register_osr_inline_deps(id, 0, &osr.leaf);
+    register_osr_inline_deps(id, 0, &osr.leaf, EntryLeaves::Cached);
     OSR_CACHE.with(|cache| cache.borrow_mut().insert((id, 0), Some(osr)));
     INLINE_DEPS.with(|deps| deps.borrow_mut().entry(obsolete).or_default().insert(id));
     let mut rebuilt = compile_osr_leaf(&ctx.obarray, &physical, 0, id, None)
@@ -249,7 +249,7 @@ fn osr_inline_disabled_preserves_entry_only_dependency_eviction() {
     });
     let mut osr = compile_osr_leaf(&ctx.obarray, &physical, 0, id, None).unwrap();
     Rc::get_mut(&mut osr.leaf).unwrap().inline_deps = Box::from([osr_symbol]);
-    register_osr_inline_deps(id, 0, &osr.leaf);
+    register_osr_inline_deps(id, 0, &osr.leaf, EntryLeaves::Cached);
     let osr_leaf = Rc::clone(&osr.leaf);
     OSR_CACHE.with(|cache| cache.borrow_mut().insert((id, 0), Some(osr)));
     refresh_cached_inline_deps(id);
@@ -294,7 +294,7 @@ fn osr_inline_invalidation_preserves_dependencies_of_a_borrowed_entry() {
     });
     let mut osr = compile_osr_leaf(&ctx.obarray, &physical, 0, id, None).unwrap();
     Rc::get_mut(&mut osr.leaf).unwrap().inline_deps = Box::from([osr_symbol]);
-    register_osr_inline_deps(id, 0, &osr.leaf);
+    register_osr_inline_deps(id, 0, &osr.leaf, EntryLeaves::Cached);
     OSR_CACHE.with(|cache| cache.borrow_mut().insert((id, 0), Some(osr)));
 
     COMPILED.with(|cache| {

@@ -133,11 +133,11 @@ fn stack_return_reuses_storage_after_an_unhandled_signal() {
         let mut failing = ByteCodeFunction::new(LambdaParams::simple(vec![]));
         failing.constants = vec![Value::symbol("vm-stack-return-undefined-function")].into();
         failing.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
-        failing.max_stack = 1;
+        failing.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
         let mut succeeding = ByteCodeFunction::new(LambdaParams::simple(vec![]));
         succeeding.constants = vec![Value::fixnum(42)].into();
         succeeding.ops = vec![Op::Constant(0), Op::Return];
-        succeeding.max_stack = 1;
+        succeeding.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
 
         let mut vm = Vm::from_context(&mut context);
         #[cfg(feature = "jit")]
@@ -165,4 +165,54 @@ fn stack_return_reuses_storage_after_an_unhandled_signal() {
         assert!(vm.ctx.bc_buf.is_empty());
         assert!(vm.ctx.bc_frames.is_empty());
     }
+}
+
+#[test]
+fn stack_pool_is_inline_thread_private_execution_storage() {
+    crate::test_utils::init_test_tracing();
+    static_assertions::assert_not_impl_any!(InterpreterStackPool: Send, Sync, Clone);
+    static_assertions::assert_eq_size!(InterpreterStackPool, Vec<InterpreterStacks>);
+    assert_eq!(
+        std::mem::align_of::<InterpreterStackPool>(),
+        std::mem::align_of::<Vec<InterpreterStacks>>()
+    );
+    // Context is repr(Rust), and test/debug configurations change its layout.
+    // Pin the exact inline representation here; the shipping assembly gate
+    // separately certifies the owner's pool address and entry-return route.
+}
+
+#[test]
+fn stack_pools_do_not_share_cached_execution_allocations() {
+    crate::test_utils::init_test_tracing();
+    let function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+    let mut first = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let mut second = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    assert_eq!(
+        std::mem::size_of_val(&first.interpreter_stacks),
+        std::mem::size_of::<InterpreterStackPool>(),
+        "Context carries the pool inline, not a Box or World view"
+    );
+    first
+        .interpreter_stacks
+        .give_back(populated_stacks(&function));
+    assert_eq!(first.interpreter_stacks.free.len(), 1);
+    assert!(second.interpreter_stacks.free.is_empty());
+    let first_storage = first.interpreter_stacks.take();
+    assert!(first.interpreter_stacks.free.is_empty());
+    second
+        .interpreter_stacks
+        .give_back(populated_stacks(&function));
+    let second_storage = second.interpreter_stacks.take();
+    assert_ne!(
+        first_storage.frames.as_ptr(),
+        second_storage.frames.as_ptr()
+    );
+    assert_ne!(
+        first_storage.suspended.as_ptr(),
+        second_storage.suspended.as_ptr()
+    );
+    assert!(first_storage.frames.is_empty());
+    assert!(first_storage.suspended.is_empty());
+    assert!(second_storage.frames.is_empty());
+    assert!(second_storage.suspended.is_empty());
 }

@@ -6,29 +6,32 @@ use crate::heap_types::LispString;
 #[test]
 fn json_option_domains_match_gnu_symbols() {
     assert_eq!(
-        ObjectType::from_symbol_value(&Value::symbol("hash-table")),
+        ObjectType::from_symbol_value(&Value::symbol("hash-table"), SymbolMode::Bare),
         Some(ObjectType::HashTable)
     );
     assert_eq!(
-        ObjectType::from_symbol_value(&Value::symbol("alist")),
+        ObjectType::from_symbol_value(&Value::symbol("alist"), SymbolMode::Bare),
         Some(ObjectType::Alist)
     );
     assert_eq!(
-        ObjectType::from_symbol_value(&Value::symbol("plist")),
+        ObjectType::from_symbol_value(&Value::symbol("plist"), SymbolMode::Bare),
         Some(ObjectType::Plist)
     );
     assert_eq!(
-        ArrayType::from_symbol_value(&Value::symbol("array")),
+        ArrayType::from_symbol_value(&Value::symbol("array"), SymbolMode::Bare),
         Some(ArrayType::Vector)
     );
     assert_eq!(
-        ArrayType::from_symbol_value(&Value::symbol("list")),
+        ArrayType::from_symbol_value(&Value::symbol("list"), SymbolMode::Bare),
         Some(ArrayType::List)
     );
 
     assert_eq!(ObjectType::HashTable.symbol_name(), "hash-table");
     assert_eq!(ArrayType::Vector.symbol_name(), "array");
-    assert_eq!(ArrayType::from_symbol_value(&Value::symbol("vector")), None);
+    assert_eq!(
+        ArrayType::from_symbol_value(&Value::symbol("vector"), SymbolMode::Bare),
+        None
+    );
 
     for (keyword, parsed) in [
         (":object-type", JsonOptionKey::ObjectType),
@@ -37,16 +40,19 @@ fn json_option_domains_match_gnu_symbols() {
         (":false-object", JsonOptionKey::FalseObject),
     ] {
         assert_eq!(
-            JsonOptionKey::from_value(&Value::keyword(keyword)),
+            JsonOptionKey::from_value(&Value::keyword(keyword), SymbolMode::Bare),
             Some(parsed)
         );
         assert_eq!(parsed.keyword(), keyword);
     }
     assert_eq!(
-        JsonOptionKey::from_value(&Value::symbol("object-type")),
+        JsonOptionKey::from_value(&Value::symbol("object-type"), SymbolMode::Bare),
         None
     );
-    assert_eq!(JsonOptionKey::from_value(&Value::keyword(":unknown")), None);
+    assert_eq!(
+        JsonOptionKey::from_value(&Value::keyword(":unknown"), SymbolMode::Bare),
+        None
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -605,7 +611,7 @@ fn parse_null() {
     crate::test_utils::init_test_tracing();
     let result = builtin_json_parse_string(vec![Value::string("null")]);
     let val = result.unwrap();
-    assert_eq!(val.as_symbol_name(), Some(":null"));
+    assert_eq!(val.as_bare_symbol_name(), Some(":null"));
 }
 
 #[test]
@@ -620,7 +626,7 @@ fn parse_false() {
     crate::test_utils::init_test_tracing();
     let result = builtin_json_parse_string(vec![Value::string("false")]);
     let val = result.unwrap();
-    assert_eq!(val.as_symbol_name(), Some(":false"));
+    assert_eq!(val.as_bare_symbol_name(), Some(":false"));
 }
 
 #[test]
@@ -828,7 +834,7 @@ fn parse_object_as_plist() {
     let val = result.unwrap();
     let items = list_to_vec(&val).expect("should be a list");
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0].as_symbol_name(), Some(":key"));
+    assert_eq!(items[0].as_bare_symbol_name(), Some(":key"));
     assert!(items[1].is_fixnum());
 }
 
@@ -1009,7 +1015,7 @@ fn parse_custom_false_object() {
         Value::keyword(":json-false"),
     ]);
     let val = result.unwrap();
-    assert_eq!(val.as_symbol_name(), Some(":json-false"));
+    assert_eq!(val.as_bare_symbol_name(), Some(":json-false"));
 }
 
 #[test]

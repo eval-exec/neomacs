@@ -598,7 +598,7 @@ fn the_standard_case_tables_and_replace_match_case_answer_like_gnu() {
 fn char_table_with_extras(purpose: &str, extras: &[Value]) -> Value {
     let table = Value::make_char_table(Value::symbol(purpose), Value::NIL, extras.len());
     let _ = table.with_char_table_mut(|obj| {
-        obj.extras.ensure_owned().clone_from(&extras.to_vec());
+        obj.copy_extras(extras);
     });
     table
 }

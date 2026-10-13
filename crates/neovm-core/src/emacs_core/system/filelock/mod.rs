@@ -612,6 +612,7 @@ pub(crate) fn unlock_file(
                 &eval.obarray,
                 sig.symbol,
                 &Value::symbol("file-error"),
+                eval.symbol_mode(),
             ) =>
         {
             let error_object = Value::cons(Value::symbol(sig.symbol), signal_payload_value(&sig));
@@ -685,6 +686,7 @@ fn current_buffer_file_lock_target(
 /// producer about file locking separately.
 pub(crate) fn lock_current_buffer_before_change(
     eval: &mut super::eval::Context,
+    before_lock: impl FnOnce(&super::eval::Context),
 ) -> Result<(), Flow> {
     let Some(buffer_id) = eval.buffers.current_buffer_id() else {
         return Ok(());
@@ -700,6 +702,9 @@ pub(crate) fn lock_current_buffer_before_change(
     let Some(filename) = current_buffer_file_lock_target(eval, buffer_id) else {
         return Ok(());
     };
+    // Handler dispatch, lock-name construction and user prompts can run Lisp.
+    // Native clean/file-target checks above do not invalidate text geometry.
+    before_lock(eval);
     let _ = lock_file(eval, &filename)?;
     Ok(())
 }

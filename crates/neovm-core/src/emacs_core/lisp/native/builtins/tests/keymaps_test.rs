@@ -41,7 +41,7 @@ fn single_key_description_distinguishes_event_payloads_ranges_and_lucid_lists() 
 }
 
 fn key_description(vec: Vec<Value>) -> String {
-    builtin_key_description(vec![Value::vector(vec)])
+    builtin_key_description(vec![Value::vector(vec)], crate::tagged::SymbolMode::Bare)
         .expect("key-description should succeed")
         .as_lisp_string()
         .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))

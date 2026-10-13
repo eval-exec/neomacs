@@ -14,6 +14,7 @@ use super::value::*;
 use crate::buffer::{EmacsBytePos, LispCharPos1};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::tagged::value::SymbolMode;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -988,7 +989,7 @@ impl CharsetRegistry {
                         .plist
                         .iter()
                         .find(|(key, _)| *key == name_key)
-                        .and_then(|(_, value)| value.as_symbol_id())?;
+                        .and_then(|(_, value)| value.as_bare_symbol_id())?;
                     (canonical != info.name).then_some((info.name, canonical))
                 })
                 .collect(),
@@ -1815,16 +1816,13 @@ fn optional_charset_lisp_pos_to_byte(
     Ok(Some(buf.lisp_pos_to_accessible_emacs_byte_pos(pos)))
 }
 
-fn require_known_charset(value: &Value) -> Result<SymId, Flow> {
-    let name = match value.kind() {
-        ValueKind::Symbol(id) => id,
-        _ => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("charsetp"), *value],
-            ));
-        }
-    };
+fn require_known_charset(value: &Value, mode: SymbolMode) -> Result<SymId, Flow> {
+    let name = value.as_symbol_id(mode).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("charsetp"), *value],
+        )
+    })?;
     let known = CHARSET_REGISTRY.with(|slot| slot.borrow().contains_symbol(name));
     if known {
         Ok(name)
@@ -1901,33 +1899,36 @@ fn charset_value_text(value: &Value) -> Option<String> {
     }
 }
 
-fn parse_map_name(value: &Value) -> Option<String> {
-    charset_value_text(value)
+fn parse_map_name(value: &Value, mode: SymbolMode) -> Option<String> {
+    value
+        .as_symbol_name(mode)
+        .map(str::to_owned)
+        .or_else(|| charset_value_text(value))
 }
 
-fn parse_subset_spec(value: &Value) -> Option<CharsetSubsetSpec> {
+fn parse_subset_spec(value: &Value, mode: SymbolMode) -> Option<CharsetSubsetSpec> {
     let items = list_to_vec(value)?;
     if items.len() != 4 {
         return None;
     }
     Some(CharsetSubsetSpec {
-        parent: items[0].as_symbol_id()?,
+        parent: items[0].as_symbol_id(mode)?,
         parent_min_code: decode_code_arg(&items[1]),
         parent_max_code: decode_code_arg(&items[2]),
         offset: int_or_zero(&items[3]),
     })
 }
 
-fn parse_superset_spec(value: &Value) -> Option<Vec<(SymId, i64)>> {
+fn parse_superset_spec(value: &Value, mode: SymbolMode) -> Option<Vec<(SymId, i64)>> {
     let items = list_to_vec(value)?;
     let members = items
         .into_iter()
         .map(|item| match item.kind() {
-            ValueKind::Symbol(id) => Some((id, 0)),
+            _ if item.is_symbol(mode) => Some((item.as_symbol_id(mode)?, 0)),
             ValueKind::Cons => {
                 let car = item.cons_car();
                 let cdr = item.cons_cdr();
-                let name = car.as_symbol_id()?;
+                let name = car.as_symbol_id(mode)?;
                 Some((name, int_or_zero(&cdr)))
             }
             _ => None,
@@ -1942,11 +1943,22 @@ fn parse_superset_spec(value: &Value) -> Option<Vec<(SymId, i64)>> {
 // ---------------------------------------------------------------------------
 
 /// `(charsetp OBJECT)` -- return t if OBJECT names a known charset.
+#[cfg(test)]
 pub(crate) fn builtin_charsetp(args: Vec<Value>) -> EvalResult {
+    builtin_charsetp_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_charsetp_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_charsetp_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_charsetp_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("charsetp", &args, 1)?;
-    let name = match args[0].kind() {
-        ValueKind::Symbol(id) => id,
-        _ => return Ok(Value::NIL),
+    let Some(name) = args[0].as_symbol_id(mode) else {
+        return Ok(Value::NIL);
     };
     let found = CHARSET_REGISTRY.with(|slot| slot.borrow().contains_symbol(name));
     Ok(Value::bool_val(found))
@@ -1998,20 +2010,29 @@ pub(crate) fn builtin_charset_priority_list(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(set-charset-priority &rest CHARSETS)` -- set charset detection priority.
+#[cfg(test)]
 pub(crate) fn builtin_set_charset_priority(args: Vec<Value>) -> EvalResult {
+    builtin_set_charset_priority_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_set_charset_priority_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_set_charset_priority_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_set_charset_priority_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_min_args("set-charset-priority", &args, 1)?;
 
     let mut requested = Vec::with_capacity(args.len());
     for arg in &args {
-        let name = match arg.kind() {
-            ValueKind::Symbol(id) => id,
-            _ => {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("charsetp"), *arg],
-                ));
-            }
-        };
+        let name = arg.as_symbol_id(mode).ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("charsetp"), *arg],
+            )
+        })?;
         let known = CHARSET_REGISTRY.with(|slot| slot.borrow().contains_symbol(name));
         if !known {
             return Err(signal(
@@ -2060,7 +2081,19 @@ pub(crate) fn char_charset_name(ch: i64) -> &'static str {
 /// charset or a `wrong-type-argument`/`charsetp` error is signalled, exactly
 /// as `CHECK_CHARSET_GET_CHARSET` does.  The literal list element is returned,
 /// not its alias target.
+#[cfg(test)]
 pub(crate) fn builtin_char_charset(args: Vec<Value>) -> EvalResult {
+    builtin_char_charset_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_char_charset_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_char_charset_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_char_charset_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_min_args("char-charset", &args, 1)?;
     expect_max_args("char-charset", &args, 2)?;
     let ch = encode_char_input(&args[0])?;
@@ -2081,7 +2114,7 @@ pub(crate) fn builtin_char_charset(args: Vec<Value>) -> EvalResult {
     while matches!(tail.kind(), ValueKind::Cons) {
         let elem = tail.cons_car();
         // CHECK_CHARSET_GET_CHARSET: each element must be a known charset.
-        let name = require_known_charset(&elem)?;
+        let name = require_known_charset(&elem, mode)?;
         let contains = CHARSET_REGISTRY.with(|slot| slot.borrow().encode_char(name, ch).is_some());
         if contains {
             return Ok(elem);
@@ -2127,9 +2160,21 @@ pub(crate) fn builtin_split_char(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(charset-plist CHARSET)` -- return property list for CHARSET.
+#[cfg(test)]
 pub(crate) fn builtin_charset_plist(args: Vec<Value>) -> EvalResult {
+    builtin_charset_plist_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_charset_plist_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_charset_plist_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_charset_plist_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("charset-plist", &args, 1)?;
-    let name = require_known_charset(&args[0])?;
+    let name = require_known_charset(&args[0], mode)?;
     CHARSET_REGISTRY.with(|slot| {
         let reg = slot.borrow();
         if let Some(pairs) = reg.plist(name) {
@@ -2149,18 +2194,27 @@ pub(crate) fn builtin_charset_plist(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(charset-id-internal &optional CHARSET)` -- return internal charset id.
+#[cfg(test)]
 pub(crate) fn builtin_charset_id_internal(args: Vec<Value>) -> EvalResult {
+    builtin_charset_id_internal_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_charset_id_internal_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_charset_id_internal_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_charset_id_internal_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_max_args("charset-id-internal", &args, 1)?;
     let arg = args.first().cloned().unwrap_or(Value::NIL);
-    let name = match arg.kind() {
-        ValueKind::Symbol(id) => id,
-        _ => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("charsetp"), arg],
-            ));
-        }
-    };
+    let name = arg.as_symbol_id(mode).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("charsetp"), arg],
+        )
+    })?;
 
     CHARSET_REGISTRY.with(|slot| {
         let reg = slot.borrow();
@@ -2208,14 +2262,14 @@ fn decode_code_arg(val: &Value) -> i64 {
 }
 
 /// Parse a plist Value into a Vec of (key, value) pairs.
-fn parse_plist(val: &Value) -> Vec<(SymId, Value)> {
+fn parse_plist(val: &Value, mode: SymbolMode) -> Vec<(SymId, Value)> {
     let mut result = Vec::new();
     let Some(items) = list_to_vec(val) else {
         return result;
     };
     let mut i = 0;
     while i + 1 < items.len() {
-        if let Some(key) = items[i].as_symbol_id() {
+        if let Some(key) = items[i].as_symbol_id(mode) {
             result.push((key, items[i + 1]));
         }
         i += 2;
@@ -2365,7 +2419,19 @@ fn expect_make_char_code_byte(value: &Value) -> Result<i64, Flow> {
 
 /// `(make-char CHARSET &optional CODE1 CODE2 CODE3 CODE4)` -- return a
 /// character at the charset position codes.
+#[cfg(test)]
 pub(crate) fn builtin_make_char(args: Vec<Value>) -> EvalResult {
+    builtin_make_char_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_make_char_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_make_char_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_make_char_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     if args.is_empty() || args.len() > 5 {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -2373,7 +2439,7 @@ pub(crate) fn builtin_make_char(args: Vec<Value>) -> EvalResult {
         ));
     }
 
-    let name = require_known_charset(&args[0])?;
+    let name = require_known_charset(&args[0], mode)?;
     let decoded = CHARSET_REGISTRY.with(|slot| {
         let reg = slot.borrow();
         let info = reg.charsets.get(&name).ok_or_else(|| {
@@ -2398,19 +2464,28 @@ pub(crate) fn builtin_make_char(args: Vec<Value>) -> EvalResult {
 ///
 /// Internal charset initializer — registers a charset in the registry.
 /// Accepts exactly 17 arguments matching the Emacs C function.
+#[cfg(test)]
 pub(crate) fn builtin_define_charset_internal(args: Vec<Value>) -> EvalResult {
+    builtin_define_charset_internal_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_define_charset_internal_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_define_charset_internal_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_define_charset_internal_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("define-charset-internal", &args, 17)?;
 
     // arg[0]: name (symbol)
-    let name = match args[0].kind() {
-        ValueKind::Symbol(id) => id,
-        _ => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("symbolp"), args[0]],
-            ));
-        }
-    };
+    let name = args[0].as_symbol_id(mode).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), args[0]],
+        )
+    })?;
 
     // arg[1]: dimension (vector or integer — the define-charset macro passes
     //         a vector of the form [dim ...], but we also accept a plain int)
@@ -2502,16 +2577,16 @@ pub(crate) fn builtin_define_charset_internal(args: Vec<Value>) -> EvalResult {
     let method = if !args[11].is_nil() {
         CharsetMethod::Offset(int_or_zero(&args[11]))
     } else if !args[12].is_nil() {
-        CharsetMethod::Map(parse_map_name(&args[12]).unwrap_or_default())
+        CharsetMethod::Map(parse_map_name(&args[12], mode).unwrap_or_default())
     } else if !args[13].is_nil() {
-        CharsetMethod::Subset(parse_subset_spec(&args[13]).ok_or_else(|| {
+        CharsetMethod::Subset(parse_subset_spec(&args[13], mode).ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("listp"), args[13]],
             )
         })?)
     } else if !args[14].is_nil() {
-        CharsetMethod::Superset(parse_superset_spec(&args[14]).ok_or_else(|| {
+        CharsetMethod::Superset(parse_superset_spec(&args[14], mode).ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("listp"), args[14]],
@@ -2525,7 +2600,7 @@ pub(crate) fn builtin_define_charset_internal(args: Vec<Value>) -> EvalResult {
     // arg[15]: unify-map
     // arg[16]: plist
     let unify_map = args[15];
-    let plist = parse_plist(&args[16]);
+    let plist = parse_plist(&args[16], mode);
 
     CHARSET_REGISTRY.with(|slot| {
         let mut reg = slot.borrow_mut();
@@ -2655,9 +2730,21 @@ pub(crate) fn builtin_get_unused_iso_final_char(args: Vec<Value>) -> EvalResult 
 
 /// `(declare-equiv-charset DIMENSION CHARS CH CHARSET)` -- declare an
 /// equivalent charset mapping tuple.
+#[cfg(test)]
 pub(crate) fn builtin_declare_equiv_charset(args: Vec<Value>) -> EvalResult {
+    builtin_declare_equiv_charset_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_declare_equiv_charset_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_declare_equiv_charset_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_declare_equiv_charset_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("declare-equiv-charset", &args, 4)?;
-    let _charset = require_known_charset(&args[3])?;
+    let _charset = require_known_charset(&args[3], mode)?;
     let dimension = expect_fixnump(&args[0])?;
     let chars = expect_fixnump(&args[1])?;
     let _ch = encode_char_input(&args[2])?;
@@ -2681,10 +2768,22 @@ pub(crate) fn builtin_declare_equiv_charset(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(define-charset-alias ALIAS CHARSET)` -- add ALIAS for CHARSET.
+#[cfg(test)]
 pub(crate) fn builtin_define_charset_alias(args: Vec<Value>) -> EvalResult {
+    builtin_define_charset_alias_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_define_charset_alias_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_define_charset_alias_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_define_charset_alias_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("define-charset-alias", &args, 2)?;
-    let target = require_known_charset(&args[1])?;
-    if let Some(id) = args[0].as_symbol_id() {
+    let target = require_known_charset(&args[1], mode)?;
+    if let Some(id) = args[0].as_symbol_id(mode) {
         CHARSET_REGISTRY.with(|slot| slot.borrow_mut().define_alias(id, target));
     }
     Ok(Value::NIL)
@@ -2722,9 +2821,21 @@ pub(crate) fn builtin_find_charset_string(args: Vec<Value>) -> EvalResult {
 ///
 /// Uses the charset's registered method (Offset, Map, etc.) to convert
 /// a charset-specific code-point to an Emacs internal character code.
+#[cfg(test)]
 pub(crate) fn builtin_decode_char(args: Vec<Value>) -> EvalResult {
+    builtin_decode_char_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_decode_char_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_decode_char_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_decode_char_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("decode-char", &args, 2)?;
-    let name = require_known_charset(&args[0])?;
+    let name = require_known_charset(&args[0], mode)?;
     let code_point = decode_char_codepoint_arg(&args[1])?;
 
     let decoded = CHARSET_REGISTRY.with(|slot| slot.borrow().decode_char(name, code_point));
@@ -2736,10 +2847,22 @@ pub(crate) fn builtin_decode_char(args: Vec<Value>) -> EvalResult {
 ///
 /// Uses the charset's registered method to convert an Emacs internal
 /// character code back to a charset-specific code-point.
+#[cfg(test)]
 pub(crate) fn builtin_encode_char(args: Vec<Value>) -> EvalResult {
+    builtin_encode_char_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_encode_char_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_encode_char_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_encode_char_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("encode-char", &args, 2)?;
     let ch = encode_char_input(&args[0])?;
-    let name = require_known_charset(&args[1])?;
+    let name = require_known_charset(&args[1], mode)?;
 
     let encoded = CHARSET_REGISTRY.with(|slot| slot.borrow().encode_char(name, ch));
 
@@ -2748,10 +2871,22 @@ pub(crate) fn builtin_encode_char(args: Vec<Value>) -> EvalResult {
 
 /// `(unify-charset CHARSET &optional UNIFY-MAP DEUNIFY)` -- toggle Unicode
 /// unification for an offset charset.
+#[cfg(test)]
 pub(crate) fn builtin_unify_charset(args: Vec<Value>) -> EvalResult {
+    builtin_unify_charset_with_symbols(args, SymbolMode::Bare)
+}
+
+pub(crate) fn builtin_unify_charset_in_state(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_unify_charset_with_symbols(args, eval.symbol_mode())
+}
+
+fn builtin_unify_charset_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_min_args("unify-charset", &args, 1)?;
     expect_max_args("unify-charset", &args, 3)?;
-    let name = require_known_charset(&args[0])?;
+    let name = require_known_charset(&args[0], mode)?;
 
     CHARSET_REGISTRY.with(|slot| {
         let mut reg = slot.borrow_mut();
@@ -2904,3 +3039,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/positioned_dispatch_test.rs"]
+mod positioned_dispatch_tests;

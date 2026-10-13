@@ -229,8 +229,7 @@ fn native_callback_cache_validates_after_debugger_redefines_designator() {
     assert_eq!(
         print_value(
             &ctx.obarray()
-                .symbol_value("native-callback-debug-log")
-                .copied()
+                .symbol_value_copied("native-callback-debug-log")
                 .expect("debug log")
         ),
         "(lambda)"
@@ -264,8 +263,9 @@ fn native_callback_cache_validates_after_gc_hook_redefines_designator() {
         .expect("GC-mutated callback");
     assert!(ctx.gc_count > gc_count);
     assert_eq!(
-        ctx.obarray().symbol_value("native-callback-gc-hook-ran"),
-        Some(&Value::T)
+        ctx.obarray()
+            .symbol_value_copied("native-callback-gc-hook-ran"),
+        Some(Value::T)
     );
     assert_eq!(value, Value::symbol("native-callback-gc-replacement"));
     assert_eq!((ctx.depth, ctx.specpdl.len()), (depth, specpdl));
@@ -391,19 +391,17 @@ fn native_callback_cache_preserves_signal_throw_and_debug_exit_unwind() {
             );
             assert_eq!((ctx.depth, ctx.specpdl.len()), (depth, specpdl));
             assert_eq!(
-                ctx.obarray().symbol_value("native-callback-bound"),
-                Some(&Value::fixnum(7))
+                ctx.obarray().symbol_value_copied("native-callback-bound"),
+                Some(Value::fixnum(7))
             );
             let signal_log = print_value(
                 &ctx.obarray()
-                    .symbol_value("native-callback-signal-log")
-                    .copied()
+                    .symbol_value_copied("native-callback-signal-log")
                     .expect("signal log"),
             );
             let exit_log = print_value(
                 &ctx.obarray()
-                    .symbol_value("native-callback-exit-log")
-                    .copied()
+                    .symbol_value_copied("native-callback-exit-log")
                     .expect("exit log"),
             );
             results.push((outcome, signal_log, exit_log));

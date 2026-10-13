@@ -159,7 +159,7 @@ fn automatic_gc_samples_use_the_gnu_special_bucket() {
     let key = *table.key_snapshots().next().unwrap();
     let frames = key.as_vector_data().unwrap();
     assert_eq!(frames.len(), 2);
-    assert!(frames[0].is_symbol_named("Automatic GC"));
+    assert!(frames[0].is_bare_symbol_named("Automatic GC"));
     assert_eq!(table.data.values().next().unwrap().as_fixnum(), Some(9));
 }
 

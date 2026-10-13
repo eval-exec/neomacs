@@ -640,8 +640,8 @@ pub struct TaggedHeap {
     /// Mapped cons ranges staged by `begin_collection` for the concurrent
     /// first cycle; `launch_concurrent_mark` moves them into the job.
     staged_mapped_cons_scan: Option<Vec<(usize, usize)>>,
-    /// Mapped veclike header addresses staged alongside (see the job field).
-    staged_mapped_veclikes: Option<Vec<usize>>,
+    /// Stopped-start mapped veclike backing descriptors (see the job field).
+    staged_mapped_veclikes: Option<MappedVeclikeScanSnapshot>,
     /// Set while a stop-the-world FIRST partition cycle runs with the image
     /// pre-marked (`premark_mapped_image`): every mapped object is marked in
     /// the side tables and the flat seed pushes all their heap children, so
@@ -912,6 +912,54 @@ pub struct TaggedHeap {
     /// A claims-only carrier has disabled measurement; the two facilities
     /// retain independent history, snapshot and per-mutator log lifetimes.
     census: Option<Box<GenCensus>>,
+    /// Native GEN0's exclusion, exact-cons admission and vector/record window
+    /// words, encoded in separate
+    /// one-byte Cells. A single size-16 field sorts ahead of the old byte tail
+    /// in Rust's layout; these size-one fields retain the old field offsets.
+    /// Contiguity is asserted in barrier_window before generated code reads
+    /// each unaligned word. Only this heap's executing mutator publishes;
+    /// the GC worker never reads these Cells, and publication has no callback
+    /// or safepoint, matching the JitHeapState Cells' contract.
+    compiled_observation_exclusion_00: Cell<u8>,
+    compiled_observation_exclusion_01: Cell<u8>,
+    compiled_observation_exclusion_02: Cell<u8>,
+    compiled_observation_exclusion_03: Cell<u8>,
+    compiled_observation_exclusion_04: Cell<u8>,
+    compiled_observation_exclusion_05: Cell<u8>,
+    compiled_observation_exclusion_06: Cell<u8>,
+    compiled_observation_exclusion_07: Cell<u8>,
+    compiled_observation_exclusion_08: Cell<u8>,
+    compiled_observation_exclusion_09: Cell<u8>,
+    compiled_observation_exclusion_10: Cell<u8>,
+    compiled_observation_exclusion_11: Cell<u8>,
+    compiled_observation_exclusion_12: Cell<u8>,
+    compiled_observation_exclusion_13: Cell<u8>,
+    compiled_observation_exclusion_14: Cell<u8>,
+    compiled_observation_exclusion_15: Cell<u8>,
+    compiled_observation_exclusion_16: Cell<u8>,
+    compiled_observation_exclusion_17: Cell<u8>,
+    compiled_observation_exclusion_18: Cell<u8>,
+    compiled_observation_exclusion_19: Cell<u8>,
+    compiled_observation_exclusion_20: Cell<u8>,
+    compiled_observation_exclusion_21: Cell<u8>,
+    compiled_observation_exclusion_22: Cell<u8>,
+    compiled_observation_exclusion_23: Cell<u8>,
+    compiled_observation_exclusion_24: Cell<u8>,
+    compiled_observation_exclusion_25: Cell<u8>,
+    compiled_observation_exclusion_26: Cell<u8>,
+    compiled_observation_exclusion_27: Cell<u8>,
+    compiled_observation_exclusion_28: Cell<u8>,
+    compiled_observation_exclusion_29: Cell<u8>,
+    compiled_observation_exclusion_30: Cell<u8>,
+    compiled_observation_exclusion_31: Cell<u8>,
+    compiled_observation_exclusion_32: Cell<u8>,
+    compiled_observation_exclusion_33: Cell<u8>,
+    compiled_observation_exclusion_34: Cell<u8>,
+    compiled_observation_exclusion_35: Cell<u8>,
+    compiled_observation_exclusion_36: Cell<u8>,
+    compiled_observation_exclusion_37: Cell<u8>,
+    compiled_observation_exclusion_38: Cell<u8>,
+    compiled_observation_exclusion_39: Cell<u8>,
 }
 
 impl Default for TaggedHeap {
@@ -1121,6 +1169,46 @@ impl TaggedHeap {
             dump_addr_hi: 0,
             vec_scan: knobs::vec_scan_mode(),
             census: GenCensus::from_knob(),
+            compiled_observation_exclusion_00: Cell::new(0),
+            compiled_observation_exclusion_01: Cell::new(0),
+            compiled_observation_exclusion_02: Cell::new(0),
+            compiled_observation_exclusion_03: Cell::new(0),
+            compiled_observation_exclusion_04: Cell::new(0),
+            compiled_observation_exclusion_05: Cell::new(0),
+            compiled_observation_exclusion_06: Cell::new(0),
+            compiled_observation_exclusion_07: Cell::new(0),
+            compiled_observation_exclusion_08: Cell::new(0),
+            compiled_observation_exclusion_09: Cell::new(0),
+            compiled_observation_exclusion_10: Cell::new(0),
+            compiled_observation_exclusion_11: Cell::new(0),
+            compiled_observation_exclusion_12: Cell::new(0),
+            compiled_observation_exclusion_13: Cell::new(0),
+            compiled_observation_exclusion_14: Cell::new(0),
+            compiled_observation_exclusion_15: Cell::new(0),
+            compiled_observation_exclusion_16: Cell::new(0),
+            compiled_observation_exclusion_17: Cell::new(0),
+            compiled_observation_exclusion_18: Cell::new(0),
+            compiled_observation_exclusion_19: Cell::new(0),
+            compiled_observation_exclusion_20: Cell::new(0),
+            compiled_observation_exclusion_21: Cell::new(0),
+            compiled_observation_exclusion_22: Cell::new(0),
+            compiled_observation_exclusion_23: Cell::new(0),
+            compiled_observation_exclusion_24: Cell::new(0),
+            compiled_observation_exclusion_25: Cell::new(0),
+            compiled_observation_exclusion_26: Cell::new(0),
+            compiled_observation_exclusion_27: Cell::new(0),
+            compiled_observation_exclusion_28: Cell::new(0),
+            compiled_observation_exclusion_29: Cell::new(0),
+            compiled_observation_exclusion_30: Cell::new(0),
+            compiled_observation_exclusion_31: Cell::new(0),
+            compiled_observation_exclusion_32: Cell::new(0),
+            compiled_observation_exclusion_33: Cell::new(0),
+            compiled_observation_exclusion_34: Cell::new(0),
+            compiled_observation_exclusion_35: Cell::new(0),
+            compiled_observation_exclusion_36: Cell::new(0),
+            compiled_observation_exclusion_37: Cell::new(0),
+            compiled_observation_exclusion_38: Cell::new(0),
+            compiled_observation_exclusion_39: Cell::new(0),
         };
         if knobs::concurrent_claims_on() {
             heap.install_concurrent_claims();
@@ -1845,18 +1933,13 @@ impl TaggedHeap {
                     .owned_capacity()
                     .saturating_mul(size_of::<TaggedValue>()),
             )
-            .saturating_add(
-                data.params
+            .saturating_add(data.params.named().map_or(0, |params| {
+                params
                     .required
                     .capacity()
-                    .saturating_mul(size_of::<SymId>()),
-            )
-            .saturating_add(
-                data.params
-                    .optional
-                    .capacity()
-                    .saturating_mul(size_of::<SymId>()),
-            )
+                    .saturating_add(params.optional.capacity())
+                    .saturating_mul(size_of::<SymId>())
+            }))
             .saturating_add(
                 data.resident_gnu_byte_offset_map_capacity()
                     .saturating_mul(size_of::<GnuByteOffsetMapEntry>()),
@@ -2047,7 +2130,9 @@ impl TaggedHeap {
             owned: data.constants.owned_capacity() > 0,
             mapped: false,
         });
-        stats = stats.add(Self::lambda_params_payload_layout(&data.params));
+        if let Some(params) = data.params.named() {
+            stats = stats.add(Self::lambda_params_payload_layout(params));
+        }
         if let Some(offsets) = data.resident_gnu_byte_offset_map() {
             stats = stats.add(PayloadLayout {
                 logical_bytes: std::mem::size_of_val(offsets),
@@ -2490,9 +2575,10 @@ impl TaggedHeap {
 impl Drop for TaggedHeap {
     fn drop(&mut self) {
         // Explicit finish is the only blocking completion handoff. Drop
-        // cannot establish exclusive ownership while a marker is active, so
-        // its fallback retains every marker-readable allocation and returns.
-        if self.concurrent_mark_running {
+        // cannot establish exclusive ownership while a marker or facade
+        // reader obligation remains, so its fallback retains the backing
+        // allocations and returns without waiting for either kind of reader.
+        if self.concurrent_mark_running || self.facade_mark_is_excluded() {
             self.abandon_concurrent_mark();
             crate::tagged::gc::clear_tagged_heap_if_installed(self);
             return;
@@ -2658,7 +2744,9 @@ mod heap_identity;
 pub use heap_identity::HeapIdentity;
 mod mark_word;
 use mark_word::{MarkStack, MarkWord, SharedMarkQueue};
+pub(crate) mod mapped_veclike_scan;
 pub(crate) mod scan_contract;
+use mapped_veclike_scan::MappedVeclikeScanSnapshot;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]
 mod shutdown_tests;
@@ -2699,8 +2787,9 @@ mod barrier_window;
 #[cfg(feature = "jit")]
 pub(crate) use barrier_window::neovm_jit_unobserved_collection_owner;
 pub(crate) use barrier_window::{
-    BarrierWindow, CompiledObservationGate, current_collection_dump_window,
-    publish_collection_observation_window,
+    BarrierWindow, CompiledObservationGate, HEAP_JIT_EXCLUSION_LEN, HEAP_JIT_EXCLUSION_LO,
+    HEAP_JIT_SINGLE_CONS, HEAP_JIT_SLOT_BARRIER_LEN, HEAP_JIT_SLOT_BARRIER_LO,
+    current_collection_dump_window, publish_collection_observation_window,
 };
 
 mod jit_state;
@@ -2715,9 +2804,15 @@ use chunk_map::{CHUNK_CLASS_COUNT, ChunkClass, ChunkEntry, ChunkMap, HeapChunkMa
 
 mod census;
 mod cold_gc;
+mod facade_mark;
 #[cfg(test)]
 use census::CensusRecord;
 use census::{CensusCycleKind, GenCensus, census_remset_probe_on};
+pub use facade_mark::{
+    CollectorQuiescenceError, ConcurrentMarkAdmissionError, ConcurrentMarkCapture,
+    ConcurrentMarkPermit, FacadeEpochRetention, FacadeMarkExclusion, FacadeMarkExclusionError,
+    QuiescentCollector,
+};
 
 mod alloc_region;
 #[cfg(test)]
@@ -2826,8 +2921,15 @@ mod generational_major_tests;
 mod generational_pacing_tests;
 
 #[cfg(test)]
+#[path = "gc/tests/bytecode_parameter_roots.rs"]
+mod bytecode_parameter_roots_tests;
+#[cfg(test)]
 #[path = "gc/tests/major_symbol_preimage_test.rs"]
 mod major_symbol_preimage_tests;
 #[cfg(test)]
 #[path = "gc/tests/symbol_barrier_test.rs"]
 mod symbol_barrier_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/chartable_contract_test.rs"]
+mod chartable_contract_tests;

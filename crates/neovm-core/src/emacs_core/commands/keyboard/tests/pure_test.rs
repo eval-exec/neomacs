@@ -73,15 +73,24 @@ fn describe_int_key_meta_tab_uses_control_notation() {
 fn describe_single_key_value_symbol() {
     crate::test_utils::init_test_tracing();
     let val = Value::symbol("left");
-    assert_eq!(describe_single_key_value(&val, false).unwrap(), b"<left>");
-    assert_eq!(describe_single_key_value(&val, true).unwrap(), b"left");
+    assert_eq!(
+        describe_single_key_value(&val, false, crate::tagged::value::SymbolMode::Bare).unwrap(),
+        b"<left>"
+    );
+    assert_eq!(
+        describe_single_key_value(&val, true, crate::tagged::value::SymbolMode::Bare).unwrap(),
+        b"left"
+    );
 }
 
 #[test]
 fn describe_single_key_value_string() {
     crate::test_utils::init_test_tracing();
     let val = Value::string("a");
-    assert_eq!(describe_single_key_value(&val, false).unwrap(), b"a");
+    assert_eq!(
+        describe_single_key_value(&val, false, crate::tagged::value::SymbolMode::Bare).unwrap(),
+        b"a"
+    );
 }
 
 // --- key_sequence_values ---
@@ -90,7 +99,7 @@ fn describe_single_key_value_string() {
 fn key_sequence_values_string() {
     crate::test_utils::init_test_tracing();
     let val = Value::string("abc");
-    let keys = key_sequence_values(&val).unwrap();
+    let keys = key_sequence_values(&val, crate::tagged::value::SymbolMode::Bare).unwrap();
     assert_eq!(keys.len(), 3);
     assert_eq!(keys[0], Value::fixnum('a' as i64));
     assert_eq!(keys[1], Value::fixnum('b' as i64));
@@ -103,7 +112,7 @@ fn key_sequence_values_unibyte_meta_bytes() {
     let val = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![
         0x80, 0x9b, 0xf8, 0xff,
     ]));
-    let keys = key_sequence_values(&val).unwrap();
+    let keys = key_sequence_values(&val, crate::tagged::value::SymbolMode::Bare).unwrap();
     assert_eq!(
         keys,
         vec![
@@ -119,14 +128,14 @@ fn key_sequence_values_unibyte_meta_bytes() {
 fn key_sequence_values_vector() {
     crate::test_utils::init_test_tracing();
     let val = Value::vector(vec![Value::fixnum(1), Value::fixnum(2)]);
-    let keys = key_sequence_values(&val).unwrap();
+    let keys = key_sequence_values(&val, crate::tagged::value::SymbolMode::Bare).unwrap();
     assert_eq!(keys, vec![Value::fixnum(1), Value::fixnum(2)]);
 }
 
 #[test]
 fn key_sequence_values_nil() {
     crate::test_utils::init_test_tracing();
-    let keys = key_sequence_values(&Value::NIL).unwrap();
+    let keys = key_sequence_values(&Value::NIL, crate::tagged::value::SymbolMode::Bare).unwrap();
     assert!(keys.is_empty());
 }
 
@@ -176,19 +185,24 @@ fn event_modifier_bit_all() {
 #[test]
 fn convert_lucid_event_list_single_char_symbol_base_matches_gnu() {
     crate::test_utils::init_test_tracing();
-    let event = convert_lucid_event_list(&[
-        Value::symbol("control"),
-        Value::symbol("meta"),
-        Value::symbol("a"),
-    ]);
+    let event = convert_lucid_event_list(
+        &[
+            Value::symbol("control"),
+            Value::symbol("meta"),
+            Value::symbol("a"),
+        ],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert_eq!(event, Some(Value::fixnum(KEY_CHAR_META | 1)));
 }
 
 #[test]
 fn convert_lucid_event_list_modifier_aliases_match_gnu() {
     crate::test_utils::init_test_tracing();
-    let event =
-        convert_lucid_event_list(&[Value::symbol("C"), Value::symbol("M"), Value::symbol("a")]);
+    let event = convert_lucid_event_list(
+        &[Value::symbol("C"), Value::symbol("M"), Value::symbol("a")],
+        crate::tagged::value::SymbolMode::Bare,
+    );
     assert_eq!(event, Some(Value::fixnum(KEY_CHAR_META | 1)));
 }
 
@@ -196,19 +210,28 @@ fn convert_lucid_event_list_modifier_aliases_match_gnu() {
 fn convert_lucid_event_list_mouse_modifiers_match_gnu() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
-        convert_lucid_event_list(&[
-            Value::symbol("down"),
-            Value::symbol("click"),
-            Value::symbol("mouse-1"),
-        ]),
+        convert_lucid_event_list(
+            &[
+                Value::symbol("down"),
+                Value::symbol("click"),
+                Value::symbol("mouse-1"),
+            ],
+            crate::tagged::value::SymbolMode::Bare
+        ),
         Some(Value::symbol("down-mouse-1"))
     );
     assert_eq!(
-        convert_lucid_event_list(&[Value::symbol("click"), Value::symbol("mouse-1")]),
+        convert_lucid_event_list(
+            &[Value::symbol("click"), Value::symbol("mouse-1")],
+            crate::tagged::value::SymbolMode::Bare
+        ),
         Some(Value::symbol("mouse-1"))
     );
     assert_eq!(
-        convert_lucid_event_list(&[Value::symbol("double"), Value::symbol("mouse-1")]),
+        convert_lucid_event_list(
+            &[Value::symbol("double"), Value::symbol("mouse-1")],
+            crate::tagged::value::SymbolMode::Bare
+        ),
         Some(Value::symbol("double-mouse-1"))
     );
 }
@@ -246,4 +269,37 @@ fn symbol_has_modifier_prefix_cases() {
     assert!(symbol_has_modifier_prefix("A-a")); // alt
     assert!(!symbol_has_modifier_prefix("foo"));
     assert!(!symbol_has_modifier_prefix("left"));
+}
+
+#[test]
+fn positioned_keyboard_events_and_lucid_modifiers_follow_symbol_policy() {
+    // GNU keymap.c:2341 and keyboard.c:7850,7862,7882 use SYMBOLP.
+    let mut ctx = crate::emacs_core::Context::new();
+    let left = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("left"), Value::fixnum(4));
+    let control = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("control"), Value::fixnum(5));
+    let base = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("a"), Value::fixnum(6));
+    assert!(describe_single_key_value(&left, false, SymbolMode::Bare).is_err());
+    assert_eq!(
+        describe_single_key_value(&left, false, SymbolMode::Positioned).unwrap(),
+        b"<left>"
+    );
+    assert_eq!(
+        convert_lucid_event_list(&[control, base], SymbolMode::Bare),
+        None
+    );
+    assert_eq!(
+        convert_lucid_event_list(&[control, base], SymbolMode::Positioned),
+        Some(Value::fixnum(1))
+    );
+    let sequence = Value::vector(vec![Value::list(vec![control, base])]);
+    assert_eq!(
+        key_sequence_values(&sequence, SymbolMode::Positioned).unwrap(),
+        vec![Value::fixnum(1)]
+    );
 }

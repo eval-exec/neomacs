@@ -14,7 +14,7 @@ fn assert_signal_symbol_and_predicate(result: EvalResult, symbol: &str, predicat
         Err(FlowKind::Signal(signal)) => {
             assert_eq!(signal.symbol_name(), symbol);
             assert_eq!(
-                signal.data.first().and_then(|v| v.as_symbol_name()),
+                signal.data.first().and_then(|v| v.as_bare_symbol_name()),
                 Some(predicate)
             );
         }
@@ -101,7 +101,7 @@ fn builtin_make_char_table_checks_symbol_and_extra_slot_property_like_gnu() {
     let purpose = Value::symbol(intern_uninterned("neo-extra"));
     eval.obarray
         .put_property_id(
-            purpose.as_symbol_id().unwrap(),
+            purpose.as_bare_symbol_id().unwrap(),
             intern("char-table-extra-slots"),
             Value::make_float(1.0),
         )
@@ -114,7 +114,7 @@ fn builtin_make_char_table_checks_symbol_and_extra_slot_property_like_gnu() {
 
     eval.obarray
         .put_property_id(
-            purpose.as_symbol_id().unwrap(),
+            purpose.as_bare_symbol_id().unwrap(),
             intern("char-table-extra-slots"),
             Value::fixnum(1),
         )
@@ -146,7 +146,7 @@ fn set_and_get_single_char() {
     builtin_set_char_table_range(vec![ct, Value::fixnum(65), Value::symbol("letter-a")], None)
         .unwrap();
     let val = builtin_char_table_range(vec![ct, Value::fixnum(65)], None).unwrap();
-    assert!(val.is_symbol_named("letter-a"));
+    assert!(val.is_bare_symbol_named("letter-a"));
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn lookup_falls_back_to_default() {
     let ct = make_char_table_value(Value::symbol("test"), Value::symbol("default-val"));
     // No entry for char 90.
     let val = builtin_char_table_range(vec![ct, Value::fixnum(90)], None).unwrap();
-    assert!(val.is_symbol_named("default-val"));
+    assert!(val.is_bare_symbol_named("default-val"));
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn set_range_cons() {
     builtin_set_char_table_range(vec![ct, range, Value::symbol("abc")], None).unwrap();
     for ch in 65..=67 {
         let val = builtin_char_table_range(vec![ct, Value::fixnum(ch)], None).unwrap();
-        assert!(val.is_symbol_named("abc"));
+        assert!(val.is_bare_symbol_named("abc"));
     }
     // Char 68 should be nil (default).
     let val = builtin_char_table_range(vec![ct, Value::fixnum(68)], None).unwrap();
@@ -212,7 +212,7 @@ fn optimize_char_table_compacts_local_runs_without_changing_lookup() {
     assert!(char_table_external_slots(&ct).is_some());
     for ch in ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I'] {
         let value = builtin_char_table_range(vec![ct, Value::fixnum(ch as i64)], None).unwrap();
-        assert!(value.is_symbol_named("letter"));
+        assert!(value.is_bare_symbol_named("letter"));
     }
     assert!(
         builtin_char_table_range(vec![ct, Value::fixnum('B' as i64)], None)
@@ -255,22 +255,22 @@ fn optimize_char_table_preserves_later_override_precedence() {
     assert!(
         builtin_char_table_range(vec![ct, Value::fixnum(14)], None)
             .unwrap()
-            .is_symbol_named("base")
+            .is_bare_symbol_named("base")
     );
     assert!(
         builtin_char_table_range(vec![ct, Value::fixnum(15)], None)
             .unwrap()
-            .is_symbol_named("later")
+            .is_bare_symbol_named("later")
     );
     assert!(
         builtin_char_table_range(vec![ct, Value::fixnum(16)], None)
             .unwrap()
-            .is_symbol_named("default")
+            .is_bare_symbol_named("default")
     );
     assert!(
         builtin_char_table_range(vec![ct, Value::fixnum(18)], None)
             .unwrap()
-            .is_symbol_named("base")
+            .is_bare_symbol_named("base")
     );
 }
 
@@ -308,10 +308,10 @@ fn optimize_char_table_custom_test_is_noop_until_callbacks_are_supported() {
     builtin_set_char_table_range(vec![ct, Value::fixnum('A' as i64), first], None).unwrap();
     builtin_set_char_table_range(vec![ct, Value::fixnum('B' as i64), second], None).unwrap();
 
-    crate::emacs_core::builtins::symbols::builtin_optimize_char_table(vec![
-        ct,
-        Value::symbol("custom-test"),
-    ])
+    crate::emacs_core::builtins::symbols::builtin_optimize_char_table(
+        vec![ct, Value::symbol("custom-test")],
+        crate::tagged::SymbolMode::Bare,
+    )
     .unwrap();
 
     assert!(char_table_external_slots(&ct).is_some());
@@ -404,7 +404,7 @@ fn parent_chain_lookup() {
 
     // Lookup in child falls through to parent.
     let val = builtin_char_table_range(vec![child, Value::fixnum(65)], None).unwrap();
-    assert!(val.is_symbol_named("from-parent"));
+    assert!(val.is_bare_symbol_named("from-parent"));
 
     // Child override takes priority.
     builtin_set_char_table_range(
@@ -413,7 +413,7 @@ fn parent_chain_lookup() {
     )
     .unwrap();
     let val = builtin_char_table_range(vec![child, Value::fixnum(65)], None).unwrap();
-    assert!(val.is_symbol_named("child-val"));
+    assert!(val.is_bare_symbol_named("child-val"));
 }
 
 #[test]
@@ -432,11 +432,11 @@ fn ascii_cache_follows_latest_write_and_default_fallback() {
     )
     .unwrap();
     let val = builtin_char_table_range(vec![ct, Value::fixnum('A' as i64)], None).unwrap();
-    assert!(val.is_symbol_named("second"));
+    assert!(val.is_bare_symbol_named("second"));
 
     builtin_set_char_table_range(vec![ct, Value::fixnum('A' as i64), Value::NIL], None).unwrap();
     let val = builtin_char_table_range(vec![ct, Value::fixnum('A' as i64)], None).unwrap();
-    assert!(val.is_symbol_named("default"));
+    assert!(val.is_bare_symbol_named("default"));
 }
 
 #[test]
@@ -459,7 +459,7 @@ fn ascii_cache_falls_through_to_parent_when_local_value_is_nil() {
     builtin_set_char_table_range(vec![child, Value::fixnum('A' as i64), Value::NIL], None).unwrap();
 
     let val = builtin_char_table_range(vec![child, Value::fixnum('A' as i64)], None).unwrap();
-    assert!(val.is_symbol_named("parent"));
+    assert!(val.is_bare_symbol_named("parent"));
 }
 
 #[test]
@@ -539,7 +539,7 @@ fn char_table_extra_slot_preserves_data() {
     );
     // The char entry should still be intact.
     let val = builtin_char_table_range(vec![ct, Value::fixnum(65)], None).unwrap();
-    assert!(val.is_symbol_named("a-val"));
+    assert!(val.is_bare_symbol_named("a-val"));
     // Extra slot remains out-of-range.
     assert!(builtin_char_table_extra_slot(vec![ct, Value::fixnum(0)]).is_err());
 }
@@ -549,7 +549,7 @@ fn char_table_subtype() {
     crate::test_utils::init_test_tracing();
     let ct = make_char_table_value(Value::symbol("syntax-table"), Value::NIL);
     let st = builtin_char_table_subtype(vec![ct]).unwrap();
-    assert!(st.is_symbol_named("syntax-table"));
+    assert!(st.is_bare_symbol_named("syntax-table"));
 }
 
 #[test]
@@ -582,7 +582,7 @@ fn later_range_overrides_earlier_single_entry() {
     .unwrap();
 
     let val = builtin_char_table_range(vec![ct, Value::fixnum('M' as i64)], None).unwrap();
-    assert!(val.is_symbol_named("range"));
+    assert!(val.is_bare_symbol_named("range"));
 }
 
 #[test]
@@ -600,7 +600,7 @@ fn explicit_nil_entry_inherits_from_parent() {
     builtin_set_char_table_range(vec![child, Value::fixnum('a' as i64), Value::NIL], None).unwrap();
 
     let val = builtin_char_table_range(vec![child, Value::fixnum('a' as i64)], None).unwrap();
-    assert!(val.is_symbol_named("parent-a"));
+    assert!(val.is_bare_symbol_named("parent-a"));
 }
 
 #[test]
@@ -1391,7 +1391,7 @@ fn char_table_char_key() {
     builtin_set_char_table_range(vec![ct, Value::char('Z'), Value::symbol("zee")], None).unwrap();
     // Look up with Int.
     let val = builtin_char_table_range(vec![ct, Value::fixnum('Z' as i64)], None).unwrap();
-    assert!(val.is_symbol_named("zee"));
+    assert!(val.is_bare_symbol_named("zee"));
 }
 
 #[test]
@@ -1404,7 +1404,7 @@ fn parent_default_fallback() {
 
     // Child has no entry, parent has no entry, parent default is used.
     let val = builtin_char_table_range(vec![child, Value::fixnum(100)], None).unwrap();
-    assert!(val.is_symbol_named("parent-default"));
+    assert!(val.is_bare_symbol_named("parent-default"));
 }
 
 #[test]
@@ -1829,7 +1829,7 @@ fn unicode_property_table_internal_returns_alist_char_table() {
 
     let decoded = builtin_get_unicode_property_internal(vec![returned, Value::fixnum(65)])
         .expect("run-length decoder should map through extra slot 4");
-    assert!(decoded.is_symbol_named("letter"));
+    assert!(decoded.is_bare_symbol_named("letter"));
 }
 
 // -----------------------------------------------------------------------
@@ -2002,7 +2002,7 @@ fn put_unicode_property_internal_numeric_round_trips_and_rejects_non_fixnum() {
         FlowKind::Signal(signal) => {
             assert_eq!(signal.symbol_name(), "wrong-type-argument");
             assert_eq!(
-                signal.data.first().and_then(|v| v.as_symbol_name()),
+                signal.data.first().and_then(|v| v.as_bare_symbol_name()),
                 Some("fixnump")
             );
         }

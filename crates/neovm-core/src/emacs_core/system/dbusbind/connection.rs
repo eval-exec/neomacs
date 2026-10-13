@@ -54,7 +54,7 @@ impl BusKey {
             }
             return Ok(Self::Address(address));
         }
-        if !bus.is_symbol() {
+        if !bus.is_bare_symbol() {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("symbolp"), bus],

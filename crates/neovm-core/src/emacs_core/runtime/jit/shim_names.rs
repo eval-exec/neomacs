@@ -114,15 +114,30 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     // Optional Opt-only exports; excluded from the frozen AOT ABI prefix.
     "neovm_jit_t2_record_array_use",
     "neovm_jit_sqrt_binding_valid",
-    // JIT-only collection journaling; preserve every name in the AOT prefix.
+    // Collection journaling; ABI31 also admits this existing string recorder to AOT.
     "neovm_jit_string_collection_write",
     // Cold GEN0 observation refinement, never an AOT import.
     "neovm_jit_unobserved_collection_owner",
+    // Live symbol policy for JIT Throw; preserve the frozen AOT prefix.
+    "neovm_jit_throw_with_symbols",
+    // ABI31 collection-aware alternatives; legacy import identities stay exact.
+    "neovm_jit_aset_collection",
+    "neovm_jit_varset_collection",
+    "neovm_jit_varbind_collection",
+    "neovm_jit_unbind_collection",
+    "neovm_jit_setcar_collection",
+    "neovm_jit_setcdr_collection",
 ];
 
-// ABI26's existing shim prefix remains the complete AOT import/salt set.
-// Selected Opt array/sqrt and collection shims form a JIT-only exported suffix;
-// emitting one into AOT must fail closed instead of producing an unsalted ABI.
-// Keep this boundary in the same single source as the exported names.
+// Keep ABI26's original AOT prefix unchanged. ABI31 adds only the collection
+// imports selected below; the Opt array/sqrt and observation-refinement names
+// stay JIT-only and an AOT import of one still fails closed.
+// Keep the selection in the same single source as the exported names.
 #[allow(dead_code)] // this file is also included by build scripts
 const NEOVM_JIT_AOT_ABI_SHIM_COUNT: usize = 70;
+
+// ABI31 admits the existing string recorder and six appended store exports
+// to AOT, while the selected Opt/refinement suffix stays JIT-only. Indices
+// reference the one name list above; no second literal name list can drift.
+#[allow(dead_code)] // this file is also included by build scripts
+const NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES: &[usize] = &[72, 75, 76, 77, 78, 79, 80];

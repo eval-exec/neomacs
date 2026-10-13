@@ -301,6 +301,7 @@ fn gnutls_boot_parameters_parse_x509_hostname() {
             Value::keyword(":hostname"),
             Value::string("example.org"),
         ]),
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("valid parameters");
     assert_eq!(parameters.credential_type, GnutlsCredentialType::X509Pki);
@@ -321,6 +322,7 @@ fn gnutls_boot_parameters_preserve_trust_files_as_additional_roots() {
                 Value::string("/second.pem"),
             ]),
         ]),
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("valid trust files");
 
@@ -343,6 +345,7 @@ fn gnutls_boot_parameters_reject_non_string_trust_file_entries() {
             Value::keyword(":trustfiles"),
             Value::list(vec![Value::fixnum(1)]),
         ]),
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap_err();
 
@@ -368,7 +371,12 @@ fn rustls_root_store_adds_certificates_from_explicit_trust_files() {
 
 #[test]
 fn gnutls_boot_parameters_validate_gnu_argument_shape() {
-    let type_error = parse_gnutls_boot_parameters(Value::fixnum(1), Value::NIL).unwrap_err();
+    let type_error = parse_gnutls_boot_parameters(
+        Value::fixnum(1),
+        Value::NIL,
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap_err();
     match type_error.into_kind() {
         crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -377,9 +385,12 @@ fn gnutls_boot_parameters_validate_gnu_argument_shape() {
         other => panic!("expected wrong-type-argument, got {other:?}"),
     }
 
-    let list_error =
-        parse_gnutls_boot_parameters(Value::symbol("gnutls-x509pki"), Value::fixnum(1))
-            .unwrap_err();
+    let list_error = parse_gnutls_boot_parameters(
+        Value::symbol("gnutls-x509pki"),
+        Value::fixnum(1),
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap_err();
     match list_error.into_kind() {
         crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -388,8 +399,12 @@ fn gnutls_boot_parameters_validate_gnu_argument_shape() {
         other => panic!("expected wrong-type-argument, got {other:?}"),
     }
 
-    let hostname_error =
-        parse_gnutls_boot_parameters(Value::symbol("gnutls-x509pki"), Value::NIL).unwrap_err();
+    let hostname_error = parse_gnutls_boot_parameters(
+        Value::symbol("gnutls-x509pki"),
+        Value::NIL,
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap_err();
     match hostname_error.into_kind() {
         crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -505,18 +520,27 @@ fn gnutls_peer_status_plist_matches_gnu_certificate_shape() {
 #[test]
 fn gnutls_peer_status_warning_descriptions_match_gnu() {
     assert_eq!(
-        builtin_gnutls_peer_status_warning_describe(vec![Value::keyword(":unknown-ca")])
-            .expect("description"),
+        builtin_gnutls_peer_status_warning_describe(
+            vec![Value::keyword(":unknown-ca")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("description"),
         Value::string("the certificate was signed by an unknown and therefore untrusted authority")
     );
     assert_eq!(
-        builtin_gnutls_peer_status_warning_describe(vec![Value::keyword(":expired")])
-            .expect("description"),
+        builtin_gnutls_peer_status_warning_describe(
+            vec![Value::keyword(":expired")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("description"),
         Value::string("certificate has expired")
     );
     assert_eq!(
-        builtin_gnutls_peer_status_warning_describe(vec![Value::keyword(":not-a-warning")])
-            .expect("unknown warning"),
+        builtin_gnutls_peer_status_warning_describe(
+            vec![Value::keyword(":not-a-warning")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("unknown warning"),
         Value::NIL
     );
 }
@@ -524,38 +548,68 @@ fn gnutls_peer_status_warning_descriptions_match_gnu() {
 #[test]
 fn gnutls_error_helpers_match_gnu_type_and_known_code_rules() {
     assert_eq!(
-        builtin_gnutls_error_string(vec![Value::string("x")]).expect("string"),
+        builtin_gnutls_error_string(
+            vec![Value::string("x")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("string"),
         Value::string("Not an error symbol or code")
     );
     assert_eq!(
-        builtin_gnutls_error_string(vec![Value::symbol("no-such")]).expect("string"),
+        builtin_gnutls_error_string(
+            vec![Value::symbol("no-such")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("string"),
         Value::string("Symbol has no numeric gnutls-code property")
     );
     assert_eq!(
-        builtin_gnutls_error_string(vec![Value::symbol("gnutls-e-invalid-session")])
-            .expect("string"),
+        builtin_gnutls_error_string(
+            vec![Value::symbol("gnutls-e-invalid-session")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("string"),
         Value::string("The specified session has been invalidated for some reason.")
     );
 
     assert_eq!(
-        builtin_gnutls_error_fatalp(vec![Value::fixnum(1)]).expect("fatalp"),
+        builtin_gnutls_error_fatalp(
+            vec![Value::fixnum(1)],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("fatalp"),
         Value::NIL
     );
     assert_eq!(
-        builtin_gnutls_error_fatalp(vec![Value::fixnum(-1)]).expect("fatalp"),
+        builtin_gnutls_error_fatalp(
+            vec![Value::fixnum(-1)],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("fatalp"),
         Value::T
     );
     assert_eq!(
-        builtin_gnutls_error_fatalp(vec![Value::symbol("gnutls-e-again")]).expect("fatalp"),
+        builtin_gnutls_error_fatalp(
+            vec![Value::symbol("gnutls-e-again")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("fatalp"),
         Value::NIL
     );
     assert_eq!(
-        builtin_gnutls_error_fatalp(vec![Value::symbol("gnutls-e-invalid-session")])
-            .expect("fatalp"),
+        builtin_gnutls_error_fatalp(
+            vec![Value::symbol("gnutls-e-invalid-session")],
+            crate::tagged::value::SymbolMode::Bare
+        )
+        .expect("fatalp"),
         Value::T
     );
 
-    let invalid_object = builtin_gnutls_error_fatalp(vec![Value::string("x")]).unwrap_err();
+    let invalid_object = builtin_gnutls_error_fatalp(
+        vec![Value::string("x")],
+        crate::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap_err();
     match invalid_object.into_kind() {
         crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -734,4 +788,64 @@ fn tls_backend_keeps_final_handshake_writes_pending_until_flushed() {
         !server.is_handshaking(),
         "Ready must permit the peer to finish too"
     );
+}
+
+#[test]
+fn positioned_tls_credentials_and_plist_keys_follow_symbol_policy() {
+    // GNU gnutls.c:2021 CHECK_SYMBOL and 2036 plist_get/EQ.
+    use crate::tagged::value::SymbolMode;
+    let mut ctx = crate::emacs_core::Context::new();
+    let credential = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("gnutls-x509pki"), Value::fixnum(4));
+    let hostname = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::keyword(":hostname"), Value::fixnum(5));
+    let proplist = Value::list(vec![hostname, Value::string("example.org")]);
+    assert!(parse_gnutls_boot_parameters(credential, proplist, SymbolMode::Bare).is_err());
+    assert!(
+        parse_gnutls_boot_parameters(Value::symbol("gnutls-x509pki"), proplist, SymbolMode::Bare)
+            .is_err()
+    );
+    let parameters =
+        parse_gnutls_boot_parameters(credential, proplist, SymbolMode::Positioned).unwrap();
+    assert_eq!(parameters.client.hostname, "example.org");
+}
+
+#[test]
+fn positioned_gnutls_status_and_algorithm_operands_follow_symbol_policy() {
+    // GNU gnutls.c:1008-1009 EQ, 1329 CHECK_SYMBOL, 2890 SYMBOLP.
+    use crate::emacs_core::builtins::gnutls::{builtin_gnutls_errorp, builtin_gnutls_hash_digest};
+    use crate::tagged::value::SymbolMode;
+    let mut ctx = crate::emacs_core::Context::new();
+    let again = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("gnutls-e-again"), Value::fixnum(4));
+    let warning = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::keyword(":expired"), Value::fixnum(5));
+    let algorithm = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("SHA256"), Value::fixnum(6));
+    assert_eq!(
+        builtin_gnutls_errorp(vec![again], SymbolMode::Bare).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        builtin_gnutls_errorp(vec![again], SymbolMode::Positioned).unwrap(),
+        Value::NIL
+    );
+    assert!(builtin_gnutls_peer_status_warning_describe(vec![warning], SymbolMode::Bare).is_err());
+    assert!(
+        builtin_gnutls_peer_status_warning_describe(vec![warning], SymbolMode::Positioned)
+            .unwrap()
+            .is_string()
+    );
+    assert!(
+        builtin_gnutls_hash_digest(vec![algorithm, Value::string("a")], SymbolMode::Bare).is_err()
+    );
+    let result =
+        builtin_gnutls_hash_digest(vec![algorithm, Value::string("a")], SymbolMode::Positioned)
+            .unwrap();
+    assert_eq!(result.as_lisp_string().unwrap().as_bytes().len(), 32);
 }

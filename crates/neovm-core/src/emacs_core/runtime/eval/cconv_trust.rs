@@ -231,7 +231,7 @@ fn is_subr_value(value: Value) -> bool {
 }
 
 fn is_macro_definition(value: Value) -> bool {
-    value.is_cons() && value.cons_car().is_symbol_named("macro")
+    value.is_cons() && value.cons_car().is_bare_symbol_named("macro")
 }
 
 /// Push every symbol reachable in CONSTANT (conses, vectors, nested

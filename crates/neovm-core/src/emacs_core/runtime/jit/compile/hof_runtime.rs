@@ -62,7 +62,8 @@ pub(crate) extern "C" fn neovm_jit_hof_length(sequence: i64) -> i64 {
 
 /// Begin an eager GNU Bcall mapping activation. Returns its raw backtrace
 /// index, or -1 with pending flow. The parent stack and list cursor precede
-/// the result slots in one dedicated VM root frame; no Lisp can run here.
+/// the result slots in one dedicated VM root frame. Only the cold depth-limit
+/// signal can run callback Lisp; it keeps those parent roots live.
 /// SAFETY: generated code supplies the active mutator and count live tagged
 /// parent words, ending in [mapping designator, callback, sequence].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -96,7 +97,7 @@ pub(crate) extern "C" fn neovm_jit_hof_start(
         if ctx.depth > ctx.max_depth {
             let check = Vm::from_context(ctx).bytecode_depth_exceeded();
             if let Err(flow) = check {
-                ctx.depth -= 1;
+                let flow = ctx.finish_lisp_depth_overflow(flow);
                 ctx.pop_vm_root_frame();
                 stash_pending_flow(flow);
                 return -1;

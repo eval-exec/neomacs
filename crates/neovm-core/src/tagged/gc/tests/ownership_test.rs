@@ -1785,13 +1785,20 @@ fn concurrent_claim_reaches_obarray_symbol_value_strings() {
         .alloc_string(crate::heap_types::LispString::from_utf8("obarray-only"));
     ev.obarray.set_symbol_value("neovm--str-claim-probe", s);
 
-    // Stage the obarray snapshot exactly like the start handshake does.
-    // SAFETY: this test captures on the sole owner before starting the marker.
-    let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut ev.tagged_heap) };
-    let snap = ev.obarray.scan_snapshot(&world);
-    ev.tagged_heap.set_pending_obarray_scan(snap);
-    ev.tagged_heap.concurrent_begin();
-    ev.tagged_heap.launch_concurrent_mark();
+    // Admit and begin before staging the obarray snapshot, as the actual
+    // handshake does. No direct root seed may replace this obarray-only sink.
+    // SAFETY: this Context is the heap/obarray's sole writer; there is no
+    // callback, safepoint or ownership handoff during start and publication.
+    let permit = unsafe { ev.tagged_heap.permit_concurrent_mark() }.unwrap();
+    let mut capture = permit.begin();
+    let snap = {
+        // SAFETY: the same admitted owner captures its matching obarray
+        // before worker publication; no other writer or callback can enter.
+        let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(capture.heap_mut()) };
+        ev.obarray.scan_snapshot(&world)
+    };
+    capture.heap_mut().set_pending_obarray_scan(snap);
+    capture.launch().unwrap();
     while !ev.tagged_heap.concurrent_mark_done() {
         std::thread::yield_now();
     }
@@ -2294,7 +2301,7 @@ fn a_reclaimed_cons_is_recognizable_as_dead() {
     // decodes as a bogus symbol: an aligned raw pointer under TAG_SYMBOL.
     let link = unsafe { (*doomed.xcons_ptr()).load_cdr() };
     assert!(
-        link.is_symbol(),
+        link.is_bare_symbol(),
         "the free-list link decodes through TAG_SYMBOL (bits 0x{:x})",
         link.bits(),
     );
@@ -3229,7 +3236,7 @@ fn a_plain_variable_store_logs_its_pre_image_only_while_marking() {
     assert!(stored);
     assert_eq!(logged, vec![second.bits()], "the overwritten value");
     assert_eq!(
-        ob.symbol_value_id(sym).map(|v| v.bits()),
+        ob.symbol_value_id_copied(sym).map(|v| v.bits()),
         Some(TaggedValue::fixnum(3).bits())
     );
 }
@@ -3272,7 +3279,7 @@ fn a_specbind_swap_logs_its_pre_image_only_while_marking() {
     assert_eq!(old.map(|v| v.bits()), Some(second.bits()));
     assert_eq!(logged, vec![second.bits()], "the overwritten value");
     assert_eq!(
-        ob.symbol_value_id(sym).map(|v| v.bits()),
+        ob.symbol_value_id_copied(sym).map(|v| v.bits()),
         Some(TaggedValue::fixnum(3).bits())
     );
 }
@@ -3469,4 +3476,37 @@ fn dropping_the_installed_heap_uninstalls_it() {
         "dropping a heap that is not installed must leave the installed one"
     );
     crate::tagged::gc::clear_tagged_heap_if_installed(&kept);
+}
+
+#[test]
+fn concurrent_builtin_clear_string_retains_interval_child_for_snapshot() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let child = heap.alloc_string(crate::heap_types::LispString::from_utf8(
+        "only-in-properties",
+    ));
+    let child_ptr = child.as_string_ptr().unwrap() as *const u8;
+    let owner = heap.alloc_string(crate::heap_types::LispString::from_utf8("props"));
+    let owner_ptr = owner.as_string_ptr().unwrap() as *mut StringObj;
+    // SAFETY: this live, fresh owner is not published or being marked yet.
+    unsafe { *(*owner_ptr).data.intervals_mut() = interval_table_carrying(child) };
+    let mut root = heap.alloc_cons(owner, TaggedValue::NIL);
+    for i in 0..300_000 {
+        root = heap.alloc_cons(TaggedValue::fixnum(i), root);
+    }
+    heap.concurrent_begin();
+    heap.seed_root(root);
+    heap.launch_concurrent_mark();
+    crate::emacs_core::buffer::builtin_clear_string(vec![owner]).unwrap();
+    assert!(!owner.as_lisp_string().unwrap().has_intervals());
+    finish_concurrent_cycle(&mut heap, root);
+    assert!(
+        heap.owns_non_cons_object(child_ptr),
+        "snapshot property child must survive clear"
+    );
+    assert_eq!(child.as_str_owned().as_deref(), Some("only-in-properties"));
+    // No property home remains. The next exact collection must reclaim child.
+    heap.collect_exact(std::iter::once(root));
+    assert!(!heap.owns_non_cons_object(child_ptr));
 }

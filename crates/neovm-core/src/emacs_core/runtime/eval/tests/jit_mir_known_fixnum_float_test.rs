@@ -43,7 +43,7 @@ fn probe() -> ByteCodeFunction {
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 7;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(7);
     f
 }
 

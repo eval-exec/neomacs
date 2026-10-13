@@ -144,7 +144,7 @@ fn reinstalling_a_different_leaf_clears_the_jit_cache() {
     });
     f.lexical = true;
     f.ops = vec![Op::StackRef(0), Op::Add1, Op::Return];
-    f.max_stack = 4;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     f.jit_runtime().set_hot_for_test();
     let callee = Value::make_bytecode(f);
     crate::emacs_core::eval::push_scratch_gc_root(callee);

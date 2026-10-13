@@ -47,6 +47,16 @@ pub struct CharRange {
 #[repr(transparent)]
 pub struct LispCharPos1(i64);
 
+/// A 1-based character position read from a live buffer (point, BEGV, ZV).
+///
+/// A buffer never holds more than
+/// [`BUF_BYTES_MAX`](super::gap_buffer::BUF_BYTES_MAX) bytes, so this position
+/// is at most `MOST_POSITIVE_FIXNUM` and becomes a fixnum without a range
+/// check, as GNU's `make_fixnum (PT)` does. Only buffer accessors build it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub(crate) struct BufferLispPos(LispCharPos1);
+
 /// Inclusive Lisp character-position range `[BEG, Z]` for a full buffer.
 ///
 /// Unlike [`AccessibleCharRange`], this range deliberately ignores narrowing.
@@ -759,6 +769,29 @@ impl LispCharPos1 {
         self.0
     }
 }
+
+impl BufferLispPos {
+    /// `pos` must be a position of a live buffer, so at most its character
+    /// count and therefore at most `BUF_BYTES_MAX`.
+    pub(in crate::buffer) fn of_live_buffer(pos: CharPos0) -> Self {
+        debug_assert!(pos.get() <= super::gap_buffer::BUF_BYTES_MAX);
+        Self(pos.to_lisp())
+    }
+}
+
+impl From<BufferLispPos> for crate::tagged::value::Fixnum {
+    fn from(pos: BufferLispPos) -> Self {
+        // 1 <= pos <= BUF_BYTES_MAX + 1 == MOST_POSITIVE_FIXNUM: no payload
+        // bit is lost.
+        Self::from_payload_bits(pos.0.as_i64() as u64)
+    }
+}
+
+const _: () = assert!(
+    super::gap_buffer::BUF_BYTES_MAX as i64 + 1
+        == crate::tagged::value::TaggedValue::MOST_POSITIVE_FIXNUM
+);
+static_assertions::assert_impl_all!(BufferLispPos: Send, Sync);
 
 impl FullBufferLispCharRange {
     pub const fn new(z: LispCharPos1) -> Self {

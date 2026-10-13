@@ -1281,6 +1281,7 @@ fn undecided_decode_uses_the_shared_iso_2022_detector() {
                     .into(),
             ),
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
 
@@ -1290,6 +1291,7 @@ fn undecided_decode_uses_the_shared_iso_2022_detector() {
             b"\x1b$B$3$s\x1b(B",
             false,
             crate::emacs_core::coding::SourceBlock::Last,
+            crate::tagged::value::SymbolMode::Bare
         ),
         Some(crate::emacs_core::intern::intern("iso-2022-7bit"))
     );
@@ -1408,6 +1410,7 @@ fn ccl_coding_system_executes_registered_identity_program() {
             Value::symbol("test-ccl-identity"),
             Value::NIL,
         ],
+        crate::tagged::value::SymbolMode::Bare,
     )
     .expect("define CCL coding system");
 
@@ -2776,5 +2779,12 @@ fn iso_2022_honours_a_shift_only_when_its_flag_is_set_like_gnu() {
 }
 
 #[cfg(test)]
+#[path = "gdh_utf8_unibyte.rs"]
+mod gdh_utf8_unibyte;
+#[cfg(test)]
 #[path = "prepared_mule_test.rs"]
 mod prepared_mule;
+
+#[cfg(test)]
+#[path = "positioned_symbol_test.rs"]
+mod positioned_symbol_test;

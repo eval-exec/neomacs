@@ -103,7 +103,7 @@ fn install_noarg_hook_probe(
     body: Vec<Value>,
 ) {
     let lambda = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![]),
+        params: LambdaParams::simple(vec![]).into(),
         body,
         env: None,
         docstring: None,
@@ -408,7 +408,7 @@ fn pure_dispatch_typed_numeric_symbol_rejections_use_number_or_marker_p() {
         match err.into_kind() {
             FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument", "name={name}");
-                let actual_name = sig.data[0].as_symbol_name().map(String::from);
+                let actual_name = sig.data[0].as_bare_symbol_name().map(String::from);
                 assert_eq!(
                     actual_name.as_deref(),
                     Some("number-or-marker-p"),
@@ -739,7 +739,7 @@ fn pure_dispatch_typed_vconcat_flattens_bool_vector_logical_bits() {
 fn pure_dispatch_typed_length_tracks_interpreted_closure_slot_count() {
     crate::test_utils::init_test_tracing();
     let bare = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x")]),
+        params: LambdaParams::simple(vec![intern("x")]).into(),
         body: vec![Value::symbol("x")],
         env: Some(Value::NIL),
         docstring: None,
@@ -747,7 +747,7 @@ fn pure_dispatch_typed_length_tracks_interpreted_closure_slot_count() {
         interactive: None,
     });
     let with_doc = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x")]),
+        params: LambdaParams::simple(vec![intern("x")]).into(),
         body: vec![Value::symbol("x")],
         env: Some(Value::NIL),
         docstring: Some(crate::heap_types::LispString::from_utf8("doc")),
@@ -856,7 +856,7 @@ fn malformed_interpreted_closure_arglists_signal_invalid_function_at_call_time()
 }
 
 #[test]
-fn compiled_literal_reifier_preserves_ordinary_vectors() {
+fn make_byte_code_preserves_ordinary_vectors() {
     crate::test_utils::init_test_tracing();
     let closure_vec = Value::vector(vec![
         Value::list(vec![Value::symbol("x")]),
@@ -868,7 +868,17 @@ fn compiled_literal_reifier_preserves_ordinary_vectors() {
         Value::NIL,
     ]);
 
-    let converted = super::symbols::try_convert_nested_compiled_literal(closure_vec);
+    let function = make_byte_code_from_parts(
+        &Value::fixnum(0),
+        &Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![192, 135])),
+        &Value::vector(vec![closure_vec]),
+        &Value::fixnum(1),
+        None,
+        None,
+    )
+    .unwrap();
+    let converted = function.get_bytecode_data().unwrap().constants[0];
+    assert_eq!(converted, closure_vec);
     assert!(
         converted.is_vector(),
         "ordinary vectors are not reader closures"
@@ -876,7 +886,7 @@ fn compiled_literal_reifier_preserves_ordinary_vectors() {
 }
 
 #[test]
-fn compiled_literal_reifier_preserves_cperl_key_vector_shape() {
+fn make_byte_code_preserves_cperl_key_vector_shape() {
     crate::test_utils::init_test_tracing();
     let key_vec = Value::vector(vec![
         Value::list(vec![Value::symbol("control"), Value::fixnum(99)]),
@@ -884,7 +894,17 @@ fn compiled_literal_reifier_preserves_cperl_key_vector_shape() {
         Value::fixnum(70),
     ]);
 
-    let converted = super::symbols::try_convert_nested_compiled_literal(key_vec);
+    let function = make_byte_code_from_parts(
+        &Value::fixnum(0),
+        &Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![192, 135])),
+        &Value::vector(vec![key_vec]),
+        &Value::fixnum(1),
+        None,
+        None,
+    )
+    .unwrap();
+    let converted = function.get_bytecode_data().unwrap().constants[0];
+    assert_eq!(converted, key_vec);
     assert!(
         converted.is_vector(),
         "key vectors must not become closures"
@@ -1412,7 +1432,7 @@ fn keymap_get_keyelt_strips_menu_item_and_string_label_wrappers() {
         ("(keymap--get-keyelt 'p61-cmd nil)", "p61-cmd"),
     ] {
         let result = eval.eval_str(form).unwrap();
-        assert_eq!(result.as_symbol_name(), Some(expected), "{form}");
+        assert_eq!(result.as_bare_symbol_name(), Some(expected), "{form}");
     }
 }
 
@@ -1454,7 +1474,7 @@ fn accessible_keymaps_lists_an_autoloaded_keymap_symbol_without_loading_it() {
         &[Value::fixnum(11)]
     );
     assert_eq!(
-        second.cons_cdr().as_symbol_name(),
+        second.cons_cdr().as_bare_symbol_name(),
         Some("p61-prefix"),
         "the symbol itself is listed unexpanded; map-keymap autoloads it later"
     );
@@ -1540,16 +1560,25 @@ fn accessible_keymaps_prefix_type_errors_match_oracle_shape() {
 #[test]
 fn key_description_renders_super_prefixed_symbol_events_with_expected_angles() {
     crate::test_utils::init_test_tracing();
-    let super_only = builtin_key_description(vec![Value::vector(vec![Value::symbol("s-f1")])])
-        .expect("key-description should succeed");
+    let super_only = builtin_key_description(
+        vec![Value::vector(vec![Value::symbol("s-f1")])],
+        crate::tagged::SymbolMode::Bare,
+    )
+    .expect("key-description should succeed");
     assert_eq!(super_only, Value::string("s-<f1>"));
 
-    let ctrl_super = builtin_key_description(vec![Value::vector(vec![Value::symbol("C-s-f1")])])
-        .expect("key-description should succeed");
+    let ctrl_super = builtin_key_description(
+        vec![Value::vector(vec![Value::symbol("C-s-f1")])],
+        crate::tagged::SymbolMode::Bare,
+    )
+    .expect("key-description should succeed");
     assert_eq!(ctrl_super, Value::string("C-s-<f1>"));
 
-    let single = builtin_single_key_description(vec![Value::symbol("s-f1")])
-        .expect("single-key-description should succeed");
+    let single = builtin_single_key_description(
+        vec![Value::symbol("s-f1")],
+        crate::tagged::SymbolMode::Bare,
+    )
+    .expect("single-key-description should succeed");
     assert_eq!(single, Value::string("s-<f1>"));
 }
 
@@ -1557,33 +1586,45 @@ fn key_description_renders_super_prefixed_symbol_events_with_expected_angles() {
 fn key_description_symbol_modifier_edges_match_emacs() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
-        builtin_single_key_description(vec![Value::symbol("M-a")])
+        builtin_single_key_description(vec![Value::symbol("M-a")], crate::tagged::SymbolMode::Bare)
             .expect("single-key-description should succeed"),
         Value::string("<M-a>")
     );
     assert_eq!(
-        builtin_single_key_description(vec![Value::symbol("C-a")])
+        builtin_single_key_description(vec![Value::symbol("C-a")], crate::tagged::SymbolMode::Bare)
             .expect("single-key-description should succeed"),
         Value::string("<C-a>")
     );
     assert_eq!(
-        builtin_single_key_description(vec![Value::symbol("C-M-a")])
-            .expect("single-key-description should succeed"),
+        builtin_single_key_description(
+            vec![Value::symbol("C-M-a")],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("single-key-description should succeed"),
         Value::string("C-<M-a>")
     );
     assert_eq!(
-        builtin_single_key_description(vec![Value::symbol("M-a"), Value::T])
-            .expect("single-key-description should succeed"),
+        builtin_single_key_description(
+            vec![Value::symbol("M-a"), Value::T],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("single-key-description should succeed"),
         Value::string("M-a")
     );
     assert_eq!(
-        builtin_key_description(vec![Value::vector(vec![Value::symbol("M-a")])])
-            .expect("key-description should succeed"),
+        builtin_key_description(
+            vec![Value::vector(vec![Value::symbol("M-a")])],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("key-description should succeed"),
         Value::string("<M-a>")
     );
     assert_eq!(
-        builtin_key_description(vec![Value::vector(vec![Value::symbol("C-s-f1")])])
-            .expect("key-description should succeed"),
+        builtin_key_description(
+            vec![Value::vector(vec![Value::symbol("C-s-f1")])],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("key-description should succeed"),
         Value::string("C-s-<f1>")
     );
 }
@@ -1592,59 +1633,91 @@ fn key_description_symbol_modifier_edges_match_emacs() {
 fn key_description_integer_modifier_and_nonunicode_edges_match_emacs() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
-        builtin_single_key_description(vec![Value::fixnum(0x40_0000)])
-            .expect("single-key-description should succeed"),
+        builtin_single_key_description(
+            vec![Value::fixnum(0x40_0000)],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("single-key-description should succeed"),
         Value::string("A-C-@")
     );
     assert_eq!(
-        builtin_single_key_description(vec![Value::fixnum(58_720_257)])
-            .expect("single-key-description should succeed"),
+        builtin_single_key_description(
+            vec![Value::fixnum(58_720_257)],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("single-key-description should succeed"),
         Value::string("C-H-S-s-a")
     );
     assert_eq!(
-        builtin_single_key_description(vec![Value::fixnum(264_241_249)])
-            .expect("single-key-description should succeed"),
+        builtin_single_key_description(
+            vec![Value::fixnum(264_241_249)],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("single-key-description should succeed"),
         Value::string("A-C-H-M-S-s-a")
     );
     assert_eq!(
-        builtin_single_key_description(vec![Value::fixnum(134_217_737)])
-            .expect("single-key-description should succeed"),
+        builtin_single_key_description(
+            vec![Value::fixnum(134_217_737)],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("single-key-description should succeed"),
         Value::string("C-M-i")
     );
     assert_eq!(
-        builtin_single_key_description(vec![Value::fixnum(138_412_041)])
-            .expect("single-key-description should succeed"),
+        builtin_single_key_description(
+            vec![Value::fixnum(138_412_041)],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("single-key-description should succeed"),
         Value::string("A-C-M-i")
     );
     assert_eq!(
-        builtin_single_key_description(vec![Value::fixnum(201_326_601)])
-            .expect("single-key-description should succeed"),
+        builtin_single_key_description(
+            vec![Value::fixnum(201_326_601)],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("single-key-description should succeed"),
         Value::string("C-M-i")
     );
 
     // Non-Unicode char codes produce a string (with lossy UTF-8 rendering)
-    let single_nonunicode = builtin_single_key_description(vec![Value::fixnum(0x11_0000)])
-        .expect("single-key-description should support nonunicode char code");
+    let single_nonunicode = builtin_single_key_description(
+        vec![Value::fixnum(0x11_0000)],
+        crate::tagged::SymbolMode::Bare,
+    )
+    .expect("single-key-description should support nonunicode char code");
     assert!(single_nonunicode.is_string());
 
-    let key_nonunicode =
-        builtin_key_description(vec![Value::vector(vec![Value::fixnum(0x20_0000)])])
-            .expect("key-description should support nonunicode char code");
+    let key_nonunicode = builtin_key_description(
+        vec![Value::vector(vec![Value::fixnum(0x20_0000)])],
+        crate::tagged::SymbolMode::Bare,
+    )
+    .expect("key-description should support nonunicode char code");
     assert!(key_nonunicode.is_string());
 
     assert_eq!(
-        builtin_key_description(vec![Value::vector(vec![Value::fixnum(0x40_0000)])])
-            .expect("key-description should succeed"),
+        builtin_key_description(
+            vec![Value::vector(vec![Value::fixnum(0x40_0000)])],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("key-description should succeed"),
         Value::string("A-C-@")
     );
     assert_eq!(
-        builtin_key_description(vec![Value::vector(vec![Value::fixnum(134_217_737)])])
-            .expect("key-description should succeed"),
+        builtin_key_description(
+            vec![Value::vector(vec![Value::fixnum(134_217_737)])],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("key-description should succeed"),
         Value::string("C-M-i")
     );
     assert_eq!(
-        builtin_key_description(vec![Value::vector(vec![Value::fixnum(201_326_601)])])
-            .expect("key-description should succeed"),
+        builtin_key_description(
+            vec![Value::vector(vec![Value::fixnum(201_326_601)])],
+            crate::tagged::SymbolMode::Bare
+        )
+        .expect("key-description should succeed"),
         Value::string("C-M-i")
     );
 }
@@ -1655,7 +1728,8 @@ fn key_description_accepts_raw_unibyte_string_sequences() {
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![
         0x80, 0x9b, 0xf8, 0xff,
     ]));
-    let described = builtin_key_description(vec![raw]).expect("key-description should succeed");
+    let described = builtin_key_description(vec![raw], crate::tagged::SymbolMode::Bare)
+        .expect("key-description should succeed");
     assert_eq!(described, Value::string("C-M-@ M-ESC M-x M-DEL"));
 }
 
@@ -2290,13 +2364,13 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
     );
     assert_eq!(
         eval.obarray()
-            .symbol_value("mib-last-clone-buffer")
+            .symbol_value_copied("mib-last-clone-buffer")
             .and_then(|v| v.as_utf8_str()),
         Some("*mib-clone*")
     );
     assert_eq!(
-        eval.obarray().symbol_value("mib-buffer-list-ran"),
-        Some(&Value::T)
+        eval.obarray().symbol_value_copied("mib-buffer-list-ran"),
+        Some(Value::T)
     );
 
     eval.obarray_mut()
@@ -2317,14 +2391,14 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
 
     assert_eq!(
         eval.obarray()
-            .symbol_value("mib-last-clone-buffer")
+            .symbol_value_copied("mib-last-clone-buffer")
             .and_then(|v| v.as_utf8_str()),
         Some("*mib-clone-inhibit*"),
         "clone-indirect-buffer-hook should still run"
     );
     assert_eq!(
-        eval.obarray().symbol_value("mib-buffer-list-ran"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("mib-buffer-list-ran"),
+        Some(Value::NIL),
         "buffer-list-update-hook should be inhibited"
     );
 }
@@ -4194,6 +4268,8 @@ fn split_window_internal_validates_core_argument_types() {
     // `(split-window-internal (selected-window) nil nil nil)` signals
     // `fixnump`.  This assertion used to pass Value::NIL and expect a window
     // back, which pinned the divergence as though it were the contract.
+    eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 12))")
+        .expect("stage the old window before a valid primitive split");
     let split = builtin_split_window_internal(
         &mut eval,
         vec![
@@ -4282,11 +4358,23 @@ fn split_window_internal_validates_core_argument_types() {
     //   (split-window-internal (selected-window) 10 "x" 0.5) => geometry error
     //   (split-window-internal (selected-window) 10 nil 0.5) => geometry error
     // (all three fail identically, on the resize step, as does SIDE `below').
+    // The first split left the selected window 12 lines tall, so this one
+    // stages and requests 6 lines: an unstaged or oversized request fails
+    // GNU's resize check before SIDE matters.
+    eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 6))")
+        .expect("stage the old window before a valid primitive split");
     let side_not_checked = builtin_split_window_internal(
         &mut eval,
-        vec![Value::NIL, Value::fixnum(12), Value::fixnum(9), Value::NIL],
+        vec![Value::NIL, Value::fixnum(6), Value::fixnum(9), Value::NIL],
     )
-    .expect("split-window-internal must not type-check SIDE");
+    .unwrap_or_else(|flow| {
+        panic!(
+            "split-window-internal must not type-check SIDE: {}",
+            crate::emacs_core::error::format_eval_result(&Err(crate::emacs_core::error::map_flow(
+                flow
+            )))
+        )
+    });
     assert!(side_not_checked.is_window());
 }
 
@@ -4363,7 +4451,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         Value::symbol("primitive-function")
     );
     let lambda = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x")]),
+        params: LambdaParams::simple(vec![intern("x")]).into(),
         body: Vec::new(),
         env: None,
         docstring: None,
@@ -6172,7 +6260,7 @@ fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat(
         panic!("obarray-make should return obarray");
     };
     let created_data = crate::emacs_core::builtins::symbols::obarray_buckets(made).unwrap();
-    assert_eq!(created_data.len(), 3);
+    assert_eq!(created_data.len(), 4);
     assert!(created_data.iter().all(|v| v.is_nil()));
 
     let default = dispatch_builtin_pure("obarray-make", vec![])
@@ -6183,7 +6271,7 @@ fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat(
     };
     assert_eq!(
         crate::emacs_core::builtins::symbols::obarray_len(default).unwrap(),
-        1511
+        8
     );
 
     let table = Value::vector(vec![Value::NIL, Value::list(vec![Value::symbol("x")])]);
@@ -8170,9 +8258,7 @@ fn defvar_1_binds_only_when_default_is_unbound() {
     .expect("defvar-1 should succeed");
     assert_eq!(result, Value::symbol("vm-defvar-1"));
     assert_eq!(
-        eval.obarray()
-            .symbol_value_id(intern("vm-defvar-1"))
-            .copied(),
+        eval.obarray().symbol_value_id_copied(intern("vm-defvar-1")),
         Some(Value::fixnum(7))
     );
 
@@ -8183,9 +8269,7 @@ fn defvar_1_binds_only_when_default_is_unbound() {
     .expect("second defvar-1 should succeed");
     assert_eq!(result, Value::symbol("vm-defvar-1"));
     assert_eq!(
-        eval.obarray()
-            .symbol_value_id(intern("vm-defvar-1"))
-            .copied(),
+        eval.obarray().symbol_value_id_copied(intern("vm-defvar-1")),
         Some(Value::fixnum(7))
     );
 }
@@ -8208,7 +8292,7 @@ fn defconst_1_sets_value_and_risky_local_property_without_constant_trap() {
     assert_eq!(result, Value::symbol("vm-defconst-1"));
     let symbol = intern("vm-defconst-1");
     assert_eq!(
-        eval.obarray().symbol_value_id(symbol).copied(),
+        eval.obarray().symbol_value_id_copied(symbol),
         Some(Value::fixnum(11))
     );
     assert_eq!(
@@ -8226,7 +8310,7 @@ fn defconst_1_sets_value_and_risky_local_property_without_constant_trap() {
     )
     .expect("GNU allows setting a defconst variable");
     assert_eq!(
-        eval.obarray().symbol_value_id(symbol).copied(),
+        eval.obarray().symbol_value_id_copied(symbol),
         Some(Value::fixnum(12))
     );
 }
@@ -8339,15 +8423,12 @@ fn pure_dispatch_make_placeholder_cluster_matches_compat_contracts() {
     let bc = make_byte_code_with_hash
         .get_bytecode_data()
         .expect("make-byte-code should produce bytecode data");
-    if !bc.constants[0].is_hash_table() {
-        panic!("expected hash-table constant, got {:?}", bc.constants[0]);
-    };
-    let entry = {
-        let table = bc.constants[0].as_hash_table().unwrap();
-        let key = Value::symbol("foo").to_hash_key(&table.test);
-        table.data.get(&key).copied()
-    };
-    assert_eq!(entry, Some(Value::fixnum(42)));
+    // GNU Fmake_byte_code stores each supplied constant unchanged.
+    assert!(bc.constants[0].is_cons(), "the constant remains list data");
+    assert_eq!(
+        bc.constants[0], hash_literal,
+        "constant identity is preserved"
+    );
 
     let make_char_result = dispatch_builtin_pure("make-char", vec![Value::fixnum(1)])
         .expect("builtin make-char should resolve");
@@ -8718,7 +8799,7 @@ fn pure_dispatch_intern_soft_accepts_raw_unibyte_string_name() {
     let value = dispatch_builtin_pure("intern-soft", vec![raw])
         .expect("builtin intern-soft should resolve")
         .expect("builtin intern-soft should evaluate");
-    assert!(value.is_symbol() || value.is_nil());
+    assert!(value.is_bare_symbol() || value.is_nil());
 }
 
 #[test]
@@ -12879,36 +12960,6 @@ fn prin1_to_string_honors_print_number_table_override() {
 }
 
 #[test]
-fn prin1_to_string_continuous_numbering_keeps_global_label_index() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-
-    let result = eval
-        .eval_str(
-            r#"
-            (progn
-              (let ((print-circle t)
-                    (print-continuous-numbering nil))
-                (let ((x (list 0)))
-                  (prin1-to-string (list x x))))
-              (let ((print-circle t)
-                    (print-continuous-numbering t))
-                (concat
-                 (let ((print-number-table (make-hash-table :test 'eq)))
-                   (let ((x (list 1)))
-                     (prin1-to-string (list x x))))
-                 "\n"
-                 (let ((print-number-table (make-hash-table :test 'eq)))
-                   (let ((x (list 2)))
-                     (prin1-to-string (list x x)))))))
-            "#,
-        )
-        .expect("continuous numbering should keep labels across print calls");
-
-    assert_eq!(result, Value::string("(#1=(1) #1#)\n(#2=(2) #2#)"));
-}
-
-#[test]
 fn prin1_to_string_updates_print_number_table_after_first_print() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
@@ -12952,38 +13003,12 @@ fn prin1_to_string_reuses_print_number_table_positive_label() {
 }
 
 #[test]
-fn prin1_to_string_continuous_gensym_gets_print_number_label() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-
-    let result = eval
-        .eval_str(
-            r#"
-            (progn
-              (let ((print-circle t)
-                    (print-continuous-numbering nil))
-                (let ((x (list 0)))
-                  (prin1-to-string (list x x))))
-              (let* ((s (make-symbol "g"))
-                     (print-gensym t)
-                     (print-circle t)
-                     (print-continuous-numbering t)
-                     (print-number-table (make-hash-table :test 'eq)))
-                (prin1-to-string s)))
-            "#,
-        )
-        .expect("GNU labels continuous print-gensym symbols even when seen once");
-
-    assert_eq!(result, Value::string("#1=#:g"));
-}
-
-#[test]
 fn prin1_to_string_preserves_gensym_lambda_parameter_identity_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
     let sym = crate::emacs_core::intern::intern_uninterned("stack");
     let lambda = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![sym]),
+        params: LambdaParams::simple(vec![sym]).into(),
         body: vec![Value::from_sym_id(sym)],
         env: Some(Value::NIL),
         docstring: None,
@@ -15515,7 +15540,7 @@ fn internal_save_selected_window_helpers_restore_selected_window() {
     let result = eval
         .eval_str(
             r#"(let* ((orig (selected-window))
-                  (new (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+                  (new ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
              (select-window new)
              (save-selected-window
                (select-window orig)
@@ -16127,7 +16152,7 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
     assert_eq!(second, Value::fixnum(1));
     assert_eq!(eval.macro_expand_calls - calls0, 2);
     assert_eq!(
-        eval.obarray().symbol_value("vm-macroexpand-count").copied(),
+        eval.obarray().symbol_value_copied("vm-macroexpand-count"),
         Some(Value::fixnum(2))
     );
 
@@ -16143,7 +16168,7 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
     assert_eq!(fourth, Value::fixnum(2));
     assert_eq!(eval.macro_expand_calls - calls0, 4);
     assert_eq!(
-        eval.obarray().symbol_value("vm-macroexpand-count").copied(),
+        eval.obarray().symbol_value_copied("vm-macroexpand-count"),
         Some(Value::fixnum(4))
     );
 }
@@ -16183,8 +16208,7 @@ fn macroexpand_runtime_repeated_expansions_survive_exact_gc() {
     assert_eq!(eval.macro_expand_calls - calls0, 2);
     assert_eq!(
         eval.obarray()
-            .symbol_value("vm-macroexpand-gc-count")
-            .copied(),
+            .symbol_value_copied("vm-macroexpand-gc-count"),
         Some(Value::fixnum(2))
     );
 }
@@ -19463,3 +19487,15 @@ fn a_user_defined_hash_table_test_answers_like_gnu_through_the_bucket_index() {
         )
     );
 }
+
+#[cfg(test)]
+#[path = "sequence_gnu_test.rs"]
+mod sequence_gnu;
+
+#[cfg(test)]
+#[path = "printer_streams.rs"]
+mod printer_streams;
+
+#[cfg(test)]
+#[path = "continuous_numbering_gnu.rs"]
+mod continuous_numbering_gnu;

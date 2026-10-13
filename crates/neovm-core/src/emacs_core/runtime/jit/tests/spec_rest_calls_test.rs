@@ -49,7 +49,10 @@ fn warmed() -> Context {
     // the fast path.
     force_slow_spec_for_test(Some(false));
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(REST_CALLS).expect("defined and warmed");
+    // Observe native rest frames rather than whether a backend happened to
+    // finish during warming. Stage source-listed entries before the original
+    // warm loop; neither that loop nor the later GC call is replayed.
+    eval_fixture_program(&mut ev, REST_CALLS).expect("defined and warmed");
     ev
 }
 
@@ -103,7 +106,8 @@ fn a_rest_tail_survives_a_collection_in_the_callee() {
     force_profit_gate_for_test(false);
     force_slow_spec_for_test(Some(false));
     let mut ev = crate::test_utils::runtime_startup_context();
-    ev.eval_str(
+    eval_fixture_program(
+        &mut ev,
         r#"(progn
   (defvar neovm--rest-gc nil)
   (defun neovm--rest-keep (&rest r)

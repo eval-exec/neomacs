@@ -353,7 +353,10 @@ fn string_pixel_width_startup_is_autoloaded() {
         .obarray
         .symbol_function("string-pixel-width")
         .expect("missing string-pixel-width startup function cell");
-    assert!(is_autoload_value(&function));
+    assert!(is_autoload_value(
+        &function,
+        crate::tagged::value::SymbolMode::Bare
+    ));
 }
 
 #[test]

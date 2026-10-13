@@ -31,7 +31,8 @@ fn heap_object_codec_round_trips_representative_objects() {
                 required: vec![DumpSymId(1)],
                 optional: vec![DumpSymId(2)],
                 rest: Some(DumpSymId(3)),
-            },
+            }
+            .into(),
             arglist: Some(DumpValue::Nil),
             lexical: true,
             env: Some(DumpValue::Vector(DumpHeapRef { index: 4 })),
@@ -63,7 +64,8 @@ fn heap_object_codec_round_trips_representative_objects() {
                 required: vec![DumpSymId(1)],
                 optional: vec![DumpSymId(2)],
                 rest: Some(DumpSymId(3)),
-            },
+            }
+            .into(),
             arglist: Some(DumpValue::Nil),
             lexical: true,
             env: Some(DumpValue::Vector(DumpHeapRef { index: 4 })),

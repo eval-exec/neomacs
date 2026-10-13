@@ -1,0 +1,1 @@
+((error "Marker does not point anywhere") (error "Marker is outside the accessible part of the buffer"))

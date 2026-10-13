@@ -1,0 +1,109 @@
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<BufferManager>`, but its trait bounds were not satisfied
+ --> tests/thread_safety_ui/arm64_macos/generic/../../world_buffer_manager_send.rs
+  |
+  | struct ThreadTransfer<T>(PhantomData<T>);
+  | ------------------------ associated function or constant `transfer` not found for this struct
+...
+  |     ThreadTransfer::<BufferManager>::transfer();
+  |                                      ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<BufferManager>` due to unsatisfied trait bounds
+  |
+ ::: src/buffer/buffer.rs
+  |
+  | pub struct BufferManager {
+  | ------------------------ doesn't satisfy `BufferManager: Send`
+  |
+  = note: the following trait bounds were not satisfied:
+          `NonNull<neovm_core::buffer::buffer::BufferStorage>: Send`
+          which is required by `BufferManager: Send`
+          `NonNull<neovm_core::buffer::Buffer>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<owned_roots::OwnedRootRegistry>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<TaggedHeap>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<neovm_core::emacs_core::Obarray>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<Vec<SymId>>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<VariableWatcherList>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<HashSet<SymId>>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<AutoloadManager>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<treesit::TreeSitterManager>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<FrameManager>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<CodingSystemManager>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<vm::InterpreterStackPool>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<eval::MacroPerfStats>: Sync`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: Sync`
+          which is required by `BufferManager: Send`
+          `*const (): Send`
+          which is required by `BufferManager: Send`
+          `*mut GcHeader: Send`
+          which is required by `BufferManager: Send`
+          `*mut ConsCell: Send`
+          which is required by `BufferManager: Send`
+          `*mut MarkerObj: Send`
+          which is required by `BufferManager: Send`
+          `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<Cell<VisitedFileModtime>>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
+          which is required by `BufferManager: Send`
+          `*mut HashTableObj: Send`
+          which is required by `BufferManager: Send`
+          `*mut FinalizerObj: Send`
+          which is required by `BufferManager: Send`
+          `*mut *mut MarkerObj: Send`
+          which is required by `BufferManager: Send`
+          `std::rc::Weak<[TaggedValue]>: Send`
+          which is required by `BufferManager: Send`
+          `*mut u8: Send`
+          which is required by `BufferManager: Send`
+          `*mut FloatObj: Send`
+          which is required by `BufferManager: Send`
+          `*mut VecLikeHeader: Send`
+          which is required by `BufferManager: Send`
+          `*mut StringObj: Send`
+          which is required by `BufferManager: Send`
+          `NonNull<LispBufferLocalValue>: Send`
+          which is required by `BufferManager: Send`
+          `*const u8: Send`
+          which is required by `BufferManager: Send`
+          `Rc<Vec<AutomaticCompositionSpan>>: Send`
+          which is required by `BufferManager: Send`
+          `*const c_void: Send`
+          which is required by `BufferManager: Send`
+          `*const tree_sitter::ffi::TSTree: Send`
+          which is required by `BufferManager: Send`
+          `Rc<OverlayList>: Send`
+          which is required by `BufferManager: Send`
+          `*mut VectorObj: Send`
+          which is required by `BufferManager: Send`
+          `*mut ByteCodeObj: Send`
+          which is required by `BufferManager: Send`
+          `*mut LambdaObj: Send`
+          which is required by `BufferManager: Send`
+          `*mut MacroObj: Send`
+          which is required by `BufferManager: Send`
+          `*mut RecordObj: Send`
+          which is required by `BufferManager: Send`
+          `*mut SymbolWithPosObj: Send`
+          which is required by `BufferManager: Send`
+          `*mut BignumObj: Send`
+          which is required by `BufferManager: Send`
+          `*const (): Sync`
+          which is required by `BufferManager: Send`
+          `NonNull<ByteCodeFunction>: Send`
+          which is required by `BufferManager: Send`
+          `NonNull<[Op]>: Send`
+          which is required by `BufferManager: Send`
