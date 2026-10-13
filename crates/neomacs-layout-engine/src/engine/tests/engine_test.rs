@@ -22,6 +22,46 @@ fn settled_point(
 use super::*;
 use crate::display_row::append_context::DisplayRowLineWrap;
 
+/// Issue #543: enabling DEBUG must preserve multibyte mode-line rendering.
+#[tracing_test::traced_test]
+#[test]
+fn debug_logging_renders_mode_line_with_ellipsis_across_preview_byte_limit() {
+    let mut eval = Context::new();
+    eval.eval_str("(setq mode-line-format (list (concat (make-string 118 ?a) \"…END\")))")
+        .unwrap();
+    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("issue543", 1800, 160, buffer);
+    tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
+        LayoutEngine::new().layout_frame_rust(&mut eval, frame);
+    });
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame);
+    let rendered: String = engine
+        .last_frame_display_state
+        .as_ref()
+        .unwrap()
+        .window_matrices
+        .iter()
+        .flat_map(|window| &window.matrix.rows)
+        .filter(|row| row.enabled && row.role == GlyphRowRole::ModeLine)
+        .flat_map(|row| &row.glyphs[1])
+        .filter_map(|glyph| match glyph.glyph_type {
+            GlyphType::Char { ch } => Some(ch),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        rendered.contains(&format!("{}…END", "a".repeat(118))),
+        "{rendered:?}"
+    );
+    assert!(
+        logs_contain("mode-line eval result"),
+        "DEBUG path must execute"
+    );
+}
+
 #[path = "../../tests/engine_face_identity_test.rs"]
 mod face_identity;
 

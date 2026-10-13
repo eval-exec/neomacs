@@ -4370,6 +4370,7 @@ dependencies = [
  "expect-test",
  "libc",
  "neomacs-infra",
+ "neomacs-melpa-test-support",
  "neomacs-parity-reference",
  "neomacs-test-oracle",
  "proptest",

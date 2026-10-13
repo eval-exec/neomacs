@@ -24,5 +24,6 @@ unused_variables = "allow"
 dead_code = "allow"
 
 [dev-dependencies]
+neomacs-melpa-test-support.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true

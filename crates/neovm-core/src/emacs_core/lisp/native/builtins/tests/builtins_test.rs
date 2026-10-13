@@ -10894,22 +10894,19 @@ fn treesit_query_expand_preserves_nil_as_the_anonymous_node_marker() {
 }
 
 #[test]
-fn treesit_query_compile_eager_missing_language_signals_treesit_query_error() {
+fn treesit_query_compile_eager_missing_language_signals_language_load_error() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let err = crate::emacs_core::builtins::builtin_treesit_query_compile(
-        &mut eval,
-        vec![
-            Value::symbol("definitely-missing-language"),
-            Value::string("(identifier) @id"),
-            Value::T,
-        ],
-    )
-    .unwrap_err();
-    match err.into_kind() {
-        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "treesit-query-error"),
-        other => panic!("expected signal, got {other:?}"),
-    }
+    // GNU 31.1 distinguishes grammar loading from query syntax failures.
+    let result = eval
+        .eval_str(
+            "(condition-case err
+                 (treesit-query-compile 'definitely-missing-language \"(identifier) @id\" t)
+               (error (and (eq (car err) 'treesit-load-language-error)
+                           (eq (car (cdr err)) 'not-found))))",
+        )
+        .unwrap();
+    assert_eq!(result, Value::T);
 }
 
 #[test]

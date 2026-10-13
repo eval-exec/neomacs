@@ -36,6 +36,7 @@ pub use source_lock::{
     prepare_cached_locked_package_plan,
 };
 pub use tree_sitter_grammar::{
+    GNU31_TREE_SITTER_GRAMMARS, GrammarSourceDirectory, TreeSitterGrammarCase,
     prepare_cached_tree_sitter_grammar, prepare_cached_tree_sitter_grammar_from_subdirectory,
 };
 

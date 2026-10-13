@@ -768,7 +768,7 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
                     result
                         .value()
                         .as_utf8_str()
-                        .map(|s| &s[..s.len().min(120)])
+                        .map(|s| &s[..s.floor_char_boundary(120)])
                         .unwrap_or(""),
                     result.value().as_utf8_str().map(str::len).unwrap_or(0)
                 );

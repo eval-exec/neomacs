@@ -1,6 +1,6 @@
 use super::*;
 use crate::emacs_core::error::{
-    FlowKind, FlowResultExt, expect_args, expect_args_range, expect_fixnum,
+    FlowKind, FlowResultExt, expect_args, expect_args_range, expect_fixnum, signal_with_data,
 };
 use libloading::Library;
 use std::path::PathBuf;
@@ -447,25 +447,7 @@ pub(crate) fn treesit_candidate_paths(eval: &super::eval::Context, language: Sym
 
     let mut candidates = Vec::new();
 
-    for suffix in default_dynamic_library_suffixes() {
-        candidates.extend(
-            LibraryProbe::system_loader_name(&lib_base_name)
-                .versioned_variants(suffix)
-                .collect::<Vec<_>>(),
-        );
-    }
-
-    if let Some(user_emacs_dir) = treesit_user_emacs_dir(eval) {
-        let joined = format!("tree-sitter/{lib_base_name}");
-        for suffix in default_dynamic_library_suffixes() {
-            candidates.extend(
-                LibraryProbe::under_directory(&user_emacs_dir, &joined)
-                    .versioned_variants(suffix)
-                    .collect::<Vec<_>>(),
-            );
-        }
-    }
-
+    // GNU 31.1 searches explicit paths, then the user directory, then the system loader.
     for dir in list_value_to_strings(super::misc_eval::dynamic_or_global_symbol_value(
         eval,
         "treesit-extra-load-path",
@@ -479,22 +461,54 @@ pub(crate) fn treesit_candidate_paths(eval: &super::eval::Context, language: Sym
         }
     }
 
+    if let Some(user_emacs_dir) = treesit_user_emacs_dir(eval) {
+        let joined = format!("tree-sitter/{lib_base_name}");
+        for suffix in default_dynamic_library_suffixes() {
+            candidates.extend(
+                LibraryProbe::under_directory(&user_emacs_dir, &joined)
+                    .versioned_variants(suffix)
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    for suffix in default_dynamic_library_suffixes() {
+        candidates.extend(
+            LibraryProbe::system_loader_name(&lib_base_name)
+                .versioned_variants(suffix)
+                .collect::<Vec<_>>(),
+        );
+    }
+
     candidates.into_iter().map(|probe| probe.0).collect()
 }
 
-fn load_language_from_path(path: &str, c_symbol: &str) -> Result<runtime::LoadedLanguage, String> {
-    let library = unsafe { Library::new(path) }.map_err(|err| err.to_string())?;
+/// Only failure to open a candidate permits searching the next path. Once a
+/// library opens, GNU reports its entry-point or ABI failure to the caller.
+enum GrammarLoadError {
+    Open(libloading::Error),
+    Symbol(libloading::Error),
+    IncompatibleLanguage { abi_version: usize },
+}
+
+fn load_language_from_path(
+    path: &str,
+    c_symbol: &str,
+) -> Result<runtime::LoadedLanguage, GrammarLoadError> {
+    let library = unsafe { Library::new(path) }.map_err(GrammarLoadError::Open)?;
     let symbol_name = format!("{c_symbol}\0");
     let lang_fn = unsafe {
         library
             .get::<unsafe extern "C" fn() -> *const ()>(symbol_name.as_bytes())
-            .map_err(|err| err.to_string())?
+            .map_err(GrammarLoadError::Symbol)?
     };
     let language = Language::new(unsafe { LanguageFn::from_raw(*lang_fn) });
     let mut parser = Parser::new();
     parser
         .set_language(&language)
-        .map_err(|err| format!("ABI mismatch: {err}"))?;
+        .map_err(|_| GrammarLoadError::IncompatibleLanguage {
+            abi_version: language.abi_version(),
+        })?;
     let filename = PathBuf::from(path)
         .canonicalize()
         .ok()
@@ -532,7 +546,22 @@ fn load_language(
                     .cache_loaded_language(remapped_language, loaded);
                 return Ok(result);
             }
-            Err(err) => errors.push(err),
+            Err(GrammarLoadError::Open(error)) => errors.push(error.to_string()),
+            Err(GrammarLoadError::Symbol(error)) => {
+                return Err(Value::list(vec![
+                    Value::symbol("symbol-error"),
+                    Value::string(error.to_string()),
+                ]));
+            }
+            Err(GrammarLoadError::IncompatibleLanguage { abi_version }) => {
+                return Err(Value::list(vec![
+                    Value::symbol("language-grammar-version-mismatch"),
+                    Value::string(format!(
+                        "{candidate}'s ABI version is {abi_version}, but supported versions are \
+                         {MIN_COMPATIBLE_LANGUAGE_VERSION}-{LANGUAGE_VERSION}"
+                    )),
+                ]));
+            }
         }
     }
 
@@ -930,12 +959,8 @@ fn ensure_query_compiled(eval: &mut super::eval::Context, query: Value) -> Resul
     let source = query_record_slot(query, QUERY_SLOT_SOURCE)?;
     let source_string = expand_query_value("treesit-query-compile", source, eval.symbol_mode())?;
 
-    let (lang, _) = load_language(eval, language_sym).map_err(|_| {
-        treesit_query_error(format!(
-            "Failed to load tree-sitter language `{}`",
-            resolve_sym(language_sym)
-        ))
-    })?;
+    let (lang, _) = load_language(eval, language_sym)
+        .map_err(|detail| signal_with_data("treesit-load-language-error", detail))?;
     let compiled =
         runtime::EmacsQuery::new(&lang, &source_string).map_err(treesit_query_error_from_query)?;
     let query_entry = eval
@@ -2196,18 +2221,8 @@ pub(crate) fn builtin_treesit_parser_create(
         return Ok(existing);
     }
 
-    let (loaded_language, _) = load_language(eval, language).map_err(|detail| {
-        signal(
-            "error",
-            vec![
-                Value::string(format!(
-                    "Failed to load tree-sitter language `{}`",
-                    resolve_sym(language)
-                )),
-                detail,
-            ],
-        )
-    })?;
+    let (loaded_language, _) = load_language(eval, language)
+        .map_err(|detail| signal_with_data("treesit-load-language-error", detail))?;
     let mut parser = Parser::new();
     parser
         .set_language(&loaded_language)

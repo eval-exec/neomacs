@@ -2,6 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod matrix;
+pub use matrix::{GNU31_TREE_SITTER_GRAMMARS, GrammarSourceDirectory, TreeSitterGrammarCase};
+
 use crate::{
     CommandError, EmacsRuntime, configure_process_environment, elisp_string, output_with_timeout,
 };
