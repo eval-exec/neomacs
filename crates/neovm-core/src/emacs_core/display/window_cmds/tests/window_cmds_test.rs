@@ -12403,3 +12403,57 @@ fn window_lines_pixel_dimensions_returns_nil_without_a_current_matrix() {
 #[cfg(test)]
 #[path = "tsb_boundary_numbers.rs"]
 mod tsb_boundary_numbers;
+
+#[test]
+fn minibuffer_selected_window_returns_nil_after_the_invoking_window_is_deleted() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = runtime_startup_context();
+    ev.eval_str("(setq issue560-origin (split-window)) (select-window issue560-origin)")
+        .expect("create and select the invoking window");
+    let mini = ev.buffer_manager_mut().create_buffer(" *Minibuf-1*");
+    ev.activate_minibuffer_window_for_buffer(mini, LispString::from_utf8("Prompt: "), None)
+        .expect("activate minibuffer");
+    assert_eq!(
+        format_eval_result(&ev.eval_str("(eq (minibuffer-selected-window) issue560-origin)")),
+        "OK t"
+    );
+    let result = ev.eval_str(
+        "(delete-window issue560-origin)
+         (list (minibuffer-selected-window) (window-live-p issue560-origin)
+               (with-selected-window
+                   (or (minibuffer-selected-window) (selected-window)) 'ok))",
+    );
+    assert_eq!(format_eval_result(&result), "OK (nil nil ok)");
+}
+
+#[test]
+fn minibuffer_selected_window_requires_an_active_selected_minibuffer() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((executing-kbd-macro t)
+      (origin (split-window))
+      (observations nil))
+  (select-window origin)
+  (push (minibuffer-selected-window) observations)
+  (catch 'issue560-done
+    (minibuffer-with-setup-hook
+        (lambda ()
+          (let ((mini (selected-window)))
+            (push (list (> (minibuffer-depth) 0)
+                        (window-minibuffer-p)
+                        (eq (minibuffer-selected-window) origin)) observations)
+            (select-window origin)
+            (push (list (> (minibuffer-depth) 0)
+                        (window-minibuffer-p)
+                        (minibuffer-selected-window)) observations)
+            (select-window mini)
+            (push (eq (minibuffer-selected-window) origin) observations))
+          (throw 'issue560-done nil))
+      (read-from-minibuffer "Prompt: ")))
+  (push (list (minibuffer-depth) (minibuffer-selected-window)) observations)
+  (delete-window origin)
+  (nreverse observations))
+"#,
+    );
+    assert_eq!(result, "OK (nil (t t t) (t nil nil) t (0 nil))");
+}

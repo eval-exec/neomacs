@@ -2312,7 +2312,7 @@ pub(crate) fn builtin_minibuffer_selected_window(
 ) -> EvalResult {
     expect_args("minibuffer-selected-window", &args, 0)?;
     Ok(eval
-        .minibuffer_selected_window
+        .minibuffer_selected_window_id()
         .map(window_value)
         .unwrap_or(Value::NIL))
 }

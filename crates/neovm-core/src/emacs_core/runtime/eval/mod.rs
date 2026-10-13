@@ -5289,8 +5289,20 @@ impl Context {
     /// GNU keeps this window's mode/header line active while the minibuffer
     /// owns input selection (`minibuffer-selected-window`).
     pub fn minibuffer_selected_window_id(&self) -> Option<WindowId> {
-        self.active_minibuffer_window_id()?;
-        self.minibuffer_selected_window
+        // GNU window.c returns the saved caller only while a minibuffer is
+        // selected, at positive minibuffer depth, and the caller is live.
+        // Keep the saved identity for nested reads/window-configuration
+        // restoration; deletion invalidates the query, not the session.
+        if !self.minibuffer_is_active() {
+            return None;
+        }
+        let selected_frame = self.frames.selected_frame()?;
+        if selected_frame.minibuffer_window != Some(selected_frame.selected_window) {
+            return None;
+        }
+        let caller = self.minibuffer_selected_window?;
+        super::window_cmds::WindowDomain::Live.frame_of(&self.frames, caller)?;
+        Some(caller)
     }
 
     pub fn activate_minibuffer_window_for_buffer(
