@@ -2736,19 +2736,25 @@ fn completion_candidates_from_hash_table(collection: Value) -> Vec<CompletionCan
     candidates
 }
 
-/// Read the `completion-ignore-case` symbol from the obarray.
-fn completion_ignore_case(obarray: &Obarray) -> bool {
+/// GNU's forwarded completion state follows the current buffer binding
+/// (`src/data.c:swap_in_symval_forwarding`), including a local `let` binding.
+pub(crate) fn completion_ignore_case(obarray: &Obarray, buffers: &BufferManager) -> bool {
     obarray
-        .symbol_value_id_copied(CompletionStateVariable::CompletionIgnoreCase.symbol_id())
+        .value_in_buffer_id(
+            buffers.current_buffer(),
+            CompletionStateVariable::CompletionIgnoreCase.symbol_id(),
+        )
         .is_some_and(|v| v.is_truthy())
 }
 
-pub(crate) fn completion_regexp_lisp_list_from_obarray(
+pub(crate) fn completion_regexp_lisp_list(
     obarray: &Obarray,
+    buffers: &BufferManager,
 ) -> Vec<crate::heap_types::LispString> {
-    let Some(val) =
-        obarray.symbol_value_id_copied(CompletionStateVariable::CompletionRegexpList.symbol_id())
-    else {
+    let Some(val) = obarray.value_in_buffer_id(
+        buffers.current_buffer(),
+        CompletionStateVariable::CompletionRegexpList.symbol_id(),
+    ) else {
         return Vec::new();
     };
     let Some(items) = super::value::list_to_vec(&val) else {
@@ -2863,8 +2869,8 @@ pub(crate) fn builtin_try_completion(
     args: Vec<Value>,
 ) -> EvalResult {
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
-    let ignore_case = completion_ignore_case(&eval.obarray);
-    let regexps = completion_regexp_lisp_list_from_obarray(&eval.obarray);
+    let ignore_case = completion_ignore_case(&eval.obarray, &eval.buffers);
+    let regexps = completion_regexp_lisp_list(&eval.obarray, &eval.buffers);
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     // Root the candidate set across the predicate calls (see the holder doc).
     let root_scope = eval.save_specpdl_roots();
@@ -2888,8 +2894,8 @@ pub(crate) fn builtin_all_completions(
     args: Vec<Value>,
 ) -> EvalResult {
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
-    let ignore_case = completion_ignore_case(&eval.obarray);
-    let regexps = completion_regexp_lisp_list_from_obarray(&eval.obarray);
+    let ignore_case = completion_ignore_case(&eval.obarray, &eval.buffers);
+    let regexps = completion_regexp_lisp_list(&eval.obarray, &eval.buffers);
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     // Root the candidate set across the predicate calls (see the holder doc).
     let root_scope = eval.save_specpdl_roots();
@@ -2922,7 +2928,7 @@ pub(crate) fn builtin_test_completion(
     if args.len() >= 2
         && let Ok(string) = expect_lisp_string(&args[0])
     {
-        let ignore_case = completion_ignore_case(&eval.obarray);
+        let ignore_case = completion_ignore_case(&eval.obarray, &eval.buffers);
         let probe =
             match direct_hash_completion_candidate(args[1], &string, eval.symbols_with_pos_enabled)
             {
@@ -2931,7 +2937,7 @@ pub(crate) fn builtin_test_completion(
             };
         match probe {
             ObarrayProbe::Found(candidate) => {
-                let regexps = completion_regexp_lisp_list_from_obarray(&eval.obarray);
+                let regexps = completion_regexp_lisp_list(&eval.obarray, &eval.buffers);
                 let syntax =
                     super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
                 return builtin_test_completion_with_candidates(
@@ -2950,8 +2956,8 @@ pub(crate) fn builtin_test_completion(
         }
     }
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
-    let ignore_case = completion_ignore_case(&eval.obarray);
-    let regexps = completion_regexp_lisp_list_from_obarray(&eval.obarray);
+    let ignore_case = completion_ignore_case(&eval.obarray, &eval.buffers);
+    let regexps = completion_regexp_lisp_list(&eval.obarray, &eval.buffers);
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     // Root the candidate set across the predicate calls (see the holder doc).
     let root_scope = eval.save_specpdl_roots();
@@ -3022,7 +3028,7 @@ pub(crate) fn builtin_flex_cost_gotoh(
         return Ok(Value::NIL);
     }
 
-    let ignore_case = completion_ignore_case(&eval.obarray);
+    let ignore_case = completion_ignore_case(&eval.obarray, &eval.buffers);
 
     // Cheap subsequence pre-filter for the common case-sensitive case: if PAT
     // is not a subsequence of STR there can be no match, so bail before the

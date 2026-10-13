@@ -8,6 +8,7 @@
 
 mod support;
 
+mod buffer_local_completion;
 mod coding_detection;
 mod coding_save;
 mod dual_width_fixed_pitch;

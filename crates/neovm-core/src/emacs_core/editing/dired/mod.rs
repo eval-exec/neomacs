@@ -664,7 +664,7 @@ pub(crate) fn builtin_file_name_completion(eval: &mut Context, args: Vec<Value>)
         args.get(2).copied().unwrap_or(Value::NIL),
     ];
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
-    let plan = if get_completion_ignore_case(&eval.obarray, &eval.buffers)
+    let plan = if super::minibuffer::completion_ignore_case(&eval.obarray, &eval.buffers)
         && super::fns::compare_strings_parity_enabled()
     {
         prepare_file_name_completion_with_case_table(eval, &args, syntax)?
@@ -706,8 +706,8 @@ pub(crate) fn builtin_file_name_all_completions(
     if file.as_bytes().contains(&b'/') {
         return Ok(Value::NIL);
     }
-    let ignore_case = get_completion_ignore_case(&eval.obarray, &eval.buffers);
-    let regexps = super::minibuffer::completion_regexp_lisp_list_from_obarray(&eval.obarray);
+    let ignore_case = super::minibuffer::completion_ignore_case(&eval.obarray, &eval.buffers);
+    let regexps = super::minibuffer::completion_regexp_lisp_list(&eval.obarray, &eval.buffers);
     // GNU Emacs: file-name-all-completions does NOT filter by
     // completion-ignored-extensions (the "all_flag" path).
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
@@ -931,7 +931,7 @@ fn prepare_file_name_completion_with_case_table(
         let raw = collect_file_name_completions_with_parity(ctx, &file, &directory, false, true)?;
         let extensions = get_ignored_extensions(&ctx.obarray);
         let raw = filter_ignored_extensions_with_case_table(ctx, &file, raw, &extensions)?;
-        let regexps = super::minibuffer::completion_regexp_lisp_list_from_obarray(&ctx.obarray);
+        let regexps = super::minibuffer::completion_regexp_lisp_list(&ctx.obarray, &ctx.buffers);
         filter_by_completion_regexps(syntax, &ctx.obarray, &ctx.buffers, raw, &regexps, true)?
     };
     Ok(FileNameCompletionPlan {
@@ -1030,22 +1030,6 @@ fn get_ignored_extensions(obarray: &super::symbol::Obarray) -> Vec<LispString> {
         .into_iter()
         .filter_map(|v| v.as_lisp_string().cloned())
         .collect()
-}
-
-/// GNU's `completion_ignore_case` -- the `DEFVAR_BOOL` cell
-/// (`src/minibuf.c:2585`) that `src/dired.c` dereferences as a bare C `bool`
-/// throughout `file_name_completion` (`:592`, `:599`, `:633`, `:886`).
-///
-/// The swap-in (`src/data.c:1573-1603`) keeps that cell equal to the current
-/// buffer's binding, and six `.el` files in this tree localise the name on
-/// purpose, so the read names the buffer. Ledger 196.
-fn get_completion_ignore_case(
-    obarray: &super::symbol::Obarray,
-    buffers: &crate::buffer::BufferManager,
-) -> bool {
-    obarray
-        .value_in_buffer(buffers.current_buffer(), "completion-ignore-case")
-        .is_some_and(|v| v.is_truthy())
 }
 
 /// Apply `completion-ignored-extensions` filtering to a set of completions.
@@ -1175,9 +1159,9 @@ pub(crate) fn prepare_file_name_completion_in_state(
         &ctx.buffers,
         &directory_arg,
     );
-    let ignore_case = get_completion_ignore_case(&ctx.obarray, &ctx.buffers);
+    let ignore_case = super::minibuffer::completion_ignore_case(&ctx.obarray, &ctx.buffers);
     let ignored_extensions = get_ignored_extensions(&ctx.obarray);
-    let regexps = super::minibuffer::completion_regexp_lisp_list_from_obarray(&ctx.obarray);
+    let regexps = super::minibuffer::completion_regexp_lisp_list(&ctx.obarray, &ctx.buffers);
     let completions = if file.as_bytes().contains(&b'/') {
         Vec::new()
     } else {
