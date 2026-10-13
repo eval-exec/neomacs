@@ -1637,7 +1637,7 @@ fn commandp_true_for_quoted_lambda_with_interactive_form() {
 }
 
 #[test]
-fn call_interactively_state_resolution_handles_default_and_noarg_cases() {
+fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     ev.obarray
@@ -1646,7 +1646,7 @@ fn call_interactively_state_resolution_handles_default_and_noarg_cases() {
     let mut builtin_plan =
         plan_call_interactively_for_test(&mut ev, &[Value::symbol("forward-char")])
             .expect("plan builtin default interactive command");
-    let (_, builtin_args) = unsafe {
+    let builtin_resolution = unsafe {
         let buffers = &mut ev.buffers;
         let custom = &ev.custom;
         let specpdl = ev.specpdl.as_slice();
@@ -1665,9 +1665,11 @@ fn call_interactively_state_resolution_handles_default_and_noarg_cases() {
             )
         })
     }
-    .expect("resolve builtin default args")
-    .expect("shared-state builtin default path");
-    assert_eq!(builtin_args, vec![Value::fixnum(4)]);
+    .expect("resolve builtin default args");
+    assert!(
+        builtin_resolution.is_none(),
+        "motion requires Lisp shift-selection policy"
+    );
 
     let lambda = ev
         .eval_str("(lambda () (interactive) 1)")
@@ -1798,7 +1800,7 @@ fn call_interactively_state_resolution_handles_simple_string_codes_without_eval(
 }
 
 #[test]
-fn call_interactively_state_resolution_applies_shift_selection_prefix_in_state() {
+fn call_interactively_state_resolution_defers_shift_selection_without_effects() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let current = ev.buffers.current_buffer_id().expect("current buffer");
@@ -1815,7 +1817,7 @@ fn call_interactively_state_resolution_applies_shift_selection_prefix_in_state()
         .expect("eval lambda");
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan shift-selection lambda");
-    let (_, args) = unsafe {
+    let resolution = unsafe {
         let buffers = &mut ev.buffers;
         let custom = &ev.custom;
         let specpdl = ev.specpdl.as_slice();
@@ -1834,13 +1836,12 @@ fn call_interactively_state_resolution_applies_shift_selection_prefix_in_state()
             )
         })
     }
-    .expect("resolve shift-selection args")
-    .expect("shared-state shift-selection path");
-    assert_eq!(args, vec![Value::fixnum(3)]);
+    .expect("resolve shift-selection args");
+    assert!(resolution.is_none());
 
     let buf = ev.buffers.current_buffer().expect("current buffer");
-    assert_eq!(buf.mark_emacs_byte_pos().map(|pos| pos.get()), Some(2));
-    assert_eq!(buf.get_buffer_local("mark-active"), Some(Value::T));
+    assert_eq!(buf.mark_emacs_byte_pos().map(|pos| pos.get()), None);
+    assert_eq!(buf.get_buffer_local("mark-active"), Some(Value::NIL));
 }
 
 #[test]
@@ -4513,26 +4514,6 @@ fn interactive_lambda_invalid_control_letter_signals_error() {
 }
 
 #[test]
-fn interactive_shift_selection_prefix_sets_mark_and_mark_active() {
-    crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
-        buf.insert("abcd");
-        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(2));
-    }
-    ev.obarray
-        .set_symbol_value("this-command-keys-shift-translated", Value::T);
-    ev.obarray.set_symbol_value("shift-select-mode", Value::T);
-
-    interactive_apply_shift_selection_prefix(&mut ev);
-
-    let buf = ev.buffers.current_buffer().expect("current buffer");
-    assert_eq!(buf.mark_emacs_byte_pos().map(|pos| pos.get()), Some(2));
-    assert_eq!(buf.get_buffer_local("mark-active"), Some(Value::T));
-}
-
-#[test]
 fn interactive_lambda_prefix_flags_star_hat_and_at_follow_batch_semantics() {
     crate::test_utils::init_test_tracing();
     let results = bootstrap_eval_all(
@@ -7110,4 +7091,115 @@ fn interactive_heap_specs_track_the_heap_valued_specs() {
     let restored = InteractiveRegistry::from_dump(dumped);
     assert_eq!(restored.heap_specs, expected(&restored));
     assert_eq!(restored.heap_specs.len(), 1);
+}
+
+#[test]
+fn repeated_shift_translated_motion_preserves_the_selection_anchor() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(with-temp-buffer
+              (insert "abcdefgh")
+              (goto-char (point-min))
+              (setq shift-select-mode t)
+              (transient-mark-mode 1)
+              (let ((this-command-keys-shift-translated t)
+                    (observations nil))
+                (dotimes (_ 4)
+                  (call-interactively #'forward-char)
+                  (push (list (point) (mark)
+                              (buffer-substring-no-properties (region-beginning) (region-end)))
+                        observations))
+                (nreverse observations)))"#,
+    );
+    assert_eq!(
+        result,
+        r#"OK ((2 1 "a") (3 1 "ab") (4 1 "abc") (5 1 "abcd"))"#
+    );
+}
+
+#[test]
+fn shifted_motion_restores_temporary_mode_but_preserves_permanent_selection() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(mapcar
+  (lambda (mode)
+    (with-temp-buffer
+      (insert "abcdefgh")
+      (goto-char 3)
+      (setq shift-select-mode mode)
+      (transient-mark-mode 1)
+      (let ((observations nil))
+        (let ((this-command-keys-shift-translated t))
+          (call-interactively #'forward-char)
+          (call-interactively #'forward-char)
+          (push (list (point) (mark t) mark-active transient-mark-mode) observations)
+          (call-interactively #'backward-char)
+          (call-interactively #'backward-char)
+          (call-interactively #'backward-char)
+          (push (list (point) (mark t) mark-active transient-mark-mode) observations))
+        (let ((this-command-keys-shift-translated nil))
+          (call-interactively #'forward-char)
+          (push (list (point) (mark t) mark-active transient-mark-mode
+                      (local-variable-p 'transient-mark-mode)) observations))
+        (nreverse observations))))
+  '(t permanent nil))"#,
+    );
+    assert_eq!(
+        result,
+        "OK (((5 3 t (only . t)) (2 3 t (only . t)) (3 3 nil t nil)) ((5 3 t t) (2 3 t t) (3 3 t t nil)) ((5 nil nil t) (2 nil nil t) (3 nil nil t nil)))"
+    );
+}
+
+#[test]
+fn shifted_motion_preserves_mark_ring_and_hooks_in_interpreted_and_compiled_callers() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(mapcar
+  (lambda (compiled)
+    (with-temp-buffer
+      (insert "abcdefgh")
+      (goto-char 3)
+      (set-mark 8)
+      (setq mark-active nil shift-select-mode t)
+      (transient-mark-mode 0)
+      (let* ((activations 0) (deactivations 0)
+             (activate-mark-hook (list (lambda () (setq activations (1+ activations)))))
+             (deactivate-mark-hook (list (lambda () (setq deactivations (1+ deactivations))))))
+        (let ((invoke (if compiled
+                          (byte-compile '(lambda () (call-interactively #'forward-char)))
+                        (lambda () (call-interactively #'forward-char))))
+              (this-command-keys-shift-translated t))
+          (funcall invoke)
+          (funcall invoke)
+          (let ((this-command-keys-shift-translated nil)) (funcall invoke)))
+        (list (point) (mark) mark-active transient-mark-mode
+              (local-variable-p 'transient-mark-mode)
+              (mapcar #'marker-position mark-ring) activations deactivations))))
+  '(nil t))"#,
+    );
+    assert_eq!(
+        result,
+        "OK ((6 3 t nil nil (8) 1 0) (6 3 t nil nil (8) 1 0))"
+    );
+}
+
+#[test]
+fn interactive_prefix_policy_runs_once_before_invalid_argument_errors() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(mapcar
+  (lambda (compiled)
+    (let* ((calls 0)
+           (observer (lambda (&rest _) (setq calls (1+ calls))))
+           (invoke (if compiled
+                       (byte-compile '(lambda () (call-interactively (lambda () (interactive "^q")))))
+                     (lambda () (call-interactively (lambda () (interactive "^q")))))))
+      (unwind-protect
+          (progn
+            (advice-add 'handle-shift-selection :before observer)
+            (list (condition-case err (funcall invoke) (error (car err))) calls))
+        (advice-remove 'handle-shift-selection observer))))
+  '(nil t))"#,
+    );
+    assert_eq!(result, "OK ((error 1) (error 1))");
 }

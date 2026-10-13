@@ -1434,9 +1434,35 @@ enum ParsedInteractiveSpec {
     Form(InteractiveFormSpec),
 }
 
+/// Operations preceding interactive argument acquisition, in source order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InteractivePrefixFlag {
+    RequireWritableBuffer,
+    SelectEventWindow,
+    HandleShiftSelection,
+}
+
+impl InteractivePrefixFlag {
+    fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            b'*' => Some(Self::RequireWritableBuffer),
+            b'@' => Some(Self::SelectEventWindow),
+            b'^' => Some(Self::HandleShiftSelection),
+            _ => None,
+        }
+    }
+
+    fn requires_runtime(self) -> bool {
+        match self {
+            Self::RequireWritableBuffer => false,
+            Self::SelectEventWindow | Self::HandleShiftSelection => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct ParsedInteractiveStringCode {
-    prefix_flags: Vec<char>,
+    prefix_flags: Vec<InteractivePrefixFlag>,
     entries: Vec<(char, crate::heap_types::LispString)>,
 }
 
@@ -1740,21 +1766,33 @@ fn interactive_args_from_string_code_in_state(
     obarray: &mut Obarray,
     dynamic: &mut Vec<OrderedRuntimeBindingMap>,
     buffers: &mut crate::buffer::BufferManager,
-    custom: &crate::emacs_core::custom::CustomManager,
-    specpdl: &[crate::emacs_core::eval::SpecBinding],
+    _custom: &crate::emacs_core::custom::CustomManager,
+    _specpdl: &[crate::emacs_core::eval::SpecBinding],
     code: &crate::heap_types::LispString,
     kind: CommandInvocationKind,
     context: &mut InteractiveInvocationContext,
 ) -> Result<Option<Vec<Value>>, Flow> {
     let parsed = parse_interactive_code_entries(code);
-    interactive_apply_prefix_flags_in_state(
-        obarray,
-        dynamic.as_mut_slice(),
-        buffers,
-        custom,
-        specpdl,
-        &parsed.prefix_flags,
-    )?;
+    // Defer before any effect: Lisp hooks and shift-selection policy cannot
+    // execute through this split-state seam, and prefix order is observable.
+    if parsed
+        .prefix_flags
+        .iter()
+        .any(|flag| flag.requires_runtime())
+    {
+        return Ok(None);
+    }
+    for flag in &parsed.prefix_flags {
+        match flag {
+            InteractivePrefixFlag::RequireWritableBuffer => {
+                interactive_require_writable_current_buffer_in_state(obarray, dynamic, buffers)?;
+            }
+            InteractivePrefixFlag::SelectEventWindow
+            | InteractivePrefixFlag::HandleShiftSelection => {
+                unreachable!("runtime prefixes were deferred above");
+            }
+        }
+    }
     if parsed.entries.is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -2175,68 +2213,6 @@ fn interactive_require_writable_current_buffer_in_state(
     Ok(())
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn interactive_apply_shift_selection_prefix(eval: &mut Context) {
-    let buffers = &mut eval.buffers;
-    let custom = &eval.custom;
-    let specpdl = eval.specpdl.as_slice();
-    // SAFETY: shift-selection updates only runtime values/buffer state;
-    // no Lisp watcher, canonical writer or retained manager reference exists.
-    unsafe {
-        eval.obarray.with_legacy_value_write(|obarray| {
-            interactive_apply_shift_selection_prefix_in_state(
-                obarray,
-                &mut [],
-                buffers,
-                custom,
-                specpdl,
-            );
-        });
-    }
-}
-
-fn interactive_apply_shift_selection_prefix_in_state(
-    obarray: &mut Obarray,
-    dynamic: &mut [OrderedRuntimeBindingMap],
-    buffers: &mut crate::buffer::BufferManager,
-    custom: &crate::emacs_core::custom::CustomManager,
-    specpdl: &[crate::emacs_core::eval::SpecBinding],
-) {
-    let shifted = dynamic_or_global_symbol_value_in_state(
-        obarray,
-        dynamic,
-        "this-command-keys-shift-translated",
-    )
-    .is_some_and(|v| v.is_truthy());
-    let shift_select_mode =
-        dynamic_or_global_symbol_value_in_state(obarray, dynamic, "shift-select-mode")
-            .is_some_and(|v| v.is_truthy());
-    if !shifted || !shift_select_mode {
-        return;
-    }
-
-    let mut mark_activated = false;
-    if let Some(current_id) = buffers.current_buffer_id() {
-        let point = buffers
-            .get(current_id)
-            .map(|buf| buf.point_emacs_byte_pos())
-            .unwrap_or(EmacsBytePos::ZERO);
-        let _ = buffers.set_buffer_mark_emacs_byte_pos(current_id, point);
-        let _ = buffers.set_buffer_local_property(current_id, "mark-active", Value::T);
-        mark_activated = true;
-    }
-    if mark_activated {
-        let _ = super::eval::set_runtime_binding(
-            obarray,
-            buffers,
-            custom,
-            specpdl,
-            intern("mark-active"),
-            Value::T,
-        );
-    }
-}
-
 fn interactive_first_event_with_parameters_from_keys(
     context: &InteractiveInvocationContext,
 ) -> Option<Value> {
@@ -2314,61 +2290,27 @@ fn interactive_select_window_from_prefix_context(
 
 fn interactive_apply_prefix_flags(
     eval: &mut Context,
-    prefix_flags: &[char],
+    prefix_flags: &[InteractivePrefixFlag],
     context: &InteractiveInvocationContext,
 ) -> Result<(), Flow> {
     for prefix_flag in prefix_flags {
         match prefix_flag {
-            '*' => interactive_require_writable_current_buffer_in_state(
-                &eval.obarray,
-                &[],
-                &eval.buffers,
-            )?,
-            '@' => interactive_select_window_from_prefix_context(eval, context)?,
-            '^' => {
-                let buffers = &mut eval.buffers;
-                let custom = &eval.custom;
-                let specpdl = eval.specpdl.as_slice();
-                // SAFETY: the shift-selection storage helper changes only
-                // values/buffer state and does not invoke Lisp or dispatch writers.
-                unsafe {
-                    eval.obarray.with_legacy_value_write(|obarray| {
-                        interactive_apply_shift_selection_prefix_in_state(
-                            obarray,
-                            &mut [],
-                            buffers,
-                            custom,
-                            specpdl,
-                        );
-                    });
-                }
+            InteractivePrefixFlag::RequireWritableBuffer => {
+                interactive_require_writable_current_buffer_in_state(
+                    &eval.obarray,
+                    &[],
+                    &eval.buffers,
+                )?
             }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn interactive_apply_prefix_flags_in_state(
-    obarray: &mut Obarray,
-    dynamic: &mut [OrderedRuntimeBindingMap],
-    buffers: &mut crate::buffer::BufferManager,
-    custom: &crate::emacs_core::custom::CustomManager,
-    specpdl: &[crate::emacs_core::eval::SpecBinding],
-    prefix_flags: &[char],
-) -> Result<(), Flow> {
-    for prefix_flag in prefix_flags {
-        match prefix_flag {
-            '*' => interactive_require_writable_current_buffer_in_state(obarray, dynamic, buffers)?,
-            '@' => {
-                // Selecting the window from the first mouse event requires command-loop
-                // event context; current batch paths have no such events yet.
+            InteractivePrefixFlag::SelectEventWindow => {
+                interactive_select_window_from_prefix_context(eval, context)?
             }
-            '^' => interactive_apply_shift_selection_prefix_in_state(
-                obarray, dynamic, buffers, custom, specpdl,
-            ),
-            _ => {}
+            InteractivePrefixFlag::HandleShiftSelection => {
+                // GNU callint.c calls the Lisp policy before acquiring arguments.
+                // It owns temporary activation, anchor preservation, mark hooks,
+                // and restoration of buffer-local transient-mark-mode.
+                eval.apply(Value::symbol("handle-shift-selection"), vec![])?;
+            }
         }
     }
     Ok(())
@@ -2495,12 +2437,12 @@ fn interactive_form_value_to_args(value: Value) -> Result<Vec<Value>, Flow> {
     ))
 }
 
-fn parse_interactive_prefix_flags(line: &[u8]) -> (Vec<char>, usize) {
+fn parse_interactive_prefix_flags(line: &[u8]) -> (Vec<InteractivePrefixFlag>, usize) {
     let mut flags = Vec::new();
     let mut offset = 0usize;
     while let Some(&byte) = line.get(offset) {
-        if matches!(byte, b'*' | b'@' | b'^') {
-            flags.push(byte as char);
+        if let Some(flag) = InteractivePrefixFlag::from_byte(byte) {
+            flags.push(flag);
             offset += 1;
         } else {
             break;

@@ -1146,3 +1146,50 @@ fn narrow_to_page_once_then_widen_via_cx_n_p_w() {
 
     assert_pair_exact_display("narrow_to_page_once_then_widen_via_cx_n_p_w", &gnu, &neo);
 }
+
+#[test]
+fn repeated_shift_right_extends_the_rendered_region_from_the_original_anchor() {
+    let (mut gnu, mut neo) = boot_pair("");
+    open_home_file(
+        &mut gnu,
+        &mut neo,
+        "shift-selection.txt",
+        "abcdefgh\n",
+        "C-x C-f",
+    );
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn (setq shift-select-mode t) (transient-mark-mode 1) (set-face-background 'region \"red\") (goto-char 1))",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    let row = gnu
+        .text_grid()
+        .iter()
+        .position(|row| row.starts_with("abcdefgh"))
+        .unwrap() as u16;
+    let normal = gnu.screen().cell(row, 7).unwrap().bgcolor();
+    for length in 1..=4 {
+        // xterm's Shift-Right sequence exercises decoding and shift translation.
+        send_both_raw(&mut gnu, &mut neo, b"\x1b[1;2C");
+        read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+        for column in 0..8 {
+            let expected = gnu.screen().cell(row, column).unwrap().bgcolor();
+            assert_eq!(
+                neo.screen().cell(row, column).unwrap().bgcolor(),
+                expected,
+                "selection length {length}, column {column}"
+            );
+            assert_eq!(
+                expected != normal,
+                column < length,
+                "GNU must highlight the complete selection after each motion"
+            );
+        }
+    }
+    send_both(&mut gnu, &mut neo, "C-w");
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    assert_pair_exact_display("shift_right_then_kill_region", &gnu, &neo);
+    assert!(gnu.row_text(row).starts_with("efgh"));
+    assert!(neo.row_text(row).starts_with("efgh"));
+}
