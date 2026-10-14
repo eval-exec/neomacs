@@ -312,7 +312,7 @@ jobs:
 
   neovm-oracle-tests:
     if: ${{ github.event_name != 'schedule' }}
-    needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
+    needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     uses: ./.github/workflows/nextest-shards.yml
     with:
       suite: oracle

@@ -134,6 +134,13 @@ threads-required = "num-test-threads"
 filter = 'test(oracle_prop_window_tree_survives_random_operation_sequences)'
 slow-timeout = { period = "1800s", terminate-after = 1 }
 
+# Native grammar cases provision pinned repositories and compile shared
+# libraries before running two editor probes. Match the cold package fixture
+# budget, ahead of the snapshot-oracle timeout below.
+[[profile.default.overrides]]
+filter = 'binary_id(neovm-oracle-tests::treesit_grammar_loading)'
+slow-timeout = { period = "960s", terminate-after = 1 }
+
 # Oracle tests compare neomacs against GNU Emacs — single-form hangs
 # should be caught quickly instead of wasting 10 minutes.
 [[profile.default.overrides]]

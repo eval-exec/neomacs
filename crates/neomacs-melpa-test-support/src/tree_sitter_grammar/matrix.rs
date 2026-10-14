@@ -1,5 +1,7 @@
 //! Pinned native grammars used by GNU Emacs 31.1's built-in modes.
 //! Each fixture requires a real shared library, not a mocked parser.
+//! Generated ABI 13/14 keeps these fixtures loadable by both Ubuntu CI
+//! (tree-sitter 0.20) and newer tree-sitter runtimes used by developers.
 use crate::EmacsRuntime;
 use std::path::PathBuf;
 
@@ -63,7 +65,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             bash => $crate::TreeSitterGrammarCase {
                 language: "bash",
                 repository: "https://github.com/tree-sitter/tree-sitter-bash",
-                revision: "a06c2e4415e9bc0346c6b86d401879ffb44058f7",
+                revision: "5df623f1c50bb0cce9b9ae85c48ce90459349730",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "echo hello\n",
                 root_type: "program",
@@ -71,7 +73,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             c => $crate::TreeSitterGrammarCase {
                 language: "c",
                 repository: "https://github.com/tree-sitter/tree-sitter-c",
-                revision: "b780e47fc780ddc8da13afa35a3f4ed5c157823d",
+                revision: "3aa2995549d5d8b26928e8d3fa2770fd4327414e",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "int main(void) { return 0; }\n",
                 root_type: "translation_unit",
@@ -79,7 +81,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             c_sharp => $crate::TreeSitterGrammarCase {
                 language: "c-sharp",
                 repository: "https://github.com/tree-sitter/tree-sitter-c-sharp",
-                revision: "8c0abe0b84a3681d3e6852ce2e2a1eecb4f731c5",
+                revision: "285c993f01d9955932b45a6192055003aa70a570",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "class Hello {}\n",
                 root_type: "compilation_unit",
@@ -87,7 +89,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             cmake => $crate::TreeSitterGrammarCase {
                 language: "cmake",
                 repository: "https://github.com/uyha/tree-sitter-cmake",
-                revision: "58993af75218bc99a1f5a04c832a5937e7c422cb",
+                revision: "f2569dd1fce0f252097a25bcbcb9ed8898840310",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "set(NAME hello)\n",
                 root_type: "source_file",
@@ -95,7 +97,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             cpp => $crate::TreeSitterGrammarCase {
                 language: "cpp",
                 repository: "https://github.com/tree-sitter/tree-sitter-cpp",
-                revision: "c009222808634c1014f82438d4883753516a2c24",
+                revision: "464e8d9093f9308922cb1eea8fc250c5f5983e9a",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "class Hello {};\n",
                 root_type: "translation_unit",
@@ -103,7 +105,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             css => $crate::TreeSitterGrammarCase {
                 language: "css",
                 repository: "https://github.com/tree-sitter/tree-sitter-css",
-                revision: "dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f",
+                revision: "185475a45c413e9294e5fd5c4165df9ca1eb05dc",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "body { color: red; }\n",
                 root_type: "stylesheet",
@@ -111,7 +113,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             dockerfile => $crate::TreeSitterGrammarCase {
                 language: "dockerfile",
                 repository: "https://github.com/camdencheek/tree-sitter-dockerfile",
-                revision: "971acdd908568b4531b0ba28a445bf0bb720aba5",
+                revision: "439c3e7b8a9bfdbf1f7d7c2beaae4173dc484cbf",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "FROM alpine\n",
                 root_type: "source_file",
@@ -119,7 +121,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             elixir => $crate::TreeSitterGrammarCase {
                 language: "elixir",
                 repository: "https://github.com/elixir-lang/tree-sitter-elixir",
-                revision: "4b0c7118760af58a2e7081bbc8396e136f820b37",
+                revision: "388e4d085388f792f452a059ad9c712479571808",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "name = \"hello\"\n",
                 root_type: "source",
@@ -127,7 +129,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             go => $crate::TreeSitterGrammarCase {
                 language: "go",
                 repository: "https://github.com/tree-sitter/tree-sitter-go",
-                revision: "2346a3ab1bb3857b48b29d779a1ef9799a248cd7",
+                revision: "12fe553fdaaa7449f764bc876fd777704d4fb752",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "package main\nfunc main() {}\n",
                 root_type: "source_file",
@@ -135,7 +137,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             gomod => $crate::TreeSitterGrammarCase {
                 language: "gomod",
                 repository: "https://github.com/camdencheek/tree-sitter-go-mod",
-                revision: "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a",
+                revision: "a9aea5e358cde4d0f8ff20b7bc4fa311e359c7ca",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "module example.com/hello\n",
                 root_type: "source_file",
@@ -143,7 +145,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             gowork => $crate::TreeSitterGrammarCase {
                 language: "gowork",
                 repository: "https://github.com/omertuc/tree-sitter-go-work",
-                revision: "949a8a470559543857a62102c84700d291fc984c",
+                revision: "67f23e57b990440aae78cce03244a94bacc377b5",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "go 1.20\nuse ./hello\n",
                 root_type: "source_file",
@@ -151,7 +153,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             heex => $crate::TreeSitterGrammarCase {
                 language: "heex",
                 repository: "https://github.com/phoenixframework/tree-sitter-heex",
-                revision: "5842537f734d7c12685bf27d6005313e3e5a47a0",
+                revision: "f3d55855935f055d2583485d064be259d9ff053d",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "<div>hello</div>\n",
                 root_type: "fragment",
@@ -159,7 +161,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             html => $crate::TreeSitterGrammarCase {
                 language: "html",
                 repository: "https://github.com/tree-sitter/tree-sitter-html",
-                revision: "73a3947324f6efddf9e17c0ea58d454843590cc0",
+                revision: "b30e4aea714d39a051353b5dac074c1806512047",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "<div>hello</div>\n",
                 root_type: "document",
@@ -167,7 +169,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             java => $crate::TreeSitterGrammarCase {
                 language: "java",
                 repository: "https://github.com/tree-sitter/tree-sitter-java",
-                revision: "e10607b45ff745f5f876bfa3e94fbcc6b44bdc11",
+                revision: "de816732671830873ee52a91998a0febb603e012",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "class Hello {}\n",
                 root_type: "program",
@@ -175,7 +177,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             javascript => $crate::TreeSitterGrammarCase {
                 language: "javascript",
                 repository: "https://github.com/tree-sitter/tree-sitter-javascript",
-                revision: "58404d8cf191d69f2674a8fd507bd5776f46cb11",
+                revision: "a2ef0796e8b9db9107c9ad210b3121b8ad918d5e",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "const name = \"hello\";\n",
                 root_type: "program",
@@ -183,7 +185,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             jsdoc => $crate::TreeSitterGrammarCase {
                 language: "jsdoc",
                 repository: "https://github.com/tree-sitter/tree-sitter-jsdoc",
-                revision: "658d18dcdddb75c760363faa4963427a7c6b52db",
+                revision: "0c5d665d04bc4ab5efda348bae3e7e34f20f264a",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "/** This is a description of the foo function. */",
                 root_type: "document",
@@ -191,7 +193,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             json => $crate::TreeSitterGrammarCase {
                 language: "json",
                 repository: "https://github.com/tree-sitter/tree-sitter-json",
-                revision: "254c42a6476413b776221e03982ac8ae159eeb72",
+                revision: "e2a0ad1b38af1d2affec29e66dbe63f214f0e531",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "{\"name\":\"hello\"}\n",
                 root_type: "document",
@@ -199,7 +201,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             lua => $crate::TreeSitterGrammarCase {
                 language: "lua",
                 repository: "https://github.com/tree-sitter-grammars/tree-sitter-lua",
-                revision: "10fe0054734eec83049514ea2e718b2a56acd0c9",
+                revision: "99fc677e6971c425e8d407f59c77ab897e585c92",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "local name = \"hello\"\n",
                 root_type: "chunk",
@@ -207,7 +209,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             markdown => $crate::TreeSitterGrammarCase {
                 language: "markdown",
                 repository: "https://github.com/tree-sitter-grammars/tree-sitter-markdown",
-                revision: "a0a00f817d02412bd92c54d316f164d827b57b5c",
+                revision: "5cdc549ab8f461aff876c5be9741027189299cec",
                 source_directory: $crate::GrammarSourceDirectory::Subdirectory("tree-sitter-markdown/src"),
                 sample: "# hello\n",
                 root_type: "document",
@@ -215,7 +217,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             markdown_inline => $crate::TreeSitterGrammarCase {
                 language: "markdown-inline",
                 repository: "https://github.com/tree-sitter-grammars/tree-sitter-markdown",
-                revision: "a0a00f817d02412bd92c54d316f164d827b57b5c",
+                revision: "e70017dcf8caad949e41425e7191c3e82127b825",
                 source_directory: $crate::GrammarSourceDirectory::Subdirectory("tree-sitter-markdown-inline/src"),
                 sample: "hello **world**",
                 root_type: "inline",
@@ -223,7 +225,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             php => $crate::TreeSitterGrammarCase {
                 language: "php",
                 repository: "https://github.com/tree-sitter/tree-sitter-php",
-                revision: "58d5643086ae60e93a3746cca648363ee97c8761",
+                revision: "11d2b8b272690ef48018afe9e651c977bfb061f2",
                 source_directory: $crate::GrammarSourceDirectory::Subdirectory("php/src"),
                 sample: "<?php $name = \"hello\";\n",
                 root_type: "program",
@@ -231,7 +233,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             python => $crate::TreeSitterGrammarCase {
                 language: "python",
                 repository: "https://github.com/tree-sitter/tree-sitter-python",
-                revision: "26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64",
+                revision: "e6226391f67a007b11012aa394ffd3dca399062c",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "name = \"hello\"\n",
                 root_type: "module",
@@ -239,7 +241,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             ruby => $crate::TreeSitterGrammarCase {
                 language: "ruby",
                 repository: "https://github.com/tree-sitter/tree-sitter-ruby",
-                revision: "ad907a69da0c8a4f7a943a7fe012712208da6dee",
+                revision: "557ec01403bd1fcfea50f1805641ca773cbaaa42",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "name = \"hello\"\n",
                 root_type: "program",
@@ -247,7 +249,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             rust => $crate::TreeSitterGrammarCase {
                 language: "rust",
                 repository: "https://github.com/tree-sitter/tree-sitter-rust",
-                revision: "77a3747266f4d621d0757825e6b11edcbf991ca5",
+                revision: "c447dcce961ac438aaeaf117347749fe7d1e8365",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "fn main() {}\n",
                 root_type: "source_file",
@@ -255,7 +257,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             toml => $crate::TreeSitterGrammarCase {
                 language: "toml",
                 repository: "https://github.com/tree-sitter-grammars/tree-sitter-toml",
-                revision: "64b56832c2cffe41758f28e05c756a3a98d16f41",
+                revision: "d7d3ba873f0d22aef59aa36bb0532936fc670b7d",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "name = \"hello\"\n",
                 root_type: "document",
@@ -263,7 +265,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             tsx => $crate::TreeSitterGrammarCase {
                 language: "tsx",
                 repository: "https://github.com/tree-sitter/tree-sitter-typescript",
-                revision: "75b3874edb2dc714fb1fd77a32013d0f8699989f",
+                revision: "14af1670c16cab8422d2a504dc4e5961293934e3",
                 source_directory: $crate::GrammarSourceDirectory::Subdirectory("tsx/src"),
                 sample: "const name = <div>hello</div>;\n",
                 root_type: "program",
@@ -271,7 +273,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             typescript => $crate::TreeSitterGrammarCase {
                 language: "typescript",
                 repository: "https://github.com/tree-sitter/tree-sitter-typescript",
-                revision: "75b3874edb2dc714fb1fd77a32013d0f8699989f",
+                revision: "14af1670c16cab8422d2a504dc4e5961293934e3",
                 source_directory: $crate::GrammarSourceDirectory::Subdirectory("typescript/src"),
                 sample: "const name: string = \"hello\";\n",
                 root_type: "program",
@@ -279,7 +281,7 @@ macro_rules! gnu31_tree_sitter_grammar_cases {
             yaml => $crate::TreeSitterGrammarCase {
                 language: "yaml",
                 repository: "https://github.com/tree-sitter-grammars/tree-sitter-yaml",
-                revision: "a1c4812a73ec5e089de8e441fdea3a921e8d5079",
+                revision: "1608168bb28493bf108460a0e5a6023a86dca738",
                 source_directory: $crate::GrammarSourceDirectory::Root,
                 sample: "name: hello\n",
                 root_type: "stream",

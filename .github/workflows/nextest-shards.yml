@@ -58,10 +58,10 @@ jobs:
       - name: Install suite dependencies
         run: scripts/ci/setup-linux.sh "$LINUX_PROFILE"
 
-      # Only the tui suite spawns GNU Emacs (pair comparisons); core and
-      # oracle shards run in snapshot mode with no live oracle process.
+      # TUI comparisons and native grammar oracle cases require pinned GNU.
+      # Other oracle cases continue to use their snapshot-mode policy.
       - name: Set up GNU Emacs oracle
-        if: inputs.suite == 'tui'
+        if: inputs.suite == 'tui' || inputs.suite == 'oracle'
         uses: ./.github/actions/setup-gnu-emacs
 
       - name: Set up Rust tooling
