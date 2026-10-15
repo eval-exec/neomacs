@@ -10,8 +10,18 @@ fn auto_scale_realizes_gnu_x11_sized_pixels_on_fractional_wayland() {
     // GNU's auto policy sees a 13-device-pixel frame column and therefore
     // realizes 24px at 1.3x.  Neomacs lays that out in logical pixels and
     // rasterizes it in device pixels.
-    assert_eq!(realization.layout_extent(ImageReportedExtent::new(24, 24)).width(), 18);
-    assert_eq!(realization.raster_extent(ImageLayoutExtent::new(18, 18)).width(), 32);
+    assert_eq!(
+        realization
+            .layout_extent(ImageReportedExtent::new(24, 24))
+            .width(),
+        18
+    );
+    assert_eq!(
+        realization
+            .raster_extent(ImageLayoutExtent::new(18, 18))
+            .width(),
+        32
+    );
 }
 
 #[test]
@@ -24,8 +34,18 @@ fn auto_scale_reconstructs_gnu_device_column_from_integer_logical_geometry() {
 
     let realization = environment.resolve(ImageScalePolicy::Default);
 
-    assert_eq!(realization.layout_extent(ImageReportedExtent::new(24, 24)).width(), 18);
-    assert_eq!(realization.raster_extent(ImageLayoutExtent::new(18, 18)).width(), 32);
+    assert_eq!(
+        realization
+            .layout_extent(ImageReportedExtent::new(24, 24))
+            .width(),
+        18
+    );
+    assert_eq!(
+        realization
+            .raster_extent(ImageLayoutExtent::new(18, 18))
+            .width(),
+        32
+    );
 }
 
 #[test]
@@ -34,8 +54,18 @@ fn auto_scale_is_identity_at_one_x_when_the_column_is_under_ten_pixels() {
 
     let realization = environment.resolve(ImageScalePolicy::Default);
 
-    assert_eq!(realization.layout_extent(ImageReportedExtent::new(24, 24)).width(), 24);
-    assert_eq!(realization.raster_extent(ImageLayoutExtent::new(24, 24)).width(), 24);
+    assert_eq!(
+        realization
+            .layout_extent(ImageReportedExtent::new(24, 24))
+            .width(),
+        24
+    );
+    assert_eq!(
+        realization
+            .raster_extent(ImageLayoutExtent::new(24, 24))
+            .width(),
+        24
+    );
 }
 
 #[test]
@@ -50,6 +80,16 @@ fn explicit_image_scale_does_not_consult_the_default_policy() {
         0.5.try_into().expect("valid scale"),
     ));
 
-    assert_eq!(realization.layout_extent(ImageReportedExtent::new(24, 24)).width(), 12);
-    assert_eq!(realization.raster_extent(ImageLayoutExtent::new(12, 12)).width(), 21);
+    assert_eq!(
+        realization
+            .layout_extent(ImageReportedExtent::new(24, 24))
+            .width(),
+        12
+    );
+    assert_eq!(
+        realization
+            .raster_extent(ImageLayoutExtent::new(12, 12))
+            .width(),
+        21
+    );
 }

@@ -1891,8 +1891,20 @@ fn chrome_image_request_carries_the_rows_fractional_frame_realization() {
 
     let requests = host.image_requests.lock().expect("image requests lock");
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].realization.layout_extent(ImageReportedExtent::new(24, 24)).width(), 18);
-    assert_eq!(requests[0].realization.raster_extent(ImageLayoutExtent::new(18, 18)).width(), 32);
+    assert_eq!(
+        requests[0]
+            .realization
+            .layout_extent(ImageReportedExtent::new(24, 24))
+            .width(),
+        18
+    );
+    assert_eq!(
+        requests[0]
+            .realization
+            .raster_extent(ImageLayoutExtent::new(18, 18))
+            .width(),
+        32
+    );
 }
 
 #[test]

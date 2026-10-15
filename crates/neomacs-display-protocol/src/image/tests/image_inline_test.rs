@@ -40,7 +40,11 @@ fn provisional_extent_equals_resolved_geometry_when_both_axes_are_pinned() {
                 for native in [(96, 96), (100, 200), (3, 7)] {
                     let provisional = realization.resolve_provisional(size, rotation);
                     let resolved = realization
-                        .resolve_geometry(size, ImageNativeExtent::new(native.0, native.1), rotation)
+                        .resolve_geometry(
+                            size,
+                            ImageNativeExtent::new(native.0, native.1),
+                            rotation,
+                        )
                         .layout();
                     assert_eq!(
                         provisional.finalize(resolved),

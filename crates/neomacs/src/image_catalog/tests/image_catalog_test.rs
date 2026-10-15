@@ -1,6 +1,6 @@
 use super::*;
-use neomacs_display_protocol::{ImageFrameIndex, ImageRealization};
 use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
+use neomacs_display_protocol::{ImageFrameIndex, ImageRealization};
 use neomacs_display_runtime::render_thread::ImageRenderState;
 use neomacs_display_runtime::render_thread::{ImageProbeSource, probe_image_layout};
 use neovm_core::emacs_core::Context;
