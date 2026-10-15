@@ -85,11 +85,11 @@ cranelift-frontend = { workspace = true, optional = true }
 cranelift-jit = { workspace = true, optional = true }
 cranelift-module = { workspace = true, optional = true }
 # AOT object emission (R1c): emit a relocatable `.o` via Cranelift's ObjectModule
-# and parse/inspect the bytes. `object` is pinned to the version cranelift already
-# resolves in this workspace (0.37, via ar_archive_writer) to avoid a duplicate
-# major. Both optional, enabled by `jit`.
+# and parse/inspect the bytes using the same `object` release as Cranelift.
+# Both dependencies are optional, enabled by `jit`.
 cranelift-object = { workspace = true, optional = true }
-object = { version = "0.37", optional = true }
+# AOT caches inspect symbol tables; they do not decode compressed sections.
+object = { version = "0.39", default-features = false, features = ["read", "std"], optional = true }
 # Host-ISA builder for the AOT ObjectModule (is_pic=true). Already in the lock
 # transitively via cranelift-jit; made a direct dep so `jit/aot.rs` can call
 # `cranelift_native::builder()`.
@@ -185,6 +185,7 @@ tree-sitter-json = "0.24"
 syn = { version = "3.0.3", features = ["full", "visit"] }
 
 [build-dependencies]
+cc = "1.4.5"
 flate2.workspace = true
 pkg-config.workspace = true
 sha2.workspace = true

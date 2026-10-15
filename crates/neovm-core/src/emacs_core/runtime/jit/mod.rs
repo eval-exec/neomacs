@@ -223,7 +223,7 @@ pub(crate) mod bg;
 /// Per-source feedback (`SourceFeedback`). Always built: `RuntimeState`
 /// holds it.
 pub(crate) mod feedback;
-#[cfg(test)]
+#[cfg(all(test, feature = "jit"))]
 #[path = "tests/test_support.rs"]
 pub(crate) mod test_support;
 

@@ -372,7 +372,7 @@ polling = "3"
 socket2 = { version = "0.6", features = ["all"] }
 
 # TLS
-rustls = { version = "0.23.45", default-features = false, features = ["std", "tls12", "ring"] }
+rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "ring"] }
 webpki-roots = "1.0"
 rustls-pki-types = "1"
 

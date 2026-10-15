@@ -4275,6 +4275,7 @@ dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
  "cbc",
+ "cc",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-jit",
@@ -4311,7 +4312,7 @@ dependencies = [
  "neovm-host-abi",
  "network-interface",
  "num_enum",
- "object 0.37.3",
+ "object 0.39.1",
  "os_pipe",
  "parking_lot",
  "pkg-config",
@@ -4972,9 +4973,7 @@ version = "0.37.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
 dependencies = [
- "flate2",
  "memchr",
- "ruzstd",
 ]
 
 [[package]]
@@ -6224,9 +6223,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",
@@ -6291,15 +6290,6 @@ dependencies = [
  "unicode-ccc",
  "unicode-properties",
  "unicode-script",
-]
-
-[[package]]
-name = "ruzstd"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7c1c839d570d835527c9a5e4db7cb2198683a988cb9d7293fc8674e6bd58fc8"
-dependencies = [
- "twox-hash",
 ]
 
 [[package]]
@@ -7516,12 +7506,6 @@ checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
 ]
-
-[[package]]
-name = "twox-hash"
-version = "2.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
 
 [[package]]
 name = "typed-index-collections"
