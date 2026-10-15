@@ -60,16 +60,19 @@ fn freshness_is_decided_by_the_editor_clock() {
 
 #[test]
 fn the_role_copy_tracks_the_editor_bytes_and_permissions() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::tempdir().unwrap();
     let editor = root.path().join("neomacs");
     let role = root.path().join("neomacs-temacs");
     write_file(&editor, "first build");
+    #[cfg(unix)]
     std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     ensure_role_binary(&editor, &role).unwrap();
     assert_eq!(std::fs::read_to_string(&role).unwrap(), "first build");
+    #[cfg(unix)]
     assert_eq!(
         std::fs::metadata(&role).unwrap().permissions().mode() & 0o777,
         0o755

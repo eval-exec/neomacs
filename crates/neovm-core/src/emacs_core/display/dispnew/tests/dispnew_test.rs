@@ -149,6 +149,7 @@ fn send_string_to_terminal_delivers_bytes_to_the_termcap_host() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn send_string_to_terminal_writes_to_stdout_for_the_initial_terminal() {
     crate::test_utils::init_test_tracing();
