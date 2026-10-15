@@ -154,6 +154,8 @@ fn send_string_to_terminal_delivers_bytes_to_the_termcap_host() {
 fn send_string_to_terminal_writes_to_stdout_for_the_initial_terminal() {
     crate::test_utils::init_test_tracing();
     reset_terminal_to_bootstrap();
+    // Initialize before redirecting stdout: startup tracing is not terminal output.
+    let mut eval = crate::emacs_core::eval::Context::new();
     // GNU: `out = stdout' for `output_initial' -- what batch, daemon and
     // pre-tty sessions run on (src/dispnew.c:6823-6824).  nextest runs every
     // test in its own process, so borrowing fd 1 for this assertion cannot
@@ -165,10 +167,8 @@ fn send_string_to_terminal_writes_to_stdout_for_the_initial_terminal() {
     let saved = unsafe { libc::dup(1) };
     assert!(saved >= 0);
     unsafe { libc::dup2(capture.as_raw_fd(), 1) };
-    let result = builtin_send_string_to_terminal(
-        &mut crate::emacs_core::eval::Context::new(),
-        vec![Value::string("PROBE-INITIAL-STDOUT")],
-    );
+    let result =
+        builtin_send_string_to_terminal(&mut eval, vec![Value::string("PROBE-INITIAL-STDOUT")]);
     unsafe {
         libc::dup2(saved, 1);
         libc::close(saved);
