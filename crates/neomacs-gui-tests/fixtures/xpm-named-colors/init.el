@@ -88,9 +88,14 @@ the latter, which is what `insert-image' builds."
      (propertize " " 'display
                  (xpm-named-color-swatch xpm-named-color-fallback-value)
                  'face '(:foreground "red")))
+    ;; One blank line between the decoys: the readback counts each swatch's
+    ;; frame-foreground pixels in its own scanline band, and touching rows
+    ;; would merge into one band (issue #556).
+    (insert "\n")
     (xpm-named-colors-insert
      "fallback-spec"
      (xpm-named-color-swatch xpm-named-color-fallback-value :foreground "blue"))
+    (insert "\n")
     ;; The third decoy: displayed under the buffer's remapped `default' face
     ;; (issue #556).
     (xpm-named-colors-insert

@@ -39,6 +39,15 @@ const FALLBACK_SPEC_DECOY: [u8; 3] = [0x00, 0x00, 0xff];
 /// not follow it either (issue #556).
 const FALLBACK_REMAP_DECOY: [u8; 3] = [0x0a, 0x0b, 0x0c];
 
+/// The three fallback swatches, each with the colour it must *not* paint: one
+/// face asks for red, one specification for blue, one is displayed under a
+/// remapped `default' face (issues #550, #556).
+const DECOYS: [(&str, [u8; 3]); 3] = [
+    ("fallback-face", FALLBACK_FACE_DECOY),
+    ("fallback-spec", FALLBACK_SPEC_DECOY),
+    ("fallback-remap", FALLBACK_REMAP_DECOY),
+];
+
 /// The decoys appear nowhere else in the frame, so anything near a full swatch
 /// means the decoy won.
 const DECOY_PIXEL_CEILING: usize = 100;
@@ -183,23 +192,26 @@ fn xpm_named_colors_resolve_like_gnu_and_paint_that_way() {
         Some(FALLBACK_REMAP_DECOY),
         "the remapped default face foreground as the fixture reports it: {state}"
     );
-    for (label, decoy) in [
-        ("fallback-face", FALLBACK_FACE_DECOY),
-        ("fallback-spec", FALLBACK_SPEC_DECOY),
-        ("fallback-remap", FALLBACK_REMAP_DECOY),
-    ] {
+    for (label, decoy) in DECOYS {
         let decoy_painted = count_pixels(&pixels, decoy);
         assert!(
             decoy_painted < DECOY_PIXEL_CEILING,
             "{label}: {decoy_painted} pixels of {decoy:?}; the swatch followed the \
              {label} colour instead of the frame foreground"
         );
-        let painted = count_pixels(&pixels, frame_foreground);
-        assert!(
-            painted >= PAINTED_PIXEL_FLOOR,
-            "{label}: {painted} pixels of the frame foreground {frame_foreground:?} in the frame"
-        );
     }
+    // One full swatch of the frame foreground per decoy, counted in the decoy's
+    // own scanline band. A frame-wide count would let two swatches satisfy the
+    // third's floor even if that swatch never painted (CodeRabbit on #557).
+    let full_bands: Vec<(u32, u32, usize)> = frame_foreground_bands(&pixels, frame_foreground)
+        .into_iter()
+        .filter(|(_, _, painted)| *painted >= PAINTED_PIXEL_FLOOR)
+        .collect();
+    assert_eq!(
+        full_bands.len(),
+        DECOYS.len(),
+        "one frame-foreground swatch band per decoy; bands: {full_bands:?}"
+    );
 }
 
 fn count_pixels(pixels: &image::RgbaImage, colour: [u8; 3]) -> usize {
@@ -210,4 +222,56 @@ fn count_pixels(pixels: &image::RgbaImage, colour: [u8; 3]) -> usize {
             [red, green, blue] == colour
         })
         .count()
+}
+
+/// The frame's rows carrying `colour` in a swatch's worth of pixels, grouped
+/// into contiguous bands of `(first_row, last_row, pixels)`.
+///
+/// A row must hold at least [`BAND_ROW_MIN_PIXELS`] of the colour to count as
+/// part of a band, so sparse stray pixels elsewhere in the frame neither
+/// fabricate a band nor bridge two real ones.
+fn frame_foreground_bands(pixels: &image::RgbaImage, colour: [u8; 3]) -> Vec<(u32, u32, usize)> {
+    const BAND_ROW_MIN_PIXELS: usize = 8;
+    let mut bands = Vec::new();
+    let mut current: Option<(u32, u32, usize)> = None;
+    for y in 0..pixels.height() {
+        let row_pixels = (0..pixels.width())
+            .filter(|x| {
+                let [red, green, blue, _] = pixels.get_pixel(*x, y).0;
+                [red, green, blue] == colour
+            })
+            .count();
+        if row_pixels >= BAND_ROW_MIN_PIXELS {
+            current = Some(match current {
+                Some((first, _, painted)) => (first, y, painted + row_pixels),
+                None => (y, y, row_pixels),
+            });
+        } else if let Some(band) = current.take() {
+            bands.push(band);
+        }
+    }
+    bands.extend(current);
+    bands
+}
+
+/// Three same-coloured swatches must stay three bands: the splitter is what
+/// keeps each decoy's floor its own (CodeRabbit on #557).
+#[test]
+fn frame_foreground_bands_split_rows_and_ignore_sparse_strays() {
+    let colour = [0x12u8, 0x34, 0x56];
+    let mut pixels = image::RgbaImage::from_pixel(20, 30, image::Rgba([0, 0, 0, 255]));
+    for y in [2u32, 3, 10, 11, 20] {
+        for x in 0..10 {
+            pixels.put_pixel(x, y, image::Rgba([colour[0], colour[1], colour[2], 255]));
+        }
+    }
+    // A lone stray pixel between the second and third swatch: below the row
+    // floor, so it neither becomes a band nor bridges the neighbours.
+    pixels.put_pixel(7, 15, image::Rgba([colour[0], colour[1], colour[2], 255]));
+
+    assert_eq!(
+        frame_foreground_bands(&pixels, colour),
+        vec![(2, 3, 20), (10, 11, 20), (20, 20, 10)],
+        "three bands, the stray absorbed"
+    );
 }
