@@ -54,6 +54,12 @@ pub enum PinnedError {
         #[source]
         source: Box<ureq::Error>,
     },
+    #[error("{url} is {actual} bytes, over the pinned fixture's {max_bytes}-byte limit")]
+    TooLarge {
+        url: String,
+        max_bytes: u64,
+        actual: u64,
+    },
     #[error(
         "{url} has SHA-256 {actual}, expected {expected} -- the pin no longer describes this artifact"
     )]
@@ -148,15 +154,25 @@ fn ensure_pinned(
             url: url.to_owned(),
             source: Box::new(source),
         })?;
+    // One byte over the cap, then an explicit check: ureq's limit reader
+    // raises `BodyExceedsLimit` on the read after its allowance reaches zero,
+    // so a body exactly at `max_bytes` must not be what trips it.
     let bytes = response
         .body_mut()
         .with_config()
-        .limit(max_bytes)
+        .limit(max_bytes.saturating_add(1))
         .read_to_vec()
         .map_err(|source| PinnedError::Http {
             url: url.to_owned(),
             source: Box::new(source),
         })?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(PinnedError::TooLarge {
+            url: url.to_owned(),
+            max_bytes,
+            actual: bytes.len() as u64,
+        });
+    }
 
     // Verify before touching the cache, so a bad response cannot replace a
     // good copy.
