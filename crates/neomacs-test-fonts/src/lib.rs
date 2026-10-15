@@ -131,7 +131,10 @@ fn prepare_plemol_jp() -> Result<PathBuf, FixtureError> {
             ZIP_SHA,
             192 * 1024 * 1024,
         )
-        .map_err(FixtureError::Fixture)?;
+        .map_err(|source| FixtureError::Fixture {
+            name: "PlemolJP_NF_v3.1.0.zip".to_owned(),
+            source,
+        })?;
         let file = File::open(&archive).map_err(|source| FixtureError::Io {
             path: archive.clone(),
             source,
@@ -349,7 +352,10 @@ fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
             LXGW_NERD_ARCHIVE_SHA256,
             MAX_LXGW_ARCHIVE_BYTES,
         )
-        .map_err(FixtureError::Fixture)?;
+        .map_err(|source| FixtureError::Fixture {
+            name: format!("{LXGW_NERD_RELEASE}.tar.gz"),
+            source,
+        })?;
         let directory = cache.join(LXGW_NERD_RELEASE);
         create_dir_all(&directory)?;
         let destination = directory.join(LXGW_NERD_REGULAR);
@@ -429,8 +435,12 @@ enum FixtureError {
         #[source]
         source: io::Error,
     },
-    #[error("pinned fixture: {0}")]
-    Fixture(String),
+    #[error("pinned fixture {name}: {source}")]
+    Fixture {
+        name: String,
+        #[source]
+        source: neomacs_infra::pinned::PinnedError,
+    },
     #[error("SHA-256 mismatch for {path}: expected {expected}, got {actual}")]
     Checksum {
         path: PathBuf,
@@ -467,7 +477,10 @@ fn prepare_pinned_file(
     url: &'static str,
     sha256: &'static str,
 ) -> Result<PathBuf, FixtureError> {
-    neomacs_infra::pinned::pinned_file(name, url, sha256).map_err(FixtureError::Fixture)
+    neomacs_infra::pinned::pinned_file(name, url, sha256).map_err(|source| FixtureError::Fixture {
+        name: name.to_owned(),
+        source,
+    })
 }
 
 fn prepare_spleen_fixtures_locked(cache_root: &Path) -> Result<SpleenFixtures, FixtureError> {
@@ -476,7 +489,10 @@ fn prepare_spleen_fixtures_locked(cache_root: &Path) -> Result<SpleenFixtures, F
         RELEASE_URL,
         RELEASE_SHA256,
     )
-    .map_err(FixtureError::Fixture)?;
+    .map_err(|source| FixtureError::Fixture {
+        name: format!("{RELEASE_NAME}.tar.gz"),
+        source,
+    })?;
 
     let fixture_root = cache_root.join(RELEASE_NAME);
     if !all_extracted_files_match(&fixture_root)? {

@@ -1,7 +1,8 @@
 use super::*;
 
 /// The bytes the cache holds are what the hash describes: a cached fixture
-/// with the pinned hash is accepted, and one with any other hash is not.
+/// with the pinned hash is accepted, and one with any other hash is refused
+/// with the typed mismatch a caller can match on.
 #[test]
 fn verification_accepts_only_the_pinned_bytes() {
     let root = cache_root();
@@ -10,12 +11,25 @@ fn verification_accepts_only_the_pinned_bytes() {
     std::fs::write(&path, b"pinned bytes").expect("write probe");
 
     let good = crate::inventory::sha256_hex(b"pinned bytes");
-    assert!(matches!(verify(&path, &good), Ok(Ok(()))));
+    assert!(verify(&path, &good).is_ok());
     match verify(&path, &"0".repeat(64)) {
-        Ok(Err(message)) => assert!(message.contains("SHA-256"), "{message}"),
-        other => panic!("a wrong hash must be reported: {other:?}"),
+        Err(error @ PinnedError::CachedHash { .. }) => {
+            assert!(error.to_string().contains("SHA-256"), "{error}");
+        }
+        other => panic!("a wrong hash must be reported as a hash error: {other:?}"),
     }
     std::fs::remove_file(&path).ok();
+}
+
+/// A cache read that cannot happen is its own typed error, not a hash
+/// mismatch: the two call for different reactions (re-fetch vs give up).
+#[test]
+fn an_unreadable_cache_entry_is_a_read_error() {
+    let missing = cache_root().join("never-written-probe.bin");
+    match verify(&missing, &"0".repeat(64)) {
+        Err(PinnedError::Read { .. }) => {}
+        other => panic!("a missing cache entry must be a read error: {other:?}"),
+    }
 }
 
 /// The size-limited variant shares the cache and its verification: a verified
