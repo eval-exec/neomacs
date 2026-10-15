@@ -475,10 +475,17 @@ enum TextRowTransitionWordWrapAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TextRowTransitionStatePolicy {
-    advance_line_number: bool,
+    line_number: TextRowLineNumberTransition,
     word_wrap: TextRowTransitionWordWrapAction,
     reset_trailing_whitespace: bool,
     prefix: TextRowTransitionPrefixAction,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextRowLineNumberTransition {
+    BufferNewline,
+    DisplayStringNewline,
+    Keep,
 }
 
 impl WordWrapBreakCandidate {
@@ -613,13 +620,13 @@ impl DisplayRowTextOverflowDecision {
 
 impl TextRowTransitionStatePolicy {
     fn new(
-        advance_line_number: bool,
+        line_number: TextRowLineNumberTransition,
         word_wrap: TextRowTransitionWordWrapAction,
         reset_trailing_whitespace: bool,
         prefix: TextRowTransitionPrefixAction,
     ) -> Self {
         Self {
-            advance_line_number,
+            line_number,
             word_wrap,
             reset_trailing_whitespace,
             prefix,
@@ -646,7 +653,7 @@ impl TextRowTransitionStatePolicy {
 
     pub(crate) fn hscroll_line_break() -> Self {
         Self::new(
-            true,
+            TextRowLineNumberTransition::BufferNewline,
             TextRowTransitionWordWrapAction::Keep,
             true,
             TextRowTransitionPrefixAction::Line,
@@ -655,16 +662,23 @@ impl TextRowTransitionStatePolicy {
 
     pub(crate) fn line_break() -> Self {
         Self::new(
-            true,
+            TextRowLineNumberTransition::BufferNewline,
             TextRowTransitionWordWrapAction::Reset,
             false,
             TextRowTransitionPrefixAction::Line,
         )
     }
 
+    pub(crate) fn display_string_line_break() -> Self {
+        Self {
+            line_number: TextRowLineNumberTransition::DisplayStringNewline,
+            ..Self::line_break()
+        }
+    }
+
     pub(crate) fn hidden_line_break() -> Self {
         Self::new(
-            true,
+            TextRowLineNumberTransition::BufferNewline,
             TextRowTransitionWordWrapAction::Reset,
             true,
             TextRowTransitionPrefixAction::Line,
@@ -673,7 +687,7 @@ impl TextRowTransitionStatePolicy {
 
     pub(crate) fn truncation() -> Self {
         Self::new(
-            false,
+            TextRowLineNumberTransition::Keep,
             TextRowTransitionWordWrapAction::Reset,
             true,
             TextRowTransitionPrefixAction::Line,
@@ -682,7 +696,7 @@ impl TextRowTransitionStatePolicy {
 
     pub(crate) fn special_truncation() -> Self {
         Self::new(
-            false,
+            TextRowLineNumberTransition::Keep,
             TextRowTransitionWordWrapAction::Disallow,
             true,
             TextRowTransitionPrefixAction::Line,
@@ -691,7 +705,7 @@ impl TextRowTransitionStatePolicy {
 
     pub(crate) fn visual_wrap() -> Self {
         Self::new(
-            false,
+            TextRowLineNumberTransition::Keep,
             TextRowTransitionWordWrapAction::Reset,
             true,
             TextRowTransitionPrefixAction::Wrap,
@@ -700,7 +714,7 @@ impl TextRowTransitionStatePolicy {
 
     pub(crate) fn special_visual_wrap() -> Self {
         Self::new(
-            false,
+            TextRowLineNumberTransition::Keep,
             TextRowTransitionWordWrapAction::Keep,
             true,
             TextRowTransitionPrefixAction::Wrap,
@@ -709,7 +723,7 @@ impl TextRowTransitionStatePolicy {
 
     pub(crate) fn character_wrap() -> Self {
         Self::new(
-            false,
+            TextRowLineNumberTransition::Keep,
             TextRowTransitionWordWrapAction::Disallow,
             true,
             TextRowTransitionPrefixAction::Wrap,
@@ -723,8 +737,12 @@ impl TextRowTransitionStatePolicy {
         word_wrap: &mut WordWrapRenderState,
         trailing_whitespace: &mut TrailingWhitespaceRenderState,
     ) -> TextRowTransitionPrefixAction {
-        if self.advance_line_number {
-            line_numbers.advance_line();
+        match self.line_number {
+            TextRowLineNumberTransition::BufferNewline => line_numbers.advance_line(),
+            TextRowLineNumberTransition::DisplayStringNewline => {
+                line_numbers.mark_continuation_row()
+            }
+            TextRowLineNumberTransition::Keep => {}
         }
         if self.resets_hscroll() {
             hscroll_skip.reset_line();
@@ -988,6 +1006,15 @@ impl LineNumberRenderState {
 
     pub(crate) fn advance_hidden_line(&mut self) {
         self.current_line += 1;
+    }
+
+    /// A replacement consumes BUFFER text only when its pushed iterator ends.
+    /// Its string newlines never contribute to this logical line count.
+    pub(crate) fn resume_after_replacement(&mut self, buffer_newlines: i64) {
+        self.current_line += buffer_newlines;
+        if buffer_newlines > 0 && matches!(self.phase, LineNumberRenderPhase::Pending(_)) {
+            self.arm_prefix(LineNumberRowPrefix::Numbered);
+        }
     }
 
     #[cfg(test)]

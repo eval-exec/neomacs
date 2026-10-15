@@ -40,6 +40,101 @@ const BODY: &str = "alpha line";
 const TAIL: &str = "last line";
 
 #[test]
+fn display_string_newlines_do_not_number_synthetic_rows_or_shift_buffer_lines() {
+    let (mut gnu, mut neo) = boot_pair("");
+    support::eval_expression(
+        &mut gnu,
+        &mut neo,
+        r##"(progn
+          (erase-buffer)
+          (dotimes (i 5) (insert (format "line %d\n" (1+ i))))
+          (display-line-numbers-mode 1)
+          (goto-char (point-min))
+          (let ((eol (line-end-position)))
+            (overlay-put (make-overlay eol (1+ eol)) 'display "  [A]\n  [B]\n"))
+          (forward-line 2)
+          nil)"##,
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(2));
+    let rows = |grid: Vec<String>| {
+        grid.into_iter()
+            .filter(|row| row.contains("line ") || row.contains("[B]"))
+            .map(|row| row.trim().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let expected = [
+        "1 line 1  [A]",
+        "[B]",
+        "2 line 2",
+        "3 line 3",
+        "4 line 4",
+        "5 line 5",
+    ];
+    assert_eq!(rows(gnu.text_grid()), expected, "GNU 31.1 oracle");
+    assert_eq!(rows(neo.text_grid()), expected, "issue #574");
+
+    support::eval_expression(&mut gnu, &mut neo, "(setq display-line-numbers 'relative)");
+    read_both(&mut gnu, &mut neo, Duration::from_secs(2));
+    let relative = [
+        "2 line 1  [A]",
+        "[B]",
+        "1 line 2",
+        "3 line 3",
+        "1 line 4",
+        "2 line 5",
+    ];
+    assert_eq!(rows(gnu.text_grid()), relative, "GNU relative-mode oracle");
+    assert_eq!(
+        rows(neo.text_grid()),
+        relative,
+        "relative display-string rows"
+    );
+}
+
+#[test]
+fn display_replacement_counts_the_buffer_newlines_it_hides() {
+    let (mut gnu, mut neo) = boot_pair("");
+    support::eval_expression(
+        &mut gnu,
+        &mut neo,
+        r##"(progn
+          (erase-buffer)
+          (dotimes (i 5) (insert (format "line %d\n" (1+ i))))
+          (display-line-numbers-mode 1)
+          (goto-char (point-min))
+          (forward-line 1)
+          (put-text-property (point) (progn (forward-line 2) (point)) 'display "[hidden] ")
+          (goto-char (point-max))
+          (forward-line -1)
+          nil)"##,
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(2));
+    let rows = |grid: Vec<String>| {
+        grid.into_iter()
+            .filter(|row| row.contains("line "))
+            .map(|row| row.trim().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let expected = ["1 line 1", "2 [hidden] line 4", "5 line 5"];
+    assert_eq!(rows(gnu.text_grid()), expected, "GNU 31.1 oracle");
+    assert_eq!(
+        rows(neo.text_grid()),
+        expected,
+        "issue #574 hidden buffer lines"
+    );
+
+    support::eval_expression(&mut gnu, &mut neo, "(setq display-line-numbers 'relative)");
+    read_both(&mut gnu, &mut neo, Duration::from_secs(2));
+    let relative = ["4 line 1", "3 [hidden] line 4", "5 line 5"];
+    assert_eq!(rows(gnu.text_grid()), relative, "GNU relative-mode oracle");
+    assert_eq!(
+        rows(neo.text_grid()),
+        relative,
+        "relative hidden buffer lines"
+    );
+}
+
+#[test]
 fn global_display_line_numbers_lights_the_gutter_in_a_buffer_created_after_startup() {
     let visited = TuiTempFile::new(
         "neomacs-issue-441-visited-",

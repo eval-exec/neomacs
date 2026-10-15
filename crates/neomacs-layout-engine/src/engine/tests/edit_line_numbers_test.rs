@@ -61,6 +61,113 @@ fn materialized_gutter(
     rows.into_iter().map(|r| r.trim().to_owned()).collect()
 }
 
+#[test]
+fn display_string_newlines_keep_buffer_numbers_and_current_line_face() {
+    let mut ctx = Context::new();
+    let buffer = ctx.buffer_manager().current_buffer().unwrap().id();
+    let frame = ctx
+        .frame_manager_mut()
+        .create_frame("display-gutter", 1024, 768, buffer);
+    assert!(ctx.frame_manager_mut().select_frame(frame));
+    let window = ctx.frame_manager().get(frame).unwrap().selected_window;
+    ctx.eval_str(r##"(progn
+      (setq mode-line-format nil header-line-format nil tab-line-format nil display-line-numbers t)
+      (internal-set-lisp-face-attribute 'line-number :background "#101010" (selected-frame))
+      (internal-set-lisp-face-attribute 'line-number-current-line :background "#ffff00" (selected-frame))
+      (insert "line 1\nline 2\nline 3\nline 4\nline 5\n")
+      (goto-char (point-min))
+      (let ((eol (line-end-position)))
+        (overlay-put (make-overlay eol (1+ eol)) 'display "  [A]\n  [B]\n"))
+      (forward-line 2))"##).unwrap();
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    let expected = [
+        "1 line 1  [A]",
+        "[B]",
+        "2 line 2",
+        "3 line 3",
+        "4 line 4",
+        "5 line 5",
+    ];
+    // Repeat to cover retained output as well as the initial complete layout.
+    for _ in 0..2 {
+        let state = redisplay(&mut engine, &mut ctx, frame);
+        assert_eq!(gutter(&state, window, 6), expected);
+        assert_eq!(materialized_gutter(&state, window, 6), expected);
+        let rows = &state
+            .window_matrices
+            .iter()
+            .find(|m| m.window_id.get() == window.0 as i64)
+            .unwrap()
+            .matrix
+            .rows;
+        let backgrounds: Vec<_> = rows
+            .iter()
+            .take(6)
+            .map(|row| state.faces[&row.glyphs[GlyphArea::Text.index()][0].face_id].background)
+            .collect();
+        assert_eq!(
+            backgrounds[3],
+            neomacs_display_protocol::types::Color::rgb(1.0, 1.0, 0.0)
+        );
+        assert_ne!(backgrounds[2], backgrounds[3]);
+    }
+}
+
+#[test]
+fn display_replacements_count_hidden_buffer_lines_for_every_replacement_kind() {
+    for replacement in [r#""[hidden] ""#, "'(space :width 2)", r#""""#] {
+        let mut ctx = Context::new();
+        let buffer = ctx.buffer_manager().current_buffer().unwrap().id();
+        let frame = ctx
+            .frame_manager_mut()
+            .create_frame("hidden-gutter", 1024, 768, buffer);
+        assert!(ctx.frame_manager_mut().select_frame(frame));
+        let window = ctx.frame_manager().get(frame).unwrap().selected_window;
+        ctx.eval_str(&format!(r#"(progn
+          (setq mode-line-format nil header-line-format nil tab-line-format nil display-line-numbers t)
+          (insert "line 1\nline 2\nline 3\nline 4\nline 5\n")
+          (goto-char (point-min))
+          (forward-line 1)
+          (put-text-property (point) (progn (forward-line 2) (point)) 'display {replacement})
+          (goto-char (point-max)) (forward-line -1))"#)).unwrap();
+        let mut engine = LayoutEngine::new_without_font_metrics();
+        let state = redisplay(&mut engine, &mut ctx, frame);
+        let rows = gutter(&state, window, 3);
+        let numbers: Vec<_> = rows
+            .iter()
+            .map(|row| row.split_whitespace().next().unwrap())
+            .collect();
+        assert_eq!(
+            numbers,
+            ["1", "2", "5"],
+            "replacement {replacement}: {rows:?}"
+        );
+    }
+}
+
+#[test]
+fn display_table_newline_glyphs_still_advance_buffer_line_numbers() {
+    let mut ctx = Context::new();
+    let buffer = ctx.buffer_manager().current_buffer().unwrap().id();
+    let frame = ctx
+        .frame_manager_mut()
+        .create_frame("table-gutter", 1024, 768, buffer);
+    assert!(ctx.frame_manager_mut().select_frame(frame));
+    let window = ctx.frame_manager().get(frame).unwrap().selected_window;
+    ctx.eval_str(
+        r#"(progn
+      (setq mode-line-format nil header-line-format nil tab-line-format nil display-line-numbers t)
+      (insert "a\nb\nc\n")
+      (setq buffer-display-table (make-char-table 'display-table nil))
+      (aset buffer-display-table ?\n [?$ ?\n])
+      (goto-char (point-min)))"#,
+    )
+    .unwrap();
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    let state = redisplay(&mut engine, &mut ctx, frame);
+    assert_eq!(gutter(&state, window, 3), ["1 a$", "2 b$", "3 c$"]);
+}
+
 fn newline_edits(mode: &str, count: usize) {
     let mut ctx = Context::new();
     ctx.eval_str("(neomacs-set-buffer-text-backend 'gap-buffer)")

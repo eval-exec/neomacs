@@ -10944,6 +10944,7 @@ fn buffer_display_property_replacement_outcome_applies_walk_state_and_cursor() {
             &geometry,
             2,
             1,
+            &mut LineNumberRenderState::new(false, 1, 0),
         );
     }
 
@@ -11174,6 +11175,7 @@ fn buffer_display_property_replacement_render_outcome_updates_progress() {
             &surface,
             &mut geometry,
             &active_face,
+            &mut LineNumberRenderState::new(false, 1, 0),
         ),
         x,
         DisplayRowPosition::new(x, col),
@@ -11192,6 +11194,7 @@ fn buffer_display_property_replacement_render_outcome_updates_progress() {
             &geometry,
             3,
             3,
+            &mut LineNumberRenderState::new(false, 1, 0),
         );
     }
 

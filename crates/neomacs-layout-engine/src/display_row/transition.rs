@@ -385,6 +385,10 @@ impl DisplayRowLineBreakTransitionPlan {
         Self::new(TextRowTransitionStatePolicy::line_break())
     }
 
+    pub(crate) fn display_string_line_break() -> Self {
+        Self::new(TextRowTransitionStatePolicy::display_string_line_break())
+    }
+
     pub(crate) fn apply_prefix_state(self, mut state: DisplayRowTransitionRenderState<'_>) {
         state.apply_state_policy(self.state_policy);
     }

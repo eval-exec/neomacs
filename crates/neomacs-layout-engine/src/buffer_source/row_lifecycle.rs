@@ -2116,6 +2116,7 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
         source_walk: &mut BufferSourceWalk<'_, B>,
         buffer: &B,
         state: BufferSourceLoopMutableState<'_, '_, '_>,
+        line_break_transition: DisplayRowLineBreakTransitionPlan,
     ) -> DisplayRowTransitionContinuation {
         let BufferSourceLoopMutableState {
             mut progress,
@@ -2221,7 +2222,6 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
             &mut progress,
         );
 
-        let line_break_transition = DisplayRowLineBreakTransitionPlan::line_break();
         let row_transition = DisplayRowTextWindowEmitContext::from_source_render(
             context.row_geometry_defaults,
             context.display_text_row_base,

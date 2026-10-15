@@ -1059,6 +1059,10 @@ pub(crate) struct DisplayPropertyReplacementStringRender {
 }
 
 impl DisplayPropertyReplacementStringRender {
+    pub(crate) fn has_remaining_text(&self) -> bool {
+        self.session.source.has_remaining_text()
+    }
+
     pub(crate) fn opening_slot(&self) -> DisplayPropertyReplacementAppendOutcome {
         DisplayPropertyReplacementAppendOutcome::new(
             self.start_position,

@@ -12,6 +12,7 @@ use crate::display_row::replacement::{
     DisplayReplacementPlacement,
 };
 use crate::display_row::source_render::TextRowSourceRenderState;
+use crate::display_row::walk_state::LineNumberRenderState;
 use crate::display_source::DisplaySourceTextPosition;
 use crate::display_source::{DisplaySourceItem, DisplaySourceStepItem};
 use crate::display_source_progress::DisplaySourceProgressState;
@@ -95,6 +96,7 @@ pub(crate) struct BufferDisplayPropertyTextReplacementRenderState<'emit> {
     append_surface: &'emit DisplayRowAppendSurface,
     row_geometry: &'emit mut DisplayRowGeometryState,
     active_face_state: &'emit DisplayRowActiveFaceState,
+    line_numbers: &'emit mut LineNumberRenderState,
 }
 
 impl<'emit> BufferDisplayPropertyTextReplacementRenderState<'emit> {
@@ -104,6 +106,7 @@ impl<'emit> BufferDisplayPropertyTextReplacementRenderState<'emit> {
         append_surface: &'emit DisplayRowAppendSurface,
         row_geometry: &'emit mut DisplayRowGeometryState,
         active_face_state: &'emit DisplayRowActiveFaceState,
+        line_numbers: &'emit mut LineNumberRenderState,
     ) -> Self {
         Self {
             source_render,
@@ -111,6 +114,7 @@ impl<'emit> BufferDisplayPropertyTextReplacementRenderState<'emit> {
             append_surface,
             row_geometry,
             active_face_state,
+            line_numbers,
         }
     }
 }
@@ -222,6 +226,7 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
                     cursor_info,
                     state.row_geometry,
                     point_charpos,
+                    state.line_numbers,
                 );
                 BufferDisplayPropertyTextReplacementApplyOutcome::Applied
             }
@@ -256,6 +261,7 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
         cursor_info: &mut CursorCaptureState,
         row_geometry: &DisplayRowGeometryState,
         point_charpos: i64,
+        line_numbers: &mut LineNumberRenderState,
     ) {
         outcome.apply_to_progress_and_cursor(
             self.request.text,
@@ -265,6 +271,7 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
             row_geometry,
             point_charpos,
             self.start_charpos,
+            line_numbers,
         );
     }
 
@@ -272,12 +279,13 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
         &self,
         replacement: DisplayPropertyReplacementAppendOutcome,
         progress: &mut DisplaySourceProgressState<'_>,
+        line_numbers: &mut LineNumberRenderState,
     ) {
         BufferDisplayPropertyTextReplacementOutcome {
             replacement,
             skip_to: self.request.replacement.descriptor().resume_charpos(),
         }
-        .apply_to_progress(self.request.text, progress);
+        .apply_to_progress(self.request.text, progress, line_numbers);
     }
 }
 
@@ -486,6 +494,7 @@ impl BufferDisplayPropertyTextReplacementOutcome {
         row_geometry: &DisplayRowGeometryState,
         point_charpos: i64,
         start_charpos: i64,
+        line_numbers: &mut LineNumberRenderState,
     ) {
         self.capture_cursor_info_if_point(
             cursor_info,
@@ -495,13 +504,24 @@ impl BufferDisplayPropertyTextReplacementOutcome {
             start_charpos,
             progress.byte_idx(),
         );
-        self.apply_to_progress(text, progress);
+        self.apply_to_progress(text, progress, line_numbers);
     }
 
-    fn apply_to_progress(self, text: &[u8], progress: &mut DisplaySourceProgressState<'_>) {
+    fn apply_to_progress(
+        self,
+        text: &[u8],
+        progress: &mut DisplaySourceProgressState<'_>,
+        line_numbers: &mut LineNumberRenderState,
+    ) {
+        let start_byte = progress.byte_idx();
         let walk_update = self.walk_update(text, progress.source_position());
         progress.apply_row_position(walk_update.row_position());
         progress.apply_source_position(walk_update.source_position());
+        if line_numbers.is_enabled() {
+            let buffer_newlines =
+                memchr::memchr_iter(b'\n', &text[start_byte..progress.byte_idx()]).count() as i64;
+            line_numbers.resume_after_replacement(buffer_newlines);
+        }
     }
 }
 

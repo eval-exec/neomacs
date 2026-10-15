@@ -762,6 +762,7 @@ impl<'rows, 'emit, 'surface>
                         self.surface.append_surface,
                         self.row_build.row_geometry,
                         active_face_state,
+                        self.row_carryover.line_numbers,
                     ),
                     &mut self.progress,
                     self.cursor_info,
@@ -806,6 +807,7 @@ impl<'rows, 'emit, 'surface>
                         replacement_context.apply_completed_string(
                             session.finish(outcome.end_position()),
                             &mut self.progress,
+                            self.row_carryover.line_numbers,
                         );
                         render_position = self.progress.row_position();
                     }

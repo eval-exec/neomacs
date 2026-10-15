@@ -2671,6 +2671,13 @@ impl<S> BufferDisplayReplacementStringSource<S> {
     }
 }
 
+impl BufferDisplayReplacementStringSource<LispStringSourceCursor> {
+    /// A row-break item has already been consumed when this is queried.
+    pub(crate) fn has_remaining_text(&self) -> bool {
+        self.source.has_remaining_text()
+    }
+}
+
 impl<S: DisplayItemSource> DisplayItemSource for BufferDisplayReplacementStringSource<S> {
     fn next_item(&mut self, context: &mut DisplaySourceContext<'_>) -> Option<DisplayItem> {
         let mut item = self.source.next_item(context)?;
@@ -2746,6 +2753,13 @@ impl LispStringSourceOrigin {
 }
 
 impl LispStringSourceCursor {
+    fn has_remaining_text(&self) -> bool {
+        self.stack
+            .frames
+            .iter()
+            .any(|frame| frame.char_index < frame.char_count())
+    }
+
     pub(crate) fn new(
         source_id: u64,
         value: Value,

@@ -25,8 +25,8 @@ use crate::display_row::replacement::{
     DisplayPropertyReplacementStringRender, DisplayReplacementStringRowStop,
 };
 use crate::display_row::transition::{
-    DisplayRowOverflowTransitionPlan, DisplayRowTextWindowEmitContext,
-    DisplayRowTransitionContinuation, VisualWrapBreak,
+    DisplayRowLineBreakTransitionPlan, DisplayRowOverflowTransitionPlan,
+    DisplayRowTextWindowEmitContext, DisplayRowTransitionContinuation, VisualWrapBreak,
 };
 use crate::display_row::walk_state::{TextRowTransitionStatePolicy, WordWrapBreakCandidate};
 use crate::display_source::DisplaySourceStepChar;
@@ -463,6 +463,7 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
                 self.state.surface.append_surface,
                 self.state.row_build.row_geometry,
                 self.active_face_state,
+                self.state.row_carryover.line_numbers,
             );
             let outcome = if move_to_next_row {
                 replacement_context.render_and_report_refusal(
@@ -597,6 +598,7 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
                     replacement_context.apply_completed_string(
                         session.finish(outcome.end_position()),
                         &mut self.state.progress,
+                        self.state.row_carryover.line_numbers,
                     );
                     return true;
                 }
@@ -606,6 +608,7 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
                     replacement_context.apply_completed_string(
                         session.finish(outcome.end_position()),
                         &mut self.state.progress,
+                        self.state.row_carryover.line_numbers,
                     );
                     return true;
                 }
@@ -615,8 +618,21 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
                     }
                 }
                 DisplayReplacementStringRowStop::RowBreak(line_break) => {
-                    if !self.emit_display_string_row_break(source_walk, buffer, line_break) {
+                    if !self.emit_display_string_row_break(
+                        source_walk,
+                        buffer,
+                        line_break,
+                        DisplayRowLineBreakTransitionPlan::display_string_line_break(),
+                    ) {
                         return false;
+                    }
+                    if !session.has_remaining_text() {
+                        replacement_context.apply_completed_string(
+                            session.finish(self.state.progress.row_position()),
+                            &mut self.state.progress,
+                            self.state.row_carryover.line_numbers,
+                        );
+                        return true;
                     }
                     self.render_pending_row_prelude(buffer);
                 }
@@ -660,6 +676,7 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
         source_walk: &mut BufferSourceWalk<'request, B>,
         buffer: &B,
         line_break: crate::display_row::replacement::DisplayReplacementStringLineBreak,
+        transition: DisplayRowLineBreakTransitionPlan,
     ) -> bool
     where
         'surface: 'request,
@@ -678,7 +695,12 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
                 self.active_face_state,
             )
             .with_display_string_line_break(line_break)
-            .render_display_string_break_and_apply(source_walk, buffer, self.state.reborrow())
+            .render_display_string_break_and_apply(
+                source_walk,
+                buffer,
+                self.state.reborrow(),
+                transition,
+            )
             .should_break()
     }
 
@@ -729,7 +751,12 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
             self.state.reborrow(),
         );
         if keep_going && let Some(line_break) = line_break {
-            return self.emit_display_string_row_break(source_walk, buffer, line_break);
+            return self.emit_display_string_row_break(
+                source_walk,
+                buffer,
+                line_break,
+                DisplayRowLineBreakTransitionPlan::line_break(),
+            );
         }
         keep_going
     }
