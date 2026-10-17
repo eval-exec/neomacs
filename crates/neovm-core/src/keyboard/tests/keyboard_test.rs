@@ -21,6 +21,23 @@ fn settled_point(
 
 use super::*;
 
+/// Prefix help preserves shift translation established by an earlier event.
+#[test]
+fn prefix_help_key_reader_finalizes_shifted_prefix() {
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let result = eval
+        .eval_str(
+            r#"(let ((overriding-terminal-local-map (make-sparse-keymap))
+                                      (translate-upper-case-key-bindings t)
+                                      (unread-command-events '(S-f5 8)))
+        (define-key overriding-terminal-local-map [f5] (make-sparse-keymap))
+        (list (append (read-key-sequence nil) nil) this-command-keys-shift-translated))"#,
+        )
+        .unwrap();
+    assert_eq!(crate::emacs_core::print_value(&result), "((f5 8) t)");
+}
+
+/// Reading prefix help returns its full sequence and defers command execution.
 #[test]
 fn prefix_help_key_reader_preserves_events_without_running_the_command() {
     let mut eval = crate::test_utils::runtime_startup_context();

@@ -52,6 +52,7 @@ fn dump_named_buffer_to_home_file(
 }
 
 // ── Tests ──────────────────────────────────────────────────
+/// Compare the prefix's help window and a subsequent command with GNU Emacs.
 fn check_prefix_help_session(sequence: &str) {
     let (mut gnu, mut neo) = boot_pair("");
     send_both(&mut gnu, &mut neo, sequence);
@@ -73,7 +74,7 @@ fn check_prefix_help_session(sequence: &str) {
     );
     let alive = |grid: &[String]| {
         grid.iter()
-            .any(|row| row.contains("prefix-help-session-alive"))
+            .any(|row| row.trim() == "prefix-help-session-alive")
     };
     wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), alive);
     for (editor, session) in [("GNU", &gnu), ("NEO", &neo)] {
@@ -85,16 +86,19 @@ fn check_prefix_help_session(sequence: &str) {
     assert_pair_exact_display(sequence, &gnu, &neo);
 }
 
+/// An unbound help character after C-c must leave the terminal session active.
 #[test]
 fn prefix_help_keeps_the_session_alive() {
     check_prefix_help_session("C-c C-h");
 }
 
+/// Prefix help must describe the complete nested prefix, including C-x 4.
 #[test]
 fn nested_prefix_help_keeps_the_session_alive() {
     check_prefix_help_session("C-x 4 C-h");
 }
 
+/// Question mark in help-event-list follows the same dispatch path as C-h.
 #[test]
 fn question_mark_prefix_help_keeps_the_session_alive() {
     check_prefix_help_session("C-c ?");

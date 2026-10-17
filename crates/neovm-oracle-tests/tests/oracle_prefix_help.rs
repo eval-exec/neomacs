@@ -3,6 +3,7 @@
 mod common;
 use common::return_if_neovm_enable_oracle_proptest_not_set;
 
+/// Neither Lisp reader executes prefix help or drops its final help event.
 #[test]
 fn prefix_help_readers_preserve_help_events_without_executing_commands() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -29,6 +30,7 @@ fn prefix_help_readers_preserve_help_events_without_executing_commands() {
     );
 }
 
+/// Prefix help observes normal command identity and pre/body/post ordering.
 #[test]
 fn prefix_help_command_runs_between_hooks_and_preserves_following_input() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -55,6 +57,7 @@ fn prefix_help_command_runs_between_hooks_and_preserves_following_input() {
     );
 }
 
+/// A binding for the full sequence wins over the prefix-help fallback.
 #[test]
 fn explicit_prefix_help_key_binding_takes_precedence() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -70,5 +73,29 @@ fn explicit_prefix_help_key_binding_takes_precedence() {
             (execute-kbd-macro [3 8])
             issue576-selected))"#,
         expect_test::expect![[r#""OK bound""#]],
+    );
+}
+
+/// Hooks see a shifted prefix as translated even when its next event is help.
+#[test]
+fn shifted_prefix_help_finalizes_translation_before_command_hooks() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    common::assert_oracle_parity_expect(
+        r#"(progn
+          (defvar issue576-trace nil)
+          (defun issue576-record (stage)
+            (when (eq this-command 'issue576-help)
+              (push (list stage (append (this-command-keys) nil)
+                          this-command-keys-shift-translated) issue576-trace)))
+          (defun issue576-help () (interactive) (issue576-record 'body))
+          (let ((overriding-terminal-local-map (make-sparse-keymap))
+                (prefix-help-command 'issue576-help) (help-char 8)
+                (translate-upper-case-key-bindings t)
+                (pre-command-hook (list (lambda () (issue576-record 'pre))))
+                (post-command-hook (list (lambda () (issue576-record 'post)))))
+            (define-key overriding-terminal-local-map [f5] (make-sparse-keymap))
+            (execute-kbd-macro [S-f5 8])
+            (nreverse issue576-trace)))"#,
+        expect_test::expect![[r#""OK ((pre (f5 8) t) (body (f5 8) t) (post (f5 8) t))""#]],
     );
 }

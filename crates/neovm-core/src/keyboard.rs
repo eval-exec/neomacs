@@ -4990,6 +4990,11 @@ impl crate::emacs_core::eval::Context {
                         binding = self
                             .eval_symbol("prefix-help-command")
                             .unwrap_or(Value::NIL);
+                        self.finalize_shift_translated_key_sequence(
+                            sequence_is_undefined,
+                            options,
+                            shift_translation.take(),
+                        );
                         self.restore_delayed_selection_event(&mut delayed_selection_event);
                         self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
                         let (translated, raw) = self.command_loop.keyboard.key_sequence_snapshot();
