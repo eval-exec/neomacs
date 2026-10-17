@@ -733,17 +733,6 @@ impl ReadKeySequenceState {
     pub fn snapshot(&self) -> (Vec<Value>, Vec<Value>) {
         (self.translated_events.clone(), self.raw_events.clone())
     }
-
-    /// Remove the last raw and translated event. Used by the
-    /// help-char dispatch path in `read_key_sequence` to strip
-    /// the help event from the sequence before running
-    /// `prefix-help-command`, matching GNU
-    /// `keyboard.c:10220-10230` which discards the help event so
-    /// `(this-command-keys)` reports the prefix only.
-    pub fn pop_last_events_for_help_char(&mut self) {
-        self.raw_events.pop();
-        self.translated_events.pop();
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3754,59 +3743,6 @@ impl crate::emacs_core::eval::Context {
         Ok(InputMethodEvent::Translated(first))
     }
 
-    /// Dispatch `prefix-help-command` via `call-interactively`,
-    /// abandoning the current key sequence. Returns `Ok(Some(..))`
-    /// when the help command ran (the read_key_sequence caller
-    /// should forward the empty sequence to the command loop) or
-    /// `Ok(None)` when `prefix-help-command` is unbound (fall
-    /// back to the ordinary lookup path).
-    ///
-    /// Mirrors GNU `keyboard.c:10188-10250`: pop the help-char
-    /// from the current sequence so the help command sees the
-    /// prefix as `(this-command-keys)`, then run
-    /// `Fcall_interactively (Vprefix_help_command, Qnil, Qnil)`.
-    ///
-    /// Keyboard audit Finding 5.
-    fn dispatch_prefix_help_command(
-        &mut self,
-        delayed_selection_event: &mut Option<Value>,
-    ) -> Result<Option<(Vec<Value>, Value)>, crate::emacs_core::error::Flow> {
-        let prefix_help_command = self
-            .eval_symbol("prefix-help-command")
-            .unwrap_or(Value::NIL);
-        if prefix_help_command.is_nil() {
-            return Ok(None);
-        }
-        // Pop the trailing help-char event from the current raw
-        // sequence and from the translated event buffer. GNU's
-        // read_key_sequence removes the help event before running
-        // the help command so `(this-command-keys)` reports the
-        // prefix only — matching the classic "C-x ?" behaviour.
-        self.command_loop
-            .keyboard
-            .kboard
-            .current_key_sequence
-            .pop_last_events_for_help_char();
-
-        self.restore_delayed_selection_event(delayed_selection_event);
-
-        // Run the help command via call-interactively so advice
-        // and `this-command` bookkeeping in the Lisp interactive
-        // dispatcher stay consistent with every other interactive
-        // command.
-        let _ = self.apply(
-            Value::symbol("call-interactively"),
-            vec![prefix_help_command],
-        )?;
-
-        // Return an empty key sequence — command_loop_1 treats
-        // that as "nothing to dispatch this tick" and immediately
-        // reads the next key.
-        self.command_loop
-            .set_command_key_sequences(Vec::new(), Vec::new());
-        Ok(Some((Vec::new(), Value::NIL)))
-    }
-
     fn shift_translated_key_sequence_event(event: Value) -> Option<Value> {
         let key_event = crate::emacs_core::keymap::emacs_event_to_key_event(&event)?;
 
@@ -5044,11 +4980,22 @@ impl crate::emacs_core::eval::Context {
                             .last()
                             .copied()
                         && self.event_matches_help_char(&last_raw)
-                        && let Some(result) =
-                            self.dispatch_prefix_help_command(&mut delayed_selection_event)?
                     {
+                        // GNU keyboard.c::read_key_sequence selects the help
+                        // command without executing it. Preserve the complete
+                        // sequence: describe-prefix-bindings removes the final
+                        // help event itself, and command_loop_1 owns dispatch
+                        // and its pre/post-command hooks. An empty sequence is
+                        // reserved for end of input, never a handled command.
+                        binding = self
+                            .eval_symbol("prefix-help-command")
+                            .unwrap_or(Value::NIL);
+                        self.restore_delayed_selection_event(&mut delayed_selection_event);
                         self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
-                        return Ok(result);
+                        let (translated, raw) = self.command_loop.keyboard.key_sequence_snapshot();
+                        self.command_loop
+                            .set_command_key_sequences(translated.clone(), raw);
+                        return Ok((translated, binding));
                     }
                     if self.translate_upper_case_key_bindings_enabled()
                         && let Some(applied_shift_translation) =

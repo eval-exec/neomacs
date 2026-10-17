@@ -52,6 +52,54 @@ fn dump_named_buffer_to_home_file(
 }
 
 // ── Tests ──────────────────────────────────────────────────
+fn check_prefix_help_session(sequence: &str) {
+    let (mut gnu, mut neo) = boot_pair("");
+    send_both(&mut gnu, &mut neo, sequence);
+    let help = |grid: &[String]| grid.iter().any(|row| row.contains("*Help*"));
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), help);
+    for (editor, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        assert!(
+            help(&session.text_grid()),
+            "{editor}: prefix help must be displayed"
+        );
+    }
+    read_both(&mut gnu, &mut neo, Duration::from_millis(400));
+    assert_pair_exact_display(&format!("{sequence}: help window"), &gnu, &neo);
+    send_both(&mut gnu, &mut neo, "C-x 1");
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn (switch-to-buffer \"*scratch*\") (erase-buffer) (insert \"prefix-help-session-alive\"))",
+    );
+    let alive = |grid: &[String]| {
+        grid.iter()
+            .any(|row| row.contains("prefix-help-session-alive"))
+    };
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), alive);
+    for (editor, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        assert!(
+            alive(&session.text_grid()),
+            "{editor}: command after prefix help must run"
+        );
+    }
+    assert_pair_exact_display(sequence, &gnu, &neo);
+}
+
+#[test]
+fn prefix_help_keeps_the_session_alive() {
+    check_prefix_help_session("C-c C-h");
+}
+
+#[test]
+fn nested_prefix_help_keeps_the_session_alive() {
+    check_prefix_help_session("C-x 4 C-h");
+}
+
+#[test]
+fn question_mark_prefix_help_keeps_the_session_alive() {
+    check_prefix_help_session("C-c ?");
+}
+
 #[test]
 fn describe_mode_on_scratch_via_ch_m() {
     let (mut gnu, mut neo) = boot_pair("");

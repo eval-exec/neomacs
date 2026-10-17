@@ -22,6 +22,25 @@ fn settled_point(
 use super::*;
 
 #[test]
+fn prefix_help_key_reader_preserves_events_without_running_the_command() {
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let result = eval
+        .eval_str(
+            r#"(progn
+      (defvar issue576-help-ran nil)
+      (defun issue576-help () (interactive) (setq issue576-help-ran t))
+      (let ((overriding-terminal-local-map (make-sparse-keymap))
+            (prefix-help-command 'issue576-help)
+            (help-char 8)
+            (unread-command-events '(3 8)))
+        (define-key overriding-terminal-local-map [3] (make-sparse-keymap))
+        (list (append (read-key-sequence nil) nil) issue576-help-ran)))"#,
+        )
+        .unwrap();
+    assert_eq!(crate::emacs_core::print_value(&result), "((3 8) nil)");
+}
+
+#[test]
 fn gc_preserves_parked_keyboard_prompt_interval_plists() {
     let mut ctx = crate::emacs_core::Context::new();
     let prompt = ctx
