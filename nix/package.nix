@@ -78,7 +78,8 @@ let
       gstreamerRuntime.pluginScanner
     ]
     ++
-      lib.optionals (pkgs.stdenv.hostPlatform.isLinux && builtins.elem "webview" productionCapabilities.cargoFeatures)
+      lib.optionals
+        (pkgs.stdenv.hostPlatform.isLinux && builtins.elem "webview" productionCapabilities.cargoFeatures)
         [
           "--set-default"
           "WPE_BACKEND_LIBRARY"
@@ -106,6 +107,20 @@ craneLib.buildPackage (
     # used solely for the dependency derivation above.
     src = source;
     inherit cargoArtifacts;
+
+    # A dumped build environment can turn build-only inputs into runtime
+    # dependencies even when the executable never links them. Let Nix's
+    # output reference scan reject that regression after fixup hooks run.
+    disallowedReferences = [
+      rustToolchain
+      cargoArtifacts
+      cargoSrc
+      source
+      pkgs.stdenv.cc
+      pkgs.llvmPackages.clang
+      pkgs.pkg-config
+      pkgs.binutils
+    ];
 
     postBuild = ''
       cargo xtask fresh-build --release --skip-build
