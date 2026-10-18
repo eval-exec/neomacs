@@ -91,6 +91,17 @@ pub(crate) fn resolve_current() -> ResolvedShellFileName {
 /// Install the one authoritative startup answer into Lisp.
 pub(crate) fn install(eval: &mut Context) {
     let shell = resolve_current();
+    install_resolved(eval, shell);
+}
+
+/// Image construction must not retain the builder's SHELL or executable
+/// search directory. Runtime startup replaces this portable default with
+/// the inherited shell or the installed private cmdproxy path.
+pub(crate) fn install_dump_default(eval: &mut Context) {
+    install_resolved(eval, resolve_for(CURRENT_PLATFORM, None, None));
+}
+
+fn install_resolved(eval: &mut Context, shell: ResolvedShellFileName) {
     eval.set_variable("shell-file-name", Value::unibyte_string(shell.lisp_name()));
     eval.obarray.make_special("shell-file-name");
 }

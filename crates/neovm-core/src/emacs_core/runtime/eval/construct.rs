@@ -2168,6 +2168,7 @@ impl Context {
             minibuffer_selected_window: world.global.minibuffer_selected_window,
             active_minibuffer_window: world.global.active_minibuffer_window,
             shutdown_request: None,
+            loadup_dump_mode: None,
             shutdown_in_progress: false,
             daemon: world.global.daemon,
             _reserved_input_mode_interrupt: true,

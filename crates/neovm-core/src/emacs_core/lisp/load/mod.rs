@@ -6248,9 +6248,18 @@ pub fn create_bootstrap_evaluator_for_loadup(
         maybe_trace_bootstrap_step("create_bootstrap_evaluator_with_features: enter");
         let mut eval = super::eval::Context::new();
         maybe_trace_bootstrap_step("create_bootstrap_evaluator_with_features: evaluator-new");
-        // Match GNU's initialization order: Lisp startup must inherit the host
-        // environment before loadup.el can inspect HOME or any other variable.
-        super::environment::install_host_environment_snapshot(&mut eval);
+        // GNU 31.1 emacs.c skips set_initial_environment when will_dump_p().
+        match invocation {
+            LoadupInvocation::PreloadOnly => {
+                super::environment::install_host_environment_snapshot(&mut eval);
+                super::shell_file_name::install(&mut eval);
+            }
+            LoadupInvocation::Dump(dump) => {
+                eval.loadup_dump_mode = Some(dump.mode());
+                // cus-start records this initial value in standard-value.
+                super::shell_file_name::install_dump_default(&mut eval);
+            }
+        }
         let bootstrap_features = normalized_bootstrap_features(extra_features);
         for feature in &bootstrap_features {
             let _ = eval.provide_value(Value::symbol(feature), None);
@@ -6318,7 +6327,9 @@ pub fn create_bootstrap_evaluator_for_loadup(
             Value::unibyte_string(lisp_directory_name_from_host_path(&project_root)),
         );
 
-        // exec-path: list of dirs from PATH env var (C: callproc.c init_callproc_1)
+        // Keep build tools available until serialization: loadup queries Git
+        // before dumping. dump-emacs-portable omits the PATH derivative
+        // only while writing a loadup image; activation re-derives them.
         let path_dirs: Vec<Value> = exec_path_dirs_from_env()
             .into_iter()
             .map(Value::unibyte_string)
@@ -6348,10 +6359,6 @@ pub fn create_bootstrap_evaluator_for_loadup(
             eval.obarray.make_special(name);
         }
 
-        // GNU callproc.c plus w32.c: inherited $SHELL, /bin/sh on POSIX,
-        // and the private cmdproxy.exe on Windows. Bootstrap and post-image
-        // startup share the same typed platform policy.
-        super::shell_file_name::install(&mut eval);
         // shell-command-switch: GNU simple.el — defaults to "-c"
         eval.set_variable("shell-command-switch", Value::unibyte_string("-c"));
 
@@ -6613,6 +6620,7 @@ fn activate_runtime_evaluator_at_root(
     project_root: &Path,
     role: RuntimeImageRole,
 ) -> Result<(), EvalError> {
+    eval.loadup_dump_mode = None;
     finalize_cached_bootstrap_eval(eval, project_root, role).map_err(|error| {
         tracing::error!("runtime evaluator activation failed: {error:?}");
         error

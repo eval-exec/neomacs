@@ -5813,7 +5813,23 @@ pub(crate) fn builtin_dump_emacs_portable(
     }
     ctx.set_variable("command-line-processed", Value::NIL);
     ctx.set_variable("process-environment", Value::NIL);
+    // This global is needed by loadup's build tools, but runtime startup
+    // reconstructs it. Save it only in native locals, after the last GC:
+    // Lisp bindings retaining the originals would also enter the image.
+    // Ordinary runtime redumps keep GNU's behavior, regardless of filename.
+    let saved_build_exec_path = ctx.loadup_dump_mode.map(|_| {
+        let exec_path = ctx
+            .obarray()
+            .canonical_value_without_buffer(CanonicalAccess::DUMP, "exec-path")
+            .any_arm()
+            .unwrap_or(Value::NIL);
+        ctx.set_variable("exec-path", Value::NIL);
+        exec_path
+    });
     let dump_result = crate::emacs_core::pdump::dump_to_file(ctx, dump_path);
+    if let Some(exec_path) = saved_build_exec_path {
+        ctx.set_variable("exec-path", exec_path);
+    }
     ctx.set_variable("post-gc-hook", saved_post_gc_hook);
     ctx.set_variable("command-line-processed", saved_command_line_processed);
     ctx.set_variable("process-environment", saved_process_environment);
