@@ -75,7 +75,7 @@ fn assert_dump_environment(mode: LoadupDumpMode, test_name: &str) {
             !bytes
                 .windows(MARKER.len())
                 .any(|window| window == MARKER.as_bytes()),
-            "production dump retains a build-only environment value",
+            "{dump_name} retains a build-only environment value",
         );
         let runtime = Command::new(&executable)
             .args(["--exact", test_name, "--nocapture"])
