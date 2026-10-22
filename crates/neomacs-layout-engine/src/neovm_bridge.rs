@@ -57,8 +57,8 @@ use neovm_core::emacs_core::textprop::{DirectCharProperties, resolve_effective_c
 use neovm_core::emacs_core::value::{ValueKind, eq_value, list_to_vec};
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::face::{
-    BoxStyle as NeoBoxStyle, Color as NeoColor, Face as NeoFace, FaceDecoration, FaceHeight,
-    FaceTable, FontWeight, UnderlinePosition as NeoUnderlinePosition,
+    BoxBorder as NeoBoxBorder, BoxStyle as NeoBoxStyle, Color as NeoColor, Face as NeoFace,
+    FaceDecoration, FaceHeight, FaceTable, FontWeight, UnderlinePosition as NeoUnderlinePosition,
     UnderlineStyle as NeoUnderlineStyle,
 };
 pub(crate) use neovm_core::window::WindowLayoutVariable as LayoutVar;
@@ -4471,17 +4471,11 @@ impl FaceResolver {
         if neo_default.strike_through == Some(true) {
             df.strike_through = true;
         }
-        // Box
-        if let Some(bb) = neo_default.box_border.enabled() {
-            df.box_type = box_style_to_u8(&bb.style);
-            df.box_color = bb.color.as_ref().map(color_to_pixel).unwrap_or(0);
-            df.box_line_width = BoxLineWidth::from_gnu(bb.width);
-        }
-
         FaceColorAttributes::from_base(&df)
             .merge(&neo_default)
             .realize()
             .install(&mut df);
+        apply_box_border(&mut df, &neo_default.box_border);
 
         Self {
             face_table: face_table.clone(),
@@ -5284,22 +5278,7 @@ impl FaceResolver {
         if let Some(color) = &face.strike_through_color {
             rf.strike_through_color = color_to_pixel(color);
         }
-        match &face.box_border {
-            FaceDecoration::Unspecified => {}
-            FaceDecoration::Disabled => {
-                rf.box_type = 0;
-                rf.box_line_width = BoxLineWidth::default();
-            }
-            FaceDecoration::Enabled(box_border) => {
-                rf.box_type = box_style_to_u8(&box_border.style);
-                rf.box_color = box_border
-                    .color
-                    .as_ref()
-                    .map(color_to_pixel)
-                    .unwrap_or(rf.fg);
-                rf.box_line_width = BoxLineWidth::from_gnu(box_border.width);
-            }
-        }
+        apply_box_border(&mut rf, &face.box_border);
         if let Some(extend) = face.extend {
             rf.extend = extend;
         }
@@ -6357,18 +6336,7 @@ impl FaceResolver {
             rf.strike_through_color = color_to_pixel(c);
         }
         // Box border
-        match &face.box_border {
-            FaceDecoration::Unspecified => {}
-            FaceDecoration::Disabled => {
-                rf.box_type = 0;
-                rf.box_line_width = BoxLineWidth::default();
-            }
-            FaceDecoration::Enabled(bb) => {
-                rf.box_type = box_style_to_u8(&bb.style);
-                rf.box_color = bb.color.as_ref().map(color_to_pixel).unwrap_or(rf.fg);
-                rf.box_line_width = BoxLineWidth::from_gnu(bb.width);
-            }
-        }
+        apply_box_border(&mut rf, &face.box_border);
         // Extend
         if let Some(ext) = face.extend {
             rf.extend = ext;
@@ -6431,8 +6399,30 @@ fn underline_style_to_u8(style: &NeoUnderlineStyle) -> u8 {
     style.gnu_code()
 }
 
-fn box_style_to_u8(style: &NeoBoxStyle) -> u8 {
-    style.gnu_code()
+fn apply_box_border(face: &mut ResolvedFace, border: &FaceDecoration<NeoBoxBorder>) {
+    match border {
+        FaceDecoration::Unspecified => {}
+        FaceDecoration::Disabled => {
+            face.box_type = 0;
+            face.box_line_width = BoxLineWidth::default();
+        }
+        FaceDecoration::Enabled(border) => {
+            face.box_type = border.style.gnu_code();
+            face.box_color = border
+                .color
+                .as_ref()
+                .map(color_to_pixel)
+                .unwrap_or_else(|| {
+                    match border.style {
+                        NeoBoxStyle::Simple => face.fg,
+                        // GNU flat-button uses the face background directly;
+                        // 3D relief uses it as the base of the shadow colors.
+                        NeoBoxStyle::Flat | NeoBoxStyle::Raised | NeoBoxStyle::Pressed => face.bg,
+                    }
+                });
+            face.box_line_width = BoxLineWidth::from_gnu(border.width);
+        }
+    }
 }
 
 #[cfg(test)]

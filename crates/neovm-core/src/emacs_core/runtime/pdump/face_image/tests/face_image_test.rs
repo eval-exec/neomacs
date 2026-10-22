@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn face_section_round_trips_face_table() {
-    let table = DumpFaceTable {
+    let mut table = DumpFaceTable {
         face_ids: vec![(
             DumpSymId(1),
             DumpFace {
@@ -87,10 +87,20 @@ fn face_section_round_trips_face_table() {
         )],
     };
 
-    let bytes = face_table_section_bytes(&table).expect("encode face table");
-    let decoded = load_face_table_section(&bytes).expect("decode face table");
+    // Simple and flat-button share a drawing code, but a fresh runtime must
+    // retain their different foreground/background default color semantics.
+    for style in [
+        DumpBoxStyle::Simple,
+        DumpBoxStyle::Flat,
+        DumpBoxStyle::Raised,
+        DumpBoxStyle::Pressed,
+    ] {
+        table.face_ids[0].1.box_border.as_mut().unwrap().style = style;
+        let bytes = face_table_section_bytes(&table).expect("encode face table");
+        let decoded = load_face_table_section(&bytes).expect("decode face table");
 
-    assert_eq!(format!("{decoded:?}"), format!("{table:?}"));
+        assert_eq!(format!("{decoded:?}"), format!("{table:?}"));
+    }
 }
 
 #[test]

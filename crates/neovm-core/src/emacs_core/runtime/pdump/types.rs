@@ -1312,6 +1312,7 @@ pub enum DumpBoxStyle {
     Flat = 0,
     Raised = 1,
     Pressed = 2,
+    Simple = 3,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -966,6 +966,77 @@ fn tab_line_rows(grid: &[String], name: &str) -> Vec<usize> {
 }
 
 #[test]
+fn global_tab_line_from_init_survives_startup_and_visiting_a_new_buffer() {
+    fn boot(program: &std::path::Path, label: &str) -> (TuiTempDirectory, TuiSession) {
+        let home = TuiTempDirectory::new("issue583-tab-line-startup-");
+        let config = home.path().join(".emacs.d");
+        std::fs::create_dir(&config).expect("create isolated user configuration");
+        std::fs::write(
+            config.join("init.el"),
+            ";;; -*- lexical-binding: t; -*-\n\
+             (setq inhibit-startup-screen t\n\
+                    initial-major-mode 'fundamental-mode\n\
+                    initial-scratch-message nil)\n\
+             (menu-bar-mode -1)\n\
+             (global-tab-line-mode t)\n",
+        )
+        .expect("write startup tab-line configuration");
+        let launch = TuiLaunch::new(program.as_os_str())
+            .args([
+                "-nw",
+                "--no-site-file",
+                "--no-site-lisp",
+                "--no-splash",
+                "--no-comp-spawn",
+            ])
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path().join(".config"))
+            .env("XDG_CACHE_HOME", home.path().join(".cache"));
+        let session = TuiSession::spawn_launch(launch, label);
+        (home, session)
+    }
+
+    let (_gnu_home, mut gnu) = boot(std::path::Path::new("emacs"), "GNU");
+    let (_neo_home, mut neo) = boot(&neomacs_binary(), "NEO");
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(20), |grid| {
+        grid.iter()
+            .any(|row| row.contains("*scratch*") && row.contains("(Fundamental)"))
+    });
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+
+    for session in [&gnu, &neo] {
+        let grid = session.text_grid();
+        assert!(
+            grid[0].contains("*scratch*"),
+            "{}: startup scratch buffer must have a tab line\n{}",
+            session.name,
+            grid.join("\n")
+        );
+    }
+    assert_pair_exact_display("global_tab_line_from_init_startup", &gnu, &neo);
+
+    // Visiting a file runs a new major mode.  The globalized minor mode must
+    // follow that lifecycle without another global-tab-line-mode call.
+    open_home_file(
+        &mut gnu,
+        &mut neo,
+        "issue583-new-buffer.txt",
+        "ISSUE583 NEW BUFFER\n",
+        "C-x C-f",
+    );
+    for session in [&gnu, &neo] {
+        let grid = session.text_grid();
+        assert!(
+            grid[0].contains("issue583-new-buffer.txt"),
+            "{}: newly visited buffer must have a tab line\n{}",
+            session.name,
+            grid.join("\n")
+        );
+    }
+    assert_pair_exact_display("global_tab_line_from_init_new_buffer", &gnu, &neo);
+}
+
+#[test]
 fn global_tab_line_shows_each_window_its_own_buffer() {
     let (mut gnu, mut neo) = boot_pair("");
 

@@ -3623,14 +3623,14 @@ fn lisp_value_to_face_attr_resolved(
                 return Some(FaceAttrValue::Box(BoxBorder {
                     color: None,
                     width: 1,
-                    style: BoxStyle::Flat,
+                    style: BoxStyle::Simple,
                 }));
             }
             if let Some(n) = value.as_fixnum() {
                 return Some(FaceAttrValue::Box(BoxBorder {
                     color: None,
                     width: n as i32,
-                    style: BoxStyle::Flat,
+                    style: BoxStyle::Simple,
                 }));
             }
             // Color string shorthand. Box colors are not tty-mapped in GNU
@@ -3640,7 +3640,7 @@ fn lisp_value_to_face_attr_resolved(
                 return Some(FaceAttrValue::Box(BoxBorder {
                     color,
                     width: 1,
-                    style: BoxStyle::Flat,
+                    style: BoxStyle::Simple,
                 }));
             }
             // Plist form: (:line-width WIDTH :color COLOR :style STYLE)
@@ -3648,7 +3648,7 @@ fn lisp_value_to_face_attr_resolved(
                 let mut border = BoxBorder {
                     color: None,
                     width: 1,
-                    style: BoxStyle::Flat,
+                    style: BoxStyle::Simple,
                 };
                 let mut i = 0;
                 while i + 1 < plist.len() {
@@ -3668,10 +3668,12 @@ fn lisp_value_to_face_attr_resolved(
                             }
                         }
                         ":style" => {
-                            border.style = val
-                                .as_bare_symbol_name()
-                                .and_then(BoxStyle::from_symbol)
-                                .unwrap_or(BoxStyle::Flat);
+                            if !val.is_nil()
+                                && let Some(style) =
+                                    val.as_bare_symbol_name().and_then(BoxStyle::from_symbol)
+                            {
+                                border.style = style;
+                            }
                         }
                         _ => {}
                     }
@@ -3682,7 +3684,7 @@ fn lisp_value_to_face_attr_resolved(
             Some(FaceAttrValue::Box(BoxBorder {
                 color: None,
                 width: 1,
-                style: BoxStyle::Flat,
+                style: BoxStyle::Simple,
             }))
         }
         LFaceAttr::InverseVideo | LFaceAttr::Extend => Some(FaceAttrValue::Bool(value.is_truthy())),

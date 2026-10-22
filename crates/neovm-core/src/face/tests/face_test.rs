@@ -139,6 +139,7 @@ fn underline_style_codes_match_gnu_face_underline_type() {
 fn box_style_codes_match_gnu_face_box_type() {
     crate::test_utils::init_test_tracing();
     let styles = [
+        (BoxStyle::Simple, 1, "nil"),
         (BoxStyle::Flat, 1, "flat-button"),
         (BoxStyle::Raised, 2, "released-button"),
         (BoxStyle::Pressed, 3, "pressed-button"),
@@ -146,7 +147,14 @@ fn box_style_codes_match_gnu_face_box_type() {
 
     for (style, code, symbol) in styles {
         assert_eq!(style.gnu_code(), code);
-        assert_eq!(BoxStyle::from_gnu_code(code), Some(style));
+        assert_eq!(
+            BoxStyle::from_gnu_code(code),
+            Some(if style == BoxStyle::Flat {
+                BoxStyle::Simple
+            } else {
+                style
+            })
+        );
         assert_eq!(style.symbol_name(), symbol);
         assert_eq!(BoxStyle::from_symbol(symbol), Some(style));
     }
@@ -155,6 +163,30 @@ fn box_style_codes_match_gnu_face_box_type() {
     assert_eq!(BoxStyle::from_gnu_code(4), None);
     assert_eq!(BoxStyle::from_symbol("flat"), None);
     assert_eq!(BoxStyle::from_symbol("raised"), None);
+}
+
+#[test]
+fn face_plist_distinguishes_plain_boxes_from_flat_button() {
+    let mut context = crate::emacs_core::Context::new();
+    for (form, expected_style) in [
+        ("t", BoxStyle::Simple),
+        ("2", BoxStyle::Simple),
+        ("(:line-width 2)", BoxStyle::Simple),
+        ("(:style nil)", BoxStyle::Simple),
+        ("(:style flat-button)", BoxStyle::Flat),
+        ("(:style flat-button :style nil)", BoxStyle::Flat),
+    ] {
+        let specification = context
+            .eval_str(&format!("'(:box {form})"))
+            .expect("face plist");
+        let items = crate::emacs_core::value::list_to_vec(&specification).unwrap();
+        let face = Face::from_plist("box", &items);
+        assert_eq!(
+            face.box_border.enabled().unwrap().style,
+            expected_style,
+            "{form}"
+        );
+    }
 }
 
 #[test]

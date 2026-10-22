@@ -2652,10 +2652,97 @@ fn face_resolver_underline_styles_use_gnu_codes() {
 }
 
 #[test]
+fn flat_button_box_uses_background_without_changing_simple_box_foreground() {
+    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let table = FaceTable::new();
+    let resolver = FaceResolver::new(&table, 0x00112233, 0x00445566, 14.0, None);
+
+    // GNU xfaces.c realize_gui_face selects the background only for an
+    // explicit flat-button style. Both styles still draw FACE_SIMPLE_BOX.
+    for (box_form, expected_type, expected_color) in [
+        ("t", 1, 0x00112233),
+        ("2", 1, 0x00112233),
+        ("(:line-width 2)", 1, 0x00112233),
+        ("(:style nil)", 1, 0x00112233),
+        ("(:style flat-button)", 1, 0x00445566),
+        ("(:style flat-button :style nil)", 1, 0x00445566),
+        ("(:style released-button)", 2, 0x00445566),
+        ("(:style pressed-button)", 3, 0x00445566),
+        ("(:style flat-button :color \"#778899\")", 1, 0x00778899),
+        ("(:color \"#778899\" :style flat-button)", 1, 0x00778899),
+    ] {
+        let face = eval_lisp(&mut evaluator, &format!("'(:box {box_form})"));
+        let mut buffer = test_buffer(583, "*flat-button*");
+        set_buffer_text(&mut buffer, "x");
+        buffer.put_text_property(0, 1, Value::symbol("face"), face);
+
+        let mut next_check = buffer.point_max_char_pos().get();
+        let resolved = resolver.face_at_pos(&buffer, 0, &mut next_check);
+        assert_eq!(resolved.box_type, expected_type, "{box_form}");
+        assert_eq!(resolved.box_color, expected_color, "{box_form}");
+    }
+}
+
+#[test]
+fn lisp_named_flat_button_style_survives_nil_plist_entries() {
+    let mut evaluator = neovm_core::emacs_core::Context::new();
+    eval_lisp(
+        &mut evaluator,
+        r##"(progn
+             (selected-frame)
+             (internal-set-lisp-face-attribute 'mode-line :foreground "#112233" nil)
+             (internal-set-lisp-face-attribute 'mode-line :background "#445566" nil)
+             (internal-set-lisp-face-attribute 'mode-line :inverse-video nil nil)
+             (internal-set-lisp-face-attribute 'mode-line :box
+                                              '(:style flat-button :style nil) nil))"##,
+    );
+    let frame = evaluator.frame_manager().selected_frame().unwrap().id;
+    evaluator.sync_runtime_faces_for_frame(frame);
+    let source = evaluator.face_table().resolve("mode-line");
+    assert_eq!(
+        source.box_border.enabled().unwrap().style,
+        NeoBoxStyle::Flat,
+        "{source:?}"
+    );
+
+    let resolver = FaceResolver::new(evaluator.face_table(), 0x00ffffff, 0x00000000, 14.0, None);
+    let resolved = resolver.resolve_named_face("mode-line");
+    assert_eq!(resolved.box_type, 1);
+    assert_eq!(resolved.box_color, 0x00445566);
+}
+
+#[test]
+fn flat_button_box_realizes_named_and_default_face_backgrounds() {
+    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let mut table = FaceTable::new();
+    for name in ["default", "flat-button"] {
+        let specification = eval_lisp(
+            &mut evaluator,
+            "'(:foreground \"#112233\" :background \"#445566\" :box (:style flat-button))",
+        );
+        let items = list_to_vec(&specification).expect("face plist");
+        table.define(name, NeoFace::from_plist(name, &items));
+    }
+    let resolver = FaceResolver::new(&table, 0x00ffffff, 0x00000000, 14.0, None);
+    assert_eq!(resolver.default_face().box_type, 1);
+    assert_eq!(resolver.default_face().box_color, 0x00445566);
+    assert_eq!(
+        resolver.resolve_named_face("flat-button").box_color,
+        0x00445566
+    );
+
+    let face = resolver
+        .face_from_plist(&eval_lisp(&mut evaluator, "'(:box (:style flat-button))"))
+        .expect("anonymous face");
+    assert_eq!(resolver.realize_face(&face).box_color, 0x00445566);
+}
+
+#[test]
 fn face_resolver_box_styles_use_gnu_codes() {
     let _evaluator = neovm_core::emacs_core::Context::new();
     let mut table = FaceTable::new();
-    let styles: [(&str, NeoBoxStyle, u8); 3] = [
+    let styles: [(&str, NeoBoxStyle, u8); 4] = [
+        ("simple-box-face", NeoBoxStyle::Simple, 1),
         ("flat-box-face", NeoBoxStyle::Flat, 1),
         ("raised-box-face", NeoBoxStyle::Raised, 2),
         ("pressed-box-face", NeoBoxStyle::Pressed, 3),

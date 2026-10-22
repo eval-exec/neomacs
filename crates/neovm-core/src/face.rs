@@ -442,18 +442,22 @@ pub struct BoxBorder {
     pub style: BoxStyle,
 }
 
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoPrimitive, IntoStaticStr, TryFromPrimitive,
-)]
-#[repr(u8)]
+/// Logical box styles, before choosing the face-relative default color.
+///
+/// GNU draws both a plain box and `flat-button` as FACE_SIMPLE_BOX, but
+/// defaults their colors to foreground and background respectively. Keep
+/// that distinction until realization instead of storing the drawing code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 pub enum BoxStyle {
+    #[strum(to_string = "nil")]
+    Simple,
     #[strum(to_string = "flat-button")]
-    Flat = 1,
+    Flat,
     #[strum(to_string = "released-button")]
-    Raised = 2,
+    Raised,
     #[strum(to_string = "pressed-button")]
-    Pressed = 3,
+    Pressed,
 }
 
 impl BoxStyle {
@@ -466,11 +470,22 @@ impl BoxStyle {
     }
 
     pub fn gnu_code(self) -> u8 {
-        self.into()
+        match self {
+            Self::Simple | Self::Flat => 1,
+            Self::Raised => 2,
+            Self::Pressed => 3,
+        }
     }
 
+    /// Decode a drawing kind, which cannot recover an explicit `flat-button`.
+    /// Lisp parsing and dump storage retain the logical style independently.
     pub fn from_gnu_code(code: u8) -> Option<Self> {
-        Self::try_from(code).ok()
+        match code {
+            1 => Some(Self::Simple),
+            2 => Some(Self::Raised),
+            3 => Some(Self::Pressed),
+            _ => None,
+        }
     }
 }
 
@@ -1671,13 +1686,13 @@ fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
         ValueKind::T => FaceDecoration::Enabled(BoxBorder {
             color: None,
             width: 1,
-            style: BoxStyle::Flat,
+            style: BoxStyle::Simple,
         }),
         ValueKind::Nil => FaceDecoration::Disabled,
         ValueKind::Fixnum(n) => FaceDecoration::Enabled(BoxBorder {
             color: None,
             width: n as i32,
-            style: BoxStyle::Flat,
+            style: BoxStyle::Simple,
         }),
         _ if value.is_string() => {
             let Some(text) = face_runtime_string(value) else {
@@ -1686,7 +1701,7 @@ fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
             FaceDecoration::Enabled(BoxBorder {
                 color: Color::parse(&text),
                 width: 1,
-                style: BoxStyle::Flat,
+                style: BoxStyle::Simple,
             })
         }
         ValueKind::Cons => {
@@ -1695,7 +1710,7 @@ fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
             };
             let mut color = None;
             let mut width = 1i32;
-            let mut style = BoxStyle::Flat;
+            let mut style = BoxStyle::Simple;
             let mut i = 0;
             while i + 1 < items.len() {
                 let key = DecorationProperty::from_value(items[i]);
@@ -1716,8 +1731,11 @@ fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
                         color = parse_color_value(item);
                     }
                     Some(DecorationProperty::Style) => {
-                        if let Some(name) = item.as_bare_symbol_name() {
-                            style = BoxStyle::from_symbol(name).unwrap_or(BoxStyle::Flat);
+                        if !item.is_nil()
+                            && let Some(specified) =
+                                item.as_bare_symbol_name().and_then(BoxStyle::from_symbol)
+                        {
+                            style = specified;
                         }
                     }
                     _ => {}

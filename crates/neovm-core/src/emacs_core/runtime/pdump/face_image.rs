@@ -14,7 +14,9 @@ use super::types::{
 };
 
 const FACE_MAGIC: [u8; 16] = *b"NEOFACE\0\0\0\0\0\0\0\0\0";
-const FACE_FORMAT_VERSION: u32 = 3;
+// Version 4 separates plain boxes from flat-button in the logical face table.
+// Older sections conflated these styles and cannot recover their color default.
+const FACE_FORMAT_VERSION: u32 = 4;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]

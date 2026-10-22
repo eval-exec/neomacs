@@ -4429,6 +4429,7 @@ fn dump_underline_style(s: &UnderlineStyle) -> DumpUnderlineStyle {
 
 fn dump_box_style(s: &BoxStyle) -> DumpBoxStyle {
     match s {
+        BoxStyle::Simple => DumpBoxStyle::Simple,
         BoxStyle::Flat => DumpBoxStyle::Flat,
         BoxStyle::Raised => DumpBoxStyle::Raised,
         BoxStyle::Pressed => DumpBoxStyle::Pressed,
@@ -6909,6 +6910,7 @@ fn load_face(decoder: &mut LoadDecoder, df: &DumpFace) -> Face {
                 color: b.color.map(|c| load_color(&c)),
                 width: b.width,
                 style: match b.style {
+                    DumpBoxStyle::Simple => BoxStyle::Simple,
                     DumpBoxStyle::Flat => BoxStyle::Flat,
                     DumpBoxStyle::Raised => BoxStyle::Raised,
                     DumpBoxStyle::Pressed => BoxStyle::Pressed,
