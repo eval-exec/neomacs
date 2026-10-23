@@ -28,7 +28,9 @@ impl<'a> PopupCommit<'a> {
 }
 
 impl RenderApp {
-    fn collect_monitor_snapshot(
+    /// Display metadata is available from the native event loop independently
+    /// of any editor window, surface permission, or GPU allocation.
+    pub(super) fn collect_monitor_snapshot(
         event_loop: &dyn ActiveEventLoop,
     ) -> Vec<crate::thread_comm::MonitorInfo> {
         let mut monitors = Vec::new();
@@ -95,11 +97,7 @@ impl RenderApp {
         }
 
         if let Some(ref shared) = self.shared_monitors {
-            let (ref lock, ref cvar) = **shared;
-            if let Ok(mut shared) = lock.lock() {
-                *shared = snapshot.clone();
-                cvar.notify_all();
-            }
+            publish_monitor_snapshot(shared, &snapshot);
         }
 
         if emit_change_event && had_snapshot {
@@ -1117,5 +1115,17 @@ impl RenderApp {
         }
 
         tracing::info!("GPU resources cleaned up");
+    }
+}
+
+/// Wake evaluator-side startup metadata readers without requiring a frame.
+pub(super) fn publish_monitor_snapshot(
+    shared: &super::SharedMonitorInfo,
+    snapshot: &[crate::thread_comm::MonitorInfo],
+) {
+    let (lock, ready) = &**shared;
+    if let Ok(mut monitors) = lock.lock() {
+        *monitors = snapshot.to_vec();
+        ready.notify_all();
     }
 }

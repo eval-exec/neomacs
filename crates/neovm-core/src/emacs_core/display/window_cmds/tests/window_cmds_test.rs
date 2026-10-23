@@ -29,6 +29,9 @@ mod frame_position_test;
 #[path = "frame_resize_test.rs"]
 mod frame_resize_test;
 
+#[path = "initial_gui_lifecycle_test.rs"]
+mod initial_gui_lifecycle_test;
+
 #[test]
 fn alpha_lower_limit_variable_projects_without_replaying_alpha_policy() {
     let mut ev = Context::new();
@@ -343,6 +346,8 @@ struct RecordingDisplayHost {
         Rc<RefCell<Vec<(crate::window::FrameId, crate::window::GuiFrameGeometryHints)>>>,
     primary_size: Option<GuiFrameHostSize>,
     resolved_frame_font: Option<ResolvedFrameFont>,
+    initial_gui_defaults: Option<crate::emacs_core::display_host::InitialGuiFrameDefaults>,
+    finished: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
 }
 
 impl RecordingDisplayHost {
@@ -405,6 +410,16 @@ fn remapped_mono_font_metrics() -> ResolvedFrameFont {
 }
 
 impl DisplayHost for RecordingDisplayHost {
+    fn prepare_initial_gui_frame(
+        &mut self,
+    ) -> Result<Option<crate::emacs_core::display_host::InitialGuiFrameDefaults>, String> {
+        Ok(self.initial_gui_defaults.clone())
+    }
+
+    fn finish_gui_frame_creation(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
+        self.finished.borrow_mut().push(request);
+        Ok(())
+    }
     fn set_gui_frame_alpha_lower_limit(&mut self, limit: f32) {
         self.alpha_limits.borrow_mut().push(limit);
     }

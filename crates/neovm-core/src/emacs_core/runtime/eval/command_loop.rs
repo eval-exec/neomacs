@@ -352,6 +352,17 @@ impl Context {
                 let rendered = super::super::error::format_signal_data_with_eval(self, &sig);
                 tracing::warn!("command_loop_top_level_1: top-level SIGNALED: {}", rendered);
                 if self
+                    .display_host
+                    .as_mut()
+                    .is_some_and(|host| host.fail_pending_gui_startup(rendered.clone()))
+                {
+                    eprintln!("Error during GUI startup: {rendered}");
+                    return self.shutdown_with_hooks(ShutdownRequest {
+                        exit_code: 1,
+                        restart: false,
+                    });
+                }
+                if self
                     .daemon
                     .as_ref()
                     .is_some_and(|daemon| !daemon.initialized)

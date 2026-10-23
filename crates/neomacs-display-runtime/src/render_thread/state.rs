@@ -1012,6 +1012,10 @@ impl RenderLifecycle {
         self.shutdown_reason.is_some()
     }
 
+    pub(super) fn shutdown_reason(&self) -> Option<RenderShutdownReason> {
+        self.shutdown_reason
+    }
+
     pub fn new(poll_when_idle: bool) -> Self {
         Self {
             resumed_seen: false,

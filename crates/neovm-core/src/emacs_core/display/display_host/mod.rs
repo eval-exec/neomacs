@@ -28,6 +28,17 @@ pub use neomacs_display_protocol::{GraphicalFaceAttribute, SelectionOwner};
 use neomacs_display_protocol::{VideoId, WebViewId};
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 
+/// Display and exact opened-font facts for the first graphical frame.
+///
+/// A terminal frame may be selected while early init runs. Its identity and
+/// one-cell metrics cannot supply defaults for the later graphical creation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InitialGuiFrameDefaults {
+    pub display: neomacs_display_protocol::GraphicalDisplayIdentity,
+    pub font: ResolvedFrameFont,
+    pub size: GuiFrameHostSize,
+}
+
 /// Evaluator-owned correlation ID for one asynchronous xwidget script call.
 ///
 /// The display host cannot allocate this ID: only the evaluator knows which
@@ -468,6 +479,23 @@ pub trait DisplayHost {
         Ok(())
     }
     fn set_gui_frame_alpha_lower_limit(&mut self, _limit: f32) {}
+
+    /// Resolve graphical defaults only when Lisp requests its opening frame.
+    fn prepare_initial_gui_frame(&mut self) -> Result<Option<InitialGuiFrameDefaults>, String> {
+        Ok(None)
+    }
+
+    /// Complete creation after GNU Lisp has applied faces and delayed font
+    /// parameters, before user `after-make-frame-functions` run.
+    fn finish_gui_frame_creation(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Retire a display-free GUI startup after an uncaught top-level error.
+    /// Recoverable errors inside Lisp must leave the pending startup intact.
+    fn fail_pending_gui_startup(&mut self, _error: String) -> bool {
+        false
+    }
 
     fn opening_gui_frame_pending(&self) -> bool {
         false
