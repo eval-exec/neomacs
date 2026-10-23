@@ -216,6 +216,9 @@ impl<R: OrderedShiftRecord> OrderedNode<R> {
 }
 
 /// A cache-local B+ tree with typed records and stable arena leaf handles.
+///
+/// Nodes are addressed by integer IDs; page zero may move as it grows.
+/// Mutation requires exclusive access, supplied by the owning index's lock.
 #[derive(Clone, Debug)]
 pub(super) struct OrderedShiftTree<R: OrderedShiftRecord> {
     root: Option<OrderedNodeId>,
@@ -278,6 +281,15 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         }
 
         let leaf_count = records.len().div_ceil(MAX_ENTRIES);
+        // Bulk construction knows the leaf and branch counts. Reserve only
+        // their occupied slots on page zero, capped at its fixed ID width.
+        let mut level_nodes = leaf_count;
+        let mut page_nodes = leaf_count.min(ARENA_PAGE_NODES);
+        while level_nodes > 1 && page_nodes < ARENA_PAGE_NODES {
+            level_nodes = level_nodes.div_ceil(MAX_ENTRIES);
+            page_nodes += level_nodes.min(ARENA_PAGE_NODES - page_nodes);
+        }
+        tree.pages.push(Self::empty_page(page_nodes));
         let base = records.len() / leaf_count;
         let extra = records.len() % leaf_count;
         let mut leaves = Vec::with_capacity(leaf_count);
@@ -1408,18 +1420,35 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
             id
         } else {
             let id = OrderedNodeId::from_index(self.next_slot);
-            if self.next_slot.is_multiple_of(ARENA_PAGE_NODES) {
-                self.pages.push(
-                    std::iter::repeat_with(|| None)
-                        .take(ARENA_PAGE_NODES)
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                );
+            let page_index = self.next_slot / ARENA_PAGE_NODES;
+            if page_index == self.pages.len() {
+                let slots = if page_index == 0 { 1 } else { ARENA_PAGE_NODES };
+                self.pages.push(Self::empty_page(slots));
+            } else if page_index == 0 && self.next_slot >= self.pages[0].len() {
+                // Exclusive mutation cannot coexist with a node borrow. Tree
+                // links and identity-map entries retain integer IDs; external
+                // position handles resolve through the index, not node addresses.
+                let slots = (self.next_slot + 1)
+                    .next_power_of_two()
+                    .min(ARENA_PAGE_NODES);
+                let mut expanded = Vec::with_capacity(slots);
+                let previous = std::mem::take(&mut self.pages[0]);
+                expanded.extend(previous.into_vec());
+                expanded.resize_with(slots, || None);
+                self.pages[0] = expanded.into_boxed_slice();
             }
             self.next_slot += 1;
             *self.slot_mut(id) = Some(node);
             id
         }
+    }
+
+    fn empty_page(slots: usize) -> Box<[Option<OrderedNode<R>>]> {
+        debug_assert!((1..=ARENA_PAGE_NODES).contains(&slots));
+        std::iter::repeat_with(|| None)
+            .take(slots)
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 
     fn release(&mut self, id: OrderedNodeId) {
@@ -1858,10 +1887,14 @@ where
         Self::in_direction(tree, query, OrderedTraversalDirection::Forward)
     }
 
+    #[inline(always)]
     fn new_reverse(tree: T, query: Q) -> Self {
         Self::in_direction(tree, query, OrderedTraversalDirection::Reverse)
     }
 
+    // Expose initialization to the caller so the fixed frame stack need not
+    // cross an out-of-line constructor return boundary.
+    #[inline(always)]
     fn in_direction(tree: T, query: Q, direction: OrderedTraversalDirection) -> Self {
         let root = tree.root;
         let mut matches = Self {
@@ -2001,3 +2034,7 @@ where
 #[cfg(test)]
 #[path = "tests/overlay_bplus_traversal_storage_test.rs"]
 mod traversal_storage_tests;
+
+#[cfg(test)]
+#[path = "tests/overlay_bplus_adaptive_arena_test.rs"]
+mod adaptive_arena_tests;

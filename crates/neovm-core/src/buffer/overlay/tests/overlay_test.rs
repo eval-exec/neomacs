@@ -1987,3 +1987,7 @@ mod gnu_identity;
 
 #[cfg(test)]
 mod property_filter_collision;
+
+#[cfg(test)]
+#[path = "random_overlay_model_test.rs"]
+mod random_overlay_model_test;
