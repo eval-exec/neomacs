@@ -69,9 +69,11 @@ All test runs used `cargo nextest`. Focused verification passed:
 | Core window/frame unit tests | 379 |
 | Frame builtin bytecode-dispatch control | 1 |
 | Application startup/frame unit tests | 73 |
-| Native startup/frame-window unit tests | 73 |
+| Native startup/frame-window and recreation unit tests | 76 |
 | Live GNU frame/common-window oracle tests | 3 |
 | TUI resize, frame visibility and init tab-line tests | 8 |
 | GUI startup lifecycle, startup failures and font/HiDPI controls | 20 |
 
 The GUI cases include GNU X11 comparison, NeoMacs X11 and Wayland, creation-time background/hooks, positive monitor dimensions during init, successful/nonzero early exits, an invalid initial frame, recovery from a caught malformed frame request, blocked font loading, native display loss, GPU-startup cancellation/resize, explicit CLI fonts and HiDPI geometry restoration. Linux display tests used isolated Xvfb/Weston sessions. The original macOS platform was not available for execution.
+
+CodeRabbit's follow-up identified an overly broad evaluator-shutdown override: normal teardown also clears the GPU, and replacing `Running` with `EvaluatorExited` would discard a native event-loop error. The native loop now captures GPU readiness before dispatch/teardown and applies the override only during GPU startup. Two result-level regressions exercise the returned native error after ordinary shutdown and graceful evaluator exit during pending GPU initialization. The first failed before the correction; the final 76-test native pass includes both and a surface-recreation control.
