@@ -1,6 +1,6 @@
 //! Native event-loop startup before font-owned window geometry is available.
 
-use super::RenderApp;
+use super::{RenderApp, SharedMonitorInfo};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use std::{cell::RefCell, rc::Rc};
 use winit::{
@@ -120,6 +120,7 @@ enum Outcome {
 
 struct StartingApp<F> {
     phase: Phase<F>,
+    shared_monitors: SharedMonitorInfo,
     can_create_surfaces: bool,
     outcome: Rc<RefCell<Outcome>>,
     evaluator: Option<Receiver<Result<InitialWindowSize, String>>>,
@@ -159,6 +160,18 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         if let Phase::Preparing { initial, .. } = &mut self.phase {
+            // Lisp can query display geometry during initialization before
+            // requesting its first GUI frame. Publish that connection metadata
+            // independently of first-window readiness and surface permission.
+            if self
+                .shared_monitors
+                .0
+                .lock()
+                .is_ok_and(|monitors| monitors.is_empty())
+            {
+                let snapshot = RenderApp::collect_monitor_snapshot(event_loop);
+                super::lifecycle::publish_monitor_snapshot(&self.shared_monitors, &snapshot);
+            }
             if let InitialWindow::Waiting(receiver) = initial {
                 let result = match receiver.0.try_recv() {
                     Ok(result) => result,
@@ -167,7 +180,13 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
                         return;
                     }
                     Err(TryRecvError::Disconnected) => {
-                        Err("GUI evaluator exited before preparing its initial frame".into())
+                        // early-init may intentionally exit before creating
+                        // any GUI frame. Join the worker for its authoritative
+                        // status or panic, just as after readiness below.
+                        *self.outcome.borrow_mut() = Outcome::EvaluatorExited;
+                        self.phase = Phase::Stopped;
+                        event_loop.exit();
+                        return;
                     }
                 };
                 match result {
@@ -224,7 +243,15 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
         }
         if let Phase::Running(app) = &mut self.phase {
             app.about_to_wait(event_loop);
-            if let Some(error) = app.startup_error.take() {
+            if matches!(
+                app.lifecycle_flags.shutdown_reason(),
+                Some(super::state::RenderShutdownReason::EvaluatorShutdown)
+            ) {
+                // The worker can send Shutdown before dropping its readiness
+                // lifetime. An exit during GPU startup is still authoritative
+                // evaluator completion, not unexpected native display loss.
+                *self.outcome.borrow_mut() = Outcome::EvaluatorExited;
+            } else if let Some(error) = app.startup_error.take() {
                 *self.outcome.borrow_mut() = Outcome::GpuFailed(error);
                 self.phase = Phase::Stopped;
                 event_loop.exit();
@@ -243,6 +270,7 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
 pub(super) fn run(
     event_loop: EventLoop,
     initial: InitialWindow,
+    shared_monitors: SharedMonitorInfo,
     create: impl FnOnce(InitialWindowSize) -> RenderApp + 'static,
 ) -> Result<RenderLoopExit, RenderLoopError> {
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -250,6 +278,7 @@ pub(super) fn run(
     let gpu_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let result = event_loop.run_app(StartingApp {
         phase: Phase::Preparing { initial, create },
+        shared_monitors,
         can_create_surfaces: false,
         outcome: Rc::clone(&outcome),
         evaluator: None,
