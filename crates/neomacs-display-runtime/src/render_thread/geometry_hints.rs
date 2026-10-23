@@ -1,12 +1,50 @@
 use neovm_core::window::GuiFrameGeometryHints;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
 use super::state::window_size_from_emacs_pixels;
+
+/// Native allocation constraints are distinct from the editor's character grid.
+/// X11 WMs also apply resize increments to maximization, before a configure
+/// event lets us observe it. Pixel increments must therefore be present before
+/// either the editor or the WM requests maximization (GNU frame.c documents
+/// the same limitation for `frame-resize-pixelwise`). Wayland's backend already
+/// suspends character snapping for maximized, fullscreen and tiled allocations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeResizeGrid {
+    Pixels,
+    Characters,
+}
+
+impl NativeResizeGrid {
+    fn for_handle(handle: RawWindowHandle) -> Self {
+        match handle {
+            RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_) => Self::Pixels,
+            _ => Self::Characters,
+        }
+    }
+
+    fn project(self, hints: GuiFrameGeometryHints) -> GuiFrameGeometryHints {
+        match self {
+            Self::Pixels => GuiFrameGeometryHints {
+                width_inc: 1,
+                height_inc: 1,
+                ..hints
+            },
+            Self::Characters => hints,
+        }
+    }
+}
 
 pub(crate) fn apply_window_geometry_hints(
     window: &dyn Window,
     geometry_hints: GuiFrameGeometryHints,
 ) {
+    let grid = window
+        .window_handle()
+        .map(|handle| NativeResizeGrid::for_handle(handle.as_raw()))
+        .unwrap_or(NativeResizeGrid::Characters);
+    let geometry_hints = grid.project(geometry_hints);
     // GNU gtkutil.c:xg_wm_set_size_hint supplies the minimum with resize
     // increments. This is essential on Wayland: winit snaps floating windows
     // relative to their minimum surface size, not relative to zero. Leaving
@@ -27,6 +65,10 @@ pub(crate) fn apply_window_geometry_hints(
     #[cfg(target_os = "linux")]
     apply_x11_geometry_hints(window, geometry_hints);
 }
+
+#[cfg(test)]
+#[path = "geometry_hints/tests/geometry_hints_test.rs"]
+mod tests;
 
 #[cfg(target_os = "linux")]
 fn apply_x11_geometry_hints(window: &dyn Window, geometry_hints: GuiFrameGeometryHints) {

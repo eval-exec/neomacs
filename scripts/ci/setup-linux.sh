@@ -82,6 +82,9 @@ case "$profile" in
             xauth
             x11-utils
             xdotool
+            wmctrl
+            kwin-x11
+            dbus
             imagemagick
             weston
             sway
@@ -91,7 +94,7 @@ case "$profile" in
             fonts-dejavu-core
             fonts-ubuntu
         )
-        required_commands=(gpg Xvfb xauth xdpyinfo xdotool import weston sway wtype grim)
+        required_commands=(gpg Xvfb xauth xdpyinfo xprop xwininfo xdotool wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim)
         requires_libfaketime=true
         ;;
     release)
