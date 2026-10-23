@@ -118,6 +118,60 @@ enum Outcome {
     GpuFailed(String),
 }
 
+impl Outcome {
+    fn observe_evaluator_shutdown(
+        &mut self,
+        gpu_was_ready: bool,
+        reason: Option<super::state::RenderShutdownReason>,
+    ) -> bool {
+        // During GPU startup, Shutdown can precede the evaluator lifetime's
+        // disconnect. Once a GPU has run, preserve the native loop's result;
+        // teardown clears app.gpu, so the caller must capture it beforehand.
+        if !gpu_was_ready
+            && matches!(
+                reason,
+                Some(super::state::RenderShutdownReason::EvaluatorShutdown)
+            )
+        {
+            *self = Self::EvaluatorExited;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn finish(
+        self,
+        result: Result<(), impl ToString>,
+        gpu_cancelled: bool,
+    ) -> Result<RenderLoopExit, RenderLoopError> {
+        let successful_exit = || {
+            if gpu_cancelled {
+                RenderLoopExit::GpuStartupCancelled
+            } else {
+                RenderLoopExit::Finished
+            }
+        };
+        match self {
+            Self::Preparing => Err(RenderLoopError::StartupInterrupted(
+                result
+                    .err()
+                    .map_or_else(|| "event loop exited".into(), |error| error.to_string()),
+            )),
+            Self::Failed(error) => Err(RenderLoopError::Preparation(error)),
+            Self::GpuFailed(error) => Err(RenderLoopError::StartupInterrupted(error)),
+            Self::EvaluatorExited => Ok(successful_exit()),
+            Self::Running => result.map(|()| successful_exit()).map_err(|error| {
+                if gpu_cancelled {
+                    RenderLoopError::StartupInterrupted(error.to_string())
+                } else {
+                    RenderLoopError::EventLoop(error.to_string())
+                }
+            }),
+        }
+    }
+}
+
 struct StartingApp<F> {
     phase: Phase<F>,
     shared_monitors: SharedMonitorInfo,
@@ -242,22 +296,21 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
             return;
         }
         if let Phase::Running(app) = &mut self.phase {
+            let gpu_was_ready = app.gpu.is_some();
             app.about_to_wait(event_loop);
-            if matches!(
-                app.lifecycle_flags.shutdown_reason(),
-                Some(super::state::RenderShutdownReason::EvaluatorShutdown)
-            ) {
-                // The worker can send Shutdown before dropping its readiness
-                // lifetime. An exit during GPU startup is still authoritative
-                // evaluator completion, not unexpected native display loss.
-                *self.outcome.borrow_mut() = Outcome::EvaluatorExited;
-            } else if let Some(error) = app.startup_error.take() {
-                *self.outcome.borrow_mut() = Outcome::GpuFailed(error);
-                self.phase = Phase::Stopped;
-                event_loop.exit();
-            } else if app.gpu.is_some() {
-                self.evaluator = None;
-                *self.outcome.borrow_mut() = Outcome::Running;
+            let evaluator_exited = self
+                .outcome
+                .borrow_mut()
+                .observe_evaluator_shutdown(gpu_was_ready, app.lifecycle_flags.shutdown_reason());
+            if !evaluator_exited {
+                if let Some(error) = app.startup_error.take() {
+                    *self.outcome.borrow_mut() = Outcome::GpuFailed(error);
+                    self.phase = Phase::Stopped;
+                    event_loop.exit();
+                } else if app.gpu.is_some() {
+                    self.evaluator = None;
+                    *self.outcome.borrow_mut() = Outcome::Running;
+                }
             }
         }
     }
@@ -284,30 +337,36 @@ pub(super) fn run(
         evaluator: None,
         gpu_cancelled: gpu_cancelled.clone(),
     });
-    let successful_exit = || {
-        if gpu_cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-            RenderLoopExit::GpuStartupCancelled
-        } else {
-            RenderLoopExit::Finished
-        }
-    };
-    match &mut *outcome.borrow_mut() {
-        Outcome::Preparing => Err(RenderLoopError::StartupInterrupted(
-            result
-                .err()
-                .map_or_else(|| "event loop exited".into(), |error| error.to_string()),
-        )),
-        Outcome::Failed(error) => Err(RenderLoopError::Preparation(std::mem::take(error))),
-        Outcome::GpuFailed(error) => {
-            Err(RenderLoopError::StartupInterrupted(std::mem::take(error)))
-        }
-        Outcome::EvaluatorExited => Ok(successful_exit()),
-        Outcome::Running => result.map(|()| successful_exit()).map_err(|error| {
-            if gpu_cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-                RenderLoopError::StartupInterrupted(error.to_string())
-            } else {
-                RenderLoopError::EventLoop(error.to_string())
-            }
-        }),
+    std::mem::take(&mut *outcome.borrow_mut()).finish(
+        result,
+        gpu_cancelled.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render_thread::state::RenderShutdownReason;
+
+    #[test]
+    fn live_gpu_shutdown_preserves_native_event_loop_failure() {
+        let mut outcome = Outcome::Running;
+        outcome.observe_evaluator_shutdown(true, Some(RenderShutdownReason::EvaluatorShutdown));
+
+        let result = outcome.finish(Err("native dispatch failed"), false);
+        assert!(
+            matches!(result, Err(RenderLoopError::EventLoop(error)) if error == "native dispatch failed")
+        );
+    }
+
+    #[test]
+    fn pending_gpu_evaluator_shutdown_finishes_gracefully() {
+        let mut outcome = Outcome::Preparing;
+        outcome.observe_evaluator_shutdown(false, Some(RenderShutdownReason::EvaluatorShutdown));
+
+        assert!(matches!(
+            outcome.finish(Err("native loop ended during evaluator exit"), false),
+            Ok(RenderLoopExit::Finished)
+        ));
     }
 }
