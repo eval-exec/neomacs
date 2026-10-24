@@ -5094,6 +5094,14 @@ fn serial_process_configure_resolves_buffer_and_port_designators() {
     crate::test_utils::init_test_tracing();
     let by_port = SerialTestPty::open();
     let by_buffer = SerialTestPty::open();
+    // This test's subject is which process each designator resolves to. A pty
+    // stands in for the UART, and its termios support is the host's: the CI
+    // runner answered one run's `tcsetattr` with EINVAL while an identical
+    // `:bytesize 7` configure passed in another shard of the same run, and
+    // GNU's serial_configure would report that host refusal the same way. A
+    // speed change is the one arm every tty driver takes, so use it to prove
+    // the configure reached each designator's own process; the bytesize and
+    // parity arms are covered by `serial_configuration_reaches_the_device`.
     let result = eval_one(&format!(
         r#"(let ((by-port (make-serial-process
                            :port "{by_port}"
@@ -5107,18 +5115,18 @@ fn serial_process_configure_resolves_buffer_and_port_designators() {
                  (progn
                    (serial-process-configure
                     :port "{by_port}"
-                    :bytesize 7)
+                    :speed 4800)
                    (serial-process-configure
                     :buffer "neo-serial-by-buffer"
-                    :parity 'even)
-                   (list (process-contact by-port :bytesize)
-                         (process-contact by-buffer :parity)))
+                    :speed 19200)
+                   (list (process-contact by-port :speed)
+                         (process-contact by-buffer :speed)))
                (ignore-errors (delete-process by-port))
                (ignore-errors (delete-process by-buffer))))"#,
         by_port = by_port.slave_path,
         by_buffer = by_buffer.slave_path,
     ));
-    assert_eq!(result, "OK (7 even)");
+    assert_eq!(result, "OK (4800 19200)");
 }
 
 #[test]
