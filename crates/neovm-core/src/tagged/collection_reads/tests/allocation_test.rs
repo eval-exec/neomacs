@@ -168,12 +168,17 @@ fn collection_reads_recent_clear_fill_counter() {
     let used =
         RECENT_READS.with(|recent| recent.words.iter().filter(|word| word.get() != 0).count());
     RECENT_CLEARED_CELLS.with(|count| count.set(0));
+    RECENT_CLEARED_MASKS.with(|count| count.set(0));
     clear_recent_reads();
     let cleared = RECENT_CLEARED_CELLS.with(Cell::get);
+    let masks = RECENT_CLEARED_MASKS.with(Cell::get);
+    assert_eq!(cleared, used, "clear only cells used by real projections");
+    assert_eq!(masks, 4);
     assert!(RECENT_READS.with(|recent| recent.words.iter().all(|word| word.get() == 0)));
     eprintln!(
-        "obsalloc RecentReads::clear used={used} cleared={cleared} fill_bytes={}",
-        cleared * size_of::<usize>()
+        "obsalloc RecentReads::clear used={used} cleared={cleared} fill_bytes={} bitmap_reset_bytes={}",
+        cleared * size_of::<usize>(),
+        masks * size_of::<u64>()
     );
     assert!(scope.finish().unwrap().unchanged());
 }

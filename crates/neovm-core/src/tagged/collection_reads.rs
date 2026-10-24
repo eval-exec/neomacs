@@ -112,6 +112,8 @@ thread_local! {
     static OBSERVED_OWNER_PUBLICATIONS: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static RECENT_CLEARED_CELLS: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static RECENT_CLEARED_MASKS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The existing mutator-local read deduplication, qualified by reclamation.
@@ -127,23 +129,61 @@ struct RecentReads {
     // and policy changes refresh it before any pointer read; no Lisp state is
     // cached by this field and other mutators cannot change its value.
     observed: Cell<bool>,
+    // Use existing padding, preserving the word probe and epoch offsets.
+    // Only cold misses set this; empty resets never initialize STATE.
+    dirty: Cell<bool>,
     epoch: Cell<u64>,
 }
+
+const _: () = {
+    #[repr(C)]
+    struct LegacyRecentReads {
+        words: [Cell<usize>; 256],
+        observed: Cell<bool>,
+        epoch: Cell<u64>,
+    }
+    use std::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<RecentReads>() == size_of::<LegacyRecentReads>());
+    assert!(align_of::<RecentReads>() == align_of::<LegacyRecentReads>());
+    assert!(offset_of!(RecentReads, words) == offset_of!(LegacyRecentReads, words));
+    assert!(offset_of!(RecentReads, observed) == offset_of!(LegacyRecentReads, observed));
+    assert!(offset_of!(RecentReads, epoch) == offset_of!(LegacyRecentReads, epoch));
+};
 
 impl RecentReads {
     const fn new() -> Self {
         Self {
             observed: Cell::new(false),
+            dirty: Cell::new(false),
             epoch: Cell::new(0),
             words: [const { Cell::new(0) }; 256],
         }
     }
 
     fn clear(&self, epoch: u64) {
-        #[cfg(test)]
-        RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + self.words.len()));
-        for word in &self.words {
-            word.set(0);
+        if self.dirty.replace(false) {
+            if let Some(dirty) = store_state::take_recent_dirty() {
+                for (block, mut mask) in dirty.into_iter().enumerate() {
+                    while mask != 0 {
+                        let index = block * 64 + mask.trailing_zeros() as usize;
+                        let word = &self.words[index];
+                        if word.get() != 0 {
+                            word.set(0);
+                            #[cfg(test)]
+                            RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + 1));
+                        }
+                        mask &= mask - 1;
+                    }
+                }
+            } else {
+                // Teardown can retire STATE before the recent-read cache.
+                // Keep reset total without accessing already destroyed TLS.
+                for word in &self.words {
+                    word.set(0);
+                }
+                #[cfg(test)]
+                RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + self.words.len()));
+            }
         }
         self.epoch.set(epoch);
     }
@@ -538,6 +578,7 @@ pub(super) fn reset_recent_reads_for_heap_installation() {
 #[cold]
 #[inline(never)]
 fn observe_new_owner(bits: usize) {
+    store_state::note_recent_miss(bits);
     // Misses acquire the shared epoch here, rather than on every cached read.
     // A real owner remains live while its pointer projection executes, even
     // if unrelated reclamation advances the global epoch concurrently.
@@ -570,6 +611,7 @@ fn observe_new_owner(bits: usize) {
 #[cold]
 #[inline(never)]
 fn observe_uncached(bits: usize) {
+    store_state::note_recent_miss(bits);
     store_state::reject_foreign_capture_reads();
     with_state(|state| {
         let mut state = state.borrow_mut();
@@ -753,6 +795,9 @@ fn record_projected_write_cold_policy(store: &StoreState, value: TaggedValue, pr
 #[inline(never)]
 fn record_projected_write_observed(store: &StoreState, value: TaggedValue, projected: bool) {
     let recent = projected && recently_observed(value.bits());
+    if projected && !recent {
+        store_state::note_recent_miss(value.bits());
+    }
     if projected {
         store_state::reject_foreign_capture_reads();
     }
@@ -1010,6 +1055,10 @@ mod tests;
 #[cfg(test)]
 #[path = "collection_reads/tests/allocation_test.rs"]
 mod allocation_tests;
+
+#[cfg(test)]
+#[path = "collection_reads/tests/recent_clear_test.rs"]
+mod recent_clear_tests;
 
 /// Round 3w (plan-3w.md section 7, C1): this World state lives in a
 /// thread-local while its World's Baton holder runs, and in the World while

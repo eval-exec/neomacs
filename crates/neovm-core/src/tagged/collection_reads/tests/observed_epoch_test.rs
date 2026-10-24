@@ -234,7 +234,7 @@ fn recent_read_reclamation_acknowledges_epoch_in_every_journal_mode() {
             let after = super::super::gc::collection_observation_epoch();
             assert_ne!(before, after, "a real sweep must publish reclamation");
             assert_eq!(
-                recently_observed(owner.bits()),
+                probe_recent(owner.bits()),
                 mode != CompiledJournalMode::Observed,
                 "Observed must reject a stale hit; Off/Eager retain legacy deduplication"
             );
@@ -243,7 +243,7 @@ fn recent_read_reclamation_acknowledges_epoch_in_every_journal_mode() {
                 after,
                 "the cold reclamation edge must acknowledge every mode"
             );
-            assert!(recently_observed(owner.bits()), "same-epoch second hit");
+            assert!(probe_recent(owner.bits()), "same-epoch second hit");
         });
     }
 }
@@ -320,7 +320,7 @@ fn incremental_sweep_without_observed_reclamation_keeps_epoch_and_recent_hits() 
         }
     });
     let reads = reads.expect("rooted owner dependencies");
-    recently_observed(owners[0].bits());
+    probe_recent(owners[0].bits());
     let before = super::super::gc::collection_observation_epoch();
     heap.begin_collection();
     for owner in owners {
@@ -337,7 +337,7 @@ fn incremental_sweep_without_observed_reclamation_keeps_epoch_and_recent_hits() 
             "a slice which clears no observation must leave the epoch stable"
         );
         assert!(
-            recently_observed(owners[0].bits()),
+            probe_recent(owners[0].bits()),
             "no-clear safepoints retain the existing read shortcut"
         );
         if done {
@@ -363,25 +363,25 @@ fn recent_reads_reset_on_heap_identity_change_and_preserve_same_heap_installatio
     let (_, reads) = capture(|| {
         assert!(is_active());
         owner.cons_car();
-        assert!(recently_observed(owner.bits()));
+        assert!(probe_recent(owner.bits()));
         set_tagged_heap(&mut first);
         assert!(
-            recently_observed(owner.bits()),
+            probe_recent(owner.bits()),
             "same live heap retains its cache"
         );
         set_tagged_heap(&mut second);
         assert!(
-            !recently_observed(owner.bits()),
+            !probe_recent(owner.bits()),
             "new heap cannot reuse an old identity hit"
         );
         set_tagged_heap(&mut first);
         assert!(
-            !recently_observed(owner.bits()),
+            !probe_recent(owner.bits()),
             "restored or migrated heap starts empty"
         );
         crate::tagged::gc::clear_tagged_heap_if_installed(&first);
         assert!(
-            !recently_observed(owner.bits()),
+            !probe_recent(owner.bits()),
             "uninstallation clears before owner destruction"
         );
     });
@@ -390,4 +390,14 @@ fn recent_reads_reset_on_heap_identity_change_and_preserve_same_heap_installatio
             .expect("live owner across installation changes")
             .unchanged()
     );
+}
+
+// These probes bypass real projection/publication. Simulate the cold edge
+// which registers the scratch word, without dereferencing an old owner.
+fn probe_recent(bits: usize) -> bool {
+    let hit = recently_observed(bits);
+    if !hit {
+        store_state::note_recent_miss(bits);
+    }
+    hit
 }

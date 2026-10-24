@@ -327,13 +327,18 @@ pub(super) struct StateSlot {
     // foreign projections reject it in the cold observer instead. This list
     // fits inside the existing TLS reserve and is never read by a hot store.
     suspended: RefCell<Vec<ObservationWorld>>,
-    _reserve: [MaybeUninit<u8>; size_of::<RefCell<LegacyStateLayout>>() - 9 * size_of::<usize>()],
+    // Scratch for the existing TLS RecentReads, reset at World installation.
+    // No owner identity is stored, and no hot projection reads these masks.
+    recent_dirty: [Cell<u64>; 4],
+    _reserve: [MaybeUninit<u8>;
+        size_of::<RefCell<LegacyStateLayout>>() - 9 * size_of::<usize>() - 4 * size_of::<u64>()],
 }
 
 const _: () = {
     assert!(size_of::<StateSlot>() == size_of::<RefCell<LegacyStateLayout>>());
     assert!(align_of::<StateSlot>() == align_of::<RefCell<LegacyStateLayout>>());
     assert!(offset_of!(StateSlot, store) == 4 * size_of::<usize>());
+    assert!(offset_of!(StateSlot, recent_dirty) == 9 * size_of::<usize>());
     assert!(JOURNAL_SIZE.is_power_of_two());
 };
 
@@ -346,10 +351,37 @@ impl Default for StateSlot {
             _prefix: [MaybeUninit::uninit(); 2],
             store,
             suspended: RefCell::new(Vec::new()),
+            recent_dirty: [const { Cell::new(0) }; 4],
             _reserve: [MaybeUninit::uninit();
-                size_of::<RefCell<LegacyStateLayout>>() - 9 * size_of::<usize>()],
+                size_of::<RefCell<LegacyStateLayout>>()
+                    - 9 * size_of::<usize>()
+                    - 4 * size_of::<u64>()],
         }
     }
+}
+
+/// Register only cold misses, before any publication shortcut or replay
+/// rejection. The unchanged indexed word probe never pays this bookkeeping.
+pub(super) fn note_recent_miss(bits: usize) {
+    if bits != 0 {
+        let index = ((bits >> 3) ^ (bits >> 11)) & 255;
+        STATE.with(|slot| {
+            let mask = &slot.recent_dirty[index / 64];
+            mask.set(mask.get() | (1 << (index % 64)));
+            RECENT_READS.with(|recent| recent.dirty.set(true));
+        });
+    }
+}
+
+pub(super) fn take_recent_dirty() -> Option<[u64; 4]> {
+    STATE
+        .try_with(|slot| {
+            let dirty = std::array::from_fn(|index| slot.recent_dirty[index].replace(0));
+            #[cfg(test)]
+            RECENT_CLEARED_MASKS.with(|count| count.set(count.get() + 4));
+            dirty
+        })
+        .ok()
 }
 
 /// One TLS pointer load and no RefCell borrow. The TLS owner retains the root
