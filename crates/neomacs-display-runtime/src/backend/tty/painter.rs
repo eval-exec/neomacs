@@ -28,17 +28,15 @@ impl TtyRif {
                 let range = start..start + self.desired.width;
                 let next = &self.desired.cells[range.clone()];
                 let previous = &self.current.cells[range];
-                let unchanged = next.iter().zip(previous).all(|(a, b)| {
-                    a.ch == b.ch
-                        && a.attrs == b.attrs
-                        && a.padding == b.padding
-                        && a.extenders == b.extenders
-                });
+                let unchanged = next
+                    .iter()
+                    .zip(previous)
+                    .all(|(a, b)| a.same_painter_visible(b));
                 if self.force_full_render || !unchanged {
                     painter.row(row, next)?;
                     self.frame_stats.write_runs += 1;
                     self.frame_stats.cells_written +=
-                        next.iter().filter(|cell| !cell.padding).count() as u32;
+                        next.iter().filter(|cell| !cell.padding()).count() as u32;
                 }
             }
             painter.finish(self.cursor_visible.then_some((
@@ -88,15 +86,15 @@ pub fn encode_cells_with(
 ) {
     let mut previous: Option<CellAttrs> = None;
     let mut bytes = Vec::new();
-    for cell in cells.iter().filter(|cell| !cell.padding) {
-        if previous.as_ref() != Some(&cell.attrs) {
+    for cell in cells.iter().filter(|cell| !cell.padding()) {
+        if previous.as_ref() != Some(&cell.attrs()) {
             if let Some(attrs) = previous {
                 super::write_turn_off_face(&mut bytes, &attrs, capabilities);
             }
-            super::write_turn_on_face(&mut bytes, &cell.attrs, capabilities);
+            super::write_turn_on_face(&mut bytes, &cell.attrs(), capabilities);
             emit(CellOutput::Control(&bytes));
             bytes.clear();
-            previous = Some(cell.attrs);
+            previous = Some(cell.attrs());
         }
         super::write_cell_contents(&mut bytes, cell);
         emit(CellOutput::Text(&bytes));

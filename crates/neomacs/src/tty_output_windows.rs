@@ -216,8 +216,8 @@ impl TtyPainter for LegacyPainter<'_> {
         let console = self.session.console();
         let mut last = None;
         let mut text = String::new();
-        for cell in cells.iter().filter(|cell| !cell.padding) {
-            let attributes = legacy_attributes(&cell.attrs, self.session.original_attributes);
+        for cell in cells.iter().filter(|cell| !cell.padding()) {
+            let attributes = legacy_attributes(&cell.attrs(), self.session.original_attributes);
             if last != Some(attributes) {
                 if !text.is_empty() {
                     console.write_char_buffer(text.as_bytes())?;
@@ -226,8 +226,8 @@ impl TtyPainter for LegacyPainter<'_> {
                 console.set_text_attribute(attributes)?;
                 last = Some(attributes);
             }
-            text.push(cell.ch);
-            if let Some(extenders) = &cell.extenders {
+            text.push(cell.ch());
+            if let Some(extenders) = cell.extenders() {
                 text.push_str(extenders);
             }
         }

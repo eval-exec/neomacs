@@ -61,9 +61,10 @@ fn native_legacy_console_restores_the_original_screen_and_mode() {
     painter
         .row(
             0,
-            &[TtyCell {
-                ch: 'A',
-                ..TtyCell::default()
+            &[{
+                let mut cell = TtyCell::default();
+                cell.set_ch('A');
+                cell
             }],
         )
         .unwrap();

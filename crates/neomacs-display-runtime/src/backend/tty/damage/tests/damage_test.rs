@@ -75,7 +75,7 @@ fn idle_frame_writes_nothing_when_silent() {
     repaint(&mut rif, "hello", Some((1, 2)), TerminalCursorShape::Block);
     assert_eq!(output_string(&mut rif), "");
     assert_eq!(rif.frame_stats().bytes, 0);
-    assert_eq!(rif.current.cells[0].ch, 'h', "the screen model is kept");
+    assert_eq!(rif.current.cells[0].ch(), 'h', "the screen model is kept");
 }
 
 #[test]
@@ -876,7 +876,7 @@ fn a_fill_change_under_reused_rows_is_repainted() {
     fresh.set_damage_mode(TtyDamageMode::Off);
     render(&mut fresh, &scene);
     let fill_bg = Some(TerminalColor::Indexed(22));
-    assert_eq!(fresh.current.row(1)[10].attrs.bg, fill_bg);
+    assert_eq!(fresh.current.row(1)[10].attrs().bg, fill_bg);
     for row in 0..14 {
         assert!(
             cells_same_content(damage.current.row(row), fresh.current.row(row)),
@@ -884,7 +884,7 @@ fn a_fill_change_under_reused_rows_is_repainted() {
         );
     }
     assert_ne!(
-        full.current.row(1)[10].attrs.bg,
+        full.current.row(1)[10].attrs().bg,
         fill_bg,
         "the full path's carry keeps the old fill (see above)"
     );
@@ -1152,13 +1152,13 @@ fn first_content_difference_names_the_field() {
         first_content_difference(&[blank.clone()], &[other.clone()]),
         None
     );
-    other.materialization = CellMaterialization::Written;
+    other.set_materialization(CellMaterialization::Written);
     assert_eq!(
         first_content_difference(&[blank.clone()], &[other.clone()]),
         None,
         "materialization is not content"
     );
-    other.blank_erase = BlankErase::Explicit;
+    other.set_blank_erase(BlankErase::Explicit);
     assert_eq!(
         first_content_difference(
             &[blank.clone(), blank.clone()],
@@ -1169,7 +1169,7 @@ fn first_content_difference_names_the_field() {
             field: CellField::BlankErase
         })
     );
-    other.ch = 'x';
+    other.set_ch('x');
     assert_eq!(
         first_content_difference(&[blank.clone()], &[other]),
         Some(CellDifference {
@@ -1312,7 +1312,7 @@ fn rows_copied_to_shift_positions_keep_their_painters_by_appearance() {
         scene.window(1).damage[5] = RowDamage::New;
         diff.frame(&scene, "changed copy");
         assert_eq!(
-            diff.damage.current.row(5)[0].ch,
+            diff.damage.current.row(5)[0].ch(),
             'X',
             "{identity:?}: the changed copy was repainted"
         );

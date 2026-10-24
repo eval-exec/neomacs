@@ -66,34 +66,9 @@ pub struct CellAttrs {
 // TtyCell
 // ---------------------------------------------------------------------------
 
-/// A single cell in the terminal grid.
-///
-/// Normally holds one base character in `ch`. When the cell hosts a
-/// grapheme cluster (base + combining marks / ZWJ sequence), the
-/// extender codepoints are stored in `extenders` and emitted to the
-/// terminal immediately after `ch`. Mirrors GNU's `COMPOSITE_GLYPH`:
-/// the base character's cell carries the whole cluster, the combining
-/// marks never occupy their own terminal cells.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TtyCell {
-    pub ch: char,
-    pub attrs: CellAttrs,
-    /// Whether GNU's `CHAR_GLYPH_SPACE_P` may treat this blank as implicit.
-    /// A filtered TTY line-end face can have default SGR attributes while
-    /// retaining non-default face identity, so attributes alone cannot decide.
-    pub blank_erase: BlankErase,
-    /// How this visually blank-compatible cell exists on the real terminal.
-    /// GNU distinguishes a written space glyph from a cell produced by EL;
-    /// terminal snapshots and later insert/delete operations observe it too.
-    pub materialization: CellMaterialization,
-    /// True if this is a padding cell for a wide (double-width) character.
-    pub padding: bool,
-    /// Grapheme-cluster extenders stacked on `ch` (None for ordinary cells).
-    pub extenders: Option<Box<str>>,
-    /// Whether emitting this cell has a compile-time-known one-column advance
-    /// or delegates width to the connected terminal's Unicode tables.
-    pub terminal_advance: TerminalAdvance,
-}
+#[path = "cell.rs"]
+mod cell;
+pub use cell::{TtyCell, TtyCellValue};
 
 /// Provenance of the cursor advance caused by one logical terminal cell.
 ///
@@ -236,20 +211,6 @@ fn projected_face_fill_rect(
     }
 }
 
-impl Default for TtyCell {
-    fn default() -> Self {
-        Self {
-            ch: ' ',
-            attrs: CellAttrs::default(),
-            blank_erase: BlankErase::DefaultFace,
-            materialization: CellMaterialization::Erased,
-            padding: false,
-            extenders: None,
-            terminal_advance: TerminalAdvance::OneColumn,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // TtyGrid
 // ---------------------------------------------------------------------------
@@ -284,7 +245,7 @@ impl TtyGrid {
 
     /// Clear all cells to spaces with the given background color.
     pub fn clear(&mut self, bg: Option<TerminalColor>) {
-        let blank = TtyCell {
+        let blank = TtyCell::new(TtyCellValue {
             ch: ' ',
             attrs: CellAttrs {
                 bg,
@@ -295,7 +256,7 @@ impl TtyGrid {
             padding: false,
             extenders: None,
             terminal_advance: TerminalAdvance::OneColumn,
-        };
+        });
         for cell in &mut self.cells {
             *cell = blank.clone();
         }
@@ -365,15 +326,15 @@ impl TtyGrid {
                 self.neutralize_overwrite(row, col);
             }
             let idx = row * self.width + col;
-            self.cells[idx] = TtyCell {
-                ch,
-                attrs,
-                blank_erase,
+            self.cells[idx] = TtyCell::new(TtyCellValue {
+                ch: ch,
+                attrs: attrs,
+                blank_erase: blank_erase,
                 materialization: CellMaterialization::Written,
-                padding,
+                padding: padding,
                 extenders: None,
                 terminal_advance: TerminalAdvance::for_scalar(ch, padding),
-            };
+            });
         }
     }
 
@@ -387,17 +348,17 @@ impl TtyGrid {
     fn neutralize_overwrite(&mut self, row: usize, col: usize) {
         let row_start = row * self.width;
         let blank = |cell: &mut TtyCell| {
-            cell.ch = ' ';
-            cell.blank_erase = BlankErase::Explicit;
-            cell.materialization = CellMaterialization::Written;
-            cell.padding = false;
-            cell.extenders = None;
-            cell.terminal_advance = TerminalAdvance::OneColumn;
+            cell.set_ch(' ');
+            cell.set_blank_erase(BlankErase::Explicit);
+            cell.set_materialization(CellMaterialization::Written);
+            cell.set_padding(false);
+            cell.set_extenders(None);
+            cell.set_terminal_advance(TerminalAdvance::OneColumn);
         };
         // The old cell is a padding half: blank leftward through its base.
-        if self.cells[row_start + col].padding {
+        if self.cells[row_start + col].padding() {
             let mut base = col;
-            while base > 0 && self.cells[row_start + base].padding {
+            while base > 0 && self.cells[row_start + base].padding() {
                 base -= 1;
             }
             for cell in &mut self.cells[row_start + base..row_start + col] {
@@ -408,7 +369,7 @@ impl TtyGrid {
         // pair (a padding cell is always preceded by base-or-padding):
         // blank the orphans.
         for offset in col + 1..self.width {
-            if !self.cells[row_start + offset].padding {
+            if !self.cells[row_start + offset].padding() {
                 break;
             }
             blank(&mut self.cells[row_start + offset]);
@@ -440,15 +401,15 @@ impl TtyGrid {
             if !padding {
                 self.neutralize_overwrite(row, col);
             }
-            self.cells[idx] = TtyCell {
-                ch,
-                attrs,
+            self.cells[idx] = TtyCell::new(TtyCellValue {
+                ch: ch,
+                attrs: attrs,
                 blank_erase: BlankErase::Explicit,
                 materialization: CellMaterialization::Written,
-                padding,
+                padding: padding,
                 extenders: ext,
                 terminal_advance: TerminalAdvance::TerminalResolved,
-            };
+            });
         }
     }
 
@@ -1495,17 +1456,17 @@ impl TtyRif {
                 .then(|| self.current.cells.get(row * self.current.width + col))
                 .flatten()
                 .filter(|current| {
-                    current.ch == ' '
-                        && current.attrs == attrs
-                        && !current.padding
-                        && current.extenders.is_none()
-                        && current.blank_erase == BlankErase::DefaultFace
+                    current.ch() == ' '
+                        && current.attrs() == attrs
+                        && !current.padding()
+                        && current.extenders().is_none()
+                        && current.blank_erase() == BlankErase::DefaultFace
                 })
-                .map(|current| current.materialization);
+                .map(|current| current.materialization());
         self.desired
             .set_with_blank_erase(row, col, ch, attrs, padding, blank_erase);
         if let Some(materialization) = preserved_materialization {
-            self.desired.cells[row * self.desired.width + col].materialization = materialization;
+            self.desired.cells[row * self.desired.width + col].set_materialization(materialization);
         }
     }
 
@@ -1689,9 +1650,10 @@ impl TtyRif {
                 // terminal filled them with blank cells whose exact
                 // attributes we choose not to depend on).
                 let w = self.current.width;
-                let poison = TtyCell {
-                    ch: '\0',
-                    ..TtyCell::default()
+                let poison = {
+                    let mut cell = TtyCell::default();
+                    cell.set_ch('\0');
+                    cell
                 };
                 if scroll.delta > 0 {
                     for i in scroll.top..=scroll.bottom - n {
@@ -1768,7 +1730,7 @@ impl TtyRif {
             desired_row
                 .iter()
                 .zip(current_row.iter())
-                .position(|(desired, current)| !desired.padding && desired != current)
+                .position(|(desired, current)| !desired.padding() && desired != current)
         }) else {
             return;
         };
@@ -1779,7 +1741,7 @@ impl TtyRif {
             desired_row
                 .iter()
                 .zip(current_row.iter())
-                .rposition(|(desired, current)| !desired.padding && desired != current)
+                .rposition(|(desired, current)| !desired.padding() && desired != current)
                 .expect("row with first changed cell must also have a last changed cell")
         };
 
@@ -1822,7 +1784,7 @@ impl TtyRif {
         // `nlen` stay erased.
         let current_row_is_erased = current_row
             .iter()
-            .all(|cell| cell.materialization == CellMaterialization::Erased);
+            .all(|cell| cell.materialization() == CellMaterialization::Erased);
         if current_row_is_erased {
             let write_end = self.desired_row_content_end(desired_row, first_changed);
             if first_changed < write_end {
@@ -1885,7 +1847,7 @@ impl TtyRif {
         let tail_can_carry_content = current_logical_length.as_usize() > first_changed
             || current_row
                 .last()
-                .is_some_and(|cell| cell.attrs.bg.is_some());
+                .is_some_and(|cell| cell.attrs().bg.is_some());
         if self.caps.insert_delete_char
             && tail_can_carry_content
             && let Some((op, shifted_row)) = detect_row_shift(
@@ -1902,14 +1864,14 @@ impl TtyRif {
             let Some(fresh_first) = desired_row
                 .iter()
                 .zip(current_row.iter())
-                .position(|(desired, current)| !desired.padding && desired != current)
+                .position(|(desired, current)| !desired.padding() && desired != current)
             else {
                 return;
             };
             let fresh_last = desired_row
                 .iter()
                 .zip(current_row.iter())
-                .rposition(|(desired, current)| !desired.padding && desired != current)
+                .rposition(|(desired, current)| !desired.padding() && desired != current)
                 .expect("shift left at least the poisoned cells changed");
             ops.push(TermOp::WriteRun {
                 row: row as u16,
@@ -1965,9 +1927,9 @@ impl TtyRif {
         // the byte-cost rule may only skip already-written cells.
         const GOTO_COST_CELLS: usize = 8;
         let changed = |col: usize| {
-            !desired_row[col].padding
+            !desired_row[col].padding()
                 && (desired_row[col] != current_row[col]
-                    || current_row[col].materialization == CellMaterialization::Erased)
+                    || current_row[col].materialization() == CellMaterialization::Erased)
         };
         let mut col = first_changed;
         let row_op_floor = ops.len();
@@ -1996,7 +1958,7 @@ impl TtyRif {
             }
         }
         if let Some(from) = erase_from {
-            let bg = desired_row[from].attrs.bg;
+            let bg = desired_row[from].attrs().bg;
             ops.push(TermOp::EraseToEol {
                 row: row as u16,
                 from: from as u16,
@@ -2030,7 +1992,7 @@ impl TtyRif {
                     let start = row * self.desired.width + start as usize;
                     let end = row * self.desired.width + end as usize;
                     for cell in &mut self.desired.cells[start..end] {
-                        cell.materialization = CellMaterialization::Written;
+                        cell.set_materialization(CellMaterialization::Written);
                     }
                 }
                 TermOp::EraseToEol { row, from, .. } => {
@@ -2038,7 +2000,7 @@ impl TtyRif {
                     let start = row * self.desired.width + from as usize;
                     let end = (row + 1) * self.desired.width;
                     for cell in &mut self.desired.cells[start..end] {
-                        cell.materialization = CellMaterialization::Erased;
+                        cell.set_materialization(CellMaterialization::Erased);
                     }
                 }
                 TermOp::ScrollRows { .. }
@@ -2180,10 +2142,10 @@ impl TtyRif {
         let row_start = row as usize * self.desired.width;
         for col in start as usize..end as usize {
             let desired = &self.desired.cells[row_start + col];
-            if desired.padding {
+            if desired.padding() {
                 continue;
             }
-            write_face_transition(&mut self.output, last_attrs, &desired.attrs);
+            write_face_transition(&mut self.output, last_attrs, &desired.attrs());
             let cell = desired.clone();
             write_cell_contents(&mut self.output, &cell);
             self.frame_stats.cells_written += 1;
@@ -2742,30 +2704,30 @@ fn row_hash(row: &[TtyCell]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = rustc_hash::FxHasher::default();
     for c in row {
-        h.write_u32(c.ch as u32);
-        c.attrs.fg.hash(&mut h);
-        c.attrs.bg.hash(&mut h);
+        h.write_u32(c.ch() as u32);
+        c.attrs().fg.hash(&mut h);
+        c.attrs().bg.hash(&mut h);
         h.write_u8(
-            (c.attrs.bold as u8)
-                | ((c.attrs.italic as u8) << 1)
-                | ((c.attrs.strikethrough as u8) << 2)
-                | ((c.attrs.inverse as u8) << 3)
-                | ((c.padding as u8) << 4),
+            (c.attrs().bold as u8)
+                | ((c.attrs().italic as u8) << 1)
+                | ((c.attrs().strikethrough as u8) << 2)
+                | ((c.attrs().inverse as u8) << 3)
+                | ((c.padding() as u8) << 4),
         );
-        h.write_u8(match c.blank_erase {
+        h.write_u8(match c.blank_erase() {
             BlankErase::DefaultFace => 0,
             BlankErase::Explicit => 1,
         });
-        h.write_u8(match c.materialization {
+        h.write_u8(match c.materialization() {
             CellMaterialization::Erased => 0,
             CellMaterialization::Written => 1,
         });
-        h.write_u8(match c.terminal_advance {
+        h.write_u8(match c.terminal_advance() {
             TerminalAdvance::OneColumn => 0,
             TerminalAdvance::TerminalResolved => 1,
         });
-        h.write_u8(c.attrs.underline);
-        if let Some(e) = &c.extenders {
+        h.write_u8(c.attrs().underline);
+        if let Some(e) = c.extenders() {
             h.write(e.as_bytes());
         }
     }
@@ -2981,9 +2943,10 @@ fn detect_row_shift(
     {
         return None;
     }
-    let poison = TtyCell {
-        ch: '\0',
-        ..TtyCell::default()
+    let poison = {
+        let mut cell = TtyCell::default();
+        cell.set_ch('\0');
+        cell
     };
     for d in 1..=MAX_SHIFT.min(width.saturating_sub(first_changed + 1)) {
         // Insertion: desired[first+d..] == current[first..width-d].
@@ -3037,16 +3000,16 @@ fn detect_row_shift(
 /// are visually inert on a blank. The background must match the erase's BCE
 /// fill, which the caller guarantees by grouping the tail by one uniform bg.
 fn erasable_blank(cell: &TtyCell) -> bool {
-    cell.ch == ' '
-        && cell.blank_erase == BlankErase::DefaultFace
-        && !cell.padding
-        && cell.extenders.is_none()
-        && cell.attrs.fg.is_none()
-        && !cell.attrs.bold
-        && !cell.attrs.italic
-        && cell.attrs.underline == 0
-        && !cell.attrs.strikethrough
-        && !cell.attrs.inverse
+    cell.ch() == ' '
+        && cell.blank_erase() == BlankErase::DefaultFace
+        && !cell.padding()
+        && cell.extenders().is_none()
+        && cell.attrs().fg.is_none()
+        && !cell.attrs().bold
+        && !cell.attrs().italic
+        && cell.attrs().underline == 0
+        && !cell.attrs().strikethrough
+        && !cell.attrs().inverse
 }
 
 /// Whether a run a horizontal shift would preserve is worth preserving.
@@ -3063,7 +3026,7 @@ fn erasable_blank(cell: &TtyCell) -> bool {
 /// shifts, matching GNU's `colored_spaces_p`.
 fn carries_shiftable_content(run: &[TtyCell]) -> bool {
     run.iter()
-        .any(|cell| !erasable_blank(cell) || cell.attrs.bg.is_some())
+        .any(|cell| !erasable_blank(cell) || cell.attrs().bg.is_some())
 }
 
 /// Return the start and background of the physical row's uniform erasable
@@ -3078,10 +3041,10 @@ fn uniform_erasable_tail(
         return None;
     }
 
-    let background = last.attrs.bg;
+    let background = last.attrs().bg;
     let mut split = search_start + last_offset;
     for (offset, cell) in cells {
-        if !erasable_blank(cell) || cell.attrs.bg != background {
+        if !erasable_blank(cell) || cell.attrs().bg != background {
             break;
         }
         split = search_start + offset;
@@ -3099,7 +3062,7 @@ fn normalize_row_blank_tail(row: &mut [TtyCell], blank_tail: BlankTailMethod) {
         return;
     }
     for cell in &mut row[split..] {
-        cell.materialization = CellMaterialization::Erased;
+        cell.set_materialization(CellMaterialization::Erased);
     }
 }
 
@@ -3119,7 +3082,7 @@ fn logical_tail_erase(
 
 fn row_has_terminal_resolved_advance(row: &[TtyCell]) -> bool {
     row.iter()
-        .any(|cell| cell.terminal_advance == TerminalAdvance::TerminalResolved)
+        .any(|cell| cell.terminal_advance() == TerminalAdvance::TerminalResolved)
 }
 
 // ---------------------------------------------------------------------------
@@ -3501,9 +3464,9 @@ fn write_underline_color(buf: &mut Vec<u8>, color: TerminalColor) {
 
 fn write_cell_contents(buf: &mut Vec<u8>, cell: &TtyCell) {
     let mut bytes = [0u8; 4];
-    let s = cell.ch.encode_utf8(&mut bytes);
+    let s = cell.ch().encode_utf8(&mut bytes);
     buf.extend_from_slice(s.as_bytes());
-    if let Some(ext) = cell.extenders.as_deref() {
+    if let Some(ext) = cell.extenders() {
         buf.extend_from_slice(ext.as_bytes());
     }
 }
@@ -3590,7 +3553,7 @@ impl TtyRif {
             let mut line = String::new();
             for col in 0..self.desired.width {
                 let idx = row * self.desired.width + col;
-                line.push(self.desired.cells[idx].ch);
+                line.push(self.desired.cells[idx].ch());
             }
             lines.push(line);
         }

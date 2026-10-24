@@ -29,13 +29,13 @@ fn native_output_commits_only_after_success_and_retries_full_frame() {
         ..Painter::default()
     };
     assert!(rif.paint(&mut painter).is_err());
-    assert_eq!(rif.current.cells[0].ch, ' ');
-    assert_eq!(rif.desired.cells[0].ch, 'A');
+    assert_eq!(rif.current.cells[0].ch(), ' ');
+    assert_eq!(rif.desired.cells[0].ch(), 'A');
     painter.fail = false;
     painter.rows.clear();
     rif.paint(&mut painter).unwrap();
     assert_eq!(painter.rows, [0, 1]);
-    assert_eq!(rif.current.cells[0].ch, 'A');
+    assert_eq!(rif.current.cells[0].ch(), 'A');
     rif.desired = rif.current.clone();
     painter.rows.clear();
     rif.paint(&mut painter).unwrap();

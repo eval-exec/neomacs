@@ -535,14 +535,10 @@ fn references_any_face(state: &FrameDisplayState, faces: &[FaceId]) -> bool {
 /// erased/written materialization.
 fn cells_same_content(left: &[TtyCell], right: &[TtyCell]) -> bool {
     left.len() == right.len()
-        && left.iter().zip(right).all(|(left, right)| {
-            left.ch == right.ch
-                && left.attrs == right.attrs
-                && left.blank_erase == right.blank_erase
-                && left.padding == right.padding
-                && left.extenders == right.extenders
-                && left.terminal_advance == right.terminal_advance
-        })
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.same_damage_content(right))
 }
 
 /// The cell field that first makes two rows show different things.
@@ -586,17 +582,17 @@ pub(super) fn first_content_difference(
         .zip(right)
         .enumerate()
         .find_map(|(col, (left, right))| {
-            let field = if left.ch != right.ch {
+            let field = if left.ch() != right.ch() {
                 CellField::Char
-            } else if left.attrs != right.attrs {
+            } else if left.attrs() != right.attrs() {
                 CellField::Attrs
-            } else if left.blank_erase != right.blank_erase {
+            } else if left.blank_erase() != right.blank_erase() {
                 CellField::BlankErase
-            } else if left.padding != right.padding {
+            } else if left.padding() != right.padding() {
                 CellField::Padding
-            } else if left.extenders != right.extenders {
+            } else if left.extenders() != right.extenders() {
                 CellField::Extenders
-            } else if left.terminal_advance != right.terminal_advance {
+            } else if left.terminal_advance() != right.terminal_advance() {
                 CellField::Advance
             } else {
                 return None;
@@ -611,12 +607,13 @@ impl TtyGrid {
         if row >= self.height {
             return;
         }
-        let blank = TtyCell {
-            attrs: CellAttrs {
+        let blank = {
+            let mut cell = TtyCell::default();
+            cell.set_attrs(CellAttrs {
                 bg,
                 ..CellAttrs::default()
-            },
-            ..TtyCell::default()
+            });
+            cell
         };
         self.cells[row * self.width..(row + 1) * self.width].fill(blank);
         self.row_written[row] = false;
@@ -1220,8 +1217,8 @@ impl TtyRif {
                     ?difference,
                     full_cell = ?difference.and_then(|d| full.get(d.col)),
                     damage_cell = ?difference.and_then(|d| damage.get(d.col)),
-                    full_text = %full.iter().map(|cell| cell.ch).collect::<String>(),
-                    damage_text = %damage.iter().map(|cell| cell.ch).collect::<String>(),
+                    full_text = %full.iter().map(|cell| cell.ch()).collect::<String>(),
+                    damage_text = %damage.iter().map(|cell| cell.ch()).collect::<String>(),
                     "NEOMACS_TTY_DAMAGE=verify: row differs"
                 );
             } else if full != damage {
@@ -1301,7 +1298,7 @@ impl TtyRif {
         for row in 0..self.desired.height {
             if self.row_planned(row) {
                 for cell in &mut self.desired.cells[row * width..(row + 1) * width] {
-                    cell.materialization = CellMaterialization::Written;
+                    cell.set_materialization(CellMaterialization::Written);
                 }
             }
         }

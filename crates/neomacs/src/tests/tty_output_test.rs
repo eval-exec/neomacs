@@ -32,7 +32,13 @@ fn standout_closes_before_plain_text_with_dedicated_or_borrowed_exit() {
         );
         let caps = Capabilities::from_database(&mut database, "").unwrap();
         let mut row = cells("AB");
-        row[0].attrs.inverse = true;
+        {
+            let attrs = row[0].attrs();
+            row[0].set_attrs(neomacs_display_runtime::backend::tty::rif::CellAttrs {
+                inverse: true,
+                ..attrs
+            });
+        }
         let mut bytes = Output::default();
         encode_cells(&mut bytes, &row, &caps.attributes);
         assert_eq!(bytes.bytes, b"ONAOFFB", "{enter}/{exit}");
@@ -54,7 +60,13 @@ fn native_padded_output_keeps_literal_text_and_scales_clear_screen() {
     assert_eq!(output, b"CLEAR\x1b[?2004h");
     output.clear();
     let mut row = cells("A$<10/>B");
-    row[0].attrs.inverse = true;
+    {
+        let attrs = row[0].attrs();
+        row[0].set_attrs(neomacs_display_runtime::backend::tty::rif::CellAttrs {
+            inverse: true,
+            ..attrs
+        });
+    }
     let mut painter = TerminfoPainter {
         output: &mut output,
         caps: &caps,
@@ -100,9 +112,10 @@ fn vt52_output_and_lifecycle_use_native_capabilities() {
         height: 0,
     };
     painter.begin(80, 24).unwrap();
-    let cell = TtyCell {
-        ch: 'A',
-        ..TtyCell::default()
+    let cell = {
+        let mut cell = TtyCell::default();
+        cell.set_ch('A');
+        cell
     };
     painter.row(1, &[cell]).unwrap();
     painter
@@ -146,9 +159,10 @@ fn paint_bottom(database: &mut Database, cells: &[TtyCell]) -> io::Result<Vec<u8
 }
 fn cells(text: &str) -> Vec<TtyCell> {
     text.chars()
-        .map(|ch| TtyCell {
-            ch,
-            ..TtyCell::default()
+        .map(|ch| {
+            let mut cell = TtyCell::default();
+            cell.set_ch(ch);
+            cell
         })
         .collect()
 }
@@ -197,7 +211,7 @@ fn bottom_right_inserts_the_full_width_of_a_wide_first_glyph() {
         .into(),
     );
     let mut row = cells("界 AB");
-    row[1].padding = true;
+    row[1].set_padding(true);
     assert_eq!(
         paint_bottom(&mut database, &row).unwrap(),
         "G0,0;ABG0,0;I2;界".as_bytes()
