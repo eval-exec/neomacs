@@ -234,14 +234,15 @@ const NAME_ATOM_CHUNK: usize = 4096;
 
 /// One frozen, property-free name atom in process-lifetime storage.
 ///
-/// Only `NameAtomStorage::push` constructs this reference, after stripping
-/// heap-backed text properties and moving the string into a leaked slot.
+/// `NameAtomStorage::push` and sealed prepared publication construct this
+/// reference after stripping properties and moving the string into a leaked slot.
 /// Hash and equality inspect only its immutable bytes and representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 struct NameAtomRef(&'static LispString);
 
-// SAFETY: construction is confined to `NameAtomStorage::push`. Its referenced
+// SAFETY: construction is confined to the serial push and sealed prepared
+// publication, both using leaked, property-free storage. The referenced
 // string has no interval table, never moves or drops, and is never mutated after
 // publication. Its bytes are owned by that leaked string or are immutable
 // process-lifetime mapped/static storage, so they contain no heap-local Values.
@@ -1433,7 +1434,10 @@ fn global_symbol_registry() -> &'static RwLock<SymbolRegistry> {
 /// canonical mapping publishes invalidation under the registry write guard;
 /// readers load it with Acquire. Fresh intern/dump insertions preserve existing
 /// mappings, and these caches never retain misses, so fresh insertions need no
-/// bump. The public dump-restore seam conservatively republishes invalidation
+/// bump on the serial path. Sealed C5 publication additionally advances once
+/// per winning fresh registry ID, under its retained registry write guard;
+/// existing-name hits and World-only membership/growth do not advance it.
+/// The public dump-restore seam conservatively republishes invalidation
 /// under the same write guard, including a partially failed restore.
 /// Caches outside this module, including `TaggedValue::subr_from_sym_id`'s memo,
 /// can use the same invalidation.

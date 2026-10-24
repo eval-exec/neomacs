@@ -97,8 +97,9 @@ impl super::intern::InitialObarrayMut<'_, '_, '_> {
             _word: &registry.symbols.word,
             _thread: PhantomData,
         };
-        super::intern::publish_existing(
+        super::intern::publish_initial(
             &registry.symbols,
+            registry.heap,
             value,
             dst,
             &mut local.hot.bytes_since_gc,

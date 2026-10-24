@@ -9,8 +9,6 @@ pub enum InitialInternError {
     ExpectedString,
     ExpectedPlainSymbol,
     UnsupportedName,
-    /// This incremental subset admits existing registry identities only.
-    NewRegistryName,
 }
 impl From<RegistrationError> for InitialInternError {
     fn from(error: RegistrationError) -> Self {
@@ -158,9 +156,9 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         Ok(InitialObarrayMut { run: self })
     }
 
-    /// Existing canonical registry identities acquire actual initial-obarray
-    /// membership in this World. Gaps stay absent; present cells keep all
-    /// their payloads. A fresh registry name is explicitly outside this stage.
+    /// Intern an ordinary name into this World's initial obarray. The matching
+    /// writer and process registry guard span fresh ID/name-root publication.
+    /// Gaps stay absent and existing cells retain their payloads.
     pub fn initial_intern_into(
         &mut self,
         name: &OwnerRootSlot<'era>,
@@ -273,8 +271,9 @@ static_assertions::assert_not_impl_any!(InitialObarrayMut<'static, 'static, 'sta
 
 /// The caller installed destination and accounting loans before publication.
 /// WRITER and the process registry guard span the entire membership commit.
-pub(super) fn publish_existing(
+pub(super) fn publish_initial(
     symbols: &SymbolSidecar,
+    heap: HeapIdentity,
     value: Value,
     dst: &mut MarkWord,
     charged: &mut usize,
@@ -286,10 +285,19 @@ pub(super) fn publish_existing(
     if name.as_bytes().first() == Some(&b':') {
         return Err(InitialInternError::UnsupportedName);
     }
-    let registry = crate::emacs_core::intern::parallel::InitialRegistryWriter::enter(authority)?;
-    let metadata = registry
-        .existing(name)?
-        .ok_or(InitialInternError::NewRegistryName)?;
+    let mut registry =
+        crate::emacs_core::intern::parallel::InitialRegistryWriter::enter(authority)?;
+    let existing = registry.existing(name)?;
+    let fresh = if existing.is_none() {
+        Some(registry.prepare_fresh(value, heap, charged)?)
+    } else {
+        None
+    };
+    let metadata = match (existing, fresh.as_ref()) {
+        (Some(metadata), None) => metadata,
+        (None, Some(prepared)) => prepared.metadata(),
+        _ => return Err(RegistrationError::Publication.into()),
+    };
     // SAFETY: exact era/World writer, with its guarded canonical metadata.
     // No recursive registry, serial projection-scope or mark-gate entry runs.
     let (result, grown) = unsafe { symbols.backing.ensure_initial_member(metadata, authority) };
@@ -303,6 +311,12 @@ pub(super) fn publish_existing(
         );
     }
     result?;
+    // No fallible edge remains after successful World publication. The fresh
+    // record retains exclusive registry access and every required reservation.
+    // Canonical mapping and epoch are installed before the rooted answer.
+    if let Some(prepared) = fresh {
+        prepared.commit(charged);
+    }
     *dst = MarkWord::of(Value::from_sym_id(metadata.id));
     Ok(())
 }

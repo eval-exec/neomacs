@@ -2,6 +2,7 @@
 use super::*;
 use crate::tagged::gc::SymbolWriteToken;
 use crate::tagged::gc::{RegistrationError, SymbolReadToken};
+mod fresh;
 
 /// Scalar metadata captured under the process registry guard. It contains no
 /// Lisp name object, movable spine address or authority to use a symbol cell.
@@ -74,4 +75,34 @@ pub(crate) fn with_registry_writer_for_test(body: impl FnOnce()) {
 pub(crate) fn identity_census_for_test() -> (u64, usize) {
     let registry = global_symbol_registry().read();
     (symbol_registry_epoch_value(), registry.symbols.len())
+}
+
+/// Scalar observations of exact root identity; never materialize a name or
+/// install a heap scope while a parallel era is live.
+#[cfg(test)]
+pub(crate) fn name_publication_for_test(
+    heap: crate::tagged::gc::HeapIdentity,
+    id: SymId,
+    losing_name: usize,
+) -> (Option<usize>, bool, bool, bool) {
+    let registry = global_symbol_registry().read();
+    let heap = SymbolNameHeapId(heap.get());
+    let name = registry.name_values.get(&id).copied();
+    let roots = registry.name_value_roots.by_heap.get(&heap);
+    (
+        name.filter(|name| name.heap_id == heap)
+            .map(|name| name.word.0),
+        name.is_some_and(|name| {
+            roots.is_some_and(|roots| {
+                roots.get(&SymbolNameObjectId::of(name.word)) == Some(&name.word)
+            })
+        }),
+        roots.is_some_and(|roots| roots.contains_key(&SymbolNameObjectId(losing_name))),
+        registry.slot(id).is_some_and(|slot| {
+            !registry
+                .names
+                .resolve_lisp_string(slot.name)
+                .has_intervals()
+        }),
+    )
 }

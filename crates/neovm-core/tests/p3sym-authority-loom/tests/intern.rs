@@ -1,7 +1,7 @@
 //! C5 finite registry/World publication protocols.
 //! No engine dependency; real strings, allocation/provenance, GC, accounting and
-//! serial mapatoms need independent engine witnesses. Registry-epoch cases are
-//! intentionally omitted pending the coordinator's interpretation of its brief.
+//! serial mapatoms need independent engine witnesses. Fresh-ID epoch cases
+//! model one publication advance per winner and stable held scalar identities.
 mod model;
 mod support;
 
@@ -601,4 +601,335 @@ fn duplicate_plain_descriptor_issue_has_witness() {
             );
         },
     );
+}
+
+mod fresh_epoch {
+    use super::*;
+    use loom::sync::atomic::AtomicU64;
+
+    const INITIAL_EPOCH: u64 = 7;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct FreshAnswer {
+        id: usize,
+        fresh: bool,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Mode {
+        Correct,
+        MissingFreshBump,
+        SpuriousExistingBump,
+        ReinterpretOldIdentity,
+    }
+
+    struct FreshWorld {
+        world: InternWorld,
+        epoch: AtomicU64,
+        mode: Mode,
+    }
+
+    impl FreshWorld {
+        fn new(mode: Mode) -> Self {
+            // Existing ID zero has a stable name/value/function. The next fresh
+            // ID is three: gaps plus a two-slot chunk boundary are exercised.
+            Self {
+                world: InternWorld::new(3),
+                epoch: AtomicU64::new(INITIAL_EPOCH),
+                mode,
+            }
+        }
+
+        fn epoch(&self) -> u64 {
+            self.epoch.load(Ordering::Acquire)
+        }
+
+        fn intern(
+            &self,
+            spelling: usize,
+            input: Name,
+            clean_preparation_refusal: bool,
+        ) -> Attempt<FreshAnswer> {
+            if spelling >= SPELLINGS || !input.valid() {
+                return Attempt::Rejected;
+            }
+            let _writer = match self.world.authority.write() {
+                Some(lease) => lease,
+                None => return Attempt::Busy,
+            };
+            if self.world.poisoned.load(Ordering::Acquire) {
+                return Attempt::Poisoned;
+            }
+            // Always word -> registry. Freshness is determined by this guarded
+            // recheck, never by an earlier soft miss or a caller-side guess.
+            let mut registry = self.world.registry.lock().unwrap();
+            let existing = registry.canonical[spelling];
+            let id = existing.unwrap_or(registry.next);
+            if id >= SLOTS || clean_preparation_refusal {
+                return Attempt::Rejected;
+            }
+            let mut state = self.world.state.get();
+            if existing.is_some() && state.slots[id].member {
+                if self.mode == Mode::SpuriousExistingBump {
+                    self.epoch.fetch_add(1, Ordering::AcqRel); // Broken hit path.
+                }
+                return Attempt::Done(FreshAnswer { id, fresh: false });
+            }
+            let required_chunks = (id + 1).div_ceil(CHUNK);
+            let new_chunks = state.chunks.max(required_chunks);
+            let new_side = state.side_capacity.max(required_chunks * CHUNK);
+            let fresh = existing.is_none();
+            let mut unfinished = Commit {
+                world: &self.world,
+                finished: false,
+            };
+            if fresh {
+                registry.next += 1;
+                registry.names[id] = Some(input);
+                registry.roots[input.heap] |= input.bit();
+                registry.canonical[spelling] = Some(id);
+            }
+            let exact = match registry.names[id] {
+                Some(name) => name,
+                None => return Attempt::Poisoned,
+            };
+            state.storage_charge +=
+                (new_chunks - state.chunks) * CHUNK + (new_side - state.side_capacity);
+            state.chunks = new_chunks;
+            state.side_capacity = new_side;
+            state.slots[id] = Slot {
+                member: true,
+                name: Some(exact),
+                value: 0,
+                function: 0,
+                descriptor: 0,
+            };
+            state.members += 1;
+            if fresh && self.mode == Mode::ReinterpretOldIdentity {
+                // Broken growth relocation: a held scalar ID now denotes a
+                // different name and cells. No invalid pointer is ever used.
+                state.slots[0].name = Some(input);
+                state.slots[0].value = 900;
+                state.slots[0].function = 901;
+            }
+            self.world.state.set(state);
+            if fresh && self.mode != Mode::MissingFreshBump {
+                // Release publishes completed arms/membership and the selected
+                // ID. Still under both guards, exactly once for its winner.
+                self.epoch.fetch_add(1, Ordering::AcqRel);
+            } else if !fresh && self.mode == Mode::SpuriousExistingBump {
+                self.epoch.fetch_add(1, Ordering::AcqRel); // Broken existing-ID issue.
+            }
+            unfinished.finished = true;
+            Attempt::Done(FreshAnswer { id, fresh })
+        }
+
+        fn held_symbol(&self, id: usize) -> Attempt<(Slot, u64)> {
+            let _reader = match self.world.authority.read() {
+                Some(lease) => lease,
+                None => return Attempt::Busy,
+            };
+            if self.world.poisoned.load(Ordering::Acquire) {
+                return Attempt::Poisoned;
+            }
+            if id >= SLOTS {
+                return Attempt::Rejected;
+            }
+            let epoch = self.epoch();
+            let slot = self.world.state.get().slots[id];
+            Attempt::Done((slot, epoch))
+        }
+    }
+
+    fn finish(
+        world: &FreshWorld,
+        spelling: usize,
+        input: Name,
+        answer: Attempt<FreshAnswer>,
+    ) -> FreshAnswer {
+        // Only after all actors join. Handle refusal explicitly even though
+        // this serial suffix cannot contend with another actor's lease.
+        completed(match answer {
+            Attempt::Busy => world.intern(spelling, input, false),
+            answer => answer,
+        })
+    }
+
+    #[test]
+    fn one_fresh_winner_advances_epoch_once_other_paths_do_not() {
+        support::check(2, || {
+            let world = Arc::new(FreshWorld::new(Mode::Correct));
+            let other_world = Arc::clone(&world);
+            let other = thread::spawn(move || bounded(|| other_world.intern(0, SECOND, false)));
+            let first = bounded(|| world.intern(0, FIRST, false));
+            // This soft lookup may contend, miss before publication, or observe
+            // the complete winner. It has no epoch-update path of its own.
+            let observed = world.world.soft(0);
+            let other = other.join().unwrap();
+            let one = finish(&world, 0, FIRST, first);
+            let two = finish(&world, 0, SECOND, other);
+            assert_eq!(one.id, two.id);
+            assert_eq!(usize::from(one.fresh) + usize::from(two.fresh), 1);
+            assert_eq!(world.epoch(), INITIAL_EPOCH + 1);
+            assert_eq!(world.world.registry.lock().unwrap().next, 4);
+            if let Attempt::Done(Some(id)) = observed {
+                assert_eq!(id, one.id);
+            }
+            let before = world.epoch();
+            let hit = completed(world.intern(0, SECOND, false));
+            assert_eq!(
+                hit,
+                FreshAnswer {
+                    id: one.id,
+                    fresh: false
+                }
+            );
+            assert_eq!(world.world.soft(0), Attempt::Done(Some(one.id)));
+            assert_eq!(world.world.soft(1), Attempt::Done(None));
+            assert_eq!(world.intern(1, SECOND, true), Attempt::Rejected);
+            assert_eq!(world.intern(SPELLINGS, SECOND, false), Attempt::Rejected);
+            // A known-held writer forces a refused try-acquire. It is a legal
+            // Busy branch, never a missing symbol and never a commit.
+            match world.world.authority.write() {
+                Some(held) => {
+                    assert_eq!(world.intern(1, SECOND, false), Attempt::Busy);
+                    drop(held);
+                }
+                None => panic!("quiescent fixture could not acquire its writer"),
+            }
+            assert_eq!(world.epoch(), before);
+            assert_eq!(world.world.registry.lock().unwrap().next, 4);
+            // A second genuine winner advances exactly once again. Clean
+            // refusal above did not consume a registry ID or its publication.
+            let second = completed(world.intern(1, SECOND, false));
+            assert!(second.fresh && second.id != one.id);
+            assert_eq!(world.epoch(), before + 1);
+            world.world.audit_counts();
+        });
+    }
+
+    #[test]
+    fn held_old_scalar_id_and_cells_survive_fresh_growth_and_epoch_changes() {
+        support::check(2, || {
+            let world = Arc::new(FreshWorld::new(Mode::Correct));
+            let held_id = 0; // Owned scalar identity, not a borrowed cell/spine.
+            let old = completed(world.held_symbol(held_id));
+            assert_eq!(old.1, INITIAL_EPOCH);
+            let before = world.world.stopped_state();
+            let other_world = Arc::clone(&world);
+            let other = thread::spawn(move || bounded(|| other_world.intern(1, SECOND, false)));
+            let first = bounded(|| world.intern(0, FIRST, false));
+            // Try the held scalar during overlap too. Refusal is allowed; a
+            // successful read must pair the same cell with a legal new epoch.
+            let overlap = world.held_symbol(held_id);
+            let other = other.join().unwrap();
+            let one = finish(&world, 0, FIRST, first);
+            let two = finish(&world, 1, SECOND, other);
+            assert!(one.fresh && two.fresh && one.id != two.id);
+            if let Attempt::Done((slot, epoch)) = overlap {
+                assert_eq!(slot, old.0);
+                assert!((INITIAL_EPOCH..=INITIAL_EPOCH + 2).contains(&epoch));
+            }
+            let after = completed(world.held_symbol(held_id));
+            assert_eq!(after.0, old.0);
+            assert_eq!(after.1, INITIAL_EPOCH + 2);
+            let state = world.world.stopped_state();
+            assert!(state.chunks > before.chunks);
+            assert!(state.side_capacity > before.side_capacity);
+            assert_eq!(state.chunks, 3);
+            assert_eq!(state.side_capacity, 6);
+            assert_eq!(state.slots[1], EMPTY);
+            assert_eq!(state.slots[2], EMPTY);
+            assert_eq!(state.slots[held_id].name, old.0.name);
+            world.world.audit_counts();
+            // Independent pre-actor fixture: a canonical ID already exists,
+            // while its World has only the initial two-slot capacity. Issuing
+            // membership must really grow both storage domains without an
+            // epoch bump; no removal/unintern operation is modeled here.
+            let seeded = FreshWorld::new(Mode::Correct);
+            {
+                let mut registry = seeded.world.registry.lock().unwrap();
+                registry.canonical[1] = Some(4);
+                registry.names[4] = Some(SECOND);
+                registry.roots[SECOND.heap] |= SECOND.bit();
+                registry.next = 5;
+            }
+            let before_issue = seeded.world.stopped_state();
+            let epoch = seeded.epoch();
+            let existing = completed(seeded.intern(1, FIRST, false));
+            assert_eq!(
+                existing,
+                FreshAnswer {
+                    id: 4,
+                    fresh: false
+                }
+            );
+            assert_eq!(seeded.epoch(), epoch);
+            let after_issue = seeded.world.stopped_state();
+            assert!(after_issue.chunks > before_issue.chunks);
+            assert!(after_issue.side_capacity > before_issue.side_capacity);
+            assert_eq!(after_issue.slots[4].name, Some(SECOND));
+            assert_eq!(completed(seeded.held_symbol(held_id)).0, old.0);
+            seeded.world.audit_counts();
+        });
+    }
+
+    #[test]
+    fn missing_fresh_registry_epoch_bump_has_witness() {
+        support::negative(
+            1,
+            "fresh intern published without its registry epoch advance",
+            || {
+                let world = FreshWorld::new(Mode::MissingFreshBump);
+                let before = world.epoch();
+                let answer = completed(world.intern(0, FIRST, false));
+                assert!(answer.fresh);
+                assert!(
+                    world.epoch() == before + 1,
+                    "fresh intern published without its registry epoch advance"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn spurious_existing_lookup_epoch_bump_has_witness() {
+        support::negative(
+            1,
+            "existing-name intern spuriously advanced registry epoch",
+            || {
+                let world = FreshWorld::new(Mode::SpuriousExistingBump);
+                let first = completed(world.intern(0, FIRST, false));
+                assert!(first.fresh);
+                let before = world.epoch();
+                let hit = completed(world.intern(0, SECOND, false));
+                assert_eq!(hit.id, first.id);
+                assert!(!hit.fresh);
+                assert!(
+                    world.epoch() == before,
+                    "existing-name intern spuriously advanced registry epoch"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn fresh_growth_reinterpreting_old_scalar_identity_has_witness() {
+        support::negative(
+            1,
+            "fresh intern growth reinterpreted a held symbol identity",
+            || {
+                let world = FreshWorld::new(Mode::ReinterpretOldIdentity);
+                let held_id = 0;
+                let old = completed(world.held_symbol(held_id)).0;
+                let fresh = completed(world.intern(0, FIRST, false));
+                assert!(fresh.fresh);
+                let current = completed(world.held_symbol(held_id)).0;
+                assert!(
+                    current == old,
+                    "fresh intern growth reinterpreted a held symbol identity"
+                );
+            },
+        );
+    }
 }

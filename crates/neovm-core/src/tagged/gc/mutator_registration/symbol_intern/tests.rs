@@ -52,6 +52,8 @@ impl Drop for FixtureGuard<'_> {
 #[derive(Clone, Copy, Debug)]
 enum Query {
     Fresh,
+    FreshBoundary,
+    FreshReusedAtom,
     Existing,
     RegistryOnly,
     Boundary,
@@ -73,7 +75,19 @@ fn fixture(
         crate::emacs_core::intern::intern(spelling);
     }
     let spelling = match query {
-        Query::Fresh => format!("p3sym-c5-new-{}", NEXT.fetch_add(1, Ordering::Relaxed)),
+        Query::Fresh | Query::FreshBoundary | Query::FreshReusedAtom => {
+            let spelling = format!("p3sym-c5-new-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+            if matches!(query, Query::FreshBoundary) {
+                let mut id = crate::emacs_core::intern::intern_uninterned("p3sym-c5-gap");
+                let target = (u64::from(id.0) / 4096 + 2) * 4096 + 17;
+                while u64::from(id.0) + 1 < target {
+                    id = crate::emacs_core::intern::intern_uninterned("p3sym-c5-gap");
+                }
+            } else if matches!(query, Query::FreshReusedAtom) {
+                crate::emacs_core::intern::intern_uninterned(&spelling);
+            }
+            spelling
+        }
         Query::Existing | Query::Nonmember => "p3sym-c2-global".to_owned(),
         Query::RegistryOnly => {
             let spelling = format!(
@@ -97,7 +111,10 @@ fn fixture(
         Query::T => "t".to_owned(),
         Query::Keyword => ":p3sym-c5-excluded".to_owned(),
     };
-    if matches!(query, Query::Fresh) {
+    if matches!(
+        query,
+        Query::Fresh | Query::FreshBoundary | Query::FreshReusedAtom
+    ) {
         assert!(crate::emacs_core::intern::lookup_interned(&spelling).is_none());
     }
     let target = crate::emacs_core::intern::lookup_interned(&spelling);
@@ -177,28 +194,88 @@ fn fixture(
         },
     )
 }
-fn missing(kind: PlainSymbolBacking, query: Query, op: InternOpKind) {
-    use crate::tagged::gc::InitialInternError;
+fn fresh_intern(kind: PlainSymbolBacking, query: Query, exact_epoch: bool) {
+    use crate::emacs_core::intern::parallel::{
+        identity_census_for_test, name_publication_for_test,
+    };
     fixture(kind, query, |run, homes| {
-        let before = homes.dst.word_for_test(run);
-        let result = intern_retry(run, &homes.name, &mut homes.dst);
-        assert_eq!(
-            result,
-            Err(InitialInternError::NewRegistryName),
-            "unexpected fixture/op error"
-        );
-        assert_eq!(
-            homes.dst.word_for_test(run),
-            before,
-            "unimplemented new-ID path changed output"
-        );
         assert!(
-            result.is_ok(),
-            "C5 missing executor op {} (new registry ID): {result:?}",
-            op.method()
+            homes.target.is_none(),
+            "must issue a genuinely new canonical ID"
         );
+        let before = run.initial_facts_for_test(homes.old_id).unwrap();
+        let registry_before = identity_census_for_test();
+        let name = homes.name.word_for_test(run);
+        let loser = homes.equal_name.word_for_test(run);
+        let old_word = name;
+        let charge = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
+        intern_retry(run, &homes.name, &mut homes.dst).expect("fresh initial_intern_into");
+        let word = homes.dst.word_for_test(run);
+        let id = Value::from_bits(word).as_bare_symbol_id().unwrap();
+        if exact_epoch {
+            assert_eq!(id.0 as usize, registry_before.1);
+            assert_eq!(
+                identity_census_for_test(),
+                (registry_before.0 + 1, registry_before.1 + 1)
+            );
+        }
+        let after = run.initial_facts_for_test(id).unwrap();
+        assert!(after.present && after.member && after.spine_current);
+        assert_eq!(
+            (after.members, after.epoch),
+            (before.members + 1, before.epoch + 1)
+        );
+        assert_eq!(after.chunks, after.sides);
+        assert_eq!(
+            after.cells,
+            Some((Value::NIL.bits(), Value::NIL.bits(), false, false))
+        );
+        assert_eq!(after.backing, Some(kind));
+        assert_eq!(
+            name_publication_for_test(run.owner.registry.heap, id, loser),
+            (Some(name), true, false, true)
+        );
+        assert!(run.owner.local.as_ref().unwrap().hot.bytes_since_gc > charge);
+        if matches!(query, Query::FreshBoundary) {
+            assert!(
+                after.chunks >= before.chunks + 2,
+                "fresh publication must really grow chunk and side tables"
+            );
+            assert!(
+                !run.initial_facts_for_test(crate::emacs_core::intern::SymId(id.0 - 1))
+                    .unwrap()
+                    .present
+            );
+        }
+        let stable_registry = identity_census_for_test();
+        let stable_charge = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
+        intern_retry(run, &homes.equal_name, &mut homes.dst).expect("existing winner lookup");
+        assert_eq!(homes.dst.word_for_test(run), word);
+        soft_retry(run, &homes.name, &mut homes.dst).expect("soft lookup of committed name");
+        assert_eq!(homes.dst.word_for_test(run), word);
+        assert_eq!(
+            run.owner.local.as_ref().unwrap().hot.bytes_since_gc,
+            stable_charge
+        );
+        if exact_epoch {
+            assert_eq!(identity_census_for_test(), stable_registry);
+        }
+        assert_eq!(
+            name_publication_for_test(run.owner.registry.heap, id, loser),
+            (Some(name), true, false, true)
+        );
+        let handle = run.initial_symbol_handle(&homes.dst).unwrap();
+        run.sym_boundp_into(&handle, &mut homes.dst).unwrap();
+        assert_eq!(homes.dst.word_for_test(run), Value::NIL.bits());
+        run.sym_function_into(&handle, &mut homes.dst).unwrap();
+        assert_eq!(homes.dst.word_for_test(run), Value::NIL.bits());
+        // A handle/boxed cell acquired before fresh growth still names the
+        // same exact string, with no generation or identity reinterpretation.
+        run.sym_value_into(&homes.old_handle, &mut homes.dst)
+            .unwrap();
+        assert_eq!(homes.dst.word_for_test(run), old_word);
     })
-    .expect("C5 missing-op red after independently successful fixture teardown");
+    .expect("C5 fresh intern and exact roots with independent clean teardown");
 }
 fn intern_retry<'era>(
     run: &mut RunAccess<'_, 'era>,
@@ -351,13 +428,8 @@ fn p3sym_c5_noop_fixture_releases_every_root_and_finishes() {
     }
 }
 #[test]
-#[ignore = "C5 preparation: missing initial_intern_into"]
-fn p3sym_c5_red_plain_new_intern() {
-    missing(
-        PlainSymbolBacking::Unprojected,
-        Query::Fresh,
-        InternOpKind::Intern,
-    );
+fn p3sym_c5_plain_new_intern() {
+    fresh_intern(PlainSymbolBacking::Unprojected, Query::Fresh, false);
 }
 #[test]
 fn p3sym_c5_plain_existing_intern() {
@@ -372,13 +444,8 @@ fn p3sym_c5_plain_soft_hit() {
     soft(PlainSymbolBacking::Unprojected, Query::Existing);
 }
 #[test]
-#[ignore = "C5 preparation: missing initial_intern_into"]
-fn p3sym_c5_red_projected_new_intern() {
-    missing(
-        PlainSymbolBacking::VoidProjection,
-        Query::Fresh,
-        InternOpKind::Intern,
-    );
+fn p3sym_c5_projected_new_intern() {
+    fresh_intern(PlainSymbolBacking::VoidProjection, Query::Fresh, false);
 }
 #[test]
 fn p3sym_c5_projected_existing_intern() {
@@ -500,6 +567,22 @@ fn p3sym_c5_surface_is_rooted_and_has_no_legacy_intern_fallback() {
             "C5 preparation surface exposed {forbidden}"
         );
     }
+    let fresh = include_str!("../../../../emacs_core/runtime/intern/parallel/fresh.rs")
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap();
+    for forbidden in [
+        ".unwrap(",
+        ".expect(",
+        "panic!(",
+        "current_tagged_heap",
+        "intern_lisp_value(",
+    ] {
+        assert!(
+            !fresh.contains(forbidden),
+            "C5 fresh publication exposed {forbidden}"
+        );
+    }
 
     let sealed = include_str!("../symbol_authority/intern.rs");
     assert!(sealed.contains("&OwnerRootSlot<'era>"));
@@ -607,6 +690,39 @@ fn p3sym_c5_existing_id_preserves_registry_epoch_and_count() {
             soft_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
             assert_eq!(identity_census_for_test(), before, "existing-name lookups never bump the registry epoch");
         }).unwrap();
+    }
+}
+
+#[test]
+fn p3sym_c5_fresh_id_crosses_chunks_and_preserves_held_cells() {
+    for kind in [
+        PlainSymbolBacking::Unprojected,
+        PlainSymbolBacking::VoidProjection,
+    ] {
+        fresh_intern(kind, Query::FreshBoundary, false);
+    }
+}
+
+#[test]
+fn p3sym_c5_fresh_id_reuses_an_existing_noncanonical_name_atom() {
+    for kind in [
+        PlainSymbolBacking::Unprojected,
+        PlainSymbolBacking::VoidProjection,
+    ] {
+        fresh_intern(kind, Query::FreshReusedAtom, false);
+    }
+}
+
+#[test]
+#[ignore = "exact process registry epoch/count fixture; run alone"]
+fn p3sym_c5_fresh_id_advances_registry_epoch_once() {
+    for kind in [
+        PlainSymbolBacking::Unprojected,
+        PlainSymbolBacking::VoidProjection,
+    ] {
+        for query in [Query::Fresh, Query::FreshBoundary, Query::FreshReusedAtom] {
+            fresh_intern(kind, query, true);
+        }
     }
 }
 
