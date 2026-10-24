@@ -110,6 +110,8 @@ thread_local! {
     static OBSERVATION_STATE_ACCESSES: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static OBSERVED_OWNER_PUBLICATIONS: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static RECENT_CLEARED_CELLS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The existing mutator-local read deduplication, qualified by reclamation.
@@ -138,6 +140,8 @@ impl RecentReads {
     }
 
     fn clear(&self, epoch: u64) {
+        #[cfg(test)]
+        RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + self.words.len()));
         for word in &self.words {
             word.set(0);
         }
@@ -986,6 +990,10 @@ pub fn capture_normalized<S, T>(
 #[cfg(test)]
 #[path = "collection_reads/tests/collection_reads_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "collection_reads/tests/allocation_test.rs"]
+mod allocation_tests;
 
 /// Round 3w (plan-3w.md section 7, C1): this World state lives in a
 /// thread-local while its World's Baton holder runs, and in the World while
