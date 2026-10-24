@@ -1333,6 +1333,7 @@ fn worker_panic_child() {
     std::process::exit(0);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_worker_panic_aborts_the_process_and_never_hangs_main() {
     use std::os::unix::process::ExitStatusExt;

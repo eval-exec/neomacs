@@ -63,6 +63,7 @@ fn waves_do_not_depend_on_input_order() {
     assert_eq!(forward, backward);
 }
 
+#[cfg(unix)]
 #[test]
 fn scanner_output_keeps_only_edges_between_sources() {
     let root = tempfile::tempdir().unwrap();
