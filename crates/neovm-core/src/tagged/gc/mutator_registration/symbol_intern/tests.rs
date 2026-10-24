@@ -49,6 +49,10 @@ impl Drop for FixtureGuard<'_> {
 enum Query {
     Fresh,
     Existing,
+    RegistryOnly,
+    Nil,
+    T,
+    Keyword,
 }
 fn fixture(
     kind: PlainSymbolBacking,
@@ -59,6 +63,17 @@ fn fixture(
     let spelling = match query {
         Query::Fresh => format!("p3sym-c5-new-{}", NEXT.fetch_add(1, Ordering::Relaxed)),
         Query::Existing => "p3sym-c2-global".to_owned(),
+        Query::RegistryOnly => {
+            let spelling = format!(
+                "p3sym-c5-registry-only-{}",
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            );
+            crate::emacs_core::intern::intern(&spelling);
+            spelling
+        }
+        Query::Nil => "nil".to_owned(),
+        Query::T => "t".to_owned(),
+        Query::Keyword => ":p3sym-c5-excluded".to_owned(),
     };
     if matches!(query, Query::Fresh) {
         assert!(crate::emacs_core::intern::lookup_interned(&spelling).is_none());
@@ -130,7 +145,9 @@ fn missing(kind: PlainSymbolBacking, query: Query, op: InternOpKind) {
         let before = homes.dst.word_for_test(run);
         let result = match op {
             InternOpKind::Intern => run.initial_intern_into(&homes.name, &mut homes.dst),
-            InternOpKind::Soft => run.initial_intern_soft_into(&homes.name, &mut homes.dst),
+            InternOpKind::Soft => run
+                .initial_intern_soft_into(&homes.name, &mut homes.dst)
+                .map_err(InternError::Engine),
         };
         if let Err(error) = result {
             assert_eq!(
@@ -153,6 +170,43 @@ fn missing(kind: PlainSymbolBacking, query: Query, op: InternOpKind) {
         );
     })
     .expect("C5 missing-op red after independently successful fixture teardown");
+}
+fn soft_retry<'era>(
+    run: &mut RunAccess<'_, 'era>,
+    name: &OwnerRootSlot<'era>,
+    dst: &mut OwnerRootSlot<'era>,
+) -> Result<(), crate::tagged::gc::InitialInternError> {
+    use crate::tagged::gc::{InitialInternError, RegistrationError};
+    // Refused acquisition is legal. Only the completed result is unwrapped
+    // by the single-owner behavioral fixtures; every Busy releases its loan.
+    for _ in 0..10_000 {
+        match run.initial_intern_soft_into(name, dst) {
+            Err(InitialInternError::Authority(RegistrationError::Busy)) => std::thread::yield_now(),
+            result => return result,
+        }
+    }
+    Err(InitialInternError::Authority(RegistrationError::Busy))
+}
+fn soft(kind: PlainSymbolBacking, query: Query) {
+    let expected = match query {
+        Query::Existing => Value::from_sym_id(crate::emacs_core::intern::intern("p3sym-c2-global")),
+        Query::T => Value::T,
+        _ => Value::NIL,
+    };
+    fixture(kind, query, |run, homes| {
+        let name = homes.name.word_for_test(run);
+        let equal_name = homes.equal_name.word_for_test(run);
+        soft_retry(run, &homes.name, &mut homes.dst).expect("C5 real soft lookup");
+        assert_eq!(homes.dst.word_for_test(run), expected.bits());
+        assert_eq!(homes.name.word_for_test(run), name);
+        soft_retry(run, &homes.equal_name, &mut homes.dst).expect("C5 equal-spelling soft lookup");
+        assert_eq!(homes.dst.word_for_test(run), expected.bits());
+        assert_eq!(homes.equal_name.word_for_test(run), equal_name);
+        let mut alias = homes.name.clone();
+        soft_retry(run, &homes.name, &mut alias).expect("C5 aliasing source and output");
+        assert_eq!(homes.name.word_for_test(run), expected.bits());
+    })
+    .expect("C5 soft completed with clean teardown");
 }
 #[test]
 fn p3sym_c5_noop_fixture_releases_every_root_and_finishes() {
@@ -184,22 +238,12 @@ fn p3sym_c5_red_plain_existing_intern() {
     );
 }
 #[test]
-#[ignore = "C5 preparation: missing initial_intern_soft_into"]
-fn p3sym_c5_red_plain_soft_miss() {
-    missing(
-        PlainSymbolBacking::Unprojected,
-        Query::Fresh,
-        InternOpKind::Soft,
-    );
+fn p3sym_c5_plain_soft_miss() {
+    soft(PlainSymbolBacking::Unprojected, Query::Fresh);
 }
 #[test]
-#[ignore = "C5 preparation: missing initial_intern_soft_into"]
-fn p3sym_c5_red_plain_soft_hit() {
-    missing(
-        PlainSymbolBacking::Unprojected,
-        Query::Existing,
-        InternOpKind::Soft,
-    );
+fn p3sym_c5_plain_soft_hit() {
+    soft(PlainSymbolBacking::Unprojected, Query::Existing);
 }
 #[test]
 #[ignore = "C5 preparation: missing initial_intern_into"]
@@ -220,22 +264,102 @@ fn p3sym_c5_red_projected_existing_intern() {
     );
 }
 #[test]
-#[ignore = "C5 preparation: missing initial_intern_soft_into"]
-fn p3sym_c5_red_projected_soft_miss() {
-    missing(
-        PlainSymbolBacking::VoidProjection,
-        Query::Fresh,
-        InternOpKind::Soft,
-    );
+fn p3sym_c5_projected_soft_miss() {
+    soft(PlainSymbolBacking::VoidProjection, Query::Fresh);
 }
 #[test]
-#[ignore = "C5 preparation: missing initial_intern_soft_into"]
-fn p3sym_c5_red_projected_soft_hit() {
-    missing(
+fn p3sym_c5_projected_soft_hit() {
+    soft(PlainSymbolBacking::VoidProjection, Query::Existing);
+}
+#[test]
+fn p3sym_c5_soft_registry_hit_world_miss_creates_no_membership() {
+    for kind in [
+        PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::VoidProjection,
+    ] {
+        soft(kind, Query::RegistryOnly);
+    }
+}
+#[test]
+fn p3sym_c5_soft_fundamental_symbols_keep_their_lisp_values() {
+    soft(PlainSymbolBacking::Unprojected, Query::Nil);
+    soft(PlainSymbolBacking::Unprojected, Query::T);
+}
+#[test]
+fn p3sym_c5_soft_invalid_name_leaves_output_unchanged() {
+    use crate::tagged::gc::InitialInternError;
+    fixture(
+        PlainSymbolBacking::Unprojected,
+        Query::Fresh,
+        |run, homes| {
+            let input = homes.dst.clone();
+            let before = homes.dst.word_for_test(run);
+            assert_eq!(
+                run.initial_intern_soft_into(&input, &mut homes.dst),
+                Err(InitialInternError::ExpectedString)
+            );
+            assert_eq!(homes.dst.word_for_test(run), before);
+            soft_retry(run, &homes.name, &mut homes.dst).unwrap();
+            assert_eq!(homes.dst.word_for_test(run), Value::NIL.bits());
+        },
+    )
+    .unwrap();
+    fixture(
+        PlainSymbolBacking::Unprojected,
+        Query::Keyword,
+        |run, homes| {
+            let before = homes.dst.word_for_test(run);
+            assert_eq!(
+                run.initial_intern_soft_into(&homes.name, &mut homes.dst),
+                Err(InitialInternError::UnsupportedName)
+            );
+            assert_eq!(homes.dst.word_for_test(run), before);
+        },
+    )
+    .unwrap();
+}
+#[test]
+fn p3sym_c5_soft_busy_is_a_refusal_and_releases_the_reader() {
+    use crate::tagged::gc::{InitialInternError, RegistrationError};
+    fixture(
+        PlainSymbolBacking::Unprojected,
         Query::Existing,
-        InternOpKind::Soft,
-    );
+        |run, homes| {
+            let before = homes.dst.word_for_test(run);
+            crate::emacs_core::intern::parallel::with_registry_writer_for_test(|| {
+                assert_eq!(
+                    run.initial_intern_soft_into(&homes.name, &mut homes.dst),
+                    Err(InitialInternError::Authority(RegistrationError::Busy))
+                );
+                assert_eq!(
+                    homes.dst.word_for_test(run),
+                    before,
+                    "Busy is not a NIL miss"
+                );
+            });
+            soft_retry(run, &homes.name, &mut homes.dst).unwrap();
+            assert!(!Value::from_bits(homes.dst.word_for_test(run)).is_nil());
+        },
+    )
+    .unwrap();
+}
+#[test]
+fn p3sym_c5_soft_stale_homes_refuse_before_decoding() {
+    use crate::tagged::gc::{InitialInternError, RegistrationError};
+    fixture(
+        PlainSymbolBacking::Unprojected,
+        Query::Fresh,
+        |run, homes| {
+            run.clear_root_slots().unwrap();
+            assert_eq!(
+                run.initial_intern_soft_into(&homes.name, &mut homes.dst),
+                Err(InitialInternError::Authority(
+                    RegistrationError::StaleRegistration
+                ))
+            );
+        },
+    )
+    .unwrap();
 }
 #[test]
 fn p3sym_c5_surface_is_rooted_and_has_no_legacy_intern_fallback() {
@@ -257,6 +381,20 @@ fn p3sym_c5_surface_is_rooted_and_has_no_legacy_intern_fallback() {
     }
     assert!(source.contains("&OwnerRootSlot<'era>"));
     assert!(source.contains("&mut OwnerRootSlot<'era>"));
+    let sealed = include_str!("../symbol_authority/intern.rs");
+    for forbidden in [
+        ".unwrap(",
+        ".expect(",
+        "panic!(",
+        "current_tagged_heap",
+        "intern_lisp_value(",
+        "NEOVM_THREADS",
+    ] {
+        assert!(
+            !sealed.contains(forbidden),
+            "C5 sealed lookup exposed {forbidden}"
+        );
+    }
     assert_eq!(
         include_str!("../symbol_intern_oracle.expected")
             .lines()

@@ -38,6 +38,22 @@ unsafe impl Send for SymbolBacking {}
 unsafe impl Sync for SymbolBacking {}
 
 impl SymbolBacking {
+    /// Inspect only membership while the matching initial-obarray reader is
+    /// held. Neither absent storage nor a nonmember slot is initialized.
+    ///
+    /// # Safety
+    /// The token belongs to this retained World; ordinary views and markers
+    /// remain excluded. A false result is a real World-obarray soft miss.
+    pub(crate) unsafe fn initial_contains(
+        &self,
+        id: SymId,
+        _authority: &crate::tagged::gc::SymbolReadToken<'_>,
+    ) -> Option<bool> {
+        // SAFETY: original World root covered by the live reader authority.
+        let obarray = unsafe { self.obarray.as_ref() };
+        (obarray.generation() == self.generation).then(|| obarray.is_global_member(id))
+    }
+
     /// Copy the function word and explicit-unbound state under one real
     /// symbol reader. This uses the landed interior-mutable function cell;
     /// no builtin fallback, callback, stamp or owner-private cache is touched.

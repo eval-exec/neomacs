@@ -2821,8 +2821,8 @@ pub use facade_mark::{
 pub(crate) use mutator_registration::symbol_functions::boundary as function_boundary_testkit;
 pub use mutator_registration::{
     AllStopped, AllStoppedFailure, CollectionError, CollectionReport, FunctionActivation,
-    FunctionCallCache, FunctionError, FunctionStep, GlobalError, KeeperSymbols, KeeperTableMut,
-    Mode, Mutator, MutatorEntry, MutatorFinishFailure, MutatorKey, MutatorPermit,
+    FunctionCallCache, FunctionError, FunctionStep, GlobalError, InitialInternError, KeeperSymbols,
+    KeeperTableMut, Mode, Mutator, MutatorEntry, MutatorFinishFailure, MutatorKey, MutatorPermit,
     MutatorStartFailure, NativeReturn, NativeRoots, OwnerPublication, OwnerRootSlot,
     ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationCensus, RegistrationError, Rendezvous,
     RendezvousError, Request, ResumeGcImage, ResumeGcImageFailure, RootedRetireFailure, RunAccess,

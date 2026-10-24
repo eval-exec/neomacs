@@ -55,6 +55,15 @@ impl AdmissionWriter<'_> {
     }
 }
 
+impl super::intern::InitialObarrayRef<'_, '_, '_> {
+    pub(super) fn read_token(&self) -> SymbolReadToken<'_> {
+        SymbolReadToken {
+            _word: &self.run.owner.registry.symbols.word,
+            _thread: PhantomData,
+        }
+    }
+}
+
 impl<'era> RunAccess<'_, 'era> {
     /// A void error leaves dst unchanged. The loaded value becomes a root
     /// before the counted-reader lease is released, including heap pointers.

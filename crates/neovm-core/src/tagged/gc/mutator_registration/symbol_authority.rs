@@ -1,7 +1,9 @@
 //! Sealed symbol authority; running values move only between owner root homes.
 mod globals;
+mod intern;
 pub use globals::GlobalError;
 pub(crate) use globals::{SymbolReadToken, SymbolWriteToken};
+pub use intern::InitialInternError;
 mod functions;
 #[cfg(test)]
 pub use functions::FunctionOpKind;

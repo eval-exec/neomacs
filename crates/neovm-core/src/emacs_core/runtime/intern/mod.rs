@@ -11,6 +11,7 @@
 //! string interner".
 
 mod fixed_symbol;
+pub(crate) mod parallel;
 pub use fixed_symbol::EpochCachedSymbol;
 
 use hashbrown::HashMap;
