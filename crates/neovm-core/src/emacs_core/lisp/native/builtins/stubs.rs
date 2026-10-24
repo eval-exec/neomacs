@@ -1014,7 +1014,34 @@ pub(crate) fn builtin_frame_after_make_frame(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("frame-after-make-frame", &args, 2)?;
-    expect_live_frame_or_nil(eval, &args[0])?;
+    let frame_id = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        FrameDomain::Live,
+    )?;
+    if args[1].is_truthy() {
+        let request = eval.frames.get(frame_id).and_then(|frame| {
+            (frame.effective_window_system().is_some()
+                && frame.parent_frame.as_frame_id().is_none())
+            .then(|| crate::emacs_core::eval::GuiFrameHostRequest {
+                frame_id,
+                width: frame.width,
+                height: frame.height,
+                title: frame.host_title_lisp_string(),
+                geometry_hints: frame.gui_geometry_hints(),
+                fullscreen: frame
+                    .known_parameter(crate::window::FrameParam::Fullscreen)
+                    .and_then(|value| crate::window::FrameFullscreen::from_symbol_value(&value)),
+            })
+        });
+        if let Some(request) = request
+            && let Some(host) = eval.display_host.as_mut()
+        {
+            host.finish_gui_frame_creation(request)
+                .map_err(|message| signal("error", vec![Value::string(message)]))?;
+        }
+    }
     Ok(Value::NIL)
 }
 
