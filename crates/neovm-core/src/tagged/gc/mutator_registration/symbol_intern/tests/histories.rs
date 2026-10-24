@@ -523,5 +523,6 @@ fn p3sym_c5_two_to_four_owners_grow_distinct_names_without_filling_gaps() {
     histories(Scenario::DifferentNames);
 }
 
+mod assignment;
 mod contention;
 mod serial;

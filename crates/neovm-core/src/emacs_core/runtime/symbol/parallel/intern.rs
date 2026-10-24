@@ -31,6 +31,10 @@ pub(crate) struct InitialInternFacts {
     pub(crate) cells: Option<(usize, usize, bool, bool)>,
     pub(crate) backing: Option<PlainSymbolBacking>,
     pub(crate) projections: usize,
+    /// Descriptor address, dense slot and canonical word; scalar test facts.
+    pub(crate) projection: Option<(usize, usize, usize)>,
+    pub(crate) shared_void: Option<(usize, usize)>,
+    pub(crate) projection_bytes: usize,
 }
 
 #[cfg(test)]
@@ -147,10 +151,32 @@ impl SymbolBacking {
             return Err(RegistrationError::Publication);
         }
         let symbol = obarray.get_by_id(id);
-        let projections = unsafe { self.projections.as_ref() }
+        let table = unsafe { self.projections.as_ref() }
             .try_borrow()
-            .map_err(|_| RegistrationError::Busy)?
-            .len();
+            .map_err(|_| RegistrationError::Busy)?;
+        let projection = symbol.and_then(|symbol| match symbol.value_cell() {
+            ValueCell::Forwarded(fwd) => table.projection(fwd).and_then(|projection| {
+                (projection.arm() == CanonicalArm::Plain && !projection.host_projected()).then(
+                    || {
+                        (
+                            projection as *const _ as usize,
+                            projection.index().slot(),
+                            projection.plain_value().bits(),
+                        )
+                    },
+                )
+            }),
+            _ => None,
+        });
+        let shared_void = table
+            .parallel_void_header(_authority)
+            .and_then(|fwd| table.projection(fwd))
+            .map(|projection| {
+                (
+                    projection as *const _ as usize,
+                    projection.plain_value().bits(),
+                )
+            });
         Ok(InitialInternFacts {
             members: obarray.global_member_count,
             epoch: obarray.members_epoch,
@@ -171,7 +197,10 @@ impl SymbolBacking {
                 )
             }),
             backing: unsafe { self.classify(id) },
-            projections,
+            projections: table.len(),
+            projection,
+            shared_void,
+            projection_bytes: table.parallel_storage_bytes(_authority),
         })
     }
 
