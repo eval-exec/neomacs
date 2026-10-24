@@ -7,6 +7,7 @@ use crate::tagged::gc::{
     FunctionError, GlobalError, HeapIdentity, InitialInternError, MutatorPermit, ParallelHeapEra,
     RegistrationError, SymbolHandle,
 };
+use contention::RetryBudget;
 use std::collections::BTreeSet;
 use std::sync::Barrier;
 
@@ -64,22 +65,37 @@ impl Failure {
 
 fn attempt<'era, T>(
     owner: &mut Mutator<'era>,
-    mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<T, Failure>,
+    operation: &str,
+    body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<T, Failure>,
 ) -> Result<T, String> {
-    for _ in 0..10_000 {
+    attempt_observed(owner, operation, body, |_, _| Ok(()))
+}
+
+fn attempt_observed<'era, T>(
+    owner: &mut Mutator<'era>,
+    operation: &str,
+    mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<T, Failure>,
+    mut refused: impl FnMut(&Mutator<'era>, &Failure) -> Result<(), String>,
+) -> Result<T, String> {
+    let mut budget = RetryBudget::new();
+    loop {
         let result = match owner.run_access() {
             Ok(mut run) => body(&mut run),
             Err(error) => Err(error.into()),
         };
         match result {
-            Err(error) if error.busy() => std::thread::yield_now(),
+            Err(error) if error.busy() => {
+                refused(owner, &error)?;
+                budget
+                    .wait(operation, &error)
+                    .map_err(|error| format!("{error}; {}", contention::diagnostics(owner)))?;
+            }
             result => {
                 return result
-                    .map_err(|error| format!("C5 history operation: {}", error.explanation()));
+                    .map_err(|error| format!("C5 history {operation}: {}", error.explanation()));
             }
         }
     }
-    Err("C5 history operation exceeded its finite Busy budget".into())
 }
 
 fn activate<'era>(
@@ -87,17 +103,17 @@ fn activate<'era>(
     heap: HeapIdentity,
     id: u64,
 ) -> Result<Mutator<'era>, String> {
-    for _ in 0..10_000 {
+    let mut budget = RetryBudget::new();
+    loop {
         match permit.activate(heap, id) {
             Ok(owner) => return Ok(owner),
             Err(failed) if failed.reason == RegistrationError::Busy => {
                 permit = failed.into_permit();
-                std::thread::yield_now();
+                budget.wait("activate", &RegistrationError::Busy)?;
             }
             Err(failed) => return Err(format!("C5 history activation: {failed:?}")),
         }
     }
-    Err("C5 history activation exceeded its finite Busy budget".into())
 }
 
 fn guarded<'era, T>(
@@ -106,18 +122,20 @@ fn guarded<'era, T>(
 ) -> Result<T, String> {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut owner)))
         .unwrap_or_else(|_| Err("C5 history assertion after start".into()));
-    let cleared = attempt(&mut owner, |run| Ok(run.clear_root_slots()?));
-    for _ in 0..10_000 {
+    let cleared = attempt(&mut owner, "clear_root_slots", |run| {
+        Ok(run.clear_root_slots()?)
+    });
+    let mut budget = RetryBudget::new();
+    loop {
         match owner.retire_rooted(&[]) {
             Ok(()) => return cleared.and(outcome),
             Err(failed) if failed.reason == RendezvousError::Busy => {
                 owner = failed.into_owner();
-                std::thread::yield_now();
+                budget.wait("retire_rooted", &RendezvousError::Busy)?;
             }
             Err(failed) => return Err(format!("C5 history retirement: {failed:?}")),
         }
     }
-    Err("C5 history retirement exceeded its finite Busy budget".into())
 }
 
 struct ActorHomes<'era> {
@@ -154,13 +172,13 @@ fn seed<'era>(
     holder: &SymbolHandle,
     nil: &SharedRoot,
 ) -> Result<ActorHomes<'era>, String> {
-    let mut name = attempt(owner, |run| Ok(run.root_slot(nil)?))?;
-    let mut dst = attempt(owner, |run| Ok(run.root_slot(nil)?))?;
-    let input = attempt(owner, |run| {
+    let mut name = attempt(owner, "root_slot(name)", |run| Ok(run.root_slot(nil)?))?;
+    let mut dst = attempt(owner, "root_slot(dst)", |run| Ok(run.root_slot(nil)?))?;
+    let input = attempt(owner, "sym_value_into(input)", |run| {
         run.sym_value_into(holder, &mut name)?;
         Ok(name.word_for_test(run))
     })?;
-    let soft_before = attempt(owner, |run| {
+    let soft_before = attempt(owner, "initial_intern_soft_into(before)", |run| {
         run.initial_intern_soft_into(&name, &mut dst)?;
         Ok(dst.word_for_test(run))
     })?;
@@ -173,26 +191,28 @@ fn seed<'era>(
 }
 
 fn perform<'era>(owner: &mut Mutator<'era>, mut homes: ActorHomes<'era>) -> Result<Row, String> {
-    let id = attempt(owner, |run| {
+    let id = attempt(owner, "initial_intern_into", |run| {
         run.initial_intern_into(&homes.name, &mut homes.dst)?;
         Value::from_bits(homes.dst.word_for_test(run))
             .as_bare_symbol_id()
             .ok_or(Failure::Fixture("intern did not root a bare symbol"))
     })?;
-    let handle = attempt(owner, |run| Ok(run.initial_symbol_handle(&homes.dst)?))?;
-    let initially_unbound = attempt(owner, |run| {
+    let handle = attempt(owner, "initial_symbol_handle", |run| {
+        Ok(run.initial_symbol_handle(&homes.dst)?)
+    })?;
+    let initially_unbound = attempt(owner, "sym_boundp_into", |run| {
         run.sym_boundp_into(&handle, &mut homes.dst)?;
         Ok(homes.dst.word_for_test(run) == Value::NIL.bits())
     })?;
-    let function_nil = attempt(owner, |run| {
+    let function_nil = attempt(owner, "sym_function_into", |run| {
         run.sym_function_into(&handle, &mut homes.dst)?;
         Ok(homes.dst.word_for_test(run) == Value::NIL.bits())
     })?;
-    let repeated = attempt(owner, |run| {
+    let repeated = attempt(owner, "initial_intern_into(repeat)", |run| {
         run.initial_intern_into(&homes.name, &mut homes.dst)?;
         Ok(homes.dst.word_for_test(run))
     })?;
-    let (soft_after, charge) = attempt(owner, |run| {
+    let (soft_after, charge) = attempt(owner, "initial_intern_soft_into(after)", |run| {
         run.initial_intern_soft_into(&homes.name, &mut homes.dst)?;
         Ok((
             homes.dst.word_for_test(run),
@@ -256,7 +276,11 @@ fn exercise(
             heap,
             9000,
         )?,
-        |owner| attempt(owner, |run| Ok(run.initial_facts_for_test(inputs[0])?)),
+        |owner| {
+            attempt(owner, "initial_facts_for_test(before)", |run| {
+                Ok(run.initial_facts_for_test(inputs[0])?)
+            })
+        },
     )?;
     let registry_before = crate::emacs_core::intern::parallel::identity_census_for_test();
     let permits = (0..inputs.len())
@@ -314,14 +338,14 @@ fn exercise(
             let mut names = Vec::new();
             let mut gaps_absent = true;
             for (index, row) in rows.iter().enumerate() {
-                cells.push(attempt(owner, |run| {
+                cells.push(attempt(owner, "initial_facts_for_test(after)", |run| {
                     Ok(run.initial_facts_for_test(row.id)?)
                 })?);
                 // Every forced-gap fixture leaves the slot immediately before its
                 // FIRST winner absent. Later different-name winners are contiguous.
                 let first = rows.iter().map(|row| row.id.0).min().ok_or("C5 no rows")?;
                 if first > 0 {
-                    gaps_absent &= !attempt(owner, |run| {
+                    gaps_absent &= !attempt(owner, "initial_facts_for_test(gap)", |run| {
                         Ok(run.initial_facts_for_test(SymId(first - 1))?)
                     })?
                     .present;
@@ -499,4 +523,5 @@ fn p3sym_c5_two_to_four_owners_grow_distinct_names_without_filling_gaps() {
     histories(Scenario::DifferentNames);
 }
 
+mod contention;
 mod serial;
