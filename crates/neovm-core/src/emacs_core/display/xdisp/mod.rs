@@ -4834,20 +4834,17 @@ fn expand_mode_line_percent_in_state(
     };
     let fmt_str = fmt_storage.as_str();
     let buf = buffers.current_buffer();
-    let buf_name = buf
-        .map(|b| b.name_runtime_string_owned())
-        .unwrap_or_else(|| "*scratch*".to_string());
-    let file_name_storage = buf.and_then(|b| {
-        b.file_name_value()
-            .as_lisp_string()
-            .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
-    });
-    let file_name = file_name_storage.as_deref().unwrap_or("");
-    let modified = buf.map(|b| b.is_modified()).unwrap_or(false);
-    let read_only = buf.is_some_and(|b| {
-        crate::emacs_core::editfns::buffer_read_only_active_in_state(vars, dynamic, b)
-    });
-    let narrowed = buf.is_some_and(|b| b.is_narrowed());
+    // GNU decode_mode_spec reads each input in its matching switch arm.
+    // This native expansion cannot run Lisp; share repeated name fields only
+    // within this string, before the walker can run the next :eval.
+    let buf_name = std::cell::OnceCell::new();
+    let file_name_storage = std::cell::OnceCell::new();
+    let modified = || buf.is_some_and(|b| b.is_modified());
+    let read_only = || {
+        buf.is_some_and(|b| {
+            crate::emacs_core::editfns::buffer_read_only_active_in_state(vars, dynamic, b)
+        })
+    };
 
     // GNU computes %l/%c lazily inside decode_mode_spec's switch — the
     // O(point) line count and O(column) scan run only when the format
@@ -4907,7 +4904,10 @@ fn expand_mode_line_percent_in_state(
             Some('b') => {
                 append_mode_line_percent_string_spec(
                     result,
-                    &buf_name,
+                    buf_name.get_or_init(|| {
+                        buf.map(|b| b.name_runtime_string_owned())
+                            .unwrap_or_else(|| "*scratch*".to_string())
+                    }),
                     &props_at_percent,
                     field_width,
                 );
@@ -4916,7 +4916,16 @@ fn expand_mode_line_percent_in_state(
             Some('f') => {
                 append_mode_line_percent_string_spec(
                     result,
-                    file_name,
+                    file_name_storage
+                        .get_or_init(|| {
+                            buf.and_then(|b| {
+                                b.file_name_value().as_lisp_string().map(|ls| {
+                                    crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes())
+                                })
+                            })
+                        })
+                        .as_deref()
+                        .unwrap_or(""),
                     &props_at_percent,
                     field_width,
                 );
@@ -4968,9 +4977,9 @@ fn expand_mode_line_percent_in_state(
             Some('*') => {
                 append_mode_line_percent_string_spec(
                     result,
-                    if read_only {
+                    if read_only() {
                         "%"
-                    } else if modified {
+                    } else if modified() {
                         "*"
                     } else {
                         "-"
@@ -4983,9 +4992,9 @@ fn expand_mode_line_percent_in_state(
             Some('+') => {
                 append_mode_line_percent_string_spec(
                     result,
-                    if modified {
+                    if modified() {
                         "*"
-                    } else if read_only {
+                    } else if read_only() {
                         "%"
                     } else {
                         "-"
@@ -4998,7 +5007,7 @@ fn expand_mode_line_percent_in_state(
             Some('&') => {
                 append_mode_line_percent_string_spec(
                     result,
-                    if modified { "*" } else { "-" },
+                    if modified() { "*" } else { "-" },
                     &props_at_percent,
                     field_width,
                 );
@@ -5049,7 +5058,11 @@ fn expand_mode_line_percent_in_state(
             Some('n') => {
                 append_mode_line_percent_string_spec(
                     result,
-                    if narrowed { " Narrow" } else { "" },
+                    if buf.is_some_and(|b| b.is_narrowed()) {
+                        " Narrow"
+                    } else {
+                        ""
+                    },
                     &props_at_percent,
                     field_width,
                 );
