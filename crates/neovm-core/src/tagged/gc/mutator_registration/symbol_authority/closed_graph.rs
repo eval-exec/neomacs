@@ -37,6 +37,33 @@ fn closed_graph(roots: impl IntoIterator<Item = Value>, budget: usize) -> bool {
 }
 
 impl KeeperSymbols<'_> {
+    /// C5's separate frozen input admission. Do not broaden the C3 graph
+    /// closure: these sessions import only exact string roots, never their
+    /// properties or mutable payload graphs as executor operands.
+    pub(crate) fn initial_names_closed_for_test(
+        &self,
+        keys: &[SymbolHandle],
+        budget: usize,
+    ) -> Result<bool, RegistrationError> {
+        if keys.len() > budget {
+            return Ok(false);
+        }
+        for key in keys {
+            self.backing(key)?;
+            // SAFETY: matching stopped heap/World, retained rooted input,
+            // and zero symbol word checked by the keeper admission.
+            let bits = unsafe { self.registry.symbols.backing.probe(key.symbol) };
+            let value = Value::from_bits(bits);
+            let Some(name) = value.as_lisp_string() else {
+                return Ok(false);
+            };
+            if name.as_bytes().first() == Some(&b':') {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(crate) fn plain_graphs_closed_for_test(
         &self,
         keys: &[SymbolHandle],

@@ -1,6 +1,27 @@
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
 
+#[test]
+fn p3sym_c5_global_executor_cannot_admit_intern_even_if_unreachable() {
+    Context::with_test_symbol_era(|era, id| {
+        let tape = source(
+            vec![
+                Op::Jump { target: 2 },
+                Op::Intern(InternOp::InitialIntern { name: 0, dst: 0 }),
+            ],
+            1,
+        );
+        assert!(matches!(
+            GlobalSession::admit(&era, &[id], &[tape]),
+            Err(AdmissionError::Program(Reject::Excluded("initial obarray")))
+        ));
+        era.admit_plain_symbol(id).unwrap();
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
 pub(super) fn source(ops: Vec<Op>, nslots: usize) -> Source {
     Source {
         insns: ops

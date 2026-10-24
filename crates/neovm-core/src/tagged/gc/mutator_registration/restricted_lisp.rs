@@ -12,6 +12,7 @@ use super::a8_probes;
 use super::symbol_functions::FunctionOp;
 use super::symbol_functions::retry::{self as contention, Deadline, Retry, SPIN_WAIT, retry_owned};
 use super::symbol_globals::GlobalOp;
+use super::symbol_intern::InternOp;
 use super::{
     AllStopped, HeapIdentity, Mutator, MutatorPermit, OwnerRootSlot, ParallelHeapEra,
     RegistrationError, Registry, RendezvousError, RunAccess, RunSlice, SealedTableAccess,
@@ -20,6 +21,7 @@ use super::{
 
 mod functions;
 mod globals;
+mod intern;
 use crate::emacs_core::builtins::maybe_resize_hash_table_for_insert;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::{HashProbe, HashTableEntry, HashTableTest};
@@ -64,6 +66,7 @@ enum Op {
     /// C3: an index into a session's admitted, immutable symbol-handle table.
     Global(GlobalOp),
     Function(FunctionOp),
+    Intern(InternOp),
     ConstNil {
         dst: u16,
     },
@@ -173,6 +176,7 @@ enum Insn {
     Allowed(Op),
     Global(GlobalOp),
     Function(FunctionOp),
+    Intern(InternOp),
     SymbolValue,
     Obarray,
     Buffer,
@@ -224,6 +228,7 @@ enum ExecError {
     EpochRetry,
     VoidVariable,
     Function(super::FunctionError),
+    Intern(super::InitialInternError),
 }
 
 /// Why exec handed control back to the driver. A safepoint pauses for the
@@ -417,6 +422,7 @@ fn lower(insns: &[Insn]) -> Result<Vec<Op>, Reject> {
             Insn::Allowed(op) => op,
             Insn::Global(op) => Op::Global(op),
             Insn::Function(op) => Op::Function(op),
+            Insn::Intern(op) => Op::Intern(op),
             Insn::SymbolValue => return Err(Reject::Excluded("symbol")),
             Insn::Obarray => return Err(Reject::Excluded("obarray")),
             Insn::Buffer => return Err(Reject::Excluded("buffer")),
@@ -473,7 +479,7 @@ fn prevalidate_with(
     step_cap: u32,
     initial: &[(u16, Abs)],
 ) -> Result<(), Reject> {
-    prevalidate_inner(ops, nslots, bound, step_cap, initial, None, None)
+    prevalidate_inner(ops, nslots, bound, step_cap, initial, None, None, false)
 }
 
 fn prevalidate_inner(
@@ -484,11 +490,13 @@ fn prevalidate_inner(
     initial: &[(u16, Abs)],
     globals: Option<usize>,
     functions: Option<usize>,
+    intern: bool,
 ) -> Result<(), Reject> {
     // Scan the entire tape, including unreachable code. A global session
     // checks all participating tapes before any participant is registered.
     globals::check_tape(ops, nslots, globals)?;
     functions::check_tape(ops, nslots, functions)?;
+    intern::check_tape(ops, nslots, intern)?;
     let mut slots = vec![Abs::Nil; nslots];
     for &(index, kind) in initial {
         slots[slot_index(index, nslots)?] = kind;
@@ -504,6 +512,10 @@ fn prevalidate_inner(
         }
         let from = u16::try_from(pc).map_err(|_| Reject::Slot)?;
         match ops[pc] {
+            Op::Intern(op) => {
+                intern::abstract_step(op, &mut slots)?;
+                pc += 1;
+            }
             Op::Function(op) => {
                 functions::abstract_step(op, &mut slots, &mut call_selected)?;
                 pc += 1;
@@ -551,6 +563,15 @@ fn prevalidate_inner(
                 pc += 1;
             }
             Op::Eq { dst, a, b } => {
+                if intern {
+                    // The intern executor compares rooted symbol identities or
+                    // NIL answers. Older sessions retain their fixnum gate.
+                    slot_index(a, nslots)?;
+                    slot_index(b, nslots)?;
+                    slots[slot_index(dst, nslots)?] = Abs::Top;
+                    pc += 1;
+                    continue;
+                }
                 let (x, y) = fix_pair(slots.as_slice(), nslots, a, b)?;
                 let index = slot_index(dst, nslots)?;
                 slots[index] = if x == y { Abs::T } else { Abs::Nil };
@@ -1071,7 +1092,9 @@ fn exec<'brand>(
                 machine.pc += 1;
             }
             Op::Eq { dst, a, b } => {
-                let (x, y) = fix_operands(slice, homes, a, b)?;
+                let a = home_index(a, homes.len())?;
+                let b = home_index(b, homes.len())?;
+                let (x, y) = (home_bits(slice, &homes[a]), home_bits(slice, &homes[b]));
                 let bits = if x == y {
                     TaggedValue::T.bits()
                 } else {
@@ -1151,7 +1174,8 @@ fn exec<'brand>(
             | Op::HtCopy { .. }
             | Op::HtCount { .. }
             | Op::Global(_)
-            | Op::Function(_) => {
+            | Op::Function(_)
+            | Op::Intern(_) => {
                 // Leases mint from `&mut RunAccess`, and the open slice
                 // region is borrowing it: leave pc on the op and let the
                 // driver perform it between regions (design §6).

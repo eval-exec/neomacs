@@ -1,6 +1,27 @@
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
 
+#[test]
+fn p3sym_c5_function_executor_cannot_admit_intern_even_if_unreachable() {
+    Context::with_test_symbol_functions_era(PlainSymbolBacking::Unprojected, |era, ids| {
+        let tape = source(
+            vec![
+                Op::Jump { target: 2 },
+                Op::Intern(InternOp::InitialInternSoft { name: 0, dst: 0 }),
+            ],
+            1,
+        );
+        assert!(matches!(
+            Session::admit(&era, &ids, &[tape]),
+            Err(AdmissionError::Program(Reject::Excluded("initial obarray")))
+        ));
+        era.admit_plain_symbol(ids[0]).unwrap();
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
 pub(super) fn source(ops: Vec<Op>, nslots: usize) -> Source {
     Source {
         insns: ops
@@ -342,7 +363,16 @@ fn p3sym_c4_executor_gate_checks_every_tape_and_activation_lifecycle() {
         let repeated = Session::admit(&era, &ids, &[source(vec![begin(), begin()], 1)]).err();
         let overflow = Session::admit(&era, &ids, &[source(vec![], usize::MAX)]).err();
         let legacy = prevalidate(&[begin()], 1, 0, STEP_CAP);
-        let global = prevalidate_inner(&[begin()], 1, 0, STEP_CAP, &[], Some(ids.len()), None);
+        let global = prevalidate_inner(
+            &[begin()],
+            1,
+            0,
+            STEP_CAP,
+            &[],
+            Some(ids.len()),
+            None,
+            false,
+        );
         let (collector, keeper) = era.finish().unwrap();
         drop(collector);
         drop(keeper);
