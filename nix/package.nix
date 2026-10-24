@@ -177,7 +177,7 @@ craneLib.buildPackage (
       mainProgram = "neomacs";
       # The wgpu/WPE backends build on Linux and macOS only; mirrors the
       # `systems` list in flake.nix.
-      platforms = lib.platforms.unix;
+      platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
     };
   }
 )
