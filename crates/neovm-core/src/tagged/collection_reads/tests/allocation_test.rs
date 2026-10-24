@@ -139,6 +139,11 @@ fn collection_reads_allocation_steady_projection_counters() {
                 retained[index % 4] = Some(certificate);
             }
         });
+        assert_eq!(
+            allocations,
+            (0, 0),
+            "warmed escaping captures must not allocate"
+        );
         assert!(
             retained
                 .iter()
@@ -250,4 +255,74 @@ fn collection_reads_small_capture_storage_lifetime_fixture() {
     assert!(!second.unwrap().unchanged());
     assert!(replacement.unwrap().unchanged());
     assert!(outer.unwrap().unchanged());
+}
+
+#[test]
+fn collection_reads_allocation_steady_phase_counters() {
+    for count in [0, 24, 512] {
+        let record = || {
+            with_state(|state| {
+                let mut state = state.borrow_mut();
+                for bits in 0..count {
+                    record_observation(&mut state, bits, LispCollectionRevision::current(), None);
+                }
+            });
+        };
+        let (_, retained) = capture(record);
+        // A second lease can retire and warm the free list while the first
+        // immutable certificate remains live and unavailable for reuse.
+        drop(capture(record));
+        let (scope, begin) = measured(CollectionReadScope::begin);
+        let (_, recording) = measured(record);
+        let (certificate, finish) = measured(|| scope.finish());
+        let certificate = certificate.unwrap();
+        assert!(retained.unwrap().unchanged());
+        let (_, retire) = measured(|| drop(certificate));
+        assert_eq!(begin, (0, 0));
+        assert_eq!(recording, (0, 0));
+        assert_eq!(finish, (0, 0));
+        assert_eq!(retire, (0, 0));
+        eprintln!(
+            "obsalloc steady owners={count} begin={begin:?} record={recording:?} finish={finish:?} retire={retire:?} (calls, requested bytes)"
+        );
+    }
+}
+
+#[test]
+fn collection_reads_certificate_retires_into_its_origin_world() {
+    let origin = ObservationWorld::current();
+    let foreign = ObservationWorld::default();
+    let record = || {
+        with_state(|state| {
+            record_observation(
+                &mut state.borrow_mut(),
+                8,
+                LispCollectionRevision::current(),
+                None,
+            );
+        });
+    };
+    let (_, reads) = capture(record);
+    let reads = reads.unwrap();
+    foreign.install(super::super::gc::BarrierWindow::NONE);
+    with_store(|store| {
+        let revision = store.advance();
+        store.record(8, revision);
+    });
+    assert!(
+        reads.unchanged(),
+        "a foreign journal does not change this certificate"
+    );
+    let (_, retire) = measured(|| drop(reads));
+    assert_eq!(
+        retire,
+        (0, 0),
+        "origin retirement cannot grow its free list"
+    );
+    origin.install(super::super::gc::BarrierWindow::NONE);
+    let (_, reused) = measured(|| {
+        let (_, reads) = capture(record);
+        assert!(reads.unwrap().unchanged());
+    });
+    assert_eq!(reused, (0, 0), "the origin receives its own retired lease");
 }

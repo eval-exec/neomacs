@@ -178,6 +178,7 @@ struct State {
     // Context/dump changes reclassify the surviving owner ranges.
     observed: observed_envelope::ObservedEnvelope,
     capture_pool: capture_storage::CapturePool,
+    certificate_pool: certificate_storage::CertificatePool,
 }
 
 impl Default for State {
@@ -191,6 +192,7 @@ impl Default for State {
             captures: Vec::with_capacity(MAX_DEPTH),
             observed: observed_envelope::ObservedEnvelope::new(),
             capture_pool: capture_storage::CapturePool::default(),
+            certificate_pool: certificate_storage::CertificatePool::default(),
         }
     }
 }
@@ -215,19 +217,9 @@ struct Capture {
 /// mutation journals remain local to the observing mutator.
 #[derive(Debug)]
 pub struct CollectionReads {
-    reads: FxHashSet<usize>,
-    origin: Box<CertificateOrigin>,
-    _not_send: std::marker::PhantomData<*const ()>,
-}
-
-// Completed certificates sit inside redisplay's TLS caches. Keep their
-// original footprint: adding a World handle inline would move unrelated TLS
-// offsets, including the interpreter's. Only cold certificate validation pays
-// this allocation/indirection; ordinary slot stores never touch it.
-#[derive(Debug)]
-struct CertificateOrigin {
-    revision: LispCollectionRevision,
+    reads: certificate_storage::CertificateLease,
     owner: ObservationWorld,
+    _not_send: std::marker::PhantomData<*const ()>,
 }
 
 const _: () = {
@@ -253,7 +245,9 @@ impl CollectionReads {
     }
 
     pub fn unchanged(&self) -> bool {
-        unchanged_since(&self.reads, self.origin.revision, self.origin.owner.store())
+        self.reads.revision().is_some_and(|revision| {
+            unchanged_since(self.reads.as_slice(), revision, self.owner.store())
+        })
     }
 
     /// A nested cache hit reads its original dependencies transitively.
@@ -261,11 +255,11 @@ impl CollectionReads {
         if !self.unchanged() {
             return false;
         }
-        if !self.origin.owner.is_current() {
+        if !self.owner.is_current() {
             return false;
         }
         if ACTIVE.with(Cell::get) {
-            for &bits in &self.reads {
+            for &bits in self.reads.as_slice() {
                 // The original observation already published its sticky mark
                 // and this mutator's envelope. Certificates retain identities,
                 // not object storage: transitive reuse must not dereference an
@@ -279,18 +273,23 @@ impl CollectionReads {
     }
 }
 
-fn unchanged_since(
-    reads: &FxHashSet<usize>,
-    revision: LispCollectionRevision,
-    store: &StoreState,
-) -> bool {
+impl Drop for CollectionReads {
+    fn drop(&mut self) {
+        let reads = &mut self.reads;
+        self.owner.with_state(|state| {
+            state.borrow_mut().certificate_pool.recycle(reads);
+        });
+    }
+}
+
+fn unchanged_since(reads: &[usize], revision: LispCollectionRevision, store: &StoreState) -> bool {
     let count = store.sequence().wrapping_sub(revision.sequence());
     if count > JOURNAL_SIZE as u64 {
         return false;
     }
     (1..=count).all(|offset| {
         let slot = revision.sequence().wrapping_add(offset) as usize % JOURNAL_SIZE;
-        !reads.contains(&store.journal()[slot].get())
+        reads.binary_search(&store.journal()[slot].get()).is_err()
     })
 }
 
@@ -386,12 +385,15 @@ impl CollectionReadScope {
             tracing::trace!(target: "neovm_core::collection_reads", reads = capture.reads.len(), writes = count, "capture changed during observation");
             return None;
         }
+        let reads = self.owner.with_state(|state| {
+            state
+                .borrow_mut()
+                .certificate_pool
+                .acquire(&capture.reads, now)
+        });
         Some(CollectionReads {
-            reads: capture.reads.keys().copied().collect(),
-            origin: Box::new(CertificateOrigin {
-                revision: now,
-                owner: self.owner.clone(),
-            }),
+            reads,
+            owner: self.owner.clone(),
             _not_send: std::marker::PhantomData,
         })
     }
@@ -773,6 +775,7 @@ fn record_projected_write_observed(store: &StoreState, value: TaggedValue, proje
 }
 
 mod capture_storage;
+mod certificate_storage;
 mod store_state;
 use store_state::with_state;
 pub(crate) use store_state::{
