@@ -14,6 +14,8 @@ struct Homes<'era> {
     dst: OwnerRootSlot<'era>,
     value: OwnerRootSlot<'era>,
     target: Option<crate::emacs_core::intern::SymId>,
+    old_id: crate::emacs_core::intern::SymId,
+    old_handle: crate::tagged::gc::SymbolHandle,
 }
 struct FixtureGuard<'era> {
     owner: Option<Mutator<'era>>,
@@ -149,6 +151,8 @@ fn fixture(
                     dst: run.root_slot(&inputs[2]).unwrap(),
                     value: run.root_slot(&inputs[2]).unwrap(),
                     target,
+                    old_id: ids[1],
+                    old_handle: handles[0],
                 });
                 let homes = guard.homes.as_mut().unwrap();
                 run.sym_value_into(&handles[0], &mut homes.name).unwrap();
@@ -605,3 +609,5 @@ fn p3sym_c5_existing_id_preserves_registry_epoch_and_count() {
         }).unwrap();
     }
 }
+
+mod failures;

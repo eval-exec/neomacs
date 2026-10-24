@@ -49,6 +49,36 @@ impl Drop for InitialObarrayRef<'_, '_, '_> {
 
 impl<'owner, 'era> RunAccess<'owner, 'era> {
     #[cfg(test)]
+    pub(crate) fn initial_fault_for_test(
+        &mut self,
+        fault: crate::emacs_core::symbol::parallel::InitialInternFault,
+    ) -> Result<(), RegistrationError> {
+        let lease = self.initial_obarray_mut()?;
+        let authority = lease.write_token();
+        // SAFETY: same retained World, no concurrent operation, WRITER held.
+        unsafe {
+            lease
+                .run
+                .owner
+                .registry
+                .symbols
+                .backing
+                .arm_initial_fault_for_test(fault, &authority)
+        };
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initial_poison_receipt_for_test(&self) -> (bool, bool, u8) {
+        let symbols = &self.owner.registry.symbols;
+        (
+            symbols.poisoned.load(Ordering::Acquire),
+            word::quiescent(&symbols.word),
+            symbols.backing.initial_fault_receipt_for_test(),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn initial_facts_for_test(
         &mut self,
         id: SymId,
@@ -266,6 +296,11 @@ pub(super) fn publish_existing(
     *charged = charged.saturating_add(grown);
     if result == Err(RegistrationError::Poisoned) {
         symbols.poison();
+        #[cfg(test)]
+        symbols.backing.record_initial_poison_for_test(
+            symbols.poisoned.load(Ordering::Acquire)
+                && symbols.word.load(Ordering::Acquire) == super::super::authority_word::WRITER,
+        );
     }
     result?;
     *dst = MarkWord::of(Value::from_sym_id(metadata.id));

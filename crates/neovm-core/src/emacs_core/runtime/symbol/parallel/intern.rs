@@ -6,6 +6,15 @@ use crate::tagged::gc::{RegistrationError, SymbolWriteToken};
 use std::mem::size_of;
 use std::ptr::addr_of_mut;
 
+/// Per-World test injection, absent from production types and instructions.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(crate) enum InitialInternFault {
+    ReservationAfterSpineMove = 1,
+    AfterSlotPublication = 2,
+}
+
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InitialInternFacts {
@@ -16,6 +25,7 @@ pub(crate) struct InitialInternFacts {
     pub(crate) sides: usize,
     pub(crate) bytes: usize,
     pub(crate) spine_current: bool,
+    pub(crate) spine_address: usize,
     pub(crate) present: bool,
     pub(crate) member: bool,
     pub(crate) cells: Option<(usize, usize, bool, bool)>,
@@ -93,6 +103,38 @@ impl PreparedChunks {
 
 impl SymbolBacking {
     /// # Safety
+    /// The test owns this World's matching writer, with no operation active.
+    #[cfg(test)]
+    pub(crate) unsafe fn arm_initial_fault_for_test(
+        &self,
+        fault: InitialInternFault,
+        _authority: &SymbolWriteToken<'_>,
+    ) {
+        self.intern_fault_receipt
+            .store(0, std::sync::atomic::Ordering::Release);
+        self.intern_fault
+            .store(fault as u8, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Scalar diagnostics only, never a World view after a poisoned commit.
+    #[cfg(test)]
+    pub(crate) fn initial_fault_receipt_for_test(&self) -> u8 {
+        self.intern_fault_receipt
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_initial_poison_for_test(&self, writer_held: bool) {
+        if writer_held
+            && self.initial_fault_receipt_for_test()
+                == InitialInternFault::AfterSlotPublication as u8
+        {
+            self.intern_fault_receipt
+                .fetch_or(128, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// # Safety
     /// Test assertions only, under this actual World's exclusive writer.
     #[cfg(test)]
     pub(crate) unsafe fn initial_facts_for_test(
@@ -117,6 +159,7 @@ impl SymbolBacking {
             sides: obarray.symbols.sides.len(),
             bytes: storage_bytes(&obarray.symbols),
             spine_current: obarray.symbols.spine_addr == obarray.symbols.chunks.as_ptr() as usize,
+            spine_address: obarray.symbols.spine_addr,
             present: symbol.is_some(),
             member: obarray.is_global_member(id),
             cells: symbol.map(|s| {
@@ -180,6 +223,10 @@ impl SymbolBacking {
             return Err(RegistrationError::Publication);
         }
         let index = metadata.id.0 as usize;
+        #[cfg(test)]
+        let fault = self
+            .intern_fault
+            .swap(0, std::sync::atomic::Ordering::AcqRel);
         let symbols = unsafe { &mut *addr_of_mut!((*root).symbols) };
         if let Some(symbol) = symbols.get(index) {
             if symbol.name() != metadata.name {
@@ -216,6 +263,31 @@ impl SymbolBacking {
             .ok_or(RegistrationError::Capacity)?;
         // Capacity-only changes are retained and charged even if a subsequent
         // reservation refuses; logical length/membership remain untouched.
+        #[cfg(test)]
+        if fault == InitialInternFault::ReservationAfterSpineMove as u8 {
+            // Force a larger reservation at this allocation seam. The old
+            // buffer remains allocated while its replacement reserves, so a
+            // distinct address and retained growth are certain. The test is
+            // independent of malloc extending in place; only Box handles move.
+            let mut replacement = Vec::new();
+            let capacity = symbols
+                .chunks
+                .len()
+                .checked_add(added)
+                .and_then(|required| {
+                    symbols
+                        .chunks
+                        .capacity()
+                        .checked_add(1)
+                        .map(|grown| required.max(grown))
+                })
+                .ok_or(RegistrationError::Capacity)?;
+            replacement
+                .try_reserve_exact(capacity)
+                .map_err(|_| RegistrationError::Capacity)?;
+            replacement.append(&mut symbols.chunks);
+            symbols.chunks = replacement;
+        }
         symbols
             .chunks
             .try_reserve(added)
@@ -224,6 +296,12 @@ impl SymbolBacking {
         // if a later preparation refuses. Keep the old logical slots usable
         // on that clean failure path as well as on the final publication path.
         symbols.spine_addr = symbols.chunks.as_ptr() as usize;
+        #[cfg(test)]
+        if fault == InitialInternFault::ReservationAfterSpineMove as u8 {
+            self.intern_fault_receipt
+                .store(fault, std::sync::atomic::Ordering::Release);
+            return Err(RegistrationError::Capacity);
+        }
         symbols
             .sides
             .try_reserve(added)
@@ -249,6 +327,15 @@ impl SymbolBacking {
                 void,
                 authority,
             ));
+        }
+        #[cfg(test)]
+        if fault == InitialInternFault::AfterSlotPublication as u8 {
+            // Target presence/membership is now live, but its counters and
+            // the destination are deliberately not committed. Resume is
+            // forbidden: the operator must publish sticky poison under WRITER.
+            self.intern_fault_receipt
+                .store(fault, std::sync::atomic::Ordering::Release);
+            return Err(RegistrationError::Poisoned);
         }
         unsafe {
             (*root).global_member_count = count;

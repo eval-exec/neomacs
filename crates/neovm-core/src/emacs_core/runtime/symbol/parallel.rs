@@ -6,7 +6,7 @@ pub(crate) use functions::FunctionUpdate;
 mod intern;
 mod write;
 #[cfg(test)]
-pub(crate) use intern::InitialInternFacts;
+pub(crate) use intern::{InitialInternFacts, InitialInternFault};
 
 use super::{Obarray, SymbolTrappedWrite, ValueCell};
 use crate::emacs_core::forward::{CanonicalArm, ThreadProjectionTable};
@@ -29,6 +29,10 @@ pub(crate) struct SymbolBacking {
     projections: NonNull<RefCell<ThreadProjectionTable>>,
     pub(crate) world: usize,
     pub(crate) generation: u64,
+    #[cfg(test)]
+    intern_fault: std::sync::atomic::AtomicU8,
+    #[cfg(test)]
+    intern_fault_receipt: std::sync::atomic::AtomicU8,
 }
 
 // SAFETY: only the keeper constructs this bridge from retained World roots.
@@ -94,6 +98,10 @@ impl SymbolBacking {
             projections,
             world,
             generation,
+            #[cfg(test)]
+            intern_fault: std::sync::atomic::AtomicU8::new(0),
+            #[cfg(test)]
+            intern_fault_receipt: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
