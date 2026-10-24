@@ -58,11 +58,21 @@ jobs:
       - name: Install suite dependencies
         run: scripts/ci/setup-linux.sh "$LINUX_PROFILE"
 
-      # TUI comparisons and native grammar oracle cases require pinned GNU.
-      # Other oracle cases continue to use their snapshot-mode policy.
+      # TUI comparisons and native grammar oracle cases require pinned GNU, and
+      # so do the neovm-core parity tests that spawn it directly (gdm_region,
+      # diagnostic_symbols). Other oracle cases continue to use their
+      # snapshot-mode policy.
       - name: Set up GNU Emacs oracle
-        if: inputs.suite == 'tui' || inputs.suite == 'oracle'
+        if: inputs.suite == 'core' || inputs.suite == 'tui' || inputs.suite == 'oracle'
         uses: ./.github/actions/setup-gnu-emacs
+
+      # neovm-core's oracle helper resolves GNU only from this variable or an
+      # emacs-mirror checkout; it does not read PATH, so the action's PATH
+      # export is invisible to it. Point it at the same pinned build the
+      # oracle and tui suites run against.
+      - name: Point the core oracle helper at the pinned GNU build
+        if: inputs.suite == 'core'
+        run: echo "NEOVM_FORCE_ORACLE_PATH=/opt/gnu-emacs-oracle/bin/emacs" >> "$GITHUB_ENV"
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust

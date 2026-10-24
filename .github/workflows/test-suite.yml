@@ -140,7 +140,10 @@ jobs:
 
   neovm-core-tests:
     if: ${{ github.event_name != 'schedule' }}
-    needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
+    # The core shards spawn GNU directly in their parity tests, so they need
+    # the pinned oracle. Depending on the warming job also means they restore
+    # its cached build instead of compiling Emacs twenty times in parallel.
+    needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     uses: ./.github/workflows/nextest-shards.yml
     with:
       suite: core
