@@ -11,12 +11,9 @@ impl Drop for RestoreMode {
 }
 
 fn clear_used() -> usize {
-    let (used, dirty) = RECENT_READS.with(|recent| {
-        (
-            recent.words.iter().filter(|word| word.get() != 0).count(),
-            recent.dirty.get(),
-        )
-    });
+    let used =
+        RECENT_READS.with(|recent| recent.words.iter().filter(|word| word.get() != 0).count());
+    let dirty = store_state::recent_scratch_dirty();
     RECENT_CLEARED_CELLS.with(|count| count.set(0));
     RECENT_CLEARED_MASKS.with(|count| count.set(0));
     clear_recent_reads();

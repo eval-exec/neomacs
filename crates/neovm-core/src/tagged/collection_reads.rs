@@ -129,9 +129,6 @@ struct RecentReads {
     // and policy changes refresh it before any pointer read; no Lisp state is
     // cached by this field and other mutators cannot change its value.
     observed: Cell<bool>,
-    // Use existing padding, preserving the word probe and epoch offsets.
-    // Only cold misses set this; empty resets never initialize STATE.
-    dirty: Cell<bool>,
     epoch: Cell<u64>,
 }
 
@@ -154,36 +151,33 @@ impl RecentReads {
     const fn new() -> Self {
         Self {
             observed: Cell::new(false),
-            dirty: Cell::new(false),
             epoch: Cell::new(0),
             words: [const { Cell::new(0) }; 256],
         }
     }
 
     fn clear(&self, epoch: u64) {
-        if self.dirty.replace(false) {
-            if let Some(dirty) = store_state::take_recent_dirty() {
-                for (block, mut mask) in dirty.into_iter().enumerate() {
-                    while mask != 0 {
-                        let index = block * 64 + mask.trailing_zeros() as usize;
-                        let word = &self.words[index];
-                        if word.get() != 0 {
-                            word.set(0);
-                            #[cfg(test)]
-                            RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + 1));
-                        }
-                        mask &= mask - 1;
+        if let Some(dirty) = store_state::take_recent_dirty() {
+            for (block, mut mask) in dirty.into_iter().enumerate() {
+                while mask != 0 {
+                    let index = block * 64 + mask.trailing_zeros() as usize;
+                    let word = &self.words[index];
+                    if word.get() != 0 {
+                        word.set(0);
+                        #[cfg(test)]
+                        RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + 1));
                     }
+                    mask &= mask - 1;
                 }
-            } else {
-                // Teardown can retire STATE before the recent-read cache.
-                // Keep reset total without accessing already destroyed TLS.
-                for word in &self.words {
-                    word.set(0);
-                }
-                #[cfg(test)]
-                RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + self.words.len()));
             }
+        } else {
+            // Teardown can retire STATE before the recent-read cache.
+            // Keep reset total without accessing already destroyed TLS.
+            for word in &self.words {
+                word.set(0);
+            }
+            #[cfg(test)]
+            RECENT_CLEARED_CELLS.with(|count| count.set(count.get() + self.words.len()));
         }
         self.epoch.set(epoch);
     }

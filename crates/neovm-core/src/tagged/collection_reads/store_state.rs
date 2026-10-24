@@ -368,7 +368,6 @@ pub(super) fn note_recent_miss(bits: usize) {
         STATE.with(|slot| {
             let mask = &slot.recent_dirty[index / 64];
             mask.set(mask.get() | (1 << (index % 64)));
-            RECENT_READS.with(|recent| recent.dirty.set(true));
         });
     }
 }
@@ -376,12 +375,22 @@ pub(super) fn note_recent_miss(bits: usize) {
 pub(super) fn take_recent_dirty() -> Option<[u64; 4]> {
     STATE
         .try_with(|slot| {
-            let dirty = std::array::from_fn(|index| slot.recent_dirty[index].replace(0));
-            #[cfg(test)]
-            RECENT_CLEARED_MASKS.with(|count| count.set(count.get() + 4));
+            let dirty = std::array::from_fn(|index| slot.recent_dirty[index].get());
+            if dirty.iter().any(|&mask| mask != 0) {
+                for mask in &slot.recent_dirty {
+                    mask.set(0);
+                }
+                #[cfg(test)]
+                RECENT_CLEARED_MASKS.with(|count| count.set(count.get() + 4));
+            }
             dirty
         })
         .ok()
+}
+
+#[cfg(test)]
+pub(super) fn recent_scratch_dirty() -> bool {
+    STATE.with(|slot| slot.recent_dirty.iter().any(|mask| mask.get() != 0))
 }
 
 /// One TLS pointer load and no RefCell borrow. The TLS owner retains the root
