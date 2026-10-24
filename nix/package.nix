@@ -164,6 +164,8 @@ craneLib.buildPackage (
         ${lib.concatStringsSep " \\\n        " linuxWrapArgs}
     '';
 
+    setupHook = ./setup-hook.sh;
+
     passthru = {
       inherit gstreamerRuntime productionCapabilities;
     };
@@ -173,6 +175,9 @@ craneLib.buildPackage (
       homepage = "https://github.com/eval-exec/neomacs";
       license = lib.licenses.gpl3Plus;
       mainProgram = "neomacs";
+      # The wgpu/WPE backends build on Linux and macOS only; mirrors the
+      # `systems` list in flake.nix.
+      platforms = lib.platforms.unix;
     };
   }
 )
