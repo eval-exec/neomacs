@@ -172,6 +172,15 @@ impl SpecSlot {
             return false;
         }
         self.epoch.store(epoch, Ordering::Relaxed);
+        // A subr slot's screened-entry cache
+        // ([`Self::cached_subr_entry`]) is valid only under the epoch it was
+        // filled at: an install that moved the epoch may have been preceded
+        // by an in-place static-subr rewrite (install_subr rewrites first,
+        // then bumps, keeping the VALUE bits), which the re-arm's bits check
+        // cannot see. Drop it; the next fast call screens once.
+        if self.holds_subr_binding() {
+            self.clear_screened_subr_entry();
+        }
         true
     }
 
@@ -316,6 +325,74 @@ impl SpecSlot {
         (
             SymId(self.direct_consts.load(Ordering::Relaxed) as u32),
             self.leaf.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Low three bits of a subr slot's `direct_entry` hold the cached
+    /// screened entry's [`SubrFn`](crate::tagged::header::SubrFn) class
+    /// (`slots + 1`, `slots` being the fixed entry's A0..A5 slot count
+    /// 0..=5); the rest is the entry's code address. A subr slot never arms
+    /// a direct entry ([`Self::arm_direct_entry`] refuses one), so the word
+    /// is otherwise unused there.
+    pub(crate) const SUBR_ENTRY_CLASS_MASK: u64 = 7;
+
+    /// The screened fixed-arity builtin entry cached for the armed subr spec
+    /// shim, or 0 when this slot has not been screened under its current
+    /// epoch. See [`Self::cache_screened_subr_entry`] for the contract.
+    #[inline(always)]
+    pub(crate) fn cached_subr_entry(&self) -> u64 {
+        self.direct_entry.load(Ordering::Relaxed)
+    }
+
+    /// Cache the screened fixed-arity builtin entry of a `SubrGeneral` site:
+    /// its code address with the [`SubrFn`](crate::tagged::header::SubrFn)
+    /// slot class in the low three bits
+    /// ([`Self::pack_screened_subr_entry`]).
+    ///
+    /// Validity: exactly while `epoch` still equals the obarray's
+    /// `function_epoch` — the same proof the subr shim's gate already
+    /// requires before it reads this word. The only production writer of a
+    /// static subr object's entry fields is `Context::install_subr` ->
+    /// `register_global_subr_entry` -> `update_static_subr_object_entry`,
+    /// and install_subr always bumps `function_epoch`
+    /// (`FunctionEpochBump::SubrRewrite`), so a hit means neither the fn
+    /// pointer, the arity bounds nor the dispatch kind changed since the
+    /// screen. Owner: the slot lives in an owning leaf's `spec_slots` and
+    /// only its mutator thread writes it, with the same relaxed atomics as
+    /// [`Self::arm_leaf`]. Every re-arm
+    /// (`dispatch::subr_spec_armed_reference`) and every [`Self::restamp`]
+    /// clears it: a re-arm at a moved epoch proves only the binding BITS,
+    /// which an in-place rewrite keeps.
+    #[inline(always)]
+    pub(crate) fn cache_screened_subr_entry(&self, entry: u64) {
+        debug_assert!(self.holds_subr_binding(), "cache on a subr site's slot");
+        self.direct_entry.store(entry, Ordering::Relaxed);
+    }
+
+    /// Drop the screened-entry cache (re-arm, restamp).
+    #[inline(always)]
+    pub(crate) fn clear_screened_subr_entry(&self) {
+        self.direct_entry.store(0, Ordering::Relaxed);
+    }
+
+    /// Encode a screened fixed-arity entry as `fn_ptr | (slots + 1)`, or
+    /// `None` when the code address's low three bits are not clear, so the
+    /// class could not be recovered from the word.
+    #[inline]
+    pub(crate) fn pack_screened_subr_entry(fn_ptr: usize, slots: usize) -> Option<u64> {
+        debug_assert!(slots <= 5, "the screen accepts only the A0..A5 entries");
+        if fn_ptr as u64 & Self::SUBR_ENTRY_CLASS_MASK != 0 {
+            return None;
+        }
+        Some(fn_ptr as u64 | (slots as u64 + 1))
+    }
+
+    /// `(fn_ptr, slots)` of a nonzero [`Self::cached_subr_entry`] word.
+    #[inline(always)]
+    pub(crate) fn decode_screened_subr_entry(entry: u64) -> (usize, usize) {
+        (
+            (entry & !Self::SUBR_ENTRY_CLASS_MASK) as usize,
+            (entry & Self::SUBR_ENTRY_CLASS_MASK) as usize - 1,
         )
     }
 }

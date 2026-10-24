@@ -9626,3 +9626,99 @@ fn refsetting_the_same_function_and_repeated_redefinitions_stop_recompiling() {
         "an unstable callee is called, not inlined"
     );
 }
+
+/// The armed subr spec shim's screened-entry cache
+/// (`SpecSlot::cache_screened_subr_entry`): the second call through an armed
+/// site takes the cached fixed-arity entry instead of re-reading the static
+/// subr object, and an in-place static-subr rewrite INVALIDATES it. The
+/// rewrite keeps the binding's VALUE bits (so the epoch-move re-arm
+/// re-validates and proceeds) while changing the arity the screen reads; the
+/// call after that re-arm must see the NEW entry — without the invalidation
+/// the cached entry would still call the old fn and return a value where GNU
+/// signals `wrong-number-of-arguments`.
+#[test]
+fn subr_spec_screened_entry_cache_engages_and_a_rewrite_invalidates_it() {
+    use crate::emacs_core::eval::{Context, SubrEntry, register_global_subr_entry};
+    use crate::emacs_core::intern::intern;
+    use crate::emacs_core::symbol::FunctionEpochBump;
+    use crate::tagged::header::{SubrDispatchKind, SubrFn};
+
+    // A call-dominated body is exactly what the profitability gate declines
+    // in production; this test needs the compiled site.
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+
+    fn plus_one(ctx: &mut Context, v: Value) -> crate::emacs_core::error::EvalResult {
+        Ok(Value::make_int(v.as_fixnum().unwrap_or_default() + 1))
+    }
+    fn times_ten(ctx: &mut Context, v: Value) -> crate::emacs_core::error::EvalResult {
+        Ok(Value::make_int(v.as_fixnum().unwrap_or_default() * 10))
+    }
+    let mk_entry = |f: SubrFn, min: u16, max: Option<u16>| SubrEntry {
+        function: Some(f),
+        min_args: min,
+        max_args: max,
+        dispatch_kind: SubrDispatchKind::Builtin,
+        interactive_spec: None,
+    };
+
+    let name = "neovm-test--subr-spec-screened-entry";
+    let sym = intern(name);
+    let mut ev = Context::new();
+    // Materialize the static subr object first (the binding's VALUE), then
+    // fill its entry: `register_global_subr_entry` rewrites the object IN
+    // PLACE and is a no-op before the object exists.
+    ev.obarray
+        .set_symbol_function(name, Value::subr_from_sym_id(sym));
+    register_global_subr_entry(sym, mk_entry(SubrFn::A1(plus_one), 1, Some(1)));
+
+    // `(lambda (p0) (test-sym p0))`: one SubrGeneral spec site.
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![SymId(1)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
+    f.constants = vec![Value::symbol(name)].into();
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("subr spec body");
+
+    let ctx = &mut ev as *mut Context as *mut u8;
+    let one = Value::make_int(1);
+    assert_eq!(
+        leaf.call(ctx, &[one]),
+        NativeRun::Ok(Value::make_int(2).bits()),
+        "first call screens the fresh entry"
+    );
+    #[cfg(debug_assertions)]
+    let cached0 = SUBR_SPEC_CACHED_COUNT.load(Ordering::Relaxed);
+    assert_eq!(
+        leaf.call(ctx, &[one]),
+        NativeRun::Ok(Value::make_int(2).bits())
+    );
+    #[cfg(debug_assertions)]
+    assert!(
+        SUBR_SPEC_CACHED_COUNT.load(Ordering::Relaxed) > cached0,
+        "a repeat call takes the slot's screened-entry cache"
+    );
+
+    // In-place rewrite of the SAME subr object, exactly as
+    // `Context::install_subr` does it: the entry metadata changes, the VALUE
+    // bits do not, and the rewrite bumps `function_epoch`.
+    register_global_subr_entry(sym, mk_entry(SubrFn::A1(times_ten), 2, Some(2)));
+    ev.obarray
+        .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
+
+    // The next call takes the reference path (epoch moved) and re-arms; the
+    // one after it is the armed fast path whose cache must be gone.
+    let check_arity_signal = |result: NativeRun| {
+        assert_eq!(result, NativeRun::Signal);
+        let flow = take_pending_flow().expect("the arity signal is stashed");
+        let FlowKind::Signal(signal) = flow.into_kind() else {
+            panic!("expected a signal flow");
+        };
+        assert_eq!(signal.symbol, intern("wrong-number-of-arguments"));
+    };
+    check_arity_signal(leaf.call(ctx, &[one]));
+    check_arity_signal(leaf.call(ctx, &[one]));
+}

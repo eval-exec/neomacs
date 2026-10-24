@@ -6,6 +6,8 @@
 use super::*;
 use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::eval::AttentionMask;
+#[cfg(feature = "jit")]
+use crate::tagged::header::{SubrFn0, SubrFn1, SubrFn2, SubrFn3, SubrFn4, SubrFn5};
 
 pub(crate) type JitBuiltin1 = fn(&mut Context, Value) -> Result<Value, Flow>;
 pub(crate) type JitBuiltin2 = fn(&mut Context, Value, Value) -> Result<Value, Flow>;
@@ -2077,6 +2079,13 @@ pub(crate) fn subr_spec_armed_reference(
         let cur = ctx.obarray.symbol_function_id(SymId(sym as u32));
         if cur.is_some_and(|v| v.bits() as i64 == expected) {
             slot.epoch.store(epoch, Ordering::Relaxed);
+            // Drop the screened-entry cache
+            // (`SpecSlot::cache_screened_subr_entry`): the epoch move may
+            // have followed an IN-PLACE static-subr rewrite, which keeps the
+            // VALUE bits this re-arm just re-validated but changes the fn
+            // pointer/arity/kind the cache captured. (The subr shims never
+            // populate `slot.leaf`; the cache is the only word to clear.)
+            slot.clear_screened_subr_entry();
             true
         } else {
             // The subr shims never populate `slot.leaf`; nothing to clear.
@@ -2085,21 +2094,51 @@ pub(crate) fn subr_spec_armed_reference(
     }
 }
 
-/// The spec shim's direct fixed-arity builtin call: `target` is the armed
-/// `#<subr>` value. `None` = take the stack path (not a builtin subr, a
-/// Many/slice signature, or an arity the fixed entry does not accept — the
-/// stack path signals that one). Same observable protocol as
-/// `Context::call_spec_subr_from_bc_stack`: eval-depth accounting, a
-/// backtrace frame recording the SYMBOL (over the native args slot, as the
-/// bytecode direct path does), the signal hook, the frame pop.
+/// A fixed-arity builtin the armed subr spec shim calls directly: the
+/// [`SubrFn`](crate::tagged::header::SubrFn) entry's code address and its
+/// slot class (A0..A5 => 0..=5).
 #[cfg(feature = "jit")]
-fn call_fixed_builtin_from_native(
-    ctx: &mut Context,
-    sym_id: SymId,
-    target: Value,
-    args_ptr: *const i64,
-    nargs: usize,
-) -> Option<crate::emacs_core::error::EvalResult> {
+#[derive(Clone, Copy)]
+struct FixedBuiltinEntry {
+    fn_ptr: usize,
+    slots: usize,
+}
+
+/// The cached screened entry's code address, viewed as the
+/// [`SubrFn`](crate::tagged::header::SubrFn) variant its slot class names:
+/// written through `addr`, read through the class's fn-pointer field. A
+/// union rather than a `transmute` — the architecture transmute guard counts
+/// production sites and may only decrease. The validity requirement is the
+/// same: the address is one the screen read from a real `SubrFn::AN`, and
+/// the class says which N it is.
+#[cfg(feature = "jit")]
+#[repr(C)]
+union ScreenedFn {
+    addr: usize,
+    a0: SubrFn0,
+    a1: SubrFn1,
+    a2: SubrFn2,
+    a3: SubrFn3,
+    a4: SubrFn4,
+    a5: SubrFn5,
+}
+
+/// Screen `target` as the fixed-arity `Builtin` entry the spec shim may call
+/// directly. `None` = take the stack path (not a builtin subr, a Many/slice
+/// signature, or an arity the fixed entry does not accept — the stack path
+/// signals that one).
+///
+/// This re-reads the static subr object's entry on EVERY call, as GNU's
+/// `funcall_subr` does: `update_static_subr_object_entry` rewrites the fn
+/// pointer, arity bounds and dispatch kind IN PLACE keeping the VALUE bits
+/// identical, so the armed epoch/bits check alone does not prove the screen.
+/// The armed fast path's screened-entry cache
+/// (`SpecSlot::cache_screened_subr_entry`) exists precisely because those
+/// rewrites always bump `function_epoch`, and the shim's gate compares its
+/// slot's epoch with it before trusting the cache.
+#[cfg(feature = "jit")]
+#[inline]
+fn screen_fixed_builtin(target: Value, nargs: usize) -> Option<FixedBuiltinEntry> {
     use crate::tagged::header::{SubrFn, SubrObj, VecLikeType};
     let ptr = target.as_veclike_ptr()?;
     // SAFETY: a veclike pointer from a live Value; the type tag is checked
@@ -2123,19 +2162,56 @@ fn call_fixed_builtin_from_native(
     // below both discriminate on it, and re-reading it through `subr` made the
     // compiler load and branch on the same field twice on every builtin call
     // out of JIT-compiled code.
-    let function = subr.function;
-    let slots = match function {
-        Some(SubrFn::A0(_)) => 0,
-        Some(SubrFn::A1(_)) => 1,
-        Some(SubrFn::A2(_)) => 2,
-        Some(SubrFn::A3(_)) => 3,
-        Some(SubrFn::A4(_)) => 4,
-        Some(SubrFn::A5(_)) => 5,
+    let entry = match subr.function? {
+        SubrFn::A0(f) => FixedBuiltinEntry {
+            fn_ptr: f as usize,
+            slots: 0,
+        },
+        SubrFn::A1(f) => FixedBuiltinEntry {
+            fn_ptr: f as usize,
+            slots: 1,
+        },
+        SubrFn::A2(f) => FixedBuiltinEntry {
+            fn_ptr: f as usize,
+            slots: 2,
+        },
+        SubrFn::A3(f) => FixedBuiltinEntry {
+            fn_ptr: f as usize,
+            slots: 3,
+        },
+        SubrFn::A4(f) => FixedBuiltinEntry {
+            fn_ptr: f as usize,
+            slots: 4,
+        },
+        SubrFn::A5(f) => FixedBuiltinEntry {
+            fn_ptr: f as usize,
+            slots: 5,
+        },
         _ => return None,
     };
-    if nargs > slots {
+    if nargs > entry.slots {
         return None;
     }
+    Some(entry)
+}
+
+/// Run a screened fixed-arity builtin. Same observable protocol as
+/// `Context::call_spec_subr_from_bc_stack`: eval-depth accounting, a
+/// backtrace frame recording the SYMBOL (over the native args slot, as the
+/// bytecode direct path does), the signal hook, the frame pop.
+///
+/// `entry` must be one [`screen_fixed_builtin`] produced for this `nargs`
+/// (the armed fast path's cached form comes with the same proof, see
+/// `SpecSlot::cached_subr_entry`).
+#[cfg(feature = "jit")]
+#[inline]
+fn run_screened_fixed_builtin(
+    ctx: &mut Context,
+    sym_id: SymId,
+    entry: FixedBuiltinEntry,
+    args_ptr: *const i64,
+    nargs: usize,
+) -> crate::emacs_core::error::EvalResult {
     // SAFETY: the generated code stored exactly `nargs` argument words at
     // `args_ptr` (its call-args slot) immediately before this call.
     let arg = |i: usize| {
@@ -2160,30 +2236,59 @@ fn call_fixed_builtin_from_native(
         let flow = ctx
             .pop_bytecode_backtrace_frame_with_result(bt_count, Err(flow))
             .expect_err("a rejected callee has no cleanup or result");
-        return Some(Err(ctx.finish_lisp_depth_overflow(flow)));
+        return Err(ctx.finish_lisp_depth_overflow(flow));
     }
-    let result = match function {
-        Some(SubrFn::A0(f)) => f(ctx),
-        Some(SubrFn::A1(f)) => f(ctx, arg(0)),
-        Some(SubrFn::A2(f)) => f(ctx, arg(0), arg(1)),
-        Some(SubrFn::A3(f)) => f(ctx, arg(0), arg(1), arg(2)),
-        Some(SubrFn::A4(f)) => f(ctx, arg(0), arg(1), arg(2), arg(3)),
-        Some(SubrFn::A5(f)) => f(ctx, arg(0), arg(1), arg(2), arg(3), arg(4)),
-        _ => unreachable!("slot count matched above"),
+    // SAFETY: `entry` is the `SubrFn` variant its slot class was screened
+    // from, and the call's arguments follow that variant's arity; the union
+    // view reads exactly that variant's field.
+    let fns = ScreenedFn { addr: entry.fn_ptr };
+    let result = unsafe {
+        match entry.slots {
+            0 => (fns.a0)(ctx),
+            1 => (fns.a1)(ctx, arg(0)),
+            2 => (fns.a2)(ctx, arg(0), arg(1)),
+            3 => (fns.a3)(ctx, arg(0), arg(1), arg(2)),
+            4 => (fns.a4)(ctx, arg(0), arg(1), arg(2), arg(3)),
+            5 => (fns.a5)(ctx, arg(0), arg(1), arg(2), arg(3), arg(4)),
+            _ => unreachable!("screened classes are the A0..A5 entries"),
+        }
     };
     ctx.depth -= 1;
     // Extract the value before cleanup. Passing the whole Result through
     // the signal/unwind joins made LLVM copy its 16-byte aggregate with wide
     // loads after the builtin's narrow stores, even on balanced Ok returns.
-    Some(match result {
+    match result {
         Ok(value) => {
             if ctx.pop_native_backtrace_frame(bt_count) {
-                return Some(Ok(value));
+                return Ok(value);
             }
             finish_fixed_builtin_from_native(ctx, bt_count, Ok(value))
         }
         Err(flow) => finish_fixed_builtin_from_native(ctx, bt_count, Err(flow)),
-    })
+    }
+}
+
+/// The spec shim's direct fixed-arity builtin call: `target` is the armed
+/// `#<subr>` value. `None` = take the stack path (see
+/// [`screen_fixed_builtin`]). On a successful screen the entry is cached in
+/// `slot` for the armed fast path's next calls
+/// (`SpecSlot::cache_screened_subr_entry`).
+#[cfg(feature = "jit")]
+fn call_fixed_builtin_from_native(
+    ctx: &mut Context,
+    sym_id: SymId,
+    target: Value,
+    slot: &SpecSlot,
+    args_ptr: *const i64,
+    nargs: usize,
+) -> Option<crate::emacs_core::error::EvalResult> {
+    let entry = screen_fixed_builtin(target, nargs)?;
+    if let Some(encoded) = SpecSlot::pack_screened_subr_entry(entry.fn_ptr, entry.slots) {
+        slot.cache_screened_subr_entry(encoded);
+    }
+    Some(run_screened_fixed_builtin(
+        ctx, sym_id, entry, args_ptr, nargs,
+    ))
 }
 
 /// Preserve signal-hook ordering and the general unwinder for non-local
@@ -2336,10 +2441,38 @@ pub extern "C" fn neovm_jit_call_subr_spec(
         {
             #[cfg(debug_assertions)]
             SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-            let target = Value::from_bits(expected as usize);
-            if let Some(res) =
-                call_fixed_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs)
-            {
+            let sym_id = SymId(sym as u32);
+            // The slot's screened-entry cache
+            // (`SpecSlot::cache_screened_subr_entry`): a hit means the epoch
+            // equals the one the entry was screened under, so the tag,
+            // dispatch-kind and arity screens and the `SubrFn` class match
+            // are already proven — call the builtin body directly. The
+            // site's `nargs` is its compile-time arity, so the cached class
+            // covers every call through this slot; the compare stays as a
+            // guard on the shim's ABI contract.
+            let cached = slot.cached_subr_entry();
+            let screened = if cached != 0 {
+                let (fn_ptr, slots) = SpecSlot::decode_screened_subr_entry(cached);
+                if nargs <= slots {
+                    #[cfg(debug_assertions)]
+                    SUBR_SPEC_CACHED_COUNT.fetch_add(1, Ordering::Relaxed);
+                    Some(FixedBuiltinEntry { fn_ptr, slots })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let res = match screened {
+                Some(entry) => Some(run_screened_fixed_builtin(
+                    ctx, sym_id, entry, args_ptr, nargs,
+                )),
+                None => {
+                    let target = Value::from_bits(expected as usize);
+                    call_fixed_builtin_from_native(ctx, sym_id, target, slot, args_ptr, nargs)
+                }
+            };
+            if let Some(res) = res {
                 return match res {
                     Ok(value) => {
                         // SAFETY: `out` is the generated code's result stack slot.
@@ -2354,8 +2487,8 @@ pub extern "C" fn neovm_jit_call_subr_spec(
             }
             return call_stack_builtin_from_native(
                 ctx,
-                SymId(sym as u32),
-                target,
+                sym_id,
+                Value::from_bits(expected as usize),
                 args_ptr,
                 nargs,
                 out,
@@ -2401,7 +2534,7 @@ fn subr_spec_call_reference(
     // a debugger armed) takes the stack path below, the reference protocol.
     if !ctx.debug_on_next_call_is_armed()
         && let Some(res) =
-            call_fixed_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs)
+            call_fixed_builtin_from_native(ctx, SymId(sym as u32), target, slot, args_ptr, nargs)
     {
         return match res {
             Ok(value) => {

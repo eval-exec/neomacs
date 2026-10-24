@@ -203,6 +203,13 @@ pub(crate) static SUBR_SPEC_COUNT: AtomicU64 = AtomicU64::new(0);
 #[cfg(debug_assertions)]
 pub(crate) static SUBR_SPEC_FAST_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Debug-build counter of armed subr-spec calls that took the slot's cached
+/// screened entry (`SpecSlot::cached_subr_entry`) instead of re-reading the
+/// static subr object. Proves the cache engages, and its invalidation tests
+/// (a re-arm or restamp clears it) can assert the screen ran again.
+#[cfg(debug_assertions)]
+pub(crate) static SUBR_SPEC_CACHED_COUNT: AtomicU64 = AtomicU64::new(0);
+
 /// Debug-build counter of subr-spec [`STATUS_NEED_GENERIC`] bounces (binding
 /// changed, overrides active, or an eq-shim bitwise miss). Together with
 /// [`SUBR_SPEC_FAST_COUNT`] this lets tests prove a site RE-ARMED after an
