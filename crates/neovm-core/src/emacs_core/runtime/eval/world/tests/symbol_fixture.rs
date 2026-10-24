@@ -93,6 +93,33 @@ impl Context {
         )
     }
 
+    /// Native C5 histories: real, independently allocated name operands in
+    /// existing plain holders. Registry gaps are issued only AFTER those
+    /// World slots exist, so intern itself must grow the retained spine/sides.
+    pub(crate) fn with_test_symbol_intern_race_era<R>(
+        kind: crate::tagged::gc::PlainSymbolBacking,
+        spellings: &[String],
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        let mut kinds =
+            vec![crate::tagged::gc::PlainSymbolBacking::Unprojected; spellings.len() + 1];
+        kinds[0] = kind;
+        Self::with_test_symbol_backings_init_era(
+            &kinds,
+            |obarray, ids| {
+                for (&id, spelling) in ids[1..].iter().zip(spellings) {
+                    obarray.seed_value_id(id, TaggedValue::string(spelling));
+                }
+                let mut id = crate::emacs_core::intern::intern_uninterned("p3sym-c5-native-gap");
+                let target = (u64::from(id.0) / 4096 + 2) * 4096 + 17;
+                while u64::from(id.0) + 1 < target {
+                    id = crate::emacs_core::intern::intern_uninterned("p3sym-c5-native-gap");
+                }
+            },
+            body,
+        )
+    }
+
     fn with_test_symbol_backings_init_era<R>(
         kinds: &[crate::tagged::gc::PlainSymbolBacking],
         init: impl FnOnce(&mut Obarray, &[SymId]),
