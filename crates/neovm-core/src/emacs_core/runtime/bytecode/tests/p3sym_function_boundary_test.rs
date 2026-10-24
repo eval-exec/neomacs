@@ -4,6 +4,9 @@ use crate::emacs_core::eval::Context;
 use crate::tagged::gc::function_boundary_testkit::{FunctionEraEdit, FunctionEraReceipt};
 use crate::tagged::transport::SharedRoot;
 
+#[path = "p3sym_intern_boundary_test.rs"]
+mod intern_growth;
+
 fn constant(answer: i64) -> Value {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     f.lexical = true;

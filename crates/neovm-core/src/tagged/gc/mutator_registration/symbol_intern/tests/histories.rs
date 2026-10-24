@@ -165,6 +165,7 @@ struct Receipt {
     gaps_absent: bool,
     registry_before: (u64, usize),
     registry_after: (u64, usize),
+    preparation_charge: usize,
 }
 
 fn seed<'era>(
@@ -245,6 +246,15 @@ fn exercise(
     inputs: &[SymId],
     scenario: Scenario,
 ) -> Result<Receipt, String> {
+    exercise_with_relocation(era, inputs, scenario, false)
+}
+
+fn exercise_with_relocation(
+    era: &ParallelHeapEra<'_>,
+    inputs: &[SymId],
+    scenario: Scenario,
+    relocate: bool,
+) -> Result<Receipt, String> {
     if !(2..=4).contains(&inputs.len()) {
         return Err("C5 history actor count".into());
     }
@@ -283,6 +293,11 @@ fn exercise(
         },
     )?;
     let registry_before = crate::emacs_core::intern::parallel::identity_census_for_test();
+    let preparation_charge = if relocate {
+        boundary::force_spine_move(era, handles[0], &nil, inputs[0], &before)?
+    } else {
+        0
+    };
     let permits = (0..inputs.len())
         .map(|index| {
             era.register(index as u64 + 1, 3)
@@ -366,6 +381,7 @@ fn exercise(
                 gaps_absent,
                 registry_before,
                 registry_after,
+                preparation_charge,
             })
         },
     );
@@ -388,6 +404,7 @@ fn assert_history(
         gaps_absent,
         registry_before,
         registry_after,
+        preparation_charge,
     } = receipt;
     let ids: BTreeSet<_> = rows.iter().map(|row| row.id.0).collect();
     let inputs: BTreeSet<_> = rows.iter().map(|row| row.input).collect();
@@ -430,7 +447,10 @@ fn assert_history(
             .all(|row| row.soft_after == Value::from_sym_id(row.id).bits()
                 && row.repeated == row.soft_after)
     );
-    assert!(rows.iter().map(|row| row.charge).sum::<usize>() >= after.bytes - before.bytes);
+    assert!(
+        rows.iter().map(|row| row.charge).sum::<usize>() + preparation_charge
+            >= after.bytes - before.bytes
+    );
     for (index, (cell, name)) in cells.iter().zip(names).enumerate() {
         assert!(cell.present && cell.member && cell.spine_current);
         if let Some(kind) = kind {

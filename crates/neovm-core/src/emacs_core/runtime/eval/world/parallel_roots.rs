@@ -336,3 +336,7 @@ mod symbol_fixture;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "tests/function_boundary.rs"]
 mod function_boundary;
+
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "tests/intern_boundary.rs"]
+mod intern_boundary;

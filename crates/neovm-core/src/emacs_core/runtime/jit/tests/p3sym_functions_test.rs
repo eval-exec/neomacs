@@ -1,4 +1,6 @@
 //! Real native calls and installed inline dependencies across owned eras.
+#[path = "p3sym_functions_test/intern_growth.rs"]
+mod intern_growth;
 #[path = "p3sym_functions_test/receiver.rs"]
 mod receiver;
 #[path = "p3sym_functions_test/reclamation.rs"]
