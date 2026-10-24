@@ -6,7 +6,7 @@ use crate::display_row::append_context::DisplayRowLineWrap;
 use crate::display_row::builder::{
     DisplayRowAppendStartPolicy, DisplayRowAppendStatus, DisplayRowItemMeasurement,
     DisplayRowLayout, DisplayRowPosition, DisplayRowProgressWriter, DisplayTabPolicy,
-    new_display_row_for_role,
+    ExactIntegerChromePen, new_display_row_for_role,
 };
 use crate::display_row::finalizer::DisplayRowLineEndFinalizer;
 use crate::display_row::geometry::DisplayRowGeometryState;
@@ -317,6 +317,16 @@ impl<'a> DisplayRowLispStringSourceRequest<'a> {
 }
 
 impl<'a> DisplayRowLispStringSourceRenderRequest<'a> {
+    pub(crate) fn with_append_start_policy(
+        mut self,
+        append_start_policy: DisplayRowAppendStartPolicy,
+    ) -> Self {
+        self.row_request = self
+            .row_request
+            .with_append_start_policy(append_start_policy);
+        self
+    }
+
     pub(crate) fn with_composition_source(
         mut self,
         source: crate::display_source::LispStringCompositionSource,
@@ -1194,6 +1204,18 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
         let default_row_background = row_face.background;
         let mut row_faces = vec![row_face];
         let mut position = render_bounds.start();
+        let mut exact_integer_pen =
+            if append_start_policy == DisplayRowAppendStartPolicy::ExactIntegerFreshChrome {
+                ExactIntegerChromePen::new(
+                    row,
+                    area,
+                    position,
+                    row_layout.tab_policy.origin_x_px,
+                    row_layout.char_width_px,
+                )
+            } else {
+                None
+            };
         let mut source_slots = Vec::new();
         let fallback_metrics = DisplayRowFallbackMetrics::from_default_face_extents(
             char_width,
@@ -1262,6 +1284,11 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                 item_face_id,
                 face_realizer.font_metrics_mut(),
             );
+            let item_append_start_policy = if exact_integer_pen.is_some() {
+                DisplayRowAppendStartPolicy::SourcePosition
+            } else {
+                append_start_policy
+            };
             let progress = match measurement {
                 DisplayRowItemMeasurement::Default => {
                     let mut glyph_measurer = DisplayRowGlyphMeasurer::with_mode(
@@ -1280,7 +1307,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                             render_bounds.max_x().to_f32(),
                             render_bounds.text_area_origin(),
                             area,
-                            append_start_policy,
+                            item_append_start_policy,
                         );
                     row_writer.push_item(render_item.row_item_for_write())
                 }
@@ -1302,11 +1329,13 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                             render_bounds.max_x().to_f32(),
                             render_bounds.text_area_origin(),
                             area,
-                            append_start_policy,
+                            item_append_start_policy,
                         );
                     row_writer.push_item(render_item.row_item_for_write())
                 }
             };
+            exact_integer_pen =
+                exact_integer_pen.and_then(|pen| pen.after_append(row, progress.end()));
             position = progress.end();
             source_slots.extend(progress.slots().iter().cloned());
             match progress.status() {

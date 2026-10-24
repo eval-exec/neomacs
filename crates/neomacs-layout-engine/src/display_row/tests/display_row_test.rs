@@ -43,6 +43,302 @@ fn base_face() -> crate::neovm_bridge::ResolvedFace {
     resolver.default_face().clone()
 }
 
+fn fresh_pen_render_lisp(
+    value: Value,
+    width: f32,
+    policy: DisplayRowAppendStartPolicy,
+) -> RenderedDisplayRow {
+    let mut font_metrics = None;
+    let mut renderer =
+        DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
+    let table = FaceTable::new();
+    let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
+    let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
+    let request = DisplayRowLispStringSourceRequest::new(
+        DisplayRowGeometry::new(0.0, width, 16.0, 8.0, 12.0, DisplayTabPolicy::every(4)),
+        DisplayOrigin::ModeLine { selected: true },
+        resolver.default_face(),
+        value,
+        crate::display_source_resolver::DisplaySourceFaceScope::FrameLocal,
+    )
+    .into_render_request(&mut face_ids)
+    .with_append_start_policy(policy);
+    let (plan, session_request) = request.into_render_parts();
+    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+    renderer
+        .render_lisp_string_plan_with_context(plan, session_request, &mut context)
+        .expect("fresh Lisp chrome row")
+}
+
+fn assert_fresh_pen_output_equal(canonical: &RenderedDisplayRow, guarded: &RenderedDisplayRow) {
+    // GlyphRow equality includes all three glyph areas, provenance, string
+    // sources, pointer/image side tables, box/bidi metadata and row geometry.
+    assert_eq!(canonical.row(), guarded.row());
+    assert_eq!(canonical.progress(), guarded.progress());
+    assert_eq!(canonical.source_slots(), guarded.source_slots());
+    assert_eq!(
+        canonical
+            .faces()
+            .iter()
+            .map(|face| face.face())
+            .collect::<Vec<_>>(),
+        guarded
+            .faces()
+            .iter()
+            .map(|face| face.face())
+            .collect::<Vec<_>>(),
+    );
+}
+
+fn fresh_pen_split_value(text: &str, boundaries: &[(usize, usize)]) -> Value {
+    Value::string_with_text_properties(
+        text,
+        boundaries
+            .iter()
+            .enumerate()
+            .map(|(index, &(start, end))| StringTextPropertyRun {
+                start,
+                end,
+                plist: Value::list(vec![
+                    Value::symbol("face"),
+                    Value::list(vec![
+                        Value::keyword("foreground"),
+                        Value::string(if index % 2 == 0 { "red" } else { "blue" }),
+                    ]),
+                    Value::symbol("mouse-face"),
+                    Value::symbol("highlight"),
+                    Value::symbol("help-echo"),
+                    Value::string(format!("live source segment {index}")),
+                ]),
+            })
+            .collect(),
+    )
+}
+
+#[test]
+fn fresh_chrome_integer_pen_preserves_split_lisp_rows_and_source_metadata() {
+    let _eval = Context::new();
+    let value = fresh_pen_split_value(
+        "ABcdEFghIJkl",
+        &[(0, 2), (2, 4), (4, 6), (6, 8), (8, 10), (10, 12)],
+    );
+    let canonical = fresh_pen_render_lisp(
+        value,
+        240.0,
+        DisplayRowAppendStartPolicy::ReconcileWithRowTail,
+    );
+    let guarded = fresh_pen_render_lisp(
+        value,
+        240.0,
+        DisplayRowAppendStartPolicy::ExactIntegerFreshChrome,
+    );
+    assert_fresh_pen_output_equal(&canonical, &guarded);
+    assert_eq!(row_text_expanding_stretches(guarded.row()), "ABcdEFghIJkl");
+    assert_eq!(guarded.source_slots().len(), 12);
+    assert!(!guarded.row().string_sources().is_empty());
+}
+
+#[test]
+fn fresh_chrome_integer_pen_preserves_clipping_across_lisp_face_segments() {
+    let _eval = Context::new();
+    let value = fresh_pen_split_value("ABCD", &[(0, 1), (1, 2), (2, 3), (3, 4)]);
+    let canonical = fresh_pen_render_lisp(
+        value,
+        18.0,
+        DisplayRowAppendStartPolicy::ReconcileWithRowTail,
+    );
+    let guarded = fresh_pen_render_lisp(
+        value,
+        18.0,
+        DisplayRowAppendStartPolicy::ExactIntegerFreshChrome,
+    );
+    assert_fresh_pen_output_equal(&canonical, &guarded);
+    assert_eq!(row_text_expanding_stretches(guarded.row()), "AB");
+    assert_eq!(guarded.progress().end_x(), 16.0);
+    assert_eq!(guarded.source_slots().len(), 2);
+}
+
+#[test]
+fn fresh_chrome_integer_pen_preserves_tab_and_wide_lisp_output() {
+    let _eval = Context::new();
+    let value = fresh_pen_split_value("AB\tC中e\u{301}Q", &[(0, 2), (2, 3), (3, 8)]);
+    let canonical = fresh_pen_render_lisp(
+        value,
+        240.0,
+        DisplayRowAppendStartPolicy::ReconcileWithRowTail,
+    );
+    let guarded = fresh_pen_render_lisp(
+        value,
+        240.0,
+        DisplayRowAppendStartPolicy::ExactIntegerFreshChrome,
+    );
+    assert_fresh_pen_output_equal(&canonical, &guarded);
+    let glyphs = &guarded.row().glyphs[GlyphArea::Text.index()];
+    assert!(
+        glyphs
+            .iter()
+            .any(|glyph| matches!(glyph.glyph_type, GlyphType::Stretch { .. }))
+    );
+    assert!(glyphs.iter().any(|glyph| glyph.wide));
+    // This Lisp source uses its original-object composition policy. The
+    // explicit cross-item UnicodeFallback test below covers composite-tail
+    // mutation; here the full row comparison covers the combining source too.
+}
+
+#[test]
+fn fresh_chrome_integer_pen_preserves_fractional_measured_run_then_following_items() {
+    #[derive(Debug)]
+    struct SplitSource(std::vec::IntoIter<DisplayItem>);
+    impl crate::display_source::DisplayItemSource for SplitSource {
+        fn next_item(
+            &mut self,
+            _: &mut crate::display_source::DisplaySourceContext<'_>,
+        ) -> Option<DisplayItem> {
+            self.0.next()
+        }
+    }
+    #[derive(Debug)]
+    struct FractionalMiddleRun;
+    impl DisplayRowRenderPolicy for FractionalMiddleRun {
+        fn measurement_for(
+            &mut self,
+            item: &DisplayItem,
+            _: FaceId,
+            _: &mut Option<FontMetricsService>,
+        ) -> DisplayRowItemMeasurement {
+            let DisplayItemKind::TextRun(run) = &item.kind else {
+                return DisplayRowItemMeasurement::Default;
+            };
+            let width = if run.text.as_ref() == "C" { 6.25 } else { 8.0 };
+            DisplayRowItemMeasurement::TextRun(
+                crate::display_text_run_measurement::DisplayTextRunMeasurementPlan::uniform_for_text(&run.text, width),
+            )
+        }
+    }
+    fn render(policy: DisplayRowAppendStartPolicy) -> RenderedDisplayRow {
+        let mut font_metrics = None;
+        let mut renderer =
+            DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::ConcreteFont);
+        let table = FaceTable::new();
+        let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
+        let mut base = resolver.default_face().clone();
+        base.set_measured_char_width_px(8.0);
+        let mut face_ids = FrameFaceAttempt::for_test_with_next_id(2);
+        let mut source = SplitSource(
+            ["AB", "C", "DE", "F"]
+                .into_iter()
+                .enumerate()
+                .map(|(id, text)| {
+                    DisplayItem::new(
+                        SourceSpan::synthetic(100 + id as u64, 0, text.chars().count()),
+                        RenderFaceRef::FaceId(FaceId::new(1)),
+                        DisplayItemKind::TextRun(crate::display_item::DisplayTextRun::independent(
+                            text,
+                        )),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_iter(),
+        );
+        let request = display_row_request_for_face(
+            DisplayRowGeometry::new(0.0, 160.0, 16.0, 8.0, 12.0, DisplayTabPolicy::every(4)),
+            FaceId::new(1),
+            &base,
+            GlyphRowRole::ModeLine,
+        )
+        .with_append_start_policy(policy);
+        let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+        let mut state = DisplayRowSourceState::frame_local();
+        let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+        let result = request
+            .render_fragment_step_into_row_with_policy(
+                &mut renderer,
+                &mut row,
+                &mut source,
+                &mut state,
+                &mut context,
+                &mut FractionalMiddleRun,
+            )
+            .expect("fractional split row");
+        result.with_row(row)
+    }
+    let _eval = Context::new();
+    let canonical = render(DisplayRowAppendStartPolicy::ReconcileWithRowTail);
+    let guarded = render(DisplayRowAppendStartPolicy::ExactIntegerFreshChrome);
+    assert_fresh_pen_output_equal(&canonical, &guarded);
+    assert_eq!(guarded.progress().end_x(), 46.25);
+    assert_eq!(guarded.source_slots().len(), 6);
+    assert_eq!(
+        guarded.row().glyphs[GlyphArea::Text.index()][2].pixel_width,
+        6.25
+    );
+}
+
+#[test]
+fn fresh_chrome_integer_pen_preserves_cross_item_combining_tail_mutation() {
+    #[derive(Debug)]
+    struct SplitSource(std::vec::IntoIter<DisplayItem>);
+
+    impl crate::display_source::DisplayItemSource for SplitSource {
+        fn next_item(
+            &mut self,
+            _: &mut crate::display_source::DisplaySourceContext<'_>,
+        ) -> Option<DisplayItem> {
+            self.0.next()
+        }
+    }
+
+    fn render(policy: DisplayRowAppendStartPolicy) -> RenderedDisplayRow {
+        let mut font_metrics = None;
+        let mut renderer =
+            DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
+        let table = FaceTable::new();
+        let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
+        let mut base = resolver.default_face().clone();
+        base.set_measured_char_width_px(8.0);
+        let mut face_ids = FrameFaceAttempt::for_test_with_next_id(2);
+        let mut source = SplitSource(
+            ["ABe", "\u{301}", "CD", "E"]
+                .into_iter()
+                .enumerate()
+                .map(|(id, text)| {
+                    DisplayItem::new(
+                        SourceSpan::synthetic(200 + id as u64, 0, text.chars().count()),
+                        RenderFaceRef::FaceId(FaceId::new(1)),
+                        DisplayItemKind::TextRun(crate::display_item::DisplayTextRun::new(text)),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_iter(),
+        );
+        display_row_request_for_face(
+            DisplayRowGeometry::new(0.0, 160.0, 16.0, 8.0, 12.0, DisplayTabPolicy::every(4)),
+            FaceId::new(1),
+            &base,
+            GlyphRowRole::ModeLine,
+        )
+        .with_append_start_policy(policy)
+        .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+        .expect("cross-item UnicodeFallback chrome row")
+    }
+
+    let _eval = Context::new();
+    let canonical = render(DisplayRowAppendStartPolicy::ReconcileWithRowTail);
+    let guarded = render(DisplayRowAppendStartPolicy::ExactIntegerFreshChrome);
+    assert_fresh_pen_output_equal(&canonical, &guarded);
+    assert_eq!(row_text_expanding_stretches(guarded.row()), "ABe\u{301}CDE");
+    assert_eq!(guarded.progress().end_x(), 48.0);
+    assert_eq!(guarded.progress().end_col(), 6);
+    assert_eq!(guarded.source_slots().len(), 7);
+    let glyphs = &guarded.row().glyphs[GlyphArea::Text.index()];
+    assert_eq!(glyphs.len(), 6);
+    assert!(matches!(
+        &glyphs[2].glyph_type,
+        GlyphType::Composite { text } if text.as_ref() == "e\u{301}"
+    ));
+    assert!(matches!(&glyphs[3].glyph_type, GlyphType::Char { ch: 'C' }));
+}
+
 #[test]
 fn realize_face_realizes_inline_stipple_spec() {
     // `(8 2 "AB")` — a GNU-style `(WIDTH HEIGHT DATA)` inline bitmap, exactly

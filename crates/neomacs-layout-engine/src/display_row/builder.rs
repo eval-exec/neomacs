@@ -1173,6 +1173,10 @@ pub(crate) enum DisplayRowAppendStartPolicy {
     /// Trust the source walk's position; structural glyphs are already reflected
     /// in that position's coordinate origin.
     SourcePosition,
+    /// Fresh window chrome can use source progress only while its render-local
+    /// exact-integer prefix certificate proves equality with the row tail.
+    /// Without that certificate this variant always reconciles.
+    ExactIntegerFreshChrome,
 }
 
 impl DisplayRowAppendStartPolicy {
@@ -1182,9 +1186,141 @@ impl DisplayRowAppendStartPolicy {
         current_tail: impl FnOnce() -> DisplayRowPosition,
     ) -> DisplayRowPosition {
         match self {
-            Self::ReconcileWithRowTail => append_start_position(requested, current_tail()),
+            Self::ReconcileWithRowTail | Self::ExactIntegerFreshChrome => {
+                append_start_position(requested, current_tail())
+            }
             Self::SourcePosition => requested,
         }
+    }
+}
+
+/// Owned proof for one fresh chrome row's exact-integer ordinary-glyph prefix.
+/// Consume it after every item; failure cannot leave a stale valid certificate.
+#[derive(Debug)]
+pub(super) struct ExactIntegerChromePen {
+    len: usize,
+    x_px: f32,
+    col: usize,
+    char_width_px: f32,
+    tail: Option<(char, DisplayRowWriteMetrics)>,
+}
+
+static_assertions::assert_impl_all!(ExactIntegerChromePen: Send, Sync, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(ExactIntegerChromePen: Clone, Copy);
+
+impl ExactIntegerChromePen {
+    const MAX_EXACT_INTEGER: f32 = 16_777_216.0;
+
+    pub(super) fn new(
+        row: &GlyphRow,
+        area: GlyphArea,
+        start: DisplayRowPosition,
+        tab_origin_x_px: f32,
+        char_width_px: f32,
+    ) -> Option<Self> {
+        if area != GlyphArea::Text
+            || !matches!(
+                row.role,
+                GlyphRowRole::ModeLine | GlyphRowRole::HeaderLine | GlyphRowRole::TabLine
+            )
+            || row.glyphs.iter().any(|glyphs| !glyphs.is_empty())
+            || row.pixel_x != 0.0
+            || row.start_col != 0
+            || start.x_px() != 0.0
+            || start.col() != 0
+            || tab_origin_x_px != 0.0
+            || !char_width_px.is_finite()
+            || char_width_px <= 0.0
+        {
+            return None;
+        }
+        Some(Self {
+            len: 0,
+            x_px: 0.0,
+            col: 0,
+            char_width_px,
+            tail: None,
+        })
+    }
+
+    fn eligible_glyph(&self, glyph: &Glyph) -> Option<(char, DisplayRowWriteMetrics)> {
+        let GlyphType::Char { ch } = &glyph.glyph_type else {
+            return None;
+        };
+        if glyph.padding || glyph.wide || base_width_cols(*ch) != 1 {
+            return None;
+        }
+        // The checked Char and flags force canonical row-tail accounting to
+        // one column. Specialize that case instead of folding a glyph slice.
+        let width = if glyph.pixel_width > 0.0 {
+            glyph.pixel_width
+        } else {
+            self.char_width_px.max(1.0)
+        };
+        // Establish the conversion domain first. Every integer through 2^24
+        // is exactly representable, so this round trip also proves integrality.
+        if !width.is_finite() || width < 0.0 || width > Self::MAX_EXACT_INTEGER {
+            return None;
+        }
+        if (width as u32) as f32 != width {
+            return None;
+        }
+        Some((*ch, DisplayRowWriteMetrics::new(width, 1)))
+    }
+
+    // This tail was previously certified. Same character inherits its static
+    // one-column width; equality with its recorded width inherits the finite,
+    // integral and bounded proof. Normalize raw fallback widths anew.
+    fn tail_is_unchanged(&self, glyph: &Glyph) -> bool {
+        let Some((recorded_ch, recorded_metrics)) = self.tail else {
+            return false;
+        };
+        let GlyphType::Char { ch } = &glyph.glyph_type else {
+            return false;
+        };
+        if *ch != recorded_ch || glyph.padding || glyph.wide {
+            return false;
+        }
+        let width = if glyph.pixel_width > 0.0 {
+            glyph.pixel_width
+        } else {
+            self.char_width_px.max(1.0)
+        };
+        width == recorded_metrics.width_px()
+    }
+
+    pub(super) fn after_append(mut self, row: &GlyphRow, end: DisplayRowPosition) -> Option<Self> {
+        let glyphs = &row.glyphs[GlyphArea::Text.index()];
+        if row.pixel_x != 0.0
+            || row.start_col != 0
+            || !row.glyphs[GlyphArea::LeftMargin.index()].is_empty()
+            || !row.glyphs[GlyphArea::RightMargin.index()].is_empty()
+            || glyphs.len() < self.len
+            || (self.len > 0 && !self.tail_is_unchanged(&glyphs[self.len - 1]))
+        {
+            return None;
+        }
+        // An eligible prefix has no padding or composite base. The existing
+        // glyph a contextual text write can grow is therefore its last glyph
+        // (see PendingDisplayRowWriteMetrics), checked above. Visit only new
+        // glyphs here, never rescan the certified prefix.
+        for glyph in &glyphs[self.len..] {
+            let (ch, metrics) = self.eligible_glyph(glyph)?;
+            let width = metrics.width_px();
+            // Guard BEFORE addition: rounded overflow could otherwise land
+            // back on the largest exactly representable integer endpoint.
+            if width > Self::MAX_EXACT_INTEGER - self.x_px {
+                return None;
+            }
+            self.x_px += width;
+            self.col = self.col.checked_add(metrics.width_cols())?;
+            self.tail = Some((ch, metrics));
+        }
+        if end.x_px() != self.x_px || end.col() != self.col {
+            return None;
+        }
+        self.len = glyphs.len();
+        Some(self)
     }
 }
 

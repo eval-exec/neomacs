@@ -19,7 +19,9 @@ use super::window_output::{
 };
 use crate::display_origin::DisplayOrigin;
 use crate::display_rendered_row_output_install::install_measured_frame_chrome_display_row;
-use crate::display_row::builder::{DisplayTabPolicy, display_row_text_is_empty};
+use crate::display_row::builder::{
+    DisplayRowAppendStartPolicy, DisplayTabPolicy, display_row_text_is_empty,
+};
 pub(crate) use crate::display_row::face_state::DisplayRowFaceRealizer;
 use crate::display_row::face_state::DisplayRowMeasurementMode;
 use crate::display_row::measured_state::{
@@ -1292,6 +1294,7 @@ impl<'face> WindowChromeDisplayRowRequest<'face> {
             .lisp_string_row_request()
             .with_symbol_values(self.symbol_values)
             .into_render_request(face_ids)
+            .with_append_start_policy(DisplayRowAppendStartPolicy::ExactIntegerFreshChrome)
             .with_chrome_text_area_left_px(self.text_area_left_px)
             .with_composition_source(
                 crate::display_source::LispStringCompositionSource::FormattedRegions(

@@ -48,6 +48,260 @@ fn layout() -> DisplayRowLayout {
     }
 }
 
+fn fresh_integer_pen(row: &GlyphRow, char_width: f32) -> Option<ExactIntegerChromePen> {
+    ExactIntegerChromePen::new(
+        row,
+        GlyphArea::Text,
+        DisplayRowPosition::new(0.0, 0),
+        0.0,
+        char_width,
+    )
+}
+
+fn integer_pen_test_glyph(ch: char, width: f32) -> Glyph {
+    Glyph {
+        pixel_width: width,
+        ..Glyph::char(ch, FaceId::new(1), 0)
+    }
+}
+
+#[test]
+fn fresh_integer_pen_accepts_appended_integer_cells_and_checks_real_progress() {
+    let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+    let pen = fresh_integer_pen(&row, 8.0).expect("empty fresh prefix");
+    row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('A', 8.0));
+    let pen = pen
+        .after_append(&row, DisplayRowPosition::new(8.0, 1))
+        .expect("first exact item");
+    row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('B', 8.0));
+    let pen = pen
+        .after_append(&row, DisplayRowPosition::new(16.0, 2))
+        .expect("next exact item");
+    row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('C', 8.0));
+    assert!(
+        pen.after_append(&row, DisplayRowPosition::new(23.0, 3))
+            .is_none()
+    );
+}
+
+#[test]
+fn fresh_integer_pen_loses_authority_after_fractional_or_changed_previous_tail() {
+    for mutate_old_tail in [false, true] {
+        let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+        let pen = fresh_integer_pen(&row, 8.0).expect("fresh prefix");
+        row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('A', 8.0));
+        let pen = pen
+            .after_append(&row, DisplayRowPosition::new(8.0, 1))
+            .expect("exact prefix");
+        let end = if mutate_old_tail {
+            row.glyphs[GlyphArea::Text.index()][0].pixel_width = 12.0;
+            DisplayRowPosition::new(20.0, 2)
+        } else {
+            DisplayRowPosition::new(14.25, 2)
+        };
+        row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph(
+            'B',
+            if mutate_old_tail { 8.0 } else { 6.25 },
+        ));
+        let lost = pen.after_append(&row, end);
+        assert!(lost.is_none());
+    }
+}
+
+#[test]
+fn fresh_integer_pen_rejects_fallback_fractional_width_and_composite_representation() {
+    let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+    let pen = fresh_integer_pen(&row, 7.25).expect("empty prefix with fractional fallback");
+    // Zero explicit width selects canonical char-width fallback, not zero.
+    row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('A', 0.0));
+    assert!(
+        pen.after_append(&row, DisplayRowPosition::new(7.25, 1))
+            .is_none()
+    );
+
+    let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+    let pen = fresh_integer_pen(&row, 8.0).expect("empty prefix");
+    row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('e', 8.0));
+    let pen = pen
+        .after_append(&row, DisplayRowPosition::new(8.0, 1))
+        .expect("plain base");
+    row.glyphs[GlyphArea::Text.index()][0].glyph_type = GlyphType::Composite {
+        text: "e\u{301}".into(),
+    };
+    assert!(
+        pen.after_append(&row, DisplayRowPosition::new(8.0, 1))
+            .is_none()
+    );
+}
+
+#[test]
+fn fresh_integer_pen_checks_exact_integer_range_before_rounded_addition() {
+    let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+    let pen = fresh_integer_pen(&row, 8.0).expect("empty prefix");
+    row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('A', 16_777_216.0));
+    let pen = pen
+        .after_append(&row, DisplayRowPosition::new(16_777_216.0, 1))
+        .expect("exact endpoint");
+    row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('B', 1.0));
+    // 2^24 + 1 rounds back to 2^24 as f32; accepting equality after the add
+    // would certify a sum outside the exact-integer domain.
+    assert!(
+        pen.after_append(&row, DisplayRowPosition::new(16_777_216.0, 2))
+            .is_none()
+    );
+}
+
+#[test]
+fn fresh_integer_pen_refuses_structural_rows_and_unproved_policy_reconciles() {
+    let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+    assert!(
+        ExactIntegerChromePen::new(
+            &row,
+            GlyphArea::Text,
+            DisplayRowPosition::new(0.0, 0),
+            8.0,
+            8.0
+        )
+        .is_none()
+    );
+    row.glyphs[GlyphArea::LeftMargin.index()].push(integer_pen_test_glyph('L', 8.0));
+    assert!(fresh_integer_pen(&row, 8.0).is_none());
+    let calls = std::cell::Cell::new(0);
+    let start = DisplayRowAppendStartPolicy::ExactIntegerFreshChrome.resolve(
+        DisplayRowPosition::new(8.0, 1),
+        || {
+            calls.set(calls.get() + 1);
+            DisplayRowPosition::new(24.0, 3)
+        },
+    );
+    assert_eq!(start, DisplayRowPosition::new(24.0, 3));
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn fresh_integer_pen_plain_metrics_match_canonical_special_float_accounting() {
+    let row = GlyphRow::new(GlyphRowRole::ModeLine);
+    let pen = fresh_integer_pen(&row, 8.0).expect("fresh prefix");
+    for ch in ['A', 'é'] {
+        for raw in [
+            8.0,
+            1.0,
+            16_777_216.0,
+            0.0,
+            -0.0,
+            -2.0,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ] {
+            let glyph = integer_pen_test_glyph(ch, raw);
+            let (_, certified) = pen
+                .eligible_glyph(&glyph)
+                .expect("canonical integral width");
+            assert_eq!(
+                certified,
+                DisplayRowWriteMetrics::from_glyphs(std::slice::from_ref(&glyph), 8.0)
+            );
+        }
+    }
+    for raw in [
+        6.25,
+        f32::MIN_POSITIVE,
+        f32::from_bits(1),
+        f32::INFINITY,
+        16_777_218.0,
+    ] {
+        assert!(
+            pen.eligible_glyph(&integer_pen_test_glyph('A', raw))
+                .is_none(),
+            "raw {raw:?}"
+        );
+    }
+}
+
+#[test]
+fn fresh_integer_pen_certified_tail_normalizes_width_equivalent_raw_mutations() {
+    for raw in [8.0, 0.0, -0.0, -2.0, f32::NEG_INFINITY, f32::NAN] {
+        let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+        let pen = fresh_integer_pen(&row, 8.0).expect("fresh prefix");
+        row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('é', 8.0));
+        let pen = pen
+            .after_append(&row, DisplayRowPosition::new(8.0, 1))
+            .expect("certified tail");
+        let glyph = &mut row.glyphs[GlyphArea::Text.index()][0];
+        glyph.pixel_width = raw;
+        glyph.face_id = FaceId::new(99);
+        glyph.pixel_height = 32.0;
+        glyph.pixel_ascent = 24.0;
+        let canonical =
+            DisplayRowWriteMetrics::from_glyphs(&row.glyphs[GlyphArea::Text.index()], 8.0);
+        assert_eq!(canonical, DisplayRowWriteMetrics::new(8.0, 1));
+        row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('B', 8.0));
+        assert!(
+            pen.after_append(&row, DisplayRowPosition::new(16.0, 2))
+                .is_some(),
+            "raw {raw:?}"
+        );
+    }
+    for fallback in [7.25, 9.0] {
+        for raw in [0.0, -0.0, -2.0, f32::NEG_INFINITY, f32::NAN] {
+            let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+            let pen = fresh_integer_pen(&row, fallback).expect("fresh prefix");
+            row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('A', 8.0));
+            let pen = pen
+                .after_append(&row, DisplayRowPosition::new(8.0, 1))
+                .expect("explicit integral width");
+            row.glyphs[GlyphArea::Text.index()][0].pixel_width = raw;
+            assert!(
+                pen.after_append(&row, DisplayRowPosition::new(8.0, 1))
+                    .is_none(),
+                "fallback {fallback}, raw {raw:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fresh_integer_pen_certified_tail_refuses_changed_character_flags_or_representation() {
+    let mutations = [
+        integer_pen_test_glyph('B', 8.0),
+        integer_pen_test_glyph('中', 8.0),
+        integer_pen_test_glyph('\u{301}', 8.0),
+        Glyph {
+            padding: true,
+            ..integer_pen_test_glyph('A', 8.0)
+        },
+        Glyph {
+            wide: true,
+            ..integer_pen_test_glyph('A', 8.0)
+        },
+        Glyph {
+            glyph_type: GlyphType::Composite {
+                text: "A\u{301}".into(),
+            },
+            ..integer_pen_test_glyph('A', 8.0)
+        },
+        Glyph {
+            glyph_type: GlyphType::Stretch { width_cols: 1 },
+            ..integer_pen_test_glyph('A', 8.0)
+        },
+        integer_pen_test_glyph('A', 6.25),
+        integer_pen_test_glyph('A', f32::INFINITY),
+    ];
+    for mutation in mutations {
+        let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
+        let pen = fresh_integer_pen(&row, 8.0).expect("fresh prefix");
+        row.glyphs[GlyphArea::Text.index()].push(integer_pen_test_glyph('A', 8.0));
+        let pen = pen
+            .after_append(&row, DisplayRowPosition::new(8.0, 1))
+            .expect("certified tail");
+        row.glyphs[GlyphArea::Text.index()][0] = mutation;
+        assert!(
+            pen.after_append(&row, DisplayRowPosition::new(8.0, 1))
+                .is_none()
+        );
+    }
+}
+
 fn text_item(text: &str) -> DisplayItem {
     DisplayItem::new(
         SourceSpan::new(
