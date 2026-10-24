@@ -295,6 +295,55 @@ impl PreparedFreshCanonical<'_, '_> {
     }
 }
 
+/// Scalar-only observations of a proposed ID and exact heap/name root. No
+/// registry storage or managed value escapes this assertion-only snapshot.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FreshRegistryFacts {
+    pub(crate) epoch: u64,
+    pub(crate) symbols: usize,
+    pub(crate) atoms: usize,
+    pub(crate) atom_names: usize,
+    pub(crate) canonical_names: usize,
+    pub(crate) name_values: usize,
+    pub(crate) heap_buckets: usize,
+    pub(crate) heap_names: usize,
+    pub(crate) input_rooted: bool,
+    pub(crate) id_present: bool,
+    pub(crate) canonical_id: Option<SymId>,
+    pub(crate) atom_present: bool,
+    pub(crate) bytes: usize,
+}
+
+#[cfg(test)]
+pub(crate) fn fresh_registry_facts_for_test(
+    heap: HeapIdentity,
+    id: SymId,
+    input: usize,
+    spelling: &str,
+) -> FreshRegistryFacts {
+    let registry = global_symbol_registry().read();
+    let roots = registry
+        .name_value_roots
+        .by_heap
+        .get(&SymbolNameHeapId(heap.get()));
+    FreshRegistryFacts {
+        epoch: symbol_registry_epoch_value(),
+        symbols: registry.symbols.len(),
+        atoms: registry.names.strings.len(),
+        atom_names: registry.names.map.len(),
+        canonical_names: registry.canonical_by_name.len(),
+        name_values: registry.name_values.len(),
+        heap_buckets: registry.name_value_roots.by_heap.len(),
+        heap_names: roots.map_or(0, |roots| roots.len()),
+        input_rooted: roots.is_some_and(|roots| roots.contains_key(&SymbolNameObjectId(input))),
+        id_present: registry.slot(id).is_some(),
+        canonical_id: registry.lookup(spelling),
+        atom_present: registry.names.lookup(spelling).is_some(),
+        bytes: storage_bytes(&registry),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +367,38 @@ mod tests {
         assert_eq!(first.0.as_bytes(), name.as_bytes());
         assert_eq!(second.0.as_bytes(), name.as_bytes());
         assert!(!first.0.has_intervals() && !second.0.has_intervals());
+    }
+
+    #[test]
+    fn p3sym_c5_abandoned_name_atom_preparations_leave_no_publication() {
+        let mut storage = NameAtomStorage::new();
+        let name = LispString::from_unibyte_slice(b"p3sym-c5-abandoned-name-chunk");
+        let detached = PreparedAtom::new(&mut storage, &name).unwrap();
+        assert!(matches!(
+            &detached.destination,
+            AtomDestination::DetachedChunk(_)
+        ));
+        drop(detached);
+        assert_eq!((storage.len, storage.chunks.len()), (0, 0));
+        let first = PreparedAtom::new(&mut storage, &name)
+            .unwrap()
+            .install(&mut storage);
+        let address = first.0 as *const LispString;
+        let retained = PreparedAtom::new(&mut storage, &name).unwrap();
+        assert!(matches!(
+            &retained.destination,
+            AtomDestination::RetainedSlot(_)
+        ));
+        drop(retained);
+        assert_eq!((storage.len, storage.chunks.len()), (1, 1));
+        assert_eq!(first.0.as_bytes(), name.as_bytes());
+        let second = PreparedAtom::new(&mut storage, &name)
+            .unwrap()
+            .install(&mut storage);
+        assert_eq!((storage.len, storage.chunks.len()), (2, 1));
+        assert_eq!(address, storage.get(NameId(0)) as *const LispString);
+        assert_ne!(address, second.0 as *const LispString);
+        assert_eq!(second.0.as_bytes(), name.as_bytes());
+        eprintln!("P3SYM_C5_ABANDONED_ATOM detached=1 retained=1 published=2");
     }
 }

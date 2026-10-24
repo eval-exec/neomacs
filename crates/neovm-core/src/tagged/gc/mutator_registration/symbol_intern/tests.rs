@@ -751,5 +751,6 @@ fn p3sym_c5_fresh_id_advances_registry_epoch_once() {
 }
 
 mod failures;
+mod fresh_failures;
 mod gc;
 mod histories;

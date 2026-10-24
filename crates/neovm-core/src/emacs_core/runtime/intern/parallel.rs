@@ -3,6 +3,8 @@ use super::*;
 use crate::tagged::gc::SymbolWriteToken;
 use crate::tagged::gc::{RegistrationError, SymbolReadToken};
 mod fresh;
+#[cfg(test)]
+pub(crate) use fresh::{FreshRegistryFacts, fresh_registry_facts_for_test};
 
 /// Scalar metadata captured under the process registry guard. It contains no
 /// Lisp name object, movable spine address or authority to use a symbol cell.
