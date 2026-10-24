@@ -34,9 +34,25 @@ fn render(
     walker: Walker,
 ) -> String {
     let mut rendered = ModeLineRendered::default();
+    render_into(ctx, pctx, format, walker, &mut rendered);
+    // Literal strings in these cases are property-free and contain no padding.
+    rendered
+        .text
+        .into_iter()
+        .map(|code| char::from_u32(code).expect("Unicode test text"))
+        .collect()
+}
+
+fn render_into(
+    ctx: &mut Context,
+    pctx: &ModeLinePercentContext,
+    format: Value,
+    walker: Walker,
+    rendered: &mut ModeLineRendered,
+) {
     match walker {
         Walker::Context => {
-            format_mode_line_recursive(ctx, pctx, &format, &mut rendered, 0, false, None)
+            format_mode_line_recursive(ctx, pctx, &format, rendered, 0, false, None)
                 .expect("context walk");
         }
         Walker::State => {
@@ -47,7 +63,7 @@ fn render(
                 &ctx.processes,
                 pctx,
                 &format,
-                &mut rendered,
+                rendered,
                 0,
                 false,
             ));
@@ -61,7 +77,7 @@ fn render(
                 &ctx.processes,
                 pctx,
                 &format,
-                &mut rendered,
+                rendered,
                 0,
                 false,
                 &mut |_, _| Ok(Value::NIL),
@@ -70,12 +86,138 @@ fn render(
             .expect("split callback walk");
         }
     }
-    // Literal strings in these cases are property-free and contain no padding.
-    rendered
-        .text
+}
+
+/// Like the existing exact-clock fixtures, run without unrelated registry
+/// writers. The SAME owned formatter state/accumulator survives both halves.
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[test]
+#[ignore = "exact process registry epoch/count; run alone"]
+fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth() {
+    use crate::emacs_core::intern::EpochCachedSymbol;
+    const NAME: &str = "p3sym-c5-held-pass";
+    let oracle: Vec<_> = include_str!(
+        "../../../../tagged/gc/mutator_registration/symbol_intern_pass_oracle.expected"
+    )
+    .lines()
+    .collect();
+    for (index, walker) in [Walker::Context, Walker::State, Walker::StateWithEval]
         .into_iter()
-        .map(|code| char::from_u32(code).expect("Unicode test text"))
-        .collect()
+        .enumerate()
+    {
+        let mut ctx = context();
+        ctx.set_variable("window-dead-windows-table", Value::NIL);
+        ctx.gc_collect_exact(); // Only before test values/pass state exist.
+        ctx.set_variable(NAME, Value::string("A"));
+        let pctx = ModeLinePercentContext::default();
+        let held = pctx.resolve_dynamic_symbol(NAME);
+        let old_id = held.0;
+        let fixed = EpochCachedSymbol::new(NAME);
+        assert_eq!(fixed.get(), old_id);
+        let format = Value::from_sym_id(old_id); // Immediate scalar identity.
+        let mut output = ModeLineRendered::default();
+        render_into(&mut ctx, &pctx, format, walker, &mut output);
+        let first = output.text.clone();
+        assert_eq!(first, [u32::from('A')], "first half of the original pass");
+        let fresh = format!("p3sym-c5-held-pass-fresh-{index}");
+        assert!(crate::emacs_core::intern::lookup_interned(&fresh).is_none());
+        let holders = [
+            intern("p3sym-c5-held-pass-input-left"),
+            intern("p3sym-c5-held-pass-input-right"),
+        ];
+        for holder in holders {
+            ctx.obarray
+                .set_symbol_value_id(holder, Value::string(&fresh));
+        }
+        // Only the process registry grows here. The World remains at its old
+        // extent until C5's real transaction must add chunk/side-table pairs.
+        let mut gap = intern_uninterned("p3sym-c5-held-pass-gap");
+        let target = (u64::from(gap.0) / 4096 + 2) * 4096 + 17;
+        while u64::from(gap.0) + 1 < target {
+            gap = intern_uninterned("p3sym-c5-held-pass-gap");
+        }
+        let pass_epoch = pctx.dynamic_symbols.borrow().epoch;
+        // No VariableView, RefCell borrow, string Value or Context view enters
+        // this closure. Held identity/pass/output are accessed only on return.
+        let receipt = ctx
+            .admit_owned_parallel(|projection| {
+                let receipt = projection.era().c5_intern_growth_for_test(holders);
+                let (collector, keeper) = projection.finish().expect("C5 pass clean era finish");
+                (collector, keeper, receipt)
+            })
+            .expect("C5 pass owned admission")
+            .expect("C5 pass history after normal serial recovery");
+        assert!(ctx.obarray.admission_matches_canonical());
+        assert!(receipt.after.chunks >= receipt.before.chunks + 2);
+        assert_eq!(receipt.after.chunks, receipt.after.sides);
+        assert!(receipt.after.sides > receipt.before.sides);
+        assert_eq!(
+            receipt.registry_after,
+            (receipt.registry_before.0 + 1, receipt.registry_before.1 + 1)
+        );
+        assert!(receipt.registry_after.0 > pass_epoch);
+        assert_eq!(
+            pctx.dynamic_symbols.borrow().epoch,
+            pass_epoch,
+            "the original pass was retained"
+        );
+        assert_eq!(held.0, old_id);
+        assert_eq!(
+            held.value(ctx.variables(), &ctx.buffers)
+                .and_then(|value| value.as_utf8_str()),
+            Some("A")
+        );
+        assert_eq!(
+            fixed.get(),
+            old_id,
+            "fixed resolver revalidates the same scalar identity"
+        );
+        reset_intern_calls();
+        let resolved = pctx.resolve_dynamic_symbol(NAME);
+        assert_eq!(resolved.0, old_id);
+        assert_eq!(
+            intern_call_names(),
+            vec![NAME.to_owned()],
+            "same pass re-resolves exactly once after the fresh epoch"
+        );
+        assert_eq!(
+            pctx.dynamic_symbols.borrow().epoch,
+            receipt.registry_after.0
+        );
+        reset_intern_calls();
+        render_into(&mut ctx, &pctx, format, walker, &mut output);
+        assert!(
+            !intern_call_names().iter().any(|name| name == NAME),
+            "subsequent pass reads stay warm"
+        );
+        let rendered: String = output
+            .text
+            .iter()
+            .map(|&code| char::from_u32(code).unwrap())
+            .collect();
+        assert_eq!(
+            crate::emacs_core::print_value(&Value::string(&rendered)),
+            oracle[0]
+        );
+        assert_eq!(
+            &output.text[..first.len()],
+            first,
+            "original output preserved"
+        );
+        assert_eq!(
+            crate::emacs_core::print_value(&if resolved.0 == old_id {
+                Value::T
+            } else {
+                Value::NIL
+            }),
+            oracle[1]
+        );
+        assert_eq!(ctx.variables().boundp(receipt.winner), oracle[2] == "t");
+        eprintln!(
+            "P3SYM_C5_HELD_PASS walker={index} epoch_delta=1 ids_delta=1 chunks_added={} same_identity=1 output={rendered}",
+            receipt.after.chunks - receipt.before.chunks
+        );
+    }
 }
 
 #[test]

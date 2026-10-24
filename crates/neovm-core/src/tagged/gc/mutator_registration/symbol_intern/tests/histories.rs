@@ -524,5 +524,6 @@ fn p3sym_c5_two_to_four_owners_grow_distinct_names_without_filling_gaps() {
 }
 
 mod assignment;
+mod boundary;
 mod contention;
 mod serial;
