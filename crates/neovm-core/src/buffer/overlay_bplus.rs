@@ -1872,7 +1872,8 @@ where
     tree: T,
     query: Q,
     direction: OrderedTraversalDirection,
-    frames: [OrderedTraversalFrame; MAX_TREE_DEPTH],
+    first_frame: OrderedTraversalFrame,
+    frames: [OrderedTraversalFrame; MAX_TREE_DEPTH - 1],
     len: usize,
 }
 
@@ -1905,14 +1906,29 @@ where
             tree,
             query,
             direction,
-            frames: std::array::from_fn(|index| {
-                if index == 0 {
-                    first_frame
-                } else {
-                    EMPTY_TRAVERSAL_FRAME
-                }
-            }),
+            // Keep the dynamic first frame separate from the constant tail,
+            // so construction can initialize the caller's storage directly.
+            first_frame,
+            frames: [EMPTY_TRAVERSAL_FRAME; MAX_TREE_DEPTH - 1],
             len,
+        }
+    }
+
+    #[inline(always)]
+    fn frame(&self, index: usize) -> OrderedTraversalFrame {
+        if index == 0 {
+            self.first_frame
+        } else {
+            self.frames[index - 1]
+        }
+    }
+
+    #[inline(always)]
+    fn frame_mut(&mut self, index: usize) -> &mut OrderedTraversalFrame {
+        if index == 0 {
+            &mut self.first_frame
+        } else {
+            &mut self.frames[index - 1]
         }
     }
 
@@ -1921,7 +1937,8 @@ where
         if let Some(frame) =
             Self::frame_if_relevant(&self.tree, self.query, id, inherited, self.len)
         {
-            self.frames[self.len] = frame;
+            let index = self.len;
+            *self.frame_mut(index) = frame;
             self.len += 1;
         }
     }
@@ -1991,7 +2008,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         while self.len > 0 {
             let frame_index = self.len - 1;
-            let mut frame = self.frames[frame_index];
+            let mut frame = self.frame(frame_index);
             let node = self.tree.node(frame.id);
             let record_delta = frame.inherited.combine(node.pending_shift);
             match &node.kind {
@@ -2016,7 +2033,7 @@ where
                     } else {
                         records[usize::from(record_index)].shifted(record_delta)
                     };
-                    self.frames[frame_index] = frame;
+                    *self.frame_mut(frame_index) = frame;
                     if self.query.record_matches(record) {
                         return Some(record);
                     }
@@ -2038,7 +2055,7 @@ where
                         }
                     };
                     let child = children[usize::from(child_index)];
-                    self.frames[frame_index] = frame;
+                    *self.frame_mut(frame_index) = frame;
                     self.push_if_relevant(child, record_delta);
                 }
             }
