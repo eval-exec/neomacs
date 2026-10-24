@@ -1879,7 +1879,15 @@ impl TtyRif {
         // replays the shift and poisons the opened/revealed cells, so
         // the ordinary span diff below emits exactly the fresh content.
         let phys_width = self.desired.width;
+        // At or beyond the logical end, the old row is uniform erasable
+        // blanks. Without a background, every candidate suffix would fail
+        // carries_shiftable_content, so refuse without comparing its cells.
+        let tail_can_carry_content = current_logical_length.as_usize() > first_changed
+            || current_row
+                .last()
+                .is_some_and(|cell| cell.attrs.bg.is_some());
         if self.caps.insert_delete_char
+            && tail_can_carry_content
             && let Some((op, shifted_row)) = detect_row_shift(
                 row as u16,
                 &self.desired.cells[row_start..row_start + phys_width],
