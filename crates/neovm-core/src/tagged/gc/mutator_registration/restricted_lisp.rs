@@ -5505,6 +5505,7 @@ fn a6_ht_reader_scaling_row() {
 /// table's epoch, so the next native dispatch must refuse the stale inline
 /// path and raise the shim's loud signal instead of jumping through a
 /// word the compiler never produced.
+#[cfg(feature = "jit")]
 #[test]
 fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
     if !crate::emacs_core::jit::compile::jit_inline_switch_on() {
