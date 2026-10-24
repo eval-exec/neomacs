@@ -2,6 +2,7 @@ use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
 
 mod gc;
+mod histories;
 
 fn source(ops: Vec<Op>, nslots: usize) -> Source {
     Source {
