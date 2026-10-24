@@ -35,6 +35,8 @@ pub(crate) mod symbol_functions;
 #[cfg(test)]
 mod symbol_globals;
 #[cfg(test)]
+mod symbol_intern;
+#[cfg(test)]
 pub use symbol_authority::FunctionOpKind;
 pub use symbol_authority::{
     FunctionActivation, FunctionCallCache, FunctionError, FunctionStep, GlobalError, KeeperSymbols,

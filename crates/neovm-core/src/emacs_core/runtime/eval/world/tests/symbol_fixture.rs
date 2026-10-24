@@ -60,6 +60,29 @@ impl Context {
         )
     }
 
+    /// C5 fixture operands are created by the sole serial setup owner, then
+    /// copied from existing plain cells through the qualified rooted value API.
+    /// No string allocation, raw name word or mutable heap view enters the era.
+    pub(crate) fn with_test_symbol_name_inputs_era<R>(
+        kind: crate::tagged::gc::PlainSymbolBacking,
+        spelling: &str,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        use crate::tagged::gc::PlainSymbolBacking;
+        Self::with_test_symbol_backings_init_era(
+            &[
+                kind,
+                PlainSymbolBacking::Unprojected,
+                PlainSymbolBacking::Unprojected,
+            ],
+            |obarray, ids| {
+                obarray.seed_value_id(ids[1], TaggedValue::string(spelling));
+                obarray.seed_value_id(ids[2], TaggedValue::string(spelling));
+            },
+            body,
+        )
+    }
+
     fn with_test_symbol_backings_init_era<R>(
         kinds: &[crate::tagged::gc::PlainSymbolBacking],
         init: impl FnOnce(&mut Obarray, &[SymId]),
