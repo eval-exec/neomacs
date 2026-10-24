@@ -1892,74 +1892,90 @@ where
         Self::in_direction(tree, query, OrderedTraversalDirection::Reverse)
     }
 
-    // Expose initialization to the caller so the fixed frame stack need not
-    // cross an out-of-line constructor return boundary.
+    // Compute the root frame before constructing the iterator, so its fixed
+    // frame stack can be initialized directly in the caller's result storage.
     #[inline(always)]
     fn in_direction(tree: T, query: Q, direction: OrderedTraversalDirection) -> Self {
-        let root = tree.root;
-        let mut matches = Self {
+        let root_frame = tree
+            .root
+            .and_then(|root| Self::frame_if_relevant(&tree, query, root, EmacsByteDelta::ZERO, 0));
+        let len = usize::from(root_frame.is_some());
+        let first_frame = root_frame.unwrap_or(EMPTY_TRAVERSAL_FRAME);
+        Self {
             tree,
             query,
             direction,
-            frames: [EMPTY_TRAVERSAL_FRAME; MAX_TREE_DEPTH],
-            len: 0,
-        };
-        if let Some(root) = root {
-            matches.push_if_relevant(root, EmacsByteDelta::ZERO);
+            frames: std::array::from_fn(|index| {
+                if index == 0 {
+                    first_frame
+                } else {
+                    EMPTY_TRAVERSAL_FRAME
+                }
+            }),
+            len,
         }
-        matches
     }
 
     #[inline(always)]
     fn push_if_relevant(&mut self, id: OrderedNodeId, inherited: EmacsByteDelta) {
+        if let Some(frame) =
+            Self::frame_if_relevant(&self.tree, self.query, id, inherited, self.len)
+        {
+            self.frames[self.len] = frame;
+            self.len += 1;
+        }
+    }
+
+    #[inline(always)]
+    fn frame_if_relevant(
+        tree: &OrderedShiftTree<R>,
+        query: Q,
+        id: OrderedNodeId,
+        inherited: EmacsByteDelta,
+        depth: usize,
+    ) -> Option<OrderedTraversalFrame> {
         #[cfg(test)]
         super::overlay::record_overlay_iterator_frame_push();
         #[cfg(test)]
-        self.query.record_subtree_visit();
-        let summary = self.tree.summary(id);
-        if !self.query.subtree_may_match(
+        query.record_subtree_visit();
+        let summary = tree.summary(id);
+        if !query.subtree_may_match(
             inherited.apply_to_pos(summary.min_position),
             inherited.apply_to_pos(summary.max_position),
             inherited.apply_to_pos(summary.max_end),
-        ) || !self.query.subtree_filter_may_match(summary.filter_mask)
+        ) || !query.subtree_filter_may_match(summary.filter_mask)
         {
-            return;
+            return None;
         }
         assert!(
-            self.len < self.frames.len(),
+            depth < MAX_TREE_DEPTH,
             "overlay B+ tree exceeded depth bound"
         );
-        let node = self.tree.node(id);
+        let node = tree.node(id);
         let record_delta = inherited.combine(node.pending_shift);
         // `prefix_max_end` already includes this node's pending shift (it is
         // updated with the summary), so only the shift inherited from parents
         // is applied to it here.
         let cursor = node.prefix_max_end.partition_point(|maximum_end| {
-            self.query
-                .maximum_end_is_too_small(inherited.apply_to_pos(*maximum_end))
+            query.maximum_end_is_too_small(inherited.apply_to_pos(*maximum_end))
         });
         let end = match &node.kind {
             OrderedNodeKind::Leaf(records) => records.partition_point(|record| {
-                !self
-                    .query
-                    .minimum_start_is_too_large(record_delta.apply_to_pos(record.key_position()))
+                !query.minimum_start_is_too_large(record_delta.apply_to_pos(record.key_position()))
             }),
             OrderedNodeKind::Branch(_) => node.branch_min_positions.partition_point(|minimum| {
-                !self
-                    .query
-                    .minimum_start_is_too_large(record_delta.apply_to_pos(*minimum))
+                !query.minimum_start_is_too_large(record_delta.apply_to_pos(*minimum))
             }),
         };
         if cursor >= end {
-            return;
+            return None;
         }
-        self.frames[self.len] = OrderedTraversalFrame {
+        Some(OrderedTraversalFrame {
             id,
             cursor: u16::try_from(cursor).expect("overlay traversal cursor fits node fanout"),
             end: u16::try_from(end).expect("overlay traversal end fits node fanout"),
             inherited,
-        };
-        self.len += 1;
+        })
     }
 }
 
