@@ -1222,6 +1222,19 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
             crate::emacs_core::builtins::symbols::obarray_bucket(custom_obarray, bucket_idx)
                 .unwrap_or(Value::NIL);
 
+        // GNU oblookup compares a name's character count and bytes and never
+        // its multibyte flag (lread.c:4945). The canonical name atom of an
+        // ASCII-only spelling is stored unibyte while the query can be
+        // multibyte, so LispString equality (which compares the flag) misses a
+        // symbol that `intern-soft` -- and GNU -- resolve. Compare the way
+        // lookup does.
+        let name_query = match &target {
+            UninternTarget::Name(name) => {
+                Some(crate::emacs_core::intern::SymbolNameQuery::from(*name))
+            }
+            UninternTarget::Symbol(_) => None,
+        };
+
         // Walk the bucket chain and rebuild without the matching symbol
         let mut items = Vec::new();
         let mut found = false;
@@ -1237,9 +1250,13 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
                             UninternTarget::Symbol(target_id) => {
                                 car.as_symbol_id(symbol_mode) == Some(*target_id)
                             }
-                            UninternTarget::Name(name) => car
-                                .as_symbol_lisp_string(symbol_mode)
-                                .is_some_and(|sym_name| sym_name == *name),
+                            UninternTarget::Name(_) => name_query.is_some_and(|query| {
+                                car.as_symbol_id(symbol_mode)
+                                    .map(
+                                        crate::emacs_core::intern::resolve_lisp_visible_symbol_name,
+                                    )
+                                    .is_some_and(|sym_name| query.matches(sym_name.text()))
+                            }),
                         };
                         if should_remove {
                             found = true;

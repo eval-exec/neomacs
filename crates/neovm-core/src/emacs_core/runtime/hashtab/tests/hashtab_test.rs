@@ -1162,6 +1162,35 @@ fn unintern_constant_symbols_preserves_custom_obarray_namesakes() {
     }
 }
 
+/// GNU `oblookup` compares a name's character count and bytes, never its
+/// multibyte flag (lread.c:4945), and `intern-soft` follows that rule. `unintern`
+/// must follow it too: the canonical name atom of an ASCII-only spelling is
+/// stored unibyte, so a multibyte query that lookup resolves to that symbol must
+/// also remove it. Oracle shard 13 (`oracle_prop_unintern_constant_symbols_and_
+/// namesakes`) caught this: the reader-interned symbol's `symbol-name` is
+/// multibyte, `intern-soft` found it, and `unintern` answered nil.
+#[test]
+fn unintern_name_lookup_ignores_the_multibyte_flag_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut ctx = crate::emacs_core::eval::Context::new();
+    let result = ctx
+        .eval_str(
+            r#"(let* ((ob (make-vector 31 0))
+                      (name (string-to-multibyte "neovm--unintern-multibyte"))
+                      (symbol (intern name ob)))
+                 (list (eq symbol (intern-soft name ob))
+                       (unintern name ob)
+                       (intern-soft name ob)))"#,
+        )
+        .expect("multibyte unintern should run");
+    let parts = list_to_vec(&result).expect("result list");
+    assert_eq!(
+        parts,
+        vec![Value::T, Value::T, Value::NIL],
+        "unintern must match a multibyte query the way intern-soft does"
+    );
+}
+
 /// An `equal` hash table must key EVERY string by its content, and must treat
 /// two strings that are not `equal` as two keys.
 ///
