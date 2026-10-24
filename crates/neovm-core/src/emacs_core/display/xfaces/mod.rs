@@ -336,10 +336,6 @@ pub(crate) fn upsert_frame_face_hash_entry(table: Value, key: Value, value: Valu
 }
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-#[cfg(test)]
-use std::cell::{Cell, RefCell};
-#[cfg(test)]
-use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};

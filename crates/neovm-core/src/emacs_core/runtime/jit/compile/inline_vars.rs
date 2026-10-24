@@ -70,7 +70,7 @@ use super::lowering::{
 };
 use super::*;
 use crate::emacs_core::eval::SpecBinding;
-use crate::emacs_core::forward::{LispFwd, LispFwdType};
+use crate::emacs_core::forward::LispFwdType;
 use crate::emacs_core::symbol::{
     SYMCELL_INLINE_WRITE_MASK, SymbolRedirect, ValueCell, symcell_inline_write_value,
 };

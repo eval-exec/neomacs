@@ -218,8 +218,6 @@ fn materialize(name: &str, source: MaterializeSource) -> Result<(), String> {
 /// same place [`Spec::load`] resolves from; the digest comes from the
 /// sealed fixture, never from anything else.
 fn pin_packages(name: &str, note: Option<String>) -> Result<String, String> {
-    use neomacs_infra::config_env::ConfigEnvironment as _;
-
     let Some(environment) = neomacs_infra::config_env::open_by_name(name) else {
         return Err(format!(
             "{name}: not materialized; materialize first, then pin"

@@ -3,7 +3,6 @@
 use super::*;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::jit::opt::{
-    ir::*,
     mem::{AliasClass, Effects},
     types::TypeSet,
 };

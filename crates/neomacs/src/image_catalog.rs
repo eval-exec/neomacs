@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_protocol::{
-    ImageNativeExtent, ImageSequenceId, ImageSequenceRetirement, ProvisionalExtent, SlotChange,
+    ImageSequenceId, ImageSequenceRetirement, ProvisionalExtent, SlotChange,
 };
 use neomacs_display_runtime::render_thread::{
     ImageDecodeTerminal, ImageProbeSource, ImageTerminalProbe, SharedImageRenderState,

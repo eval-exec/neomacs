@@ -3,7 +3,9 @@
 
 use super::super::TaggedHeap;
 use super::*;
-use crate::tagged::header::{GcHeader, HashTableObj, HeapObjectKind, VecLikeHeader, VecLikeType};
+#[cfg(test)]
+use crate::tagged::header::HashTableObj;
+use crate::tagged::header::{GcHeader, HeapObjectKind, VecLikeHeader, VecLikeType};
 use crate::tagged::value::TaggedValue;
 use rustc_hash::FxHashSet;
 use std::sync::Weak;

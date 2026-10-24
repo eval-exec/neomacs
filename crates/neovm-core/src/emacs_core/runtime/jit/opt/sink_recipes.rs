@@ -7,7 +7,7 @@
 
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::opt::{
-    ir::{Block, FrameId, Func, Inst, Value},
+    ir::{Block, FrameId, Inst, Value},
     types::TypeSet,
 };
 use std::collections::HashMap;

@@ -11,7 +11,7 @@ use super::tests::make_test_app;
 use crate::thread_comm::ConfigCommand;
 use neomacs_display_protocol::{
     EmacsModifierKey, ModifierEventKind, ModifierPolicy, ModifierSideState, OptionAsAltShape,
-    PhysicalModifierKey, RawModifiers, TransportModifierBit,
+    RawModifiers, TransportModifierBit,
 };
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 

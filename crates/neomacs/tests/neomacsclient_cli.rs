@@ -20,7 +20,6 @@ fn neomacsclient_sends_gnu_server_request_over_local_socket() {
     use std::fs;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
-    use std::path::PathBuf;
     use std::thread;
 
     let repo_tmp = neomacs_infra::workspace_root().join("tmp");
@@ -77,7 +76,6 @@ fn neomacsclient_parent_id_implies_a_new_graphical_frame() {
     use std::fs;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
-    use std::path::PathBuf;
     use std::thread;
 
     let repo_tmp = neomacs_infra::workspace_root().join("tmp");
@@ -126,7 +124,6 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
     use std::fs;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
-    use std::path::PathBuf;
     use std::thread;
 
     let repo_tmp = neomacs_infra::workspace_root().join("tmp");
@@ -188,7 +185,6 @@ fn neomacsclient_tty_identifies_its_terminal_to_the_server() {
     use std::fs::{self, File, OpenOptions};
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
-    use std::path::PathBuf;
     use std::process::Stdio;
     use std::thread;
 
@@ -258,7 +254,6 @@ fn neomacsclient_tty_forwards_resize_to_the_server_process() {
     use std::fs::{self, File, OpenOptions};
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
-    use std::path::PathBuf;
     use std::process::Stdio;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
@@ -342,7 +337,6 @@ fn neomacsclient_sends_gnu_auth_for_tcp_server_file() {
     use std::fs;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::path::PathBuf;
     use std::thread;
 
     let repo_tmp = neomacs_infra::workspace_root().join("tmp");

@@ -6,7 +6,6 @@ use crate::test_utils::{
     eval_with_ldefs_boot_autoloads, runtime_startup_context, runtime_startup_eval_all,
 };
 use std::fs;
-use std::path::PathBuf;
 
 fn bootstrap_eval_all(src: &str) -> Vec<String> {
     runtime_startup_eval_all(src)

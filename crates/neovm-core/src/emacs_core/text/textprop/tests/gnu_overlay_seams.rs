@@ -1,5 +1,3 @@
-use super::*;
-
 #[test]
 fn gde_overlay_cycle_and_property_filtering() {
     crate::test_utils::init_test_tracing();

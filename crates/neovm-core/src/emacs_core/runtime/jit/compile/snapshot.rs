@@ -216,6 +216,6 @@ pub(crate) fn publish_numeric_feedback(f: &ByteCodeFunction) -> NumericFeedbackS
 
 #[path = "snapshot/array_feedback.rs"]
 mod array_feedback;
-pub(crate) use array_feedback::{
-    FrontFeedbackScope, SelectedFeedbackSnapshot, publish_numeric_feedback_with_arrays,
-};
+#[cfg(test)]
+pub(crate) use array_feedback::SelectedFeedbackSnapshot;
+pub(crate) use array_feedback::{FrontFeedbackScope, publish_numeric_feedback_with_arrays};

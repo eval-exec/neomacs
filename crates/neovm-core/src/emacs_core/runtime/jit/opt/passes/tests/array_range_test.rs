@@ -7,7 +7,6 @@ use super::super::array_reads::{ArrayAdmission, BoundsWitness, lift};
 use super::*;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::jit::opt::{
-    ir::*,
     mem::{AliasClass, Effects},
     types::{Range, TypeSet},
 };

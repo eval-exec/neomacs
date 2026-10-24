@@ -18,7 +18,6 @@
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 /// Captured outcome of running a binary with a specific argv.

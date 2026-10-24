@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::emacs_core::jit::opt::{
-    ir::*,
     mem::{AliasClass, Effects},
     types::{Range, TypeSet},
 };

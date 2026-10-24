@@ -1,5 +1,3 @@
-use super::*;
-
 #[test]
 fn gde_review_overlay_lists_full_region_intersection() {
     crate::test_utils::init_test_tracing();

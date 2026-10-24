@@ -9,7 +9,7 @@ use crate::emacs_core::Context;
 use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::intern::resolve_sym;
 use crate::heap_types::LispString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn workspace_temp_dir(prefix: &str) -> tempfile::TempDir {
     let workspace_root = crate::test_utils::workspace_root();

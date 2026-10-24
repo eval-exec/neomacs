@@ -14,7 +14,7 @@ use crate::emacs_core::eval::{
 };
 use crate::emacs_core::jit::opt::passes::{array_reads, range};
 use crate::emacs_core::jit::opt::{
-    build, eval, ir, mem,
+    build, eval, ir,
     types::{Range, TypeSet},
 };
 use crate::emacs_core::jit::tier2::CompileTier;

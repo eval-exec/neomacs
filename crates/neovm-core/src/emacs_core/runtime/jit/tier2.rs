@@ -576,6 +576,6 @@ mod reach_tests;
 pub(crate) mod array_stability;
 mod policy;
 pub(crate) use policy::{
-    charge_compile, cpu_time_us, rearm_fallback, release, reserve_compile, revert_if_t2,
-    upgrade_deferred, upgrade_failed, wait_for_opt_budget,
+    charge_compile, cpu_time_us, rearm_fallback, reserve_compile, revert_if_t2, upgrade_deferred,
+    upgrade_failed, wait_for_opt_budget,
 };

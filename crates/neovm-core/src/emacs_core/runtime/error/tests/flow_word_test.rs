@@ -4,7 +4,7 @@
 use super::{
     EvalError, EvalResult, Flow, FlowKind, FlowRef, InFlightRegistryHandle, InFlightRootPin,
     LispCondition, SignalData, ThreadBlockedData, ThrowData, current_in_flight_registry_handle,
-    flow_from_eval_error, is_signal_result, map_flow, signal, with_signal_result,
+    flow_from_eval_error, map_flow, signal,
 };
 use crate::emacs_core::eval::{Context, ResumeTarget, ShutdownRequest};
 use crate::emacs_core::intern::intern;

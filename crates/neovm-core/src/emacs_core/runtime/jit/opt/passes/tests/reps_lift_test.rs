@@ -9,7 +9,6 @@ use crate::emacs_core::eval::{
 use crate::emacs_core::jit::opt::{
     build::{BuildInput, build},
     eval::{EvalError, Inputs, Outcome, evaluate},
-    ir::*,
     mem::{AliasClass, Effects},
     types::TypeSet,
 };

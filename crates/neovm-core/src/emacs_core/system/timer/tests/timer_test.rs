@@ -6,7 +6,6 @@ use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use std::cell::RefCell;
 use std::fs;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 

@@ -1,5 +1,3 @@
-use super::*;
-
 #[test]
 fn gde_review_deletion_bulk_and_middle_order() {
     crate::test_utils::init_test_tracing();

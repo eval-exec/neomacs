@@ -6,7 +6,6 @@ fn test_ob() -> crate::emacs_core::symbol::Obarray {
 use super::*;
 use crate::test_utils::runtime_startup_eval_all;
 use std::fs;
-use std::path::PathBuf;
 
 fn bootstrap_eval_all(src: &str) -> Vec<String> {
     runtime_startup_eval_all(src)

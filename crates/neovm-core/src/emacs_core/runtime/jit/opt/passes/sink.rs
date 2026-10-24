@@ -18,9 +18,7 @@ mod front;
 #[path = "sink_versions.rs"]
 mod versions;
 
-use self::front::{
-    append_edge_fields, append_phi_fields, borrow_word, edge_mut, numeric_values, rewrite_source,
-};
+use self::front::{append_edge_fields, append_phi_fields, borrow_word, edge_mut, rewrite_source};
 use self::versions::{
     PassError, Versions, append, append_version, box_field, create_cache_phi, fill_cache_phi,
     guaranteed_word, word_view,

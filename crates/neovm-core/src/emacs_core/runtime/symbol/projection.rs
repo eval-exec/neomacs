@@ -23,7 +23,7 @@
 use super::cell::{ArmMut, RevealedCell};
 use super::{Obarray, SymId, SymbolTrappedWrite};
 use crate::emacs_core::forward::{
-    BuiltinForwarder, CanonicalArm, CanonicalBlv, FwdRef, LispFwd, ThreadProjectionDescriptor,
+    BuiltinForwarder, CanonicalArm, CanonicalBlv, FwdRef, ThreadProjectionDescriptor,
     ThreadProjectionTable,
 };
 use crate::emacs_core::value::Value;

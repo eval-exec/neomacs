@@ -3,7 +3,6 @@ use crate::emacs_core::eval::{
     Context, bytecode_branch_poll_count, reset_bytecode_branch_poll_count,
 };
 use crate::emacs_core::intern::intern;
-use crate::emacs_core::jit::cache;
 use crate::emacs_core::value::{HashTableTest, LambdaParams};
 
 fn loop_function(arity: usize, constants: Vec<Value>, ops: Vec<Op>) -> ByteCodeFunction {

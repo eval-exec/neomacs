@@ -1,8 +1,8 @@
 //! Frozen shipping layout, measured from the ac489d4f74 fat artifact.
 //! Typed store blocks extend the tail; no older field may move.
-use super::*;
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64", not(test)))]
 const _: () = {
+    use super::*;
     use std::mem::offset_of;
     assert!(offset_of!(TaggedHeap, mark_cons_block_cache) == 0);
     assert!(offset_of!(TaggedHeap, mutator_gc) == 24);

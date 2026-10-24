@@ -13,7 +13,6 @@ use crate::emacs_core::{Context, format_eval_result};
 use crate::test_utils::{eval_with_ldefs_boot_autoloads, runtime_startup_eval_all};
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
 use strum::IntoEnumIterator;
 
 /// Create evaluator with minimal Elisp shims for interactive testing.

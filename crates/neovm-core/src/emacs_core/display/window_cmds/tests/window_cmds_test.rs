@@ -10,7 +10,6 @@ use crate::window::{FrameFullscreen, FrameParam};
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::fs;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

@@ -16,7 +16,6 @@ use crate::test_utils::runtime_startup_eval_all;
 use crate::window::FrameId;
 use std::cell::RefCell;
 use std::fs;
-use std::path::PathBuf;
 use std::rc::Rc;
 
 #[test]

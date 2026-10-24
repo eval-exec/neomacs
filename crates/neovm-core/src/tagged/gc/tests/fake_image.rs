@@ -9,7 +9,7 @@
 //! objects, which are never marked and get swept while live.
 
 use super::*;
-use crate::tagged::header::{ConsCdrOrNext, LispValueVec, VecLikeHeader, VecLikeType, VectorObj};
+use crate::tagged::header::{LispValueVec, VecLikeHeader, VecLikeType, VectorObj};
 
 /// The image's objects, adjacent in memory.
 #[repr(C)]

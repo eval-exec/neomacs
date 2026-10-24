@@ -8,7 +8,6 @@ use super::frontend_tests::{Settings, count_loop};
 use super::*;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::jit::cache;
-use crate::emacs_core::jit::compile::compile_pipeline_tests::function;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 use crate::emacs_core::jit::compile::{
     Context, NativeRun, OptProfitMode, Value, force_opt_osr_entry_for_test,

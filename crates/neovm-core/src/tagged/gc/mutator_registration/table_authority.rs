@@ -41,8 +41,10 @@ fn owner_gc_ptr(owner: &mut Mutator<'_>) -> *mut MutatorGcState {
         })
 }
 
+#[cfg(test)]
+pub(crate) use super::authority_word::WRITER;
 pub(crate) use super::authority_word::{
-    COUNT_MASK, WRITER, quiescent, reader_enter, reader_exit, writer_enter, writer_exit,
+    quiescent, reader_enter, reader_exit, writer_enter, writer_exit,
 };
 
 /// The shell configuration a reader may observe (B3 op bodies): the

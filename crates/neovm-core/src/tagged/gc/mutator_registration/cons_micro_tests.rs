@@ -1,6 +1,5 @@
 //! Same optimized libtest ELF, direct Rust allocation, collected loops only.
 #![cfg(not(feature = "gc-memory-telemetry"))]
-use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::alloc_region::RegionStats;
 use crate::tagged::gc::{RunSlice, SliceRoot, TaggedHeap};

@@ -19,8 +19,6 @@ use neomacs_gui_tests::DisplayHarness;
 use neomacs_gui_tests::{
     GuiBackend, GuiRunOptions, GuiRunResult, GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
 };
-use neomacs_infra::config_env::ConfigEnvironment as _;
-use neomacs_infra::display::WaylandOutput;
 use neomacs_infra::workspace_root;
 use std::path::PathBuf;
 use std::time::Duration;

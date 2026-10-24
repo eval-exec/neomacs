@@ -1,6 +1,6 @@
 use super::menu_test_support::publish;
 use super::*;
-use crate::emacs_core::error::{FlowRef, FlowResultExt as _};
+use crate::emacs_core::error::FlowRef;
 
 #[test]
 fn gui_menu_deep_acyclic_menu_is_complete_or_reports_resource_exhaustion() {

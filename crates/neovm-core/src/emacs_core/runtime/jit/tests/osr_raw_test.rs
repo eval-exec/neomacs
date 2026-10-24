@@ -1,6 +1,5 @@
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::jit::cache;
 use crate::emacs_core::value::LambdaParams;
 
 fn raw_loop(ops: Vec<Op>) -> ByteCodeFunction {

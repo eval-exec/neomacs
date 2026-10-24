@@ -7,7 +7,6 @@ use super::super::value::{Value, ValueKind};
 use crate::test_utils::runtime_startup_context;
 use malachite::integer::Integer;
 use std::fs;
-use std::path::PathBuf;
 
 /// Helper: create an evaluator, insert text, and position point.
 fn eval_with_text(text: &str) -> Context {

@@ -30,7 +30,6 @@ use crate::emacs_core::terminal::pure::{
 };
 use neomacs_display_protocol::SelectionOwner;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 fn builtin_x_popup_menu(eval: &mut Context, args: Vec<Value>) -> EvalResult {

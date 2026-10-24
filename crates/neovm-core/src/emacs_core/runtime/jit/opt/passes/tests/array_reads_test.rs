@@ -9,7 +9,6 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::compile::{analyze_cfg, compile_pipeline_tests::function};
 use crate::emacs_core::jit::opt::{
     build,
-    ir::*,
     mem::{AliasClass, Effects},
     types::{Range, TypeSet},
 };

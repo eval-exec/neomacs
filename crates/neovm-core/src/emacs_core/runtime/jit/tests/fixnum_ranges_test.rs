@@ -4,7 +4,6 @@ use crate::emacs_core::eval::{
     Context, bytecode_branch_poll_count, reset_bytecode_branch_poll_count,
 };
 use crate::emacs_core::intern::intern;
-use crate::emacs_core::jit::cache;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::LambdaParams;
 

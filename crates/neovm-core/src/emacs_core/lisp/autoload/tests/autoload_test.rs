@@ -9,7 +9,6 @@ use crate::emacs_core::{Context, format_eval_result};
 use crate::heap_types::LispString;
 use crate::test_utils::load_minimal_gnu_backquote_runtime;
 use std::fs;
-use std::path::PathBuf;
 
 fn eval_one(src: &str) -> String {
     let mut ev = Context::new();

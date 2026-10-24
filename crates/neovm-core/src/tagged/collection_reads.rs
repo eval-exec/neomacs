@@ -757,7 +757,7 @@ fn record_projected_write_observed(store: &StoreState, value: TaggedValue, proje
 mod store_state;
 use store_state::with_state;
 pub(crate) use store_state::{
-    ObservationWorld, StoreState, clear_installed_store_heap, current_store_root, with_store,
+    ObservationWorld, StoreState, clear_installed_store_heap, with_store,
 };
 
 mod compiled_journal;
