@@ -8,7 +8,7 @@ use crate::buffer::LispCharPos1;
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::Context;
 pub(super) use crate::emacs_core::textprop::{
-    FontificationBoundaryAdmission, FontificationBoundaryMode,
+    FontificationBoundaryAdmission, FontificationBoundaryMode, FontificationScanAdmission,
 };
 use std::ffi::OsStr;
 
@@ -48,6 +48,24 @@ pub(super) fn admit(
     mode: FontificationBoundaryMode,
 ) -> Result<FontificationBoundaryAdmission, Flow> {
     crate::emacs_core::textprop::next_fontified_property_boundary_in_state(
+        ctx.variables(),
+        ctx.buffer_manager(),
+        LispCharPos1::new(position),
+        LispCharPos1::new(end),
+        mode,
+    )
+}
+
+/// A synchronous first-nil query. Nothing returned retains a property-tree
+/// borrow or a proof which could survive a fontification callback.
+#[inline]
+pub(super) fn first_unfontified(
+    ctx: &Context,
+    position: i64,
+    end: i64,
+    mode: FontificationBoundaryMode,
+) -> FontificationScanAdmission {
+    crate::emacs_core::textprop::first_unfontified_position_in_state(
         ctx.variables(),
         ctx.buffer_manager(),
         LispCharPos1::new(position),

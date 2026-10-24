@@ -3201,6 +3201,31 @@ impl Buffer {
         self.text.emacs_byte_pos_to_char_pos(byte_pos)
     }
 
+    /// Native fontification conversion which never grows a position cache.
+    pub(crate) fn char_pos_to_emacs_byte_pos_clamped_no_alloc(
+        &self,
+        char_pos: CharPos0,
+    ) -> EmacsBytePos {
+        let char_pos = char_pos.min(self.total_char_end_pos());
+        if char_pos == self.point.char_pos() {
+            return self.point.emacs_byte_pos();
+        }
+        self.text.char_pos_to_emacs_byte_pos_no_alloc(char_pos)
+    }
+
+    /// Native fontification conversion for a character-boundary byte position.
+    /// Clamp stale endpoints without publishing growing position-anchor storage.
+    pub(crate) fn emacs_byte_pos_to_char_pos_clamped_no_alloc(
+        &self,
+        byte_pos: EmacsBytePos,
+    ) -> CharPos0 {
+        let byte_pos = byte_pos.min(self.total_emacs_byte_end_pos());
+        if byte_pos == self.point.emacs_byte_pos() {
+            return self.point.char_pos();
+        }
+        self.text.emacs_byte_pos_to_char_pos_no_alloc(byte_pos)
+    }
+
     pub fn emacs_byte_pos_to_lisp_char_pos(&self, byte_pos: EmacsBytePos) -> LispCharPos1 {
         self.emacs_byte_pos_to_char_pos_clamped(byte_pos).to_lisp()
     }
@@ -3527,6 +3552,18 @@ impl Buffer {
 
     /// The first position in `range` whose text-property interval
     /// `differs` (see [`TextPropertyTable::first_char_pos_where`]).
+    /// The caller supplies validated character bounds; no byte conversion or
+    /// position-anchor cache update is needed for this immutable query.
+    pub(crate) fn text_props_first_char_pos_where_in_char_range(
+        &self,
+        range: CharRange,
+        differs: impl FnMut(Value) -> bool,
+    ) -> Option<CharPos0> {
+        self.text.text_props_first_char_pos_where(range, differs)
+    }
+
+    /// The first position in `range` whose text-property interval
+    /// `differs` (see [`TextPropertyTable::first_char_pos_where`]).
     pub fn text_props_first_char_pos_where_in_emacs_byte_range(
         &self,
         range: EmacsByteRange,
@@ -3538,6 +3575,17 @@ impl Buffer {
             self.text.emacs_byte_pos_to_char_pos(range.end()),
         );
         self.text.text_props_first_char_pos_where(chars, differs)
+    }
+
+    /// Char-native bounded property query for native fontification admission.
+    pub(crate) fn text_props_next_single_change_after_char_pos_bounded(
+        &self,
+        pos: CharPos0,
+        name: Value,
+        limit: CharPos0,
+    ) -> Option<CharPos0> {
+        self.text
+            .text_props_next_single_change_after_char_pos_bounded(pos, name, limit)
     }
 
     pub fn text_props_next_change_after_emacs_byte_pos(

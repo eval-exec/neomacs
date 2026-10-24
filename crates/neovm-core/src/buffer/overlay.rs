@@ -1724,6 +1724,17 @@ impl OverlayList {
         self.index.next_boundary_after(pos, limit)
     }
 
+    /// Return the next endpoint without allocating or publishing a lazy index.
+    /// Until the endpoint index exists, this borrows and scans interval records
+    /// in O(overlays); subsequent queries reuse the existing endpoint tree.
+    pub(crate) fn next_boundary_after_until_emacs_byte_pos_no_alloc(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.index.next_boundary_after_no_alloc(pos, limit)
+    }
+
     pub fn previous_boundary_before_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,

@@ -3215,6 +3215,124 @@ pub(crate) enum FontificationBoundaryAdmission {
     Resolved(LispCharPos1),
 }
 
+/// A current-call raw scan, or refusal to replace the canonical effective
+/// character-property path. `Raw(None)` proves the entire requested span is
+/// nonnil; no Lisp value, interval cursor or proof escapes this query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub(crate) enum FontificationScanAdmission {
+    UseGeneric,
+    Raw(Option<LispCharPos1>),
+}
+
+/// Native fontification point read with the public getter's current-buffer
+/// semantics, but no argument vector or growing char/byte position cache.
+/// No Lisp runs while the borrowed resolver and buffer are live.
+pub(crate) fn fontified_property_at_position_in_state(
+    vars: crate::emacs_core::eval::VariableView<'_>,
+    buffers: &BufferManager,
+    position: LispCharPos1,
+) -> EvalResult {
+    let buffer_id = resolve_text_property_buffer_id_in_buffers(buffers, None)?;
+    let buffer = buffers
+        .get(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+    let char_pos = validate_buffer_point_char_pos_raw(
+        buffer,
+        position.as_i64(),
+        Value::fixnum(position.as_i64()),
+    )?;
+    let fontified = Value::symbol("fontified");
+    if !buffer.overlays().is_empty() {
+        let byte_pos = buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(char_pos);
+        if let Some((value, _)) = buffer_overlay_property_at_byte_pos(
+            vars,
+            buffers,
+            buffer,
+            byte_pos.get(),
+            fontified,
+            None,
+        ) {
+            return Ok(value);
+        }
+    }
+    Ok(lookup_buffer_text_property_at_char_pos(
+        vars,
+        buffers,
+        buffer,
+        char_pos,
+        fontified,
+        BufferPropertyLookupDomain::Accessible,
+    ))
+}
+
+/// Refused/off native admission uses the same resolved interval walk as the
+/// property builtin, without its char/byte round trip. END remains a fixnum
+/// LIMIT: it may be stale or outside current narrowing, exactly as for the
+/// original next-single-property-change request.
+pub(crate) fn resolved_fontified_property_boundary_in_state(
+    vars: crate::emacs_core::eval::VariableView<'_>,
+    buffers: &BufferManager,
+    position: LispCharPos1,
+    end: LispCharPos1,
+) -> EvalResult {
+    let buffer_id = resolve_text_property_buffer_id_in_buffers(buffers, None)?;
+    let buffer = buffers
+        .get(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+    let resolver = CharPropertyResolver::snapshot(vars, buffers, Value::symbol("fontified"));
+    Ok(walk_buffer_single_property_change(
+        &resolver,
+        buffer,
+        position.as_i64(),
+        Value::fixnum(position.as_i64()),
+        Some(end.as_i64()),
+    )?
+    .into_value(Some(end.as_i64())))
+}
+
+/// Find the first unfontified character with one seated interval walk when
+/// raw plists are the complete effective property source. Refuse stale bounds
+/// before any clamping; the canonical caller owns unusual validation/errors.
+/// This immutable query runs no Lisp/GC and retains nothing across callbacks.
+#[inline]
+pub(crate) fn first_unfontified_position_in_state(
+    vars: crate::emacs_core::eval::VariableView<'_>,
+    buffers: &BufferManager,
+    position: LispCharPos1,
+    end: LispCharPos1,
+    mode: FontificationBoundaryMode,
+) -> FontificationScanAdmission {
+    if mode == FontificationBoundaryMode::Off {
+        return FontificationScanAdmission::UseGeneric;
+    }
+    let Some(buffer) = buffers.current_buffer() else {
+        return FontificationScanAdmission::UseGeneric;
+    };
+    if position < buffer.point_min_lisp_char_pos()
+        || position >= end
+        || end > buffer.point_max_lisp_char_pos()
+        || !buffer.overlays().is_empty()
+    {
+        return FontificationScanAdmission::UseGeneric;
+    }
+    let fontified = Value::symbol("fontified");
+    let resolver = CharPropertyResolver::snapshot(vars, buffers, fontified);
+    if !resolver.supports_presence_coalescing()
+        || buffer.text_props_property_name_presence(Value::from_sym_id(category_sym_id()))
+            != crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent
+    {
+        return FontificationScanAdmission::UseGeneric;
+    }
+    let range = CharRange::new(position.to_char_pos(), end.to_char_pos());
+    let first = buffer.text_props_first_char_pos_where_in_char_range(range, |plist| {
+        plist_get_value(plist, fontified)
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    });
+    FontificationScanAdmission::Raw(first.map(CharPos0::to_lisp))
+}
+
 /// Exact bounded fontification request over the current buffer. No Lisp or
 /// GC runs while the resolver/Buffer borrows are live. Each call snapshots
 /// control variables exactly once; a refused raw proof feeds that SAME
@@ -3257,13 +3375,13 @@ pub(crate) fn next_fontified_property_boundary_in_state(
         // LIMIT answer this caller requires, not a new fontification stop.
         let position = LispCharPos1::new(position).to_char_pos();
         let end = LispCharPos1::new(end);
-        let from_byte = buffer.char_pos_to_emacs_byte_pos_clamped(position);
-        let end_byte = buffer.char_pos_to_emacs_byte_pos_clamped(end.to_char_pos());
         let next = buffer
-            .text_props_next_single_change_after_emacs_byte_pos_bounded(
-                from_byte, fontified, end_byte,
+            .text_props_next_single_change_after_char_pos_bounded(
+                position,
+                fontified,
+                end.to_char_pos(),
             )
-            .map(|byte| buffer.emacs_byte_pos_to_char_pos_clamped(byte).to_lisp())
+            .map(CharPos0::to_lisp)
             .unwrap_or(end);
         return Ok(FontificationBoundaryAdmission::Raw(LispCharPos1::new(
             next.as_i64().min(end.as_i64()),
@@ -3297,11 +3415,8 @@ fn walk_buffer_single_property_change(
     position_arg: Value,
     limit: Option<i64>,
 ) -> Result<SinglePropertyWalk, Flow> {
-    let byte_pos =
-        validate_buffer_property_point_emacs_byte_pos_raw(buffer, position, position_arg)?;
-    let char_pos = buffer.emacs_byte_pos_to_char_pos_clamped(byte_pos);
-    let buffer_end =
-        buffer.emacs_byte_pos_to_char_pos_clamped(buffer.accessible_emacs_byte_region().end());
+    let char_pos = validate_buffer_property_point_char_pos_raw(buffer, position, position_arg)?;
+    let buffer_end = buffer.point_max_char_pos();
     Ok(walk_single_property_change(
         resolver,
         char_pos,
@@ -4085,3 +4200,7 @@ mod char_property_carrier_tests;
 #[cfg(test)]
 #[path = "tests/text_property_any_interval_test.rs"]
 mod text_property_any_interval_tests;
+
+#[cfg(test)]
+#[path = "tests/fontification_scan_test.rs"]
+mod fontification_scan_tests;

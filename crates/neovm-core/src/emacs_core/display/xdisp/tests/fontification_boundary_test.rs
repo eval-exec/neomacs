@@ -8,6 +8,7 @@ use crate::emacs_core::Value;
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::xdisp::{
     ensure_fontified_for_redisplay_with_mode, next_fontified_property_change,
+    next_unfontified_position,
 };
 
 fn generic(ctx: &Context, pos: i64, end: i64) -> EvalResult {
@@ -213,6 +214,28 @@ fn observe_ensure(mode: FontificationBoundaryMode, setup: &str) -> (String, Stri
 }
 
 #[test]
+fn fontification_overlay_boundary_ignores_endpoints_outside_live_restriction() {
+    let mut ctx = Context::new();
+    ctx.eval_str(
+        "(progn (insert \"abcdefghij\")
+           (put-text-property 1 11 'fontified t)
+           (let ((o (make-overlay 8 10))) (overlay-put o 'fontified t))
+           (narrow-to-region 1 5))",
+    )
+    .expect("callback-style narrowed source");
+    for mode in [
+        FontificationBoundaryMode::On,
+        FontificationBoundaryMode::Off,
+    ] {
+        assert_eq!(
+            next_fontified_property_change(&mut ctx, 1, 11, mode)
+                .expect("stale limit retains generic exhaustion semantics"),
+            Value::fixnum(11),
+        );
+    }
+}
+
+#[test]
 fn fontification_boundary_real_ensure_preserves_marking_and_overlay_callback_order() {
     for setup in [
         "(setq fontification-functions
@@ -281,5 +304,89 @@ fn fontification_boundary_real_ensure_keeps_nonmarking_and_error_hook_observatio
             observe_ensure(FontificationBoundaryMode::Off, setup),
             "{setup}"
         );
+    }
+}
+
+#[test]
+fn fontification_scan_stops_at_effective_overlay_nil_islands() {
+    // GNU 31.1: taskset -c 0-3,14-31 bash
+    // tmp/vmcall/fontadm-oracle/run-gnu.sh --out
+    // tmp/vmcall/fontadm-oracle/capture-r1 --release (main sandbox).
+    // Captured stdout SHA256 f120875cc51de9fda48cf75aa025475d6cf0d8677743694428204093f2db5171:
+    // truthy-overlay-prefix-nil-text-tail first nil=5; a nil overlay over
+    // truthy text has no nil stop. These are literals, never refreshed here.
+    for mode in [
+        FontificationBoundaryMode::On,
+        FontificationBoundaryMode::Off,
+    ] {
+        let mut ctx = Context::new();
+        ctx.eval_str(
+            "(progn (insert \"aé中λbcdefg\")
+               (let ((a (make-overlay 1 5)) (b (make-overlay 7 9))
+                     (face (make-overlay 2 4)))
+                 (overlay-put a 'fontified t)
+                 (overlay-put b 'fontified 'defer)
+                 (overlay-put face 'face 'bold)))",
+        )
+        .unwrap();
+        for (from, end, expected) in [(1, 11, 5), (2, 4, 4), (5, 11, 5), (7, 11, 9)] {
+            assert_eq!(
+                next_unfontified_position(&mut ctx, from, end, mode).unwrap(),
+                expected,
+                "{mode:?}, {from}..{end}"
+            );
+        }
+        // Nil overlay values do not hide a truthy text value.
+        ctx.eval_str(
+            "(progn (put-text-property 1 (point-max) 'fontified t)
+               (let ((o (make-overlay 3 8))) (overlay-put o 'fontified nil)))",
+        )
+        .unwrap();
+        assert_eq!(
+            next_unfontified_position(&mut ctx, 1, 11, mode).unwrap(),
+            11
+        );
+    }
+}
+
+#[test]
+fn fontification_scan_overlay_prefix_does_not_skip_hooks_in_nil_tail() {
+    for mode in [
+        FontificationBoundaryMode::On,
+        FontificationBoundaryMode::Off,
+    ] {
+        let observed = observe_ensure(
+            mode,
+            "(progn
+               (let ((o (make-overlay 1 5))) (overlay-put o 'fontified t))
+               (setq fontification-functions
+                 (list (lambda (p) (setq fb-calls (cons p fb-calls))
+                         (put-text-property p (min (point-max) (+ p 2))
+                                            'fontified t)))))",
+        );
+        assert_eq!(observed.0, "Fontified");
+        assert!(observed.2.starts_with("((9 7 5) "), "{observed:?}");
+    }
+}
+
+#[test]
+fn fontification_scan_restarts_after_hook_replaces_a_later_island() {
+    for mode in [
+        FontificationBoundaryMode::On,
+        FontificationBoundaryMode::Off,
+    ] {
+        let observed = observe_ensure(
+            mode,
+            "(progn (put-text-property 3 9 'fontified t)
+               (setq fontification-functions
+                 (list (lambda (p) (setq fb-calls (cons p fb-calls))
+                         (put-text-property p (1+ p) 'fontified t)
+                         (if (= p 1)
+                           (progn (put-text-property 4 5 'fontified nil)
+                             (let ((o (make-overlay 9 11)))
+                               (overlay-put o 'fontified t))))))))",
+        );
+        assert_eq!(observed.0, "Fontified");
+        assert!(observed.2.starts_with("((4 2 1) "), "{observed:?}");
     }
 }

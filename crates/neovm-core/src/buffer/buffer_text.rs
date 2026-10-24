@@ -2241,6 +2241,20 @@ impl BufferText {
         next.map(|next| self.char_pos_to_emacs_byte_pos(next))
     }
 
+    /// Char-native bounded query for native fontification admission. This
+    /// borrows the existing property tree without converting or caching positions.
+    pub(crate) fn text_props_next_single_change_after_char_pos_bounded(
+        &self,
+        pos: CharPos0,
+        name: Value,
+        limit: CharPos0,
+    ) -> Option<CharPos0> {
+        self.storage
+            .borrow()
+            .text_props
+            .next_single_property_change_after_char_pos_bounded(pos, name, limit)
+    }
+
     /// Display-engine bounded variant: like
     /// [`Self::text_props_next_single_change_after_emacs_byte_pos`] but stops
     /// scanning at `limit` (an emacs byte position), returning it as a soft
@@ -3370,6 +3384,25 @@ impl BufferText {
             .then(|| metrics.emacs_byte_end())
     }
 
+    /// Convert a valid character position without growing the position-anchor
+    /// vector. Backend lookups only read existing nodes or update the gap
+    /// backend's fixed-size anchor ring; no heap storage is published.
+    pub(crate) fn char_pos_to_emacs_byte_pos_no_alloc(&self, target: CharPos0) -> EmacsBytePos {
+        self.storage
+            .borrow()
+            .backend
+            .char_pos_to_emacs_byte_pos(target)
+    }
+
+    /// Convert a valid character-boundary byte position without growing the
+    /// position-anchor vector. The caller owns byte-boundary validation.
+    pub(crate) fn emacs_byte_pos_to_char_pos_no_alloc(&self, target: EmacsBytePos) -> CharPos0 {
+        self.storage
+            .borrow()
+            .backend
+            .emacs_byte_pos_to_char_pos(target)
+    }
+
     /// Convert a logical Emacs byte position to a character position. Symmetric
     /// to `buf_charpos_to_bytepos` — shares the same anchor + cache machinery.
     ///
@@ -3855,3 +3888,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/buffer_text_chain_test.rs"]
 mod chain_test;
+
+#[cfg(test)]
+#[path = "buffer_text/tests/fontification_noalloc.rs"]
+mod fontification_noalloc_tests;

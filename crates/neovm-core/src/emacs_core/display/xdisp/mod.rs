@@ -8639,9 +8639,10 @@ pub use fontification_demand::{
 };
 
 fn get_fontified_property(ctx: &mut super::eval::Context, pos: i64) -> EvalResult {
-    super::textprop::builtin_get_char_property(
-        ctx,
-        vec![Value::fixnum(pos), Value::symbol("fontified")],
+    super::textprop::fontified_property_at_position_in_state(
+        ctx.variables(),
+        ctx.buffer_manager(),
+        LispCharPos1::new(pos),
     )
 }
 
@@ -8651,22 +8652,79 @@ fn next_fontified_property_change(
     limit: i64,
     mode: FontificationBoundaryMode,
 ) -> EvalResult {
-    match fontification_boundary::admit(ctx, pos, limit, mode)? {
+    let text_next = match fontification_boundary::admit(ctx, pos, limit, mode)? {
         FontificationBoundaryAdmission::Raw(next)
-        | FontificationBoundaryAdmission::Resolved(next) => {
-            return Ok(Value::fixnum(next.as_i64()));
+        | FontificationBoundaryAdmission::Resolved(next) => Value::fixnum(next.as_i64()),
+        FontificationBoundaryAdmission::UseGeneric => {
+            super::textprop::resolved_fontified_property_boundary_in_state(
+                ctx.variables(),
+                ctx.buffer_manager(),
+                LispCharPos1::new(pos),
+                LispCharPos1::new(limit),
+            )?
         }
-        FontificationBoundaryAdmission::UseGeneric => {}
+    };
+    // Effective fontified values include overlays. A text-only boundary can
+    // skip the end of a fontifying overlay and miss the nil text after it.
+    // Unrelated overlay endpoints are harmless extra native stops: the caller
+    // resolves the effective value there before considering any Lisp hook.
+    let Some(buffer) = ctx.buffers.current_buffer() else {
+        return Ok(text_next);
+    };
+    if !buffer.overlays().is_empty()
+        && let Some(next) = text_next.as_int()
+        && next > pos
+    {
+        // A callback can narrow the source after END was captured. Overlay
+        // stops outside the live accessible text cannot affect this query.
+        let live_end = buffer.point_max_lisp_char_pos().as_i64();
+        let byte_pos = buffer
+            .char_pos_to_emacs_byte_pos_clamped_no_alloc(LispCharPos1::new(pos).to_char_pos());
+        let byte_end = buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(
+            LispCharPos1::new(next.min(live_end)).to_char_pos(),
+        );
+        if let Some(boundary) = buffer
+            .overlays()
+            .next_boundary_after_until_emacs_byte_pos_no_alloc(byte_pos, byte_end)
+        {
+            let boundary = buffer
+                .emacs_byte_pos_to_char_pos_clamped_no_alloc(boundary)
+                .to_lisp()
+                .as_i64();
+            if boundary < live_end {
+                return Ok(Value::fixnum(boundary.min(next)));
+            }
+        }
     }
-    super::textprop::builtin_next_single_property_change(
-        ctx,
-        vec![
-            Value::fixnum(pos),
-            Value::symbol("fontified"),
-            Value::NIL,
-            Value::fixnum(limit),
-        ],
-    )
+    Ok(text_next)
+}
+
+/// Find the next effective nil position without retaining a cursor across
+/// Lisp. The common proof seats one bounded interval walk; the fallback
+/// resolves values at text/overlay stops, including aliases and categories.
+fn next_unfontified_position(
+    ctx: &mut super::eval::Context,
+    mut pos: i64,
+    end: i64,
+    mode: FontificationBoundaryMode,
+) -> Result<i64, Flow> {
+    match fontification_boundary::first_unfontified(ctx, pos, end, mode) {
+        fontification_boundary::FontificationScanAdmission::Raw(next) => {
+            return Ok(next.map_or(end, |next| next.as_i64()));
+        }
+        fontification_boundary::FontificationScanAdmission::UseGeneric => {}
+    }
+    while pos < end {
+        if get_fontified_property(ctx, pos)?.is_nil() {
+            return Ok(pos);
+        }
+        let next = next_fontified_property_change(ctx, pos, end, mode)?;
+        let Some(next) = next.as_int() else {
+            return Ok(end);
+        };
+        pos = if next <= pos { pos + 1 } else { next.min(end) };
+    }
+    Ok(end)
 }
 
 fn call_fontification_functions_at<O: FontificationDemandObserver>(
@@ -8920,52 +8978,40 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
                 break;
             }
 
-            let before = get_fontified_property(ctx, pos)?;
-            if before.is_nil() {
-                observer.unknown();
-                // Mark before entering Lisp, including callbacks which fail,
-                // decline to fontify, or remove the current buffer.
-                outcome = outcome.merge(RedisplayFontificationOutcome::CallbacksUnchanged);
-                call_fontification_functions_at(ctx, hook_value, pos, observer);
-                if ctx.buffers.current_buffer_id() != Some(buf_id) {
-                    ctx.restore_current_buffer_if_live(buf_id);
-                }
-                if ctx.buffers.current_buffer_id() != Some(buf_id) {
-                    break;
-                }
-
-                // GNU recomputes properties only if the hook actually
-                // marked the current character fontified.  If it did not,
-                // advance one character to avoid looping forever on the
-                // same unfontified position.
-                let after = get_fontified_property(ctx, pos)?;
-                if after.is_nil() {
-                    observer.advance(LispCharPos1::new(pos), LispCharPos1::new(pos + 1), false);
-                    pos += 1;
-                    continue;
-                }
-                outcome = RedisplayFontificationOutcome::Fontified;
+            let next = next_unfontified_position(ctx, pos, end, mode)?;
+            if next > pos {
+                observer.advance(LispCharPos1::new(pos), LispCharPos1::new(next), true);
+                pos = next;
             }
-
-            let next = next_fontified_property_change(ctx, pos, end, mode)?;
-            let Some(next_pos) = next.as_int() else {
+            if pos >= end {
                 break;
-            };
-            if next_pos <= pos {
-                observer.advance(
-                    LispCharPos1::new(pos),
-                    LispCharPos1::new(pos + 1),
-                    !before.is_nil(),
-                );
-                pos += 1;
-            } else {
-                observer.advance(
-                    LispCharPos1::new(pos),
-                    LispCharPos1::new(next_pos.min(end)),
-                    !before.is_nil(),
-                );
-                pos = next_pos.min(end);
             }
+            observer.unknown();
+            // Mark before entering Lisp, including callbacks which fail,
+            // decline to fontify, or remove the current buffer.
+            outcome = outcome.merge(RedisplayFontificationOutcome::CallbacksUnchanged);
+            call_fontification_functions_at(ctx, hook_value, pos, observer);
+            if ctx.buffers.current_buffer_id() != Some(buf_id) {
+                ctx.restore_current_buffer_if_live(buf_id);
+            }
+            if ctx.buffers.current_buffer_id() != Some(buf_id) {
+                break;
+            }
+
+            // GNU recomputes properties only if the hook actually
+            // marked the current character fontified.  If it did not,
+            // advance one character to avoid looping forever on the
+            // same unfontified position.
+            let after = get_fontified_property(ctx, pos)?;
+            if after.is_nil() {
+                observer.advance(LispCharPos1::new(pos), LispCharPos1::new(pos + 1), false);
+                pos += 1;
+                continue;
+            }
+            outcome = RedisplayFontificationOutcome::Fontified;
+            // Reacquire restrictions, resolution controls, overlays and the
+            // interval tree at this stop. A hook may have changed any later
+            // island, so no precomputed future position crosses the callback.
         }
 
         Ok(outcome)

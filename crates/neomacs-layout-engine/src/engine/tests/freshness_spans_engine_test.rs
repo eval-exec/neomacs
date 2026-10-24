@@ -115,6 +115,118 @@ fn freshness_spans_keep_unmarking_and_signaling_fontifier_refusals() {
 }
 
 #[test]
+fn sparse_unmarking_fontifier_refreshes_earlier_faces_and_display_after_error() {
+    for (mutation, result, force_rewind) in [
+        (
+            r#"(put-text-property 6 12 'face '(:foreground "red"))"#,
+            "nil",
+            true,
+        ),
+        (
+            r#"(put-text-property 6 12 'display "CHANGED\nDISPLAY")"#,
+            r#"(error "sparse fontifier changed an earlier display property")"#,
+            false,
+        ),
+    ] {
+        const PREFIX: &str = "seed\nBEFORE\n";
+        let hidden = "hidden\n".repeat(10_000);
+        let tail = PREFIX.chars().count() + hidden.chars().count() + 1;
+        let text = format!("{PREFIX}{hidden}TAIL\n");
+        let (mut eval, frame, _, window) = incr_editing_frame(&text, 360, 200);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.eval_str(&format!(
+            r#"(progn
+              (setq buffer-invisibility-spec t
+                    fontadm-events nil fontadm-calls nil fontadm-mutated nil
+                    header-line-format nil tab-line-format nil)
+              (put-text-property (point-min) (point-max) 'fontified t)
+              (put-text-property 13 {tail} 'invisible t)
+              (put-text-property {tail} (1+ {tail}) 'fontified nil)
+              (put-text-property 6 9 'face 'bold)
+              (setq mode-line-format
+                '((:eval (progn
+                    (setq fontadm-events (cons 'chrome fontadm-events))
+                    "FONTADM"))))
+              (setq fontification-functions
+                (list (lambda (position)
+                  (setq fontadm-events (cons 'font fontadm-events)
+                        fontadm-calls (cons position fontadm-calls))
+                  (if fontadm-mutated nil
+                    (setq fontadm-mutated t)
+                    {mutation}
+                    {result})))))"#,
+        ))
+        .expect("install a one-shot sparse callback without marking its stop");
+        let neovm_core::window::Window::Leaf { force_start, .. } = eval
+            .frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .find_window_mut(window)
+            .unwrap()
+        else {
+            panic!("leaf window");
+        };
+        *force_start = true;
+
+        let rewinds_before = crate::buffer_source::row_route::ROUTE_REWIND_COUNT
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let refusal = force_rewind
+            .then(|| crate::buffer_source::row_route::RoutedRowRefusalInjection::arm(1));
+        let mut engine = LayoutEngine::new();
+        engine.layout_frame_rust(&mut eval, frame);
+        drop(refusal);
+        if force_rewind {
+            assert_eq!(
+                crate::buffer_source::row_route::ROUTE_REWIND_COUNT
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    - rewinds_before,
+                1,
+                "the provisional segmented row must exercise its real rewind"
+            );
+        }
+        let events = neovm_core::emacs_core::value::list_to_vec(
+            &eval.eval_str("(reverse fontadm-events)").unwrap(),
+        )
+        .unwrap();
+        assert_before(&events, "chrome", "font");
+        let calls =
+            neovm_core::emacs_core::value::list_to_vec(&eval.eval_str("fontadm-calls").unwrap())
+                .unwrap();
+        assert!(
+            calls.len() >= 2 && calls.iter().all(|p| *p == Value::fixnum(tail as i64)),
+            "a late sparse callback must reject the provisional leaf and revisit its still-nil stop: {calls:?}"
+        );
+        assert!(
+            eval.eval_str(&format!("(get-text-property {tail} 'fontified)"))
+                .unwrap()
+                .is_nil(),
+            "retry must follow changed inputs even though fontification never succeeds"
+        );
+        activate_last_engine_presentation(&mut eval, &engine, frame);
+        let actual = selected_window_layout_trace(&eval, &engine, frame);
+        let rows = trace_text_rows(&actual);
+        assert!(rows.iter().any(|row| row.contains("TAIL")), "{rows:?}");
+        assert!(rows.iter().all(|row| !row.contains("hidden")), "{rows:?}");
+        if !force_rewind {
+            assert!(rows.iter().any(|row| row.contains("CHANGED")), "{rows:?}");
+            assert!(rows.iter().any(|row| row.contains("DISPLAY")), "{rows:?}");
+        }
+        // Use the same live source objects and final properties. Quiesce only
+        // observers which would repeat callbacks in the independent producer.
+        eval.eval_str("(setq fontification-functions nil mode-line-format '(\"FONTADM\"))")
+            .unwrap();
+        let mut reference = LayoutEngine::new();
+        reference.layout_frame_rust(&mut eval, frame);
+        activate_last_engine_presentation(&mut eval, &reference, frame);
+        assert_eq!(
+            actual,
+            selected_window_layout_trace(&eval, &reference, frame),
+            "an unmarked/error sparse callback can change an already-rendered row; compare resolved faces, glyphs, points, geometry and window end"
+        );
+    }
+}
+
+#[test]
 fn freshness_spans_keep_false_and_throwing_display_form_refusals() {
     for form_result in ["nil", "(throw 'span-display-abort t)"] {
         let (mut eval, frame, _, _) = boundary_fixture();

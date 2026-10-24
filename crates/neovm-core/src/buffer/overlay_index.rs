@@ -1406,6 +1406,38 @@ impl OverlayIndex {
             .filter(|boundary| *boundary <= limit)
     }
 
+    /// Borrow an existing index without publishing an allocating endpoint tree.
+    /// A cold index scans all interval records in O(overlays), using only the
+    /// recursive visitor's stack; an already published index keeps its normal
+    /// tree search. Both endpoints count, including zero-length overlays.
+    pub(super) fn next_boundary_after_no_alloc(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        if pos >= limit {
+            return None;
+        }
+        if let Some(endpoints) = self.endpoints.get() {
+            return endpoints.next_after(pos, limit);
+        }
+        let intervals = self.intervals.read();
+        let mut next = None;
+        intervals
+            .records
+            .for_each_match(IntervalBPlusQuery::All, |record| {
+                for endpoint in [record.range.start(), record.range.end()] {
+                    if pos < endpoint
+                        && endpoint <= limit
+                        && next.is_none_or(|current| endpoint < current)
+                    {
+                        next = Some(endpoint);
+                    }
+                }
+            });
+        next
+    }
+
     pub(super) fn previous_boundary_before(
         &self,
         pos: EmacsBytePos,
@@ -1858,3 +1890,7 @@ fn ranges_overlap_region(
 #[cfg(test)]
 #[path = "overlay_index/tests/overlay_index_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "overlay_index/tests/nonalloc_boundary.rs"]
+mod nonalloc_boundary;
