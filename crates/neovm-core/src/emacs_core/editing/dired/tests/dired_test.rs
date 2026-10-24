@@ -712,7 +712,17 @@ fn test_file_name_completion_regexps_fold_when_completion_ignore_case() {
         vec![Value::string(""), Value::string(&dir_str), Value::NIL],
     )
     .unwrap();
-    assert_eq!(result.as_utf8_str(), Some("con"));
+    // GNU builds the completion from the first matching directory entry and
+    // only then truncates the common prefix, so `completion-ignore-case`
+    // folds the MATCH but the returned spelling keeps that entry's case.
+    // Measured on GNU 31.1 with these three files: a readdir order starting
+    // at CONCAP.el answers "CON", one starting at config.el answers "con".
+    // Directory order is the host's, not the fixture's (the CI runner's TMPDIR
+    // yields CON-first), so pin the folded prefix, not its spelling.
+    assert_eq!(
+        result.as_utf8_str().map(str::to_ascii_lowercase),
+        Some("con".to_string())
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
