@@ -7,7 +7,10 @@ use crate::tagged::value::TaggedValue as Value;
 pub enum InitialInternError {
     Authority(RegistrationError),
     ExpectedString,
+    ExpectedPlainSymbol,
     UnsupportedName,
+    /// This incremental subset admits existing registry identities only.
+    NewRegistryName,
 }
 impl From<RegistrationError> for InitialInternError {
     fn from(error: RegistrationError) -> Self {
@@ -20,6 +23,23 @@ impl From<RegistrationError> for InitialInternError {
 pub(super) struct InitialObarrayRef<'lease, 'owner, 'era> {
     pub(super) run: &'lease mut RunAccess<'owner, 'era>,
 }
+pub(super) struct InitialObarrayMut<'lease, 'owner, 'era> {
+    pub(super) run: &'lease mut RunAccess<'owner, 'era>,
+}
+impl Drop for InitialObarrayMut<'_, '_, '_> {
+    fn drop(&mut self) {
+        let registry = self.run.owner.registry;
+        if std::thread::panicking() {
+            registry.symbols.poison();
+        }
+        let poisoned = registry.symbols.poisoned.load(Ordering::Acquire);
+        word::writer_exit(&registry.symbols.word);
+        self.run.symbol_loan = false;
+        if poisoned {
+            registry.poison();
+        }
+    }
+}
 impl Drop for InitialObarrayRef<'_, '_, '_> {
     fn drop(&mut self) {
         word::reader_exit(&self.run.owner.registry.symbols.word);
@@ -28,6 +48,100 @@ impl Drop for InitialObarrayRef<'_, '_, '_> {
 }
 
 impl<'owner, 'era> RunAccess<'owner, 'era> {
+    #[cfg(test)]
+    pub(crate) fn initial_facts_for_test(
+        &mut self,
+        id: SymId,
+    ) -> Result<crate::emacs_core::symbol::parallel::InitialInternFacts, RegistrationError> {
+        let lease = self.initial_obarray_mut()?;
+        let authority = lease.write_token();
+        // SAFETY: assertion-only snapshot under the actual matching writer.
+        unsafe {
+            lease
+                .run
+                .owner
+                .registry
+                .symbols
+                .backing
+                .initial_facts_for_test(id, &authority)
+        }
+    }
+
+    /// Running admission is from a validated owner home, never an arbitrary
+    /// SymId. The exclusive word checks actual membership and canonical arm.
+    pub fn initial_symbol_handle(
+        &mut self,
+        symbol: &OwnerRootSlot<'era>,
+    ) -> Result<SymbolHandle, InitialInternError> {
+        globals::check_home(self, symbol)?;
+        let lease = self.initial_obarray_mut()?;
+        let value = lease
+            .run
+            .owner
+            .local
+            .as_ref()
+            .and_then(|local| local.root_scratch.get(symbol.index))
+            .ok_or(RegistrationError::StaleRegistration)?
+            .value();
+        let id = value
+            .as_bare_symbol_id()
+            .ok_or(InitialInternError::ExpectedPlainSymbol)?;
+        let registry = lease.run.owner.registry;
+        let authority = lease.write_token();
+        // SAFETY: exact era/World WRITER, validated real rooted symbol operand.
+        let kind = unsafe {
+            registry
+                .symbols
+                .backing
+                .classify_initial_member(id, &authority)
+        }
+        .ok_or(RegistrationError::Publication)?;
+        Ok(SymbolHandle {
+            heap: registry.heap,
+            world: registry.symbols.backing.world,
+            era: registry.symbols.era,
+            obarray: registry.symbols.backing.generation,
+            symbol: id,
+            kind,
+        })
+    }
+
+    fn initial_obarray_mut(
+        &mut self,
+    ) -> Result<InitialObarrayMut<'_, 'owner, 'era>, RegistrationError> {
+        self.owner.check_thread()?;
+        if self.symbol_loan {
+            return Err(RegistrationError::OutstandingLoan);
+        }
+        let symbols = &self.owner.registry.symbols;
+        if symbols.poisoned.load(Ordering::Acquire) {
+            return Err(RegistrationError::Poisoned);
+        }
+        if !word::writer_enter(&symbols.word) {
+            return Err(RegistrationError::Busy);
+        }
+        if symbols.poisoned.load(Ordering::Acquire) {
+            word::writer_exit(&symbols.word);
+            return Err(RegistrationError::Poisoned);
+        }
+        self.symbol_loan = true;
+        Ok(InitialObarrayMut { run: self })
+    }
+
+    /// Existing canonical registry identities acquire actual initial-obarray
+    /// membership in this World. Gaps stay absent; present cells keep all
+    /// their payloads. A fresh registry name is explicitly outside this stage.
+    pub fn initial_intern_into(
+        &mut self,
+        name: &OwnerRootSlot<'era>,
+        dst: &mut OwnerRootSlot<'era>,
+    ) -> Result<(), InitialInternError> {
+        globals::check_home(self, name)?;
+        globals::check_home(self, dst)?;
+        self.initial_obarray_mut()?
+            .intern_into(name.index, dst.index)
+    }
+
     fn initial_obarray_ref(
         &mut self,
     ) -> Result<InitialObarrayRef<'_, 'owner, 'era>, RegistrationError> {
@@ -125,3 +239,35 @@ impl InitialObarrayRef<'_, '_, '_> {
     }
 }
 static_assertions::assert_not_impl_any!(InitialObarrayRef<'static, 'static, 'static>: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(InitialObarrayMut<'static, 'static, 'static>: Send, Sync, Clone, Copy);
+
+/// The caller installed destination and accounting loans before publication.
+/// WRITER and the process registry guard span the entire membership commit.
+pub(super) fn publish_existing(
+    symbols: &SymbolSidecar,
+    value: Value,
+    dst: &mut MarkWord,
+    charged: &mut usize,
+    authority: &SymbolWriteToken<'_>,
+) -> Result<(), InitialInternError> {
+    let name = value
+        .as_lisp_string()
+        .ok_or(InitialInternError::ExpectedString)?;
+    if name.as_bytes().first() == Some(&b':') {
+        return Err(InitialInternError::UnsupportedName);
+    }
+    let registry = crate::emacs_core::intern::parallel::InitialRegistryWriter::enter(authority)?;
+    let metadata = registry
+        .existing(name)?
+        .ok_or(InitialInternError::NewRegistryName)?;
+    // SAFETY: exact era/World writer, with its guarded canonical metadata.
+    // No recursive registry, serial projection-scope or mark-gate entry runs.
+    let (result, grown) = unsafe { symbols.backing.ensure_initial_member(metadata, authority) };
+    *charged = charged.saturating_add(grown);
+    if result == Err(RegistrationError::Poisoned) {
+        symbols.poison();
+    }
+    result?;
+    *dst = MarkWord::of(Value::from_sym_id(metadata.id));
+    Ok(())
+}

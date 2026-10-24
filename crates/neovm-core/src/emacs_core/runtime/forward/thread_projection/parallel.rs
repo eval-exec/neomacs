@@ -19,6 +19,12 @@ impl ThreadProjectionDescriptor {
 }
 
 impl ThreadProjectionTable {
+    /// Reuse this World's already-created VOID; never consult the process
+    /// projection-scope mutex or allocate a descriptor during name publication.
+    pub(crate) fn parallel_void_header(&self, _: &SymbolWriteToken<'_>) -> Option<FwdRef> {
+        self.void.map(ThreadProjectionDescriptor::header)
+    }
+
     pub(crate) fn parallel_storage_bytes(&self, _: &SymbolWriteToken<'_>) -> usize {
         let slots = self
             .free

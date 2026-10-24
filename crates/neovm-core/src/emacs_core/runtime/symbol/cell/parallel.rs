@@ -3,6 +3,32 @@ use super::*;
 use crate::tagged::gc::SymbolWriteToken;
 
 impl LispSymbol {
+    /// Construct detached initial membership from guarded name metadata. The
+    /// ordinary constructors resolve the registry again and cannot run below
+    /// the C5 registry guard. The real slot still publishes arms before name.
+    pub(crate) fn parallel_initial_member(
+        name: NameId,
+        void: Option<FwdRef>,
+        _: &SymbolWriteToken<'_>,
+    ) -> Self {
+        let mut symbol = Self::empty();
+        symbol.name.store(name.0, Ordering::Relaxed);
+        symbol.interned_global = true;
+        symbol.set_interned(SymbolInterned::InternedInInitial);
+        if let Some(header) = void {
+            symbol.flags.set_redirect(SymbolRedirect::Forwarded);
+            symbol.flags.set_runtime_projected(true);
+            symbol.val = CellWord::forwarded(header);
+        }
+        symbol
+    }
+    /// Existing nonmembers retain every value/function/plist/flag arm except
+    /// the membership bits GNU intern changes. No serial write hook runs.
+    pub(crate) fn parallel_mark_initial(&mut self, _: &SymbolWriteToken<'_>) {
+        self.interned_global = true;
+        self.set_interned(SymbolInterned::InternedInInitial);
+    }
+
     pub(crate) fn parallel_store_plain(&self, value: Value, _: &SymbolWriteToken<'_>) -> bool {
         if !self.flags.is_plain_untrapped_unprojected() {
             return false;

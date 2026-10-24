@@ -68,6 +68,15 @@ impl Context {
         spelling: &str,
         body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
     ) -> R {
+        Self::with_test_symbol_name_inputs_init_era(kind, spelling, |_, _| {}, body)
+    }
+
+    pub(crate) fn with_test_symbol_name_inputs_init_era<R>(
+        kind: crate::tagged::gc::PlainSymbolBacking,
+        spelling: &str,
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
         use crate::tagged::gc::PlainSymbolBacking;
         Self::with_test_symbol_backings_init_era(
             &[
@@ -78,6 +87,7 @@ impl Context {
             |obarray, ids| {
                 obarray.seed_value_id(ids[1], TaggedValue::string(spelling));
                 obarray.seed_value_id(ids[2], TaggedValue::string(spelling));
+                init(obarray, ids);
             },
             body,
         )

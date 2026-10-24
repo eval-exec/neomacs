@@ -64,6 +64,49 @@ impl super::intern::InitialObarrayRef<'_, '_, '_> {
     }
 }
 
+impl super::intern::InitialObarrayMut<'_, '_, '_> {
+    pub(super) fn write_token(&self) -> SymbolWriteToken<'_> {
+        SymbolWriteToken {
+            _word: &self.run.owner.registry.symbols.word,
+            _thread: PhantomData,
+        }
+    }
+
+    pub(super) fn intern_into(
+        &mut self,
+        name_index: usize,
+        dst_index: usize,
+    ) -> Result<(), super::intern::InitialInternError> {
+        let registry = self.run.owner.registry;
+        let local = self
+            .run
+            .owner
+            .local
+            .as_mut()
+            .ok_or(RegistrationError::StaleRegistration)?;
+        let value = local
+            .root_scratch
+            .get(name_index)
+            .ok_or(RegistrationError::StaleRegistration)?
+            .value();
+        let dst = local
+            .root_scratch
+            .get_mut(dst_index)
+            .ok_or(RegistrationError::StaleRegistration)?;
+        let authority = SymbolWriteToken {
+            _word: &registry.symbols.word,
+            _thread: PhantomData,
+        };
+        super::intern::publish_existing(
+            &registry.symbols,
+            value,
+            dst,
+            &mut local.hot.bytes_since_gc,
+            &authority,
+        )
+    }
+}
+
 impl<'era> RunAccess<'_, 'era> {
     /// A void error leaves dst unchanged. The loaded value becomes a root
     /// before the counted-reader lease is released, including heap pointers.

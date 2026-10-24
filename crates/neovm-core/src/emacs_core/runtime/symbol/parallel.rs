@@ -3,7 +3,10 @@
 
 mod functions;
 pub(crate) use functions::FunctionUpdate;
+mod intern;
 mod write;
+#[cfg(test)]
+pub(crate) use intern::InitialInternFacts;
 
 use super::{Obarray, SymbolTrappedWrite, ValueCell};
 use crate::emacs_core::forward::{CanonicalArm, ThreadProjectionTable};

@@ -1,4 +1,4 @@
-//! C5 preparation-only rooted executor syntax; no legacy interner fallback.
+//! Test-only closed intern executor syntax; no legacy interner fallback.
 use super::{OwnerRootSlot, RunAccess};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,30 +19,5 @@ impl InternOpKind {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum InternError {
-    MissingOperation(InternOpKind),
-    Engine(super::InitialInternError),
-}
-
-/// The production seam will be inherent sealed RunAccess operations. Keeping
-/// this preparation trait test-only cannot accidentally enable serial intern.
-pub(super) trait InitialInternApi<'era> {
-    fn initial_intern_into(
-        &mut self,
-        name: &OwnerRootSlot<'era>,
-        dst: &mut OwnerRootSlot<'era>,
-    ) -> Result<(), InternError>;
-}
-impl<'era> InitialInternApi<'era> for RunAccess<'_, 'era> {
-    fn initial_intern_into(
-        &mut self,
-        _name: &OwnerRootSlot<'era>,
-        _dst: &mut OwnerRootSlot<'era>,
-    ) -> Result<(), InternError> {
-        Err(InternError::MissingOperation(InternOpKind::Intern))
-    }
-}
-
 #[cfg(not(feature = "gc-memory-telemetry"))]
 mod tests;
