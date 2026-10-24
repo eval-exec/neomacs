@@ -39,3 +39,7 @@ path = "tests/globals.rs"
 [[test]]
 name = "functions"
 path = "tests/functions.rs"
+
+[[test]]
+name = "intern"
+path = "tests/intern.rs"
