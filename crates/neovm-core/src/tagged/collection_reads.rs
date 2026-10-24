@@ -7,7 +7,7 @@
 //! an inactive mutator skips the shared gate. Active reads retain the process
 //! policy gate and cold recorder, while traversal selection keeps its own gate.
 use super::{mutate::LispCollectionRevision, value::TaggedValue};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use std::cell::{Cell, RefCell};
 use std::sync::{
     LazyLock,
@@ -177,6 +177,7 @@ struct State {
     // journal. Reclamation prunes dead identities without dereferencing them;
     // Context/dump changes reclassify the surviving owner ranges.
     observed: observed_envelope::ObservedEnvelope,
+    capture_pool: capture_storage::CapturePool,
 }
 
 impl Default for State {
@@ -187,14 +188,15 @@ impl Default for State {
         // history permanently: WRITE_LAZY may clear the conservative initial flag.
         initialize();
         Self {
-            captures: Vec::new(),
+            captures: Vec::with_capacity(MAX_DEPTH),
             observed: observed_envelope::ObservedEnvelope::new(),
+            capture_pool: capture_storage::CapturePool::default(),
         }
     }
 }
 
 struct Capture {
-    reads: FxHashMap<usize, LispCollectionRevision>,
+    reads: capture_storage::CaptureReads,
     started: LispCollectionRevision,
     overflow: bool,
     // Each entry has a completed Observed-mode projection or a validated
@@ -323,8 +325,9 @@ impl CollectionReadScope {
                 return false;
             }
             clear_recent_reads();
+            let reads = state.capture_pool.acquire();
             state.captures.push(Capture {
-                reads: FxHashMap::default(),
+                reads,
                 started: LispCollectionRevision::current(),
                 overflow,
                 publication_epoch: recent_publication_epoch(),
@@ -347,6 +350,12 @@ impl CollectionReadScope {
             return None;
         }
         let capture = self.take();
+        let result = self.finish_capture(&capture);
+        self.recycle(capture);
+        result
+    }
+
+    fn finish_capture(&self, capture: &Capture) -> Option<CollectionReads> {
         // Guards always retire in their own State, even when a callback
         // activates a different World. A certificate is meaningful only in
         // the World in which its captured projections were made.
@@ -378,13 +387,19 @@ impl CollectionReadScope {
             return None;
         }
         Some(CollectionReads {
-            reads: capture.reads.into_keys().collect(),
+            reads: capture.reads.keys().copied().collect(),
             origin: Box::new(CertificateOrigin {
                 revision: now,
                 owner: self.owner.clone(),
             }),
             _not_send: std::marker::PhantomData,
         })
+    }
+
+    fn recycle(&self, capture: Capture) {
+        self.owner.with_state(|state| {
+            state.borrow_mut().capture_pool.recycle(capture.reads);
+        });
     }
 
     fn take(&mut self) -> Capture {
@@ -415,7 +430,8 @@ impl CollectionReadScope {
 impl Drop for CollectionReadScope {
     fn drop(&mut self) {
         if self.active {
-            self.take();
+            let capture = self.take();
+            self.recycle(capture);
         }
     }
 }
@@ -597,10 +613,8 @@ fn record_observation(
         if capture.overflow {
             continue;
         }
-        if capture.reads.len() == MAX_READS && !capture.reads.contains_key(&bits) {
+        if !capture.reads.insert_first(bits, revision) {
             capture.overflow = true;
-        } else {
-            capture.reads.entry(bits).or_insert(revision);
         }
     }
 }
@@ -758,6 +772,7 @@ fn record_projected_write_observed(store: &StoreState, value: TaggedValue, proje
     });
 }
 
+mod capture_storage;
 mod store_state;
 use store_state::with_state;
 pub(crate) use store_state::{
@@ -978,9 +993,7 @@ pub fn capture_normalized<S, T>(
             let capture = state.captures.last_mut().expect("normalization scope");
             let now = LispCollectionRevision::from_sequence(scope.owner.store().sequence());
             capture.started = now;
-            for revision in capture.reads.values_mut() {
-                *revision = now;
-            }
+            capture.reads.rebase(now);
         });
     }
     let value = read(state);

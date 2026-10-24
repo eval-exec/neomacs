@@ -172,3 +172,82 @@ fn collection_reads_recent_clear_fill_counter() {
     );
     assert!(scope.finish().unwrap().unchanged());
 }
+
+/// Every depth needs independent first-read revisions. Reusing the innermost
+/// map for an outer scope would erase its dependency or move its first read.
+#[test]
+fn collection_reads_capture_map_reuses_nested_storage() {
+    use crate::emacs_core::Value;
+    for count in [24, 512] {
+        let owners: Vec<_> = (0..count)
+            .map(|_| Value::cons(Value::NIL, Value::NIL))
+            .collect();
+        let mut scopes = Vec::with_capacity(MAX_DEPTH);
+        let mut record_nested = || {
+            for _ in 0..MAX_DEPTH {
+                scopes.push(CollectionReadScope::begin());
+            }
+            for owner in &owners {
+                owner.cons_car();
+            }
+            // Dropping a scope returns its leased revision map without
+            // constructing an escaping certificate (measured separately).
+            while let Some(scope) = scopes.pop() {
+                drop(scope);
+            }
+        };
+        record_nested();
+        let (_, allocations) = measured(|| {
+            for _ in 0..32 {
+                record_nested();
+            }
+        });
+        assert_eq!(allocations, (0, 0), "nested maps retain their storage");
+        eprintln!(
+            "obsalloc capture maps owners={count} depth={MAX_DEPTH} captures=256 steady={allocations:?} (calls, requested bytes)"
+        );
+
+        // Every outer first-read revision must still precede this write,
+        // even after repeated reuse of all the nested map storage.
+        for _ in 0..MAX_DEPTH {
+            scopes.push(CollectionReadScope::begin());
+            owners[0].cons_car();
+        }
+        owners[0].set_car(Value::T);
+        while let Some(scope) = scopes.pop() {
+            assert!(scope.finish().is_none());
+        }
+    }
+}
+
+/// Small, heap-free capture fixture for both Miri aliasing models. Recording
+/// numeric identities bypasses publication and never dereferences an owner.
+#[test]
+fn collection_reads_small_capture_storage_lifetime_fixture() {
+    let record = |bits| {
+        with_state(|state| {
+            record_observation(
+                &mut state.borrow_mut(),
+                bits,
+                LispCollectionRevision::current(),
+                None,
+            );
+        });
+    };
+    let (_, first) = capture(|| record(8));
+    let (_, second) = capture(|| record(16));
+    drop(first);
+    let (_, replacement) = capture(|| record(24));
+    let (_, outer) = capture(|| {
+        record(32);
+        let (_, inner) = capture(|| record(40));
+        assert!(inner.unwrap().unchanged());
+    });
+    with_store(|store| {
+        let revision = store.advance();
+        store.record(16, revision);
+    });
+    assert!(!second.unwrap().unchanged());
+    assert!(replacement.unwrap().unchanged());
+    assert!(outer.unwrap().unchanged());
+}
