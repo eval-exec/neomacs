@@ -14,6 +14,7 @@ use super::super::value::{TAG_CONS, TAG_MASK, TAG_VECLIKE};
 use super::NativeWindowCollectionOwner;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
+use std::mem::{align_of, size_of};
 
 const EMPTY_BOUNDS: (usize, usize) = (usize::MAX, 0);
 const MAX_RECLAMATION_RETRIES: usize = 3;
@@ -24,10 +25,10 @@ pub(super) struct ObservedEnvelope {
     // Cached native-store eligibility from live publication. A Buffer/Window/
     // Frame/Bytecode/String owner is still marked/replay-qualified in `owners`,
     // but cannot widen a native write gate or bound its empty intervals.
-    addresses: BTreeSet<usize>,
+    addresses: Vec<usize>,
     // Vector/Record eligibility is also cached at live publication. Native
     // slot stores use these bounds independently of observed Cons addresses.
-    slot_addresses: BTreeSet<usize>,
+    slot_addresses: Vec<usize>,
     epoch: Option<u64>,
     dump: BarrierWindow,
     full: (usize, usize),
@@ -50,6 +51,29 @@ pub(super) struct ObservedEnvelope {
     geometry_rebuilds: usize,
 }
 
+const _: () = {
+    #[allow(dead_code)]
+    struct LegacyEnvelope {
+        owners: FxHashSet<usize>,
+        addresses: BTreeSet<usize>,
+        slot_addresses: BTreeSet<usize>,
+        epoch: Option<u64>,
+        dump: BarrierWindow,
+        full: (usize, usize),
+        below: (usize, usize),
+        above: (usize, usize),
+        slot_below: (usize, usize),
+        slot_above: (usize, usize),
+        excluded: Option<BarrierWindow>,
+        excluded_cons: usize,
+        single_cons: usize,
+        #[cfg(test)]
+        geometry_rebuilds: usize,
+    }
+    assert!(size_of::<ObservedEnvelope>() == size_of::<LegacyEnvelope>());
+    assert!(align_of::<ObservedEnvelope>() == align_of::<LegacyEnvelope>());
+};
+
 impl ObservedEnvelope {
     /// Heap reinstallation can change the native dump/owner protocol between
     /// uses of a learned negative proof. Forget only those optional rejects;
@@ -63,8 +87,8 @@ impl ObservedEnvelope {
     pub(super) fn new() -> Self {
         Self {
             owners: FxHashSet::default(),
-            addresses: BTreeSet::new(),
-            slot_addresses: BTreeSet::new(),
+            addresses: Vec::new(),
+            slot_addresses: Vec::new(),
             epoch: Some(collection_observation_epoch()),
             dump: BarrierWindow::NONE,
             full: EMPTY_BOUNDS,
@@ -110,7 +134,7 @@ impl ObservedEnvelope {
             self.owners
                 .retain(|&bits| collection_observed_metadata(bits));
             // Other heaps share the reclamation epoch. Validate all local
-            // identities, but keep the ordered nodes and bounds when none of
+            // identities, but keep the ordered buffers and bounds when none of
             // them died; an unrelated sweep must not rebuild this ledger.
             if self.owners.len() != old_len || self.dump != dump {
                 self.rebuild(dump);
@@ -127,12 +151,18 @@ impl ObservedEnvelope {
     }
 
     /// Insert even when another mutator already set the process-wide mark.
-    /// Native-store-eligible observations update the address buckets/tree;
+    /// Native-store-eligible observations update the retained sorted address buffers;
     /// only reclamation or a dump-span change scans all local identities.
     /// A newly observed owner closes any gap covering it before the caller
     /// publishes its shared mark or snapshots the dependency's revision.
     pub(super) fn insert(&mut self, bits: usize, geometry: NativeWindowCollectionOwner) -> bool {
         let newly_owned = self.owners.insert(bits);
+        // Retain headroom for replacement populations after pruning. Cleaning
+        // tombstones can then reuse the warmed table instead of repeatedly
+        // growing it for similarly sized owner populations in later epochs.
+        if newly_owned && self.owners.len() > self.owners.capacity() / 2 {
+            self.owners.reserve(self.owners.len());
+        }
         let slot_geometry = match geometry {
             NativeWindowCollectionOwner::Other => return newly_owned,
             NativeWindowCollectionOwner::Cons => false,
@@ -143,8 +173,8 @@ impl ObservedEnvelope {
         // before epoch filtering removes our old identity. A real projection
         // must still promote Other -> Slots; positive membership alone may
         // remain conservative across reuse and never reads a stale header.
-        let newly_native = self.addresses.insert(address);
-        let newly_slot = slot_geometry && self.slot_addresses.insert(address);
+        let newly_native = insert_address(&mut self.addresses, address);
+        let newly_slot = slot_geometry && insert_address(&mut self.slot_addresses, address);
         if !newly_native && !newly_slot {
             return newly_owned;
         }
@@ -167,7 +197,9 @@ impl ObservedEnvelope {
     /// Positive eligibility is cached from a live projection, independently
     /// of complete identity membership. It may conservatively survive reuse.
     pub(super) fn has_slot_geometry(&self, bits: usize) -> bool {
-        self.slot_addresses.contains(&(bits & !TAG_MASK))
+        self.slot_addresses
+            .binary_search(&(bits & !TAG_MASK))
+            .is_ok()
     }
 
     /// A completed local publication remains valid throughout a stable
@@ -224,24 +256,21 @@ impl ObservedEnvelope {
     pub(super) fn exclude_unobserved(&mut self, bits: usize) -> bool {
         let address = bits & !TAG_MASK;
         if self.owners.contains(&bits)
-            || self.addresses.contains(&address)
+            || self.addresses.binary_search(&address).is_ok()
             || self.dump.covers(address)
             || self.single_cons == address
             || self.excluded.is_some_and(|gap| gap.covers(address))
         {
             return false;
         }
-        let mut lo = self
+        let next = self
             .addresses
-            .range(..address)
-            .next_back()
+            .partition_point(|&candidate| candidate < address);
+        let mut lo = next
+            .checked_sub(1)
+            .and_then(|previous| self.addresses.get(previous))
             .map_or(0, |previous| previous + 1);
-        let mut hi = self
-            .addresses
-            .range(address..)
-            .next()
-            .copied()
-            .unwrap_or(usize::MAX);
+        let mut hi = self.addresses.get(next).copied().unwrap_or(usize::MAX);
         if self.dump.len() != 0 {
             if address < self.dump.lo() {
                 hi = hi.min(self.dump.lo());
@@ -297,9 +326,9 @@ impl ObservedEnvelope {
         }
         self.dump = dump;
         // Keep the live-publication eligibility fact already stored in the
-        // address tree. Full ledger filtering above establishes lifetime;
+        // address buffer. Full ledger filtering above establishes lifetime;
         // these tag-only membership checks never read a possibly freed header.
-        // A dump-span change preserves the same classification and tree nodes.
+        // A dump-span change preserves the same classification and buffer capacity.
         self.addresses.retain(|&address| {
             self.owners.contains(&(address | TAG_CONS))
                 || self.owners.contains(&(address | TAG_VECLIKE))
@@ -367,3 +396,19 @@ mod refinement_tests;
 #[cfg(test)]
 #[path = "tests/observed_disjoint_refinement.rs"]
 mod disjoint_refinement_tests;
+
+#[cfg(test)]
+#[path = "tests/envelope_allocation_test.rs"]
+mod allocation_tests;
+
+// Only cold live publication inserts addresses. Sorted numeric buffers retain
+// capacity across pruning while preserving exact predecessor/successor queries.
+fn insert_address(addresses: &mut Vec<usize>, address: usize) -> bool {
+    match addresses.binary_search(&address) {
+        Ok(_) => false,
+        Err(index) => {
+            addresses.insert(index, address);
+            true
+        }
+    }
+}

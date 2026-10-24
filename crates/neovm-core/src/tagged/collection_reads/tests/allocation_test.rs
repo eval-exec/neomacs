@@ -43,7 +43,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-fn measured<T>(f: impl FnOnce() -> T) -> (T, (usize, usize)) {
+pub(super) fn measured<T>(f: impl FnOnce() -> T) -> (T, (usize, usize)) {
     struct StopCounting;
     impl Drop for StopCounting {
         fn drop(&mut self) {
