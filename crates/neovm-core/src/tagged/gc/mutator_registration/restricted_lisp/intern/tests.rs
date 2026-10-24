@@ -1,6 +1,8 @@
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
 
+mod gc;
+
 fn source(ops: Vec<Op>, nslots: usize) -> Source {
     Source {
         insns: ops
