@@ -1754,6 +1754,21 @@ pub(crate) fn set_window_configuration_with_options(
         eval.gnu_mark_frame_redisplay(snapshot.frame_id);
         unshow_frame_root_buffers(eval, snapshot.frame_id);
         if let Some(frame) = eval.frames.get_mut(snapshot.frame_id) {
+            // GNU set-window-configuration disconnects/reconnects root-tree
+            // leaves through wset_buffer; adjust_window_count invalidates their
+            // base_line_pos. A saved tree must never replay an earlier counter.
+            snapshot
+                .tree
+                .for_each_node_mut(|window| window.set_mode_line_base(None));
+            // GNU's owned minibuffer is the root's next sibling (frame.c);
+            // delete_all_child_windows traverses siblings too. Native storage
+            // keeps that owned leaf separately, so clear both possible copies.
+            if let Some(live_mini) = frame.minibuffer_leaf.as_mut() {
+                live_mini.set_mode_line_base(None);
+            }
+            if let Some(saved_mini) = snapshot.minibuffer_leaf.as_mut() {
+                saved_mini.set_mode_line_base(None);
+            }
             frame.set_tree(snapshot.tree);
             // GNU `Fset_window_configuration` does NOT touch
             // `frame->old_selected_window` directly — that field

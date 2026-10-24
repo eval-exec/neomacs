@@ -1436,6 +1436,40 @@ pub struct WindowCellDimensions {
     lines: Option<i64>,
 }
 
+/// GNU's positive numeric line base. This is live semantic window state:
+/// nested format-mode-line calls update the same value. No Lisp roots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct ModeLineBase {
+    position: CharPos0,
+    line: std::num::NonZeroUsize,
+}
+
+static_assertions::assert_impl_all!(ModeLineBase: Send, Sync, Copy, std::fmt::Debug);
+static_assertions::assert_eq_size!(ModeLineBase, Option<ModeLineBase>);
+
+impl ModeLineBase {
+    pub(crate) const fn first(position: CharPos0) -> Self {
+        Self {
+            position,
+            line: std::num::NonZeroUsize::MIN,
+        }
+    }
+
+    /// A nonpositive GNU numeric base is unusable on the next decode.
+    pub(crate) fn new(position: CharPos0, line: usize) -> Option<Self> {
+        std::num::NonZeroUsize::new(line).map(|line| Self { position, line })
+    }
+
+    pub(crate) const fn position(self) -> CharPos0 {
+        self.position
+    }
+
+    pub(crate) const fn line_number(self) -> usize {
+        self.line.get()
+    }
+}
+
 /// A window in the window tree.
 #[derive(Clone, Debug)]
 // Window nodes own their complete leaf/split state and are cloned as snapshots;
@@ -1446,6 +1480,9 @@ pub enum Window {
     Leaf {
         id: WindowId,
         buffer_id: BufferId,
+        /// Cleared at GNU freshness boundaries, never restored from a saved
+        /// configuration or shared with a newly cloned sibling.
+        mode_line_base: Option<ModeLineBase>,
         /// Pixel bounds within the frame.
         bounds: Rect,
         /// Cached byte position of the first visible character.
@@ -1615,6 +1652,7 @@ impl Window {
         Window::Leaf {
             id,
             buffer_id,
+            mode_line_base: None,
             // GNU gives a new window change_stamp 0 and a nil old_buffer, so the
             // next record can tell it did not exist before.
             old_buffer: None,
@@ -2203,6 +2241,25 @@ impl Window {
         }
     }
 
+    pub(crate) fn mode_line_base(&self) -> Option<ModeLineBase> {
+        match self {
+            Self::Leaf { mode_line_base, .. } => *mode_line_base,
+            Self::Internal { .. } => None,
+        }
+    }
+
+    pub(crate) fn set_mode_line_base(&mut self, value: Option<ModeLineBase>) {
+        if let Self::Leaf { mode_line_base, .. } = self {
+            *mode_line_base = value;
+        }
+    }
+
+    /// Invalidate GNU's numeric base when replacing a displayed buffer without
+    /// resetting the other window fields (temporary echo/startup transitions).
+    pub fn reset_mode_line_base(&mut self) {
+        self.set_mode_line_base(None);
+    }
+
     /// Set the buffer displayed in this window (leaf only).
     pub fn set_buffer(&mut self, new_id: BufferId) {
         if let Window::Leaf {
@@ -2213,9 +2270,13 @@ impl Window {
             point,
             min_hscroll,
             suspend_auto_hscroll,
+            mode_line_base,
             ..
         } = self
         {
+            // GNU wset_buffer invalidates base_line_pos even for a numeric
+            // identity round trip; do not preserve pre-switch history.
+            *mode_line_base = None;
             *buffer_id = new_id;
             *window_start = LispCharPos1::ONE;
             *position_markers = WindowPositionMarkerState::Detached;
@@ -8121,6 +8182,7 @@ fn make_split_sibling(
         id,
         buffer_id,
         bounds: sibling_bounds,
+        mode_line_base,
         parameters,
         parameters_generation,
         dedicated,
@@ -8138,6 +8200,7 @@ fn make_split_sibling(
     } = &mut sibling
     {
         *id = new_id;
+        *mode_line_base = None;
         *buffer_id = new_buffer_id;
         *sibling_bounds = bounds;
         parameters.clear();

@@ -29,6 +29,7 @@
 
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;
+mod mode_line_point;
 
 #[inline]
 pub fn mode_line_flow_enabled() -> bool {
@@ -2224,6 +2225,11 @@ fn try_format_mode_line_display(
         pctx.target = ModeLineTarget::Display {
             columns: target_cols,
         };
+        pctx.point.enter_context(
+            &mut eval.frames,
+            &eval.buffers,
+            mode_line_point::PointSelection::CurrentBuffer,
+        );
         let mut rendered = ModeLineRendered::default();
         {
             // pctx caches heap Values (frame name, eol indicator) captured
@@ -2304,13 +2310,20 @@ pub(crate) fn finish_format_mode_line_in_eval(
         } else {
             let format_val = args[0];
             let face_spec = resolve_mode_line_face_spec(args);
-            let pctx = build_mode_line_percent_context(
+            let mut pctx = build_mode_line_percent_context(
                 &eval.frames,
                 &eval.buffers,
                 Some(&eval.coding_systems),
                 eval.variables(),
                 args.get(2),
             );
+            let point_selection = if mode_line_flow_policy::enabled() {
+                mode_line_point::PointSelection::CurrentBuffer
+            } else {
+                mode_line_point::PointSelection::WindowSnapshot
+            };
+            pctx.point
+                .enter_context(&mut eval.frames, &eval.buffers, point_selection);
             let mut result = ModeLineRendered::default();
             {
                 // pctx caches heap Values (frame name, eol indicator) captured
@@ -2642,12 +2655,9 @@ struct ModeLinePercentContext {
     /// `%-` expansion without letting an untyped optional width conflate string
     /// formatting with direct display formatting.
     target: ModeLineTarget,
-    /// Byte position of THIS window's point, for point-dependent specs (`%l`,
-    /// `%c`). GNU sets the buffer's point to `w->pointm` while displaying a
-    /// window's mode line, so these reflect that window — not the selected
-    /// window's point (which is the live buffer point). `None` falls back to the
-    /// buffer point. Set per-window in `build_mode_line_percent_context`.
-    window_point: Option<EmacsBytePos>,
+    /// Context walks read live PT and the original window's shared counter;
+    /// read-only split entry points retain their isolated native snapshot.
+    point: mode_line_point::PointContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2701,7 +2711,7 @@ impl Default for ModeLinePercentContext {
             frame_coding_mnemonics: FrameCodingMnemonics::WindowSystem,
             eol_indicator: None,
             target: ModeLineTarget::String,
-            window_point: None,
+            point: mode_line_point::PointContext::default(),
         }
     }
 }
@@ -2764,11 +2774,26 @@ fn build_mode_line_percent_context(
                 let is_selected = frames
                     .selected_frame()
                     .is_some_and(|frame| frame.selected_window == *id);
-                ctx.window_point = Some(if is_selected {
+                let point = if is_selected {
                     buf.point_emacs_byte_pos()
                 } else {
                     buf.char_pos_to_emacs_byte_pos_clamped(point.to_char_pos())
-                });
+                };
+                let height = frames
+                    .find_window_frame_id(*id)
+                    .and_then(|frame_id| frames.get(frame_id))
+                    .map(|frame| {
+                        usize::try_from(window.total_lines(frame.char_height)).unwrap_or(0)
+                    })
+                    .unwrap_or(0);
+                ctx.point = mode_line_point::PointContext::new(
+                    buf,
+                    *id,
+                    window_start.to_char_pos(),
+                    point,
+                    height,
+                    window.mode_line_base(),
+                );
             } else {
                 ctx.window_end = ctx.window_start;
             }
@@ -4123,6 +4148,57 @@ fn append_mode_line_string_in_state(
     value: &Value,
     literal: bool,
 ) {
+    append_mode_line_string_with_point_access(
+        vars,
+        dynamic,
+        buffers,
+        processes,
+        command_loop_depth,
+        pctx,
+        result,
+        value,
+        literal,
+        &mut mode_line_point::Access::Snapshot,
+    );
+}
+
+fn append_mode_line_string_in_eval(
+    eval: &mut super::eval::Context,
+    pctx: &ModeLinePercentContext,
+    result: &mut ModeLineRendered,
+    value: &Value,
+    literal: bool,
+) {
+    let command_loop_depth = eval.recursive_command_loop_depth();
+    let vars = VariableView::new(&eval.obarray, &eval.owner);
+    let mut access = mode_line_point::Access::Live(&mut eval.frames);
+    append_mode_line_string_with_point_access(
+        vars,
+        &[],
+        &eval.buffers,
+        &eval.processes,
+        command_loop_depth,
+        pctx,
+        result,
+        value,
+        literal,
+        &mut access,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_mode_line_string_with_point_access(
+    vars: VariableView<'_>,
+    dynamic: &[OrderedRuntimeBindingMap],
+    buffers: &crate::buffer::BufferManager,
+    processes: &crate::emacs_core::process::ProcessManager,
+    command_loop_depth: usize,
+    pctx: &ModeLinePercentContext,
+    result: &mut ModeLineRendered,
+    value: &Value,
+    literal: bool,
+    point_access: &mut mode_line_point::Access<'_>,
+) {
     // `%` is ASCII (0x25), which can never appear as a UTF-8 continuation or
     // lead byte, so scanning the raw bytes detects format specs without a lossy
     // decode and stays byte-faithful for raw-unibyte literal segments.
@@ -4145,6 +4221,7 @@ fn append_mode_line_string_in_state(
             pctx,
             value,
             result,
+            point_access,
         );
     }
 }
@@ -4227,17 +4304,7 @@ fn format_mode_line_recursive_rooted(
     match format.kind() {
         ValueKind::Nil => {}
 
-        ValueKind::String => append_mode_line_string_in_state(
-            eval.variables(),
-            &[],
-            &eval.buffers,
-            &eval.processes,
-            eval.recursive_command_loop_depth(),
-            pctx,
-            result,
-            format,
-            false,
-        ),
+        ValueKind::String => append_mode_line_string_in_eval(eval, pctx, result, format, false),
 
         ValueKind::Fixnum(n) => {
             let _ = n;
@@ -4262,17 +4329,7 @@ fn format_mode_line_recursive_rooted(
                 && !val.is_nil()
             {
                 if val.is_string() {
-                    append_mode_line_string_in_state(
-                        eval.variables(),
-                        &[],
-                        &eval.buffers,
-                        &eval.processes,
-                        eval.recursive_command_loop_depth(),
-                        pctx,
-                        result,
-                        &val,
-                        true,
-                    );
+                    append_mode_line_string_in_eval(eval, pctx, result, &val, true);
                 } else {
                     format_mode_line_recursive(
                         eval,
@@ -4824,6 +4881,7 @@ fn expand_mode_line_percent_in_state(
     pctx: &ModeLinePercentContext,
     value: &Value,
     result: &mut ModeLineRendered,
+    point_access: &mut mode_line_point::Access<'_>,
 ) {
     let fmt_storage = if let Some(string) = value.as_lisp_string() {
         crate::emacs_core::emacs_char::to_utf8_lossy(string.as_bytes())
@@ -4846,25 +4904,27 @@ fn expand_mode_line_percent_in_state(
         })
     };
 
-    // GNU computes %l/%c lazily inside decode_mode_spec's switch — the
-    // O(point) line count and O(column) scan run only when the format
-    // actually contains the spec. Memoize on first demand: one compute per
-    // walk even when both %l and %c appear.
-    let mut point_line_column_memo: Option<LineColumn> = None;
-    let mut point_line_column = || -> LineColumn {
-        *point_line_column_memo.get_or_insert_with(|| {
-            if let Some(b) = buf {
-                // Use THIS window's point (GNU sets point to `w->pointm` per
-                // window), falling back to the live buffer point when no
-                // window context.
-                let point_byte = pctx
-                    .window_point
-                    .unwrap_or_else(|| b.point_emacs_byte_pos());
-                prefix_line_and_column(b, b.accessible_emacs_byte_region(), point_byte)
-            } else {
-                LineColumn { line: 1, column: 0 }
+    // A native string cannot evaluate Lisp or move point. Columns can share
+    // their calculation here. Every %l must still decode and publish its next
+    // shared base: reseating can invalidate that base before the next field.
+    let mut column_memo = None;
+    let mut point_field = |field| -> usize {
+        let Some(buffer) = buf else {
+            return match field {
+                mode_line_point::Field::Line => 1,
+                mode_line_point::Field::Column => 0,
+            };
+        };
+        match field {
+            mode_line_point::Field::Line => {
+                let value = pctx.point.line_and_column(buffer, point_access);
+                column_memo = Some(value.column);
+                value.line
             }
-        })
+            mode_line_point::Field::Column => {
+                *column_memo.get_or_insert_with(|| pctx.point.column(buffer))
+            }
+        }
     };
 
     let chars: Vec<char> = fmt_str.chars().collect();
@@ -5080,7 +5140,7 @@ fn expand_mode_line_percent_in_state(
             Some('l') => {
                 append_mode_line_percent_string_spec(
                     result,
-                    &point_line_column().line.to_string(),
+                    &point_field(mode_line_point::Field::Line).to_string(),
                     &props_at_percent,
                     field_width,
                 );
@@ -5090,7 +5150,7 @@ fn expand_mode_line_percent_in_state(
                 note_column_spec_consumed();
                 append_mode_line_percent_string_spec(
                     result,
-                    &point_line_column().column.to_string(),
+                    &point_field(mode_line_point::Field::Column).to_string(),
                     &props_at_percent,
                     field_width,
                 );
@@ -5101,7 +5161,7 @@ fn expand_mode_line_percent_in_state(
                 note_column_spec_consumed();
                 append_mode_line_percent_string_spec(
                     result,
-                    &(point_line_column().column + 1).to_string(),
+                    &(point_field(mode_line_point::Field::Column) + 1).to_string(),
                     &props_at_percent,
                     field_width,
                 );
@@ -10378,3 +10438,11 @@ mod fontification_demand_tests;
 #[cfg(test)]
 #[path = "tests/mode_line_fixed_symbols_test.rs"]
 mod mode_line_fixed_symbols;
+
+#[cfg(test)]
+#[path = "tests/mode_line_point_test.rs"]
+mod mode_line_point_test;
+
+#[cfg(test)]
+#[path = "tests/mode_line_nested_point_test.rs"]
+mod mode_line_nested_point_test;

@@ -92,7 +92,7 @@
                      (forward-line 1)
                      (forward-char 2)
                      (d15-pct-note 'narrow-point)))
-            "narrow[%*|%+|%&|%n][%n]"
+            "narrow[%*|%+|%&|%n|%l|%c|%C][%n|%l|%c]"
             (:eval (progn (widen) (goto-char (point-min))
                           (set-buffer-modified-p nil)
                           (d15-pct-note 'restore)))

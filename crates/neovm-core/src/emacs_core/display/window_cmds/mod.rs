@@ -6893,6 +6893,7 @@ pub(crate) fn make_frame_plain_on_terminal(
                     frame.minibuffer_leaf = None;
                     frame.minibuffer_window = Some(frame.root_window().id());
                     frame.no_split = true;
+                    frame.root_window_mut().reset_mode_line_base();
                     if let Some(minibuffer_buffer_id) = minibuffer_buffer_id
                         && let Window::Leaf { buffer_id, .. } = frame.root_window_mut()
                     {
@@ -7493,6 +7494,7 @@ pub(crate) fn x_create_frame_impl(
         } else {
             current_buffer_id
         };
+        frame.root_window_mut().reset_mode_line_base();
         if let Window::Leaf { buffer_id, .. } = frame.root_window_mut() {
             *buffer_id = root_buffer_id;
         }

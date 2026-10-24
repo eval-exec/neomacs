@@ -1139,6 +1139,7 @@ impl<'a> MiniDisplaySource<'a> {
                 .get_mut(request.frame)
                 .and_then(|frame| frame.find_window_mut(request.window))
             {
+                window.reset_mode_line_base();
                 if let Window::Leaf {
                     buffer_id,
                     window_start,
@@ -1189,6 +1190,7 @@ impl<'a> MiniDisplaySource<'a> {
                     &mut self.eval.buffers,
                     window,
                 );
+                window.reset_mode_line_base();
                 if let Window::Leaf {
                     buffer_id,
                     window_start,

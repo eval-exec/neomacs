@@ -2506,6 +2506,12 @@ impl Buffer {
 
     fn swap_owned_text_state_with(&mut self, other: &mut Self) {
         mem::swap(&mut self.text, &mut other.text);
+        // GNU buffer-swap-text marks both buffers clip_changed. The witness
+        // is keyed by buffer identity inside each newly owned text allocation.
+        self.text.acknowledge_mode_line_clip(other.id);
+        other.text.acknowledge_mode_line_clip(self.id);
+        self.text.note_mode_line_clipped(self.id);
+        other.text.note_mode_line_clipped(other.id);
         mem::swap(&mut self.point, &mut other.point);
         mem::swap(&mut self.accessible_start, &mut other.accessible_start);
         mem::swap(&mut self.accessible_end, &mut other.accessible_end);
@@ -2525,6 +2531,7 @@ impl Buffer {
     }
 
     fn note_buffer_swap_text_self(&mut self) {
+        self.text.note_mode_line_clipped(self.id);
         self.slots[BUFFER_SLOT_POINT_BEFORE_SCROLL.index()] = Value::NIL;
         self.text.record_char_modification(2);
         self.increment_overlay_modified_tick();
@@ -4054,6 +4061,7 @@ impl Buffer {
         let end_byte = range.end().clamp(start_byte, total);
         let start = self.text_anchor_for_emacs_byte_pos(start_byte);
         let end = self.text_anchor_for_emacs_byte_pos(end_byte);
+        self.note_mode_line_restriction_change(start, end);
         self.set_accessible_region_anchors_unchecked(start, end);
         // Clamp point into the new accessible region.
         self.goto_emacs_byte_pos(self.point_emacs_byte_pos());
@@ -4089,6 +4097,7 @@ impl Buffer {
     }
 
     pub fn restore_accessible_region(&mut self, snapshot: AccessibleBufferRegionSnapshot) {
+        self.note_mode_line_restriction_change(snapshot.start_anchor(), snapshot.end_anchor());
         self.set_accessible_region_anchors_unchecked(
             snapshot.start_anchor(),
             snapshot.end_anchor(),
@@ -4100,6 +4109,10 @@ impl Buffer {
         &mut self,
         snapshot: AccessibleBufferRegionSnapshot,
     ) {
+        self.note_mode_line_restriction_change(
+            snapshot.start_anchor(),
+            self.text_anchor_for_emacs_byte_pos(self.total_emacs_byte_end_pos()),
+        );
         self.set_accessible_region_anchors_unchecked(
             snapshot.start_anchor(),
             self.text_anchor_for_emacs_byte_pos(self.total_emacs_byte_end_pos()),
@@ -4161,6 +4174,23 @@ impl Buffer {
 
     pub(in crate::buffer) fn set_point_anchor_unchecked(&mut self, anchor: TextPositionAnchor) {
         self.point = anchor;
+    }
+
+    fn note_mode_line_restriction_change(
+        &self,
+        start: TextPositionAnchor,
+        end: TextPositionAnchor,
+    ) {
+        if start.emacs_byte_pos() != self.point_min_emacs_byte_pos()
+            || end.emacs_byte_pos() != self.point_max_emacs_byte_pos()
+        {
+            self.text.note_mode_line_clipped(self.id);
+        }
+    }
+
+    /// GNU's durable restriction-change flag, cleared only on accepted redisplay.
+    pub(crate) fn mode_line_clip_changed(&self) -> bool {
+        self.text.mode_line_clipped(self.id)
     }
 
     pub(in crate::buffer) fn set_accessible_region_anchors_unchecked(
@@ -4405,6 +4435,7 @@ impl Buffer {
     /// the committed (accepted) layout break.
     pub fn reset_unchanged_region(&self) {
         self.text.reset_unchanged_region();
+        self.text.acknowledge_mode_line_clip(self.id);
     }
 
     /// Tick that advances on every text-PROPERTY change to this buffer

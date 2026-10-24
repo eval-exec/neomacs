@@ -5297,6 +5297,7 @@ fn bootstrap_buffers_with_font(
         }
         frame.sync_menu_bar_height_from_parameters();
         frame.sync_tool_bar_height_from_parameters();
+        frame.root_window_mut().reset_mode_line_base();
         if let Window::Leaf {
             buffer_id,
             window_start,
@@ -5349,6 +5350,9 @@ fn bootstrap_buffers_with_font(
         let mini_y = height as f32 - mini_h;
         if let Window::Leaf { bounds, .. } = frame.root_window_mut() {
             bounds.height = mini_y;
+        }
+        if let Some(mini_leaf) = &mut frame.minibuffer_leaf {
+            mini_leaf.reset_mode_line_base();
         }
         if let Some(mini_leaf) = &mut frame.minibuffer_leaf
             && let Window::Leaf {

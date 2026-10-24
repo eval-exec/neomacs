@@ -1379,6 +1379,7 @@ impl FrameManager {
 
         if let Some(Window::Leaf {
             buffer_id: leaf_buffer_id,
+            mode_line_base,
             window_start: leaf_window_start,
             position_markers,
             window_end,
@@ -1395,6 +1396,9 @@ impl FrameManager {
             .get_mut(frame_id)
             .and_then(|frame| frame.find_window_mut(window_id))
         {
+            // GNU wset_buffer invalidates the numeric line base for every
+            // install, including the same buffer and identity round trips.
+            *mode_line_base = None;
             *leaf_buffer_id = buffer_id;
             *leaf_window_start = window_start.max(LispCharPos1::ONE);
             *position_markers = super::WindowPositionMarkerState::Detached;

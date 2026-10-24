@@ -103,6 +103,7 @@ mod mode_line_gc_lifetime_oracle;
 #[path = "mode_line_numeric_padding_oracle.rs"]
 mod mode_line_numeric_padding_oracle;
 mod mode_line_percent_input_oracle;
+mod mode_line_point_oracle;
 #[path = "modes.rs"]
 mod modes;
 #[path = "mx_suggestion.rs"]
