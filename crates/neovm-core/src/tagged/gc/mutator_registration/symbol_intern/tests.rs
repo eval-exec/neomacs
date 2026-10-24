@@ -16,6 +16,7 @@ struct Homes<'era> {
     target: Option<crate::emacs_core::intern::SymId>,
     old_id: crate::emacs_core::intern::SymId,
     old_handle: crate::tagged::gc::SymbolHandle,
+    equal_holder: crate::tagged::gc::SymbolHandle,
 }
 struct FixtureGuard<'era> {
     owner: Option<Mutator<'era>>,
@@ -66,6 +67,21 @@ fn fixture(
     kind: PlainSymbolBacking,
     query: Query,
     body: impl for<'owner, 'era> FnOnce(&mut RunAccess<'owner, 'era>, &mut Homes<'era>),
+) -> std::thread::Result<()> {
+    fixture_owner(kind, query, |_, owner, homes| {
+        let mut run = owner.run_access().unwrap();
+        body(&mut run, homes);
+    })
+}
+
+fn fixture_owner(
+    kind: PlainSymbolBacking,
+    query: Query,
+    body: impl for<'heap, 'era> FnOnce(
+        &crate::tagged::gc::ParallelHeapEra<'heap>,
+        &mut Mutator<'era>,
+        &mut Homes<'era>,
+    ),
 ) -> std::thread::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     // Existing input holders stay below a deliberately distant target ID.
@@ -153,6 +169,7 @@ fn fixture(
                 .unwrap();
             let cleanup = Rc::new(RefCell::new(None));
             let receipt = Rc::clone(&cleanup);
+            let era_ref = &era;
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 let mut guard = FixtureGuard {
                     owner: Some(owner),
@@ -160,26 +177,33 @@ fn fixture(
                     homes: None,
                     cleanup: receipt,
                 };
-                let mut run = guard.owner.as_mut().unwrap().run_access().unwrap();
-                let inputs = guard.inputs.as_ref().unwrap();
-                guard.homes = Some(Homes {
-                    name: run.root_slot(&inputs[0]).unwrap(),
-                    equal_name: run.root_slot(&inputs[1]).unwrap(),
-                    dst: run.root_slot(&inputs[2]).unwrap(),
-                    value: run.root_slot(&inputs[2]).unwrap(),
-                    target,
-                    old_id: ids[1],
-                    old_handle: handles[0],
-                });
-                let homes = guard.homes.as_mut().unwrap();
-                run.sym_value_into(&handles[0], &mut homes.name).unwrap();
-                run.sym_value_into(&handles[1], &mut homes.equal_name)
-                    .unwrap();
-                assert_ne!(
-                    homes.name.word_for_test(&run),
-                    homes.equal_name.word_for_test(&run)
+                {
+                    let mut run = guard.owner.as_mut().unwrap().run_access().unwrap();
+                    let inputs = guard.inputs.as_ref().unwrap();
+                    guard.homes = Some(Homes {
+                        name: run.root_slot(&inputs[0]).unwrap(),
+                        equal_name: run.root_slot(&inputs[1]).unwrap(),
+                        dst: run.root_slot(&inputs[2]).unwrap(),
+                        value: run.root_slot(&inputs[2]).unwrap(),
+                        target,
+                        old_id: ids[1],
+                        old_handle: handles[0],
+                        equal_holder: handles[1],
+                    });
+                    let homes = guard.homes.as_mut().unwrap();
+                    run.sym_value_into(&handles[0], &mut homes.name).unwrap();
+                    run.sym_value_into(&handles[1], &mut homes.equal_name)
+                        .unwrap();
+                    assert_ne!(
+                        homes.name.word_for_test(&run),
+                        homes.equal_name.word_for_test(&run)
+                    );
+                }
+                body(
+                    era_ref,
+                    guard.owner.as_mut().unwrap(),
+                    guard.homes.as_mut().unwrap(),
                 );
-                body(&mut run, homes);
             }));
             assert_eq!(
                 cleanup.borrow().as_ref(),
@@ -727,3 +751,4 @@ fn p3sym_c5_fresh_id_advances_registry_epoch_once() {
 }
 
 mod failures;
+mod gc;

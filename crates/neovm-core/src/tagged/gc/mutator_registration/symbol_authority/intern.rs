@@ -16,6 +16,21 @@ impl From<RegistrationError> for InitialInternError {
     }
 }
 
+impl KeeperSymbols<'_> {
+    /// Refresh the explicit-heap process name index at EVERY stopped census.
+    /// The pre-era frozen shell cannot contain names first registered by C5.
+    /// Minting retains the matching AllStopped and requires a zero word; the
+    /// registry lock ends before the collector obtains its mutable heap loan.
+    pub(in crate::tagged::gc::mutator_registration) fn append_name_roots(
+        &self,
+        roots: &mut Vec<Value>,
+    ) -> Result<(), RegistrationError> {
+        self.registry.symbols.ready()?;
+        crate::emacs_core::intern::collect_symbol_name_gc_roots(roots, self.registry.heap.get());
+        Ok(())
+    }
+}
+
 /// An era/World-bound obarray reader, without a pre-existing symbol key.
 /// It borrows RunAccess until release and shares the C2/C3 authority word.
 pub(super) struct InitialObarrayRef<'lease, 'owner, 'era> {
