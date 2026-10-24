@@ -3580,10 +3580,20 @@ pub struct Context {
     macro_perf_enabled: bool,
     /// Custom variable manager — defcustom/defgroup system.
     pub(crate) custom: CustomManager,
+    /// Native construction state, never serialized. Unlike an ordinary
+    /// runtime redump, loadup must omit build-only environment derivatives.
+    /// Use trailing padding to preserve the pinned Context field offsets.
+    pub(crate) loadup_dump_mode: Option<super::load::LoadupDumpMode>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
 static_assertions::assert_not_impl_any!(Context: Send, Sync);
+// Construction state must fit the single trailing byte without growing
+// Context or shifting its pinned native/JIT ABI.
+static_assertions::const_assert_eq!(
+    std::mem::size_of::<Option<super::load::LoadupDumpMode>>(),
+    1
+);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShutdownRequest {

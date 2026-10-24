@@ -60,9 +60,10 @@ fn host_process_environment() -> Value {
 /// Install the environment inherited by this Neomacs process as the Lisp
 /// startup environment.
 ///
-/// GNU initializes `process-environment` before `loadup.el`, so every startup
-/// consumer observes the same HOME, PATH, and other host variables as file
-/// expansion and subprocess creation. A cached evaluator needs the same
+/// GNU initializes `process-environment` before Lisp startup, except when
+/// constructing a dump (`!will_dump_p()` in emacs.c). Runtime consumers
+/// observe the same HOME, PATH, and other host variables as file expansion
+/// and subprocess creation. A cached evaluator needs the same
 /// operation when it is activated, because its dumped environment belongs to
 /// the process that created the cache rather than the current process.
 pub(crate) fn install_host_environment_snapshot(eval: &mut Context) {
