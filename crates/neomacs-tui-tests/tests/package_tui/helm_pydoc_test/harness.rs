@@ -43,12 +43,35 @@ pub(super) fn open_pydoc(pair: &mut PackageTuiPair) {
     });
 }
 
+/// A Helm Pydoc candidate row: a bare Python module name.  Headers, the mode
+/// line and the surrounding console chrome all contain spaces or punctuation.
+fn is_module_name_row(row: &str) -> bool {
+    let mut chars = row.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
 pub(super) fn filter_module(pair: &mut PackageTuiPair, module: &str) {
     send_to_both(pair, |session| session.send(module.as_bytes()));
+    // Helm updates its `pattern:' line as soon as the keystrokes arrive but
+    // redraws the candidate list from its input-idle timer.  Wait for the
+    // filtered list itself in both editors: every remaining module row
+    // matches the pattern and the pattern's module is among them, so the
+    // snapshot cannot catch the old unfiltered layout behind a new pattern
+    // line.  No fixed delay: both editors are polled until the content
+    // condition holds or the bound expires.
     wait_for_both(pair, Duration::from_secs(12), |grid| {
-        grid.iter()
-            .any(|row| row.contains("pattern:") && row.contains(module))
-            && grid.iter().any(|row| row.trim_start().starts_with(module))
+        let pattern_updated = grid
+            .iter()
+            .any(|row| row.contains("pattern:") && row.contains(module));
+        let module_rows: Vec<&str> = grid
+            .iter()
+            .map(|row| row.trim())
+            .filter(|row| is_module_name_row(row))
+            .collect();
+        pattern_updated
+            && module_rows.iter().any(|row| row.contains(module))
+            && module_rows.iter().all(|row| row.contains(module))
     });
 }
 
