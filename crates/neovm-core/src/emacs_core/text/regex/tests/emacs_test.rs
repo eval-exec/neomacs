@@ -2891,3 +2891,18 @@ fn prepared_regexp_reuse_preserves_reverse_counts_posix_and_captures() {
         )
     );
 }
+
+/// Regex fuzz artifact `crash-bfc34a9633d9bd0a2879e0552f0871a9eccf47d1`.
+///
+/// A five-byte tail whose payload is not a valid 5-byte character decoded
+/// above `MAX_CHAR`, and the syntax-spec opcode asserted when it wrapped that
+/// code in an `EmacsChar`.  Both engines must decode it as one raw byte.
+#[test]
+fn out_of_range_five_byte_text_decodes_as_a_raw_byte_in_both_engines() {
+    let text = [0xF8, 0xB8, 0x96, 0xB8, 0x96];
+    let case = RegexCase::new("\\s-", &text, false, 0, 0);
+    match check_regex_differential(case, RegexDifferential::PikeVm) {
+        Ok(RegexCheck::Equivalent { .. }) => {}
+        other => panic!("five-byte tail must decode as a raw byte: {other:?}"),
+    }
+}

@@ -761,7 +761,9 @@ pub fn multibyte_length(bytes: &[u8], allow_8bit: bool) -> Option<usize> {
 ///
 /// This mirrors GNU `STRING_CHAR_AND_LENGTH`. The input must be a valid Emacs
 /// multibyte sequence (no bounds checking on continuation bytes beyond what the
-/// lead byte promises).
+/// lead byte promises). A five-byte tail whose payload leaves the encodable
+/// `MAX_4_BYTE_CHAR..=MAX_5_BYTE_CHAR` range is not a character: it decodes as
+/// the lead byte, so every result stays inside [`EmacsChar`]'s domain.
 pub fn string_char(bytes: &[u8]) -> (u32, usize) {
     debug_assert!(!bytes.is_empty());
     let b0 = bytes[0];
@@ -810,7 +812,13 @@ pub fn string_char(bytes: &[u8]) -> (u32, usize) {
             | ((bytes[2] as u32 & 0x3F) << 12)
             | ((bytes[3] as u32 & 0x3F) << 6)
             | (bytes[4] as u32 & 0x3F);
-        (c, 5)
+        if c <= MAX_5_BYTE_CHAR {
+            (c, 5)
+        } else {
+            // Payload out of the five-byte range (e.g. F8 B8 ..): a five-byte
+            // tail with these bits is not an internal multibyte character.
+            (byte8_to_char(b0), 1)
+        }
     } else {
         // Invalid or truncated sequence — treat lead byte as raw byte
         (byte8_to_char(b0), 1)
