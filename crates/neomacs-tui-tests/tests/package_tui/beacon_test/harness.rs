@@ -265,6 +265,38 @@ pub(super) fn wait_for_pair_background(
     );
 }
 
+/// Wait until `session` alone shows (or loses) the Beacon background span.
+///
+/// Beacon blinks are transient. The paired driver runs one editor's whole
+/// command before the other's, so a joint wait that starts after both
+/// invocations can already have missed the first editor's blink; observe each
+/// editor in its own turn instead.
+pub(super) fn wait_for_background(
+    session: &mut TuiSession,
+    needle: &str,
+    offset: usize,
+    width: usize,
+    present: bool,
+) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let target = Some(present);
+    loop {
+        if cell_span_background_state(session, needle, offset, width) == target {
+            return present.then(|| styled_span(session, needle, offset, width));
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "Beacon {} never reached background present={present}; state={:?}\nGrid:\n{}\nOutput: {:?}",
+                session.name,
+                cell_span_background_state(session, needle, offset, width),
+                session.text_grid().join("\n"),
+                String::from_utf8_lossy(session.recent_output()),
+            );
+        }
+        session.read(Duration::from_millis(60));
+    }
+}
+
 pub(super) fn wait_for_pair_marker(pair: &mut PackageTuiPair, marker: &str) {
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {

@@ -72,11 +72,17 @@ pub(super) fn run_body(
         mismatches,
     );
 
+    // The natural blink is transient (beacon-blink-delay 0.8,
+    // beacon-blink-duration 1.4) and the paired driver invokes one editor
+    // completely before the other: the shard-07 recording shows GNU blinking
+    // at 125-127 s and Neo at 139-141 s, so a joint wait that starts after
+    // both invocations can never see GNU's blink. Observe each editor's own
+    // blink in its own turn.
     both(pair, "natural timer start", |session| {
-        invoke(session, "beacon359-tui-natural", "B359-NATURAL-START")
+        invoke(session, "beacon359-tui-natural", "B359-NATURAL-START");
+        let _ = wait_for_background(session, "manual alpha", 7, 7, true);
+        let _ = wait_for_background(session, "manual alpha", 7, 7, false);
     })?;
-    let _ = wait_for_pair_background(pair, "manual alpha", 7, 7, true);
-    let _ = wait_for_pair_background(pair, "manual alpha", 7, 7, false);
     for session in [&mut pair.gnu, &mut pair.neo] {
         wait_for(
             session,
