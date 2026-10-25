@@ -354,7 +354,6 @@ impl<'rows, 'request, 'emit, 'surface, 'face, FS: crate::neovm_bridge::FaceServi
             strings.anchor_charpos(),
             self.loop_context.point_charpos(),
         );
-        let (x, col) = self.state.progress.row_progress_mut().coordinates_mut();
         let continuation = self
             .state
             .surface
@@ -365,15 +364,16 @@ impl<'rows, 'request, 'emit, 'surface, 'face, FS: crate::neovm_bridge::FaceServi
                 strings.strings(),
                 strings.box_boundaries(),
                 self.state.source_render.reborrow(),
-                x,
-                col,
+                self.state.progress.visual_row_progress(),
                 self.state.row_build.row_geometry,
+                self.state.row_build.row_flags,
                 self.state.cursor_info,
                 self.state.row_source_start,
                 self.state.row_y_positions,
                 self.state.face_ids,
-                self.state.row_carryover.line_numbers,
+                self.state.row_carryover.reborrow(),
                 self.state.face_scan,
+                self.active_face_state,
             );
         if let Some(boundary) = word_wrap_boundary {
             if continuation.should_break() {

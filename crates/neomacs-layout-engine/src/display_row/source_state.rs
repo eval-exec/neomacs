@@ -110,6 +110,21 @@ impl DisplayRowSourceState {
         };
     }
 
+    /// Preserve the pending element's string coordinate when a replacement
+    /// maps its coverage back to buffer coordinates.
+    pub(crate) fn pending_string_position(
+        &self,
+    ) -> Option<&crate::display_item::DisplaySourcePosition> {
+        let item = self.pending_item.as_ref()?;
+        match &item.kind {
+            crate::display_item::DisplayItemKind::SourceMappedText(mapped) => mapped
+                .glyph_string_start
+                .as_ref()
+                .or(Some(&item.span.start)),
+            _ => Some(&item.span.start),
+        }
+    }
+
     pub(crate) fn discard_pending_item(&mut self) {
         self.pending_item = None;
     }

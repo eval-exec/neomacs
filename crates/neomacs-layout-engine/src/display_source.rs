@@ -2718,6 +2718,14 @@ impl<S: DisplayItemSource> DisplayItemSource for BufferDisplayReplacementStringS
     }
 }
 
+/// Raw prefix properties of the active pushed string. Nil is deliberately
+/// preserved until the common prefix lookup applies buffer/default fallback.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct LispStringPrefixProperties {
+    pub(crate) line: Option<Value>,
+    pub(crate) wrap: Option<Value>,
+}
+
 pub(crate) struct LispStringSourceCursor {
     stack: LispStringSourceStack,
 }
@@ -2780,6 +2788,45 @@ impl LispStringSourceOrigin {
 }
 
 impl LispStringSourceCursor {
+    pub(crate) fn prefix_properties_at(
+        &self,
+        pending: Option<&DisplaySourcePosition>,
+    ) -> LispStringPrefixProperties {
+        let (frame, index) = match pending {
+            Some(DisplaySourcePosition::LispString {
+                source_id,
+                char_index,
+                ..
+            }) => {
+                let Some(frame) = self
+                    .stack
+                    .frames
+                    .iter()
+                    .rev()
+                    .find(|frame| frame.source_id == source_id.get())
+                else {
+                    return LispStringPrefixProperties::default();
+                };
+                (frame, *char_index)
+            }
+            _ => {
+                let Some(frame) = self.stack.frames.last() else {
+                    return LispStringPrefixProperties::default();
+                };
+                (frame, frame.char_index)
+            }
+        };
+        let Some(props) = frame.props.as_ref() else {
+            return LispStringPrefixProperties::default();
+        };
+        LispStringPrefixProperties {
+            line: props
+                .get_property_at_char_pos(CharPos0::new(index), Value::symbol("line-prefix")),
+            wrap: props
+                .get_property_at_char_pos(CharPos0::new(index), Value::symbol("wrap-prefix")),
+        }
+    }
+
     fn has_remaining_text(&self) -> bool {
         self.stack
             .frames

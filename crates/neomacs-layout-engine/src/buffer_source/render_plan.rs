@@ -770,7 +770,7 @@ impl BufferSourceOutputSetup {
             self.body_install_context.display_text_row_base(),
             geometry.max_rows,
         )
-        .with_continuation_row_prelude(row_prelude_context.continuation_row_prelude());
+        .with_continuation_row_prelude(row_prelude_context, params);
         let loop_context = BufferSourceLoopRequestContext::new(
             buffer_id,
             source.text_start_byte(),

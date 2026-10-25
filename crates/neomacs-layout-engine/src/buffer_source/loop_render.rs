@@ -313,6 +313,9 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                 self.row_build.row_geometry,
             );
         }
+        // Prefixes decorate the row but do not count as source progress when
+        // a pushed string retries an oversized element on a fresh row.
+        self.progress.record_row_text_start();
         if wrap_prefix {
             self.progress
                 .record_wrap_prefix_width((prefix_end_x - prefix_start_x).max(0.0));

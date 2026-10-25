@@ -4,7 +4,9 @@
 //! source walking and generic row/source append rendering: hscroll skip,
 //! selective display, invisible text, line breaks, and end-of-buffer tails.
 
-use crate::buffer_source::loop_state::BufferSourceLoopMutableState;
+use crate::buffer_source::loop_state::{
+    BufferSourceLoopMutableState, BufferSourceRowCarryoverState,
+};
 use crate::buffer_source::walk::BufferSourceWalk;
 use crate::coords::layout_i64_char_pos_to_lisp_char_pos;
 use crate::display_cursor::{
@@ -15,8 +17,8 @@ use crate::display_row::append_context::DisplayRowAppendSurface;
 use crate::display_row::builder::DisplayRowPosition;
 use crate::display_row::face_state::DisplayRowActiveFaceState;
 use crate::display_row::geometry::{
-    DisplayRowExtendState, DisplayRowGeometryDefaults, DisplayRowGeometryState, DisplayRowLimit,
-    DisplayRowYPositions,
+    DisplayRowExtendState, DisplayRowFlags, DisplayRowGeometryDefaults, DisplayRowGeometryState,
+    DisplayRowLimit, DisplayRowYPositions,
 };
 use crate::display_row::line_end::{
     LineEndContext, LineEndExtend, LineEndFillGeometry, LineEndIndicator,
@@ -43,7 +45,9 @@ use crate::display_row::walk_state::{
 use crate::display_source::{
     DisplaySourceStepChar, DisplaySourceTextPosition, DisplaySpaceWidthPolicy,
 };
-use crate::display_source_progress::{DisplaySourceProgressState, DisplaySourceRowProgressState};
+use crate::display_source_progress::{
+    DisplaySourceProgressState, DisplaySourceRowProgressState, DisplaySourceVisualRowProgress,
+};
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{LayoutBufferView, LayoutCharPropertyLookup, RustTextPropAccess};
 use crate::types::LayoutCharPos0;
@@ -500,13 +504,14 @@ impl<'a> BufferSourceEndOfBufferTailRenderContext<'a> {
         self,
         buffer: &B,
         source_render: TextRowSourceRenderState<'_, FS>,
-        row_progress: DisplaySourceRowProgressState<'_>,
+        row_progress: DisplaySourceVisualRowProgress<'_>,
         row_geometry: &mut DisplayRowGeometryState,
+        row_flags: &mut DisplayRowFlags,
         cursor_info: &mut CursorCaptureState,
         row_source_start: &mut DisplayRowSourceStart,
         row_y_positions: &mut DisplayRowYPositions,
         face_ids: &mut FrameFaceAttempt,
-        line_numbers: &mut LineNumberRenderState,
+        row_carryover: BufferSourceRowCarryoverState<'_>,
         face_scan: &mut FaceScanCheckpoint,
     ) -> BufferSourceEndOfBufferTailRenderOutcome {
         let mut row_progress = row_progress;
@@ -556,21 +561,21 @@ impl<'a> BufferSourceEndOfBufferTailRenderContext<'a> {
         if self.overlay_policy == BufferSourceEobOverlayPolicy::Render
             && self.overlay_context.should_render(row_geometry)
         {
-            let (x, col) = row_progress.coordinates_mut();
             let continuation = self.overlay_context.render_eob_anchor_strings_at_text_row(
                 buffer,
                 OverlayStringRenderPositions::from_layout_i64(self.charpos, self.point_charpos),
                 self.active_face_state.resolved_face().box_type != 0,
                 source_render.reborrow(),
-                x,
-                col,
+                row_progress.reborrow(),
                 row_geometry,
+                row_flags,
                 cursor_info,
                 row_source_start,
                 row_y_positions,
                 face_ids,
-                line_numbers,
+                row_carryover,
                 face_scan,
+                self.active_face_state,
             );
             if point_is_visible_eob && continuation == DisplayRowTransitionContinuation::Exhausted {
                 progress = BufferSourceEobTailProgress::OverlayRowsExhausted;

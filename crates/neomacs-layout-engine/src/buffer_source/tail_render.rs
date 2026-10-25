@@ -1,6 +1,7 @@
 //! Buffer source post-loop tail rendering and install context.
 
 use crate::buffer_source::loop_context::BufferSourceLoopRequestContext;
+use crate::buffer_source::loop_state::BufferSourceRowCarryoverState;
 use crate::display_cursor::CursorCaptureState;
 use crate::display_row::face_state::DisplayRowActiveFaceState;
 use crate::display_row::geometry::{
@@ -8,10 +9,8 @@ use crate::display_row::geometry::{
 };
 use crate::display_row::overlay_string::BufferOverlayStringTextRowRenderContext;
 use crate::display_row::source_render::TextRowSourceRenderState;
-use crate::display_row::walk_state::{
-    DisplayRowSourceStart, FaceScanCheckpoint, LineNumberRenderState,
-};
-use crate::display_source_progress::DisplaySourceRowProgressState;
+use crate::display_row::walk_state::{DisplayRowSourceStart, FaceScanCheckpoint};
+use crate::display_source_progress::DisplaySourceVisualRowProgress;
 use crate::display_text_window_row_lifecycle::{
     TextWindowBodyInstallRenderContext, TextWindowBodyInstallRequest,
     TextWindowCursorPublishStatus, TextWindowFinishRequest, TextWindowFinishState,
@@ -327,13 +326,14 @@ pub(crate) fn render_buffer_source_tail_and_decide_retry<
 >(
     loop_context: BufferSourceLoopRequestContext,
     mut source_render: TextRowSourceRenderState<'emit, FS>,
-    mut row_progress: DisplaySourceRowProgressState<'emit>,
+    mut row_progress: DisplaySourceVisualRowProgress<'emit>,
     row_geometry: &'emit mut DisplayRowGeometryState,
+    row_flags: &'emit mut DisplayRowFlags,
     cursor_info: &'emit mut CursorCaptureState,
     row_source_start: &'emit mut DisplayRowSourceStart,
     row_y_positions: &'rows mut DisplayRowYPositions,
     face_ids: &'emit mut FrameFaceAttempt,
-    line_numbers: &'emit mut LineNumberRenderState,
+    row_carryover: BufferSourceRowCarryoverState<'emit>,
     face_scan: &'emit mut FaceScanCheckpoint,
     overlay_context: BufferOverlayStringTextRowRenderContext<'surface>,
     tail_context: &BufferSourceTailRequestContext<'_>,
@@ -396,11 +396,12 @@ where
             source_render.reborrow(),
             row_progress.reborrow(),
             row_geometry,
+            row_flags,
             cursor_info,
             row_source_start,
             row_y_positions,
             face_ids,
-            line_numbers,
+            row_carryover,
             face_scan,
         );
     let point_is_visible_eob = tail_progress.point_is_visible_eob();

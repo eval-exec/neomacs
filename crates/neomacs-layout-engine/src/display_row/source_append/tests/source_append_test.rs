@@ -103,7 +103,9 @@ use crate::display_source_append_plan::{
 };
 use crate::display_source_item_append::*;
 use crate::display_source_overflow::DisplaySourceTextCharOverflowAction;
-use crate::display_source_progress::{DisplaySourceProgressState, DisplaySourceRowProgressState};
+use crate::display_source_progress::{
+    DisplaySourceProgressState, DisplaySourceRowProgressState, DisplaySourceVisualRowProgress,
+};
 use crate::display_source_resolver::DisplayPropertyReplacementSourceResolveRequest;
 use crate::display_text_run_measurement::{DisplayTextRunAdvance, DisplayTextRunMeasurement};
 use crate::display_text_window_row_lifecycle::{
@@ -5333,9 +5335,11 @@ fn buffer_overlay_string_render_context_disabled_keeps_render_state() {
         );
         let mut state = OverlayStringRenderState::from_source_render(
             source_render,
-            &mut x,
-            &mut col,
+            DisplaySourceVisualRowProgress::new(DisplaySourceRowProgressState::new(
+                &mut x, &mut col,
+            )),
             &mut ctx.geometry,
+            &mut ctx.row_flags,
             &mut cursor_info,
             &mut row_source_start,
             &mut ctx.row_y_positions,
@@ -5361,6 +5365,13 @@ fn buffer_overlay_string_render_context_disabled_keeps_render_state() {
 #[test]
 fn overlay_string_row_break_context_finishes_current_row() {
     let mut ctx = RowTransitionTestContext::new("overlay-row-break-context");
+    let buffer_id = ctx
+        .eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("buffer")
+        .id();
+    let buffer = current_buffer_snapshot(&ctx.eval, buffer_id);
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
@@ -5392,9 +5403,11 @@ fn overlay_string_row_break_context_finishes_current_row() {
         );
         let mut state = OverlayStringRenderState::from_source_render(
             source_render,
-            &mut x,
-            &mut col,
+            DisplaySourceVisualRowProgress::new(DisplaySourceRowProgressState::new(
+                &mut x, &mut col,
+            )),
             &mut ctx.geometry,
+            &mut ctx.row_flags,
             &mut cursor_info,
             &mut row_source_start,
             &mut ctx.row_y_positions,
@@ -5402,7 +5415,11 @@ fn overlay_string_row_break_context_finishes_current_row() {
         );
 
         assert_eq!(
-            OverlayStringRowBreakRenderContext::new(5, row_context).finish_row(&mut state),
+            OverlayStringRowBreakRenderContext::new(5, row_context).finish_row(
+                &buffer,
+                crate::display_source::LispStringPrefixProperties::default(),
+                &mut state,
+            ),
             DisplayRowTransitionContinuation::Continue
         );
     }
@@ -7874,6 +7891,14 @@ fn buffer_end_of_buffer_tail_render_request_captures_cursor_and_renders_overlay(
     let mut line_numbers = LineNumberRenderState::new(false, 1, 1);
     let mut face_scan = FaceScanCheckpoint::initial();
     let mut font_metrics = None;
+    let mut prefix_request = DisplayRowPrefixRequest::None;
+    let mut hscroll = HorizontalScrollSkipState::new(
+        LineWrapMode::Wrap,
+        0,
+        HorizontalScrollTruncationTarget::FirstVisibleSourceGlyph,
+    );
+    let mut word_wrap = WordWrapRenderState::new(false);
+    let mut trailing = TrailingWhitespaceRenderState::new(false, 0);
 
     let outcome =
         BufferSourceEndOfBufferTailRenderContext::new(3, 3, 3, 3, overlay_context, &active_face)
@@ -7886,13 +7911,22 @@ fn buffer_end_of_buffer_tail_render_request_captures_cursor_and_renders_overlay(
                     &mut font_metrics,
                     &face_resolver,
                 ),
-                DisplaySourceRowProgressState::new(&mut x, &mut col),
+                DisplaySourceVisualRowProgress::new(DisplaySourceRowProgressState::new(
+                    &mut x, &mut col,
+                )),
                 &mut context.geometry,
+                &mut context.row_flags,
                 &mut cursor_info,
                 &mut row_source_start,
                 &mut context.row_y_positions,
                 &mut face_ids,
-                &mut line_numbers,
+                BufferSourceRowCarryoverState::new(
+                    &mut prefix_request,
+                    &mut line_numbers,
+                    &mut hscroll,
+                    &mut word_wrap,
+                    &mut trailing,
+                ),
                 &mut face_scan,
             );
 

@@ -37603,3 +37603,7 @@ mod window_input_ownership_resolver_test;
 #[cfg(test)]
 #[path = "mini_root_minimum_test.rs"]
 mod mini_root_minimum_test;
+
+#[cfg(test)]
+#[path = "overlay_string_window_wrap_test.rs"]
+mod overlay_string_window_wrap_test;

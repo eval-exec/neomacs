@@ -558,25 +558,26 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                             segment.start,
                             loop_context.point_charpos(),
                         );
-                    let (x, col) = self.progress.row_progress_mut().coordinates_mut();
                     let continuation = self
                         .surface
                         .overlay_context
+                        .without_row_transitions()
                         .render_produced_strings_at_text_row(
                             buffer,
                             positions,
                             anchor.strings(),
                             crate::display_item::DisplayStringBoxBoundaries::known(false, false),
                             self.source_render.reborrow(),
-                            x,
-                            col,
+                            self.progress.visual_row_progress(),
                             self.row_build.row_geometry,
+                            self.row_build.row_flags,
                             self.cursor_info,
                             self.row_source_start,
                             self.row_y_positions,
                             self.face_ids,
-                            self.row_carryover.line_numbers,
+                            self.row_carryover.reborrow(),
                             self.face_scan,
+                            active_face_state,
                         );
                     // A routable overlay string holds no newline and the plan
                     // refused every anchor an overflow prefix reaches, so the

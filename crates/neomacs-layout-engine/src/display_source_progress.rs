@@ -53,6 +53,7 @@ pub(crate) struct DisplaySourceProgressState<'emit> {
     charpos: &'emit mut i64,
     row: DisplaySourceRowProgressState<'emit>,
     physical_line_tabs: Option<&'emit mut DisplayPhysicalLineTabState>,
+    row_text_start_x: Option<&'emit mut f32>,
 }
 
 impl<'emit> DisplaySourceProgressState<'emit> {
@@ -67,6 +68,7 @@ impl<'emit> DisplaySourceProgressState<'emit> {
             charpos,
             row: DisplaySourceRowProgressState::new(x, col),
             physical_line_tabs: None,
+            row_text_start_x: None,
         }
     }
 
@@ -76,6 +78,25 @@ impl<'emit> DisplaySourceProgressState<'emit> {
     ) -> Self {
         self.physical_line_tabs = Some(physical_line_tabs);
         self
+    }
+
+    pub(crate) fn with_row_text_start(mut self, x: &'emit mut f32) -> Self {
+        self.row_text_start_x = Some(x);
+        self
+    }
+
+    pub(crate) fn visual_row_progress(&mut self) -> DisplaySourceVisualRowProgress<'_> {
+        DisplaySourceVisualRowProgress {
+            row: self.row.reborrow(),
+            physical_line_tabs: self.physical_line_tabs.as_deref_mut(),
+            row_text_start_x: self.row_text_start_x.as_deref_mut(),
+        }
+    }
+
+    pub(crate) fn record_row_text_start(&mut self) {
+        if let Some(start) = self.row_text_start_x.as_deref_mut() {
+            *start = self.row.x();
+        }
     }
 
     pub(crate) fn row_position(&self) -> DisplayRowPosition {
@@ -159,6 +180,102 @@ impl<'emit> DisplaySourceProgressState<'emit> {
             charpos: self.charpos,
             row: self.row.reborrow(),
             physical_line_tabs: self.physical_line_tabs.as_deref_mut(),
+            row_text_start_x: self.row_text_start_x.as_deref_mut(),
+        }
+    }
+}
+
+/// The visual pen borrowed by a pushed source. Buffer source coordinates stay
+/// with the outer iterator; TAB progress and the decorated row's text origin
+/// stay shared, so an overlay cannot leave either describing the previous row.
+pub(crate) struct DisplaySourceVisualRowProgress<'a> {
+    row: DisplaySourceRowProgressState<'a>,
+    physical_line_tabs: Option<&'a mut DisplayPhysicalLineTabState>,
+    row_text_start_x: Option<&'a mut f32>,
+}
+
+impl<'a> DisplaySourceVisualRowProgress<'a> {
+    pub(crate) fn new(row: DisplaySourceRowProgressState<'a>) -> Self {
+        Self {
+            row,
+            physical_line_tabs: None,
+            row_text_start_x: None,
+        }
+    }
+
+    pub(crate) fn with_physical_line_tabs(
+        mut self,
+        tabs: &'a mut DisplayPhysicalLineTabState,
+    ) -> Self {
+        self.physical_line_tabs = Some(tabs);
+        self
+    }
+
+    pub(crate) fn with_row_text_start(mut self, x: &'a mut f32) -> Self {
+        self.row_text_start_x = Some(x);
+        self
+    }
+
+    pub(crate) fn reborrow(&mut self) -> DisplaySourceVisualRowProgress<'_> {
+        DisplaySourceVisualRowProgress {
+            row: self.row.reborrow(),
+            physical_line_tabs: self.physical_line_tabs.as_deref_mut(),
+            row_text_start_x: self.row_text_start_x.as_deref_mut(),
+        }
+    }
+
+    pub(crate) fn row_position(&self) -> DisplayRowPosition {
+        self.row.row_position().with_tab_coordinates(
+            self.physical_line_tabs
+                .as_deref()
+                .map_or_else(Default::default, |tabs| tabs.coordinates()),
+        )
+    }
+
+    pub(crate) fn x(&self) -> f32 {
+        self.row.x()
+    }
+    pub(crate) fn col(&self) -> usize {
+        self.row.col()
+    }
+    pub(crate) fn col_mut(&mut self) -> &mut usize {
+        self.row.col_mut()
+    }
+    pub(crate) fn apply_position(&mut self, position: DisplayRowPosition) {
+        self.row.apply_position(position);
+    }
+
+    pub(crate) fn has_source_content(&self, content_x: f32) -> bool {
+        self.x()
+            > self
+                .row_text_start_x
+                .as_deref()
+                .copied()
+                .unwrap_or(content_x)
+    }
+
+    pub(crate) fn record_row_text_start(&mut self) {
+        if let Some(start) = self.row_text_start_x.as_deref_mut() {
+            *start = self.row.x();
+        }
+    }
+
+    pub(crate) fn continue_after_visual_row(&mut self, content_x: f32) {
+        let width = (self.x() - content_x).max(0.0);
+        if let Some(tabs) = self.physical_line_tabs.as_deref_mut() {
+            tabs.continue_after_visual_row(width);
+        }
+    }
+
+    pub(crate) fn record_wrap_prefix_width(&mut self, width: f32) {
+        if let Some(tabs) = self.physical_line_tabs.as_deref_mut() {
+            tabs.record_wrap_prefix(width);
+        }
+    }
+
+    pub(crate) fn reset_physical_line_tabs(&mut self) {
+        if let Some(tabs) = self.physical_line_tabs.as_deref_mut() {
+            tabs.reset_for_physical_line();
         }
     }
 }

@@ -16,7 +16,8 @@ use crate::display_row::source_render::TextRowSourceRenderState;
 use crate::display_row::source_state::DisplayRowSourceState;
 use crate::display_row::walk_state::TextRowTransitionPrefixAction;
 use crate::display_source::{
-    DisplayItemSegmentSource, DisplaySpaceGeometry, LispStringSourceCursor, LispStringSourceOrigin,
+    DisplayItemSegmentSource, DisplaySpaceGeometry, LispStringPrefixProperties,
+    LispStringSourceCursor, LispStringSourceOrigin,
 };
 use crate::display_source_append_plan::NaturalDisplayRowAppendRenderPolicy;
 use crate::display_source_resolver::DisplayStringBaseFace;
@@ -476,7 +477,6 @@ impl DisplayRowPrefixRequest {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn source_for_value(
         self,
         value: Value,
@@ -624,6 +624,7 @@ pub(crate) struct BufferLinePrefixRenderRequest<'a> {
     fallback_metrics: DisplayRowFallbackMetrics,
     position: DisplayRowPosition,
     params: &'a WindowParams,
+    source_properties: LispStringPrefixProperties,
 }
 
 impl<'a> BufferLinePrefixRenderRequest<'a> {
@@ -647,7 +648,13 @@ impl<'a> BufferLinePrefixRenderRequest<'a> {
             fallback_metrics,
             position,
             params,
+            source_properties: LispStringPrefixProperties::default(),
         }
+    }
+
+    pub(crate) fn with_source_properties(mut self, properties: LispStringPrefixProperties) -> Self {
+        self.source_properties = properties;
+        self
     }
 
     pub(crate) fn render_requested_to_text_row_and_emit<
@@ -669,10 +676,26 @@ impl<'a> BufferLinePrefixRenderRequest<'a> {
         let text_props = RustTextPropAccess::new(buffer);
         let line_property = text_props.get_property(anchor_charpos, Value::symbol("line-prefix"));
         let wrap_property = text_props.get_property(anchor_charpos, Value::symbol("wrap-prefix"));
-        let source = request.source_from_values(
-            self.values.with_properties(line_property, wrap_property),
-            CharPos0::new(anchor_charpos as usize),
-        );
+        // GNU get_line_prefix_it_property checks the current string first,
+        // then the underlying buffer, falling back only for nil. Classify
+        // AFTER this selection: an invalid non-nil property must not reveal
+        // the buffer-local default underneath it.
+        let non_nil = |value: Option<Value>| value.filter(|value| !value.is_nil());
+        let property = match *request {
+            DisplayRowPrefixRequest::Line => {
+                non_nil(self.source_properties.line).or_else(|| non_nil(line_property))
+            }
+            DisplayRowPrefixRequest::Wrap => {
+                non_nil(self.source_properties.wrap).or_else(|| non_nil(wrap_property))
+            }
+            DisplayRowPrefixRequest::None => None,
+        };
+        let anchor = CharPos0::new(anchor_charpos as usize);
+        let source = if let Some(property) = property {
+            request.source_for_value(property, anchor)
+        } else {
+            request.source_from_values(self.values.with_properties(None, None), anchor)
+        };
         request.clear();
 
         let Some(prefix_source) = source else {
@@ -786,6 +809,12 @@ impl<'a> LispStringSourceRowAppendSession<'a> {
             .text_row_frame(self.append_surface, geometry, self.glyph_y_offset);
         self.source_session
             .render_to_text_row_and_emit(state, face_ids, frame, position)
+    }
+
+    pub(crate) fn pending_prefix_properties(&self) -> LispStringPrefixProperties {
+        self.source_session
+            .source
+            .prefix_properties_at(self.source_session.source_state.pending_string_position())
     }
 
     pub(crate) fn discard_pending_until_row_break(
