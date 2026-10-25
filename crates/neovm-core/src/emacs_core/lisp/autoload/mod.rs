@@ -357,6 +357,14 @@ pub(crate) fn is_autoload_value(val: &Value, mode: SymbolMode) -> bool {
             .is_some_and(|id| id == autoload_symbol_id())
 }
 
+/// The `autoload` symbol's tagged value bits: the bare-symbol encoding a JIT
+/// lowering compares a function cell's car against
+/// (`jit::compile::lowering::emit_inline_autoload_do_load`). Same cached id
+/// [`is_autoload_value`] uses, so the two cannot disagree.
+pub(crate) fn autoload_symbol_value_bits() -> i64 {
+    Value::from_sym_id(autoload_symbol_id()).bits() as i64
+}
+
 /// `(autoload-do-load FUNDEF &optional FUNNAME MACRO-ONLY)` — trigger autoload.
 /// If FUNDEF is an autoload form, load the file and return the new definition.
 /// Otherwise return FUNDEF unchanged.

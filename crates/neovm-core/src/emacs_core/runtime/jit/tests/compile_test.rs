@@ -9228,6 +9228,11 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    // The SHIM's protocol: the inline identity fast path is
+    // `autoload_do_load_sites_answer_non_autoload_inline`'s subject, and
+    // its default-on arm would answer the non-autoload FUNDEFs before the
+    // shim and hide what this test pins.
+    crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(false));
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context as *mut u8;
     let binding = ev
@@ -9369,6 +9374,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
         ),
         other => panic!("restored autoload-do-load: {other:?}"),
     }
+    crate::emacs_core::jit::compile::force_inline_predicates_for_test(None);
 }
 
 /// `recordp` / `symbol-with-pos-p` through `Op::Call` answer their armed hit
@@ -9534,6 +9540,171 @@ fn type_tag_predicate_sites_answer_inline() {
             NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits), expected, "{name} restored"),
             other => panic!("restored {name}: {other:?}"),
         }
+    }
+    crate::emacs_core::jit::compile::force_inline_predicates_for_test(None);
+}
+
+/// `autoload-do-load` through `Op::Call` answers its non-autoload identity
+/// inline (`lowering::emit_inline_autoload_do_load`): a FUNDEF that is not
+/// an `(autoload ...)` cons comes back as it is with no shim frame. An
+/// autoload object, and a cons whose car is a symbol-with-pos (whose
+/// classification `symbols-with-pos-enabled` decides at run time), bounces to
+/// the shim exactly as before. The same body is compiled under both inline
+/// modes.
+#[test]
+fn autoload_do_load_sites_answer_non_autoload_inline() {
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::intern::{SymId, intern};
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context as *mut u8;
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![SymId(1)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
+    f.constants = vec![Value::symbol("autoload-do-load")].into();
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    let outcome = |r: Result<Value, crate::emacs_core::error::Flow>| -> String {
+        match r.kinded() {
+            Ok(v) => crate::emacs_core::print::print_value(&v),
+            Err(FlowKind::Signal(sig)) => format!(
+                "signal {} {:?}",
+                sig.symbol_name(),
+                sig.data
+                    .iter()
+                    .map(crate::emacs_core::print::print_value)
+                    .collect::<Vec<_>>()
+            ),
+            Err(other) => format!("{other:?}"),
+        }
+    };
+    let pool = ev
+        .eval_str(
+            "(list (symbol-function 'car) (lambda (x) x) nil t 'sym 5 \"s\"
+                    (cons 'lambda '(x)) (cons 'foo 1) (cons 5 1) (cons (vector 1) 2)
+                    (list 'autoload \"jit-adl-inline-missing-file\" nil nil nil))",
+        )
+        .expect("pool");
+    crate::emacs_core::eval::push_scratch_gc_root(pool);
+    let items = crate::emacs_core::value::list_to_vec(&pool).expect("list");
+    for inline in [true, false] {
+        crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(inline));
+        let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+        let _ = ev.debug_on_next_call_is_armed();
+        #[cfg(debug_assertions)]
+        let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
+        let mut autoloads = 0u64;
+        for &item in &items {
+            let want = outcome(crate::emacs_core::autoload::builtin_autoload_do_load_3(
+                &mut ev,
+                item,
+                Value::NIL,
+                Value::NIL,
+            ));
+            let ctx = &mut ev as *mut Context as *mut u8;
+            let got = match leaf.call(ctx, &[item]) {
+                NativeRun::Ok(bits) => {
+                    crate::emacs_core::print::print_value(&Value::from_bits(bits))
+                }
+                NativeRun::Signal => outcome(Err(take_pending_flow().expect("stashed flow"))),
+                other => panic!(
+                    "(autoload-do-load {}) inline={inline}: {other:?}",
+                    crate::emacs_core::print::print_value(&item)
+                ),
+            };
+            assert_eq!(
+                got,
+                want,
+                "(autoload-do-load {}) inline={inline}",
+                crate::emacs_core::print::print_value(&item)
+            );
+            if crate::emacs_core::autoload::is_autoload_value(&item, ev.symbol_mode()) {
+                autoloads += 1;
+            }
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            SUBR_SPEC_COUNT.load(Ordering::Relaxed) - shim0,
+            if inline {
+                autoloads
+            } else {
+                items.len() as u64
+            },
+            "inline={inline}: only an autoload object reaches the shim when the inline path is on"
+        );
+        let _ = autoloads;
+    }
+    // `symbols-with-pos-enabled` is a runtime Lisp variable: a cons whose car
+    // is a symbol-with-pos is mode-dependent, so the inline path bounces it
+    // and the shim decides. A symbol-with-pos of ANOTHER symbol is not an
+    // autoload object; of `autoload` it is, and the load fails as it does
+    // through the builtin.
+    crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(true));
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    let _ = ev.debug_on_next_call_is_armed();
+    ev.eval_str("(setq symbols-with-pos-enabled t)")
+        .expect("enable");
+    let swp_other = ev
+        .eval_str("(cons (position-symbol 'jit-adl-other 1) 2)")
+        .expect("swp car");
+    let swp_autoload = ev
+        .eval_str(
+            "(list (position-symbol 'autoload 1) \"jit-adl-inline-missing-file\" nil nil nil)",
+        )
+        .expect("autoload swp car");
+    for &item in &[swp_other, swp_autoload] {
+        let want = outcome(crate::emacs_core::autoload::builtin_autoload_do_load_3(
+            &mut ev,
+            item,
+            Value::NIL,
+            Value::NIL,
+        ));
+        #[cfg(debug_assertions)]
+        let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
+        let ctx = &mut ev as *mut Context as *mut u8;
+        let got = match leaf.call(ctx, &[item]) {
+            NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            NativeRun::Signal => outcome(Err(take_pending_flow().expect("stashed flow"))),
+            other => panic!("(autoload-do-load swp): {other:?}"),
+        };
+        assert_eq!(got, want, "symbol-with-pos car under Positioned mode");
+        // Conservative: both shapes take the shim even with the inline path
+        // armed (the car's classification depends on the mode).
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            SUBR_SPEC_COUNT.load(Ordering::Relaxed) - shim0,
+            1,
+            "a symbol-with-pos car bounces to the shim"
+        );
+    }
+    ev.eval_str("(setq symbols-with-pos-enabled nil)")
+        .expect("disable");
+    // A redefinition is honoured: the site re-validates and takes the
+    // generic call.
+    let original = ev
+        .obarray
+        .symbol_function_id(intern("autoload-do-load"))
+        .expect("bound");
+    ev.eval_str("(fset 'autoload-do-load (lambda (&rest _) 'redefined))")
+        .expect("fset");
+    match leaf.call(ctx, &[Value::make_int(1)]) {
+        NativeRun::Ok(bits) => assert_eq!(
+            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            "redefined"
+        ),
+        other => panic!("redefined autoload-do-load: {other:?}"),
+    }
+    ev.obarray
+        .set_symbol_function_id(intern("autoload-do-load"), original);
+    match leaf.call(ctx, &[Value::make_int(1)]) {
+        NativeRun::Ok(bits) => assert_eq!(
+            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            "1"
+        ),
+        other => panic!("restored autoload-do-load: {other:?}"),
     }
     crate::emacs_core::jit::compile::force_inline_predicates_for_test(None);
 }

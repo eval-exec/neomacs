@@ -1767,9 +1767,9 @@ fn emit_inline_predicate_guards(fb: &mut FunctionBuilder, rt: &RtCtx, slot: Clif
 fn inline_pred_kind_on(kind: SpecCalleeKind) -> bool {
     match kind {
         SpecCalleeKind::PredTypeOf | SpecCalleeKind::PredClTypeOf => jit_inline_type_of_on(),
-        SpecCalleeKind::PredSymbolWithPos | SpecCalleeKind::PredRecordp => {
-            jit_inline_predicates_on()
-        }
+        SpecCalleeKind::PredSymbolWithPos
+        | SpecCalleeKind::PredRecordp
+        | SpecCalleeKind::PredAutoloadDoLoad => jit_inline_predicates_on(),
         _ => false,
     }
 }
@@ -1829,6 +1829,80 @@ fn emit_inline_type_tag_predicate(
     fb.seal_block(nil_block);
     let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
     fb.def_var(res, nil);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(miss);
+    Some((merge, res))
+}
+
+/// Lower `autoload-do-load`'s identity fast path at an armed JIT site: a
+/// FUNDEF that is not an `(autoload ...)` cons comes back as it is, with no
+/// shim frame and no generic dispatch. An autoload object, and any car whose
+/// classification depends on `symbols-with-pos-enabled` (a symbol-with-pos),
+/// bounces to the shim unchanged — from there the existing
+/// `STATUS_NEED_GENERIC` path performs the load with its frame and roots.
+///
+/// The mode-independent test: a non-cons is not an autoload object in either
+/// mode; a cons whose car is a bare symbol other than `autoload` is not one
+/// either; a bare `autoload` car is one in both modes. Only a symbol-with-pos
+/// car is mode-dependent (`SymbolMode::Positioned` unwraps it), so it is the
+/// one cons shape that takes the shim.
+///
+/// OBSERVATION: the cons car is a mutable word, read here without the
+/// `cons_car` observe gate like every other JIT inline word read — the
+/// shipped `Op::Car`/`Op::Cdr` lowering (`lower_car_cdr`) and `aref` slot
+/// reads take the same `MemFlagsData::trusted()` load. The argument keeps
+/// the cons live and the path runs no safepoint, so the word cannot move
+/// under the read.
+fn emit_inline_autoload_do_load(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    slot: ClifValue,
+    arg: ClifValue,
+) -> Option<(Block, Variable)> {
+    use crate::tagged::header::{ConsCell, VecLikeHeader};
+    let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
+    let car_off = core::mem::offset_of!(ConsCell, car);
+    let autoload_bits = crate::emacs_core::autoload::autoload_symbol_value_bits();
+    let flags = MemFlagsData::trusted();
+    let miss = emit_inline_predicate_guards(fb, rt, slot);
+    let merge = fb.create_block();
+    let res = fb.declare_var(types::I64);
+    let car_block = fb.create_block();
+    let answer = fb.create_block();
+    let tag = band_imm_p(fb, arg, TAG_MASK as i64);
+    let is_cons = icmp_imm_p(fb, IntCC::Equal, tag, TAG_CONS as i64);
+    fb.ins().brif(is_cons, car_block, &[], answer, &[]);
+    // The car decides: a bare `autoload` is an autoload object, a bare other
+    // symbol is not, and a veclike may be a symbol-with-pos (mode-dependent).
+    fb.switch_to_block(car_block);
+    fb.seal_block(car_block);
+    let object = band_imm_p(fb, arg, !(TAG_MASK as i64));
+    let car = fb.ins().load(types::I64, flags, object, car_off as i32);
+    let car_object = fb.create_block();
+    let car_plain = fb.create_block();
+    let car_veclike = has_veclike_tag(fb, car);
+    fb.ins().brif(car_veclike, car_object, &[], car_plain, &[]);
+    fb.switch_to_block(car_object);
+    fb.seal_block(car_object);
+    let car_ptr = band_imm_p(fb, car, !(TAG_MASK as i64));
+    let car_type = fb.ins().uload8(types::I64, flags, car_ptr, type_off as i32);
+    let car_with_pos = icmp_imm_p(
+        fb,
+        IntCC::Equal,
+        car_type,
+        crate::tagged::header::VecLikeType::SymbolWithPos as u8 as i64,
+    );
+    fb.ins().brif(car_with_pos, miss, &[], answer, &[]);
+    fb.switch_to_block(car_plain);
+    fb.seal_block(car_plain);
+    let autoload_car = icmp_imm_p(fb, IntCC::Equal, car, autoload_bits);
+    fb.ins().brif(autoload_car, miss, &[], answer, &[]);
+    // `answer`'s and `miss`'s last edges exist now.
+    fb.seal_block(answer);
+    fb.seal_block(miss);
+    // The answer is the argument itself.
+    fb.switch_to_block(answer);
+    fb.def_var(res, arg);
     fb.ins().jump(merge, &[]);
     fb.switch_to_block(miss);
     Some((merge, res))
@@ -7790,9 +7864,10 @@ fn lower_simple_op_arms(
             // A JIT predicate site answers its armed hit inline and leaves every
             // other case to the shim below: `type-of`/`cl-type-of` a record
             // (`emit_inline_record_type_of`), `recordp`/`symbol-with-pos-p` a
-            // veclike type tag (`emit_inline_type_tag_predicate`). The inline
-            // path stores nothing, so the merge meets the shim path's store
-            // record with this one.
+            // veclike type tag (`emit_inline_type_tag_predicate`) and
+            // `autoload-do-load` a non-autoload FUNDEF
+            // (`emit_inline_autoload_do_load`). The inline path stores nothing,
+            // so the merge meets the shim path's store record with this one.
             let inline_pred = match (spec, &reg_args) {
                 (Some((_, _, slot_ptr, _, kind)), Some(args))
                     if !aot && !jit_force_slow_spec() && inline_pred_kind_on(kind) =>
@@ -7817,6 +7892,9 @@ fn lower_simple_op_arms(
                             args[0],
                             crate::tagged::header::VecLikeType::Record as u8,
                         ),
+                        SpecCalleeKind::PredAutoloadDoLoad => {
+                            emit_inline_autoload_do_load(fb, rt, slot_v, args[0])
+                        }
                         _ => None,
                     };
                     emitted.map(|(merge, res)| (merge, res, carry))
