@@ -406,6 +406,7 @@ fn p3sym_c4_projected_multi_owner_function_handoff_gc() {
 
 #[test]
 fn p3sym_c4_journal_only_definition_gc() {
+    let _probes = a8_probes::suppress();
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::Projected,
@@ -460,6 +461,7 @@ fn p3sym_c4_journal_only_definition_gc() {
 }
 #[test]
 fn p3sym_c4_activation_gc_small() {
+    let _probes = a8_probes::suppress();
     let ops = vec![
         function(FunctionOp::Function { symbol: 0, dst: 2 }),
         Op::Safepoint,
