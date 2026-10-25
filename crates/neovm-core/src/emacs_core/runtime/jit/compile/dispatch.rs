@@ -2203,8 +2203,17 @@ fn screen_fixed_builtin(target: Value, nargs: usize) -> Option<FixedBuiltinEntry
 /// `entry` must be one [`screen_fixed_builtin`] produced for this `nargs`
 /// (the armed fast path's cached form comes with the same proof, see
 /// `SpecSlot::cached_subr_entry`).
+///
+/// `#[inline(always)]` — measured, not assumed: as an out-of-line 0x338-byte
+/// helper it spent its own 6-push prologue and 6-pop epilogue (~14 Ir) on
+/// every armed builtin call (1.14M per elb-bytecomp run). The callers already
+/// hold every value the body needs (Context, the args slot, nargs, the
+/// patched frame index), and the body's own callee-saved set is a subset of
+/// the shim's, so the inline form only adds a class-dispatch jump table and
+/// the builtin call site to the caller. See the turn-2 report for the
+/// measured hit-path Ir and the shim's census size.
 #[cfg(feature = "jit")]
-#[inline]
+#[inline(always)]
 fn run_screened_fixed_builtin(
     ctx: &mut Context,
     sym_id: SymId,
