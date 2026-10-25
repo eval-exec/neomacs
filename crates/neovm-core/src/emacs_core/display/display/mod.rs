@@ -2022,6 +2022,48 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
     .run(ctx)
 }
 
+/// Read one key sequence for the modal popup the way GNU's
+/// `read_menu_command` does (src/keyboard.c:1690-1711): through the ordinary
+/// `read_key_sequence`, seeing C-g as the ordinary quit-character KEY event.
+///
+/// GNU's `read_char` turns a pending C-g into that key and
+/// `read_key_sequence` clears `Vquit_flag` once it consumes it
+/// (src/keyboard.c:2810-2812, 11349), so the menu sees the `keyboard-quit`
+/// binding -- remapped to `tty-menu-exit` by `tty-menu-navigation-map`
+/// (lisp/menu-bar.el) -- and no quit signal is thrown.  The command loop gets
+/// the same shape by binding `inhibit-quit` around its own read
+/// (runtime/eval/command_loop.rs).  Neomacs's frontend raises `quit_requested`
+/// eagerly in another thread, so without that binding the safe-point poll
+/// throws out of the modal read BEFORE the C-g key is dequeued; the popup then
+/// exits with the key still queued, the command loop reads it next as
+/// `keyboard-quit`, and its `cmd_error` echoes "Quit".
+fn read_popup_menu_key_sequence(ctx: &mut Context) -> Result<(Vec<Value>, Value), Flow> {
+    let count = ctx.specpdl.len();
+    ctx.try_specbind_or_unwind_to(
+        count,
+        crate::emacs_core::intern::intern("inhibit-quit"),
+        Value::T,
+    )?;
+    let read = ctx.read_key_sequence();
+    // The read result carries Lisp values; keep them in the VM root window
+    // while `unbind_to` can run an unlet/debug-on-exit watcher, exactly as the
+    // command loop's own read does (runtime/eval/command_loop.rs:774-790).
+    let root_scope = ctx.save_vm_roots();
+    if let Ok((keys, binding)) = &read {
+        for key in keys.iter().copied() {
+            ctx.push_vm_frame_root(key);
+        }
+        ctx.push_vm_frame_root(*binding);
+    }
+    let unwind = match read.as_ref() {
+        Ok(_) => ctx.unbind_to_with_result(count, Ok(Value::NIL)),
+        Err(flow) => ctx.unbind_to_with_result(count, Err(flow.clone())),
+    };
+    ctx.restore_vm_roots(root_scope);
+    unwind?;
+    read
+}
+
 #[allow(clippy::too_many_arguments)] // popup-loop inputs mirror the display-host boundary
 fn x_popup_menu_interactive_loop(
     ctx: &mut Context,
@@ -2047,7 +2089,7 @@ fn x_popup_menu_interactive_loop(
         // GNU `read_menu_command` calls the ordinary `read_key_sequence`:
         // input clears the previous logical echo message even though the TTY
         // menu keeps ordinary redisplay inhibited while it owns the screen.
-        let (keys, binding) = ctx.read_key_sequence()?;
+        let (keys, binding) = read_popup_menu_key_sequence(ctx)?;
         if keys
             .first()
             .is_some_and(|key| key.as_symbol_name(symbol_mode) == Some("menu-bar"))
@@ -2142,6 +2184,12 @@ fn x_popup_menu_interactive_loop(
                 | TtyMenuNavigationCommand::KeyboardQuit
                 | TtyMenuNavigationCommand::KeyboardEscapeQuit,
             ) => {
+                // GNU `read_menu_input` maps all three to MI_QUIT_MENU, and
+                // `tty_menu_activate` then removes the last help-echo "so
+                // that it doesn't re-appear after Quit" before returning
+                // TTYM_NO_SELECT (src/term.c:3639-3643). The menu exits
+                // without a quit signal reaching the command loop.
+                help.select(None).publish(ctx, *selected)?;
                 return Ok(Value::NIL);
             }
             _ => {}
