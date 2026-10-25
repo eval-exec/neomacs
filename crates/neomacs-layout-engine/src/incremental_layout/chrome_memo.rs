@@ -34,11 +34,13 @@
 //!   logged and counted, and the rendered row stands.
 
 mod source_projection;
+mod value_comparison;
 use source_projection::ChromeSourceProjection;
 pub(crate) use source_projection::{
     ChromeSourceBindings, ChromeSourceProjectionMode, ChromeSourceSpan,
     chrome_source_projection_mode,
 };
+use value_comparison::{CapturedMemoKey, MemoKeyScope};
 
 use std::sync::Arc;
 
@@ -203,19 +205,22 @@ impl ChromeRowFingerprint {
                 )
             }
             ChromeSourceProjectionMode::Off => {
-                let mut sources: Vec<Value> = Vec::new();
+                let keys = MemoKeyScope::for_formatted(formatted);
+                let root_key = keys.capture(root);
+                let mut sources: Vec<CapturedMemoKey<'_>> = Vec::new();
                 let spans = formatted
                     .source_spans()
                     .iter()
                     .map(|span| {
-                        let source = span.source();
-                        let source_index = match sources.iter().position(|seen| *seen == source) {
-                            Some(index) => index,
-                            None => {
-                                sources.push(source);
-                                sources.len() - 1
-                            }
-                        };
+                        let source = keys.capture(span.source());
+                        let source_index =
+                            match sources.iter().position(|seen| seen.equivalent(&source)) {
+                                Some(index) => index,
+                                None => {
+                                    sources.push(source);
+                                    sources.len() - 1
+                                }
+                            };
                         ChromeSpanShape {
                             output_start: span.output_start(),
                             output_end: span.output_end(),
@@ -225,7 +230,9 @@ impl ChromeRowFingerprint {
                     })
                     .collect();
                 // Whether a span's source IS the root string decides its string id.
-                let root_index = sources.iter().position(|source| *source == root);
+                let root_index = sources
+                    .iter()
+                    .position(|source| source.equivalent(&root_key));
                 (spans, root_index, None)
             }
         };
@@ -436,16 +443,17 @@ impl PlainEncoder {
         if intervals.is_empty() {
             return Ok(());
         }
-        let display = Value::symbol("display");
+        let keys = MemoKeyScope::for_string(string);
+        let display = keys.capture(Value::symbol("display"));
         let name_only = [
-            Value::symbol("help-echo"),
-            Value::symbol("local-map"),
-            Value::symbol("keymap"),
+            keys.capture(Value::symbol("help-echo")),
+            keys.capture(Value::symbol("local-map")),
+            keys.capture(Value::symbol("keymap")),
         ];
         let runs = intervals.object_interval_plist_runs_for_char_len(
             neovm_core::buffer::CharLen::new(string.schars()),
         );
-        let mut properties: Vec<(Value, Value)> = Vec::new();
+        let mut properties: Vec<(CapturedMemoKey<'_>, Value)> = Vec::new();
         for run in runs {
             let mut plist = run.plist();
             if plist.is_nil() {
@@ -468,7 +476,8 @@ impl PlainEncoder {
                 } else {
                     Value::NIL
                 };
-                if !properties.iter().any(|(seen, _)| *seen == name) {
+                let name = keys.capture(name);
+                if !properties.iter().any(|(seen, _)| seen.equivalent(&name)) {
                     properties.push((name, value));
                 }
                 plist = if rest.is_cons() {
@@ -477,19 +486,22 @@ impl PlainEncoder {
                     Value::NIL
                 };
             }
-            properties.sort_by_key(|(name, _)| name.bits());
-            for &(name, value) in &properties {
-                self.value(name, depth + 1)?;
-                if scope == PropertyScope::Root {
-                    if name == display && !value.is_nil() {
-                        return Err(NotPlain);
+            properties.sort_by_key(|(name, _)| name.original().bits());
+            for (name, value) in &properties {
+                self.value(name.original(), depth + 1)?;
+                match scope {
+                    PropertyScope::Root => {
+                        if name.equivalent(&display) && !value.is_nil() {
+                            return Err(NotPlain);
+                        }
+                        if name_only.iter().any(|key| key.equivalent(name)) {
+                            self.out.push(tag::NAME_ONLY);
+                            continue;
+                        }
                     }
-                    if name_only.contains(&name) {
-                        self.out.push(tag::NAME_ONLY);
-                        continue;
-                    }
+                    PropertyScope::Nested => {}
                 }
-                self.value(value, depth + 1)?;
+                self.value(*value, depth + 1)?;
             }
         }
         Ok(())

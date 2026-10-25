@@ -85,7 +85,20 @@ fn legacy(
 }
 
 fn compare(root: Value, spans: &[InputSpan]) -> ChromeSourceProjection {
-    let actual = ChromeSourceProjection::classify(root, spans.iter().copied());
+    let owner = [root];
+    let scope = MemoKeyScope::for_values(&owner);
+    let actual = ChromeSourceProjection::classify(
+        &scope,
+        root,
+        spans
+            .iter()
+            .map(|&(source, start, end, source_start)| ProjectionSourceSpan {
+                source,
+                output_start: CharPos0::new(start),
+                output_end: CharPos0::new(end),
+                source_start: CharPos0::new(source_start),
+            }),
+    );
     let expected = legacy(root, spans);
     assert_eq!(&*actual.fingerprint_spans, expected.0);
     assert_eq!(actual.root_index, expected.1);
