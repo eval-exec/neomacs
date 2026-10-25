@@ -583,6 +583,11 @@ impl TuiSession {
         // Keep the GNU oracle focused on TUI behavior.  On NixOS the async
         // native compiler can fail after startup and pop *Warnings*, which
         // pollutes the rendered screen unrelated to the command under test.
+        // The suite's hardcoded face colours are truecolor RGB values; without
+        // COLORTERM GNU reports 256 palette cells (display-color-cells 256) and
+        // downsamples every #RRGGBB face to an index (measured: Idx(211) for
+        // Rgb(238,121,159)). GitHub runners export no COLORTERM, so pin the
+        // terminal both editors see, the same way package_scenario does.
         let launch = TuiLaunch::new("emacs")
             .args([
                 "-nw",
@@ -591,6 +596,7 @@ impl TuiSession {
                 QUIET_NATIVE_COMP_EVAL,
                 QUIET_MX_SUGGESTION_EVAL,
             ])
+            .env("COLORTERM", "truecolor")
             .args(extra_args.split_whitespace());
         Self::spawn_launch_with_erase_char(launch, "GNU", erase)
     }
@@ -615,6 +621,7 @@ impl TuiSession {
         );
         let launch = TuiLaunch::new(bin.as_os_str())
             .args(["-nw", "-Q", QUIET_MX_SUGGESTION_EVAL])
+            .env("COLORTERM", "truecolor")
             .args(extra_args.split_whitespace());
         Self::spawn_launch_with_erase_char(launch, "NEO", erase)
     }
