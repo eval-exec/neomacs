@@ -8536,13 +8536,16 @@ fn set_visited_file_name_elisp_functions_match_gnu_semantics() {
     );
 
     let ready = |grid: &[String]| {
-        let recent = grid
+        // The oracle answer is one long `%S` message that the echo area wraps
+        // at the terminal width, so a token can be split across two rows.
+        // vt100's row contents mark a wrapped row with a trailing backslash;
+        // drop that marker and join without separators, since the wrap itself
+        // inserts no character. The PID-tagged spellings below cannot occur in
+        // stale output.
+        let recent: String = grid
             .iter()
-            .rev()
-            .take(4)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n");
+            .map(|row| row.strip_suffix('\\').unwrap_or(row))
+            .collect();
         recent.contains("visfile:")
             && recent.contains(r#"(\"neo-vis\" nil nil"#)
             && recent.contains(&format!(r#"(\"{basename}\""#))
