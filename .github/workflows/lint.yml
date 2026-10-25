@@ -167,3 +167,25 @@ jobs:
           command: check
           arguments: --all-features
           command-arguments: --hide-inclusion-graph
+
+  test-target-shape:
+    name: one integration test binary per crate
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - *checkout
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+          cache-key: ci-test-target-shape
+
+      # Each integration test binary statically links the crate's dependency
+      # closure, and nextest isolates tests by process at run time, so extra
+      # binaries only add link work. See crates/neomacs-tui-tests/tests/tui.rs.
+      - name: Check integration test target count
+        run: >-
+          cargo metadata --no-deps --format-version 1
+          | python3 -I scripts/ci/check-test-targets.py
