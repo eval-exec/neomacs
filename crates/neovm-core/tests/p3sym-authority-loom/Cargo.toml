@@ -43,3 +43,7 @@ path = "tests/functions.rs"
 [[test]]
 name = "intern"
 path = "tests/intern.rs"
+
+[[test]]
+name = "combined"
+path = "tests/combined.rs"

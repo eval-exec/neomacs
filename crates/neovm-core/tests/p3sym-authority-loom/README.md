@@ -1,5 +1,42 @@
 # Proof 3 symbol authority models — C1
 
+## C6 preparation extension
+
+`tests/combined.rs` adds 15 specification cases (nine positive, six negative)
+on stacked C5 tip `7d1f1a21eb`: six stopped epochs transfer one immutable
+function/name graph between owner homes, real-role global/projection cells,
+a function cell, a selected old activation and the exact-name registry index.
+Later full census permits old-definition reclamation. A separate unscripted
+ACK case explores root-image publication and release-before-ACK; stale epochs
+and a held lease cannot authorize tracing. Existing authority/support code is
+reused, with no engine dependency or helper fork. A refused acquisition is
+handled explicitly; the scripted phase actions have no competing lease.
+
+The full crate now defines **77 cases** and **25 intended witnesses**. Run all
+cases at preemption bounds 2 and 3 using the existing entered/completed receipt
+accounting. These are expected counts before C6 validation, not a qualification
+result. Retained C1–C5 receipt revisions remain unchanged.
+
+New exact witness headings:
+
+- `C6 second stop omitted live global reseeding`
+- `C6 stop omitted canonical projection backing`
+- `C6 replacement lost the active old definition`
+- `C6 stop omitted the exact registry name root`
+- `C6 ACK preceded publication of its owner root image`
+- `C6 keeper traced while a symbol lease was held`
+
+Generation bits and sweep masks are finite specifications. They do **not**
+implement a collector, all-owner young-log capture, remsets or real minor GC.
+Omission controls inspect copied root censuses, then complete every handoff
+and join before emitting the named witness; they do not deliberately sweep a
+native heap while omitting required roots. Native combined executor, actual
+GEN0/GEN1 collections and eventual reclamation, GNU twins, keeper sealing,
+Miri/TSan, assertion-enabled families, scaling diagnostics, census and board
+remain separate C6 obligations. The running JIT/spine-lifetime gap remains a
+later N-mutator JIT obligation because production JIT does not run in this era.
+
+
 ## C4 preparation extension
 
 `tests/functions.rs` adds ten cases (seven positive, three negative) on the
