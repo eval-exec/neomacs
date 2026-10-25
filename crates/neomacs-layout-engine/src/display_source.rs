@@ -1,3 +1,7 @@
+//! String-source policy: `NEOMACS_LISP_STRING_RUN_TEXT=decode` retains the
+//! scalar materializer; unset or `bulk` copies validated ordinary UTF-8 runs.
+//! The selector is native immutable process configuration, read once.
+
 use crate::display_item::{
     BufferDisplayReplacementSource, DisplayGlyphless, DisplayItem, DisplayItemKind,
     DisplayItemLayout, DisplayLength, DisplayLineHeightPolicy, DisplayLineSpacingPolicy,
@@ -27,7 +31,7 @@ use crate::unicode::{EmacsTextStorage, decode_emacs_char, decode_utf8};
 use neomacs_display_protocol::face::BoxVerticalEdges;
 use neomacs_display_protocol::types::FaceId;
 use neovm_core::buffer::{
-    BufferId, CharLen, CharPos0, EmacsBytePos, text_props::TextPropertyTable,
+    BufferId, CharLen, CharPos0, CharRange, EmacsBytePos, text_props::TextPropertyTable,
 };
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::composite::composition_display_text_for_property;
@@ -2912,6 +2916,45 @@ struct LispStringResolvedSpan {
     item_layout: DisplayItemLayout,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LispStringRunTextPolicy {
+    Decode,
+    ValidatedBytes,
+}
+
+impl LispStringRunTextPolicy {
+    fn selected() -> Self {
+        static POLICY: std::sync::OnceLock<LispStringRunTextPolicy> = std::sync::OnceLock::new();
+        *POLICY.get_or_init(|| {
+            match std::env::var("NEOMACS_LISP_STRING_RUN_TEXT")
+                .ok()
+                .as_deref()
+            {
+                Some("decode" | "off" | "0") => Self::Decode,
+                _ => Self::ValidatedBytes,
+            }
+        })
+    }
+}
+
+/// A synchronous string-frame scan's result. It owns native text only, so it
+/// may cross threads without retaining a Lisp borrow or mutator-local state.
+#[derive(Debug)]
+struct LispStringOrdinaryRun {
+    end: CharPos0,
+    text: String,
+}
+
+static_assertions::assert_impl_all!(LispStringOrdinaryRun: Send, Sync);
+
+/// Only the scanner can certify an ordinary range. The legacy forced-one
+/// extent is distinct: UTF-8 validity alone does not make a control printable.
+#[derive(Clone, Copy, Debug)]
+enum LispStringRunExtent {
+    Ordinary(CharRange),
+    Legacy(CharRange),
+}
+
 pub(crate) struct LispStringSourceStack {
     frames: Vec<LispStringSourceFrame>,
     next_source_id: u64,
@@ -3458,13 +3501,18 @@ impl LispStringSourceFrame {
             .next_automatic_composition_start(start)
             .unwrap_or(property_end)
             .min(property_end);
-        let end = self.next_text_run_end(start, text_end, tty_glyphless_char_display);
+        let run = self.ordinary_text_run(
+            CharRange::new(CharPos0::new(start), CharPos0::new(text_end)),
+            tty_glyphless_char_display,
+            LispStringRunTextPolicy::selected(),
+        );
+        let end = run.end.get();
         self.char_index = end;
         LispStringResolvedAction::Emit(
             DisplayItem::new(
                 self.span(start, end),
                 face,
-                DisplayItemKind::TextRun(DisplayTextRun::independent(self.text_slice(start, end))),
+                DisplayItemKind::TextRun(DisplayTextRun::independent(run.text)),
             )
             .with_layout(item_layout)
             .with_pointer_appearance(pointer_appearance)
@@ -3561,12 +3609,14 @@ impl LispStringSourceFrame {
             .min(self.char_count())
     }
 
-    fn next_text_run_end(
+    fn ordinary_text_run(
         &self,
-        start: usize,
-        limit: usize,
+        bounds: CharRange,
         tty_glyphless_char_display: TtyGlyphlessCharDisplay,
-    ) -> usize {
+        policy: LispStringRunTextPolicy,
+    ) -> LispStringOrdinaryRun {
+        let start = bounds.start().get();
+        let limit = bounds.end().get();
         let mut end = start;
         while end < limit {
             let Some(ch) = self.char_at(end) else {
@@ -3581,7 +3631,36 @@ impl LispStringSourceFrame {
             }
             end += 1;
         }
-        end.max(start + 1).min(limit)
+        let extent = if end > start {
+            LispStringRunExtent::Ordinary(CharRange::new(bounds.start(), CharPos0::new(end)))
+        } else {
+            LispStringRunExtent::Legacy(CharRange::new(
+                bounds.start(),
+                CharPos0::new(end.max(start + 1).min(limit)),
+            ))
+        };
+        let (range, copied) = match extent {
+            LispStringRunExtent::Ordinary(range) => {
+                let copied = match policy {
+                    LispStringRunTextPolicy::Decode => None,
+                    LispStringRunTextPolicy::ValidatedBytes => self
+                        .text
+                        .get(self.byte_offset(start)..self.byte_offset(end))
+                        .filter(|bytes| match self.storage {
+                            EmacsTextStorage::Unibyte => bytes.is_ascii(),
+                            EmacsTextStorage::Multibyte => true,
+                        })
+                        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                        .map(str::to_owned),
+                };
+                (range, copied)
+            }
+            LispStringRunExtent::Legacy(range) => (range, None),
+        };
+        LispStringOrdinaryRun {
+            end: range.end(),
+            text: copied.unwrap_or_else(|| self.text_slice(start, range.end().get())),
+        }
     }
 
     fn display_prop_at(&self, char_index: usize) -> Option<Value> {
@@ -4058,3 +4137,7 @@ fn is_control_char(ch: char) -> bool {
 #[cfg(test)]
 #[path = "display_source/tests/display_source_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "display_source/tests/ordinary_run_text_test.rs"]
+mod ordinary_run_text_tests;
