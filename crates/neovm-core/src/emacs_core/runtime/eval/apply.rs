@@ -1868,7 +1868,23 @@ impl Context {
     /// bit set, or a frame promoted to the owned shape), or an entry a callee
     /// left behind -- keeps the general path, which is the only place
     /// `run_debug_on_exit` runs.
-    #[inline]
+    ///
+    /// The tag test is NOT a mere debugging assertion, so it cannot move
+    /// under `debug_assertions`: `backtrace-debug` (a Lisp-reachable builtin,
+    /// `src/eval.c:4025`) can flag or promote the frame the shim pushed while
+    /// the callee runs, and GNU's exit-debugger check would then fire on this
+    /// pop (`bytecode.c:826-829`); an entry a callee left standing has the
+    /// same status.  What the release body does is already GNU's shape: one
+    /// length compare, one unsigned range compare over the two flagless
+    /// shapes (`Backtrace2`/`BacktraceNative`, consecutive discriminants),
+    /// the flag byte test only for `Backtrace1`, and the length store that is
+    /// `specpdl_ptr--`.
+    ///
+    /// `#[inline(always)]`: the two call sites that pay it (the spec shim
+    /// 2.27M times and the generic call shim 0.21M times per elb-bytecomp run)
+    /// were spending ~5 Ir of call/argument setup around a 12-instruction
+    /// body, and the body needs nothing the callers do not already hold.
+    #[inline(always)]
     pub(crate) fn pop_native_backtrace_frame(&mut self, count: usize) -> bool {
         if self.specpdl.len() != count + 1 {
             return false;
