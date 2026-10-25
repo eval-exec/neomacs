@@ -2705,12 +2705,12 @@ mod memory_inventory;
 pub mod memory_telemetry;
 
 mod birth_logs;
+mod concurrent;
 mod generational;
 mod old_sweep;
 mod pacing;
-
-mod concurrent;
 pub use concurrent::MarkFinishError;
+pub(crate) use concurrent::MarkPhase;
 mod heap_identity;
 pub use heap_identity::HeapIdentity;
 mod mark_word;
@@ -2773,7 +2773,7 @@ pub(crate) use aliasable::AliasableBox;
 #[path = "gc/tests/test_heap.rs"]
 mod test_heap;
 #[cfg(test)]
-pub(crate) use test_heap::TestHeap;
+pub(crate) use test_heap::{SyntheticConcurrentBarrier, TestHeap};
 
 mod arena_pages;
 pub(crate) use arena_pages::*;

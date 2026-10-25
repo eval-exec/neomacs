@@ -2,6 +2,7 @@
 #![deny(clippy::wildcard_enum_match_arm)]
 use super::*;
 use crate::emacs_core::builtins::higher_order::{NativeSortCall, SortPredicate};
+use crate::tagged::gc::MarkPhase;
 use crate::tagged::header::{SubrFn2, SubrFnManySlice};
 
 #[cfg(test)]
@@ -272,9 +273,13 @@ impl Context {
         // values are still buffered and before deciding whether to publish.
         // Inhibited GC cannot run a hook; all other unusual GC states defer.
         if self.gc_inhibit_depth == 0
-            && (self.tagged_heap.sweep_in_progress()
-                || self.tagged_heap.mark_in_progress()
-                || self.gc_pending
+            && (match self.tagged_heap.mark_phase() {
+                MarkPhase::Idle => false,
+                MarkPhase::ConcurrentRunning
+                | MarkPhase::StoppedMarking
+                | MarkPhase::PublishingSweep
+                | MarkPhase::Sweeping => true,
+            } || self.gc_pending
                 || self.gc_stress
                 || self.tagged_heap.gc_threshold_is_overridden()
                 || self.tagged_heap.should_collect())

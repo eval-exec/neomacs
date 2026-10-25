@@ -122,7 +122,13 @@ fn start_mark_without_safe_points(ev: &mut Context) {
     assert!(ev.tagged_heap.alloc_regions_open());
 }
 
-fn forced_collection_after_two_world_marks(join_first: bool) {
+enum MarkerJoin {
+    Explicit,
+    ByCollection,
+}
+
+fn forced_collection_after_two_world_marks(join: MarkerJoin) {
+    use crate::tagged::gc::MarkPhase;
     let mut worlds = [Context::new(), Context::new()];
     for ev in &mut worlds {
         start_mark_without_safe_points(ev);
@@ -132,18 +138,29 @@ fn forced_collection_after_two_world_marks(join_first: bool) {
     assert!(crate::tagged::gc::tagged_heap_is_current(
         &worlds[1].tagged_heap
     ));
-    if join_first {
-        worlds[0].finish_concurrent_mark().expect("join A");
-        assert!(!worlds[0].tagged_heap.alloc_regions_open());
-        assert!(worlds[0].tagged_heap.mark_in_progress());
-        assert!(!worlds[0].tagged_heap.concurrent_mark_running());
+    assert_eq!(
+        worlds[0].tagged_heap.mark_phase(),
+        MarkPhase::ConcurrentRunning
+    );
+    match join {
+        MarkerJoin::Explicit => {
+            worlds[0].finish_concurrent_mark().expect("join A");
+            assert!(!worlds[0].tagged_heap.alloc_regions_open());
+            assert_eq!(
+                worlds[0].tagged_heap.mark_phase(),
+                MarkPhase::StoppedMarking
+            );
+        }
+        MarkerJoin::ByCollection => {}
     }
     // Catch the regression so both real workers are joined on the red path.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         worlds[0].gc_collect_from_current_roots_impl(true);
-        assert!(!worlds[0].tagged_heap.mark_in_progress());
-        assert!(!worlds[0].tagged_heap.sweep_in_progress());
-        assert!(worlds[1].tagged_heap.concurrent_mark_running());
+        assert_eq!(worlds[0].tagged_heap.mark_phase(), MarkPhase::Idle);
+        assert_eq!(
+            worlds[1].tagged_heap.mark_phase(),
+            MarkPhase::ConcurrentRunning
+        );
         worlds[1].gc_collect_from_current_roots_impl(true);
     }));
     for ev in &mut worlds {
@@ -161,12 +178,12 @@ fn forced_collection_after_two_world_marks(join_first: bool) {
 
 #[test]
 fn two_worlds_forced_collection_after_explicit_marker_join() {
-    forced_collection_after_two_world_marks(true);
+    forced_collection_after_two_world_marks(MarkerJoin::Explicit);
 }
 
 #[test]
 fn two_worlds_forced_collection_without_explicit_marker_join_control() {
-    forced_collection_after_two_world_marks(false);
+    forced_collection_after_two_world_marks(MarkerJoin::ByCollection);
 }
 
 /// How many of this process's threads are collectors. Nextest runs each

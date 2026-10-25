@@ -10,6 +10,7 @@ use super::super::{Context, Flow, Value};
 use super::scheduler::{Control, Handoff, Lifecycle, Peers, ThreadKey, Wait};
 use crate::emacs_core::error::signal;
 use crate::emacs_core::intern::SymId;
+use crate::tagged::gc::MarkPhase;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -620,11 +621,14 @@ impl Context {
                 )],
             ));
         }
-        if self.tagged_heap.sweep_in_progress()
-            && !self.tagged_heap.mark_in_progress()
-            && !self.tagged_heap.concurrent_mark_running()
-            && !self.tagged_heap.gc_locks_poisoned()
-        {
+        let sweep_only = match self.tagged_heap.mark_phase() {
+            MarkPhase::Sweeping => true,
+            MarkPhase::Idle
+            | MarkPhase::ConcurrentRunning
+            | MarkPhase::StoppedMarking
+            | MarkPhase::PublishingSweep => false,
+        };
+        if sweep_only && !self.tagged_heap.gc_locks_poisoned() {
             // The Baton still excludes concurrent launch; no callback,
             // safepoint or handoff runs before the transport table closes the
             // publication and checks its explicit readers. The restored owner

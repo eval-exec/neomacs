@@ -4,6 +4,7 @@
 //! the same view of `Context` and the parent's private items (`use super::*`).
 
 use super::*;
+use crate::tagged::gc::MarkPhase;
 
 impl Context {
     /// Enumerate every live `Value` reference in the evaluator and all
@@ -780,8 +781,13 @@ impl Context {
         self.last_activation_thread = Some(thread);
         let heap_identity = self.tagged_heap.identity();
         let collection_epoch = self.tagged_heap.gc_collections();
-        let sweeping = self.tagged_heap.sweep_in_progress();
-        let collection_in_progress = self.tagged_heap.mark_in_progress() || sweeping;
+        let collection_in_progress = match self.tagged_heap.mark_phase() {
+            MarkPhase::Idle => false,
+            MarkPhase::ConcurrentRunning
+            | MarkPhase::StoppedMarking
+            | MarkPhase::PublishingSweep
+            | MarkPhase::Sweeping => true,
+        };
         super::super::string_pos_cache::activate_string_pos_cache(
             heap_identity,
             collection_epoch,

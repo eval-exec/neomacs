@@ -8,6 +8,49 @@ use super::*;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 
+/// A consistent no-worker SATB scope for native/Lisp store probes. Automatic
+/// collection must remain inhibited; the probe must not force an explicit GC.
+/// The Context loan and thread marker keep restoration on the installing owner.
+pub(crate) struct SyntheticConcurrentBarrier<'a> {
+    context: &'a mut crate::emacs_core::eval::Context,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(SyntheticConcurrentBarrier<'static>: Send, Sync);
+
+impl<'a> SyntheticConcurrentBarrier<'a> {
+    pub(crate) fn enter(context: &'a mut crate::emacs_core::eval::Context) -> Self {
+        assert!(
+            context.gc_inhibit_depth > 0,
+            "synthetic barriers require GC inhibition"
+        );
+        assert_eq!(context.tagged_heap.mark_phase(), MarkPhase::Idle);
+        let guard = Self {
+            context,
+            _thread: std::marker::PhantomData,
+        };
+        guard.context.tagged_heap.mark_in_progress = true;
+        guard
+            .context
+            .tagged_heap
+            .set_concurrent_active_for_test(true);
+        guard
+    }
+
+    pub(crate) fn context(&mut self) -> &mut crate::emacs_core::eval::Context {
+        self.context
+    }
+}
+
+impl Drop for SyntheticConcurrentBarrier<'_> {
+    fn drop(&mut self) {
+        self.context
+            .tagged_heap
+            .set_concurrent_active_for_test(false);
+        self.context.tagged_heap.mark_in_progress = false;
+    }
+}
+
 pub(crate) struct TestHeap {
     owner: AliasableBox<TaggedHeap>,
 }

@@ -522,21 +522,23 @@ fn check_concurrent_mark_store_shims() {
     assert_eq!(inline_var_sites(InlineVarOp::Bind), 1);
     assert_eq!(inline_var_sites(InlineVarOp::Unbind), 1);
     let depths = (ev.specpdl.len(), ev.jit_bind_stack.len());
-    ev.tagged_heap.set_concurrent_active_for_test(true);
-    let (got, called) = run(&mut ev, &set_plain, &[Value::make_int(1)]);
-    assert_eq!((got.as_str(), called.varset), ("1", 1));
-    let logged = ev.tagged_heap.take_satb_shared_for_test();
-    let (got, called) = run(&mut ev, &let_loc, &[Value::make_int(2)]);
-    assert_eq!(got, "(body 11)");
-    assert_eq!((called.varbind, called.unbind), (1, 1));
-    assert_eq!((ev.specpdl.len(), ev.jit_bind_stack.len()), depths);
-    let (got, called) = run(&mut ev, &set_obj, &[Value::make_int(3)]);
-    assert_eq!((got.as_str(), called.varset), ("3", 1));
-    ev.tagged_heap.set_concurrent_active_for_test(false);
-    assert!(
-        logged.iter().any(|v| print_value(v) == "(old-plain)"),
-        "the overwritten plain value is logged: {logged:?}"
-    );
+    ev.with_gc_inhibited(|context| {
+        let mut scope = crate::tagged::gc::SyntheticConcurrentBarrier::enter(context);
+        let ev = scope.context();
+        let (got, called) = run(ev, &set_plain, &[Value::make_int(1)]);
+        assert_eq!((got.as_str(), called.varset), ("1", 1));
+        let logged = ev.tagged_heap.take_satb_shared_for_test();
+        let (got, called) = run(ev, &let_loc, &[Value::make_int(2)]);
+        assert_eq!(got, "(body 11)");
+        assert_eq!((called.varbind, called.unbind), (1, 1));
+        assert_eq!((ev.specpdl.len(), ev.jit_bind_stack.len()), depths);
+        let (got, called) = run(ev, &set_obj, &[Value::make_int(3)]);
+        assert_eq!((got.as_str(), called.varset), ("3", 1));
+        assert!(
+            logged.iter().any(|v| print_value(v) == "(old-plain)"),
+            "the overwritten plain value is logged: {logged:?}"
+        );
+    });
     for (leaf, args, expected, expected_shims) in [
         (&set_plain, vec![Value::make_int(4)], "4", Shims::default()),
         (
@@ -918,30 +920,32 @@ fn atomic_forwarder_active_mark_routes_set_bind_and_unbind_through_satb() {
     let (set, bind_unbind) = leaves.expect("both bodies compiled");
     let replacement = Value::list(vec![Value::symbol("new-object")]);
     let binding = Value::list(vec![Value::symbol("bound-object")]);
-    ev.tagged_heap.set_concurrent_active_for_test(true);
-    let (set_result, set_calls) = run(&mut ev, &set, &[replacement]);
-    let set_preimages = ev.tagged_heap.take_satb_shared_for_test();
-    let (let_result, let_calls) = run(&mut ev, &bind_unbind, &[binding]);
-    let let_preimages = ev.tagged_heap.take_satb_shared_for_test();
-    ev.tagged_heap.set_concurrent_active_for_test(false);
-    assert_eq!(set_result, "(new-object)");
-    assert_eq!(set_calls.varset, 1, "active mark refuses inline varset");
-    assert!(
-        set_preimages
-            .iter()
-            .any(|value| value.bits() == before_set.bits())
-    );
-    assert_eq!(let_result, "(body (new-object))");
-    assert_eq!(let_calls.varbind, 1, "active mark refuses inline varbind");
-    assert_eq!(let_calls.unbind, 1, "active mark refuses inline unbind");
-    assert!(
-        let_preimages
-            .iter()
-            .any(|value| value.bits() == replacement.bits())
-    );
-    assert!(
-        let_preimages
-            .iter()
-            .any(|value| value.bits() == binding.bits())
-    );
+    ev.with_gc_inhibited(|context| {
+        let mut scope = crate::tagged::gc::SyntheticConcurrentBarrier::enter(context);
+        let ev = scope.context();
+        let (set_result, set_calls) = run(ev, &set, &[replacement]);
+        let set_preimages = ev.tagged_heap.take_satb_shared_for_test();
+        let (let_result, let_calls) = run(ev, &bind_unbind, &[binding]);
+        let let_preimages = ev.tagged_heap.take_satb_shared_for_test();
+        assert_eq!(set_result, "(new-object)");
+        assert_eq!(set_calls.varset, 1, "active mark refuses inline varset");
+        assert!(
+            set_preimages
+                .iter()
+                .any(|value| value.bits() == before_set.bits())
+        );
+        assert_eq!(let_result, "(body (new-object))");
+        assert_eq!(let_calls.varbind, 1, "active mark refuses inline varbind");
+        assert_eq!(let_calls.unbind, 1, "active mark refuses inline unbind");
+        assert!(
+            let_preimages
+                .iter()
+                .any(|value| value.bits() == replacement.bits())
+        );
+        assert!(
+            let_preimages
+                .iter()
+                .any(|value| value.bits() == binding.bits())
+        );
+    });
 }

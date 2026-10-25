@@ -4,6 +4,7 @@
 //! the same view of `Context` and the parent's private items (`use super::*`).
 
 use super::*;
+use crate::tagged::gc::MarkPhase;
 
 /// Fixed command-loop identities. Each spelling is resolved once per registry
 /// epoch. A use after arbitrary Lisp
@@ -2337,7 +2338,13 @@ impl Context {
         // new cycle is about to start: an in-flight mark or sweep is the
         // continuation of a collection whose compaction already ran.
         if force_complete
-            || !(self.tagged_heap.mark_in_progress() || self.tagged_heap.sweep_in_progress())
+            || match self.tagged_heap.mark_phase() {
+                MarkPhase::Idle => true,
+                MarkPhase::ConcurrentRunning
+                | MarkPhase::StoppedMarking
+                | MarkPhase::PublishingSweep
+                | MarkPhase::Sweeping => false,
+            }
         {
             crate::emacs_core::undo::compact_buffers_for_gc(self);
         }
@@ -2372,15 +2379,22 @@ impl Context {
                 // Explicit GC: drive any in-flight cycle to completion, then run
                 // a fresh full stop-the-world collection of the current state
                 // (GNU `garbage-collect` semantics).
-                // An explicit marker join closes this heap's regions but
-                // leaves its mark and birth logs for termination/promotion.
-                // Joining again is idempotent; both states need the same
-                // stopped-mutator root reseed and completed mark before sweep.
-                if (*heap_ptr).mark_in_progress() {
-                    self.terminate_concurrent_mark(heap_ptr);
-                }
-                if (*heap_ptr).sweep_in_progress() {
-                    (*heap_ptr).finish_incremental_sweep_now();
+                match (*heap_ptr).mark_phase() {
+                    MarkPhase::Idle => {}
+                    MarkPhase::ConcurrentRunning | MarkPhase::StoppedMarking => {
+                        // Joining is idempotent. Both running and explicitly
+                        // joined workers leave a mark to terminate and promote.
+                        self.terminate_concurrent_mark(heap_ptr);
+                        (*heap_ptr).finish_incremental_sweep_now();
+                    }
+                    MarkPhase::Sweeping => (*heap_ptr).finish_incremental_sweep_now(),
+                    MarkPhase::PublishingSweep => {
+                        debug_assert!(
+                            false,
+                            "a collection driver cannot reenter sweep publication"
+                        );
+                        return;
+                    }
                 }
                 // Disarms a concurrent first cycle drained above, so this
                 // cycle traces the whole image before it promotes (see
@@ -2389,113 +2403,129 @@ impl Context {
                 self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                 (*heap_ptr).complete_collection();
                 cycle_completed = true;
-            } else if (*heap_ptr).sweep_in_progress() {
-                // Phase 3: drain the deferred sweep started at mark termination.
-                //
-                // A sweep that allocation has outrun -- the NEXT cycle is
-                // already due -- finishes now, as the concurrent mark's cap
-                // does. Slices come one per safe point, and a loop whose safe
-                // points are sparse can cons faster than they reclaim: the next
-                // cycle cannot start until this one drains, so each cycle began
-                // with more garbage, swept longer, and set a higher threshold
-                // from the consing its own sweep let through. elb pidigits'
-                // threshold climbed 18 MB -> 311 MB over 14 cycles at a flat
-                // ~10 MB live, and the benchmark peaked at 3 GB resident (GNU,
-                // which sweeps synchronously, 495 MB). The cap is the threshold
-                // itself, not a multiple: at 4x (the mark's) a threshold that
-                // counts half the consing since the last cycle could still
-                // double every cycle.
-                let overdue = (*heap_ptr).bytes_since_gc() > (*heap_ptr).gc_threshold();
-                if overdue {
-                    (*heap_ptr).finish_incremental_sweep_now();
-                    cycle_completed = true;
-                } else if (*heap_ptr).incremental_sweep_slice(INCREMENTAL_SWEEP_BUDGET) {
-                    cycle_completed = true; // sweep drained -> cycle done
-                } else {
-                    return; // more sweep to do; defer bookkeeping
-                }
-            } else if (*heap_ptr).concurrent_mark_running() {
-                // Phase 5: the background GC thread is marking while we run. If it
-                // has drained, run the (short) stop-the-world termination; else
-                // return immediately and keep mutating — this is the pause win.
-                // A hard cap forces termination if allocation outruns marking.
-                let cap = (*heap_ptr).gc_threshold().saturating_mul(4);
-                let must_finish = (*heap_ptr).bytes_since_gc() > cap;
-                let mark_done = (*heap_ptr).concurrent_mark_done();
-                // A tentative done flag is sufficient to stop now. The
-                // stopped-world admission folds every owner's bounded partial;
-                // publishing it and waiting another poll only grows the window.
-                if mark_done || must_finish {
-                    if must_finish && !mark_done {
-                        // Cap-forced: the GC thread had NOT drained — the
-                        // residual mark now runs synchronously in the
-                        // termination below. Record it so the pacing
-                        // instrumentation escalates its lead and the trace
-                        // attributes the pause.
-                        (*heap_ptr).note_must_finish();
+            } else {
+                match (*heap_ptr).mark_phase() {
+                    MarkPhase::Sweeping => {
+                        // Phase 3: drain the deferred sweep started at mark termination.
+                        //
+                        // A sweep that allocation has outrun -- the NEXT cycle is
+                        // already due -- finishes now, as the concurrent mark's cap
+                        // does. Slices come one per safe point, and a loop whose safe
+                        // points are sparse can cons faster than they reclaim: the next
+                        // cycle cannot start until this one drains, so each cycle began
+                        // with more garbage, swept longer, and set a higher threshold
+                        // from the consing its own sweep let through. elb pidigits'
+                        // threshold climbed 18 MB -> 311 MB over 14 cycles at a flat
+                        // ~10 MB live, and the benchmark peaked at 3 GB resident (GNU,
+                        // which sweeps synchronously, 495 MB). The cap is the threshold
+                        // itself, not a multiple: at 4x (the mark's) a threshold that
+                        // counts half the consing since the last cycle could still
+                        // double every cycle.
+                        let overdue = (*heap_ptr).bytes_since_gc() > (*heap_ptr).gc_threshold();
+                        if overdue {
+                            (*heap_ptr).finish_incremental_sweep_now();
+                            cycle_completed = true;
+                        } else if (*heap_ptr).incremental_sweep_slice(INCREMENTAL_SWEEP_BUDGET) {
+                            cycle_completed = true; // sweep drained -> cycle done
+                        } else {
+                            return; // more sweep to do; defer bookkeeping
+                        }
                     }
-                    self.terminate_concurrent_mark(heap_ptr);
-                    return; // sweep deferred; cycle not done yet
-                }
-                return; // GC thread still marking; mutator continues
-            } else if (*heap_ptr).mark_in_progress() {
-                // A joined worker or dropped unpublished capture can leave a
-                // major's residual mark. Minor admission requires quiescence;
-                // finish that cycle with the complete current root set first.
-                match (*heap_ptr).drain_to_quiescent(|heap| {
-                    self.seed_registered_mutator_roots_world_stopped(heap);
-                }) {
-                    Ok(quiescent) => drop(quiescent),
-                    Err(error) => {
-                        // Preserve the unfinished cycle on failed recovery.
-                        tracing::warn!(target: "neovm::gc", %error, "residual major recovery pending");
+                    MarkPhase::ConcurrentRunning => {
+                        // Phase 5: the background GC thread is marking while we run. If it
+                        // has drained, run the (short) stop-the-world termination; else
+                        // return immediately and keep mutating — this is the pause win.
+                        // A hard cap forces termination if allocation outruns marking.
+                        let cap = (*heap_ptr).gc_threshold().saturating_mul(4);
+                        let must_finish = (*heap_ptr).bytes_since_gc() > cap;
+                        let mark_done = (*heap_ptr).concurrent_mark_done();
+                        // A tentative done flag is sufficient to stop now. The
+                        // stopped-world admission folds every owner's bounded partial;
+                        // publishing it and waiting another poll only grows the window.
+                        if mark_done || must_finish {
+                            if must_finish && !mark_done {
+                                // Cap-forced: the GC thread had NOT drained — the
+                                // residual mark now runs synchronously in the
+                                // termination below. Record it so the pacing
+                                // instrumentation escalates its lead and the trace
+                                // attributes the pause.
+                                (*heap_ptr).note_must_finish();
+                            }
+                            self.terminate_concurrent_mark(heap_ptr);
+                            return; // sweep deferred; cycle not done yet
+                        }
+                        return; // GC thread still marking; mutator continues
+                    }
+                    MarkPhase::StoppedMarking => {
+                        // A joined worker or dropped unpublished capture can leave a
+                        // major's residual mark. Minor admission requires quiescence;
+                        // finish that cycle with the complete current root set first.
+                        match (*heap_ptr).drain_to_quiescent(|heap| {
+                            self.seed_registered_mutator_roots_world_stopped(heap);
+                        }) {
+                            Ok(quiescent) => drop(quiescent),
+                            Err(error) => {
+                                // Preserve the unfinished cycle on failed recovery.
+                                tracing::warn!(target: "neovm::gc", %error, "residual major recovery pending");
+                                return;
+                            }
+                        }
+                        cycle_completed = true;
+                    }
+                    MarkPhase::PublishingSweep => {
+                        debug_assert!(
+                            false,
+                            "a collection driver cannot reenter sweep publication"
+                        );
                         return;
                     }
-                }
-                cycle_completed = true;
-            } else if self.gc_stress && (*heap_ptr).generational_enabled() {
-                // A fresh automatic stress cycle is synchronous. Choose its
-                // generation before advancing the next-cycle stride; an
-                // explicit full collection and every continuation took the
-                // earlier branches and never advance this counter here.
-                let minor = (*heap_ptr)
-                    .should_run_minor(self.gc_runtime_settings_cache.memory_full.is_full(), true);
-                (*heap_ptr).note_generation_stress_cycle_started();
-                if minor {
-                    (*heap_ptr).begin_minor_collection().expect(
+                    MarkPhase::Idle => {
+                        if self.gc_stress && (*heap_ptr).generational_enabled() {
+                            // A fresh automatic stress cycle is synchronous. Choose its
+                            // generation before advancing the next-cycle stride; an
+                            // explicit full collection and every continuation took the
+                            // earlier branches and never advance this counter here.
+                            let minor = (*heap_ptr).should_run_minor(
+                                self.gc_runtime_settings_cache.memory_full.is_full(),
+                                true,
+                            );
+                            (*heap_ptr).note_generation_stress_cycle_started();
+                            if minor {
+                                (*heap_ptr).begin_minor_collection().expect(
                         "scheduler drained the preceding mark and sweep before minor admission",
                     );
-                    self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                    (*heap_ptr).complete_minor_collection();
-                    (*heap_ptr).finish_incremental_sweep_now();
-                } else {
-                    (*heap_ptr).begin_stw_collection();
-                    self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                    (*heap_ptr).complete_collection();
-                }
-                cycle_completed = true;
-            } else if (*heap_ptr)
-                .should_run_minor(self.gc_runtime_settings_cache.memory_full.is_full(), false)
-            {
-                // Minor marking stops every registered mutator and visits
-                // their roots. Promotion completes before mutating resumes;
-                // the existing sweep continuation records cycle completion.
-                (*heap_ptr).begin_minor_collection().expect(
+                                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
+                                (*heap_ptr).complete_minor_collection();
+                                (*heap_ptr).finish_incremental_sweep_now();
+                            } else {
+                                (*heap_ptr).begin_stw_collection();
+                                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
+                                (*heap_ptr).complete_collection();
+                            }
+                            cycle_completed = true;
+                        } else if (*heap_ptr).should_run_minor(
+                            self.gc_runtime_settings_cache.memory_full.is_full(),
+                            false,
+                        ) {
+                            // Minor marking stops every registered mutator and visits
+                            // their roots. Promotion completes before mutating resumes;
+                            // the existing sweep continuation records cycle completion.
+                            (*heap_ptr).begin_minor_collection().expect(
                     "scheduler drained the preceding mark and sweep before minor admission",
                 );
-                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                (*heap_ptr).complete_minor_collection();
-                return;
-            } else {
-                let concurrent_kind = if (*heap_ptr).should_run_concurrent() {
-                    Some(ConcurrentCycleKind::Threshold)
-                } else if (*heap_ptr).is_partition_first_cycle() {
-                    Some(ConcurrentCycleKind::FirstPartition)
-                } else {
-                    None
-                };
-                if let Some(kind) = concurrent_kind {
-                    match self.start_concurrent_mark(heap_ptr, kind) {
+                            self.seed_registered_mutator_roots_world_stopped(heap_ptr);
+                            (*heap_ptr).complete_minor_collection();
+                            return;
+                        } else {
+                            let concurrent_kind = if (*heap_ptr).should_run_concurrent() {
+                                Some(ConcurrentCycleKind::Threshold)
+                            } else if (*heap_ptr).is_partition_first_cycle() {
+                                Some(ConcurrentCycleKind::FirstPartition)
+                            } else {
+                                None
+                            };
+                            if let Some(kind) = concurrent_kind {
+                                match self.start_concurrent_mark(heap_ptr, kind) {
                         Ok(()) => return,
                         Err(crate::tagged::gc::ConcurrentMarkAdmissionError::Excluded(_)) => {
                             // Held facade roots choose exact synchronous GC.
@@ -2516,33 +2546,51 @@ impl Context {
                             // the synchronous recovery below must finish it.
                         }
                     }
-                }
-                if (*heap_ptr).mark_in_progress() {
-                    // SAFETY: this current owner's closed GC-driver extent
-                    // excludes heap/obarray/TLS writers and callbacks. The
-                    // complete owner census reseeds every external root before
-                    // the unlaunched cycle drains marking and sweep.
-                    let drain = (*heap_ptr).drain_to_quiescent(|heap| {
-                        self.seed_registered_mutator_roots_world_stopped(heap);
-                    });
-                    match drain {
-                        Ok(quiescent) => drop(quiescent),
-                        Err(error) => {
-                            // Preserve incomplete storage and work for explicit
-                            // retry; do not start or account another collection.
-                            if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
-                                eprintln!("NEOVM_GC synchronous recovery pending: {error}");
                             }
-                            return;
+                            match (*heap_ptr).mark_phase() {
+                                MarkPhase::StoppedMarking => {
+                                    // SAFETY: this current owner's closed GC-driver extent
+                                    // excludes heap/obarray/TLS writers and callbacks. The
+                                    // complete owner census reseeds every external root before
+                                    // the unlaunched cycle drains marking and sweep.
+                                    let drain = (*heap_ptr).drain_to_quiescent(|heap| {
+                                        self.seed_registered_mutator_roots_world_stopped(heap);
+                                    });
+                                    match drain {
+                                        Ok(quiescent) => drop(quiescent),
+                                        Err(error) => {
+                                            // Preserve incomplete storage and work for explicit
+                                            // retry; do not start or account another collection.
+                                            if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1")
+                                            {
+                                                eprintln!(
+                                                    "NEOVM_GC synchronous recovery pending: {error}"
+                                                );
+                                            }
+                                            return;
+                                        }
+                                    }
+                                }
+                                MarkPhase::Idle => {
+                                    // No concurrent state has been armed on exclusion rejection.
+                                    (*heap_ptr).begin_stw_collection();
+                                    self.seed_registered_mutator_roots_world_stopped(heap_ptr);
+                                    (*heap_ptr).complete_collection();
+                                }
+                                MarkPhase::ConcurrentRunning
+                                | MarkPhase::PublishingSweep
+                                | MarkPhase::Sweeping => {
+                                    debug_assert!(
+                                        false,
+                                        "failed mark admission must leave idle or stopped marking"
+                                    );
+                                    return;
+                                }
+                            }
+                            cycle_completed = true;
                         }
                     }
-                } else {
-                    // No concurrent state has been armed on exclusion rejection.
-                    (*heap_ptr).begin_stw_collection();
-                    self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                    (*heap_ptr).complete_collection();
                 }
-                cycle_completed = true;
             }
         }
         if !cycle_completed {
@@ -3117,7 +3165,8 @@ impl Context {
     /// two address-keyed lexenv caches only go stale when a sweep recycles a
     /// cons -- every sweep runs inside that body, past this point.
     fn concurrent_mark_is_still_the_gc_thread_s(&self) -> bool {
-        if !self.tagged_heap.concurrent_mark_running() || self.tagged_heap.concurrent_mark_done() {
+        debug_assert_eq!(self.tagged_heap.mark_phase(), MarkPhase::ConcurrentRunning);
+        if self.tagged_heap.concurrent_mark_done() {
             return false;
         }
         let cap = self.tagged_heap.gc_threshold().saturating_mul(4);
@@ -3133,8 +3182,13 @@ impl Context {
         // allocation pacing has not tripped. Everything else takes the
         // exact path below, unchanged.
         if self.gc_inhibit_depth == 0
-            && !self.tagged_heap.sweep_in_progress()
-            && !self.tagged_heap.mark_in_progress()
+            && match self.tagged_heap.mark_phase() {
+                MarkPhase::Idle => true,
+                MarkPhase::ConcurrentRunning
+                | MarkPhase::StoppedMarking
+                | MarkPhase::PublishingSweep
+                | MarkPhase::Sweeping => false,
+            }
             && !self.gc_pending
             && !self.gc_stress
             && !self.tagged_heap.gc_threshold_is_overridden()
@@ -3150,21 +3204,16 @@ impl Context {
         if self.gc_inhibit_depth > 0 {
             return false;
         }
-        // A deferred sweep must keep getting slices at every safe point until
-        // it drains, regardless of the allocation threshold.
-        if self.tagged_heap.sweep_in_progress() {
-            return true;
-        }
-        // An in-flight mark must too -- but while the GC THREAD holds the mark,
-        // the mutator's job at a safe point is only to notice that it has
-        // drained. Saying so here, rather than entering the collector to find
-        // out, is what keeps that safe point cheap: the caller wraps this in a
-        // specpdl root save/restore and the collector body opened with a
-        // `clock_gettime`, so a poll that had nothing to do still cost ~90
-        // instructions. On one rust-lsp-typing capture that was 5,800,003
-        // timestamps taken for the 25 durations anything ever read.
-        if self.tagged_heap.mark_in_progress() {
-            return !self.concurrent_mark_is_still_the_gc_thread_s();
+        match self.tagged_heap.mark_phase() {
+            MarkPhase::Idle => {}
+            MarkPhase::Sweeping | MarkPhase::StoppedMarking => return true,
+            MarkPhase::ConcurrentRunning => {
+                return !self.concurrent_mark_is_still_the_gc_thread_s();
+            }
+            MarkPhase::PublishingSweep => {
+                debug_assert!(false, "a safe point cannot reenter sweep publication");
+                return true;
+            }
         }
         if self.gc_pending {
             return true;
