@@ -148,6 +148,51 @@ jobs:
     with:
       suite: core
 
+  # The compile-fail contracts are #[ignore]d because each runner compiles
+  # separate trybuild fixture crates, which does not fit a nextest per-test
+  # watchdog; the default suites and the shard matrix therefore never run
+  # them. CI's only `--run-ignored only` job is the MELPA live canary, so this
+  # standalone job is their home. It needs the workspace checkout, not the
+  # nextest archive, and it stays out of the shard matrix: this is gate-wt.sh's
+  # compile-contracts step, both halves, with plain cargo test.
+  compile-contracts:
+    name: compile contracts (linux x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - uses: ./.github/actions/install-build-deps
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-compile-contracts-linux-x86_64
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # trybuild always invokes `cargo --offline` on a scratch project that
+      # copies this workspace's Cargo.lock and [patch.crates-io] table. The
+      # eval-exec forks in that table (cosmic-text first) are git checkouts a
+      # fresh runner does not have, so their sources must be fetched into
+      # CARGO_HOME before any contract runner starts. This job uses the rustup
+      # toolchain from rust-toolchain.toml, whose components are rustfmt,
+      # clippy and llvm-tools -- no rust-src. That is the gate rule: a
+      # toolchain with rust-src produces false trybuild diagnostic mismatches.
+      - name: Fetch locked crates for trybuild's offline builds
+        run: cargo fetch --locked
+
+      - name: Run the ignored compile-fail contracts
+        run: |
+          env -u TRYBUILD cargo test -p neovm-core \
+            --test p0s3_contracts --test p1rv_contracts \
+            --test thread_safety_contracts --test chartable_write_contracts \
+            -- --ignored
+          env -u TRYBUILD cargo test -p neovm-core --lib sole_owner_compile_contracts -- --ignored
+
   gnu-emacs-oracle:
     name: GNU Emacs oracle (linux x86_64)
     runs-on: ubuntu-24.04
