@@ -170,6 +170,34 @@ enum Op {
     Safepoint,
 }
 
+/// Closed session admission. Each variant carries exactly the symbol table
+/// admitted by that session; intern cannot be enabled independently of its
+/// global handles, and function handles share their session's global table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TapeCapabilities {
+    Core,
+    Globals { symbols: usize },
+    Functions { symbols: usize },
+    InitialIntern { globals: usize },
+}
+
+impl TapeCapabilities {
+    fn global_handles(self) -> Option<usize> {
+        match self {
+            Self::Core => None,
+            Self::Globals { symbols } | Self::Functions { symbols } => Some(symbols),
+            Self::InitialIntern { globals } => Some(globals),
+        }
+    }
+
+    fn function_handles(self) -> Option<usize> {
+        match self {
+            Self::Functions { symbols } => Some(symbols),
+            Self::Core | Self::Globals { .. } | Self::InitialIntern { .. } => None,
+        }
+    }
+}
+
 /// Surface syntax the gate sees. Excluded variants never lower into [`Op`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Insn {
@@ -479,7 +507,14 @@ fn prevalidate_with(
     step_cap: u32,
     initial: &[(u16, Abs)],
 ) -> Result<(), Reject> {
-    prevalidate_inner(ops, nslots, bound, step_cap, initial, None, None, false)
+    prevalidate_inner(
+        ops,
+        nslots,
+        bound,
+        step_cap,
+        initial,
+        TapeCapabilities::Core,
+    )
 }
 
 fn prevalidate_inner(
@@ -488,15 +523,13 @@ fn prevalidate_inner(
     bound: u32,
     step_cap: u32,
     initial: &[(u16, Abs)],
-    globals: Option<usize>,
-    functions: Option<usize>,
-    intern: bool,
+    capabilities: TapeCapabilities,
 ) -> Result<(), Reject> {
     // Scan the entire tape, including unreachable code. A global session
     // checks all participating tapes before any participant is registered.
-    globals::check_tape(ops, nslots, globals)?;
-    functions::check_tape(ops, nslots, functions)?;
-    intern::check_tape(ops, nslots, intern)?;
+    globals::check_tape(ops, nslots, capabilities.global_handles())?;
+    functions::check_tape(ops, nslots, capabilities.function_handles())?;
+    intern::check_tape(ops, nslots, capabilities)?;
     let mut slots = vec![Abs::Nil; nslots];
     for &(index, kind) in initial {
         slots[slot_index(index, nslots)?] = kind;
@@ -563,18 +596,22 @@ fn prevalidate_inner(
                 pc += 1;
             }
             Op::Eq { dst, a, b } => {
-                if intern {
-                    // The intern executor compares rooted symbol identities or
-                    // NIL answers. Older sessions retain their fixnum gate.
-                    slot_index(a, nslots)?;
-                    slot_index(b, nslots)?;
-                    slots[slot_index(dst, nslots)?] = Abs::Top;
-                    pc += 1;
-                    continue;
-                }
-                let (x, y) = fix_pair(slots.as_slice(), nslots, a, b)?;
-                let index = slot_index(dst, nslots)?;
-                slots[index] = if x == y { Abs::T } else { Abs::Nil };
+                let answer = match capabilities {
+                    TapeCapabilities::InitialIntern { .. } => {
+                        // Intern compares rooted symbol identities or NIL;
+                        // older sessions retain their fixnum gate.
+                        slot_index(a, nslots)?;
+                        slot_index(b, nslots)?;
+                        Abs::Top
+                    }
+                    TapeCapabilities::Core
+                    | TapeCapabilities::Globals { .. }
+                    | TapeCapabilities::Functions { .. } => {
+                        let (x, y) = fix_pair(slots.as_slice(), nslots, a, b)?;
+                        if x == y { Abs::T } else { Abs::Nil }
+                    }
+                };
+                slots[slot_index(dst, nslots)?] = answer;
                 pc += 1;
             }
             Op::BranchIfNil { cond, target } => {
@@ -605,7 +642,9 @@ fn prevalidate_inner(
             }
             Op::Car { dst, cell } | Op::Cdr { dst, cell } => {
                 let kind = slots[slot_index(cell, nslots)?];
-                if kind != Abs::Cons && !(globals.is_some() && kind == Abs::Top) {
+                if kind != Abs::Cons
+                    && !(capabilities.global_handles().is_some() && kind == Abs::Top)
+                {
                     return Err(Reject::RejectedType);
                 }
                 slots[slot_index(dst, nslots)?] = Abs::Top;

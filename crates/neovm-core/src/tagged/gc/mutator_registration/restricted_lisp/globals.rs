@@ -25,12 +25,27 @@ pub(super) fn check_tape(ops: &[Op], nslots: usize, globals: Option<usize>) -> R
             | Op::HtClear { .. }
             | Op::HtMake { .. }
             | Op::HtCopy { .. }
-            | Op::HtCount { .. }
-                if globals.is_some() =>
-            {
-                return Err(Reject::Excluded("global session mutation/table"));
+            | Op::HtCount { .. } => {
+                if globals.is_some() {
+                    return Err(Reject::Excluded("global session mutation/table"));
+                }
             }
-            _ => {}
+            Op::Function(_)
+            | Op::Intern(_)
+            | Op::ConstNil { .. }
+            | Op::ConstT { .. }
+            | Op::ConstFixnum { .. }
+            | Op::Move { .. }
+            | Op::Add { .. }
+            | Op::Sub { .. }
+            | Op::Lt { .. }
+            | Op::Eq { .. }
+            | Op::BranchIfNil { .. }
+            | Op::Jump { .. }
+            | Op::Cons { .. }
+            | Op::Car { .. }
+            | Op::Cdr { .. }
+            | Op::Safepoint => {}
         }
     }
     Ok(())
@@ -99,9 +114,7 @@ impl GlobalSession {
                 source.bound,
                 STEP_CAP,
                 &[],
-                Some(ids.len()),
-                None,
-                false,
+                TapeCapabilities::Globals { symbols: ids.len() },
             )
             .map_err(AdmissionError::Program)?;
             programs.push(Program {

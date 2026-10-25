@@ -6,18 +6,30 @@ use crate::tagged::gc::{GlobalError, InitialInternError, SymbolHandle};
 
 const REFUSAL_CAP: u32 = 1 << 20;
 
-pub(super) fn check_tape(ops: &[Op], nslots: usize, admitted: bool) -> Result<(), Reject> {
+pub(super) fn check_tape(
+    ops: &[Op],
+    nslots: usize,
+    capabilities: TapeCapabilities,
+) -> Result<(), Reject> {
     for &op in ops {
         if let Op::Intern(op) = op {
-            if !admitted {
-                return Err(Reject::Excluded("initial obarray"));
+            match capabilities {
+                TapeCapabilities::InitialIntern { .. } => {}
+                TapeCapabilities::Core
+                | TapeCapabilities::Globals { .. }
+                | TapeCapabilities::Functions { .. } => {
+                    return Err(Reject::Excluded("initial obarray"));
+                }
             }
             let (name, dst) = operands(op);
             slot_index(name, nslots)?;
             slot_index(dst, nslots)?;
         }
-        if !admitted {
-            continue;
+        match capabilities {
+            TapeCapabilities::InitialIntern { .. } => {}
+            TapeCapabilities::Core
+            | TapeCapabilities::Globals { .. }
+            | TapeCapabilities::Functions { .. } => continue,
         }
         // Scan ALL operands, including unreachable instructions. No string or
         // intern answer can reach the older global-session Car/Cdr exception.
@@ -52,7 +64,22 @@ pub(super) fn check_tape(ops: &[Op], nslots: usize, admitted: bool) -> Result<()
             Op::Jump { target } => {
                 target_index(target, ops.len())?;
             }
-            _ => return Err(Reject::Excluded("intern closed operations")),
+            Op::Global(GlobalOp::Set { .. })
+            | Op::Function(_)
+            | Op::Cons { .. }
+            | Op::Car { .. }
+            | Op::Cdr { .. }
+            | Op::SetCar { .. }
+            | Op::SetCdr { .. }
+            | Op::HtGet { .. }
+            | Op::HtPut { .. }
+            | Op::HtRem { .. }
+            | Op::HtClear { .. }
+            | Op::HtMake { .. }
+            | Op::HtCopy { .. }
+            | Op::HtCount { .. } => {
+                return Err(Reject::Excluded("intern closed operations"));
+            }
         }
     }
     Ok(())
@@ -80,7 +107,13 @@ impl From<InitialInternError> for ExecError {
     fn from(error: InitialInternError) -> Self {
         match error {
             InitialInternError::Authority(error) => Self::Registration(error),
-            error => Self::Intern(error),
+            InitialInternError::ExpectedString => Self::Intern(InitialInternError::ExpectedString),
+            InitialInternError::ExpectedPlainSymbol => {
+                Self::Intern(InitialInternError::ExpectedPlainSymbol)
+            }
+            InitialInternError::UnsupportedName => {
+                Self::Intern(InitialInternError::UnsupportedName)
+            }
         }
     }
 }
@@ -142,9 +175,7 @@ impl Session {
                 source.bound,
                 STEP_CAP,
                 &[],
-                Some(ids.len()),
-                None,
-                true,
+                TapeCapabilities::InitialIntern { globals: ids.len() },
             )
             .map_err(AdmissionError::Program)?;
             programs.push(Program {
@@ -281,7 +312,7 @@ impl Session {
                     GlobalOp::Value { symbol, dst }
                     | GlobalOp::Boundp { symbol, dst }
                     | GlobalOp::Makunbound { symbol, dst } => (symbol, dst),
-                    _ => return Err(ExecError::Type),
+                    GlobalOp::Set { .. } => return Err(ExecError::Type),
                 };
                 let handle = self
                     .handles
@@ -292,14 +323,37 @@ impl Session {
                     GlobalOp::Value { .. } => run.sym_value_into(handle, &mut dst),
                     GlobalOp::Boundp { .. } => run.sym_boundp_into(handle, &mut dst),
                     GlobalOp::Makunbound { .. } => run.sym_makunbound_into(handle, &mut dst),
-                    _ => return Err(ExecError::Type),
+                    GlobalOp::Set { .. } => return Err(ExecError::Type),
                 };
                 result.map_err(|error| match error {
                     GlobalError::Authority(error) => ExecError::Registration(error),
                     GlobalError::VoidVariable => ExecError::VoidVariable,
                 })?;
             }
-            _ => return Err(ExecError::Type),
+            Op::Function(_)
+            | Op::ConstNil { .. }
+            | Op::ConstT { .. }
+            | Op::ConstFixnum { .. }
+            | Op::Move { .. }
+            | Op::Add { .. }
+            | Op::Sub { .. }
+            | Op::Lt { .. }
+            | Op::Eq { .. }
+            | Op::BranchIfNil { .. }
+            | Op::Jump { .. }
+            | Op::Cons { .. }
+            | Op::Car { .. }
+            | Op::Cdr { .. }
+            | Op::SetCar { .. }
+            | Op::SetCdr { .. }
+            | Op::HtGet { .. }
+            | Op::HtPut { .. }
+            | Op::HtRem { .. }
+            | Op::HtClear { .. }
+            | Op::HtMake { .. }
+            | Op::HtCopy { .. }
+            | Op::HtCount { .. }
+            | Op::Safepoint => return Err(ExecError::Type),
         }
         Ok(())
     }

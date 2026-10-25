@@ -369,9 +369,7 @@ fn p3sym_c4_executor_gate_checks_every_tape_and_activation_lifecycle() {
             0,
             STEP_CAP,
             &[],
-            Some(ids.len()),
-            None,
-            false,
+            TapeCapabilities::Globals { symbols: ids.len() },
         );
         let (collector, keeper) = era.finish().unwrap();
         drop(collector);

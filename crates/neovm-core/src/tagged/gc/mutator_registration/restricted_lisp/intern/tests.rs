@@ -11,7 +11,30 @@ fn source(ops: Vec<Op>, nslots: usize) -> Source {
             .map(|op| match op {
                 Op::Intern(op) => Insn::Intern(op),
                 Op::Global(op) => Insn::Global(op),
-                other => Insn::Allowed(other),
+                op @ (Op::Function(_)
+                | Op::ConstNil { .. }
+                | Op::ConstT { .. }
+                | Op::ConstFixnum { .. }
+                | Op::Move { .. }
+                | Op::Add { .. }
+                | Op::Sub { .. }
+                | Op::Lt { .. }
+                | Op::Eq { .. }
+                | Op::BranchIfNil { .. }
+                | Op::Jump { .. }
+                | Op::Cons { .. }
+                | Op::Car { .. }
+                | Op::Cdr { .. }
+                | Op::SetCar { .. }
+                | Op::SetCdr { .. }
+                | Op::HtGet { .. }
+                | Op::HtPut { .. }
+                | Op::HtRem { .. }
+                | Op::HtClear { .. }
+                | Op::HtMake { .. }
+                | Op::HtCopy { .. }
+                | Op::HtCount { .. }
+                | Op::Safepoint) => Insn::Allowed(op),
             })
             .collect(),
         nslots,
@@ -361,9 +384,7 @@ fn p3sym_c5_executor_gate_checks_unreachable_ops_and_all_participants() {
                     0,
                     STEP_CAP,
                     &[],
-                    Some(1),
-                    None,
-                    true
+                    TapeCapabilities::InitialIntern { globals: 1 }
                 ),
                 Err(Reject::RejectedType)
             );
@@ -429,4 +450,50 @@ fn p3sym_c5_executor_uses_only_rooted_intern_and_fixed_input_surface() {
     ] {
         assert!(driver.contains(method));
     }
+}
+
+#[test]
+fn p3sym_c5_executor_typed_capabilities_preserve_session_boundaries() {
+    let initial = TapeCapabilities::InitialIntern { globals: 1 };
+    assert_eq!(initial.global_handles(), Some(1));
+    assert_eq!(initial.function_handles(), None);
+    assert_eq!(check_tape(&[intern(0, 0), soft(0, 0)], 1, initial), Ok(()));
+    for capabilities in [
+        TapeCapabilities::Core,
+        TapeCapabilities::Globals { symbols: 1 },
+        TapeCapabilities::Functions { symbols: 1 },
+    ] {
+        assert_eq!(
+            check_tape(&[intern(0, 0)], 1, capabilities),
+            Err(Reject::Excluded("initial obarray"))
+        );
+        assert_eq!(check_tape(&[], 0, capabilities), Ok(()));
+    }
+    for excluded in [
+        Op::Function(FunctionOp::Function { symbol: 0, dst: 0 }),
+        Op::Global(GlobalOp::Set {
+            symbol: 0,
+            src: 0,
+            dst: 0,
+        }),
+        Op::Cons {
+            dst: 0,
+            car: 0,
+            cdr: 0,
+        },
+    ] {
+        assert_eq!(
+            check_tape(&[excluded], 1, initial),
+            Err(Reject::Excluded("intern closed operations"))
+        );
+    }
+    assert_eq!(check_tape(&[], 0, initial), Ok(()));
+    assert_eq!(
+        ExecError::from(InitialInternError::ExpectedString),
+        ExecError::Intern(InitialInternError::ExpectedString)
+    );
+    assert_eq!(
+        ExecError::from(InitialInternError::Authority(RegistrationError::Busy)),
+        ExecError::Registration(RegistrationError::Busy)
+    );
 }

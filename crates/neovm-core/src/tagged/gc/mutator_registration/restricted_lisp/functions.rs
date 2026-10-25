@@ -137,9 +137,7 @@ impl Session {
                 source.bound,
                 STEP_CAP,
                 &[],
-                Some(ids.len()),
-                Some(ids.len()),
-                false,
+                TapeCapabilities::Functions { symbols: ids.len() },
             )
             .map_err(AdmissionError::Program)?;
             programs.push(Program {
