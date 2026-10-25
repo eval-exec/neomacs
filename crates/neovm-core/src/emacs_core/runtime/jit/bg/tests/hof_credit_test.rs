@@ -116,8 +116,25 @@ fn run(stress: bool) {
         "credited callers compiled on the worker: {after:?}"
     );
 
-    // A finished job installs at its function's next probe: one more run
-    // through warm callbacks reaches every installed leaf.
+    // A finished job installs at its function's next probe, but the
+    // background stress soak (`NEOVM_JIT_BG_STRESS`, on for `stress` runs)
+    // deliberately makes a finished job read as running for 1..=4 further
+    // probes (`bg::stress_probe_skips`), and the worker can finish after the
+    // drive's last call: "install late under stress" is exactly that case.
+    // One warm run is then a single probe per caller, not a guaranteed
+    // install, so give each caller up to 4 skips + the install probe (with
+    // margin) through cheap no-op mappings before the warm run exercises the
+    // installed leaves.
+    const INSTALL_PROBES: usize = 8;
+    for _ in 0..INSTALL_PROBES {
+        if leaf_inlines(&mut ctx, "hbg-incs", "mapcar")
+            && leaf_inlines(&mut ctx, "hbg-walk", "mapc")
+        {
+            break;
+        }
+        ctx.eval_str("(progn (hbg-incs nil) (hbg-walk nil))")
+            .expect("install probe");
+    }
     let again = print_value(
         &ctx.eval_str(&format!("(hbg-step (number-sequence 1 {LEN}))"))
             .expect("warm run"),
