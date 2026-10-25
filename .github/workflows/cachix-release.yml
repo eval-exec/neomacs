@@ -159,7 +159,13 @@ jobs:
 
       # The Nix evaluator and all build processes above run without this
       # credential. Only these explicitly selected store roots can be pushed.
-      - name: Push and pin only the release closures
+      # Release closures are pushed but not pinned: pins are exempt from
+      # Cachix garbage collection, so every release added keep-forever pins
+      # until the plan's pin-storage limit rejected new ones (v0.0.20: HTTP 402).
+      # Unpinned, Cachix evicts the least recently used paths when the cache is
+      # full, which keeps the current release (newest push, most fetched) and
+      # ages out old ones; installing an old release then builds from source.
+      - name: Push only the release closures
         shell: bash
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -167,7 +173,3 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "$FULL_PATH" | cachix push eval-exec
-
-          pin_system="${NIX_SYSTEM//_/-}"
-          cachix pin eval-exec \
-            "neomacs-${RELEASE_TAG}-${pin_system}" "$FULL_PATH"
