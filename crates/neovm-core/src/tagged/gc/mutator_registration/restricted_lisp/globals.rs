@@ -161,10 +161,9 @@ impl GlobalSession {
         owner: &mut Mutator<'era>,
         frame: &mut Frame<'era>,
     ) -> Result<Step, ExecError> {
-        frame.attempts_left = frame
-            .attempts_left
-            .checked_sub(1)
-            .ok_or(ExecError::Backedge)?;
+        if frame.attempts_left == 0 {
+            return Err(ExecError::Backedge);
+        }
         let program = self.programs.get(frame.program).ok_or(ExecError::Slot)?;
         let flow = with_run(owner, |run| {
             run.with_slice(|slice| {
@@ -185,7 +184,7 @@ impl GlobalSession {
             })
             .map_err(ExecError::from)?
         })?;
-        match flow {
+        let step = match flow {
             Flow::Done => Ok(Step::Done),
             Flow::Safepoint => Ok(Step::Safepoint),
             Flow::Lease => {
@@ -201,7 +200,24 @@ impl GlobalSession {
                     Err(error) => Err(error),
                 }
             }
+        }?;
+        match step {
+            Step::Retry => {}
+            Step::Done | Step::Safepoint | Step::Progress => frame.attempts_left -= 1,
         }
+        Ok(step)
+    }
+
+    /// Wait for protocol contention without charging the instruction budget.
+    fn wait_step<'era>(
+        &self,
+        owner: &mut Mutator<'era>,
+        frame: &mut Frame<'era>,
+    ) -> Result<Step, ExecError> {
+        retry_exec(|| match self.step(owner, frame)? {
+            Step::Retry => Err(ExecError::Registration(RegistrationError::Busy)),
+            step @ (Step::Done | Step::Safepoint | Step::Progress) => Ok(step),
+        })
     }
 
     fn apply<'era>(

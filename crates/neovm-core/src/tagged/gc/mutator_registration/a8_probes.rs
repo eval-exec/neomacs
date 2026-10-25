@@ -10,6 +10,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
+mod suppression;
+pub(crate) use suppression::suppress;
+
 pub(crate) const REQUEST_PUBLISHED: u8 = 1;
 /// `publish_roots` entered (owner woke and holds its run-closed state).
 pub(crate) const PUBLISH_ENTERED: u8 = 2;
@@ -76,6 +79,10 @@ pub(crate) fn take_events() -> Vec<ProbeEvent> {
 /// The next native-extent sequence number; stamped on both the return and
 /// permission events so they pair without an epoch.
 pub(crate) fn native_seq() -> u64 {
+    match suppression::scope() {
+        suppression::ProbeScope::Suppressed => return 0,
+        suppression::ProbeScope::Recording => {}
+    }
     NATIVE_SEQ.fetch_add(1, Ordering::SeqCst) + 1
 }
 
@@ -83,6 +90,10 @@ pub(crate) fn native_seq() -> u64 {
 pub(crate) fn mark(kind: u8, epoch: u64, owner: u64) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
+    }
+    match suppression::scope() {
+        suppression::ProbeScope::Suppressed => return,
+        suppression::ProbeScope::Recording => {}
     }
     let nanos = START
         .lock()

@@ -1,10 +1,12 @@
 //! The actual minimal retained World; no bootstrap or setup collection.
+use super::retry::{self as contention, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::tagged::gc::{Mutator, PlainSymbolBacking, RendezvousError};
+use crate::tagged::gc::{Mutator, PlainSymbolBacking};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 use std::cell::RefCell;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 
 struct Homes<'era> {
@@ -34,17 +36,15 @@ impl Drop for FixtureGuard<'_> {
                 .clear_root_slots()
                 .map_err(|e| format!("C4 cleanup clear: {e:?}"))?;
             drop(self.input.take());
-            for _ in 0..10_000 {
-                match owner.retire_rooted(&[]) {
-                    Ok(()) => return Ok(()),
-                    Err(failed) if failed.reason == RendezvousError::Busy => {
-                        owner = failed.into_owner();
-                        std::thread::yield_now();
-                    }
-                    Err(failed) => return Err(format!("C4 cleanup retirement: {failed:?}")),
-                }
-            }
-            Err("C4 cleanup retirement remained Busy".into())
+            retry_owned(
+                owner,
+                |owner| owner.retire_rooted(&[]),
+                |failed| match contention::rendezvous(&failed.reason) {
+                    Retry::Busy => ControlFlow::Continue(failed.into_owner()),
+                    Retry::Refuse => ControlFlow::Break(failed),
+                },
+            )
+            .map_err(|failed| format!("C4 cleanup retirement: {failed:?}"))
         })();
         *self.cleanup.borrow_mut() = Some(cleanup);
     }

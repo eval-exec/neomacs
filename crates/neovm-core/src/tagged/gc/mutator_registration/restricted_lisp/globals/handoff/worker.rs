@@ -1,6 +1,9 @@
 //! Own each frame/token until cleanup, independently of execution's outcome.
 use super::*;
 
+#[cfg(not(miri))]
+mod contention_tests;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Snapshot {
     pub(super) words: Vec<usize>,
@@ -66,7 +69,7 @@ fn pause<'era>(
     frame: &mut Frame<'era>,
 ) -> Result<(), ExecError> {
     loop {
-        match session.step(owner, frame)? {
+        match session.wait_step(owner, frame)? {
             Step::Safepoint => return Ok(()),
             Step::Retry => thread::yield_now(),
             Step::Progress => {}
@@ -75,33 +78,16 @@ fn pause<'era>(
     }
 }
 
-fn native_transition<T>(
-    mut transition: impl FnMut() -> Result<T, RendezvousError>,
-) -> Result<T, RendezvousError> {
-    // Simultaneous restores can refuse before taking an image. Busy leaves
-    // ownership with this worker; retry outside every run/entry/image loan.
-    // Keep the fixture finite without a wall-clock condition under Miri.
-    for _ in 0..STEP_CAP {
-        match transition() {
-            Err(RendezvousError::Busy) => thread::yield_now(),
-            outcome => return outcome,
-        }
-    }
-    Err(RendezvousError::Busy)
-}
-
-fn retire_owner(mut owner: Mutator<'_>) -> Result<(), String> {
-    for _ in 0..STEP_CAP {
-        match owner.retire_rooted(&[]) {
-            Ok(()) => return Ok(()),
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                owner = failure.into_owner();
-                thread::yield_now();
-            }
-            Err(failure) => return Err(format!("retire: {:?}", failure.reason)),
-        }
-    }
-    Err("retire: Busy retry budget exhausted".to_owned())
+fn retire_owner(owner: Mutator<'_>) -> Result<(), String> {
+    retry_owned(
+        owner,
+        |owner| owner.retire_rooted(&[]),
+        |failure| match contention::rendezvous(&failure.reason) {
+            Retry::Busy => ControlFlow::Continue(failure.into_owner()),
+            Retry::Refuse => ControlFlow::Break(failure),
+        },
+    )
+    .map_err(|failure| format!("retire: {:?}", failure.reason))
 }
 
 pub(super) fn run<'era>(
@@ -113,9 +99,10 @@ pub(super) fn run<'era>(
     commands: Receiver<Command>,
     events: Sender<Event>,
 ) {
+    let _probes = a8_probes::suppress();
     let mut owner = activate_owner(permit, heap, 3000 + index as u64);
     let mut frame = None;
-    let mut native = false;
+    let mut native = NativeState::Running;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         || -> Result<Snapshot, ExecError> {
             frame = Some(session.seed(&mut owner, index, nil)?);
@@ -125,14 +112,14 @@ pub(super) fn run<'era>(
                 assert_eq!(receive(&commands), Command::Advance);
                 pause(session, &mut owner, frame)?;
                 let before = snapshot(&mut owner, frame)?;
-                native_transition(|| owner.enter_native(&[]))?;
-                native = true;
-                events
-                    .send(Event::Paused(before))
-                    .expect("keeper alive at pause");
-                assert_eq!(receive(&commands), Command::Resume);
-                native_transition(|| owner.leave_native())?;
-                native = false;
+                owner.with_native_extent(&[], |_| {
+                    native = NativeState::Published;
+                    events
+                        .send(Event::Paused(before))
+                        .expect("keeper alive at pause");
+                    assert_eq!(receive(&commands), Command::Resume);
+                })?;
+                native = NativeState::Running;
                 events
                     .send(Event::Resumed(snapshot(&mut owner, frame)?))
                     .expect("keeper alive at resume");
@@ -157,8 +144,8 @@ pub(super) fn run<'era>(
     let cleanup = (|| -> Result<(), String> {
         // A native owner still has a local shell, so local.is_none() cannot
         // distinguish a published image from restored running state.
-        if native {
-            native_transition(|| owner.leave_native())
+        if matches!(native, NativeState::Published) {
+            contention::retry(|| owner.leave_native(), contention::rendezvous)
                 .map_err(|e| format!("restore for cleanup: {e:?}"))?;
         }
         with_run(&mut owner, |run| {

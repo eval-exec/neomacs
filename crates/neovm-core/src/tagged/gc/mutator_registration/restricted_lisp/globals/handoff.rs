@@ -116,6 +116,7 @@ fn collect(era: &ParallelHeapEra<'_>, before: Vec<Snapshot>, phase: usize) -> Cy
 }
 
 fn scenario(kind: PlainSymbolBacking, owners: usize) {
+    let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
     let (cycles, finished) = Context::with_test_symbol_backing_era(kind, |era, id| {
         let sources: Vec<_> = (0..owners).map(program).collect();
         let session = GlobalSession::admit(&era, &[id], &sources).unwrap();

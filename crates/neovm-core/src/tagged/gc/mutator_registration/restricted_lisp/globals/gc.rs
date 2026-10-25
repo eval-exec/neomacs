@@ -92,7 +92,7 @@ fn round(
 
 fn pause<'era>(session: &GlobalSession, owner: &mut Mutator<'era>, frame: &mut Frame<'era>) {
     loop {
-        match session.step(owner, frame).unwrap() {
+        match session.wait_step(owner, frame).unwrap() {
             Step::Safepoint => return,
             Step::Progress => {}
             Step::Retry => thread::yield_now(),

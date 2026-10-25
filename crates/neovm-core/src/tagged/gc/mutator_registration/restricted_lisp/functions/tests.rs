@@ -51,7 +51,7 @@ fn drive<'era>(
     frame: &mut Frame<'era>,
 ) -> Result<(), ExecError> {
     loop {
-        match session.step(owner, frame)? {
+        match session.wait_step(owner, frame)? {
             Step::Done => return Ok(()),
             Step::Retry | Step::Yielded => thread::yield_now(),
             Step::Progress | Step::Safepoint => {}
@@ -272,7 +272,13 @@ fn p3sym_c4_executor_busy_and_yield_preserve_instruction_and_answer() {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut run = peer.run_access().unwrap();
                     let writer = run.symbol_mut(&session.handles[0]).unwrap();
+                    let budget = frame.attempts_left;
+                    frame.attempts_left = 1;
                     assert_eq!(session.step(owner, frame), Ok(Step::Retry));
+                    assert_eq!(frame.attempts_left, 1);
+                    assert_eq!(session.step(owner, frame), Ok(Step::Retry));
+                    assert_eq!(frame.attempts_left, 1);
+                    frame.attempts_left = budget;
                     assert_eq!(frame.machine.pc, 0);
                     assert_eq!(frame.cache.observed_epoch(), None);
                     assert_eq!(frame.activation.selected_epoch(), None);

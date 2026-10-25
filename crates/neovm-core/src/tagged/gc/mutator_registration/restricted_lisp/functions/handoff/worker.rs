@@ -50,8 +50,8 @@ fn snapshot<'era>(
     session: &Session,
     frame: &Frame<'era>,
 ) -> Result<Snapshot, ExecError> {
-    for _ in 0..STEP_CAP {
-        let result = with_run(owner, |run| {
+    retry_exec(|| {
+        with_run(owner, |run| {
             let mut facts = [(0, 0); 2];
             for (dst, key) in facts.iter_mut().zip(&session.handles) {
                 let (epoch, stamp, _) = run.function_facts_for_test(key)?;
@@ -69,13 +69,8 @@ fn snapshot<'era>(
                 pc: frame.machine.pc,
                 points: frame.machine.safepoints,
             })
-        });
-        match result {
-            Err(ExecError::Registration(RegistrationError::Busy)) => thread::yield_now(),
-            result => return result,
-        }
-    }
-    Err(RegistrationError::Busy.into())
+        })
+    })
 }
 pub(super) fn pause<'era>(
     session: &Session,
@@ -83,7 +78,7 @@ pub(super) fn pause<'era>(
     frame: &mut Frame<'era>,
 ) -> Result<(), ExecError> {
     loop {
-        match session.step(owner, frame)? {
+        match session.wait_step(owner, frame)? {
             Step::Safepoint => return Ok(()),
             Step::Retry | Step::Yielded => thread::yield_now(),
             Step::Progress => {}
@@ -91,29 +86,16 @@ pub(super) fn pause<'era>(
         }
     }
 }
-fn transition<T>(
-    mut body: impl FnMut() -> Result<T, RendezvousError>,
-) -> Result<T, RendezvousError> {
-    for _ in 0..STEP_CAP {
-        match body() {
-            Err(RendezvousError::Busy) => thread::yield_now(),
-            result => return result,
-        }
-    }
-    Err(RendezvousError::Busy)
-}
-fn retire(mut owner: Mutator<'_>) -> Result<(), String> {
-    for _ in 0..STEP_CAP {
-        match owner.retire_rooted(&[]) {
-            Ok(()) => return Ok(()),
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                owner = failure.into_owner();
-                thread::yield_now();
-            }
-            Err(failure) => return Err(format!("retire: {:?}", failure.reason)),
-        }
-    }
-    Err("retirement retry budget exhausted".into())
+fn retire(owner: Mutator<'_>) -> Result<(), String> {
+    retry_owned(
+        owner,
+        |owner| owner.retire_rooted(&[]),
+        |failure| match contention::rendezvous(&failure.reason) {
+            Retry::Busy => ControlFlow::Continue(failure.into_owner()),
+            Retry::Refuse => ControlFlow::Break(failure),
+        },
+    )
+    .map_err(|failure| format!("retire: {:?}", failure.reason))
 }
 pub(super) fn run<'era>(
     session: &Session,
@@ -124,9 +106,10 @@ pub(super) fn run<'era>(
     commands: Receiver<Command>,
     events: Sender<Event>,
 ) {
+    let _probes = a8_probes::suppress();
     let mut owner = activate_owner(permit, heap, OWNER_BASE + index as u64);
     let mut frame = None;
-    let mut native = false;
+    let mut native = NativeState::Running;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         || -> Result<Terminal, ExecError> {
             frame = Some(session.seed(&mut owner, index, nil)?);
@@ -143,19 +126,19 @@ pub(super) fn run<'era>(
                     })?;
                 }
                 let before = snapshot(&mut owner, session, frame)?;
-                transition(|| owner.enter_native(&[]))?;
-                native = true;
-                events.send(Event::Paused(before)).expect("keeper at pause");
-                assert_eq!(receive(&commands), Command::Resume);
-                transition(|| owner.leave_native())?;
-                native = false;
+                owner.with_native_extent(&[], |_| {
+                    native = NativeState::Published;
+                    events.send(Event::Paused(before)).expect("keeper at pause");
+                    assert_eq!(receive(&commands), Command::Resume);
+                })?;
+                native = NativeState::Running;
                 events
                     .send(Event::Resumed(snapshot(&mut owner, session, frame)?))
                     .expect("keeper at resume");
             }
             assert_eq!(receive(&commands), Command::Finish);
             let execution = loop {
-                match session.step(&mut owner, frame) {
+                match session.wait_step(&mut owner, frame) {
                     Ok(Step::Done) => break Ok(()),
                     Ok(Step::Retry | Step::Yielded) => thread::yield_now(),
                     Ok(Step::Progress | Step::Safepoint) => {}
@@ -178,8 +161,9 @@ pub(super) fn run<'era>(
     };
     drop(frame);
     let cleanup = (|| -> Result<(), String> {
-        if native {
-            transition(|| owner.leave_native()).map_err(|e| format!("restore: {e:?}"))?;
+        if matches!(native, NativeState::Published) {
+            contention::retry(|| owner.leave_native(), contention::rendezvous)
+                .map_err(|e| format!("restore: {e:?}"))?;
         }
         with_run(&mut owner, |run| {
             run.clear_root_slots()?;

@@ -128,6 +128,7 @@ fn paused(actor: &Actor) -> Snapshot {
     }
 }
 fn scenario(kind: PlainSymbolBacking, count: usize) {
+    let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
     let (rounds, snapshots, finished, graphs) =
         Context::with_test_symbol_functions_era(kind, |era, ids| {
             let sources: Vec<_> = (0..count).map(source).collect();

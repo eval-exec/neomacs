@@ -5,6 +5,8 @@ use super::{
 };
 use std::num::NonZeroU32;
 
+pub(super) mod retry;
+
 /// Closed syntax only: handles and resident operand homes, no raw callee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FunctionOp {

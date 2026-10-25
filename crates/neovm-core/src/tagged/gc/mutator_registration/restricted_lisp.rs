@@ -8,7 +8,9 @@
 //! any owner is activated.
 #![cfg(not(feature = "gc-memory-telemetry"))]
 
+use super::a8_probes;
 use super::symbol_functions::FunctionOp;
+use super::symbol_functions::retry::{self as contention, Retry, SPIN_WAIT, retry_owned};
 use super::symbol_globals::GlobalOp;
 use super::{
     AllStopped, HeapIdentity, Mutator, MutatorPermit, OwnerRootSlot, ParallelHeapEra,
@@ -25,14 +27,37 @@ use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::{Fixnum, TaggedValue};
 use rustc_hash::FxHashSet;
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const STEP_CAP: u32 = 10_000;
-const SPIN_WAIT: Duration = Duration::from_secs(60);
 const CHANNEL_WAIT: Duration = Duration::from_secs(90);
+
+/// The extent body committed publication; only a successful wrapper return
+/// permits heap access. Keep that cleanup obligation across unwinding.
+enum NativeState {
+    Running,
+    Published,
+}
+
+fn retry_exec<T>(op: impl FnMut() -> Result<T, ExecError>) -> Result<T, ExecError> {
+    contention::retry(op, |error| match error {
+        ExecError::Registration(error) => contention::registration(error),
+        ExecError::Rendezvous(_)
+        | ExecError::ForeignCons
+        | ExecError::Type
+        | ExecError::Overflow
+        | ExecError::Backedge
+        | ExecError::Slot
+        | ExecError::UserTestMutation
+        | ExecError::EpochRetry
+        | ExecError::VoidVariable
+        | ExecError::Function(_) => Retry::Refuse,
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Op {
@@ -371,26 +396,14 @@ fn recv<T>(rx: &Receiver<T>) -> T {
         .unwrap_or_else(|error| panic!("owner channel closed: {error}"))
 }
 
-fn retry_rv<T>(mut op: impl FnMut() -> Result<T, RendezvousError>) -> T {
-    let deadline = Instant::now() + SPIN_WAIT;
-    loop {
-        match op() {
-            Ok(value) => return value,
-            Err(RendezvousError::Busy) if Instant::now() < deadline => thread::yield_now(),
-            Err(error) => panic!("rendezvous: {error:?}"),
-        }
-    }
+fn retry_rv<T>(op: impl FnMut() -> Result<T, RendezvousError>) -> T {
+    contention::retry(op, contention::rendezvous)
+        .unwrap_or_else(|error| panic!("rendezvous: {error:?}"))
 }
 
-fn retry_reg<T>(mut op: impl FnMut() -> Result<T, RegistrationError>) -> T {
-    let deadline = Instant::now() + SPIN_WAIT;
-    loop {
-        match op() {
-            Ok(value) => return value,
-            Err(RegistrationError::Busy) if Instant::now() < deadline => thread::yield_now(),
-            Err(error) => panic!("registration: {error:?}"),
-        }
-    }
+fn retry_reg<T>(op: impl FnMut() -> Result<T, RegistrationError>) -> T {
+    contention::retry(op, contention::registration)
+        .unwrap_or_else(|error| panic!("registration: {error:?}"))
 }
 
 fn must<T>(result: Result<T, ExecError>) -> T {
@@ -2261,75 +2274,55 @@ fn one_slice<'era>(
     })
 }
 
-fn activate_owner<'era>(
-    mut permit: MutatorPermit<'era>,
-    heap: HeapIdentity,
-    id: u64,
-) -> Mutator<'era> {
-    let deadline = Instant::now() + SPIN_WAIT;
-    loop {
-        match permit.activate(heap, id) {
-            Ok(owner) => return owner,
-            Err(failure)
-                if failure.reason == RegistrationError::Busy && Instant::now() < deadline =>
-            {
-                permit = failure.into_permit();
-                thread::yield_now();
-            }
-            Err(failure) => panic!("activate: {:?}", failure.reason),
-        }
-    }
+fn activate_owner<'era>(permit: MutatorPermit<'era>, heap: HeapIdentity, id: u64) -> Mutator<'era> {
+    retry_owned(
+        permit,
+        |permit| permit.activate(heap, id),
+        |failure| match contention::registration(&failure.reason) {
+            Retry::Busy => ControlFlow::Continue(failure.into_permit()),
+            Retry::Refuse => ControlFlow::Break(failure),
+        },
+    )
+    .unwrap_or_else(|failure| panic!("activate: {:?}", failure.reason))
 }
 
 fn restore(owner: &mut Mutator<'_>) {
-    let mut image = owner
+    let image = owner
         .begin_restore_retry(false)
         .unwrap_or_else(|error| panic!("restore: {error:?}"));
-    let deadline = Instant::now() + SPIN_WAIT;
-    loop {
-        match image.apply() {
-            Ok(()) => return,
-            Err(failure)
-                if failure.reason == RendezvousError::Busy && Instant::now() < deadline =>
-            {
-                image = failure.into_image();
-                thread::yield_now();
-            }
-            Err(failure) => panic!("apply: {:?}", failure.reason),
-        }
-    }
+    retry_owned(
+        image,
+        |image| image.apply(),
+        |failure| match contention::rendezvous(&failure.reason) {
+            Retry::Busy => ControlFlow::Continue(failure.into_image()),
+            Retry::Refuse => ControlFlow::Break(failure),
+        },
+    )
+    .unwrap_or_else(|failure| panic!("apply: {:?}", failure.reason))
 }
 
-fn retire(mut owner: Mutator<'_>) {
-    let deadline = Instant::now() + SPIN_WAIT;
-    loop {
-        match owner.retire_rooted(&[]) {
-            Ok(()) => return,
-            Err(failure)
-                if failure.reason == RendezvousError::Busy && Instant::now() < deadline =>
-            {
-                owner = failure.into_owner();
-                thread::yield_now();
-            }
-            Err(failure) => panic!("retire: {:?}", failure.reason),
-        }
-    }
+fn retire(owner: Mutator<'_>) {
+    retry_owned(
+        owner,
+        |owner| owner.retire_rooted(&[]),
+        |failure| match contention::rendezvous(&failure.reason) {
+            Retry::Busy => ControlFlow::Continue(failure.into_owner()),
+            Retry::Refuse => ControlFlow::Break(failure),
+        },
+    )
+    .unwrap_or_else(|failure| panic!("retire: {:?}", failure.reason))
 }
 
-fn complete(mut stopped: AllStopped<'_>) {
-    let deadline = Instant::now() + SPIN_WAIT;
-    loop {
-        match stopped.complete() {
-            Ok(()) => return,
-            Err(failure)
-                if failure.reason == RendezvousError::Busy && Instant::now() < deadline =>
-            {
-                stopped = failure.into_stopped();
-                thread::yield_now();
-            }
-            Err(failure) => panic!("complete: {:?}", failure.reason),
-        }
-    }
+fn complete(stopped: AllStopped<'_>) {
+    retry_owned(
+        stopped,
+        |stopped| stopped.complete(),
+        |failure| match contention::rendezvous(&failure.reason) {
+            Retry::Busy => ControlFlow::Continue(failure.into_stopped()),
+            Retry::Refuse => ControlFlow::Break(failure),
+        },
+    )
+    .unwrap_or_else(|failure| panic!("complete: {:?}", failure.reason))
 }
 
 fn on_heap<R>(
@@ -2337,14 +2330,7 @@ fn on_heap<R>(
     stopped: &AllStopped<'_>,
     body: impl Fn(&crate::tagged::gc::TaggedHeap) -> R,
 ) -> R {
-    let deadline = Instant::now() + SPIN_WAIT;
-    loop {
-        match era.with_stopped_heap_for_test(stopped, &body) {
-            Ok(value) => return value,
-            Err(RendezvousError::Busy) if Instant::now() < deadline => thread::yield_now(),
-            Err(error) => panic!("stopped heap: {error:?}"),
-        }
-    }
+    retry_rv(|| era.with_stopped_heap_for_test(stopped, &body))
 }
 
 fn open_collection<'a>(

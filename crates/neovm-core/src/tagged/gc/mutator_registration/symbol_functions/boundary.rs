@@ -1,12 +1,12 @@
 //! Test bridge: actual owner operations, then actual stopped reconciliation.
 //! No Context, header view, evaluator or native entry is admitted here.
+use super::retry::{self as contention, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::intern::SymId;
-use crate::tagged::gc::{
-    HeapIdentity, Mutator, MutatorPermit, ParallelHeapEra, RegistrationError, RendezvousError,
-};
+use crate::tagged::gc::{HeapIdentity, Mutator, MutatorPermit, ParallelHeapEra};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue;
+use std::ops::ControlFlow;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum FunctionEraEdit {
@@ -36,35 +36,37 @@ fn attempt<'era, T>(
     owner: &mut Mutator<'era>,
     mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<T, FunctionError>,
 ) -> Result<T, String> {
-    for _ in 0..10_000 {
-        let result = match owner.run_access() {
+    contention::retry(
+        || match owner.run_access() {
             Ok(mut run) => body(&mut run),
             Err(error) => Err(error.into()),
-        };
-        match result {
-            Err(FunctionError::Authority(RegistrationError::Busy)) => std::thread::yield_now(),
-            result => return result.map_err(|error| format!("function owner: {error:?}")),
-        }
-    }
-    Err("function owner remained Busy within the finite attempt budget".into())
+        },
+        |error| match error {
+            FunctionError::Authority(error) => contention::registration(error),
+            FunctionError::VoidFunction
+            | FunctionError::UnsupportedDefinition
+            | FunctionError::EpochExhausted
+            | FunctionError::ActiveActivation
+            | FunctionError::InactiveActivation => Retry::Refuse,
+        },
+    )
+    .map_err(|error| format!("function owner: {error:?}"))
 }
 
 fn activate<'era>(
-    mut permit: MutatorPermit<'era>,
+    permit: MutatorPermit<'era>,
     heap: HeapIdentity,
     id: u64,
 ) -> Result<Mutator<'era>, String> {
-    for _ in 0..10_000 {
-        match permit.activate(heap, id) {
-            Ok(owner) => return Ok(owner),
-            Err(failed) if failed.reason == RegistrationError::Busy => {
-                permit = failed.into_permit();
-                std::thread::yield_now();
-            }
-            Err(failed) => return Err(format!("function activation: {failed:?}")),
-        }
-    }
-    Err("function activation remained Busy".into())
+    retry_owned(
+        permit,
+        |permit| permit.activate(heap, id),
+        |failed| match contention::registration(&failed.reason) {
+            Retry::Busy => ControlFlow::Continue(failed.into_permit()),
+            Retry::Refuse => ControlFlow::Break(failed),
+        },
+    )
+    .map_err(|failed| format!("function activation: {failed:?}"))
 }
 
 fn guarded<'era, T>(
@@ -76,17 +78,16 @@ fn guarded<'era, T>(
     // All body homes and loans have ended, regardless of its outcome. Clear
     // the actual canonical bank, then consume the real retirement capability.
     let cleared = attempt(&mut owner, |run| run.clear_root_slots().map_err(Into::into));
-    for _ in 0..10_000 {
-        match owner.retire_rooted(&[]) {
-            Ok(()) => return cleared.and(result),
-            Err(failed) if failed.reason == RendezvousError::Busy => {
-                owner = failed.into_owner();
-                std::thread::yield_now();
-            }
-            Err(failed) => return Err(format!("function owner teardown: {failed:?}")),
-        }
-    }
-    Err("function owner retirement remained Busy".into())
+    retry_owned(
+        owner,
+        |owner| owner.retire_rooted(&[]),
+        |failed| match contention::rendezvous(&failed.reason) {
+            Retry::Busy => ControlFlow::Continue(failed.into_owner()),
+            Retry::Refuse => ControlFlow::Break(failed),
+        },
+    )
+    .map_err(|failed| format!("function owner teardown: {failed:?}"))?;
+    cleared.and(result)
 }
 
 fn snapshot(
