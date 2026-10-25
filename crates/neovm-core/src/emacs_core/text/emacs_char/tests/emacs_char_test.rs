@@ -189,6 +189,41 @@ fn checked_decoder_keeps_an_out_of_range_five_byte_tail_in_the_character_domain(
     assert!(EmacsChar::from_code(code).is_some(), "{code:#x}");
 }
 
+#[test]
+fn checked_decoder_bounds_five_byte_tails_at_the_character_domain() {
+    // `string_char` decodes like GNU, so it deliberately does not reject
+    // overlong tails (`multibyte_length` is the validity check): F8 80 80 80
+    // 80 decodes as code 0.  It only keeps the payload representable, so a
+    // tail above MAX_CHAR becomes its lead byte.
+    for code in [
+        0x00_0000,
+        MAX_4_BYTE_CHAR,
+        MAX_5_BYTE_CHAR,
+        MAX_5_BYTE_CHAR + 1,
+        MAX_CHAR,
+        MAX_CHAR + 1,
+        0xFF_FFFF,
+    ] {
+        let bytes = [
+            0xF8,
+            0x80 | ((code >> 18) & 0x3F) as u8,
+            0x80 | ((code >> 12) & 0x3F) as u8,
+            0x80 | ((code >> 6) & 0x3F) as u8,
+            0x80 | (code & 0x3F) as u8,
+        ];
+        let (decoded, len) = string_char(&bytes);
+        assert!(
+            EmacsChar::from_code(decoded).is_some(),
+            "U+{code:X} -> {decoded:#x}"
+        );
+        if code <= MAX_CHAR {
+            assert_eq!((decoded, len), (code, 5), "U+{code:X}");
+        } else {
+            assert_eq!((decoded, len), (byte8_to_char(0xF8), 1), "U+{code:X}");
+        }
+    }
+}
+
 // -----------------------------------------------------------------------
 // chars_in_multibyte
 // -----------------------------------------------------------------------
