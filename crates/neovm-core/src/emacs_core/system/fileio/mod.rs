@@ -6690,6 +6690,235 @@ fn resolve_write_coding_system_symbol(
     }
 }
 
+/// GNU's `coding-system-require-warning` for one write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCodingWarning {
+    /// Use a bound `coding-system-for-write` as-is.
+    Silent,
+    /// Confirm it with `select-safe-coding-system-function`.
+    Confirm,
+}
+
+/// The installed `select-safe-coding-system-function`, if any.
+///
+/// Carrying the symbol in the `Present` variant makes "call the selector"
+/// unrepresentable without a callable target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCodingSelector {
+    Absent,
+    Present(super::intern::SymId),
+}
+
+/// A coding-system value read from a buffer slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodingValue {
+    /// Lisp nil.
+    Unset,
+    /// A coding-system symbol.
+    Coding(super::intern::SymId),
+}
+
+/// How `buffer-file-coding-system` is bound for this buffer.
+///
+/// GNU distinguishes a buffer-local binding from the inherited default with
+/// `Flocal_variable_p`; a local nil is still a local binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BufferCodingSlot {
+    /// No buffer-local binding; the value is inherited from the default.
+    Inherited(CodingValue),
+    /// A buffer-local binding exists (its value may be nil).
+    Local(CodingValue),
+}
+
+impl BufferCodingSlot {
+    /// The coding GNU's `val` starts from, or `fallback` for nil (Neo's
+    /// platform default; GNU keeps nil and decides it in the selector).
+    fn chosen(self, fallback: super::intern::SymId) -> super::intern::SymId {
+        match self {
+            BufferCodingSlot::Inherited(CodingValue::Coding(coding))
+            | BufferCodingSlot::Local(CodingValue::Coding(coding)) => coding,
+            BufferCodingSlot::Inherited(CodingValue::Unset)
+            | BufferCodingSlot::Local(CodingValue::Unset) => fallback,
+        }
+    }
+}
+
+/// GNU `enable-multibyte-characters` for this buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BufferMultibyte {
+    Multibyte,
+    Unibyte,
+}
+
+/// Why GNU's `choose_write_coding_system` forces raw-text output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ForceRawTextReason {
+    /// src/fileio.c:5389-5393: `enable-multibyte-characters` is nil and
+    /// `buffer-file-coding-system` is nil or not buffer-local.
+    UnibyteBufferWithoutLocalCoding,
+    /// src/fileio.c:5416-5423: the selected coding's type is `raw_text`.
+    RawTextCodingType,
+}
+
+/// GNU's `!using_default_coding` end-of-line inheritance
+/// (src/fileio.c:5437-5443), applied before the raw-text conversion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BufferDefaultEol {
+    /// The chosen coding came from the buffer default itself
+    /// (`using_default_coding`), or that default is nil: no step.
+    Settled,
+    /// Inherit PARENT's concrete end-of-line type when the chosen coding has
+    /// none.
+    InheritFrom(super::intern::SymId),
+}
+
+/// What one `choose_write_coding_system` call must do next.
+///
+/// Computed once from [`WriteCodingInput`]; the write path then matches it
+/// exhaustively to run the selector and/or `raw_text_coding_system`
+/// (src/fileio.c:5450).  Variants that call the selector carry its symbol, so
+/// a selector call without a callable selector does not typecheck.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCodingChoice {
+    /// `coding-system-for-write` is used as-is.
+    BoundDirect(super::intern::SymId),
+    /// `coding-system-for-write` is confirmed with `(t CODING)`.
+    BoundConfirmed {
+        coding: super::intern::SymId,
+        selector: super::intern::SymId,
+    },
+    /// The selector is skipped and CODING is converted with
+    /// `raw_text_coding_system`.
+    ForcedRawText {
+        reason: ForceRawTextReason,
+        coding: super::intern::SymId,
+        eol: BufferDefaultEol,
+    },
+    /// CODING is used directly.
+    Selected {
+        coding: super::intern::SymId,
+        eol: BufferDefaultEol,
+    },
+    /// The selector is asked with CODING as its default.
+    SelectWithDefault {
+        coding: super::intern::SymId,
+        selector: super::intern::SymId,
+        eol: BufferDefaultEol,
+    },
+}
+
+/// Where the buffer path's coding came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCodingSource {
+    /// `coding-system-for-write` is bound.
+    Bound {
+        coding: super::intern::SymId,
+        warning: WriteCodingWarning,
+    },
+    /// The buffer's `buffer-file-coding-system` supplies CHOSEN.
+    Buffer {
+        chosen: super::intern::SymId,
+        class: crate::emacs_core::coding::WriteCodingClass,
+    },
+}
+
+/// The evaluator-independent inputs of GNU's decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WriteCodingInput {
+    source: WriteCodingSource,
+    selector: WriteCodingSelector,
+    multibyte: BufferMultibyte,
+    slot: BufferCodingSlot,
+    /// GNU `BVAR (&buffer_defaults, buffer_file_coding_system)`.
+    buffer_default: CodingValue,
+}
+
+/// GNU `choose_write_coding_system`'s decision table as one exhaustive match
+/// (src/fileio.c:5383-5450).
+fn decide_write_coding(input: WriteCodingInput) -> WriteCodingChoice {
+    match input.source {
+        WriteCodingSource::Bound { coding, warning } => match (warning, input.selector) {
+            (WriteCodingWarning::Silent, _) => WriteCodingChoice::BoundDirect(coding),
+            (WriteCodingWarning::Confirm, WriteCodingSelector::Absent) => {
+                WriteCodingChoice::BoundDirect(coding)
+            }
+            (WriteCodingWarning::Confirm, WriteCodingSelector::Present(selector)) => {
+                WriteCodingChoice::BoundConfirmed { coding, selector }
+            }
+        },
+        WriteCodingSource::Buffer { chosen, class } => {
+            // GNU's `using_default_coding` is set only when a nil
+            // `buffer-file-coding-system` was replaced by the buffer default.
+            let using_default = match input.slot {
+                BufferCodingSlot::Inherited(_) | BufferCodingSlot::Local(CodingValue::Unset) => {
+                    true
+                }
+                BufferCodingSlot::Local(CodingValue::Coding(_)) => false,
+            };
+            let eol = match (using_default, input.buffer_default) {
+                (false, CodingValue::Coding(parent)) => BufferDefaultEol::InheritFrom(parent),
+                (true, _) | (false, CodingValue::Unset) => BufferDefaultEol::Settled,
+            };
+            // (a) unibyte with no usable local coding, then (b) a raw-text
+            // coding type on the chosen value.
+            let forced = match (input.multibyte, input.slot) {
+                (BufferMultibyte::Unibyte, BufferCodingSlot::Inherited(_))
+                | (BufferMultibyte::Unibyte, BufferCodingSlot::Local(CodingValue::Unset)) => {
+                    Some(ForceRawTextReason::UnibyteBufferWithoutLocalCoding)
+                }
+                (BufferMultibyte::Unibyte, BufferCodingSlot::Local(CodingValue::Coding(_)))
+                | (BufferMultibyte::Multibyte, BufferCodingSlot::Inherited(_))
+                | (BufferMultibyte::Multibyte, BufferCodingSlot::Local(_)) => None,
+            }
+            .or(match class {
+                crate::emacs_core::coding::WriteCodingClass::RawText => {
+                    Some(ForceRawTextReason::RawTextCodingType)
+                }
+                crate::emacs_core::coding::WriteCodingClass::Selectable => None,
+            });
+            match forced {
+                Some(reason) => WriteCodingChoice::ForcedRawText {
+                    reason,
+                    coding: chosen,
+                    eol,
+                },
+                None => match input.selector {
+                    WriteCodingSelector::Present(selector) => {
+                        WriteCodingChoice::SelectWithDefault {
+                            coding: chosen,
+                            selector,
+                            eol,
+                        }
+                    }
+                    WriteCodingSelector::Absent => WriteCodingChoice::Selected {
+                        coding: chosen,
+                        eol,
+                    },
+                },
+            }
+        }
+    }
+}
+
+/// GNU's `!using_default_coding` step: inherit the buffer default's concrete
+/// end-of-line type when the chosen coding does not fix one.
+fn inherit_buffer_default_eol(
+    mgr: &crate::emacs_core::coding::CodingSystemManager,
+    coding: super::intern::SymId,
+    eol: BufferDefaultEol,
+) -> super::intern::SymId {
+    match eol {
+        BufferDefaultEol::Settled => coding,
+        BufferDefaultEol::InheritFrom(parent) => {
+            crate::emacs_core::coding::coding_inherit_eol_type(
+                mgr,
+                coding,
+                crate::emacs_core::coding::EolParent::Coding(parent),
+            )
+        }
+    }
+}
+
 fn select_write_region_coding_system(
     eval: &mut super::eval::Context,
     buffer_id: crate::buffer::BufferId,
@@ -6723,31 +6952,113 @@ fn select_write_region_coding_system(
             resolved.as_symbol_id(symbol_mode).unwrap_or(symbol),
         )
     };
-    if for_write.is_some() && !require_warning {
-        return Ok(finish(eval, fallback));
-    }
     let selector = eval.visible_variable_value_or_nil("select-safe-coding-system-function");
-    let Some(selector_id) = selector.as_symbol_id(symbol_mode) else {
-        return Ok(finish(eval, fallback));
+    let selector = match selector.as_symbol_id(symbol_mode) {
+        Some(id) if eval.obarray().fboundp_id(id) => WriteCodingSelector::Present(id),
+        _ => WriteCodingSelector::Absent,
     };
-    if !eval.obarray().fboundp_id(selector_id) {
-        return Ok(finish(eval, fallback));
-    }
-
-    // GNU `choose_write_coding_system` delegates the final choice to
+    let warning = match require_warning {
+        true => WriteCodingWarning::Confirm,
+        false => WriteCodingWarning::Silent,
+    };
+    // GNU reads the buffer slot with BVAR and asks Flocal_variable_p whether
+    // it is buffer-local; the inherited default alone does not count.
+    let slot_value = eval
+        .buffers
+        .get(buffer_id)
+        .and_then(|buf| buf.buffer_local_value("buffer-file-coding-system"))
+        .and_then(|value| coding_system_value_to_name(&value))
+        .map(|name| CodingValue::Coding(intern(&name)))
+        .unwrap_or(CodingValue::Unset);
+    let slot = match eval
+        .buffers
+        .get(buffer_id)
+        .is_some_and(|buf| buf.has_buffer_local_by_sym_id(intern("buffer-file-coding-system")))
+    {
+        true => BufferCodingSlot::Local(slot_value),
+        false => BufferCodingSlot::Inherited(slot_value),
+    };
+    let multibyte = match eval
+        .buffers
+        .get(buffer_id)
+        .is_some_and(|buf| buf.get_multibyte())
+    {
+        true => BufferMultibyte::Multibyte,
+        false => BufferMultibyte::Unibyte,
+    };
+    let buffer_default = eval
+        .buffer_default_value("buffer-file-coding-system")
+        .and_then(|value| coding_system_value_to_name(&value))
+        .map(|name| CodingValue::Coding(intern(&name)))
+        .unwrap_or(CodingValue::Unset);
+    let source = match for_write.as_deref() {
+        Some(bound) => WriteCodingSource::Bound {
+            coding: intern(bound),
+            warning,
+        },
+        None => {
+            let chosen = slot.chosen(fallback);
+            WriteCodingSource::Buffer {
+                chosen,
+                class: crate::emacs_core::coding::classify_write_coding(
+                    &eval.coding_systems,
+                    resolve_sym(chosen),
+                ),
+            }
+        }
+    };
+    let choice = decide_write_coding(WriteCodingInput {
+        source,
+        selector,
+        multibyte,
+        slot,
+        buffer_default,
+    });
+    // GNU `choose_write_coding_system` delegates a non-raw selection to
     // `select-safe-coding-system-function`.  Among other safety checks, the
     // Lisp selector calls `find-auto-coding` on the exact region, so a
     // `coding:` declaration in generated Lisp takes precedence over the
-    // inherited platform default.
-    let default_coding = if for_write.is_some() {
-        Value::list(vec![Value::T, Value::symbol(fallback)])
-    } else {
-        Value::symbol(fallback)
+    // inherited platform default.  A bound coding is confirmed with the
+    // restricted `(t CODING)` default; a buffer-default selection passes
+    // CODING itself as the default.  A forced raw-text selection skips the
+    // selector and is converted by `raw_text_coding_system` (fileio.c:5450).
+    let (selected, selected_eol) = match choice {
+        WriteCodingChoice::BoundDirect(coding) => return Ok(finish(eval, coding)),
+        WriteCodingChoice::Selected { coding, eol } => {
+            let coding = inherit_buffer_default_eol(&eval.coding_systems, coding, eol);
+            return Ok(finish(eval, coding));
+        }
+        WriteCodingChoice::ForcedRawText { coding, eol, .. } => {
+            let coding = inherit_buffer_default_eol(&eval.coding_systems, coding, eol);
+            let raw =
+                crate::emacs_core::coding::raw_text_coding_system(&eval.coding_systems, coding);
+            return Ok(finish(eval, raw));
+        }
+        WriteCodingChoice::BoundConfirmed { coding, selector } => (
+            eval.funcall_general(
+                Value::from_sym_id(selector),
+                vec![
+                    from,
+                    to,
+                    Value::list(vec![Value::T, Value::symbol(coding)]),
+                    Value::NIL,
+                    filename,
+                ],
+            )?,
+            BufferDefaultEol::Settled,
+        ),
+        WriteCodingChoice::SelectWithDefault {
+            coding,
+            selector,
+            eol,
+        } => (
+            eval.funcall_general(
+                Value::from_sym_id(selector),
+                vec![from, to, Value::symbol(coding), Value::NIL, filename],
+            )?,
+            eol,
+        ),
     };
-    let selected = eval.funcall_general(
-        selector,
-        vec![from, to, default_coding, Value::NIL, filename],
-    )?;
     let selected_id = selected
         .as_symbol_id(symbol_mode)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![selected]))?;
@@ -6755,6 +7066,7 @@ fn select_write_region_coding_system(
     if !eval.coding_systems.is_known_or_derived(selected_name) {
         return Err(signal(LispCondition::CodingSystemError, vec![selected]));
     }
+    let selected_id = inherit_buffer_default_eol(&eval.coding_systems, selected_id, selected_eol);
     Ok(finish(eval, selected_id))
 }
 

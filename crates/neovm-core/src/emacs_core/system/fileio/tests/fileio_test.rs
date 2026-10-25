@@ -4601,6 +4601,443 @@ fn write_region_honors_buffer_coding_cookie_over_default_dos_eol() {
 }
 
 #[test]
+fn decide_write_coding_is_gnu_choose_write_coding_system() {
+    crate::test_utils::init_test_tracing();
+    use super::{
+        BufferCodingSlot, BufferDefaultEol, BufferMultibyte, CodingValue, ForceRawTextReason,
+        WriteCodingChoice, WriteCodingInput, WriteCodingSelector, WriteCodingSource,
+        WriteCodingWarning, decide_write_coding,
+    };
+    use crate::emacs_core::coding::WriteCodingClass;
+
+    let selector = crate::emacs_core::intern::intern("select-safe-coding-system");
+    let utf8 = crate::emacs_core::intern::intern("utf-8");
+    let utf8_dos = crate::emacs_core::intern::intern("utf-8-dos");
+    let no_conversion = crate::emacs_core::intern::intern("no-conversion");
+    let present = WriteCodingSelector::Present(selector);
+    let absent = WriteCodingSelector::Absent;
+    let silent = WriteCodingWarning::Silent;
+    let confirm = WriteCodingWarning::Confirm;
+    let raw = WriteCodingClass::RawText;
+    let selectable = WriteCodingClass::Selectable;
+    let multibyte = BufferMultibyte::Multibyte;
+    let unibyte = BufferMultibyte::Unibyte;
+
+    let bound = |warning| WriteCodingSource::Bound {
+        coding: utf8,
+        warning,
+    };
+    let buffer = |chosen, class| WriteCodingSource::Buffer { chosen, class };
+    let input = |source, selector, multibyte, slot, buffer_default| WriteCodingInput {
+        source,
+        selector,
+        multibyte,
+        slot,
+        buffer_default,
+    };
+
+    // The whole GNU `choose_write_coding_system` truth table
+    // (src/fileio.c:5383-5450).  Every arm is one typed state; a selector arm
+    // carries its symbol, and the forced arms carry the source of the force.
+    let cases = [
+        // A bound `coding-system-for-write` is used as-is unless
+        // `coding-system-require-warning` asks for confirmation.
+        (
+            input(
+                bound(silent),
+                absent,
+                multibyte,
+                BufferCodingSlot::Inherited(CodingValue::Unset),
+                CodingValue::Unset,
+            ),
+            WriteCodingChoice::BoundDirect(utf8),
+        ),
+        (
+            input(
+                bound(silent),
+                present,
+                multibyte,
+                BufferCodingSlot::Inherited(CodingValue::Unset),
+                CodingValue::Unset,
+            ),
+            WriteCodingChoice::BoundDirect(utf8),
+        ),
+        (
+            input(
+                bound(confirm),
+                absent,
+                multibyte,
+                BufferCodingSlot::Inherited(CodingValue::Unset),
+                CodingValue::Unset,
+            ),
+            WriteCodingChoice::BoundDirect(utf8),
+        ),
+        (
+            input(
+                bound(confirm),
+                present,
+                multibyte,
+                BufferCodingSlot::Inherited(CodingValue::Unset),
+                CodingValue::Unset,
+            ),
+            WriteCodingChoice::BoundConfirmed {
+                coding: utf8,
+                selector,
+            },
+        ),
+        // (a) unibyte and no usable local coding forces raw text, with or
+        // without a selector.
+        (
+            input(
+                buffer(utf8, selectable),
+                present,
+                unibyte,
+                BufferCodingSlot::Inherited(CodingValue::Coding(utf8)),
+                CodingValue::Coding(utf8),
+            ),
+            WriteCodingChoice::ForcedRawText {
+                reason: ForceRawTextReason::UnibyteBufferWithoutLocalCoding,
+                coding: utf8,
+                eol: BufferDefaultEol::Settled,
+            },
+        ),
+        (
+            input(
+                buffer(utf8, selectable),
+                absent,
+                unibyte,
+                BufferCodingSlot::Local(CodingValue::Unset),
+                CodingValue::Unset,
+            ),
+            WriteCodingChoice::ForcedRawText {
+                reason: ForceRawTextReason::UnibyteBufferWithoutLocalCoding,
+                coding: utf8,
+                eol: BufferDefaultEol::Settled,
+            },
+        ),
+        // A local coding disables (a); a selectable coding then follows the
+        // selector rule.
+        (
+            input(
+                buffer(utf8, selectable),
+                absent,
+                unibyte,
+                BufferCodingSlot::Local(CodingValue::Coding(utf8)),
+                CodingValue::Coding(utf8_dos),
+            ),
+            WriteCodingChoice::Selected {
+                coding: utf8,
+                eol: BufferDefaultEol::InheritFrom(utf8_dos),
+            },
+        ),
+        // (b) a raw-text-type coding forces raw text.
+        (
+            input(
+                buffer(no_conversion, raw),
+                present,
+                multibyte,
+                BufferCodingSlot::Local(CodingValue::Coding(no_conversion)),
+                CodingValue::Coding(utf8_dos),
+            ),
+            WriteCodingChoice::ForcedRawText {
+                reason: ForceRawTextReason::RawTextCodingType,
+                coding: no_conversion,
+                eol: BufferDefaultEol::InheritFrom(utf8_dos),
+            },
+        ),
+        (
+            input(
+                buffer(no_conversion, raw),
+                present,
+                multibyte,
+                BufferCodingSlot::Inherited(CodingValue::Coding(no_conversion)),
+                CodingValue::Unset,
+            ),
+            WriteCodingChoice::ForcedRawText {
+                reason: ForceRawTextReason::RawTextCodingType,
+                coding: no_conversion,
+                eol: BufferDefaultEol::Settled,
+            },
+        ),
+        // Non-forced buffer selections: the selector decides when present,
+        // otherwise the chosen coding is used directly.
+        (
+            input(
+                buffer(utf8, selectable),
+                present,
+                multibyte,
+                BufferCodingSlot::Local(CodingValue::Coding(utf8)),
+                CodingValue::Coding(utf8_dos),
+            ),
+            WriteCodingChoice::SelectWithDefault {
+                coding: utf8,
+                selector,
+                eol: BufferDefaultEol::InheritFrom(utf8_dos),
+            },
+        ),
+        (
+            input(
+                buffer(utf8, selectable),
+                absent,
+                multibyte,
+                BufferCodingSlot::Inherited(CodingValue::Coding(utf8)),
+                CodingValue::Coding(utf8),
+            ),
+            WriteCodingChoice::Selected {
+                coding: utf8,
+                eol: BufferDefaultEol::Settled,
+            },
+        ),
+        (
+            input(
+                buffer(utf8, selectable),
+                present,
+                multibyte,
+                BufferCodingSlot::Inherited(CodingValue::Coding(utf8)),
+                CodingValue::Coding(utf8),
+            ),
+            WriteCodingChoice::SelectWithDefault {
+                coding: utf8,
+                selector,
+                eol: BufferDefaultEol::Settled,
+            },
+        ),
+        (
+            input(
+                buffer(utf8, selectable),
+                present,
+                multibyte,
+                BufferCodingSlot::Local(CodingValue::Unset),
+                CodingValue::Unset,
+            ),
+            WriteCodingChoice::SelectWithDefault {
+                coding: utf8,
+                selector,
+                eol: BufferDefaultEol::Settled,
+            },
+        ),
+    ];
+    for (case, expected) in cases {
+        assert_eq!(decide_write_coding(case), expected);
+    }
+}
+
+#[test]
+fn write_region_raw_text_coding_skips_select_safe_coding_system() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("raw-cache.xml");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // GNU `choose_write_coding_system': a raw-text-type coding system is
+    // byte-faithful, so `select-safe-coding-system-function` is not consulted
+    // even when the text carries a coding cookie (here the XML declaration).
+    // Neo used to call the Lisp selector, which compares the cookie with the
+    // raw-text coding and asks for a coding system; in batch that prompt reads
+    // stdin and signals end-of-file.  The selector is installed as the global
+    // default because the Rust write path resolves the visible default value.
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'select-safe-coding-system-function))
+                 (selector-calls 0))
+             (unwind-protect
+                 (progn
+                   (fset 'raw-text-write-selector
+                         (lambda (&rest _args)
+                           (setq selector-calls (1+ selector-calls))
+                           'utf-8-unix))
+                   (set-default 'select-safe-coding-system-function
+                                'raw-text-write-selector)
+                   (with-temp-buffer
+                     (setq buffer-file-coding-system 'no-conversion)
+                     (insert "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss/>\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     (list selector-calls last-coding-system-used)))
+               (set-default 'select-safe-coding-system-function saved)
+               (fmakunbound 'raw-text-write-selector)))"#
+    ));
+
+    assert_eq!(results[0], "OK (0 no-conversion)");
+    assert_eq!(
+        std::fs::read(&path).expect("read raw cache output"),
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss/>\n"
+    );
+}
+
+#[test]
+fn unibyte_buffer_without_local_coding_forces_gnu_raw_text() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("unibyte-raw.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1 (`emacs -Q --batch`, src/fileio.c:5383-5450):
+    // a fresh unibyte buffer with no buffer-local `buffer-file-coding-system`
+    // takes the first `force_raw_text` source (fileio.c:5389-5393), so
+    // `last-coding-system-used` is `raw-text-unix` (the inherited utf-8-unix
+    // coding converted by `raw_text_coding_system`, fileio.c:5448-5450).
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'utf-8-unix)
+                   (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     (list (local-variable-p 'buffer-file-coding-system)
+                           last-coding-system-used)))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK (nil raw-text-unix)");
+    assert_eq!(
+        std::fs::read(&path).expect("read unibyte output"),
+        b"hello\n"
+    );
+}
+
+#[test]
+fn unibyte_buffer_inherits_gnu_raw_text_eol_from_the_default_coding() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("unibyte-raw-dos.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1: with the default coding utf-8-dos and a fresh
+    // unibyte buffer, `raw_text_coding_system (utf-8-dos)` (fileio.c:5450)
+    // keeps the DOS end-of-line type: last-coding-system-used = raw-text-dos
+    // and the file is CRLF.
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'utf-8-dos)
+                   (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     last-coding-system-used))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK raw-text-dos");
+    assert_eq!(
+        std::fs::read(&path).expect("read unibyte dos output"),
+        [b'h', b'e', b'l', b'l', b'o', b'\r', b'\n']
+    );
+}
+
+#[test]
+fn unibyte_buffer_with_local_coding_skips_gnu_force_raw_text() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("unibyte-local.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1: a buffer-local coding disables the unibyte
+    // force source (fileio.c:5389-5393), so the write uses that coding:
+    // last-coding-system-used = utf-8-unix.
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'utf-8-dos)
+                   (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (setq-local buffer-file-coding-system 'utf-8-unix)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     last-coding-system-used))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK utf-8-unix");
+    assert_eq!(
+        std::fs::read(&path).expect("read unibyte local output"),
+        b"hello\n"
+    );
+}
+
+#[test]
+fn local_raw_text_inherits_gnu_buffer_default_eol_before_force() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("local-raw-text.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1: a local raw-text coding still takes the second
+    // force source (fileio.c:5416-5423); `!using_default_coding` first
+    // inherits the buffer default's EOL (fileio.c:5437-5443), and
+    // `raw_text_coding_system` keeps it, so the result is raw-text-dos.
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'raw-text-dos)
+                   (with-temp-buffer
+                     (setq-local buffer-file-coding-system 'raw-text)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     last-coding-system-used))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK raw-text-dos");
+    assert_eq!(
+        std::fs::read(&path).expect("read local raw-text output"),
+        [b'h', b'e', b'l', b'l', b'o', b'\r', b'\n']
+    );
+}
+
+#[test]
+fn local_selectable_coding_inherits_gnu_buffer_default_eol_after_selecting() {
+    crate::test_utils::init_test_tracing();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("local-utf8.txt");
+    let path_lisp = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // Recorded from GNU 31.1: after `select-safe-coding-system` returns the
+    // local utf-8, `!using_default_coding` inherits the buffer default's
+    // utf-8-dos end-of-line type (fileio.c:5437-5443).
+    let results = bootstrap_eval(&format!(
+        r#"(let ((saved (default-value 'buffer-file-coding-system)))
+             (unwind-protect
+                 (progn
+                   (set-default 'buffer-file-coding-system 'utf-8-dos)
+                   (with-temp-buffer
+                     (setq-local buffer-file-coding-system 'utf-8)
+                     (insert "hello\n")
+                     (write-region nil nil "{path_lisp}" nil 'silent)
+                     last-coding-system-used))
+               (set-default 'buffer-file-coding-system saved)))"#
+    ));
+
+    assert_eq!(results[0], "OK utf-8-dos");
+    assert_eq!(
+        std::fs::read(&path).expect("read local utf-8 output"),
+        [b'h', b'e', b'l', b'l', b'o', b'\r', b'\n']
+    );
+}
+
+#[test]
 fn write_region_uses_runtime_shift_jis_codec() {
     crate::test_utils::init_test_tracing();
 

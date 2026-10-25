@@ -990,6 +990,26 @@ fn find_coding_systems_region_internal_rejects_non_list_exclude_for_non_ascii_bu
 // ----- coding-system-type -----
 
 #[test]
+fn write_coding_class_distinguishes_raw_text_types() {
+    crate::test_utils::init_test_tracing();
+    let m = mgr();
+    for name in ["raw-text", "raw-text-unix", "no-conversion", "binary"] {
+        assert_eq!(
+            classify_write_coding(&m, name),
+            WriteCodingClass::RawText,
+            "{name} must be byte-faithful for the write path"
+        );
+    }
+    for name in ["utf-8", "utf-8-unix", "latin-1", "undecided"] {
+        assert_eq!(
+            classify_write_coding(&m, name),
+            WriteCodingClass::Selectable,
+            "{name} must go through the safety selector"
+        );
+    }
+}
+
+#[test]
 fn coding_system_type_utf8() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
