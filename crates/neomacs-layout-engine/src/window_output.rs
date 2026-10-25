@@ -405,6 +405,11 @@ fn begin_display_text_row(
         begin.display_row_index,
         begin.start_charpos,
     ));
+    // BEGIN already owns the row's position, even if EOB leaves it without
+    // a finished source-row snapshot. A structural prefix can publish its
+    // minimum height before FINISH; keep that height at this row's real Y.
+    DisplayOutputTextRowMetricsInstallRequest::new(begin.display_row_index, begin.y, 0.0, 0.0)
+        .install(output_builder);
     begin.display_row_index
 }
 
