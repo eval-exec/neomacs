@@ -47,6 +47,9 @@ readonly -a build_packages=(
     gnutls-bin
     libgnutls28-dev
     zlib1g-dev
+    # The workspace test archive links with mold; it is a drop-in ELF linker
+    # and is faster than lld for the many test binaries this repo links.
+    mold
 )
 
 readonly -a video_backend_packages=(

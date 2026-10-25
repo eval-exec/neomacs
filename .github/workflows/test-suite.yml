@@ -30,20 +30,21 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      # A release workspace test archive links 96 test binaries (37 from
-      # neomacs-tui-tests alone), each statically linking neovm-core and
-      # Cranelift. Linking, not compiling, dominates this job (~21 of 29
-      # minutes), so: lld runs multi-threaded, rustc and links share the
-      # runner's 4 cores (binaries are stripped of debuginfo, which keeps
-      # concurrent link RSS well below 16 GB), and test code uses relaxed
-      # codegen-units — the perf-critical neomacs runtime ships from the
-      # separate test-runtime job, never from these harness binaries.
+      # Test files are merged into one binary per crate (see
+      # docs/building.md), so this job links a few dozen executables instead
+      # of one per test file. Linking still dominates: every binary statically
+      # links neovm-core and Cranelift. mold links them faster than lld at the
+      # same 4-core/16 GB budget, rustc and links share the runner's cores
+      # (binaries carry no debuginfo, which keeps concurrent link RSS well
+      # below 16 GB), and test code uses relaxed codegen-units — the
+      # perf-critical neomacs runtime ships from the separate test-runtime
+      # job, never from these harness binaries.
       # If this OOMs on a hosted runner, halve CARGO_BUILD_JOBS before
       # ever re-serializing the linker.
       CARGO_BUILD_JOBS: "4"
       CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-      RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
       TMPDIR: ${{ github.workspace }}/tmp
     steps:
       - &checkout
@@ -62,10 +63,29 @@ jobs:
           install-nextest: true
 
       - name: Build and archive workspace tests
+        # Build test binaries only for the packages the archive consumers run.
+        # The excluded crates are dependencies, so their libraries are still
+        # compiled; their own test harnesses are not linked into the archive.
         run: |
           cargo nextest archive \
             --release \
             --workspace \
+            --exclude neomacs \
+            --exclude neomacs-allocator \
+            --exclude neomacs-diagnostics \
+            --exclude neomacs-font-materializer \
+            --exclude neomacs-infra \
+            --exclude neomacs-parity-reference \
+            --exclude neomacs-perf \
+            --exclude neomacs-test-fonts \
+            --exclude neomacs-test-oracle \
+            --exclude neomacs-terminfo \
+            --exclude neomacs-video \
+            --exclude neomacs-video-model \
+            --exclude neomacs-webview \
+            --exclude neovm-host-abi \
+            --exclude neovm-worker \
+            --exclude xtask \
             --archive-file neomacs-workspace-tests.tar.zst
 
       - name: Upload workspace test archive
@@ -386,12 +406,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Select by package and test name, never by binary id: the binary
+          # layout is an implementation detail (see docs/building.md). The
+          # interactive package-TUI corpus moved to neomacs-tui-tests in
+          # commit c9a3c0ed81 and runs in the tui shards, so there is no
+          # melpa_tui target here.
           - suite: batch
-            filter: binary_id(=neomacs-melpa-test-support)|(binary_id(=neomacs-melpa-tests)-test(~gui_parity_tests::))
-          - suite: tui
-            filter: binary_id(=neomacs-melpa-tests::melpa_tui)
+            filter: package(neomacs-melpa-test-support) or (package(neomacs-melpa-tests) and not test(~gui_parity_tests::))
           - suite: gui
-            filter: binary_id(=neomacs-melpa-tests)&test(~gui_parity_tests::)
+            filter: package(neomacs-melpa-tests) and test(~gui_parity_tests::)
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
@@ -451,8 +474,6 @@ jobs:
         uses: ./.github/actions/setup-gnu-emacs
 
       - name: Run deterministic package ecosystem compatibility tests
-        env:
-          NEOMACS_TUI_RECORD: ${{ matrix.suite == 'tui' && 'on' || 'off' }}
         run: |
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
@@ -461,12 +482,6 @@ jobs:
             --workspace-remap "$GITHUB_WORKSPACE" \
             --success-output immediate \
             --no-fail-fast
-
-      - name: Upload MELPA TUI recordings
-        if: matrix.suite == 'tui' && always()
-        uses: ./.github/actions/upload-tui-recordings
-        with:
-          artifact-name: neomacs-melpa-tui-recordings-${{ github.run_id }}
 
   neomacs-display-tests:
     name: display stack tests (linux x86_64)
