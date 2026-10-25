@@ -56,7 +56,17 @@ fn p3sym_c5_vm_readers_and_function_caches_survive_intern_relocation() {
         matches!(ctx.symbol_bytecode_call_cache.get(symbol, clock), Some(ResolvedStackCallTarget::ByteCode { callee }) if callee.value() == old)
     );
     assert_eq!(ctx.c4_named_cache_for_test(symbol), Some(named));
+    #[cfg(feature = "jit")]
+    let growth_before = crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot();
     ctx.c5_intern_growth_era_for_test(holders);
+    #[cfg(feature = "jit")]
+    assert_eq!(
+        crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot()
+            .since(&growth_before)
+            .total(),
+        0,
+        "growth/recovery must not attribute a function-epoch move"
+    );
 
     // Inspect installed entries BEFORE any serial resolver can refill them.
     coherent(&ctx, clock);
@@ -87,5 +97,57 @@ fn p3sym_c5_vm_readers_and_function_caches_survive_intern_relocation() {
     coherent(&ctx, clock);
     eprintln!(
         "P3SYM_C5_VM_GROWTH relocated=1 vm_cache_preserved=1 named_cache_preserved=1 function_clock_delta=0 stamps_unchanged=1 rows=3"
+    );
+    #[cfg(feature = "jit")]
+    check_function_reasons(&mut ctx, [symbol, holders[0]]);
+}
+
+/// The writer runs on its own real owner thread: read its actual local deltas
+/// from the boundary receipt, never the returning Context thread's counters.
+#[cfg(feature = "jit")]
+fn check_function_reasons(ctx: &mut Context, ids: [SymId; 2]) {
+    use crate::emacs_core::symbol::FunctionEpochBump;
+    let replacement = Value::list(vec![Value::symbol("lambda"), Value::NIL, Value::fixnum(97)]);
+    let _root = ctx.retain_gc_roots([replacement]);
+    let initial = ctx.obarray.function_epoch();
+    let mut attributed = 0;
+    let mut fset = 0;
+    let mut unbind = 0;
+    for (edit, expected_fset, expected_unbind) in [
+        (FunctionEraEdit::Same { symbol: 0 }, 0, 0),
+        (FunctionEraEdit::Replace { symbol: 0 }, 1, 0),
+        (FunctionEraEdit::Same { symbol: 0 }, 0, 0),
+        (FunctionEraEdit::Unbind { symbol: 0 }, 0, 1),
+        (FunctionEraEdit::Unbind { symbol: 0 }, 0, 0),
+        (FunctionEraEdit::Replace { symbol: 0 }, 1, 0),
+    ] {
+        let previous = ctx.obarray.function_epoch();
+        let input = root(ctx, replacement);
+        let receipt = ctx.c4_function_era_for_test(ids, edit, input, |_| {});
+        let distance = ctx.obarray.function_epoch() - previous;
+        coherent(ctx, previous + expected_fset + expected_unbind);
+        let reasons = receipt.writer.epoch_bumps;
+        assert_eq!(reasons.bumps_for(FunctionEpochBump::Fset), expected_fset);
+        assert_eq!(
+            reasons.bumps_for(FunctionEpochBump::Fmakunbound),
+            expected_unbind
+        );
+        assert_eq!(reasons.bumps_for(FunctionEpochBump::Defalias), 0);
+        assert_eq!(
+            reasons.total(),
+            distance,
+            "every sealed epoch move labeled once"
+        );
+        assert_eq!(receipt.before.facts[0].0, previous);
+        assert_eq!(receipt.writer.facts[0].0, previous + distance);
+        assert_eq!(receipt.after.facts[0].0, previous + distance);
+        attributed += reasons.total();
+        fset += expected_fset;
+        unbind += expected_unbind;
+    }
+    assert_eq!(attributed, ctx.obarray.function_epoch() - initial);
+    assert_eq!((fset, unbind, attributed), (2, 1, 3));
+    eprintln!(
+        "P3SYM_C5_FUNCTION_REASONS epoch_delta=3 reasons=3 fset=2 fmakunbound=1 defalias=0 noops=3 growth=0 soft=0"
     );
 }

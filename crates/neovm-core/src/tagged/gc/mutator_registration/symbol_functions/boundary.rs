@@ -23,6 +23,9 @@ pub(crate) enum FunctionBoundaryPoint {
 pub(crate) struct FunctionOwnerSnapshot {
     pub(crate) words: [usize; 2],
     pub(crate) facts: [(u64, u64, bool); 2],
+    /// Actual committing thread's delta; reader snapshots leave this empty.
+    #[cfg(feature = "jit")]
+    pub(crate) epoch_bumps: crate::emacs_core::jit::stats::epoch::EpochCounters,
 }
 #[derive(Debug)]
 pub(crate) struct FunctionEraReceipt {
@@ -107,7 +110,12 @@ fn snapshot(
             Ok((dst.word_for_test(run), run.function_facts_for_test(key)?))
         })?;
     }
-    Ok(FunctionOwnerSnapshot { words, facts })
+    Ok(FunctionOwnerSnapshot {
+        words,
+        facts,
+        #[cfg(feature = "jit")]
+        epoch_bumps: Default::default(),
+    })
 }
 
 /// A keeper callback may inspect only its inactive cache metadata. Fixtures
@@ -167,6 +175,9 @@ pub(crate) fn exercise_function_era(
                     let mut dst = attempt(owner, |run| run.root_slot(nil_ref).map_err(Into::into))?;
                     let mut src =
                         attempt(owner, |run| run.root_slot(replacement).map_err(Into::into))?;
+                    #[cfg(feature = "jit")]
+                    let bumps_before =
+                        crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot();
                     let answer = attempt(owner, |run| {
                         match edit {
                             FunctionEraEdit::Same { .. } => {
@@ -182,7 +193,15 @@ pub(crate) fn exercise_function_era(
                         }?;
                         Ok(dst.word_for_test(run))
                     })?;
-                    Ok((snapshot(owner, &writer_handles, nil_ref)?, answer))
+                    let observed = snapshot(owner, &writer_handles, nil_ref)?;
+                    #[cfg(feature = "jit")]
+                    let observed = FunctionOwnerSnapshot {
+                        epoch_bumps: crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot(
+                        )
+                        .since(&bumps_before),
+                        ..observed
+                    };
+                    Ok((observed, answer))
                 })
             });
             let owner = activate(reader, heap, 7101);

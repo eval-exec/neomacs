@@ -3,17 +3,24 @@ use super::*;
 use crate::tagged::gc::{FunctionError, RegistrationError, SymbolWriteToken};
 use std::sync::atomic::Ordering;
 
-/// One complete desired state; Unbind cannot carry a non-NIL payload.
+/// The closed Lisp writers retain their reason; fmakunbound has no payload.
 #[derive(Clone, Copy)]
 pub(crate) enum FunctionUpdate {
-    Set(super::super::Value),
-    Unbind,
+    Fset(super::super::Value),
+    Fmakunbound,
 }
 impl FunctionUpdate {
     pub(crate) fn parts(self) -> (super::super::Value, bool) {
         match self {
-            Self::Set(value) => (value, false),
-            Self::Unbind => (super::super::Value::NIL, true),
+            Self::Fset(value) => (value, false),
+            Self::Fmakunbound => (super::super::Value::NIL, true),
+        }
+    }
+
+    fn reason(self) -> super::super::FunctionEpochBump {
+        match self {
+            Self::Fset(_) => super::super::FunctionEpochBump::Fset,
+            Self::Fmakunbound => super::super::FunctionEpochBump::Fmakunbound,
         }
     }
 
@@ -170,6 +177,12 @@ impl SymbolBacking {
             .dispatch_cells
             .function_epoch
             .store(commit.epoch, Ordering::Release);
+        // Exactly the legacy attribution, on this committing owner's existing
+        // counters. No serial setter, Context lookup, new TLS or atomic count.
+        let why = update.reason();
+        crate::emacs_core::eval::note_function_epoch_move(why, Some(id));
+        #[cfg(feature = "jit")]
+        crate::emacs_core::jit::stats::note_function_epoch_bump(why, Some(id));
         Ok(())
     }
 

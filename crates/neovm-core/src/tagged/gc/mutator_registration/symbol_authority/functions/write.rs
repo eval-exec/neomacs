@@ -184,7 +184,7 @@ impl<'era> RunAccess<'_, 'era> {
             .ok_or(RegistrationError::StaleRegistration)?
             .value();
         self.symbol_mut(symbol)?
-            .write_function_into(dst.index, FunctionUpdate::Set(value))
+            .write_function_into(dst.index, FunctionUpdate::Fset(value))
     }
 
     /// Store the explicit-unbound state, returning the original symbol even
@@ -196,7 +196,7 @@ impl<'era> RunAccess<'_, 'era> {
     ) -> Result<(), FunctionError> {
         globals::check_home(self, dst)?;
         self.symbol_mut(symbol)?
-            .write_function_into(dst.index, FunctionUpdate::Unbind)
+            .write_function_into(dst.index, FunctionUpdate::Fmakunbound)
     }
 }
 
@@ -215,7 +215,7 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
         .find(|r| r.symbol == id)
         .ok_or(RegistrationError::Publication)?;
     let answer = match update {
-        FunctionUpdate::Set(value) => {
+        FunctionUpdate::Fset(value) => {
             if !closed_definition(value, record.lambda) {
                 // An admitted compiled definition may be returned unchanged,
                 // never installed in a different cell or executed here. Check
@@ -237,7 +237,7 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
             }
             value
         }
-        FunctionUpdate::Unbind => Value::from_sym_id(id),
+        FunctionUpdate::Fmakunbound => Value::from_sym_id(id),
     };
     // SAFETY: retained World and exclusive word, no callback or structural change.
     let planned = unsafe { symbols.backing.plan_function_write(id, update, authority) }?;

@@ -154,6 +154,8 @@ struct Row {
     initially_unbound: bool,
     function_nil: bool,
     charge: usize,
+    #[cfg(feature = "jit")]
+    function_bumps: u64,
 }
 #[derive(Debug)]
 struct Receipt {
@@ -192,6 +194,8 @@ fn seed<'era>(
 }
 
 fn perform<'era>(owner: &mut Mutator<'era>, mut homes: ActorHomes<'era>) -> Result<Row, String> {
+    #[cfg(feature = "jit")]
+    let function_before = crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot();
     let id = attempt(owner, "initial_intern_into", |run| {
         run.initial_intern_into(&homes.name, &mut homes.dst)?;
         Value::from_bits(homes.dst.word_for_test(run))
@@ -234,6 +238,10 @@ fn perform<'era>(owner: &mut Mutator<'era>, mut homes: ActorHomes<'era>) -> Resu
         initially_unbound,
         function_nil,
         charge,
+        #[cfg(feature = "jit")]
+        function_bumps: crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot()
+            .since(&function_before)
+            .total(),
     })
 }
 
@@ -406,6 +414,11 @@ fn assert_history(
         registry_after,
         preparation_charge,
     } = receipt;
+    #[cfg(feature = "jit")]
+    assert!(
+        rows.iter().all(|row| row.function_bumps == 0),
+        "intern, repeated intern and soft lookup contribute no function-epoch reason"
+    );
     let ids: BTreeSet<_> = rows.iter().map(|row| row.id.0).collect();
     let inputs: BTreeSet<_> = rows.iter().map(|row| row.input).collect();
     let expected = if scenario == Scenario::DifferentNames {
