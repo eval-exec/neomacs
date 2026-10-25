@@ -272,6 +272,7 @@ pub(crate) fn resolve_tty_attribute_capabilities(
     }
 
     TtyAttributeCapabilities {
+        clear_screen: sequence(database, Termcap("cl")),
         standout_sequence,
         exit_standout_mode,
         underline_sequence,

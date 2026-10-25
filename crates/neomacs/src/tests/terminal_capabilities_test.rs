@@ -455,6 +455,32 @@ fn cursor_visibility_strings_are_the_entrys_own_vi_ve_vs() {
 }
 
 #[test]
+fn clear_screen_retains_entry_bytes_padding_and_absence() {
+    let mut database = FakeCapabilityDatabase::screen_256color().with_string("cl", "\x1b[H\x1b[J");
+    let caps = resolve_tty_attribute_capabilities(&mut database, "");
+    assert_eq!(
+        caps.clear_screen.as_deref(),
+        Some(b"\x1b[H\x1b[J".as_slice())
+    );
+
+    let mut padded = FakeCapabilityDatabase::bare().with_string("cl", "\x1b[2J$<4*>\x1b[H");
+    let caps = resolve_tty_attribute_capabilities(&mut padded, "");
+    assert_eq!(
+        caps.clear_screen.as_deref(),
+        Some(b"\x1b[2J$<4*>\x1b[H".as_slice())
+    );
+    assert!(caps.requires_padding());
+
+    let mut absent = FakeCapabilityDatabase::bare();
+    assert!(
+        resolve_tty_attribute_capabilities(&mut absent, "")
+            .clear_screen
+            .is_none()
+    );
+    assert!(TtyAttributeCapabilities::full().clear_screen.is_none());
+}
+
+#[test]
 fn xterm_shaped_entry_resolves_every_planner_capability() {
     let mut database = FakeCapabilityDatabase::xterm_like().with_flag("ut");
     let caps = resolve_term_caps(&mut database);

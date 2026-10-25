@@ -5,6 +5,11 @@ use std::io;
 
 pub trait TtyPainter {
     fn begin(&mut self, width: usize, height: usize) -> io::Result<()>;
+    /// Clear resize-invalidated physical state when the terminal has `cl`.
+    /// Native cell painters need no terminal control-string fallback.
+    fn clear_screen(&mut self) -> io::Result<()> {
+        Ok(())
+    }
     fn row(&mut self, row: usize, cells: &[TtyCell]) -> io::Result<()>;
     fn finish(&mut self, cursor: Option<(u16, u16, TerminalCursorShape)>) -> io::Result<()>;
 }
@@ -18,6 +23,9 @@ impl TtyRif {
         self.frame_stats = super::TtyFrameStats::default();
         let result = (|| {
             painter.begin(self.desired.width, self.desired.height)?;
+            if self.needs_physical_clear() {
+                painter.clear_screen()?;
+            }
             for row in 0..self.desired.height {
                 // A damage frame (NEOMACS_TTY_DAMAGE) rasterized only the rows
                 // whose painters changed; the others are on screen already.
@@ -49,6 +57,7 @@ impl TtyRif {
             self.mark_planned_rows_written();
             self.commit_frame();
             self.force_full_render = false;
+            self.pending_physical_clear = super::PendingPhysicalClear::None;
             self.scroll_seed = None;
         } else {
             self.force_full_render = true;

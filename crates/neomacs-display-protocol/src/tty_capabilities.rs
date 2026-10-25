@@ -548,13 +548,16 @@ pub struct TtyFaceAppearance {
 
 /// The capabilities of one terminal.
 ///
-/// Fields mirror the terminfo capabilities GNU reads in `init_tty`: `so`, `us`,
+/// Fields mirror the terminfo capabilities GNU reads in `init_tty`: `cl`, `so`, `us`,
 /// `Smulx`, `md`, `mh`, `ZH`, `smxx`, `me`, `ue`, `op`, `AF`, `AB`, `Co` and
 /// `NC`.  Each string capability is carried as its own bytes, terminfo padding
 /// retained until output calls tputs, because presence is not
 /// separable from spelling.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TtyAttributeCapabilities {
+    /// `cl` — GNU `TS_clr_frame`, used when a resized frame is garbaged.
+    /// Preserve the entry's bytes and padding; no missing-entry ANSI fallback.
+    pub clear_screen: Option<Vec<u8>>,
     /// `so` — GNU `TS_standout_mode`.
     pub standout_sequence: Option<Vec<u8>>,
     /// Paired standout exit: `se`, underline fallback `ue`, or `me`.
@@ -603,6 +606,7 @@ impl TtyAttributeCapabilities {
     pub fn requires_padding(&self) -> bool {
         let padded = |bytes: &[u8]| bytes.windows(2).any(|pair| pair == b"$<");
         let attributes = [
+            &self.clear_screen,
             &self.standout_sequence,
             &self.exit_standout_mode,
             &self.underline_sequence,
@@ -667,6 +671,7 @@ impl TtyAttributeCapabilities {
     /// only in the state GNU cannot be in.
     pub fn full_with_color_cells(max_colors: i64) -> Self {
         Self {
+            clear_screen: None,
             standout_sequence: Some(b"\x1b[7m".to_vec()),
             exit_standout_mode: Some(b"\x1b[27m".to_vec()),
             underline_sequence: Some(b"\x1b[4m".to_vec()),
@@ -693,6 +698,7 @@ impl TtyAttributeCapabilities {
     /// A terminal that can render no attributes at all (a `dumb`-style entry).
     pub fn none() -> Self {
         Self {
+            clear_screen: None,
             standout_sequence: None,
             exit_standout_mode: None,
             underline_sequence: None,

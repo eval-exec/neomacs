@@ -69,6 +69,117 @@ fn resize_clears_grids() {
     assert_eq!(rif.current.cells[0].ch(), ' ');
 }
 
+#[test]
+fn resize_clears_physical_screen_before_fresh_matrix_and_only_once() {
+    let caps = TermCaps {
+        synchronized_output: false,
+        ..TermCaps::default()
+    };
+    let terminal = TtyAttributeCapabilities {
+        clear_screen: Some(b"\x1b[H\x1b[J".to_vec()),
+        ..TtyAttributeCapabilities::none()
+    };
+    let mut rif = TtyRif::new_with_caps(8, 4, caps);
+    for (column, character) in "OLDVIEW".chars().enumerate() {
+        rif.desired
+            .set(0, column, character, CellAttrs::default(), false);
+    }
+    render_with_screen_clear_capability(&mut rif, &terminal);
+    assert!(!rif.take_output().is_empty());
+
+    // In the saved Vertico resize, an old-width output already in flight
+    // reaches the newly narrowed terminal before its fresh matrix. Repainting
+    // cells alone leaves its soft-wrap history behind. GNU's post-resize
+    // clear_frame emits the entry's cl (screen-256color: home + ED) first.
+    rif.resize(6, 4);
+    for (column, character) in "NEW".chars().enumerate() {
+        rif.desired
+            .set(0, column, character, CellAttrs::default(), false);
+    }
+    render_with_screen_clear_capability(&mut rif, &terminal);
+    let output = rif.take_output();
+    let clear = b"\x1b[H\x1b[J";
+    let clear_at = output
+        .windows(clear.len())
+        .position(|bytes| bytes == clear)
+        .expect("a resized/garbaged terminal needs GNU's physical screen clear");
+    let glyphs_at = output
+        .windows(3)
+        .position(|bytes| bytes == b"NEW")
+        .expect("the resized frame must paint its fresh row");
+    assert!(
+        clear_at < glyphs_at,
+        "clear must precede fresh matrix glyphs"
+    );
+
+    render_with_screen_clear_capability(&mut rif, &terminal);
+    let unchanged = rif.take_output();
+    assert!(!unchanged.windows(3).any(|bytes| bytes == b"\x1b[J"));
+    assert!(!unchanged.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+
+    rif.desired.set(0, 1, 'O', CellAttrs::default(), false);
+    render_with_screen_clear_capability(&mut rif, &terminal);
+    let incremental = rif.take_output();
+    assert!(!incremental.windows(3).any(|bytes| bytes == b"\x1b[J"));
+    assert!(!incremental.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+
+    // Menu restores still request a repaint, not a resize screen clear.
+    rif.force_redraw();
+    render_with_screen_clear_capability(&mut rif, &terminal);
+    assert!(
+        !rif.take_output()
+            .windows(clear.len())
+            .any(|bytes| bytes == clear)
+    );
+}
+
+fn render_with_screen_clear_capability(rif: &mut TtyRif, caps: &TtyAttributeCapabilities) {
+    rif.diff_and_render_with_clear_screen(|output| write_clear_screen_with(output, caps));
+}
+
+#[test]
+fn resize_without_clear_screen_capability_does_not_invent_ansi_clear() {
+    let mut rif = TtyRif::new(8, 4);
+    rif.diff_and_render();
+    rif.take_output();
+    rif.resize(6, 4);
+    rif.desired.set(0, 0, 'N', CellAttrs::default(), false);
+
+    render_with_screen_clear_capability(&mut rif, &TtyAttributeCapabilities::none());
+    let output = rif.take_output();
+    assert!(output.contains(&b'N'));
+    assert!(!output.windows(3).any(|bytes| bytes == b"\x1b[J"));
+    assert!(!output.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+}
+
+#[test]
+fn resize_clear_uses_the_entry_sequence_and_survives_a_failed_write_retry() {
+    let terminal = TtyAttributeCapabilities {
+        clear_screen: Some(b"\x1b[2J\x1b[H".to_vec()),
+        ..TtyAttributeCapabilities::none()
+    };
+    let clear = terminal.clear_screen.as_deref().unwrap();
+    let mut rif = TtyRif::new(8, 4);
+    rif.diff_and_render();
+    rif.take_output();
+    rif.resize(6, 4);
+    render_with_screen_clear_capability(&mut rif, &terminal);
+    let output = rif.take_output();
+    assert!(output.windows(clear.len()).any(|bytes| bytes == clear));
+    assert!(!rif.needs_physical_clear());
+
+    // The output owner calls this only if writing that resize update failed.
+    rif.retry_physical_clear();
+    assert!(rif.needs_physical_clear());
+    render_with_screen_clear_capability(&mut rif, &terminal);
+    assert!(
+        rif.take_output()
+            .windows(clear.len())
+            .any(|bytes| bytes == clear)
+    );
+    assert!(!rif.needs_physical_clear());
+}
+
 // ---------------------------------------------------------------------------
 // Face resolution
 // ---------------------------------------------------------------------------

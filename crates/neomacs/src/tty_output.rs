@@ -327,6 +327,7 @@ pub(crate) fn render_to(
     caps: &Capabilities,
 ) -> io::Result<()> {
     if caps.ansi && !caps.needs_padding {
+        let clearing_resize = rif.needs_physical_clear();
         rif.diff_and_render();
         let body = rif.take_output();
         if body.is_empty() {
@@ -339,6 +340,9 @@ pub(crate) fn render_to(
         caps.reset_modes(&mut bytes);
         bytes.extend_from_slice(&body);
         if let Err(error) = bytes.write_to(output, caps) {
+            if clearing_resize {
+                rif.retry_physical_clear();
+            }
             rif.force_redraw();
             return Err(error);
         }
@@ -457,6 +461,10 @@ impl<W: Write> TtyPainter for TerminfoPainter<'_, W> {
         // Reset before repainting, even when the first desired face is default.
         self.caps.reset_modes(&mut self.bytes);
         self.caps.append(&mut self.bytes, "vi");
+        Ok(())
+    }
+    fn clear_screen(&mut self) -> io::Result<()> {
+        self.bytes.control(self.caps.control("cl"), self.height);
         Ok(())
     }
     fn row(&mut self, row: usize, cells: &[TtyCell]) -> io::Result<()> {

@@ -535,8 +535,16 @@ pub struct TtyRif {
     scroll_seed: Option<isize>,
     /// Force the next render to repaint every terminal cell.
     force_full_render: bool,
+    /// Resize invalidates physical wrap history as well as the cell matrices.
+    pending_physical_clear: PendingPhysicalClear,
     /// P3.5 stage-B knobs and what they remember between frames.
     damage: damage::DamageState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingPhysicalClear {
+    None,
+    AfterResize,
 }
 
 fn terminal_cursor_cell(x: f32, y: f32, char_width: f32, char_height: f32) -> (u16, u16) {
@@ -975,6 +983,7 @@ impl TtyRif {
             frame_stats: TtyFrameStats::default(),
             scroll_seed: None,
             force_full_render: true,
+            pending_physical_clear: PendingPhysicalClear::None,
             damage: damage::DamageState::from_knobs(),
         }
     }
@@ -1007,12 +1016,27 @@ impl TtyRif {
 
     /// Resize the terminal grids. Clears both grids (forces full redraw).
     pub fn resize(&mut self, width: usize, height: usize) {
+        if self.width() != width || self.height() != height {
+            self.pending_physical_clear = PendingPhysicalClear::AfterResize;
+        }
         self.current = TtyGrid::new(width, height);
         self.desired = TtyGrid::new(width, height);
         self.force_full_render = true;
         self.damage.forget_terminal();
         self.damage.forget_painters();
         self.terminal_cursor_shape.forget_after_redraw();
+    }
+
+    /// Whether the next output must clear resize-invalidated terminal history.
+    #[inline]
+    pub fn needs_physical_clear(&self) -> bool {
+        self.pending_physical_clear == PendingPhysicalClear::AfterResize
+    }
+
+    /// Retain the resize obligation when its encoded output could not be written.
+    pub fn retry_physical_clear(&mut self) {
+        self.pending_physical_clear = PendingPhysicalClear::AfterResize;
+        self.force_full_render = true;
     }
 
     /// Force the next [`diff_and_render`](Self::diff_and_render) call to emit
@@ -1579,6 +1603,12 @@ impl TtyRif {
     /// After this call, `current` is swapped to reflect what is now on screen.
     /// Retrieve the buffered output with [`take_output`].
     pub fn diff_and_render(&mut self) {
+        self.diff_and_render_with_clear_screen(|output| {
+            with_capabilities(|caps| write_clear_screen_with(output, caps));
+        });
+    }
+
+    fn diff_and_render_with_clear_screen(&mut self, emit_clear: impl FnOnce(&mut Vec<u8>)) {
         self.output.clear();
         self.frame_stats = TtyFrameStats::default();
 
@@ -1613,6 +1643,12 @@ impl TtyRif {
         // before the frame's glyphs are written, src/term.c:763).
         write_hide_cursor(&mut self.output);
 
+        if self.needs_physical_clear() {
+            // GNU clear_frame clears a garbaged/resized terminal before the
+            // fresh glyph matrix. Repainting alone cannot remove soft wraps
+            // left by an old-width update already in flight at resize.
+            emit_clear(&mut self.output);
+        }
         self.encode_ops(&ops);
 
         // The desired grid begins as logical GNU glyph content. Reconcile the
@@ -1657,6 +1693,7 @@ impl TtyRif {
         // copies only its repainted rows).
         self.commit_frame();
         self.force_full_render = false;
+        self.pending_physical_clear = PendingPhysicalClear::None;
         self.finish_verified_frame();
     }
 
@@ -3229,6 +3266,14 @@ fn write_cursor_goto(buf: &mut Vec<u8>, row: u16, col: u16) {
 /// GNU).
 fn write_hide_cursor(buf: &mut Vec<u8>) {
     with_capabilities(|caps| write_hide_cursor_with(buf, caps));
+}
+
+/// GNU `tty_clear_frame` emits `TS_clr_frame` from the entry's `cl`.
+/// The padded-control renderer handles entries requiring tputs delays.
+fn write_clear_screen_with(buf: &mut Vec<u8>, caps: &TtyAttributeCapabilities) {
+    if let Some(sequence) = &caps.clear_screen {
+        buf.extend_from_slice(sequence);
+    }
 }
 
 fn write_hide_cursor_with(buf: &mut Vec<u8>, caps: &TtyAttributeCapabilities) {
