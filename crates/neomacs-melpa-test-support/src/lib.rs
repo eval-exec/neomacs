@@ -300,6 +300,7 @@ impl EmacsRuntime {
     fn gnu_emacs_executable() -> PathBuf {
         for variable in [
             "NEOMACS_MELPA_ORACLE_EMACS",
+            "NEOVM_FORCE_ORACLE_PATH",
             "NEOVM_ORACLE_EMACS",
             "ORACLE_EMACS",
         ] {

@@ -280,9 +280,12 @@ fn run_probe(name: &str, program: PathBuf, scenario: Scenario, extra: &[&str]) -
 }
 
 fn assert_order_matches_gnu(scenario: Scenario) {
+    // The attested oracle chokepoint every other parity suite uses; the old
+    // $HOME/.local/bin/emacs path does not exist on CI runners and spawned
+    // ENOENT.
     let gnu = run_probe(
         "GNU",
-        PathBuf::from(std::env::var_os("HOME").expect("HOME for GNU31.1")).join(".local/bin/emacs"),
+        neomacs_melpa_test_support::EmacsRuntime::gnu_emacs().executable,
         scenario,
         &[
             "-no-comp-spawn",

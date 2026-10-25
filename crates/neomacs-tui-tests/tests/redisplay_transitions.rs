@@ -3,7 +3,6 @@
 
 use neomacs_tui_tests::pair::{read_both, send_both, wait_for_both};
 use neomacs_tui_tests::{TuiLaunch, TuiSession, TuiTempDirectory, TuiTerminalConfig};
-use std::path::PathBuf;
 use std::time::Duration;
 
 const INIT: &str = r#"(setq inhibit-startup-screen t initial-scratch-message nil
@@ -30,11 +29,11 @@ fn pair(hooks: bool) -> (TuiSession, TuiSession, TuiTempDirectory) {
     let files = TuiTempDirectory::new("neomacs-redisplay-transitions-");
     let script = files.path().join("transitions.el");
     std::fs::write(&script, INIT).expect("write shared transition fixture");
-    let gnu_program = std::env::var_os("ORACLE_EMACS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").expect("GNU home")).join(".local/bin/emacs")
-        });
+    // Resolve GNU through the attested oracle chokepoint the rest of the TUI
+    // and MELPA parity tests use (NEOVM_FORCE_ORACLE_PATH, the melpa override,
+    // the adjacent emacs-mirror checkout, then PATH). Resolving ORACLE_EMACS or
+    // $HOME/.local/bin/emacs here spawned ENOENT in CI, where neither exists.
+    let gnu_program = neomacs_melpa_test_support::EmacsRuntime::gnu_emacs().executable;
     let terminal = || TuiTerminalConfig::new("xterm-256color", 32, 96);
     let mut gnu = TuiSession::spawn_launch_on_terminal(
         TuiLaunch::new(gnu_program.as_os_str())
