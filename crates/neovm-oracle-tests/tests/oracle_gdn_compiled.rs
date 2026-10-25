@@ -1,7 +1,6 @@
 //! GNU-refreshed GDN primitive opcode regressions. Run with NEOVM_JIT=0,
 //! and with NEOVM_JIT_THRESHOLD=1 NEOVM_JIT_BG=sync for deterministic tier-up.
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 #[test]
 fn oracle_gdn_compiled_foreign_marker_reads() {

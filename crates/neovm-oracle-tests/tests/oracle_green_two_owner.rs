@@ -4,8 +4,7 @@
 //! without relying on OS scheduling. Refresh only with the GNU oracle and PID sandbox:
 //! NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1.
 
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 use common::return_if_neovm_enable_oracle_proptest_not_set;
 

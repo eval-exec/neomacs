@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Standalone Rust binary for Neomacs (no C dependency)"
 build = "build.rs"
+autotests = false
 
 [features]
 # Windows distribution helpers; enabled by xtask on Windows only.
@@ -88,7 +89,6 @@ name = "windows_launcher"
 path = "tests/windows_launcher.rs"
 required-features = ["windows-tools"]
 
-
 [dependencies]
 neomacs-terminfo.workspace = true
 neomacs-display-protocol.workspace = true
@@ -136,3 +136,13 @@ vergen-gitcl.workspace = true
 
 [lints]
 workspace = true
+
+# Every file in tests/ is a module of this one binary.
+[[test]]
+name = "neomacs_integration"
+path = "tests/neomacs_integration.rs"
+
+# CI selects this target with --test, so it stays separate.
+[[test]]
+name = "daemon_lifecycle"
+path = "tests/daemon_lifecycle.rs"

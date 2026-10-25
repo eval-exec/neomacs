@@ -1,6 +1,5 @@
 //! Initial-frame measurement keeps GNU's absolute-pixel stretch contract.
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 use common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]

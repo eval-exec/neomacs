@@ -24,15 +24,17 @@ test-threads = 24
 # bootstrap time while still catching real hangs.
 slow-timeout = { period = "600s", terminate-after = 1, grace-period = "0s" }
 
-# Apply memory limit to all tests EXCEPT the real GUI smoke: that test
-# spawns a full GUI neomacs (wgpu + Vulkan software rasterizer), and
-# llvmpipe's virtual address-space reservations depend on the ambient
-# driver closure (nextest's LD_LIBRARY_PATH can select a mesa whose
+# Apply memory limit to all tests EXCEPT the real GUI smoke and child-frame
+# animation cases: those spawn a full GUI neomacs (wgpu + Vulkan software
+# rasterizer), and llvmpipe's virtual address-space reservations depend on the
+# ambient driver closure (nextest's LD_LIBRARY_PATH can select a mesa whose
 # per-thread VA reservations blow an 8GB RLIMIT_AS, failing pthread_create
 # with EAGAIN). The guardrail exists for unit-test allocation backtraces,
-# not for constraining a spawned production GUI stack.
+# not for constraining a spawned production GUI stack. Both files are now
+# modules of the gui binary, so match their module prefixes instead of the
+# former per-file binary IDs.
 [[profile.default.scripts]]
-filter = 'not binary_id(neomacs-gui-tests::real_gui_smoke) and not binary_id(neomacs-gui-tests::child_frame_animation)'
+filter = 'not (package(neomacs-gui-tests) and (test(~real_gui_smoke::) or test(~child_frame_animation::)))'
 # `prlimit` is a Linux util-linux executable, not a generic Unix interface.
 # macOS is cfg(unix) too, but has no `prlimit`; selecting by the actual host OS
 # keeps hosted native tests executable instead of failing before test startup.
@@ -138,7 +140,7 @@ slow-timeout = { period = "1800s", terminate-after = 1 }
 # libraries before running two editor probes. Match the cold package fixture
 # budget, ahead of the snapshot-oracle timeout below.
 [[profile.default.overrides]]
-filter = 'binary_id(neovm-oracle-tests::treesit_grammar_loading)'
+filter = 'package(neovm-oracle-tests) and test(~treesit_grammar_loading::)'
 slow-timeout = { period = "960s", terminate-after = 1 }
 
 # Oracle tests compare neomacs against GNU Emacs — single-form hangs
@@ -163,9 +165,10 @@ filter = 'package(neovm-core) and test(native_runtime_test)'
 slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
 
 # These tests own the live desktop through one helper. Do not interleave them
-# with other tests in this nextest invocation (including other GUI binaries).
+# with other tests in this nextest invocation (including other GUI tests in the
+# merged gui binary).
 [[profile.default.overrides]]
-filter = 'binary_id(neomacs-gui-tests::macos_native_menus)'
+filter = 'package(neomacs-gui-tests) and test(~macos_native_menus::)'
 platform = { host = 'cfg(target_os = "macos")' }
 threads-required = "num-test-threads"
 
@@ -190,8 +193,14 @@ threads-required = 4
 # it one case at a time.  This costs one bootstrap, not one per case: the
 # fixture provisions the shared runtime image itself (neomacs-infra), and
 # every later case reuses it.
+# The daemon lifecycle binary is the only neomacs-package test binary whose
+# tests sit at the crate root; the merged integration binary and the lib put
+# every test behind a module, so their names contain "::". Select the
+# root-level cases without naming the binary, which is absent from the
+# workspace test archive (that package's test harnesses are not consumed
+# there) and would make a binary_id filter fail in shard invocations.
 [[profile.default.overrides]]
-filter = 'binary_id(neomacs::daemon_lifecycle)'
+filter = 'package(neomacs) and not test(~::)'
 threads-required = "num-test-threads"
 
 # Executable lookup failures use a minimal evaluator and local fixtures. No

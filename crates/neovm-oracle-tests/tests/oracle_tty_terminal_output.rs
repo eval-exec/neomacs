@@ -10,8 +10,7 @@
 
 #![cfg(unix)]
 
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 #[path = "../src/tty_test_terminal.rs"]
 mod tty_test_terminal;

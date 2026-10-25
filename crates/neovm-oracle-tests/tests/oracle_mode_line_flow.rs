@@ -1,8 +1,7 @@
 //! Active GNU mode-line non-local exits and state restoration.
 //! Batch GNU bypasses the formatter, so expectations require active Xvfb GNU.
 
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::process::Command;

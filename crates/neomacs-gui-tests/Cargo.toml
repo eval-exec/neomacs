@@ -9,6 +9,26 @@ publish = false
 # This crate exists only for its integration tests and shared GUI test harness.
 # It drives Neomacs native GUI runs through deterministic text/PNG artifacts
 # instead of relying on manual window inspection.
+#
+# Every file in tests/ is a module of the ONE gui test binary rooted at
+# tests/gui.rs, except native_display, which the native display contract
+# selects with --test. Each former per-file binary linked the display stack
+# again; nextest runs every test in its own process.
+autotests = false
+
+[[test]]
+name = "gui"
+path = "tests/gui.rs"
+
+[[test]]
+name = "native_display"
+path = "tests/native_display.rs"
+
+# The fixture mock has no unit tests; skip linking an empty test harness.
+[[bin]]
+name = "neomacs-telega-fixture-mock"
+path = "src/bin/neomacs-telega-fixture-mock.rs"
+test = false
 
 [dependencies]
 getrandom.workspace = true

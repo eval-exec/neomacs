@@ -1,5 +1,4 @@
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 #[test]
 fn global_tab_line_activates_existing_and_new_major_mode_buffers() {

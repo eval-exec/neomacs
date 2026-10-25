@@ -3,5 +3,4 @@
 
 #[path = "../src/combination/mod.rs"]
 mod combination;
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;

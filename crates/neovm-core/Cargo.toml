@@ -207,52 +207,12 @@ path = "tests/p0s3_contracts.rs"
 name = "p1rv_contracts"
 path = "tests/p1rv_contracts.rs"
 
-[[test]]
-name = "p2ht_contracts"
-path = "tests/p2ht_contracts.rs"
-
-[[test]]
-name = "compat_all"
-path = "tests/compat_all.rs"
-
-[[test]]
-name = "aot_call_bearing"
-path = "tests/aot_call_bearing.rs"
-
-[[test]]
-name = "aot_pgo"
-path = "tests/aot_pgo.rs"
-
-[[test]]
-name = "aot_spec"
-path = "tests/aot_spec.rs"
-
-[[test]]
-name = "fringe_standard_indicators"
-path = "tests/fringe_standard_indicators.rs"
-
 # Runs its checks on a child process's MAIN thread, which libtest never
 # offers; the file answers the libtest CLI subset nextest uses.
 [[test]]
 name = "main_thread_stack"
 path = "tests/main_thread_stack.rs"
 harness = false
-
-[[test]]
-name = "gdm_casing"
-path = "tests/gdm_casing.rs"
-
-[[test]]
-name = "gdm_columns"
-path = "tests/gdm_columns.rs"
-
-[[test]]
-name = "gdm_region"
-path = "tests/gdm_region.rs"
-
-[[test]]
-name = "gdm_widths"
-path = "tests/gdm_widths.rs"
 
 [[bench]]
 name = "buffer_text_backends"
@@ -277,18 +237,8 @@ dead_code = "warn"
 name = "gnu_overlay_deletion_allocations"
 path = "tests/gnu_overlay_deletion_allocations.rs"
 
+# The remaining core integration suites share one harness; keep them
+# linked once. Nextest still runs every test in its own process.
 [[test]]
-name = "pixel_measurement"
-path = "tests/pixel_measurement.rs"
-
-[[test]]
-name = "coding_safety"
-path = "tests/coding_safety.rs"
-
-[[test]]
-name = "coding_detection"
-path = "tests/coding_detection.rs"
-
-[[test]]
-name = "font_coverage"
-path = "tests/font_coverage.rs"
+name = "core"
+path = "tests/core.rs"

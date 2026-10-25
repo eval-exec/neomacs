@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Cross-platform embedded web content for Neomacs"
+autotests = false
 
 [features]
 default = []
@@ -55,3 +56,8 @@ static_assertions.workspace = true
 
 [lints]
 workspace = true
+
+# Every file in tests/ is a module of this one binary.
+[[test]]
+name = "webview"
+path = "tests/webview.rs"

@@ -59,16 +59,15 @@ phase-specific failures.
 - `package_vc.rs` installs from a workspace-local Git repository, restarts,
   upgrades to a new commit, restarts again, deletes the package, and verifies
   that deletion survives one more restart. It never contacts a remote host.
-- `src/tui_parity_tests/` contains packages whose public workflow requires a
-  real interactive terminal. Cargo exposes those scenarios through the
-  dedicated `melpa_tui` integration-test target, while the batch and GUI
-  corpora remain in the library test target. This gives CI and local runs a
-  stable target boundary rather than depending on Rust module-name filters.
-  The opt-in `tui` module in `neomacs-melpa-test-support` supplies the reusable
-  scenario pipeline. Every package TUI scenario launches the same prepared
-  package set in GNU Emacs and Neomacs, declares a closed terminal profile, and
-  must observe the same readiness checkpoint in both editors before the
-  sessions can be driven.
+- The interactive package-TUI corpus moved to the `neomacs-tui-tests` package
+  (`tests/package_tui/`) and runs in the tui shards, while the batch and GUI
+  corpora remain in this library test target. Keeping the interactive corpus
+  in the tui crate's single test binary avoids linking the engine once per
+  test file. The opt-in `tui` module in `neomacs-melpa-test-support` supplies
+  the reusable scenario pipeline. Every package TUI scenario launches the
+  same prepared package set in GNU Emacs and Neomacs, declares a closed
+  terminal profile, and must observe the same readiness checkpoint in both
+  editors before the sessions can be driven.
   Complete-screen checkpoints default to exact visible display parity: text,
   geometry, cursor, face/style classes, and resolved RGB colors. A deliberately
   named raw-terminal checkpoint remains available for tests whose subject is
@@ -80,7 +79,8 @@ The GNU package-resource contracts are required CI checks.
 New parity corpora are added in descending MELPA download-count order, not
 alphabetically. `melpa-top500-roadmap.tsv` ranks the top 500 packages by
 downloads and marks each `covered` (a corpus exists under `src/parity_tests/`
-or `src/tui_parity_tests/`) or `todo`; work through the highest-ranked `todo`
+or `crates/neomacs-tui-tests/tests/package_tui/`) or `todo`; work through the
+highest-ranked `todo`
 rows first. Regenerate the roadmap after adding a corpus or to refresh the
 download counts:
 
@@ -140,13 +140,15 @@ NEOMACS_MELPA_ORACLE_EMACS="/home/exec/Projects/github.com/emacs-mirror/emacs/sr
 cargo nextest run -p neomacs-melpa-tests --no-fail-fast
 ```
 
-Run only real-terminal package workflows after building the release runtime:
+Run only the real-terminal package workflows after building the release
+runtime (the corpus lives in the tui crate now):
 
 ```sh
 TMPDIR="$PWD/tmp" \
+NEOMACS_TUI_NEOMACS_BIN="$PWD/target/release/neomacs" \
 NEOMACS_BIN="$PWD/target/release/neomacs" \
 NEOMACS_MELPA_ORACLE_EMACS="/home/exec/Projects/github.com/emacs-mirror/emacs/src/emacs" \
-cargo nextest run -p neomacs-melpa-tests --release --test melpa_tui \
+cargo nextest run -p neomacs-tui-tests --release -E 'test(~package_tui::)' \
   --no-fail-fast
 ```
 

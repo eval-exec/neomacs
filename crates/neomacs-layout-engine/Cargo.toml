@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Rust layout engine crate for Neomacs"
+autotests = false
 
 [features]
 default = []
@@ -61,3 +62,8 @@ tracing-test.workspace = true
 
 [lints]
 workspace = true
+
+# Every file in tests/ is a module of this one binary.
+[[test]]
+name = "layout"
+path = "tests/layout.rs"

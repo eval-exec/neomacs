@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Owned terminal capability snapshots and numeric expansion"
 links = "neomacs_terminfo"
+autotests = false
 
 [dependencies]
 regex.workspace = true
@@ -25,3 +26,8 @@ rustix = { workspace = true, features = ["pty", "termios"] }
 
 [lints]
 workspace = true
+
+# Every file in tests/ is a module of this one binary.
+[[test]]
+name = "terminfo"
+path = "tests/terminfo.rs"
