@@ -944,10 +944,13 @@ fn read_event_echoes_invoking_keys_and_new_event_after_gnu_delay() {
     sender.join().expect("input sender");
 
     assert_eq!(event, Value::fixnum('1' as i64));
-    assert_eq!(
-        ev.current_message_text().as_deref(),
-        Some("C-q 1- (C-h for help)")
-    );
+    // While read-event waits past `echo-keystrokes', echo_now shows the
+    // invoking keys with echo_dash's "- (C-h for help)" decoration.  When the
+    // key arrives, GNU's read_char records it and calls echo_update
+    // (keyboard.c:3382), which rebuilds the echo from the command keys
+    // without the dash (keyboard.c:601-626); the dash only returns when the
+    // next read starts to wait.
+    assert_eq!(ev.current_message_text().as_deref(), Some("C-q 1"));
 }
 
 #[test]
