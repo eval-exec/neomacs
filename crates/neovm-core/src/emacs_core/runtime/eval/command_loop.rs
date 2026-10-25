@@ -3180,15 +3180,12 @@ impl Context {
         // The common answer, decided from plain fields without a call: no
         // collection is in flight, none is pending or forced, and the
         // allocation pacing has not tripped. Everything else takes the
-        // exact path below, unchanged.
+        // exact path below. These short-circuit fact reads preserve the hot
+        // guard's sweep-before-mark loads; the slow path decides what the
+        // complete phase means through its exhaustive MarkPhase match.
         if self.gc_inhibit_depth == 0
-            && match self.tagged_heap.mark_phase() {
-                MarkPhase::Idle => true,
-                MarkPhase::ConcurrentRunning
-                | MarkPhase::StoppedMarking
-                | MarkPhase::PublishingSweep
-                | MarkPhase::Sweeping => false,
-            }
+            && !self.tagged_heap.sweep_in_progress()
+            && !self.tagged_heap.mark_in_progress()
             && !self.gc_pending
             && !self.gc_stress
             && !self.tagged_heap.gc_threshold_is_overridden()
