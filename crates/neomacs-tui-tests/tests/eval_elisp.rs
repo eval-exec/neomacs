@@ -36,6 +36,49 @@ fn expose_structural_bytecode_in_backtraces(gnu: &mut TuiSession, neo: &mut TuiS
 
 // ── Tests ──────────────────────────────────────────────────
 #[test]
+fn printer_quit_is_caught_before_returning_to_interactive_evaluation() {
+    let (mut gnu, mut neo) = boot_pair("");
+    support::eval_expression(
+        &mut gnu,
+        &mut neo,
+        r#"(let ((print-circle nil) (print-unreadable-function (lambda (_object _escape) (setq quit-flag t) "Q"))) (condition-case nil (prin1-to-string (vector (make-marker) '(after))) (quit (list 'caught 'inside 'printer))))"#,
+    );
+    let caught = |grid: &[String]| {
+        grid.iter()
+            .rev()
+            .take(4)
+            .any(|row| row.contains("(caught inside printer)"))
+    };
+    gnu.read_until(Duration::from_secs(6), caught);
+    neo.read_until(Duration::from_secs(8), caught);
+    for (label, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        assert!(
+            caught(&session.text_grid()),
+            "{label}: printer quit must reach the surrounding handler: {}",
+            session.text_grid().join("\n")
+        );
+    }
+
+    support::eval_expression(&mut gnu, &mut neo, "(list (not quit-flag) (+ 40 2))");
+    let responsive = |grid: &[String]| grid.iter().rev().take(4).any(|row| row.contains("(t 42)"));
+    gnu.read_until(Duration::from_secs(6), responsive);
+    neo.read_until(Duration::from_secs(8), responsive);
+    for (label, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        assert!(
+            responsive(&session.text_grid()),
+            "{label}: evaluation must remain responsive after printer quit: {}",
+            session.text_grid().join("\n")
+        );
+    }
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    assert_pair_exact_display(
+        "printer_quit_is_caught_before_returning_to_interactive_evaluation",
+        &gnu,
+        &neo,
+    );
+}
+
+#[test]
 fn integer_width_overflow_returns_to_interactive_evaluation() {
     let (mut gnu, mut neo) = boot_pair("");
     support::eval_expression(
