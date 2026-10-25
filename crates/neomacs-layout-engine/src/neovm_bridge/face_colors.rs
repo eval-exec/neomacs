@@ -14,6 +14,15 @@ enum FaceVideo {
     Inverse,
 }
 
+/// Which GNU realization rule applies to a composed face.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FaceRealization {
+    /// Window-system frames: `load_face_colors` swaps unconditionally.
+    Gui,
+    /// Terminal frames: `realize_tty_face` plus `turn_on_face`.
+    Terminal,
+}
+
 /// Seed faces are manually built frame fallbacks. Once realized, every merge
 /// uses the retained attributes, never the public paint fields.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -114,11 +123,35 @@ impl FaceColorAttributes {
     }
 
     pub(super) fn realize(self) -> RealizedFaceColors {
+        self.realize_for(FaceRealization::Gui)
+    }
+
+    /// GNU's terminal realization (`realize_tty_face` plus `turn_on_face`).
+    ///
+    /// `realize_tty_face` swaps the two mapped colors for every inverse-video
+    /// face (src/xfaces.c:6800-6810), then `turn_on_face` toggles the
+    /// terminal's standout mode whenever either swapped slot is a default
+    /// marker -- `fg == FACE_TTY_DEFAULT_BG_COLOR || bg ==
+    /// FACE_TTY_DEFAULT_FG_COLOR` (src/term.c:2049-2058) -- and, while
+    /// standout is active, writes each color through the OPPOSITE SGR channel
+    /// (src/term.c:2095-2115).  The swap and the channel crossing cancel: a
+    /// face with at least one defaulted channel paints its OWN colors plus
+    /// standalone standout.  Only a face whose two colors are both concrete
+    /// keeps the swap and skips standout.  Emit that net pair directly: keep
+    /// the slots and let the INVERSE attribute produce the standout sequence.
+    /// A window-system face is realized by `load_face_colors`, which swaps
+    /// unconditionally, so it always takes the plain swap below.
+    pub(super) fn realize_terminal(self) -> RealizedFaceColors {
+        self.realize_for(FaceRealization::Terminal)
+    }
+
+    fn realize_for(self, kind: FaceRealization) -> RealizedFaceColors {
         let (mut foreground, mut background, terminal_inverse) = match self.video {
             FaceVideo::Normal => (self.foreground, self.background, false),
             FaceVideo::Inverse
-                if self.foreground.is_terminal_default()
-                    && self.background.is_terminal_default() =>
+                if kind == FaceRealization::Terminal
+                    && (self.foreground.is_terminal_default()
+                        || self.background.is_terminal_default()) =>
             {
                 (self.foreground, self.background, true)
             }

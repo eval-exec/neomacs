@@ -3641,7 +3641,7 @@ impl ResolvedFace {
         // source colors from this face's already-inverted paint.
         FaceColorAttributes::from_base(self)
             .merge_terminal_realization(realized)
-            .realize()
+            .realize_terminal()
             .install(self);
         self.terminal_underline_color = realized
             .underline
