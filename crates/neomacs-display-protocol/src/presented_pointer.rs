@@ -769,7 +769,15 @@ fn serialize_text_positions<S: serde::Serializer>(
 }
 
 /// Immutable, presentation-qualified semantic hit index.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+///
+/// The owning presented frame retains the primary records. Derived nontext
+/// buckets are built only by a matching-presentation query and contain owned
+/// numeric indexes, never references into another frame. Clones start cold;
+/// replacing primary records invalidates the same owner's derived payload.
+/// Frame replacement installs a new presentation ID and index: an old-qualified
+/// query against the new frame fails before initializing its lazy buckets. A
+/// retained old immutable frame may still answer its own matching old queries.
+#[derive(serde::Serialize)]
 pub struct PresentedHitIndex {
     presentation: PresentationId,
     regions: Vec<PresentedHitRegion>,
@@ -780,15 +788,113 @@ pub struct PresentedHitIndex {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     string_positions: Vec<PresentedStringPosition>,
     #[serde(skip)]
-    region_buckets: Vec<PresentedHitBucket>,
-    #[serde(skip)]
-    resize_handle_buckets: Vec<PresentedHitBucket>,
-    #[serde(skip)]
-    string_buckets: Vec<PresentedHitBucket>,
+    nontext_buckets: std::sync::OnceLock<Box<NontextBuckets>>,
     #[serde(skip)]
     pointer_regions: Vec<PresentedPointerRegion>,
-    #[serde(skip)]
-    pointer_buckets: Vec<PresentedHitBucket>,
+}
+
+/// One optional allocation replaces four eagerly owned bucket vectors. The
+/// payload owns only derived numeric data and is independent of owner address.
+struct NontextBuckets {
+    regions: Vec<PresentedHitBucket>,
+    resize_handles: Vec<PresentedHitBucket>,
+    strings: Vec<PresentedHitBucket>,
+    pointers: Vec<PresentedHitBucket>,
+}
+
+// This field replacement must not grow inline owners, including TLS owners.
+// Exact enclosing layouts and ELF TLS still require the actual build checks.
+const _: () = assert!(
+    std::mem::size_of::<std::sync::OnceLock<Box<NontextBuckets>>>()
+        <= std::mem::size_of::<[Vec<PresentedHitBucket>; 4]>()
+);
+
+impl Clone for PresentedHitIndex {
+    fn clone(&self) -> Self {
+        Self {
+            presentation: self.presentation,
+            regions: self.regions.clone(),
+            resize_handles: self.resize_handles.clone(),
+            text: self.text.clone(),
+            string_positions: self.string_positions.clone(),
+            nontext_buckets: std::sync::OnceLock::new(),
+            pointer_regions: self.pointer_regions.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for PresentedHitIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Diagnostic format deliberately reports cache status instead of the
+        // old eager vectors. Debug must not initialize derived buckets.
+        f.debug_struct("PresentedHitIndex")
+            .field("presentation", &self.presentation)
+            .field("regions", &self.regions)
+            .field("resize_handles", &self.resize_handles)
+            .field("text", &self.text)
+            .field("string_positions", &self.string_positions)
+            .field(
+                "nontext_buckets_initialized",
+                &self.nontext_buckets.get().is_some(),
+            )
+            .field("pointer_regions", &self.pointer_regions)
+            .finish()
+    }
+}
+
+impl PartialEq for PresentedHitIndex {
+    fn eq(&self, other: &Self) -> bool {
+        // Preserve the original derive's short-circuit order, especially text
+        // equality (which can materialize its existing deferred source) and
+        // the derived buckets before pointer records. Cache state is immaterial.
+        self.presentation == other.presentation
+            && self.regions == other.regions
+            && self.resize_handles == other.resize_handles
+            && self.text == other.text
+            && self.string_positions == other.string_positions
+            && same_nontext_buckets(
+                self.regions.iter().map(|region| region.bounds),
+                other.regions.iter().map(|region| region.bounds),
+            )
+            && same_nontext_buckets(
+                self.resize_handles.iter().map(|handle| handle.bounds),
+                other.resize_handles.iter().map(|handle| handle.bounds),
+            )
+            && same_nontext_buckets(
+                self.string_positions.iter().map(|position| position.bounds),
+                other
+                    .string_positions
+                    .iter()
+                    .map(|position| position.bounds),
+            )
+            && self.pointer_regions == other.pointer_regions
+            && same_nontext_buckets(
+                self.pointer_regions.iter().map(|region| region.bounds()),
+                other.pointer_regions.iter().map(|region| region.bounds()),
+            )
+    }
+}
+
+fn same_nontext_buckets(
+    left: impl Iterator<Item = FrameRect> + Clone,
+    right: impl Iterator<Item = FrameRect> + Clone,
+) -> bool {
+    let bits = |bounds: FrameRect| {
+        [
+            bounds.x().to_bits(),
+            bounds.y().to_bits(),
+            bounds.width().to_bits(),
+            bounds.height().to_bits(),
+        ]
+    };
+    if left.clone().map(bits).eq(right.clone().map(bits)) {
+        return true;
+    }
+    // Primary float equality permits signed-zero differences. total_cmp in
+    // the unchanged builder may then produce a different run structure, but
+    // a singleton signed-zero difference may still yield equal buckets. Use
+    // exact temporary old results for this rare case; publish neither cache.
+    build_presented_hit_buckets(left.enumerate()) == build_presented_hit_buckets(right.enumerate())
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -835,6 +941,42 @@ impl Default for PresentedHitIndex {
 }
 
 impl PresentedHitIndex {
+    /// Build once for this immutable owner's current primary vectors. Only
+    /// query paths (and private query-count tests) call this; stale public
+    /// queries return before reaching it. Structural readers stay cold.
+    fn nontext_buckets(&self) -> &NontextBuckets {
+        self.nontext_buckets
+            .get_or_init(|| {
+                Box::new(NontextBuckets {
+                    regions: build_presented_hit_buckets(
+                        self.regions
+                            .iter()
+                            .enumerate()
+                            .map(|(index, region)| (index, region.bounds)),
+                    ),
+                    resize_handles: build_presented_hit_buckets(
+                        self.resize_handles
+                            .iter()
+                            .enumerate()
+                            .map(|(index, handle)| (index, handle.bounds)),
+                    ),
+                    strings: build_presented_hit_buckets(
+                        self.string_positions
+                            .iter()
+                            .enumerate()
+                            .map(|(index, position)| (index, position.bounds)),
+                    ),
+                    pointers: build_presented_hit_buckets(
+                        self.pointer_regions
+                            .iter()
+                            .enumerate()
+                            .map(|(index, region)| (index, region.bounds())),
+                    ),
+                })
+            })
+            .as_ref()
+    }
+
     #[must_use]
     pub const fn empty(presentation: PresentationId) -> Self {
         Self {
@@ -846,11 +988,8 @@ impl PresentedHitIndex {
                 built: std::sync::OnceLock::new(),
             },
             string_positions: Vec::new(),
-            region_buckets: Vec::new(),
-            resize_handle_buckets: Vec::new(),
-            string_buckets: Vec::new(),
+            nontext_buckets: std::sync::OnceLock::new(),
             pointer_regions: Vec::new(),
-            pointer_buckets: Vec::new(),
         }
     }
 
@@ -894,29 +1033,14 @@ impl PresentedHitIndex {
                 return Err(PresentedHitError::StringPositionOutsideSemanticRegion);
             }
         }
-        let region_buckets = build_presented_hit_buckets(
-            regions
-                .iter()
-                .enumerate()
-                .map(|(index, region)| (index, region.bounds)),
-        );
-        let string_buckets = build_presented_hit_buckets(
-            string_positions
-                .iter()
-                .enumerate()
-                .map(|(index, position)| (index, position.bounds)),
-        );
         Ok(Self {
             presentation,
             regions,
             resize_handles: Vec::new(),
             text: PresentedTextIndex::built(text_positions),
             string_positions,
-            region_buckets,
-            resize_handle_buckets: Vec::new(),
-            string_buckets,
+            nontext_buckets: std::sync::OnceLock::new(),
             pointer_regions: Vec::new(),
-            pointer_buckets: Vec::new(),
         })
     }
 
@@ -932,13 +1056,8 @@ impl PresentedHitIndex {
         {
             return Err(PresentedHitError::InvalidResizeHandleGeometry);
         }
-        self.resize_handle_buckets = build_presented_hit_buckets(
-            resize_handles
-                .iter()
-                .enumerate()
-                .map(|(index, handle)| (index, handle.bounds)),
-        );
         self.resize_handles = resize_handles;
+        let _ = self.nontext_buckets.take();
         Ok(self)
     }
 
@@ -961,13 +1080,9 @@ impl PresentedHitIndex {
                 return Err(PresentedHitError::PointerOutsideSemanticRegion);
             }
         }
-        self.pointer_regions = pointer_regions.to_vec();
-        self.pointer_buckets = build_presented_hit_buckets(
-            self.pointer_regions
-                .iter()
-                .enumerate()
-                .map(|(index, region)| (index, region.bounds())),
-        );
+        let pointer_regions = pointer_regions.to_vec();
+        self.pointer_regions = pointer_regions;
+        let _ = self.nontext_buckets.take();
         Ok(())
     }
 
@@ -988,7 +1103,7 @@ impl PresentedHitIndex {
             .then(|| {
                 find_presented_pointer_candidate(
                     &self.pointer_regions,
-                    &self.pointer_buckets,
+                    &self.nontext_buckets().pointers,
                     query.x(),
                     query.y(),
                 )
@@ -1083,7 +1198,7 @@ impl PresentedHitIndex {
         let window = region.window()?;
         let mut selected = None;
         for_each_presented_hit_candidate(
-            &self.string_buckets,
+            &self.nontext_buckets().strings,
             x,
             y,
             |index| self.string_positions[index].bounds,
@@ -1124,7 +1239,7 @@ impl PresentedHitIndex {
         // `LogicalPixels::new` rejects anything but a finite value, so an
         // infinite or NaN coordinate cannot reach here to be checked for.
         let resize_handle = best_presented_hit_candidate(
-            &self.resize_handle_buckets,
+            &self.nontext_buckets().resize_handles,
             query.x(),
             query.y(),
             |index| self.resize_handles[index].bounds,
@@ -1138,7 +1253,7 @@ impl PresentedHitIndex {
             }));
         }
         let best = best_presented_hit_candidate(
-            &self.region_buckets,
+            &self.nontext_buckets().regions,
             query.x(),
             query.y(),
             |index| self.regions[index].bounds,
@@ -1204,13 +1319,13 @@ impl PresentedHitIndex {
     /// Pointer regions this index would examine for a hit at `(x, y)`.
     ///
     /// Separate from [`Self::candidate_count`] because the pointer buckets are
-    /// built at bind time from a different vector; a pruning claim proved
+    /// derived from a different vector; a pruning claim proved
     /// against the semantic buckets says nothing about them.
     #[cfg(test)]
     pub(crate) fn pointer_candidate_count(&self, x: f32, y: f32) -> usize {
         let mut count = 0;
         for_each_presented_hit_candidate(
-            &self.pointer_buckets,
+            &self.nontext_buckets().pointers,
             x,
             y,
             |index| self.pointer_regions[index].bounds(),
@@ -1222,7 +1337,8 @@ impl PresentedHitIndex {
     /// Pointer regions this index holds, however many buckets they landed in.
     #[cfg(test)]
     pub(crate) fn pointer_index_entry_count(&self) -> usize {
-        self.pointer_buckets
+        self.nontext_buckets()
+            .pointers
             .iter()
             .map(|bucket| bucket.candidates.len())
             .sum()
@@ -1232,14 +1348,14 @@ impl PresentedHitIndex {
     pub(crate) fn candidate_count(&self, x: f32, y: f32) -> usize {
         let mut count = 0;
         for_each_presented_hit_candidate(
-            &self.region_buckets,
+            &self.nontext_buckets().regions,
             x,
             y,
             |index| self.regions[index].bounds,
             |_| count += 1,
         );
         for_each_presented_hit_candidate(
-            &self.resize_handle_buckets,
+            &self.nontext_buckets().resize_handles,
             x,
             y,
             |index| self.resize_handles[index].bounds,
@@ -1254,7 +1370,7 @@ impl PresentedHitIndex {
             |_| count += 1,
         );
         for_each_presented_hit_candidate(
-            &self.string_buckets,
+            &self.nontext_buckets().strings,
             x,
             y,
             |index| self.string_positions[index].bounds,
@@ -2623,3 +2739,7 @@ mod tests;
 #[cfg(test)]
 #[path = "presented_pointer/tests/row_hit_test.rs"]
 mod row_hit_test;
+
+#[cfg(test)]
+#[path = "presented_pointer/tests/nontext_buckets_test.rs"]
+mod nontext_buckets_test;
