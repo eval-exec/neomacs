@@ -439,6 +439,89 @@ mod boolean_policy_tests;
 pub(crate) fn window_chrome_string_positions(
     state: &FrameDisplayState,
 ) -> Result<Vec<PresentedStringPosition>, PresentedHitError> {
+    match chrome_position_source() {
+        ChromePositionSource::Rows => Ok(row_chrome_string_positions(state)),
+        ChromePositionSource::Frame => frame_chrome_string_positions(state),
+    }
+}
+
+/// Stream the enabled chrome rows once, straight from each glyph's own
+/// provenance.
+///
+/// A non-padding grid glyph advances the slot column by at least one, so every
+/// materialized glyph's slot is unique and its row glyph's `Str` provenance is
+/// the source that a slot table would have recorded for it.  The per-row
+/// staging buffer and the slot table are therefore both redundant here.
+/// (GNU consumes retained matrix rows the same way: no per-frame row copy and
+/// no per-frame source table.)
+fn row_chrome_string_positions(state: &FrameDisplayState) -> Vec<PresentedStringPosition> {
+    let mut positions = Vec::with_capacity(chrome_string_glyph_count(state));
+    state.for_each_window_matrix_row_materialized_glyph(
+        |_, _, row| row.enabled && window_chrome_region(row.role).is_some(),
+        |frame_glyph, glyph, row| {
+            let Some(slot) = frame_glyph.slot_id() else {
+                return;
+            };
+            let GlyphProvenance::Str { source, index } = glyph.provenance else {
+                return;
+            };
+            let Some(source) = row.string_source(source) else {
+                return;
+            };
+            let Some(region) = window_chrome_region(row.role) else {
+                return;
+            };
+            let Some(bounds) = frame_glyph.geometry() else {
+                return;
+            };
+            let Ok(bounds) = FrameRect::new(bounds.x, bounds.y, bounds.width, bounds.height) else {
+                return;
+            };
+            positions.push(PresentedStringPosition::new(
+                slot.window_id,
+                region,
+                bounds,
+                source.string(),
+                index as u64,
+            ));
+        },
+    );
+    positions
+}
+
+/// Capacity for [`row_chrome_string_positions`]: the exact number of enabled
+/// chrome-row glyphs that carry a resolvable string source.  This is the count
+/// the old slot table was keyed by.
+fn chrome_string_glyph_count(state: &FrameDisplayState) -> usize {
+    let mut count = 0usize;
+    for entry in &state.window_matrices {
+        for row in &entry.matrix.rows {
+            if !row.enabled || window_chrome_region(row.role).is_none() {
+                continue;
+            }
+            for area in GlyphArea::ALL {
+                for glyph in &row.glyphs[area.index()] {
+                    if glyph.padding {
+                        continue;
+                    }
+                    if let GlyphProvenance::Str { source, .. } = glyph.provenance
+                        && row.string_source(source).is_some()
+                    {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+/// The legacy frame-wide walk (NEOMACS_PRESENT_CHROME_POS=off): build the
+/// slot table from the chrome rows, then filter every materialized frame
+/// glyph against it.
+fn frame_chrome_string_positions(
+    state: &FrameDisplayState,
+) -> Result<Vec<PresentedStringPosition>, PresentedHitError> {
     let mut sources = rustc_hash::FxHashMap::default();
     for entry in &state.window_matrices {
         for (row_index, row) in entry.matrix.rows.iter().enumerate() {
@@ -492,19 +575,7 @@ pub(crate) fn window_chrome_string_positions(
             char_index,
         ));
     };
-    match chrome_position_source() {
-        ChromePositionSource::Frame => state.for_each_glyph(push),
-        ChromePositionSource::Rows => {
-            // Every source slot lies on an enabled chrome row of a window
-            // matrix, and only those rows' glyphs carry such slots.
-            if !sources.is_empty() {
-                state.for_each_window_matrix_row_glyph(
-                    |_, _, row| row.enabled && window_chrome_region(row.role).is_some(),
-                    push,
-                );
-            }
-        }
-    }
+    state.for_each_glyph(push);
     Ok(positions)
 }
 

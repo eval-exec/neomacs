@@ -2081,6 +2081,22 @@ struct MaterializedRowCell {
     height: f32,
 }
 
+/// Where one grid row's materialization walk ended.
+///
+/// The legacy chrome row completion needs the walk's final pen position and
+/// column after the last area; nothing else survives the walk.
+#[derive(Clone, Copy)]
+struct GridRowWalkEnd {
+    x_cursor: f32,
+    win_x: f32,
+    win_w: f32,
+    col: usize,
+    row_role: GlyphRowRole,
+    chrome_clip_rect: Option<Rect>,
+    y: f32,
+    row_height: f32,
+}
+
 fn intersect_rects(a: Rect, b: Rect) -> Rect {
     let left = a.x.max(b.x);
     let top = a.y.max(b.y);
@@ -3109,6 +3125,40 @@ impl FrameDisplayState {
         }
     }
 
+    /// The glyphs [`Self::for_each_window_matrix_row_materialized_glyph`]
+    /// materializes for the window-matrix rows ACCEPT keeps, streamed to PUSH
+    /// without the per-row staging buffer.
+    ///
+    /// The order and every glyph's geometry match
+    /// [`Self::for_each_window_matrix_row_glyph`] and the corresponding part
+    /// of [`Self::for_each_glyph`].  The legacy chrome tail completion is not
+    /// applied: it only rewrites one already-produced glyph's vertical box
+    /// edges, and the synthetic tail fill glyph is not produced.
+    pub fn for_each_window_matrix_row_materialized_glyph(
+        &self,
+        mut accept: impl FnMut(&WindowMatrixEntry, usize, &GlyphRow) -> bool,
+        mut push: impl FnMut(FrameGlyph, &Glyph, &GlyphRow),
+    ) {
+        for entry in &self.window_matrices {
+            for (row_idx, glyph_row) in entry.matrix.rows.iter().enumerate() {
+                if accept(entry, row_idx, glyph_row) {
+                    let (row_bounds, area_layout, char_w) =
+                        self.window_row_materialization_inputs(entry, glyph_row);
+                    let _ = self.walk_grid_row_glyphs(
+                        entry.window_id,
+                        row_idx as u32,
+                        glyph_row,
+                        row_bounds,
+                        area_layout,
+                        char_w,
+                        self.char_height,
+                        &mut push,
+                    );
+                }
+            }
+        }
+    }
+
     /// One window-matrix row of [`Self::for_each_glyph`].
     fn for_each_window_row_glyph(
         &self,
@@ -3117,16 +3167,8 @@ impl FrameDisplayState {
         glyph_row: &GlyphRow,
         push: &mut impl FnMut(FrameGlyph),
     ) {
-        // Body (`Text`) rows clip to the text-area band so a vscroll's
-        // top-clipped first row / exposed bottom row do not bleed over the
-        // header/tab-line or mode-line; chrome rows keep the window bounds.
-        let row_bounds = entry.row_pixel_bounds(glyph_row.role);
-        let area_layout = self.glyph_row_area_layout(entry, glyph_row.role);
-        let char_w = if entry.matrix.ncols > 0 {
-            row_bounds.width / entry.matrix.ncols as f32
-        } else {
-            self.char_width
-        };
+        let (row_bounds, area_layout, char_w) =
+            self.window_row_materialization_inputs(entry, glyph_row);
         self.for_each_grid_row_glyph(
             entry.window_id,
             row_idx as u32,
@@ -3137,6 +3179,24 @@ impl FrameDisplayState {
             self.char_height,
             push,
         );
+    }
+
+    /// Body (`Text`) rows clip to the text-area band so a vscroll's
+    /// top-clipped first row / exposed bottom row do not bleed over the
+    /// header/tab-line or mode-line; chrome rows keep the window bounds.
+    fn window_row_materialization_inputs(
+        &self,
+        entry: &WindowMatrixEntry,
+        glyph_row: &GlyphRow,
+    ) -> (Rect, GlyphRowAreaLayout, f32) {
+        let row_bounds = entry.row_pixel_bounds(glyph_row.role);
+        let area_layout = self.glyph_row_area_layout(entry, glyph_row.role);
+        let char_w = if entry.matrix.ncols > 0 {
+            row_bounds.width / entry.matrix.ncols as f32
+        } else {
+            self.char_width
+        };
+        (row_bounds, area_layout, char_w)
     }
 
     /// Resolve face attributes for grid materialization.
@@ -3180,7 +3240,12 @@ impl FrameDisplayState {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn for_each_grid_row_glyph(
+    /// Walk one grid row's materialized glyphs in emission order.
+    ///
+    /// SINK receives each materialized glyph, its row glyph and its row.  The
+    /// returned end state feeds the legacy chrome row completion in
+    /// [`Self::for_each_grid_row_glyph`].
+    fn walk_grid_row_glyphs(
         &self,
         window_id: DisplayWindowId,
         row_index: u32,
@@ -3189,18 +3254,11 @@ impl FrameDisplayState {
         area_layout: GlyphRowAreaLayout,
         char_w: f32,
         char_h: f32,
-        emit: &mut impl FnMut(FrameGlyph),
-    ) {
+        sink: &mut impl FnMut(FrameGlyph, &Glyph, &GlyphRow),
+    ) -> Option<GridRowWalkEnd> {
         if !glyph_row.enabled {
-            return;
+            return None;
         }
-
-        // Keep one row affine until its legacy chrome completion is known.
-        // GNU transfers the terminal side of a boxed chrome run to the final
-        // stretch glyph; emitting directly would leave no way to retract that
-        // side from the preceding glyph.
-        let mut materialized_row = Vec::new();
-        let mut push = |glyph| materialized_row.push(glyph);
 
         let win_x = pixel_bounds.x;
         let win_y = pixel_bounds.y;
@@ -3292,27 +3350,31 @@ impl FrameDisplayState {
                         };
                         let cell = row_cell.rect(x, materialized_width);
                         let baseline = cell.y + row_ascent + glyph.vertical_offset_px;
-                        push(FrameGlyph::Char {
-                            window_id,
-                            row_role,
-                            clip_rect,
-                            slot_id,
-                            bidi_level: glyph.bidi_level,
-                            char: *ch,
-                            composed: None,
-                            x: cell.x,
-                            y: cell.y,
-                            baseline,
-                            width: cell.width,
-                            height: cell.height,
-                            ascent: if font_ascent > 0.0 {
-                                font_ascent.min(row_height)
-                            } else {
-                                row_ascent
+                        sink(
+                            FrameGlyph::Char {
+                                window_id,
+                                row_role,
+                                clip_rect,
+                                slot_id,
+                                bidi_level: glyph.bidi_level,
+                                char: *ch,
+                                composed: None,
+                                x: cell.x,
+                                y: cell.y,
+                                baseline,
+                                width: cell.width,
+                                height: cell.height,
+                                ascent: if font_ascent > 0.0 {
+                                    font_ascent.min(row_height)
+                                } else {
+                                    row_ascent
+                                },
+                                face_id: glyph.face_id,
+                                box_vertical_edges: glyph.box_vertical_edges,
                             },
-                            face_id: glyph.face_id,
-                            box_vertical_edges: glyph.box_vertical_edges,
-                        });
+                            glyph,
+                            glyph_row,
+                        );
                     }
                     GlyphType::Composite { text } | GlyphType::AutomaticComposite { text, .. } => {
                         let font_ascent =
@@ -3326,45 +3388,53 @@ impl FrameDisplayState {
                         };
                         let cell = row_cell.rect(x, materialized_width);
                         let baseline = cell.y + row_ascent + glyph.vertical_offset_px;
-                        push(FrameGlyph::Char {
-                            window_id,
-                            row_role,
-                            clip_rect,
-                            slot_id,
-                            bidi_level: glyph.bidi_level,
-                            char: text.chars().next().unwrap_or(' '),
-                            composed: Some(text.clone()),
-                            x: cell.x,
-                            y: cell.y,
-                            baseline,
-                            width: cell.width,
-                            height: cell.height,
-                            ascent: if font_ascent > 0.0 {
-                                font_ascent.min(row_height)
-                            } else {
-                                row_ascent
+                        sink(
+                            FrameGlyph::Char {
+                                window_id,
+                                row_role,
+                                clip_rect,
+                                slot_id,
+                                bidi_level: glyph.bidi_level,
+                                char: text.chars().next().unwrap_or(' '),
+                                composed: Some(text.clone()),
+                                x: cell.x,
+                                y: cell.y,
+                                baseline,
+                                width: cell.width,
+                                height: cell.height,
+                                ascent: if font_ascent > 0.0 {
+                                    font_ascent.min(row_height)
+                                } else {
+                                    row_ascent
+                                },
+                                face_id: glyph.face_id,
+                                box_vertical_edges: glyph.box_vertical_edges,
                             },
-                            face_id: glyph.face_id,
-                            box_vertical_edges: glyph.box_vertical_edges,
-                        });
+                            glyph,
+                            glyph_row,
+                        );
                     }
                     GlyphType::Stretch { .. } => {
                         let face_data = self.resolve_face_for_materialize(glyph.face_id);
                         let cell = row_cell.rect(x, materialized_width);
-                        push(FrameGlyph::Stretch {
-                            window_id,
-                            row_role,
-                            clip_rect,
-                            slot_id,
-                            bidi_level: glyph.bidi_level,
-                            x: cell.x,
-                            y: cell.y,
-                            width: cell.width,
-                            height: cell.height,
-                            bg: face_data.bg,
-                            face_id: glyph.face_id,
-                            box_vertical_edges: glyph.box_vertical_edges,
-                        });
+                        sink(
+                            FrameGlyph::Stretch {
+                                window_id,
+                                row_role,
+                                clip_rect,
+                                slot_id,
+                                bidi_level: glyph.bidi_level,
+                                x: cell.x,
+                                y: cell.y,
+                                width: cell.width,
+                                height: cell.height,
+                                bg: face_data.bg,
+                                face_id: glyph.face_id,
+                                box_vertical_edges: glyph.box_vertical_edges,
+                            },
+                            glyph,
+                            glyph_row,
+                        );
                     }
                     GlyphType::Image {
                         image_id,
@@ -3396,22 +3466,26 @@ impl FrameDisplayState {
                             layout_height
                         };
                         let slot_y = baseline - layout_ascent + glyph.vertical_offset_px;
-                        push(FrameGlyph::Image {
-                            window_id,
-                            row_role,
-                            clip_rect,
-                            slot_id: Some(slot_id),
-                            image_id: ImageId::new(*image_id as u32),
-                            source_rect: *source_rect,
-                            slot_rect: Rect::new(x, slot_y, materialized_width, layout_height),
-                            box_rect: Rect::new(x, y, materialized_width, row_height),
-                            x: x + left_margin,
-                            y: slot_y + top_margin,
-                            width: (materialized_width - left_margin - right_margin).max(0.0),
-                            height: (layout_height - top_margin - bottom_margin).max(0.0),
-                            face_id: glyph.face_id,
-                            box_vertical_edges: glyph.box_vertical_edges,
-                        });
+                        sink(
+                            FrameGlyph::Image {
+                                window_id,
+                                row_role,
+                                clip_rect,
+                                slot_id: Some(slot_id),
+                                image_id: ImageId::new(*image_id as u32),
+                                source_rect: *source_rect,
+                                slot_rect: Rect::new(x, slot_y, materialized_width, layout_height),
+                                box_rect: Rect::new(x, y, materialized_width, row_height),
+                                x: x + left_margin,
+                                y: slot_y + top_margin,
+                                width: (materialized_width - left_margin - right_margin).max(0.0),
+                                height: (layout_height - top_margin - bottom_margin).max(0.0),
+                                face_id: glyph.face_id,
+                                box_vertical_edges: glyph.box_vertical_edges,
+                            },
+                            glyph,
+                            glyph_row,
+                        );
                     }
                     GlyphType::Video {
                         video_id, opacity, ..
@@ -3431,20 +3505,24 @@ impl FrameDisplayState {
                         } else {
                             row_height
                         };
-                        push(FrameGlyph::Video {
-                            window_id,
-                            row_role,
-                            clip_rect,
-                            slot_id: Some(slot_id),
-                            video_id: *video_id,
-                            x,
-                            y: baseline - layout_ascent + glyph.vertical_offset_px,
-                            width: materialized_width,
-                            height: layout_height,
-                            opacity: *opacity,
-                            face_id: glyph.face_id,
-                            box_vertical_edges: glyph.box_vertical_edges,
-                        });
+                        sink(
+                            FrameGlyph::Video {
+                                window_id,
+                                row_role,
+                                clip_rect,
+                                slot_id: Some(slot_id),
+                                video_id: *video_id,
+                                x,
+                                y: baseline - layout_ascent + glyph.vertical_offset_px,
+                                width: materialized_width,
+                                height: layout_height,
+                                opacity: *opacity,
+                                face_id: glyph.face_id,
+                                box_vertical_edges: glyph.box_vertical_edges,
+                            },
+                            glyph,
+                            glyph_row,
+                        );
                     }
                     GlyphType::Xwidget {
                         xwidget_id,
@@ -3489,21 +3567,25 @@ impl FrameDisplayState {
                         // (`x_draw_xwidget_glyph_string`, src/xwidget.c).
                         let layout_advance = XwidgetLayoutAdvance::new(Px(glyph_width))
                             .expect("a materialized xwidget has positive finite width");
-                        push(FrameGlyph::Xwidget {
-                            window_id,
-                            row_role,
-                            slot_id: Some(slot_id),
-                            xwidget_id: *xwidget_id,
-                            webview_id: *webview_id,
-                            presentation: XwidgetPresentationGeometry::new(
-                                origin,
-                                *content,
-                                layout_advance,
-                                clip,
-                            ),
-                            face_id: glyph.face_id,
-                            box_vertical_edges: glyph.box_vertical_edges,
-                        });
+                        sink(
+                            FrameGlyph::Xwidget {
+                                window_id,
+                                row_role,
+                                slot_id: Some(slot_id),
+                                xwidget_id: *xwidget_id,
+                                webview_id: *webview_id,
+                                presentation: XwidgetPresentationGeometry::new(
+                                    origin,
+                                    *content,
+                                    layout_advance,
+                                    clip,
+                                ),
+                                face_id: glyph.face_id,
+                                box_vertical_edges: glyph.box_vertical_edges,
+                            },
+                            glyph,
+                            glyph_row,
+                        );
                     }
                     GlyphType::Surface { surface_id, .. } => {
                         let layout_height = if glyph.pixel_height > 0.0 {
@@ -3521,37 +3603,45 @@ impl FrameDisplayState {
                         } else {
                             row_height
                         };
-                        push(FrameGlyph::Surface {
-                            window_id,
-                            row_role,
-                            clip_rect,
-                            slot_id: Some(slot_id),
-                            surface_id: SurfaceId::new(*surface_id as u32),
-                            x,
-                            y: baseline - layout_ascent + glyph.vertical_offset_px,
-                            width: materialized_width,
-                            height: layout_height,
-                            face_id: glyph.face_id,
-                            box_vertical_edges: glyph.box_vertical_edges,
-                        });
+                        sink(
+                            FrameGlyph::Surface {
+                                window_id,
+                                row_role,
+                                clip_rect,
+                                slot_id: Some(slot_id),
+                                surface_id: SurfaceId::new(*surface_id as u32),
+                                x,
+                                y: baseline - layout_ascent + glyph.vertical_offset_px,
+                                width: materialized_width,
+                                height: layout_height,
+                                face_id: glyph.face_id,
+                                box_vertical_edges: glyph.box_vertical_edges,
+                            },
+                            glyph,
+                            glyph_row,
+                        );
                     }
                     GlyphType::Glyphless { ch, presentation } => match presentation {
                         GlyphlessPresentation::ThinSpace => {
                             let face_data = self.resolve_face_for_materialize(glyph.face_id);
-                            push(FrameGlyph::Stretch {
-                                window_id,
-                                row_role,
-                                clip_rect,
-                                slot_id,
-                                bidi_level: glyph.bidi_level,
-                                x,
-                                y,
-                                width: materialized_width,
-                                height: row_height,
-                                bg: face_data.bg,
-                                face_id: glyph.face_id,
-                                box_vertical_edges: glyph.box_vertical_edges,
-                            });
+                            sink(
+                                FrameGlyph::Stretch {
+                                    window_id,
+                                    row_role,
+                                    clip_rect,
+                                    slot_id,
+                                    bidi_level: glyph.bidi_level,
+                                    x,
+                                    y,
+                                    width: materialized_width,
+                                    height: row_height,
+                                    bg: face_data.bg,
+                                    face_id: glyph.face_id,
+                                    box_vertical_edges: glyph.box_vertical_edges,
+                                },
+                                glyph,
+                                glyph_row,
+                            );
                         }
                         GlyphlessPresentation::EmptyBox | GlyphlessPresentation::HexCode => {
                             let font_ascent =
@@ -3564,27 +3654,31 @@ impl FrameDisplayState {
                                 row_height
                             };
                             let baseline = y + row_ascent + glyph.vertical_offset_px;
-                            push(FrameGlyph::Char {
-                                window_id,
-                                row_role,
-                                clip_rect,
-                                slot_id,
-                                bidi_level: glyph.bidi_level,
-                                char: *ch,
-                                composed: None,
-                                x,
-                                y,
-                                baseline,
-                                width: materialized_width,
-                                height: row_height,
-                                ascent: if font_ascent > 0.0 {
-                                    font_ascent.min(row_height)
-                                } else {
-                                    row_ascent
+                            sink(
+                                FrameGlyph::Char {
+                                    window_id,
+                                    row_role,
+                                    clip_rect,
+                                    slot_id,
+                                    bidi_level: glyph.bidi_level,
+                                    char: *ch,
+                                    composed: None,
+                                    x,
+                                    y,
+                                    baseline,
+                                    width: materialized_width,
+                                    height: row_height,
+                                    ascent: if font_ascent > 0.0 {
+                                        font_ascent.min(row_height)
+                                    } else {
+                                        row_ascent
+                                    },
+                                    face_id: glyph.face_id,
+                                    box_vertical_edges: glyph.box_vertical_edges,
                                 },
-                                face_id: glyph.face_id,
-                                box_vertical_edges: glyph.box_vertical_edges,
-                            });
+                                glyph,
+                                glyph_row,
+                            );
                         }
                     },
                 }
@@ -3592,6 +3686,60 @@ impl FrameDisplayState {
                 x_cursor += glyph_width;
             }
         }
+
+        Some(GridRowWalkEnd {
+            x_cursor,
+            win_x,
+            win_w,
+            col,
+            row_role,
+            chrome_clip_rect,
+            y,
+            row_height,
+        })
+    }
+
+    /// Materialize one grid row and apply the legacy chrome row completion.
+    ///
+    /// GNU transfers the terminal side of a boxed chrome run to the final
+    /// stretch glyph; emitting directly would leave no way to retract that
+    /// side from the preceding glyph, so this path keeps the row affine until
+    /// the completion is known.  Callers that consume only slot identity and
+    /// geometry use [`Self::for_each_window_matrix_row_materialized_glyph`].
+    fn for_each_grid_row_glyph(
+        &self,
+        window_id: DisplayWindowId,
+        row_index: u32,
+        glyph_row: &GlyphRow,
+        pixel_bounds: Rect,
+        area_layout: GlyphRowAreaLayout,
+        char_w: f32,
+        char_h: f32,
+        emit: &mut impl FnMut(FrameGlyph),
+    ) {
+        let mut materialized_row = Vec::new();
+        let Some(end) = self.walk_grid_row_glyphs(
+            window_id,
+            row_index,
+            glyph_row,
+            pixel_bounds,
+            area_layout,
+            char_w,
+            char_h,
+            &mut |glyph, _source, _row| materialized_row.push(glyph),
+        ) else {
+            return;
+        };
+        let GridRowWalkEnd {
+            x_cursor,
+            win_x,
+            win_w,
+            col,
+            row_role,
+            chrome_clip_rect,
+            y,
+            row_height,
+        } = end;
 
         // Window-owned chrome still relies on the legacy row-completion
         // fallback introduced before typed frame chrome.  A frame tab bar is
