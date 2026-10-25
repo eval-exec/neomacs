@@ -5,6 +5,16 @@ use std::time::{Duration, Instant};
 
 pub(in super::super) const SPIN_WAIT: Duration = Duration::from_secs(60);
 
+/// An absolute contention deadline, never an attempt allowance. Construct it
+/// once at the fixture boundary and retain it through capability recovery.
+pub(in super::super) struct Deadline(Instant);
+
+impl Deadline {
+    pub(in super::super) fn contention() -> Self {
+        Self(Instant::now() + SPIN_WAIT)
+    }
+}
+
 /// Classify the typed error at the operation boundary.
 pub(in super::super) enum Retry {
     Busy,
@@ -47,10 +57,12 @@ pub(in super::super) fn rendezvous(error: &RendezvousError) -> Retry {
 }
 
 pub(in super::super) fn retry<T, E>(
+    deadline: Deadline,
     mut operation: impl FnMut() -> Result<T, E>,
     mut classify: impl FnMut(&E) -> Retry,
 ) -> Result<T, E> {
     retry_owned(
+        deadline,
         (),
         |()| operation(),
         |error| match classify(&error) {
@@ -63,25 +75,17 @@ pub(in super::super) fn retry<T, E>(
 /// A failed consuming operation returns its capability in `E`. Recover it
 /// only for a retry; refusal or expiry returns that intact failure instead.
 pub(in super::super) fn retry_owned<C, T, E>(
-    capability: C,
-    operation: impl FnMut(C) -> Result<T, E>,
-    recover: impl FnMut(E) -> ControlFlow<E, C>,
-) -> Result<T, E> {
-    retry_owned_until(capability, operation, recover, Instant::now() + SPIN_WAIT)
-}
-
-fn retry_owned_until<C, T, E>(
+    deadline: Deadline,
     mut capability: C,
     mut operation: impl FnMut(C) -> Result<T, E>,
     mut recover: impl FnMut(E) -> ControlFlow<E, C>,
-    deadline: Instant,
 ) -> Result<T, E> {
     loop {
         let failure = match operation(capability) {
             Ok(value) => return Ok(value),
             Err(failure) => failure,
         };
-        if Instant::now() >= deadline {
+        if Instant::now() >= deadline.0 {
             return Err(failure);
         }
         match recover(failure) {
@@ -114,6 +118,7 @@ mod tests {
         let ready = Instant::now() + Duration::from_millis(20);
         let mut attempts = 0;
         let result = retry(
+            Deadline::contention(),
             || {
                 attempts += 1;
                 if attempts <= 10_001 || Instant::now() < ready {
@@ -133,6 +138,7 @@ mod tests {
     fn fixture_retry_refuses_without_another_attempt() {
         let mut attempts = 0;
         let result: Result<(), _> = retry(
+            Deadline::contention(),
             || {
                 attempts += 1;
                 Err(Error::Refused)
@@ -153,6 +159,7 @@ mod tests {
     fn fixture_retry_owned_recovers_busy_capability() {
         let mut attempts = 0;
         let result = retry_owned(
+            Deadline::contention(),
             Box::new(11),
             |capability| {
                 attempts += 1;
@@ -176,6 +183,7 @@ mod tests {
     #[test]
     fn fixture_retry_owned_preserves_refused_capability() {
         let result: Result<(), Failure> = retry_owned(
+            Deadline::contention(),
             Box::new(17),
             |capability| {
                 Err(Failure {
@@ -195,7 +203,8 @@ mod tests {
 
     #[test]
     fn fixture_retry_owned_expiry_preserves_busy_capability() {
-        let result: Result<(), Failure> = retry_owned_until(
+        let result: Result<(), Failure> = retry_owned(
+            Deadline(Instant::now()),
             Box::new(23),
             |capability| {
                 Err(Failure {
@@ -204,7 +213,6 @@ mod tests {
                 })
             },
             |_| panic!("expiry must return the failure before recovering its capability"),
-            Instant::now(),
         );
         let failure = result.unwrap_err();
         assert_eq!(*failure.capability, 23);

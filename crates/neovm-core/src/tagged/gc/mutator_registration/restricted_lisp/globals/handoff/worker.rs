@@ -80,6 +80,7 @@ fn pause<'era>(
 
 fn retire_owner(owner: Mutator<'_>) -> Result<(), String> {
     retry_owned(
+        Deadline::contention(),
         owner,
         |owner| owner.retire_rooted(&[]),
         |failure| match contention::rendezvous(&failure.reason) {
@@ -145,8 +146,12 @@ pub(super) fn run<'era>(
         // A native owner still has a local shell, so local.is_none() cannot
         // distinguish a published image from restored running state.
         if matches!(native, NativeState::Published) {
-            contention::retry(|| owner.leave_native(), contention::rendezvous)
-                .map_err(|e| format!("restore for cleanup: {e:?}"))?;
+            contention::retry(
+                Deadline::contention(),
+                || owner.leave_native(),
+                contention::rendezvous,
+            )
+            .map_err(|e| format!("restore for cleanup: {e:?}"))?;
         }
         with_run(&mut owner, |run| {
             run.clear_root_slots()?;

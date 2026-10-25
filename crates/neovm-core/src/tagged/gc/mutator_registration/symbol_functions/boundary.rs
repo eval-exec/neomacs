@@ -1,6 +1,6 @@
 //! Test bridge: actual owner operations, then actual stopped reconciliation.
 //! No Context, header view, evaluator or native entry is admitted here.
-use super::retry::{self as contention, Retry, retry_owned};
+use super::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::intern::SymId;
 use crate::tagged::gc::{HeapIdentity, Mutator, MutatorPermit, ParallelHeapEra};
@@ -37,6 +37,7 @@ fn attempt<'era, T>(
     mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<T, FunctionError>,
 ) -> Result<T, String> {
     contention::retry(
+        Deadline::contention(),
         || match owner.run_access() {
             Ok(mut run) => body(&mut run),
             Err(error) => Err(error.into()),
@@ -59,6 +60,7 @@ fn activate<'era>(
     id: u64,
 ) -> Result<Mutator<'era>, String> {
     retry_owned(
+        Deadline::contention(),
         permit,
         |permit| permit.activate(heap, id),
         |failed| match contention::registration(&failed.reason) {
@@ -79,6 +81,7 @@ fn guarded<'era, T>(
     // the actual canonical bank, then consume the real retirement capability.
     let cleared = attempt(&mut owner, |run| run.clear_root_slots().map_err(Into::into));
     retry_owned(
+        Deadline::contention(),
         owner,
         |owner| owner.retire_rooted(&[]),
         |failed| match contention::rendezvous(&failed.reason) {

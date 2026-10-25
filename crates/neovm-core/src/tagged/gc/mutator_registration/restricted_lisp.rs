@@ -10,7 +10,7 @@
 
 use super::a8_probes;
 use super::symbol_functions::FunctionOp;
-use super::symbol_functions::retry::{self as contention, Retry, SPIN_WAIT, retry_owned};
+use super::symbol_functions::retry::{self as contention, Deadline, Retry, SPIN_WAIT, retry_owned};
 use super::symbol_globals::GlobalOp;
 use super::{
     AllStopped, HeapIdentity, Mutator, MutatorPermit, OwnerRootSlot, ParallelHeapEra,
@@ -44,7 +44,7 @@ enum NativeState {
 }
 
 fn retry_exec<T>(op: impl FnMut() -> Result<T, ExecError>) -> Result<T, ExecError> {
-    contention::retry(op, |error| match error {
+    contention::retry(Deadline::contention(), op, |error| match error {
         ExecError::Registration(error) => contention::registration(error),
         ExecError::Rendezvous(_)
         | ExecError::ForeignCons
@@ -397,12 +397,12 @@ fn recv<T>(rx: &Receiver<T>) -> T {
 }
 
 fn retry_rv<T>(op: impl FnMut() -> Result<T, RendezvousError>) -> T {
-    contention::retry(op, contention::rendezvous)
+    contention::retry(Deadline::contention(), op, contention::rendezvous)
         .unwrap_or_else(|error| panic!("rendezvous: {error:?}"))
 }
 
 fn retry_reg<T>(op: impl FnMut() -> Result<T, RegistrationError>) -> T {
-    contention::retry(op, contention::registration)
+    contention::retry(Deadline::contention(), op, contention::registration)
         .unwrap_or_else(|error| panic!("registration: {error:?}"))
 }
 
@@ -2276,6 +2276,7 @@ fn one_slice<'era>(
 
 fn activate_owner<'era>(permit: MutatorPermit<'era>, heap: HeapIdentity, id: u64) -> Mutator<'era> {
     retry_owned(
+        Deadline::contention(),
         permit,
         |permit| permit.activate(heap, id),
         |failure| match contention::registration(&failure.reason) {
@@ -2291,6 +2292,7 @@ fn restore(owner: &mut Mutator<'_>) {
         .begin_restore_retry(false)
         .unwrap_or_else(|error| panic!("restore: {error:?}"));
     retry_owned(
+        Deadline::contention(),
         image,
         |image| image.apply(),
         |failure| match contention::rendezvous(&failure.reason) {
@@ -2303,6 +2305,7 @@ fn restore(owner: &mut Mutator<'_>) {
 
 fn retire(owner: Mutator<'_>) {
     retry_owned(
+        Deadline::contention(),
         owner,
         |owner| owner.retire_rooted(&[]),
         |failure| match contention::rendezvous(&failure.reason) {
@@ -2315,6 +2318,7 @@ fn retire(owner: Mutator<'_>) {
 
 fn complete(stopped: AllStopped<'_>) {
     retry_owned(
+        Deadline::contention(),
         stopped,
         |stopped| stopped.complete(),
         |failure| match contention::rendezvous(&failure.reason) {

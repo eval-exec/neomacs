@@ -25,6 +25,7 @@ fn resume_after_contention(contention: Contention) {
                 receive(&resume_rx);
                 let mut attempts = 0;
                 let result = contention::retry(
+                    Deadline::contention(),
                     || {
                         attempts += 1;
                         let result = owner.leave_native();
@@ -40,8 +41,12 @@ fn resume_after_contention(contention: Contention) {
                     Ok(_) => Ok(()),
                     Err(_) => {
                         receive(&resume_rx);
-                        contention::retry(|| owner.leave_native(), contention::rendezvous)
-                            .map(|_| ())
+                        contention::retry(
+                            Deadline::contention(),
+                            || owner.leave_native(),
+                            contention::rendezvous,
+                        )
+                        .map(|_| ())
                     }
                 };
                 retire_owner(owner).unwrap();

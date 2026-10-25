@@ -88,6 +88,7 @@ pub(super) fn pause<'era>(
 }
 fn retire(owner: Mutator<'_>) -> Result<(), String> {
     retry_owned(
+        Deadline::contention(),
         owner,
         |owner| owner.retire_rooted(&[]),
         |failure| match contention::rendezvous(&failure.reason) {
@@ -162,8 +163,12 @@ pub(super) fn run<'era>(
     drop(frame);
     let cleanup = (|| -> Result<(), String> {
         if matches!(native, NativeState::Published) {
-            contention::retry(|| owner.leave_native(), contention::rendezvous)
-                .map_err(|e| format!("restore: {e:?}"))?;
+            contention::retry(
+                Deadline::contention(),
+                || owner.leave_native(),
+                contention::rendezvous,
+            )
+            .map_err(|e| format!("restore: {e:?}"))?;
         }
         with_run(&mut owner, |run| {
             run.clear_root_slots()?;

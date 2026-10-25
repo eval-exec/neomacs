@@ -1,5 +1,5 @@
 //! The actual minimal retained World; no bootstrap or setup collection.
-use super::retry::{self as contention, Retry, retry_owned};
+use super::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::{Mutator, PlainSymbolBacking};
@@ -37,6 +37,7 @@ impl Drop for FixtureGuard<'_> {
                 .map_err(|e| format!("C4 cleanup clear: {e:?}"))?;
             drop(self.input.take());
             retry_owned(
+                Deadline::contention(),
                 owner,
                 |owner| owner.retire_rooted(&[]),
                 |failed| match contention::rendezvous(&failed.reason) {
