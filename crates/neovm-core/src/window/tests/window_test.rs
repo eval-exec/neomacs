@@ -2709,6 +2709,8 @@ fn frame_resize_pixelwise_updates_window_tree_and_invalidates_display_state() {
             3,
         );
 
+    // GNU resize_frame_windows uses one current FRAME_LINE_HEIGHT for the
+    // ordinary minibuffer on a vertical resize, not its old 16px allocation.
     frame.resize_pixelwise(400, 260);
 
     assert_eq!(frame.width, 400);
@@ -2726,18 +2728,18 @@ fn frame_resize_pixelwise_updates_window_tree_and_invalidates_display_state() {
     assert_eq!(frame.parameter("height"), Some(Value::fixnum(13)));
 
     let root_bounds = *frame.root_window().bounds();
-    assert_eq!(root_bounds, Rect::new(0.0, 0.0, 400.0, 244.0));
+    assert_eq!(root_bounds, Rect::new(0.0, 0.0, 400.0, 240.0));
 
     let mini_bounds = *frame.minibuffer_leaf.as_ref().unwrap().bounds();
-    assert_eq!(mini_bounds, Rect::new(0.0, 244.0, 400.0, 16.0));
+    assert_eq!(mini_bounds, Rect::new(0.0, 240.0, 400.0, 20.0));
 
     assert_eq!(
         frame.find_window(w1).unwrap().bounds(),
-        &Rect::new(0.0, 0.0, 200.0, 244.0)
+        &Rect::new(0.0, 0.0, 200.0, 240.0)
     );
     assert_eq!(
         frame.find_window(w2).unwrap().bounds(),
-        &Rect::new(200.0, 0.0, 200.0, 244.0)
+        &Rect::new(200.0, 0.0, 200.0, 240.0)
     );
     assert_eq!(
         frame.find_window(w1).unwrap().window_end_valid(),
@@ -2979,15 +2981,17 @@ fn frame_resize_pixelwise_preserves_flexible_window_proportions() {
         .unwrap();
 
     let frame = mgr.get_mut(fid).unwrap();
+    // GNU resize_frame_windows uses one current FRAME_LINE_HEIGHT for the
+    // ordinary minibuffer on a vertical resize, not its old 16px allocation.
     frame.resize_pixelwise(800, 260);
 
     assert_eq!(
         frame.find_window(side).unwrap().bounds(),
-        &Rect::new(0.0, 0.0, 200.0, 244.0)
+        &Rect::new(0.0, 0.0, 200.0, 240.0)
     );
     assert_eq!(
         frame.find_window(main).unwrap().bounds(),
-        &Rect::new(200.0, 0.0, 600.0, 244.0)
+        &Rect::new(200.0, 0.0, 600.0, 240.0)
     );
 }
 
@@ -3916,16 +3920,18 @@ fn frame_resize_pixelwise_reserves_tab_bar_height_above_root_window_tree() {
     frame.set_parameter(Value::symbol("tab-bar-lines"), Value::fixnum(1));
 
     frame.sync_tab_bar_height_from_parameters();
+    // GNU resize_frame_windows uses one current FRAME_LINE_HEIGHT for the
+    // ordinary minibuffer on a vertical resize, not its old 16px allocation.
     frame.resize_pixelwise(400, 260);
 
     assert_eq!(frame.tab_bar_height, 20);
     assert_eq!(
         *frame.root_window().bounds(),
-        Rect::new(0.0, 20.0, 400.0, 224.0)
+        Rect::new(0.0, 20.0, 400.0, 220.0)
     );
     assert_eq!(
         *frame.minibuffer_leaf.as_ref().unwrap().bounds(),
-        Rect::new(0.0, 244.0, 400.0, 16.0)
+        Rect::new(0.0, 240.0, 400.0, 20.0)
     );
     assert_eq!(frame.parameter("height"), Some(Value::fixnum(12)));
 }
