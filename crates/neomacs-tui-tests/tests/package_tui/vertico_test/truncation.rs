@@ -237,9 +237,16 @@ fn assert_gnu_line_glyph(pair: &PackageTuiPair, description: &str, marker: fn(&s
         grid.join("\n")
     );
     for row in rows {
-        let drawn: Vec<char> = grid[usize::from(row)].chars().collect();
+        // Terminal columns count cells, not Unicode scalars: combining
+        // marks share a cell and wide characters occupy two.
+        let last_column = u16::try_from(COLUMNS - 1).expect("terminal column fits");
+        let line_glyph = pair
+            .gnu
+            .screen()
+            .cell(row, last_column)
+            .and_then(|cell| cell.contents().chars().next());
         assert_eq!(
-            drawn.get(COLUMNS - 1).copied(),
+            line_glyph,
             Some(LINE_GLYPH),
             "GNU's candidate row {row} does not carry the glyph for a line that \
              does not fit in its last column, for {description}: {:?}",
