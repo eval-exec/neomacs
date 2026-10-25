@@ -12,6 +12,28 @@ fn assert_active_mini_respects_root_minimum(
     split_size: Option<i64>,
     expected_root_minimum: i64,
 ) {
+    assert_active_mini_root_minimum_after_geometry(
+        window_min_height,
+        split,
+        split_size,
+        expected_root_minimum,
+        MiniGeometryHistory::InitiallyShort,
+    );
+}
+
+#[derive(Clone, Copy)]
+enum MiniGeometryHistory {
+    InitiallyShort,
+    ExpandedOnTallFrame,
+}
+
+fn assert_active_mini_root_minimum_after_geometry(
+    window_min_height: i64,
+    split: Option<SplitDirection>,
+    split_size: Option<i64>,
+    expected_root_minimum: i64,
+    history: MiniGeometryHistory,
+) {
     let _policy = RedisplayHookPolicyGuard::legacy();
     let mut eval =
         create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
@@ -28,7 +50,10 @@ fn assert_active_mini_respects_root_minimum(
     let frame_id = eval.frame_manager_mut().create_frame(
         "short-active-mini-root-minimum",
         80,
-        13,
+        match history {
+            MiniGeometryHistory::InitiallyShort => 13,
+            MiniGeometryHistory::ExpandedOnTallFrame => 29,
+        },
         root_buffer,
     );
     {
@@ -103,6 +128,50 @@ fn assert_active_mini_respects_root_minimum(
         "layout converges"
     );
 
+    if let MiniGeometryHistory::ExpandedOnTallFrame = history {
+        assert_eq!(
+            eval.frame_manager()
+                .get(frame_id)
+                .expect("frame")
+                .find_window(mini)
+                .expect("mini")
+                .bounds()
+                .height,
+            11.0,
+            "fixture first expands on the tall terminal"
+        );
+        // The real Vertico test opens at thirty terminal rows, then receives
+        // fifteen and fourteen rows. The menu occupies one external row.
+        for inner_height in [14, 13] {
+            eval.frame_manager_mut()
+                .get_mut(frame_id)
+                .expect("frame")
+                .resize_pixelwise(80, inner_height);
+            assert_eq!(
+                eval.frame_manager()
+                    .get(frame_id)
+                    .expect("frame")
+                    .find_window(mini)
+                    .expect("mini")
+                    .bounds()
+                    .height,
+                1.0,
+                "physical vertical resize resets the expanded mini before regrowth"
+            );
+            engine.layout_frame_rust(&mut eval, frame_id);
+            assert!(
+                engine.last_frame_display_state.is_some(),
+                "resized layout converges"
+            );
+            let frame = eval.frame_manager().get(frame_id).expect("frame");
+            assert_eq!(frame.root_window().bounds().height, root_minimum as f32);
+            assert_eq!(
+                frame.find_window(mini).expect("mini").bounds().height,
+                inner_height as f32 - root_minimum as f32
+            );
+        }
+    }
+
     let frame = eval.frame_manager().get(frame_id).expect("frame");
     let root_height = frame.root_window().bounds().height;
     let mini_height = frame.find_window(mini).expect("mini").bounds().height;
@@ -145,4 +214,37 @@ fn active_mini_growth_preserves_each_uneven_stacked_child_minimum() {
     // Start with 8+4 rows. Merely clamping the root to8 and proportionally
     // redistributing would leave the second child below its four-row minimum.
     assert_active_mini_respects_root_minimum(4, Some(SplitDirection::Vertical), Some(8), 8);
+}
+
+#[test]
+fn expanded_active_mini_regrows_with_default_root_minimum_after_terminal_shrink() {
+    assert_active_mini_root_minimum_after_geometry(
+        4,
+        None,
+        None,
+        4,
+        MiniGeometryHistory::ExpandedOnTallFrame,
+    );
+}
+
+#[test]
+fn expanded_active_mini_regrows_with_custom_root_minimum_after_terminal_shrink() {
+    assert_active_mini_root_minimum_after_geometry(
+        6,
+        None,
+        None,
+        6,
+        MiniGeometryHistory::ExpandedOnTallFrame,
+    );
+}
+
+#[test]
+fn expanded_active_mini_regrows_preserving_uneven_stacked_child_minima() {
+    assert_active_mini_root_minimum_after_geometry(
+        4,
+        Some(SplitDirection::Vertical),
+        Some(8),
+        8,
+        MiniGeometryHistory::ExpandedOnTallFrame,
+    );
 }

@@ -2774,6 +2774,79 @@ fn resize_pixelwise_minibuffer_only_does_not_add_minibuffer_line() {
     );
 }
 
+fn expanded_mini_frame_for_resize_control() -> FrameManager {
+    let mut frames = FrameManager::new();
+    let fid = frames.create_frame("expanded-mini-resize", 80, 29, BufferId(1));
+    let frame = frames.get_mut(fid).expect("frame");
+    frame.char_width = 1.0;
+    frame.char_height = 1.0;
+    frame.shrink_mini_window();
+    frame.grow_mini_window_with_max_lines(10, 20.0);
+    assert_eq!(
+        frame
+            .minibuffer_leaf
+            .as_ref()
+            .expect("mini")
+            .bounds()
+            .height,
+        11.0
+    );
+    frames
+}
+
+#[test]
+fn width_only_frame_resize_preserves_expanded_minibuffer_height() {
+    let mut frames = expanded_mini_frame_for_resize_control();
+    let frame = frames.selected_frame_mut().expect("frame");
+    frame.resize_pixelwise(100, 29);
+    assert_eq!(
+        frame
+            .minibuffer_leaf
+            .as_ref()
+            .expect("mini")
+            .bounds()
+            .height,
+        11.0
+    );
+    assert_eq!(
+        frame.minibuffer_leaf.as_ref().expect("mini").bounds().width,
+        100.0
+    );
+}
+
+#[test]
+fn same_size_frame_refresh_preserves_expanded_minibuffer_height() {
+    let mut frames = expanded_mini_frame_for_resize_control();
+    let frame = frames.selected_frame_mut().expect("frame");
+    frame.resize_pixelwise(80, 29);
+    assert_eq!(
+        frame
+            .minibuffer_leaf
+            .as_ref()
+            .expect("mini")
+            .bounds()
+            .height,
+        11.0
+    );
+}
+
+#[test]
+fn font_geometry_refresh_preserves_expanded_minibuffer_pixel_allocation() {
+    let mut frames = expanded_mini_frame_for_resize_control();
+    let frame = frames.selected_frame_mut().expect("frame");
+    frame.char_width = 2.0;
+    frame.refresh_geometry_for_changed_font(&crate::buffer::BufferManager::new());
+    assert_eq!(
+        frame
+            .minibuffer_leaf
+            .as_ref()
+            .expect("mini")
+            .bounds()
+            .height,
+        11.0
+    );
+}
+
 #[test]
 fn frame_resize_discards_geometry_dependent_auto_hscroll() {
     crate::test_utils::init_test_tracing();

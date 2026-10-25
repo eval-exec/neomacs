@@ -6083,9 +6083,36 @@ impl Frame {
             self.tty_posn_pool_can_repartition = false;
         }
         let horizontal_geometry_changed = self.width != width;
+        // GNU resize_frame_windows resets the ordinary minibuffer's text
+        // body to one line on a vertical frame resize, before redisplay
+        // regrows it through window.el's root minimum policy. Preserve the
+        // nontext geometry published by its current matrix.
+        let resized_mini_height = (self.height != height)
+            .then(|| {
+                self.minibuffer_leaf.as_ref().map(|mini| {
+                    let nontext = self.redisplay_snapshot(mini.id()).map_or(0.0, |snapshot| {
+                        if snapshot.regions_materialized {
+                            (snapshot.regions.outer.height - snapshot.regions.text_body.height)
+                                .max(0.0)
+                        } else {
+                            (snapshot.tab_line_height.max(0)
+                                + snapshot.header_line_height.max(0)
+                                + snapshot.mode_line_height.max(0))
+                                as f32
+                        }
+                    });
+                    self.char_height.max(1.0) + nontext
+                })
+            })
+            .flatten();
         self.clear_pending_gui_resize();
         self.width = width;
         self.height = height;
+        if let (Some(mini), Some(height)) = (self.minibuffer_leaf.as_mut(), resized_mini_height) {
+            let mut bounds = *mini.bounds();
+            bounds.height = height;
+            mini.set_bounds(bounds);
+        }
         self.sync_window_area_bounds();
         if horizontal_geometry_changed {
             self.tree.invalidate_automatic_hscroll_for_geometry_change();
