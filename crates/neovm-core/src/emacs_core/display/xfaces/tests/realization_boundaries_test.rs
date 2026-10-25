@@ -10,8 +10,8 @@ fn default_slot_projection_observes_same_generation_winners_and_refuses_stale_ca
     cache.prepare(generation, crate::face::FaceTable::new());
     cache.insert_basic(BasicFace::Default, attributes.clone(), attributes.clone());
     assert_eq!(
-        context.cached_display_face_uses_default_slot_for_frame(frame, &attributes),
-        Some(true)
+        context.cached_display_face_slot_for_frame(frame, &attributes),
+        crate::face::realization::CachedFaceSlot::Default
     );
     context
         .frames
@@ -20,14 +20,14 @@ fn default_slot_projection_observes_same_generation_winners_and_refuses_stale_ca
         .face_realization
         .insert_basic(BasicFace::Margin, attributes.clone(), attributes.clone());
     assert_eq!(
-        context.cached_display_face_uses_default_slot_for_frame(frame, &attributes),
-        Some(false)
+        context.cached_display_face_slot_for_frame(frame, &attributes),
+        crate::face::realization::CachedFaceSlot::NonDefault
     );
     assert_eq!(context.face_change_count, generation);
     context.face_change_count += 1;
     assert_eq!(
-        context.cached_display_face_uses_default_slot_for_frame(frame, &attributes),
-        None
+        context.cached_display_face_slot_for_frame(frame, &attributes),
+        crate::face::realization::CachedFaceSlot::Unavailable
     );
 }
 

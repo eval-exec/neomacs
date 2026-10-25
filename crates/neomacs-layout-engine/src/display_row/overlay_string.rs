@@ -41,7 +41,7 @@ use crate::neovm_bridge::{
     LayoutBufferView, OverlayDisplayString, ResolvedFace, RustTextPropAccess,
 };
 use crate::types::{LayoutCharPos0, WindowParams};
-use neovm_core::buffer::CharPos0;
+use neovm_core::buffer::{CharPos0, DisplayColumn};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::value::get_string_text_properties_table_for_value;
 
@@ -187,6 +187,15 @@ enum OverlayStringRowTransitions {
     Refuse,
 }
 
+impl OverlayStringRowTransitions {
+    fn refuses(self) -> bool {
+        match self {
+            Self::Allow => false,
+            Self::Refuse => true,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct OverlayStringRenderRowContext<'a> {
     pub(crate) append_surface: &'a DisplayRowAppendSurface,
@@ -194,7 +203,6 @@ pub(crate) struct OverlayStringRenderRowContext<'a> {
     text_y: f32,
     pub(crate) row_base: usize,
     pub(crate) max_rows: usize,
-    continuation_row_prelude: Option<OverlayStringContinuationRowContext<'a>>,
     row_transitions: OverlayStringRowTransitions,
 }
 
@@ -212,17 +220,8 @@ impl<'a> OverlayStringRenderRowContext<'a> {
             text_y,
             row_base,
             max_rows,
-            continuation_row_prelude: None,
             row_transitions: OverlayStringRowTransitions::Allow,
         }
-    }
-
-    fn with_continuation_row_prelude(
-        mut self,
-        request: Option<OverlayStringContinuationRowContext<'a>>,
-    ) -> Self {
-        self.continuation_row_prelude = request;
-        self
     }
 
     fn with_row_transitions(mut self, policy: OverlayStringRowTransitions) -> Self {
@@ -279,7 +278,7 @@ pub(crate) struct OverlayStringRenderState<
     pub(crate) row_source_start: &'a mut DisplayRowSourceStart,
     pub(crate) row_y_positions: &'a mut DisplayRowYPositions,
     pub(crate) face_ids: &'a mut FrameFaceAttempt,
-    continuation_row_prelude_state: Option<BufferSourceContinuationRowPreludeState<'a>>,
+    continuation: OverlayStringRowContinuation<'a>,
 }
 
 #[derive(Clone, Copy)]
@@ -290,9 +289,17 @@ struct OverlayStringContinuationRowContext<'a> {
 }
 
 struct BufferSourceContinuationRowPreludeState<'a> {
+    prelude: Option<OverlayStringContinuationRowContext<'a>>,
     carryover: BufferSourceRowCarryoverState<'a>,
     face_scan: &'a mut FaceScanCheckpoint,
     active_face: &'a DisplayRowActiveFaceState,
+}
+
+/// Only the buffer variant owns the state needed to publish a new visual row.
+/// A prelude cannot be supplied independently of that authority.
+enum OverlayStringRowContinuation<'a> {
+    Isolated,
+    Buffer(BufferSourceContinuationRowPreludeState<'a>),
 }
 
 impl<'a, FS: crate::neovm_bridge::FaceServices> OverlayStringRenderState<'a, FS> {
@@ -316,35 +323,40 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> OverlayStringRenderState<'a, FS>
             row_source_start,
             row_y_positions,
             face_ids,
-            continuation_row_prelude_state: None,
+            continuation: OverlayStringRowContinuation::Isolated,
         }
     }
 
     fn with_buffer_source_continuation_row_prelude(
         mut self,
+        prelude: Option<OverlayStringContinuationRowContext<'a>>,
         carryover: BufferSourceRowCarryoverState<'a>,
         face_scan: &'a mut FaceScanCheckpoint,
         active_face: &'a DisplayRowActiveFaceState,
     ) -> Self {
-        self.continuation_row_prelude_state = Some(BufferSourceContinuationRowPreludeState {
-            carryover,
-            face_scan,
-            active_face,
-        });
+        self.continuation =
+            OverlayStringRowContinuation::Buffer(BufferSourceContinuationRowPreludeState {
+                prelude,
+                carryover,
+                face_scan,
+                active_face,
+            });
         self
     }
 
     fn render_continuation_row_prelude<B: LayoutBufferView>(
         &mut self,
-        context: OverlayStringContinuationRowContext<'_>,
         buffer: &B,
-        anchor: i64,
+        anchor: LayoutCharPos0,
         properties: LispStringPrefixProperties,
     ) {
-        let state = self
-            .continuation_row_prelude_state
-            .as_mut()
-            .expect("buffer continuation-row prelude requires its render state");
+        let state = match &mut self.continuation {
+            OverlayStringRowContinuation::Isolated => return,
+            OverlayStringRowContinuation::Buffer(state) => state,
+        };
+        let Some(context) = state.prelude else {
+            return;
+        };
         context
             .prelude
             .continuation_row_prelude()
@@ -376,7 +388,7 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> OverlayStringRenderState<'a, FS>
                 state.carryover.prefix_request,
                 &mut self.source_render,
                 buffer,
-                anchor,
+                anchor.get(),
                 self.face_ids,
             );
         self.progress.apply_position(end);
@@ -474,7 +486,6 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
             self.row_base,
             self.max_rows,
         )
-        .with_continuation_row_prelude(self.continuation_row_prelude)
         .with_row_transitions(self.row_transitions)
     }
 
@@ -604,7 +615,12 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
             row_y_positions,
             face_ids,
         )
-        .with_buffer_source_continuation_row_prelude(carryover, face_scan, active_face);
+        .with_buffer_source_continuation_row_prelude(
+            self.continuation_row_prelude,
+            carryover,
+            face_scan,
+            active_face,
+        );
         self.render_produced_strings(
             buffer,
             positions,
@@ -632,14 +648,14 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) struct OverlayStringRowBreakRenderContext<'a> {
-    anchor_charpos: i64,
+    anchor_charpos: LayoutCharPos0,
     row_context: OverlayStringRenderRowContext<'a>,
 }
 
 impl<'a> OverlayStringRowBreakRenderContext<'a> {
     pub(crate) fn new(anchor_charpos: i64, row_context: OverlayStringRenderRowContext<'a>) -> Self {
         Self {
-            anchor_charpos,
+            anchor_charpos: LayoutCharPos0::new(anchor_charpos),
             row_context,
         }
     }
@@ -650,6 +666,14 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
         properties: LispStringPrefixProperties,
         state: &mut OverlayStringRenderState<'_, FS>,
     ) -> DisplayRowTransitionContinuation {
+        // An isolated row session has no authority to publish a buffer row
+        // transition. Refuse before changing TAB progress or output rows.
+        let context = match &mut state.continuation {
+            OverlayStringRowContinuation::Isolated => {
+                return DisplayRowTransitionContinuation::Exhausted;
+            }
+            OverlayStringRowContinuation::Buffer(context) => context,
+        };
         let position = state.progress.row_position();
         state
             .progress
@@ -658,10 +682,9 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
             VisualWrapBreak::MidElement,
             TextRowTransitionStatePolicy::visual_wrap(),
         );
-        let context = state
-            .continuation_row_prelude_state
-            .as_mut()
-            .expect("buffer visual wrap requires shared row carryover");
+        // The shared transition predates DisplayColumn; keep its raw mutable
+        // coordinate confined to this call boundary.
+        let mut column = state.progress.col().get();
         let transition = DisplayRowTextWindowEmitContext::from_source_render(
             self.row_context
                 .geometry_defaults(state.source_render.measurement_mode()),
@@ -675,22 +698,21 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
         )
         .emit_overflow_then_row_start(
             plan,
-            LayoutCharPos0::new(self.anchor_charpos),
+            self.anchor_charpos,
             position,
             context.carryover.render_state(true),
-            state.progress.col_mut(),
+            &mut column,
         );
+        state.progress.set_col(DisplayColumn::new(column));
         if transition.is_exhausted() {
             return DisplayRowTransitionContinuation::Exhausted;
         }
         context.face_scan.invalidate();
-        state.row_source_start.advance_to(self.anchor_charpos);
+        state.row_source_start.advance_to(self.anchor_charpos.get());
         state
             .progress
             .apply_position(DisplayRowPosition::new(self.row_context.content_x(), 0));
-        if let Some(prelude) = self.row_context.continuation_row_prelude {
-            state.render_continuation_row_prelude(prelude, buffer, self.anchor_charpos, properties);
-        }
+        state.render_continuation_row_prelude(buffer, self.anchor_charpos, properties);
         state.progress.record_row_text_start();
         DisplayRowTransitionContinuation::Continue
     }
@@ -703,7 +725,7 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
     ) -> DisplayRowTransitionContinuation {
         let content_x = self.row_context.content_x();
         let geometry_transition = DisplayRowLineBreakTransitionRequest::new(
-            LayoutCharPos0::new(self.anchor_charpos),
+            self.anchor_charpos,
             self.row_context
                 .geometry_defaults(state.source_render.measurement_mode()),
             self.row_context.row_base,
@@ -715,7 +737,7 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
         )
         .finish_geometry(state.geometry);
 
-        state.row_source_start.advance_to(self.anchor_charpos);
+        state.row_source_start.advance_to(self.anchor_charpos.get());
         let row_transition = state
             .source_render
             .output_render()
@@ -730,16 +752,19 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
         state
             .progress
             .apply_position(DisplayRowPosition::new(content_x, 0));
-        if let Some(context) = state.continuation_row_prelude_state.as_mut() {
-            context.carryover.render_state(true).apply_line_break_row_start(
-                crate::display_row::transition::DisplayRowLineBreakTransitionPlan::display_string_line_break(),
-                state.progress.col_mut(),
-            );
-            context.face_scan.invalidate();
+        match &mut state.continuation {
+            OverlayStringRowContinuation::Isolated => {}
+            OverlayStringRowContinuation::Buffer(context) => {
+                let mut column = state.progress.col().get();
+                context.carryover.render_state(true).apply_line_break_row_start(
+                    crate::display_row::transition::DisplayRowLineBreakTransitionPlan::display_string_line_break(),
+                    &mut column,
+                );
+                state.progress.set_col(DisplayColumn::new(column));
+                context.face_scan.invalidate();
+            }
         }
-        if let Some(prelude) = self.row_context.continuation_row_prelude {
-            state.render_continuation_row_prelude(prelude, buffer, self.anchor_charpos, properties);
-        }
+        state.render_continuation_row_prelude(buffer, self.anchor_charpos, properties);
         state.progress.record_row_text_start();
         DisplayRowTransitionContinuation::Continue
     }
@@ -819,7 +844,7 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         state.progress.apply_position(end);
 
         if matches!(stop, DisplayRowRenderStop::RowBreak(_)) {
-            if row_context.row_transitions == OverlayStringRowTransitions::Refuse {
+            if row_context.row_transitions.refuses() {
                 return DisplayRowTransitionContinuation::Exhausted;
             }
             state
@@ -850,7 +875,7 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
                         .output_emitter()
                         .note_automatic_mini_row_truncation();
                 }
-                if row_context.row_transitions == OverlayStringRowTransitions::Refuse {
+                if row_context.row_transitions.refuses() {
                     return DisplayRowTransitionContinuation::Exhausted;
                 }
                 // GNU's pushed overlay-string iterator survives WINDOW_WRAP:

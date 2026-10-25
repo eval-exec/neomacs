@@ -512,10 +512,40 @@ impl From<BasicFaceId> for FaceId {
 
 /// GNU's default-space predicate distinguishes its default slot from another
 /// realized slot even when all Lisp attributes and terminal paint are equal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TtySpaceIdentity {
     CanonicalDefault,
     OtherRealized,
+    /// No authoritative realized TTY slot was supplied.
+    #[default]
+    Unknown,
+}
+
+static_assertions::assert_impl_all!(TtySpaceIdentity: Copy, Send, Sync);
+const _: () = assert!(std::mem::size_of::<TtySpaceIdentity>() == 1);
+
+// Preserve the earlier optional field's wire encoding at the serde boundary,
+// without storing optional domain state or changing the known variant order.
+fn serialize_tty_space_identity<S>(
+    identity: &TtySpaceIdentity,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let wire_identity = match identity {
+        TtySpaceIdentity::Unknown => None,
+        TtySpaceIdentity::CanonicalDefault | TtySpaceIdentity::OtherRealized => Some(*identity),
+    };
+    serde::Serialize::serialize(&wire_identity, serializer)
+}
+
+fn deserialize_tty_space_identity<'de, D>(deserializer: D) -> Result<TtySpaceIdentity, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <Option<TtySpaceIdentity> as serde::Deserialize>::deserialize(deserializer)
+        .map(Option::unwrap_or_default)
 }
 
 /// A face defines text styling (colors, font, decorations)
@@ -669,16 +699,20 @@ pub struct Face {
     pub underline_placement: UnderlinePosition,
 
     /// Logical default-space identity, independent of the arena's numeric id.
-    /// None means the producer did not supply an authoritative TTY identity.
-    #[serde(default)]
-    pub tty_space_identity: Option<TtySpaceIdentity>,
+    /// Unknown means the producer supplied no authoritative realized TTY slot.
+    #[serde(
+        default,
+        serialize_with = "serialize_tty_space_identity",
+        deserialize_with = "deserialize_tty_space_identity"
+    )]
+    pub tty_space_identity: TtySpaceIdentity,
 }
 
 impl Default for Face {
     fn default() -> Self {
         Self {
             id: FaceId::new(0),
-            tty_space_identity: Some(TtySpaceIdentity::CanonicalDefault),
+            tty_space_identity: TtySpaceIdentity::CanonicalDefault,
             foreground: Color::WHITE,
             background: Color::BLACK,
             terminal_foreground: None,
@@ -722,7 +756,11 @@ impl Face {
             id,
             // Only the reserved basic default slot is known here. Dynamic
             // ids require the producer's explicit logical declaration.
-            tty_space_identity: (id.get() == 0).then_some(TtySpaceIdentity::CanonicalDefault),
+            tty_space_identity: if id.get() == 0 {
+                TtySpaceIdentity::CanonicalDefault
+            } else {
+                TtySpaceIdentity::Unknown
+            },
             ..Default::default()
         }
     }
@@ -905,7 +943,7 @@ impl FaceDataFFI {
             // FFI edge: wrap the raw C-side face id into the typed FaceId here.
             id: FaceId::new(self.face_id),
             // The legacy pixel-only FFI cannot prove a realized cache slot.
-            tty_space_identity: None,
+            tty_space_identity: TtySpaceIdentity::Unknown,
             foreground: Color::from_pixel(self.fg),
             background: Color::from_pixel(self.bg),
             // A raw FFI pixel never went through `tty-color-desc`, so it has no

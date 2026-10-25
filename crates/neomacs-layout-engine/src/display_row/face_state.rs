@@ -32,7 +32,7 @@ fn underline_style_from_code(code: u8) -> UnderlineStyle {
 #[derive(Debug, Clone)]
 pub(crate) struct DisplayRowFace {
     pub(crate) face_id: FaceId,
-    pub(crate) tty_space_identity: Option<neomacs_display_protocol::face::TtySpaceIdentity>,
+    pub(crate) tty_space_identity: neomacs_display_protocol::face::TtySpaceIdentity,
     pub(crate) foreground: Color,
     pub(crate) background: Color,
     /// The realized terminal colours, carried beside the pixels the GUI paints:

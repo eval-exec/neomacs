@@ -114,14 +114,32 @@ impl DisplayRowSourceState {
     /// maps its coverage back to buffer coordinates.
     pub(crate) fn pending_string_position(
         &self,
-    ) -> Option<&crate::display_item::DisplaySourcePosition> {
+    ) -> Option<crate::display_source::LispStringPrefixPosition> {
+        use crate::display_item::{DisplayItemKind, DisplaySourcePosition};
+
         let item = self.pending_item.as_ref()?;
-        match &item.kind {
-            crate::display_item::DisplayItemKind::SourceMappedText(mapped) => mapped
+        let position = match &item.kind {
+            DisplayItemKind::SourceMappedText(mapped) => mapped
                 .glyph_string_start
                 .as_ref()
-                .or(Some(&item.span.start)),
-            _ => Some(&item.span.start),
+                .unwrap_or(&item.span.start),
+            DisplayItemKind::TextRun(_)
+            | DisplayItemKind::ControlChar { .. }
+            | DisplayItemKind::Glyphless(_)
+            | DisplayItemKind::Stretch(_)
+            | DisplayItemKind::MediaReplacement(_)
+            | DisplayItemKind::RowBreak(_) => &item.span.start,
+        };
+        match position {
+            DisplaySourcePosition::LispString {
+                source_id,
+                char_index,
+                ..
+            } => Some(crate::display_source::LispStringPrefixPosition::new(
+                *source_id,
+                neovm_core::buffer::CharPos0::new(*char_index),
+            )),
+            DisplaySourcePosition::Buffer { .. } | DisplaySourcePosition::Synthetic { .. } => None,
         }
     }
 

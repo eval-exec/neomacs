@@ -529,7 +529,7 @@ impl<'a> BufferSourceEndOfBufferTailRenderContext<'a> {
             self.active_face_state,
             row_geometry,
             row_progress.x(),
-            row_progress.col(),
+            row_progress.col().get(),
         );
 
         if tail.is_at_accessible_end() {
@@ -541,7 +541,7 @@ impl<'a> BufferSourceEndOfBufferTailRenderContext<'a> {
                 face_metrics.char_width(),
                 row_geometry.height().max(face_metrics.row_height()),
                 row_geometry.row(),
-                row_progress.col(),
+                row_progress.col().get(),
             );
         }
 

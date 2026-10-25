@@ -1332,8 +1332,21 @@ impl WindowChromeStringState {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum MiniPrecedingZvByte {
     AtBufferStart,
-    Byte(u8),
+    LineFeed,
+    OtherByte,
     Unknown,
+}
+
+static_assertions::assert_impl_all!(MiniPrecedingZvByte: Copy, Send, Sync);
+const _: () = assert!(std::mem::size_of::<MiniPrecedingZvByte>() == 1);
+
+impl From<u8> for MiniPrecedingZvByte {
+    fn from(byte: u8) -> Self {
+        match byte {
+            b'\n' => Self::LineFeed,
+            _ => Self::OtherByte,
+        }
+    }
 }
 
 /// Numeric facts of one exclusive speculative emitter. They are discarded
@@ -1345,40 +1358,34 @@ pub(crate) enum AutomaticMiniRowEnd {
     Truncated,
 }
 
+static_assertions::assert_impl_all!(AutomaticMiniRowEnd: Copy, Send, Sync);
+const _: () = assert!(std::mem::size_of::<AutomaticMiniRowEnd>() == 1);
+
 impl MiniPrecedingZvByte {
     /// Called only for a completed empty current row at/before first-visible X
     /// in TRUNCATE mode. Keep GNU's mover and final-height guards distinct.
     pub(crate) fn automatic_tail_height(
         self,
         previous_row: AutomaticMiniRowEnd,
-        height_px: f32,
+        height_px: neomacs_display_protocol::types::Px,
     ) -> crate::output::window_state::AutomaticMiniTailHeight {
         use crate::output::window_state::AutomaticMiniTailHeight;
         match previous_row {
             AutomaticMiniRowEnd::Truncated => match self {
                 // move_it_to:11122–11145 exits before Y advance/metrics reset
                 // after a clipped final string line, including true ZV_BYTE==1.
-                Self::AtBufferStart => AutomaticMiniTailHeight::TruncatedLineStop { height_px },
-                Self::Byte(byte) => {
-                    if byte != b'\n' {
-                        AutomaticMiniTailHeight::TruncatedLineStop { height_px }
-                    } else {
-                        AutomaticMiniTailHeight::CurrentRow
-                    }
+                Self::AtBufferStart | Self::OtherByte => {
+                    AutomaticMiniTailHeight::TruncatedLineStop { height_px }
                 }
-                Self::Unknown => AutomaticMiniTailHeight::CurrentRow,
+                Self::LineFeed | Self::Unknown => AutomaticMiniTailHeight::CurrentRow,
             },
             AutomaticMiniRowEnd::Ordinary => match self {
                 // resize_mini_window:13355–13368 suppresses last_height only
                 // for a real preceding non-LF byte, never merely empty BEGV..ZV.
-                Self::Byte(byte) => {
-                    if byte != b'\n' {
-                        AutomaticMiniTailHeight::ZeroMetricsTruncatedEnd { height_px }
-                    } else {
-                        AutomaticMiniTailHeight::CurrentRow
-                    }
+                Self::OtherByte => AutomaticMiniTailHeight::ZeroMetricsTruncatedEnd { height_px },
+                Self::AtBufferStart | Self::LineFeed | Self::Unknown => {
+                    AutomaticMiniTailHeight::CurrentRow
                 }
-                Self::AtBufferStart | Self::Unknown => AutomaticMiniTailHeight::CurrentRow,
             },
         }
     }

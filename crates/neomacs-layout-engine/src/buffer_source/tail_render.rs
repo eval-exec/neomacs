@@ -15,8 +15,7 @@ use crate::display_text_window_row_lifecycle::{
     OrdinaryEobRowAdmission, TextWindowBodyInstallRenderContext, TextWindowBodyInstallRequest,
     TextWindowCursorPublishStatus, TextWindowFinishRequest, TextWindowFinishState,
     TextWindowTailFinalizeContext, TextWindowTailFinalizeRequest, TextWindowTailFinalizeState,
-    TextWindowVisibilityRetryOutcome, TextWindowVisibilityRetryRequest,
-    ordinary_eob_row_is_visible,
+    TextWindowVisibilityRetryOutcome, TextWindowVisibilityRetryRequest, ordinary_eob_row_admission,
 };
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{LayoutBufferView, ResolvedFace, RustBufferAccess};
@@ -421,12 +420,15 @@ where
                 // Rust EmacsBytePos is zero-based; GNU ZV_BYTE is one-based.
                 // GNU ZV_BYTE <= 1 is therefore Rust zv == 0, and GNU's
                 // FETCH_BYTE(ZV_BYTE - 1) is the byte at Rust zv - 1.
-                match buf_access.zv() {
-                    0 => MiniPrecedingZvByte::AtBufferStart,
-                    zv if zv > 0 => buf_access
-                        .byte_at(zv - 1)
-                        .map_or(MiniPrecedingZvByte::Unknown, MiniPrecedingZvByte::Byte),
-                    _ => MiniPrecedingZvByte::Unknown,
+                let zv = buf_access.view().layout_point_max_emacs_byte_pos();
+                if zv == neovm_core::buffer::EmacsBytePos::ZERO {
+                    MiniPrecedingZvByte::AtBufferStart
+                } else {
+                    buf_access
+                        .byte_at_emacs_pos(
+                            zv.saturating_sub_len(neovm_core::buffer::EmacsByteLen::new(1)),
+                        )
+                        .map_or(MiniPrecedingZvByte::Unknown, MiniPrecedingZvByte::from)
                 }
             } else {
                 MiniPrecedingZvByte::Unknown
@@ -517,31 +519,23 @@ where
         let candidate_row = cursor_info
             .eob_row_candidates()
             .find_map(|(offset, _)| tail_context.display_text_row_base.checked_add(offset));
-        let visible =
-            source_render
-                .output_render()
-                .with_output_target_parts(|mut output, emitter, _| {
-                    let insertion = emitter.point_for_lisp_buffer_pos(point);
-                    candidate_row.is_some_and(|index| {
-                        output
-                            .builder()
-                            .current_window_row(index)
-                            .is_some_and(|row| {
-                                ordinary_eob_row_is_visible(
-                                    index,
-                                    row,
-                                    insertion,
-                                    tail_context.retry_bounds.text_area_top(),
-                                    tail_context.retry_bounds.text_area_bottom(),
-                                )
-                            })
+        source_render
+            .output_render()
+            .with_output_target_parts(|mut output, emitter, _| {
+                let insertion = emitter.point_for_lisp_buffer_pos(point);
+                candidate_row
+                    .and_then(|index| {
+                        output.builder().current_window_row(index).map(|row| {
+                            ordinary_eob_row_admission(
+                                neovm_core::window::MatrixRow0::new(index),
+                                row,
+                                insertion,
+                                tail_context.retry_bounds,
+                            )
+                        })
                     })
-                });
-        if visible {
-            OrdinaryEobRowAdmission::Visible
-        } else {
-            OrdinaryEobRowAdmission::Unavailable
-        }
+                    .unwrap_or(OrdinaryEobRowAdmission::Unavailable)
+            })
     } else {
         OrdinaryEobRowAdmission::ExistingPolicy
     };

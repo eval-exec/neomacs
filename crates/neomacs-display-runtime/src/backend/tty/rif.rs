@@ -1515,13 +1515,16 @@ impl TtyRif {
         attrs: PackedCellAttrs,
         default_face: &mut Option<PackedCellAttrs>,
     ) -> BlankErase {
-        if self
+        use neomacs_display_protocol::face::TtySpaceIdentity;
+        match self
             .faces
             .get(&face_id)
-            .and_then(|face| face.tty_space_identity)
-            != Some(neomacs_display_protocol::face::TtySpaceIdentity::CanonicalDefault)
+            .map_or(TtySpaceIdentity::Unknown, |face| face.tty_space_identity)
         {
-            return BlankErase::Explicit;
+            TtySpaceIdentity::Unknown | TtySpaceIdentity::OtherRealized => {
+                return BlankErase::Explicit;
+            }
+            TtySpaceIdentity::CanonicalDefault => {}
         }
         let default = *default_face
             .get_or_insert_with(|| PackedCellAttrs::new(self.resolve_attrs(FaceId::new(0))));

@@ -1090,7 +1090,7 @@ fn terminal_cell_face(
         .unwrap_or_else(|| "monospace".to_string());
     Face {
         id: face_id,
-        tty_space_identity: None,
+        tty_space_identity: neomacs_display_protocol::face::TtySpaceIdentity::Unknown,
         foreground: fg,
         background: Color::TRANSPARENT,
         terminal_foreground: None,

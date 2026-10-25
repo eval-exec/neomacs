@@ -147,6 +147,19 @@ impl RealizationEpoch {
 
 static_assertions::assert_not_impl_any!(RealizationEpoch: Send, Sync, Copy);
 
+/// Generic face lookup classification read under the owning Context/frame
+/// borrow. This copied native value contains no Lisp roots or shared state;
+/// Unavailable carries no authority to infer a default slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CachedFaceSlot {
+    Unavailable,
+    Default,
+    NonDefault,
+}
+
+static_assertions::assert_impl_all!(CachedFaceSlot: Copy, Send, Sync);
+const _: () = assert!(std::mem::size_of::<CachedFaceSlot>() == 1);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum DefaultLookupPosition {
     #[default]
@@ -409,14 +422,19 @@ impl FrameFaceRealizationCache {
 
     /// Project the existing generic cache winner, not its equivalent paint.
     /// Forced basic faces can shadow default with an identical attribute key.
-    pub(crate) fn lookup_uses_default_slot(&self, attributes: &Face) -> Option<bool> {
-        self.lookup(attributes)?;
-        Some(
-            self.default_lookup_position == DefaultLookupPosition::Winner
-                && self
-                    .basic(BasicFace::Default)
-                    .is_some_and(|(source, _)| source == attributes),
-        )
+    pub(crate) fn lookup_slot(&self, attributes: &Face) -> CachedFaceSlot {
+        if self.lookup(attributes).is_none() {
+            return CachedFaceSlot::Unavailable;
+        }
+        if self.default_lookup_position == DefaultLookupPosition::Winner
+            && self
+                .basic(BasicFace::Default)
+                .is_some_and(|(source, _)| source == attributes)
+        {
+            CachedFaceSlot::Default
+        } else {
+            CachedFaceSlot::NonDefault
+        }
     }
 
     pub(crate) fn insert(&mut self, attributes: Face, realized: Face) {

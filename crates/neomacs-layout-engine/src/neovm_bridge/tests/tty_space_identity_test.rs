@@ -1,6 +1,7 @@
 use super::*;
 use neovm_core::emacs_core::terminal::pure;
 
+#[must_use = "dropping this guard restores the test terminal runtime"]
 struct RestoreTerminal;
 impl Drop for RestoreTerminal {
     fn drop(&mut self) {
@@ -48,7 +49,7 @@ fn overlay_string_unrelated_remapping_uses_generic_default_slot_identity() {
     resolver.realize_for_display(&mut canonical, &mut context);
     assert_eq!(
         canonical.tty_space_identity,
-        Some(TtySpaceIdentity::CanonicalDefault)
+        TtySpaceIdentity::CanonicalDefault
     );
     buffer.set_buffer_local(
         "face-remapping-alist",
@@ -62,13 +63,10 @@ fn overlay_string_unrelated_remapping_uses_generic_default_slot_identity() {
     resolver.realize_for_display(&mut generic, &mut context);
     let attributes = generic.source_attributes.as_ref().unwrap().attributes();
     assert_eq!(
-        context.cached_display_face_uses_default_slot_for_frame(frame, attributes),
-        Some(false)
+        context.cached_display_face_slot_for_frame(frame, attributes),
+        neovm_core::face::realization::CachedFaceSlot::NonDefault
     );
-    assert_eq!(
-        generic.tty_space_identity,
-        Some(TtySpaceIdentity::OtherRealized)
-    );
+    assert_eq!(generic.tty_space_identity, TtySpaceIdentity::OtherRealized);
     assert_eq!(canonical.terminal_fg, generic.terminal_fg);
     assert_eq!(canonical.terminal_bg, generic.terminal_bg);
     assert!(!crate::display_source_resolver::same_resolved_face(
@@ -86,7 +84,7 @@ fn ordinary_buffer_only_bypasses_generic_lookup_without_raw_overlays() {
     resolver.realize_for_display(&mut canonical, &mut context);
     assert_eq!(
         canonical.tty_space_identity,
-        Some(TtySpaceIdentity::CanonicalDefault)
+        TtySpaceIdentity::CanonicalDefault
     );
     let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
         serial: 1,
@@ -101,10 +99,7 @@ fn ordinary_buffer_only_bypasses_generic_lookup_without_raw_overlays() {
     // No face property: raw overlay presence alone bypasses GNU's fastpath.
     let mut generic = resolver.face_at_pos(&buffer, 0, &mut next);
     resolver.realize_for_display(&mut generic, &mut context);
-    assert_eq!(
-        generic.tty_space_identity,
-        Some(TtySpaceIdentity::OtherRealized)
-    );
+    assert_eq!(generic.tty_space_identity, TtySpaceIdentity::OtherRealized);
     let sources = overlay_faces_at(&buffer, EmacsBytePos::new(0), None).into_sources(None);
     assert!(!sources.is_empty());
     assert!(sources.values().next().is_none());
@@ -117,8 +112,8 @@ fn paint_memo_hits_requery_logical_identity_in_mutable_and_cached_paths() {
     entry.require_generic_tty_lookup();
     let attributes = entry.source_attributes.as_ref().unwrap().clone();
     assert_eq!(
-        context.cached_display_face_uses_default_slot_for_frame(frame, attributes.attributes()),
-        Some(false)
+        context.cached_display_face_slot_for_frame(frame, attributes.attributes()),
+        neovm_core::face::realization::CachedFaceSlot::NonDefault
     );
     resolver.record_tty_paint(
         TtyPaintKey::of(&entry),
@@ -129,28 +124,22 @@ fn paint_memo_hits_requery_logical_identity_in_mutable_and_cached_paths() {
     );
     // A paint memo must not preserve even an explicitly stale identity bit.
     let mut cached = entry.clone();
-    cached.tty_space_identity = Some(TtySpaceIdentity::CanonicalDefault);
+    cached.tty_space_identity = TtySpaceIdentity::CanonicalDefault;
     assert!(resolver.realize_cached_for_display(&mut cached, &context));
-    assert_eq!(
-        cached.tty_space_identity,
-        Some(TtySpaceIdentity::OtherRealized)
-    );
+    assert_eq!(cached.tty_space_identity, TtySpaceIdentity::OtherRealized);
     let mut mutable = entry;
-    mutable.tty_space_identity = Some(TtySpaceIdentity::CanonicalDefault);
+    mutable.tty_space_identity = TtySpaceIdentity::CanonicalDefault;
     resolver.realize_for_display(&mut mutable, &mut context);
-    assert_eq!(
-        mutable.tty_space_identity,
-        Some(TtySpaceIdentity::OtherRealized)
-    );
+    assert_eq!(mutable.tty_space_identity, TtySpaceIdentity::OtherRealized);
 }
 
 #[test]
 fn equal_paint_default_and_other_slots_publish_distinct_arena_identities() {
     let _context = Context::new();
     let mut canonical = ResolvedFace::default();
-    canonical.tty_space_identity = Some(TtySpaceIdentity::CanonicalDefault);
+    canonical.tty_space_identity = TtySpaceIdentity::CanonicalDefault;
     let mut other = canonical.clone();
-    other.tty_space_identity = Some(TtySpaceIdentity::OtherRealized);
+    other.tty_space_identity = TtySpaceIdentity::OtherRealized;
     let mut attempt = crate::frame_face_arena::FrameFaceArena::default().begin_attempt();
     let left =
         crate::display_row::face_state::stable_face_id_for_resolved(&mut attempt, &canonical);
@@ -164,11 +153,11 @@ fn equal_paint_default_and_other_slots_publish_distinct_arena_identities() {
     assert_eq!(left_face.foreground, right_face.foreground);
     assert_eq!(
         left_face.tty_space_identity,
-        Some(TtySpaceIdentity::CanonicalDefault)
+        TtySpaceIdentity::CanonicalDefault
     );
     assert_eq!(
         right_face.tty_space_identity,
-        Some(TtySpaceIdentity::OtherRealized)
+        TtySpaceIdentity::OtherRealized
     );
     attempt.import_face(left_face).unwrap();
     attempt.import_face(right_face).unwrap();

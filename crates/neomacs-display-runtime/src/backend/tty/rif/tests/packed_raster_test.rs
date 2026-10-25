@@ -717,11 +717,11 @@ fn packed_face_runs_clips_composites_and_overlapping_tails_match_frozen_raster()
         let mut face = Face::new(FaceId::new(id));
         // This frozen optimization fixture's interned face21 is the
         // canonical default, unlike GNU's equal-paint nondefault slot.
-        face.tty_space_identity = Some(if id == 0 || id == 21 {
+        face.tty_space_identity = if id == 0 || id == 21 {
             neomacs_display_protocol::face::TtySpaceIdentity::CanonicalDefault
         } else {
             neomacs_display_protocol::face::TtySpaceIdentity::OtherRealized
-        });
+        };
         face.use_default_foreground = id == 0 || id == 21;
         face.use_default_background = id == 0 || id == 21;
         face.terminal_foreground = Some(TerminalColor::Indexed(id as u16));

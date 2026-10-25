@@ -6,10 +6,10 @@ use crate::display_item::{
     BufferDisplayReplacementSource, DisplayGlyphless, DisplayItem, DisplayItemKind,
     DisplayItemLayout, DisplayLength, DisplayLineHeightPolicy, DisplayLineSpacingPolicy,
     DisplayMediaReplacement, DisplayPointerAppearance, DisplayPointerOccurrence,
-    DisplayPointerSourceRange, DisplayRowBreak, DisplaySourceMappedText, DisplaySourcePosition,
-    DisplayStretch, DisplayStretchWidth, DisplayStringBoxBoundaries, DisplayTextComposition,
-    DisplayTextRun, GlyphlessJoinerPolicy, GlyphlessMethod, RenderFaceRef, SourceSpan,
-    glyphless_method_for_char,
+    DisplayPointerSourceRange, DisplayRowBreak, DisplaySourceId, DisplaySourceMappedText,
+    DisplaySourcePosition, DisplayStretch, DisplayStretchWidth, DisplayStringBoxBoundaries,
+    DisplayTextComposition, DisplayTextRun, GlyphlessJoinerPolicy, GlyphlessMethod, RenderFaceRef,
+    SourceSpan, glyphless_method_for_char,
 };
 use crate::display_origin::{DisplayOrigin, DisplayPropertySource, OverlayStringKind};
 use crate::display_property::{
@@ -2726,6 +2726,22 @@ pub(crate) struct LispStringPrefixProperties {
     pub(crate) wrap: Option<Value>,
 }
 
+/// A pushed string coordinate, never a buffer byte offset or synthetic slot.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LispStringPrefixPosition {
+    source_id: DisplaySourceId,
+    char_index: CharPos0,
+}
+
+impl LispStringPrefixPosition {
+    pub(crate) fn new(source_id: DisplaySourceId, char_index: CharPos0) -> Self {
+        Self {
+            source_id,
+            char_index,
+        }
+    }
+}
+
 pub(crate) struct LispStringSourceCursor {
     stack: LispStringSourceStack,
 }
@@ -2790,13 +2806,12 @@ impl LispStringSourceOrigin {
 impl LispStringSourceCursor {
     pub(crate) fn prefix_properties_at(
         &self,
-        pending: Option<&DisplaySourcePosition>,
+        pending: Option<LispStringPrefixPosition>,
     ) -> LispStringPrefixProperties {
         let (frame, index) = match pending {
-            Some(DisplaySourcePosition::LispString {
+            Some(LispStringPrefixPosition {
                 source_id,
                 char_index,
-                ..
             }) => {
                 let Some(frame) = self
                     .stack
@@ -2807,23 +2822,21 @@ impl LispStringSourceCursor {
                 else {
                     return LispStringPrefixProperties::default();
                 };
-                (frame, *char_index)
+                (frame, char_index)
             }
-            _ => {
+            None => {
                 let Some(frame) = self.stack.frames.last() else {
                     return LispStringPrefixProperties::default();
                 };
-                (frame, frame.char_index)
+                (frame, CharPos0::new(frame.char_index))
             }
         };
         let Some(props) = frame.props.as_ref() else {
             return LispStringPrefixProperties::default();
         };
         LispStringPrefixProperties {
-            line: props
-                .get_property_at_char_pos(CharPos0::new(index), Value::symbol("line-prefix")),
-            wrap: props
-                .get_property_at_char_pos(CharPos0::new(index), Value::symbol("wrap-prefix")),
+            line: props.get_property_at_char_pos(index, Value::symbol("line-prefix")),
+            wrap: props.get_property_at_char_pos(index, Value::symbol("wrap-prefix")),
         }
     }
 
@@ -3321,23 +3334,22 @@ impl LispStringSourceFrame {
 
         if let LispStringCompositions::Unresolved(source) = &self.automatic_compositions {
             let spans = match (source, context.automatic_composition) {
-                (_, None) => Vec::new(),
+                (
+                    LispStringCompositionSource::OriginalObject
+                    | LispStringCompositionSource::FormattedRegions(_),
+                    None,
+                ) => Vec::new(),
                 (LispStringCompositionSource::OriginalObject, Some(rules)) => match self.storage {
-                    EmacsTextStorage::Multibyte => {
-                        self.automatic_compositions_in(rules, 0, self.char_count())
-                    }
+                    EmacsTextStorage::Multibyte => self.automatic_compositions_in(
+                        rules,
+                        CharRange::new(CharPos0::new(0), CharPos0::new(self.char_count())),
+                    ),
                     EmacsTextStorage::Unibyte => Vec::new(),
                 },
                 (LispStringCompositionSource::FormattedRegions(regions), Some(rules)) => regions
                     .iter()
                     .filter(|region| region.end().get() <= self.char_count())
-                    .flat_map(|region| {
-                        self.automatic_compositions_in(
-                            rules,
-                            region.start().get(),
-                            region.end().get(),
-                        )
-                    })
+                    .flat_map(|region| self.automatic_compositions_in(rules, *region))
                     .collect(),
             };
             self.automatic_compositions = LispStringCompositions::Resolved(spans);
@@ -3488,9 +3500,12 @@ impl LispStringSourceFrame {
                 );
             }
         }
-        if let Some(end) =
-            self.automatic_composition_end(start, property_end, context.display_target())
-        {
+        if let Some(end) = self.automatic_composition_end(
+            CharPos0::new(start),
+            CharPos0::new(property_end),
+            context.display_target(),
+        ) {
+            let end = end.get();
             self.char_index = end;
             return LispStringResolvedAction::Emit(
                 DisplayItem::new(
@@ -3571,9 +3586,10 @@ impl LispStringSourceFrame {
     fn automatic_compositions_in(
         &self,
         rules: AutomaticCompositionRules,
-        start: usize,
-        end: usize,
+        range: CharRange,
     ) -> Vec<AutomaticCompositionSpan> {
+        let start = range.start().get();
+        let end = range.end().get();
         let mut spans = Vec::new();
         let mut run_start = start;
         // GNU stops its automatic-composition search at a newline. Other
@@ -3583,10 +3599,13 @@ impl LispStringSourceFrame {
         for position in start..=end {
             if position < end
                 && self.char_at(position).is_some_and(|character| {
-                    matches!(
-                        classify_text_source_char(character),
-                        TextSourceCharClassification::Text(_)
-                    )
+                    match classify_text_source_char(character) {
+                        TextSourceCharClassification::Text(_) => true,
+                        TextSourceCharClassification::RowBreak
+                        | TextSourceCharClassification::ControlChar { .. }
+                        | TextSourceCharClassification::EscapeOctal { .. }
+                        | TextSourceCharClassification::Glyphless { .. } => false,
+                    }
                 })
             {
                 continue;
@@ -3612,37 +3631,42 @@ impl LispStringSourceFrame {
     #[inline]
     fn automatic_composition_end(
         &self,
-        start: usize,
-        property_end: usize,
+        start: CharPos0,
+        property_end: CharPos0,
         target: crate::display_property::DisplayPropertyTarget,
-    ) -> Option<usize> {
-        let end = self.automatic_composition_at(start)?;
+    ) -> Option<CharPos0> {
+        let end = CharPos0::new(self.automatic_composition_at(start.get())?);
         if end <= property_end {
             return Some(end);
         }
         // A terminal cluster belongs to its base cell's face. A face-only
         // boundary cannot split its zero-width extenders. GUI font boundaries
         // and every non-face property retain the existing conservative stop.
-        if target != crate::display_property::DisplayPropertyTarget::Terminal
-            || self.composition_prop_at(start).is_some()
-        {
+        match target {
+            crate::display_property::DisplayPropertyTarget::Graphical => return None,
+            crate::display_property::DisplayPropertyTarget::Terminal => {}
+        }
+        if self.composition_prop_at(start.get()).is_some() {
             return None;
         }
         let props = self.props.as_ref()?;
         let face = Value::symbol(&FACE_PROPERTY);
         let font_lock_face = Value::symbol(&FONT_LOCK_FACE_PROPERTY);
-        let mut base = props.get_properties_at_char_pos(CharPos0::new(start));
+        let mut base = props.get_properties_at_char_pos(start);
         base.remove(&face);
         base.remove(&font_lock_face);
         let mut boundary = property_end;
         while boundary < end {
-            let mut next = props.get_properties_at_char_pos(CharPos0::new(boundary));
+            let mut next = props.get_properties_at_char_pos(boundary);
             next.remove(&face);
             next.remove(&font_lock_face);
             if next != base {
                 return None;
             }
-            boundary = self.next_property_change(boundary).max(boundary + 1);
+            boundary = CharPos0::new(
+                self.next_property_change(boundary.get())
+                    .max(boundary.get() + 1),
+            );
         }
         Some(end)
     }

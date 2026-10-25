@@ -466,19 +466,24 @@ impl super::super::eval::Context {
             .cloned()
     }
 
-    /// Whether the current generic lookup resolves to GNU's default slot.
+    /// Classify the current generic lookup as unavailable, default or non-default.
     /// This is read independently of paint memos: equal-attribute insertions
     /// can change the winning basic slot without a face-change counter bump.
-    pub fn cached_display_face_uses_default_slot_for_frame(
+    pub fn cached_display_face_slot_for_frame(
         &self,
         frame: FrameId,
         attributes: &Face,
-    ) -> Option<bool> {
-        let cache = &self.frames.get(frame)?.face_realization;
-        cache
-            .generation_matches(self.face_change_count)
-            .then(|| cache.lookup_uses_default_slot(attributes))
-            .flatten()
+    ) -> crate::face::realization::CachedFaceSlot {
+        use crate::face::realization::CachedFaceSlot;
+        let Some(frame) = self.frames.get(frame) else {
+            return CachedFaceSlot::Unavailable;
+        };
+        let cache = &frame.face_realization;
+        if cache.generation_matches(self.face_change_count) {
+            cache.lookup_slot(attributes)
+        } else {
+            CachedFaceSlot::Unavailable
+        }
     }
 
     /// Import one fixed GNU basic role without evaluating Lisp. Equal source

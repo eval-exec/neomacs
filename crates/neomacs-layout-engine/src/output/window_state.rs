@@ -29,12 +29,21 @@ pub(crate) struct OutputSourceWindowCheckpoint {
 
 /// Completed GNU automatic-mini observation, owned only by this output attempt.
 /// This never changes the public row matrix or text-extent query.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) enum AutomaticMiniTailHeight {
+    #[default]
     CurrentRow,
-    TruncatedLineStop { height_px: f32 },
-    ZeroMetricsTruncatedEnd { height_px: f32 },
+    TruncatedLineStop {
+        height_px: neomacs_display_protocol::types::Px,
+    },
+    ZeroMetricsTruncatedEnd {
+        height_px: neomacs_display_protocol::types::Px,
+    },
 }
+
+static_assertions::assert_impl_all!(AutomaticMiniTailHeight: Copy, Send, Sync);
+const _: () =
+    assert!(std::mem::size_of::<AutomaticMiniTailHeight>() == 2 * std::mem::size_of::<f32>());
 
 pub(crate) struct OutputWindowBuildState {
     windows: Vec<OutputWindowGridEntry>,
@@ -281,7 +290,7 @@ impl OutputWindowBuildState {
 
     pub(crate) fn install_automatic_mini_tail_height(&mut self, height: AutomaticMiniTailHeight) {
         if let Some(grid) = self.current_row_grid.as_mut() {
-            grid.automatic_mini_tail_height = Some(height);
+            grid.automatic_mini_tail_height = height;
         }
     }
 
@@ -427,7 +436,7 @@ pub(crate) struct OutputWindowRowGrid {
     /// row's contents are (re)installed via `begin_row` / `replace_row`.
     finalized_rows: Vec<bool>,
     row_capacity: OutputWindowRowCapacity,
-    automatic_mini_tail_height: Option<AutomaticMiniTailHeight>,
+    automatic_mini_tail_height: AutomaticMiniTailHeight,
 }
 
 /// Why an enabled buffer row owns point.
@@ -498,7 +507,7 @@ impl OutputWindowRowGrid {
             matrix: GlyphMatrix::new(nrows, ncols),
             finalized_rows: vec![false; nrows],
             row_capacity: OutputWindowRowCapacity::Fixed,
-            automatic_mini_tail_height: None,
+            automatic_mini_tail_height: AutomaticMiniTailHeight::CurrentRow,
         }
     }
 
@@ -539,9 +548,9 @@ impl OutputWindowRowGrid {
     /// GNU removes the final row's spacing after move_it_to(ZV).
     fn mini_measurement_height_px(&self, fallback_row_height: f32) -> f32 {
         match self.automatic_mini_tail_height {
-            Some(AutomaticMiniTailHeight::TruncatedLineStop { height_px })
-            | Some(AutomaticMiniTailHeight::ZeroMetricsTruncatedEnd { height_px }) => height_px,
-            Some(AutomaticMiniTailHeight::CurrentRow) | None => {
+            AutomaticMiniTailHeight::TruncatedLineStop { height_px }
+            | AutomaticMiniTailHeight::ZeroMetricsTruncatedEnd { height_px } => height_px.get(),
+            AutomaticMiniTailHeight::CurrentRow => {
                 let last = self
                     .matrix
                     .rows

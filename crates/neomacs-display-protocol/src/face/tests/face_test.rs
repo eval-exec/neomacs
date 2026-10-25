@@ -4,14 +4,42 @@ use super::*;
 fn arena_id_does_not_declare_a_dynamic_faces_default_space_identity() {
     assert_eq!(
         Face::new(FaceId::new(0)).tty_space_identity,
-        Some(TtySpaceIdentity::CanonicalDefault)
+        TtySpaceIdentity::CanonicalDefault
     );
-    assert_eq!(Face::new(FaceId::new(21)).tty_space_identity, None);
+    assert_eq!(
+        Face::new(FaceId::new(21)).tty_space_identity,
+        TtySpaceIdentity::Unknown
+    );
     let mut interned_default = Face::new(FaceId::new(21));
-    interned_default.tty_space_identity = Some(TtySpaceIdentity::CanonicalDefault);
+    interned_default.tty_space_identity = TtySpaceIdentity::CanonicalDefault;
     let mut equal_paint_other = interned_default.clone();
-    equal_paint_other.tty_space_identity = Some(TtySpaceIdentity::OtherRealized);
+    equal_paint_other.tty_space_identity = TtySpaceIdentity::OtherRealized;
     assert_ne!(interned_default, equal_paint_other);
+}
+
+#[test]
+fn tty_space_identity_preserves_unknown_legacy_wire_values() {
+    let mut serialized = serde_json::to_value(Face::new(FaceId::new(21))).unwrap();
+    assert_eq!(serialized["tty_space_identity"], serde_json::Value::Null);
+    for identity in [
+        TtySpaceIdentity::Unknown,
+        TtySpaceIdentity::CanonicalDefault,
+        TtySpaceIdentity::OtherRealized,
+    ] {
+        let mut face = Face::default();
+        face.tty_space_identity = identity;
+        let decoded: Face = serde_json::from_value(serde_json::to_value(face).unwrap()).unwrap();
+        assert_eq!(decoded.tty_space_identity, identity);
+    }
+    serialized
+        .as_object_mut()
+        .unwrap()
+        .remove("tty_space_identity");
+    let missing: Face = serde_json::from_value(serialized.clone()).unwrap();
+    assert_eq!(missing.tty_space_identity, TtySpaceIdentity::Unknown);
+    serialized["tty_space_identity"] = serde_json::Value::Null;
+    let legacy_null: Face = serde_json::from_value(serialized).unwrap();
+    assert_eq!(legacy_null.tty_space_identity, TtySpaceIdentity::Unknown);
 }
 
 #[test]

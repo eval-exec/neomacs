@@ -335,25 +335,32 @@ pub(crate) enum OrdinaryEobRowAdmission {
     Unavailable,
 }
 
+static_assertions::assert_impl_all!(OrdinaryEobRowAdmission: Copy, Send, Sync);
+const _: () = assert!(std::mem::size_of::<OrdinaryEobRowAdmission>() == 1);
+
 /// Join the point-proven capture's absolute matrix row to its actual enabled
 /// ZV row and insertion geometry. No physical cursor style is required.
 #[inline]
-pub(crate) fn ordinary_eob_row_is_visible(
-    row_index: usize,
+pub(crate) fn ordinary_eob_row_admission(
+    row_index: neovm_core::window::MatrixRow0,
     row: &neomacs_display_protocol::glyph_matrix::GlyphRow,
     insertion: Option<neovm_core::window::DisplayPointSnapshot>,
-    text_area_top: i64,
-    text_area_bottom: i64,
-) -> bool {
-    row.enabled
+    viewport: crate::buffer_source::tail_render::BufferSourceRetryBounds,
+) -> OrdinaryEobRowAdmission {
+    let visible = row.enabled
         && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
         && row.ends_at_zv
         && insertion.is_some_and(|point| {
-            i64::try_from(row_index).ok() == Some(point.row)
+            i64::try_from(row_index.get()).ok() == Some(point.row)
                 && point.height > 0
-                && point.y >= text_area_top
-                && point.y.saturating_add(point.height) <= text_area_bottom
-        })
+                && point.y >= viewport.text_area_top()
+                && point.y.saturating_add(point.height) <= viewport.text_area_bottom()
+        });
+    if visible {
+        OrdinaryEobRowAdmission::Visible
+    } else {
+        OrdinaryEobRowAdmission::Unavailable
+    }
 }
 
 pub(crate) struct TextWindowVisibilityRetryRequest<'a, 'buf, B: LayoutBufferView> {
@@ -756,11 +763,11 @@ impl<'a> TextWindowTailFinalizeRequest<'a> {
                     {
                         context.preceding_zv_byte.automatic_tail_height(
                             output_emitter.previous_automatic_mini_row_end(),
-                            row_geometry.current_row_y(
+                            neomacs_display_protocol::types::Px(row_geometry.current_row_y(
                                 row_y_positions,
                                 context.text_y,
                                 context.char_h,
-                            ) - context.window_top,
+                            ) - context.window_top),
                         )
                     } else {
                         AutomaticMiniTailHeight::CurrentRow

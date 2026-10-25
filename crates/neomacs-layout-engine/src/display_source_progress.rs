@@ -1,5 +1,6 @@
 use crate::display_row::builder::{DisplayPhysicalLineTabState, DisplayRowPosition};
 use crate::display_source::DisplaySourceTextPosition;
+use neovm_core::buffer::DisplayColumn;
 
 pub(crate) struct DisplaySourceRowProgressState<'emit> {
     x: &'emit mut f32,
@@ -235,11 +236,11 @@ impl<'a> DisplaySourceVisualRowProgress<'a> {
     pub(crate) fn x(&self) -> f32 {
         self.row.x()
     }
-    pub(crate) fn col(&self) -> usize {
-        self.row.col()
+    pub(crate) fn col(&self) -> DisplayColumn {
+        DisplayColumn::new(self.row.col())
     }
-    pub(crate) fn col_mut(&mut self) -> &mut usize {
-        self.row.col_mut()
+    pub(crate) fn set_col(&mut self, col: DisplayColumn) {
+        *self.row.col_mut() = col.get();
     }
     pub(crate) fn apply_position(&mut self, position: DisplayRowPosition) {
         self.row.apply_position(position);

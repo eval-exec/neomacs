@@ -757,7 +757,7 @@ fn tty_line_end_filler_from_a_nonzero_default_style_face_remains_erasable() {
     default_face.use_default_background = true;
     let mut resolved_default = Face::new(FaceId::new(21));
     resolved_default.tty_space_identity =
-        Some(neomacs_display_protocol::face::TtySpaceIdentity::CanonicalDefault);
+        neomacs_display_protocol::face::TtySpaceIdentity::CanonicalDefault;
     resolved_default.use_default_foreground = true;
     resolved_default.use_default_background = true;
     state.faces.insert(FaceId::new(0), default_face);
@@ -816,7 +816,7 @@ fn tty_nondefault_logical_face_with_default_paint_writes_its_blank_tail() {
     margin_face.id = FaceId::new(21);
     margin_face.lisp_name = Some("margin".to_owned());
     margin_face.tty_space_identity =
-        Some(neomacs_display_protocol::face::TtySpaceIdentity::OtherRealized);
+        neomacs_display_protocol::face::TtySpaceIdentity::OtherRealized;
     state.faces.insert(FaceId::new(0), default_face);
     state.faces.insert(FaceId::new(21), margin_face);
 

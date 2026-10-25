@@ -12,6 +12,7 @@ default = []
 neo-term = []
 
 [dependencies]
+static_assertions.workspace = true
 rustc-hash.workspace = true
 bitflags.workspace = true
 num_enum.workspace = true
@@ -22,7 +23,6 @@ strum.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-static_assertions.workspace = true
 neomacs-infra.workspace = true
 proptest.workspace = true
 
