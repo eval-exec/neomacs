@@ -3,6 +3,7 @@ use super::*;
 use crate::tagged::gc::SymbolWriteToken;
 use crate::tagged::gc::{RegistrationError, SymbolReadToken};
 mod fresh;
+pub(crate) use fresh::PreparedFreshCanonical;
 #[cfg(test)]
 pub(crate) use fresh::{FreshRegistryFacts, fresh_registry_facts_for_test};
 
@@ -10,12 +11,22 @@ pub(crate) use fresh::{FreshRegistryFacts, fresh_registry_facts_for_test};
 /// Lisp name object, movable spine address or authority to use a symbol cell.
 #[derive(Clone, Copy)]
 pub(crate) struct ExistingCanonicalSymbol {
-    pub(crate) id: SymId,
-    pub(crate) name: NameId,
+    id: SymId,
+    name: NameId,
+}
+impl ExistingCanonicalSymbol {
+    pub(crate) fn id(self) -> SymId {
+        self.id
+    }
+
+    pub(crate) fn name(self) -> NameId {
+        self.name
+    }
 }
 
 /// Lock rank is the matching World WRITER, then this process registry guard.
 /// Retaining the guard keeps the canonical decision through World publication.
+#[must_use = "retain the registry writer through World and canonical publication"]
 pub(crate) struct InitialRegistryWriter<'authority> {
     registry: parking_lot::RwLockWriteGuard<'static, SymbolRegistry>,
     _authority: std::marker::PhantomData<&'authority SymbolWriteToken<'authority>>,

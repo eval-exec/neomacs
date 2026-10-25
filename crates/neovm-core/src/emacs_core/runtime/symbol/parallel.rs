@@ -22,6 +22,13 @@ pub enum PlainSymbolBacking {
     VoidProjection,
 }
 
+/// Membership is distinct from a refused observation of a stale backing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InitialMembership {
+    Member,
+    Absent,
+}
+
 /// Original World allocation roots, never references derived from a Context
 /// view. The era retains the World's Baton even on abandoned/poisoned teardown.
 pub(crate) struct SymbolBacking {
@@ -50,15 +57,22 @@ impl SymbolBacking {
     ///
     /// # Safety
     /// The token belongs to this retained World; ordinary views and markers
-    /// remain excluded. A false result is a real World-obarray soft miss.
+    /// remain excluded. Absent is a real World-obarray soft miss.
     pub(crate) unsafe fn initial_contains(
         &self,
         id: SymId,
         _authority: &crate::tagged::gc::SymbolReadToken<'_>,
-    ) -> Option<bool> {
+    ) -> Result<InitialMembership, crate::tagged::gc::RegistrationError> {
         // SAFETY: original World root covered by the live reader authority.
         let obarray = unsafe { self.obarray.as_ref() };
-        (obarray.generation() == self.generation).then(|| obarray.is_global_member(id))
+        if obarray.generation() != self.generation {
+            return Err(crate::tagged::gc::RegistrationError::StaleRegistration);
+        }
+        Ok(if obarray.is_global_member(id) {
+            InitialMembership::Member
+        } else {
+            InitialMembership::Absent
+        })
     }
 
     /// Copy the function word and explicit-unbound state under one real

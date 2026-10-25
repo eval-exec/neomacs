@@ -247,18 +247,18 @@ impl SymbolBacking {
     ) -> Result<(), RegistrationError> {
         let root = self.obarray.as_ptr();
         if unsafe { (*root).generation } != self.generation
-            || metadata.name == super::super::SYMBOL_NAME_SENTINEL
+            || metadata.name() == super::super::SYMBOL_NAME_SENTINEL
         {
             return Err(RegistrationError::Publication);
         }
-        let index = metadata.id.0 as usize;
+        let index = metadata.id().0 as usize;
         #[cfg(test)]
         let fault = self
             .intern_fault
             .swap(0, std::sync::atomic::Ordering::AcqRel);
         let symbols = unsafe { &mut *addr_of_mut!((*root).symbols) };
         if let Some(symbol) = symbols.get(index) {
-            if symbol.name() != metadata.name {
+            if symbol.name() != metadata.name() {
                 return Err(RegistrationError::Publication);
             }
             if symbol.is_interned_global() {
@@ -352,7 +352,7 @@ impl SymbolBacking {
             slot.parallel_mark_initial(authority);
         } else {
             slot.publish_fill(LispSymbol::parallel_initial_member(
-                metadata.name,
+                metadata.name(),
                 void,
                 authority,
             ));

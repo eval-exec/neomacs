@@ -1,5 +1,7 @@
 //! Initial-obarray name operations: operands and answers remain owner roots.
 use super::*;
+use crate::emacs_core::intern::parallel::{ExistingCanonicalSymbol, PreparedFreshCanonical};
+use crate::emacs_core::symbol::parallel::InitialMembership;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue as Value;
 
@@ -33,9 +35,11 @@ impl KeeperSymbols<'_> {
 
 /// An era/World-bound obarray reader, without a pre-existing symbol key.
 /// It borrows RunAccess until release and shares the C2/C3 authority word.
+#[must_use = "the initial-obarray reader retains the owner loan until dropped"]
 pub(super) struct InitialObarrayRef<'lease, 'owner, 'era> {
     pub(super) run: &'lease mut RunAccess<'owner, 'era>,
 }
+#[must_use = "the initial-obarray writer retains the owner loan until dropped"]
 pub(super) struct InitialObarrayMut<'lease, 'owner, 'era> {
     pub(super) run: &'lease mut RunAccess<'owner, 'era>,
 }
@@ -257,12 +261,10 @@ impl InitialObarrayRef<'_, '_, '_> {
                             .symbols
                             .backing
                             .initial_contains(id, &authority)
-                    }
-                    .ok_or(RegistrationError::Publication)?;
-                    if member {
-                        Value::from_sym_id(id)
-                    } else {
-                        Value::NIL
+                    }?;
+                    match member {
+                        InitialMembership::Member => Value::from_sym_id(id),
+                        InitialMembership::Absent => Value::NIL,
                     }
                 }
             }
@@ -284,6 +286,28 @@ impl InitialObarrayRef<'_, '_, '_> {
 static_assertions::assert_not_impl_any!(InitialObarrayRef<'static, 'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(InitialObarrayMut<'static, 'static, 'static>: Send, Sync, Clone, Copy);
 
+/// Exactly one canonical decision is retained through World publication.
+/// A fresh reservation exclusively borrows the registry writer until commit.
+enum CanonicalPreparation<'writer, 'authority> {
+    Existing(ExistingCanonicalSymbol),
+    Fresh(PreparedFreshCanonical<'writer, 'authority>),
+}
+impl CanonicalPreparation<'_, '_> {
+    fn metadata(&self) -> ExistingCanonicalSymbol {
+        match self {
+            Self::Existing(metadata) => *metadata,
+            Self::Fresh(prepared) => prepared.metadata(),
+        }
+    }
+
+    fn commit(self, charged: &mut usize) {
+        match self {
+            Self::Existing(_) => {}
+            Self::Fresh(prepared) => prepared.commit(charged),
+        }
+    }
+}
+
 /// The caller installed destination and accounting loans before publication.
 /// WRITER and the process registry guard span the entire membership commit.
 pub(super) fn publish_initial(
@@ -302,17 +326,11 @@ pub(super) fn publish_initial(
     }
     let mut registry =
         crate::emacs_core::intern::parallel::InitialRegistryWriter::enter(authority)?;
-    let existing = registry.existing(name)?;
-    let fresh = if existing.is_none() {
-        Some(registry.prepare_fresh(value, heap, charged)?)
-    } else {
-        None
+    let prepared = match registry.existing(name)? {
+        Some(metadata) => CanonicalPreparation::Existing(metadata),
+        None => CanonicalPreparation::Fresh(registry.prepare_fresh(value, heap, charged)?),
     };
-    let metadata = match (existing, fresh.as_ref()) {
-        (Some(metadata), None) => metadata,
-        (None, Some(prepared)) => prepared.metadata(),
-        _ => return Err(RegistrationError::Publication.into()),
-    };
+    let metadata = prepared.metadata();
     // SAFETY: exact era/World writer, with its guarded canonical metadata.
     // No recursive registry, serial projection-scope or mark-gate entry runs.
     let (result, grown) = unsafe { symbols.backing.ensure_initial_member(metadata, authority) };
@@ -329,9 +347,7 @@ pub(super) fn publish_initial(
     // No fallible edge remains after successful World publication. The fresh
     // record retains exclusive registry access and every required reservation.
     // Canonical mapping and epoch are installed before the rooted answer.
-    if let Some(prepared) = fresh {
-        prepared.commit(charged);
-    }
-    *dst = MarkWord::of(Value::from_sym_id(metadata.id));
+    prepared.commit(charged);
+    *dst = MarkWord::of(Value::from_sym_id(metadata.id()));
     Ok(())
 }

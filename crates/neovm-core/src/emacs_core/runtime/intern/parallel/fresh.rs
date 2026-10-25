@@ -6,6 +6,7 @@ use std::mem::{MaybeUninit, size_of};
 
 /// An exclusive borrow prevents a prepared ID/reservation from becoming stale
 /// before commit. It carries the original registry guard and matching WRITER.
+#[must_use = "commit the prepared canonical entry after World publication, or drop it to abandon"]
 pub(crate) struct PreparedFreshCanonical<'writer, 'authority> {
     writer: &'writer mut InitialRegistryWriter<'authority>,
     data: PreparedData,
