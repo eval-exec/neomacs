@@ -949,3 +949,7 @@ pub(crate) mod dense_index_test_support;
 #[cfg(test)]
 #[path = "tests/edit_sync_fontify_coverage_support.rs"]
 pub(crate) mod fontify_coverage_test_support;
+
+#[cfg(test)]
+#[path = "tests/edit_sync_clone_row_parity_test.rs"]
+mod clone_row_parity_tests;

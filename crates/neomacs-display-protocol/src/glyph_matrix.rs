@@ -37,6 +37,8 @@ use rustc_hash::FxHashMap as HashMap;
 mod text_geometry;
 pub use text_geometry::{TextRowGeometry, TextSlotColumn, VisualTextGlyphIndex};
 
+mod clone_row;
+
 /// One terminal cell produced by GNU's `compose-gstring-for-terminal`.
 ///
 /// The layout boundary resolves automatic-composition semantics while it has
@@ -1020,7 +1022,7 @@ impl Glyph {
 /// Contains three glyph areas (left margin, text, right margin) matching
 /// GNU's layout. Row hashing enables fast diff: if hashes match, the rows
 /// are likely identical; if they differ, the row needs redrawing.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GlyphRow {
     /// Glyphs per area: [left_margin, text, right_margin].
     pub glyphs: [Vec<Glyph>; GlyphArea::COUNT],
