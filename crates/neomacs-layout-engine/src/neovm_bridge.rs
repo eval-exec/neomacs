@@ -4042,14 +4042,21 @@ pub struct FaceResolver {
     /// The bound TTY snapshot may inspect any definition after a color callback
     /// replaces the live table and collects. Root the whole snapshot once.
     face_table_roots: Option<FaceTableRoots>,
-    default_face: ResolvedFace,
+    /// The frame's realized default face. Shared with [`TtyRealizationPin`] so
+    /// a redisplay that re-adopts the previous realization bumps a refcount
+    /// instead of copying the face (GNU keeps realized faces on the frame and
+    /// redisplays reference them, src/xfaces.c:3098-3105). Clone-on-write only
+    /// where a backend installs newly opened font metrics.
+    default_face: std::sync::Arc<ResolvedFace>,
     /// Frame ownership is supplied by production layout. Unit resolvers have
     /// no evaluator capability and remain pure. No evaluator or Lisp state is
     /// retained here or in thread-local storage.
     tty_face_source: Option<BoundTtyFaceSource>,
     /// Only real TTY bindings need the large enum-indexed basic projection.
     /// Unbound/default-off/GUI resolvers retain one empty pointer-sized option.
-    realized_basic_faces: Option<Box<enum_map::EnumMap<BasicFace, Option<ResolvedFace>>>>,
+    /// Shared with the realization pin for the same reason as [`Self::default_face`].
+    realized_basic_faces:
+        Option<std::sync::Arc<enum_map::EnumMap<BasicFace, Option<ResolvedFace>>>>,
     /// Window system in use: `None` for TTY, `Some("x")` for X11,
     /// `Some("wayland")` for Wayland, etc.  Used to evaluate
     /// `:filtered` face spec predicates.
@@ -4346,8 +4353,12 @@ pub(crate) struct TtyRealizationPin {
     frame_id: FrameId,
     generation: u64,
     table: FaceTable,
-    default_face: ResolvedFace,
-    basic_faces: Box<enum_map::EnumMap<BasicFace, Option<ResolvedFace>>>,
+    /// Shared handles to the frame's realized faces. The next transaction's
+    /// resolver adopts these by refcount and re-pins the same allocations; a
+    /// definition/table change misses this pin and rebuilds, which is exactly
+    /// the existing invalidation boundary. Nothing is copied per redisplay.
+    default_face: std::sync::Arc<ResolvedFace>,
+    basic_faces: std::sync::Arc<enum_map::EnumMap<BasicFace, Option<ResolvedFace>>>,
 }
 
 /// GNU basic-face lookup has two realization outcomes.  A canonical lookup
@@ -4382,7 +4393,9 @@ impl FaceResolver {
     /// Every subsequently realized face then inherits from the same size that
     /// supplied frame geometry and will be sent to rasterization.
     pub(crate) fn retain_opened_default_font_size(&mut self, opened_size: GraphicFontSizePx) {
-        self.default_face.font_size = opened_size.get();
+        // The realized default may be shared with the previous transaction's
+        // pin; a backend font installation is the rare case that must fork it.
+        std::sync::Arc::make_mut(&mut self.default_face).font_size = opened_size.get();
         self.frame_font_domain
             .retain_opened_graphic_size(opened_size);
     }
@@ -4488,7 +4501,7 @@ impl FaceResolver {
         Self {
             face_table: face_table.clone(),
             face_table_roots: None,
-            default_face: df,
+            default_face: std::sync::Arc::new(df),
             tty_face_source: None,
             realized_basic_faces: None,
             window_system,
@@ -4569,12 +4582,12 @@ impl FaceResolver {
         );
         default.install_realized_tty_colors(&default_paint);
         default.canonical_tty_role = Some(BasicFace::Default);
-        self.default_face = default;
+        self.default_face = std::sync::Arc::new(default);
         self.tty_face_source = Some(BoundTtyFaceSource {
             frame_id,
             generation: evaluator.face_change_count(),
         });
-        let mut named_default = self.default_face.clone();
+        let mut named_default = (*self.default_face).clone();
         named_default.lisp_name = Some(BasicFace::Default.name().to_owned());
         let mut basic_faces = Box::new(enum_map::EnumMap::default());
         basic_faces[BasicFace::Default] = Some(named_default);
@@ -4612,7 +4625,7 @@ impl FaceResolver {
                 BasicFaceId::from_name(name).map_or(BasicFaceId::SENTINEL, u32::from);
             basic_faces[role] = Some(resolved);
         }
-        self.realized_basic_faces = Some(basic_faces);
+        self.realized_basic_faces = Some(std::sync::Arc::from(basic_faces));
     }
 
     pub(crate) fn has_tty_realization(&self) -> bool {
@@ -4628,8 +4641,8 @@ impl FaceResolver {
             frame_id: bound.frame_id,
             generation: bound.generation,
             table: self.face_table.clone(),
-            default_face: self.default_face.clone(),
-            basic_faces: basic_faces.clone(),
+            default_face: std::sync::Arc::clone(&self.default_face),
+            basic_faces: std::sync::Arc::clone(basic_faces),
         })
     }
 
@@ -5623,7 +5636,7 @@ impl FaceResolver {
                 // canonical DEFAULT_FACE_ID before merging the named face and
                 // its buffer-local remappings. Starting from the remapped
                 // default would apply a default-only text scale twice.
-                let base = self.default_face.clone();
+                let base = (*self.default_face).clone();
                 let mut resolved = self
                     .resolve_remapped_face_value_over(
                         remapping,
@@ -5878,7 +5891,7 @@ impl FaceResolver {
             return self.resolve_named_face(name);
         }
 
-        let base = self.default_face.clone();
+        let base = (*self.default_face).clone();
         let mut resolved = self
             .resolve_remapped_face_value_over(remapping, &base, &Value::symbol(name))
             .unwrap_or(base);
@@ -5978,7 +5991,7 @@ impl FaceResolver {
         // assq miss, src/xfaces.c:3269-3295). Answer the common case with the
         // assq alone and skip the anonymous composition probe entirely.
         if Self::buffer_face_remapping_specs(remapping, "default").is_none() {
-            return self.default_face.clone();
+            return (*self.default_face).clone();
         }
         let mut remap_stack = Vec::new();
         self.resolve_buffer_face_value_overlay_spec_inner(
@@ -5995,7 +6008,7 @@ impl FaceResolver {
                 contribution.identity.as_ref(),
             )
         })
-        .unwrap_or_else(|| self.default_face.clone())
+        .unwrap_or_else(|| (*self.default_face).clone())
     }
 
     pub fn resolve_face_value_over(
@@ -6288,7 +6301,7 @@ impl FaceResolver {
         face: &NeoFace,
         source: FaceRealizationSource,
     ) -> ResolvedFace {
-        let mut rf = self.default_face.clone();
+        let mut rf = (*self.default_face).clone();
         // The clone starts from the default face; an anonymous face must not
         // inherit its *name*. Named resolvers overwrite this after realizing.
         rf.lisp_name = None;
@@ -6498,6 +6511,10 @@ mod line_count_test;
 #[cfg(test)]
 #[path = "neovm_bridge/tests/rows_face_witness_test.rs"]
 mod rows_face_witness_test;
+
+#[cfg(test)]
+#[path = "neovm_bridge/tests/tty_realization_pin_test.rs"]
+mod tty_realization_pin_test;
 
 #[cfg(test)]
 #[path = "neovm_bridge/tests/face_producer_transport_test.rs"]

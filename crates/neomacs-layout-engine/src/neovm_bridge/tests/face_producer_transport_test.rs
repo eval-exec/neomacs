@@ -62,7 +62,7 @@ fn named_face_producer_keeps_realized_basic_face_short_circuit() {
         ..ResolvedFace::default()
     };
     basic_faces[BasicFace::ModeLineActive] = Some(cached.clone());
-    resolver.realized_basic_faces = Some(Box::new(basic_faces));
+    resolver.realized_basic_faces = Some(std::sync::Arc::new(basic_faces));
     let value = Value::symbol("mode-line-active");
     assert_eq!(resolver.resolve_named_face_producer(value), Some(cached));
     assert_eq!(
