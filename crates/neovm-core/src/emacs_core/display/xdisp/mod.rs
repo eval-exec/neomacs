@@ -8652,51 +8652,53 @@ fn next_fontified_property_change(
     limit: i64,
     mode: FontificationBoundaryMode,
 ) -> EvalResult {
-    let text_next = match fontification_boundary::admit(ctx, pos, limit, mode)? {
+    // Bound the text walk BEFORE visiting its intervals. Computing a full
+    // text suffix and only then clipping to an earlier overlay stop repeats
+    // that suffix at every overlay endpoint in densely highlighted buffers.
+    // The two independent stop sources still select exactly their minimum.
+    let limit = ctx
+        .buffers
+        .current_buffer()
+        .and_then(|buffer| {
+            if buffer.overlays().is_empty() || limit <= pos {
+                return None;
+            }
+            // A callback may have narrowed since the caller captured LIMIT.
+            // Endpoints at/past the live end do not introduce a new stop; retain
+            // the original limit and canonical argument validation in that case.
+            let live_end = buffer.point_max_lisp_char_pos().as_i64();
+            if pos < buffer.point_min_lisp_char_pos().as_i64() || pos >= live_end {
+                return None;
+            }
+            let byte_pos = buffer
+                .char_pos_to_emacs_byte_pos_clamped_no_alloc(LispCharPos1::new(pos).to_char_pos());
+            let byte_end = buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(
+                LispCharPos1::new(limit.min(live_end)).to_char_pos(),
+            );
+            buffer
+                .overlays()
+                .next_boundary_after_until_emacs_byte_pos_no_alloc(byte_pos, byte_end)
+                .map(|boundary| {
+                    buffer
+                        .emacs_byte_pos_to_char_pos_clamped_no_alloc(boundary)
+                        .to_lisp()
+                        .as_i64()
+                })
+                .filter(|boundary| *boundary < live_end)
+        })
+        .unwrap_or(limit);
+    match fontification_boundary::admit(ctx, pos, limit, mode)? {
         FontificationBoundaryAdmission::Raw(next)
-        | FontificationBoundaryAdmission::Resolved(next) => Value::fixnum(next.as_i64()),
+        | FontificationBoundaryAdmission::Resolved(next) => Ok(Value::fixnum(next.as_i64())),
         FontificationBoundaryAdmission::UseGeneric => {
             super::textprop::resolved_fontified_property_boundary_in_state(
                 ctx.variables(),
                 ctx.buffer_manager(),
                 LispCharPos1::new(pos),
                 LispCharPos1::new(limit),
-            )?
-        }
-    };
-    // Effective fontified values include overlays. A text-only boundary can
-    // skip the end of a fontifying overlay and miss the nil text after it.
-    // Unrelated overlay endpoints are harmless extra native stops: the caller
-    // resolves the effective value there before considering any Lisp hook.
-    let Some(buffer) = ctx.buffers.current_buffer() else {
-        return Ok(text_next);
-    };
-    if !buffer.overlays().is_empty()
-        && let Some(next) = text_next.as_int()
-        && next > pos
-    {
-        // A callback can narrow the source after END was captured. Overlay
-        // stops outside the live accessible text cannot affect this query.
-        let live_end = buffer.point_max_lisp_char_pos().as_i64();
-        let byte_pos = buffer
-            .char_pos_to_emacs_byte_pos_clamped_no_alloc(LispCharPos1::new(pos).to_char_pos());
-        let byte_end = buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(
-            LispCharPos1::new(next.min(live_end)).to_char_pos(),
-        );
-        if let Some(boundary) = buffer
-            .overlays()
-            .next_boundary_after_until_emacs_byte_pos_no_alloc(byte_pos, byte_end)
-        {
-            let boundary = buffer
-                .emacs_byte_pos_to_char_pos_clamped_no_alloc(boundary)
-                .to_lisp()
-                .as_i64();
-            if boundary < live_end {
-                return Ok(Value::fixnum(boundary.min(next)));
-            }
+            )
         }
     }
-    Ok(text_next)
 }
 
 /// Find the next effective nil position without retaining a cursor across

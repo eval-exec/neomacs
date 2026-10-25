@@ -390,3 +390,62 @@ fn fontification_scan_restarts_after_hook_replaces_a_later_island() {
         assert!(observed.2.starts_with("((4 2 1) "), "{observed:?}");
     }
 }
+
+#[test]
+fn fontification_overlay_first_stop_matches_independent_text_and_overlay_queries() {
+    for text in [
+        "(make-string 96 ?a)",
+        "(apply #'concat (make-list 32 \"aé中\"))",
+    ] {
+        let mut ctx = Context::new();
+        ctx.eval_str(&format!(
+            "(progn (insert {text})
+               (put-text-property 1 (point-max) 'fontified t)
+               (put-text-property 77 83 'fontified nil)
+               (let ((p 1))
+                 (while (< p (point-max))
+                   (put-text-property p (1+ p) 'face
+                                      (if (= (% p 2) 0) 'bold 'italic))
+                   (setq p (1+ p))))
+               (let ((p 3))
+                 (while (< p 90)
+                   (let ((o (make-overlay p (+ p 3))))
+                     (overlay-put o 'face 'bold))
+                   (setq p (+ p 7)))))"
+        ))
+        .unwrap();
+        for restriction in ["nil", "(narrow-to-region 5 91)"] {
+            ctx.eval_str(restriction).unwrap();
+            let buffer = ctx.buffer_manager().current_buffer().unwrap();
+            let min = buffer.point_min_lisp_char_pos().as_i64();
+            let max = buffer.point_max_lisp_char_pos().as_i64();
+            for pos in min..max {
+                for limit in [pos + 1, max, max + 7] {
+                    // The public text-only query and independent public
+                    // overlay query reproduce the original stop contract.
+                    let text_stop = generic(&ctx, pos, limit).unwrap().as_int().unwrap();
+                    let overlay_stop = ctx
+                        .eval_str(&format!("(next-overlay-change {pos})"))
+                        .unwrap()
+                        .as_int()
+                        .unwrap();
+                    let expected = if overlay_stop < max {
+                        text_stop.min(overlay_stop)
+                    } else {
+                        text_stop
+                    };
+                    for mode in [
+                        FontificationBoundaryMode::On,
+                        FontificationBoundaryMode::Off,
+                    ] {
+                        assert_eq!(
+                            next_fontified_property_change(&mut ctx, pos, limit, mode).unwrap(),
+                            Value::fixnum(expected),
+                            "{text}: {pos}..{limit}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
