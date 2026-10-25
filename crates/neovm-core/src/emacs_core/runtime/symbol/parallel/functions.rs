@@ -165,6 +165,14 @@ impl SymbolBacking {
         // Use the landed interior-mutable cell, never an atomic cast or a
         // serial setter (which would touch another owner's TLS and SATB).
         let (value, explicitly_unbound) = update.parts();
+        // The flag/cell invariant (`LispSymbol::function_unbound`): an
+        // explicitly-unbound update always carries NIL. Placed directly
+        // after `parts()` so the C5 interning work can edit the rest of
+        // this function without a textual conflict.
+        debug_assert!(
+            !explicitly_unbound || value.is_nil(),
+            "a function-unbound update must carry NIL"
+        );
         symbol.function.store_atomic(value);
         symbol.function_unbound = explicitly_unbound;
         let published = obarray.symbols.sides.get(index >> 12).is_some_and(|side| {

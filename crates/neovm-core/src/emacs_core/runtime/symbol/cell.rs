@@ -480,6 +480,16 @@ pub struct LispSymbol {
     /// Whether this symbol is interned in the global obarray.
     pub(super) interned_global: bool,
     /// Whether `fmakunbound` explicitly masked the symbol's fallback function.
+    ///
+    /// INVARIANT: `true` implies `function` is NIL. Every writer that raises
+    /// the flag stores NIL in the same serialized write (`fmakunbound_id`,
+    /// the sealed `commit_function_write` path, the pdump restore loop), and
+    /// `set_symbol_function_id` clears the flag only after storing a value;
+    /// debug builds assert the pair at each of those sites. A reader that
+    /// takes one atomic load of the CELL WORD alone then always sees a state
+    /// the cell really held, while a separate flag read could observe a
+    /// flag/cell pair that never existed. Do not raise this flag without
+    /// clearing the cell in the same writer.
     pub(super) function_unbound: bool,
 }
 

@@ -4093,6 +4093,12 @@ impl Obarray {
         // SATB: retain the function cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.function.get());
         sym.function.store_atomic(Value::NIL);
+        // The flag/cell invariant (`LispSymbol::function_unbound`): raised
+        // only with a NIL cell, in one serialized write.
+        debug_assert!(
+            sym.function.get().is_nil(),
+            "fmakunbound raised function_unbound with a non-nil cell"
+        );
         if !was_unbound || was_bound_function {
             self.note_function_redefined(id, FunctionEpochBump::Fmakunbound, previous);
         }
@@ -5052,9 +5058,16 @@ impl Obarray {
             }
         }
         for id in function_unbound {
-            ob.slot_mut(id)
-                .expect("pdump function-unbound entry must reference a loaded symbol")
-                .function_unbound = true;
+            let sym = ob
+                .slot_mut(id)
+                .expect("pdump function-unbound entry must reference a loaded symbol");
+            sym.function_unbound = true;
+            // The flag/cell invariant (`LispSymbol::function_unbound`): a dump
+            // may mark only a symbol whose restored cell is NIL.
+            debug_assert!(
+                sym.function.get().is_nil(),
+                "pdump marks a symbol function-unbound with a non-nil cell"
+            );
         }
         // The cells were written without stamps: nothing validated before
         // the restored clock may be proven current through them.
