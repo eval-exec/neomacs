@@ -4,8 +4,10 @@ use crate::tagged::gc::SymbolWriteToken;
 use crate::tagged::gc::{RegistrationError, SymbolReadToken};
 mod fresh;
 pub(crate) use fresh::PreparedFreshCanonical;
+mod retained_bytes;
 #[cfg(test)]
 pub(crate) use fresh::{FreshRegistryFacts, fresh_registry_facts_for_test};
+pub(crate) use retained_bytes::RetainedBytes;
 
 /// Scalar metadata captured under the process registry guard. It contains no
 /// Lisp name object, movable spine address or authority to use a symbol cell.

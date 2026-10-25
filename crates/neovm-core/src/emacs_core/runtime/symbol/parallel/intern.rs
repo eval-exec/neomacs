@@ -1,7 +1,8 @@
 //! Prepared initial membership on retained World roots, without serial hooks.
-use super::super::{LispSymbol, OBARRAY_CHUNK, SymbolChunks, fn_stamps};
+use super::super::cell::InitialCell;
+use super::super::{FunctionEpoch, LispSymbol, OBARRAY_CHUNK, SymbolChunks, fn_stamps};
 use super::*;
-use crate::emacs_core::intern::parallel::ExistingCanonicalSymbol;
+use crate::emacs_core::intern::parallel::{ExistingCanonicalSymbol, RetainedBytes};
 use crate::tagged::gc::{RegistrationError, SymbolWriteToken};
 use std::mem::size_of;
 use std::ptr::addr_of_mut;
@@ -55,36 +56,48 @@ impl Obarray {
 
 // Known retained payload, matching the GC's ordinary Rust-storage charges.
 // Allocator/control-block headers and detached temporary staging are excluded.
-fn storage_bytes(symbols: &SymbolChunks) -> usize {
-    symbols
-        .chunks
-        .len()
-        .saturating_mul(
-            size_of::<[LispSymbol; OBARRAY_CHUNK]>() + size_of::<fn_stamps::ChunkSide>(),
-        )
-        .saturating_add(symbols.chunks.capacity().saturating_mul(size_of::<usize>()))
-        .saturating_add(symbols.sides.capacity().saturating_mul(size_of::<usize>()))
+fn storage_bytes(symbols: &SymbolChunks) -> RetainedBytes {
+    RetainedBytes::from(
+        symbols
+            .chunks
+            .len()
+            .saturating_mul(
+                size_of::<[LispSymbol; OBARRAY_CHUNK]>() + size_of::<fn_stamps::ChunkSide>(),
+            )
+            .saturating_add(symbols.chunks.capacity().saturating_mul(size_of::<usize>()))
+            .saturating_add(symbols.sides.capacity().saturating_mul(size_of::<usize>())),
+    )
 }
+
+/// Capacity is retained and chargeable even if membership publication refuses.
+#[must_use = "account the retained bytes before propagating the publication result"]
+pub(crate) struct InitialMemberAccounting {
+    pub(crate) result: Result<(), RegistrationError>,
+    pub(crate) retained: RetainedBytes,
+}
+
+/// Number of new symbol/side chunk pairs, distinct from payload bytes.
+struct PreparedChunkCount(usize);
 
 struct PreparedChunks {
     chunks: Vec<Box<[LispSymbol; OBARRAY_CHUNK]>>,
     sides: Vec<Box<fn_stamps::ChunkSide>>,
 }
 impl PreparedChunks {
-    fn new(count: usize, floor: u64) -> Result<Self, RegistrationError> {
+    fn new(count: PreparedChunkCount, floor: FunctionEpoch) -> Result<Self, RegistrationError> {
         let mut prepared = Self {
             chunks: Vec::new(),
             sides: Vec::new(),
         };
         prepared
             .chunks
-            .try_reserve_exact(count)
+            .try_reserve_exact(count.0)
             .map_err(|_| RegistrationError::Capacity)?;
         prepared
             .sides
-            .try_reserve_exact(count)
+            .try_reserve_exact(count.0)
             .map_err(|_| RegistrationError::Capacity)?;
-        for _ in 0..count {
+        for _ in 0..count.0 {
             let mut chunk = Vec::new();
             chunk
                 .try_reserve_exact(OBARRAY_CHUNK)
@@ -99,7 +112,7 @@ impl PreparedChunks {
             // Global-allocator abort is not claimed as a recoverable refusal.
             prepared
                 .sides
-                .push(Box::new(fn_stamps::ChunkSide::new(floor)));
+                .push(Box::new(fn_stamps::ChunkSide::new(u64::from(floor))));
         }
         Ok(prepared)
     }
@@ -146,11 +159,15 @@ impl SymbolBacking {
         id: SymId,
         _authority: &SymbolWriteToken<'_>,
     ) -> Result<InitialInternFacts, RegistrationError> {
+        // SAFETY: the assertion-only caller retains this World's writer and
+        // original allocation root, with ordinary views and markers excluded.
         let obarray = unsafe { self.obarray.as_ref() };
         if obarray.generation() != self.generation {
             return Err(RegistrationError::Publication);
         }
         let symbol = obarray.get_by_id(id);
+        // SAFETY: the same exclusive writer covers this retained table root
+        // and the RefCell borrow; no projection-table loan escapes the call.
         let table = unsafe { self.projections.as_ref() }
             .try_borrow()
             .map_err(|_| RegistrationError::Busy)?;
@@ -183,7 +200,7 @@ impl SymbolBacking {
             slots: obarray.symbols.len,
             chunks: obarray.symbols.chunks.len(),
             sides: obarray.symbols.sides.len(),
-            bytes: storage_bytes(&obarray.symbols),
+            bytes: usize::from(storage_bytes(&obarray.symbols)),
             spine_current: obarray.symbols.spine_addr == obarray.symbols.chunks.as_ptr() as usize,
             spine_address: obarray.symbols.spine_addr,
             present: symbol.is_some(),
@@ -196,6 +213,7 @@ impl SymbolBacking {
                     s.flags().declared_special(),
                 )
             }),
+            // SAFETY: classify uses the same actual World writer and roots.
             backing: unsafe { self.classify(id) },
             projections: table.len(),
             projection,
@@ -212,10 +230,12 @@ impl SymbolBacking {
         id: SymId,
         _authority: &SymbolWriteToken<'_>,
     ) -> Option<PlainSymbolBacking> {
+        // SAFETY: matching writer covers the retained original obarray root.
         let obarray = unsafe { self.obarray.as_ref() };
         if obarray.generation() != self.generation || !obarray.is_global_member(id) {
             return None;
         }
+        // SAFETY: the caller's matching writer also covers projection lookup.
         unsafe { self.classify(id) }
     }
 
@@ -229,15 +249,26 @@ impl SymbolBacking {
         &self,
         metadata: ExistingCanonicalSymbol,
         authority: &SymbolWriteToken<'_>,
-    ) -> (Result<(), RegistrationError>, usize) {
+    ) -> InitialMemberAccounting {
         let root = self.obarray.as_ptr();
         // Original root subfields only: do not exclusively reborrow dispatch,
         // BLV/forwarder roots, completion state or the whole Obarray.
+        // SAFETY: retained original root and matching WRITER; form a raw
+        // subfield pointer without reborrowing the whole Obarray.
         let symbols = unsafe { addr_of_mut!((*root).symbols) };
+        // SAFETY: shared capacity observation under the same exclusive word;
+        // this short reference ends before commit's mutable subfield loan.
         let before = storage_bytes(unsafe { &*symbols });
+        // SAFETY: metadata remains guarded by the process registry writer,
+        // and this World writer excludes all readers and marker activity.
         let result = unsafe { self.commit_initial_member(metadata, authority) };
+        // SAFETY: commit ended its mutable loan; the original subfield root
+        // is retained even on refusal, so capacity growth is still observable.
         let grown = storage_bytes(unsafe { &*symbols }).saturating_sub(before);
-        (result, grown)
+        InitialMemberAccounting {
+            result,
+            retained: grown,
+        }
     }
 
     unsafe fn commit_initial_member(
@@ -246,6 +277,8 @@ impl SymbolBacking {
         authority: &SymbolWriteToken<'_>,
     ) -> Result<(), RegistrationError> {
         let root = self.obarray.as_ptr();
+        // SAFETY: matching WRITER covers the retained generation field;
+        // ordinary views and restore/delete are excluded for the entire era.
         if unsafe { (*root).generation } != self.generation
             || metadata.name() == super::super::SYMBOL_NAME_SENTINEL
         {
@@ -256,6 +289,8 @@ impl SymbolBacking {
         let fault = self
             .intern_fault
             .swap(0, std::sync::atomic::Ordering::AcqRel);
+        // SAFETY: matching WRITER grants exclusive access to this symbols
+        // subfield only; no aggregate mutable Obarray reference is created.
         let symbols = unsafe { &mut *addr_of_mut!((*root).symbols) };
         if let Some(symbol) = symbols.get(index) {
             if symbol.name() != metadata.name() {
@@ -265,12 +300,16 @@ impl SymbolBacking {
                 return Ok(());
             }
         }
+        // SAFETY: disjoint membership counter, covered by the same WRITER.
         let count = unsafe { (*root).global_member_count }
             .checked_add(1)
             .ok_or(RegistrationError::Exhausted)?;
+        // SAFETY: disjoint member clock, covered by the same WRITER.
         let epoch = unsafe { (*root).members_epoch }
             .checked_add(1)
             .ok_or(RegistrationError::Exhausted)?;
+        // SAFETY: retained table root and matching exclusive writer; the
+        // temporary shared table borrow ends before any slot is published.
         let void = unsafe { self.projections.as_ref() }
             .try_borrow()
             .map_err(|_| RegistrationError::Busy)?
@@ -335,8 +374,8 @@ impl SymbolBacking {
             .sides
             .try_reserve(added)
             .map_err(|_| RegistrationError::Capacity)?;
-        let floor = symbols.sides.first().map_or(0, |side| side.floor());
-        let prepared = PreparedChunks::new(added, floor)?;
+        let floor = FunctionEpoch(symbols.sides.first().map_or(0, |side| side.floor()));
+        let prepared = PreparedChunks::new(PreparedChunkCount(added), floor)?;
         // All fallible preparation ended. Any unexpected refusal below this
         // point is sticky poison before the outer WRITER is released.
         symbols.chunks.extend(prepared.chunks);
@@ -353,7 +392,7 @@ impl SymbolBacking {
         } else {
             slot.publish_fill(LispSymbol::parallel_initial_member(
                 metadata.name(),
-                void,
+                InitialCell::from(void),
                 authority,
             ));
         }
@@ -366,6 +405,8 @@ impl SymbolBacking {
                 .store(fault, std::sync::atomic::Ordering::Release);
             return Err(RegistrationError::Poisoned);
         }
+        // SAFETY: disjoint counters are updated under the retained World
+        // WRITER after all fallible preparation and slot publication ended.
         unsafe {
             (*root).global_member_count = count;
             (*root).members_epoch = epoch;

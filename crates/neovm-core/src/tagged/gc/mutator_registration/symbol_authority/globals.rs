@@ -1,5 +1,7 @@
 //! Slot-to-slot Plain globals. No legacy TLS or raw-value public API.
+use super::intern::OwnerRootIndex;
 use super::*;
+use crate::emacs_core::intern::parallel::RetainedBytes;
 use crate::emacs_core::symbol::parallel::FunctionUpdate;
 use crate::emacs_core::value::Value;
 use crate::tagged::gc::mark_word::MarkWord;
@@ -74,8 +76,8 @@ impl super::intern::InitialObarrayMut<'_, '_, '_> {
 
     pub(super) fn intern_into(
         &mut self,
-        name_index: usize,
-        dst_index: usize,
+        name_index: OwnerRootIndex,
+        dst_index: OwnerRootIndex,
     ) -> Result<(), super::intern::InitialInternError> {
         let registry = self.run.owner.registry;
         let local = self
@@ -86,25 +88,33 @@ impl super::intern::InitialObarrayMut<'_, '_, '_> {
             .ok_or(RegistrationError::StaleRegistration)?;
         let value = local
             .root_scratch
-            .get(name_index)
+            .get(usize::from(name_index))
             .ok_or(RegistrationError::StaleRegistration)?
             .value();
         let dst = local
             .root_scratch
-            .get_mut(dst_index)
+            .get_mut(usize::from(dst_index))
             .ok_or(RegistrationError::StaleRegistration)?;
         let authority = SymbolWriteToken {
             _word: &registry.symbols.word,
             _thread: PhantomData,
         };
-        super::intern::publish_initial(
+        let mut charged = RetainedBytes::default();
+        let result = super::intern::publish_initial(
             &registry.symbols,
             registry.heap,
             value,
             dst,
-            &mut local.hot.bytes_since_gc,
+            &mut charged,
             &authority,
-        )
+        );
+        // Retained reservations remain chargeable on a typed refusal, too.
+        // This is the one conversion back to the existing collector counter.
+        local.hot.bytes_since_gc = local
+            .hot
+            .bytes_since_gc
+            .saturating_add(usize::from(charged));
+        result
     }
 }
 

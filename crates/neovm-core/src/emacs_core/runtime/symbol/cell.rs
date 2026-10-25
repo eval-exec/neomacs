@@ -35,6 +35,7 @@
 //! mutators, and no `Send`/`Sync` is claimed for any type in this module.
 
 mod parallel;
+pub(super) use parallel::InitialCell;
 
 use super::{
     LispBufferLocalValue, SYMBOL_NAME_SENTINEL, SymbolInterned, SymbolRedirect, SymbolTrappedWrite,

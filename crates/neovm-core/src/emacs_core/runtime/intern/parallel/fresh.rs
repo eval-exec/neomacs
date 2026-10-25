@@ -18,8 +18,32 @@ struct PreparedData {
     exact: SymbolNameValue,
     atom: Option<PreparedAtom>,
     root_bucket: FxHashMap<SymbolNameObjectId, HeapNameWord>,
-    next_epoch: u64,
+    next_epoch: RegistryEpoch,
 }
+
+/// The registry identity invalidation clock, never a function-binding stamp.
+/// Its private value can only advance with checked arithmetic before commit.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct RegistryEpoch(u64);
+
+impl RegistryEpoch {
+    fn current() -> Self {
+        Self(symbol_registry_epoch_value())
+    }
+
+    fn checked_successor(self) -> Result<Self, RegistrationError> {
+        self.0
+            .checked_add(1)
+            .map(Self)
+            .ok_or(RegistrationError::Exhausted)
+    }
+
+    fn publish(self) {
+        symbol_registry_epoch().store(self.0, Ordering::Release);
+    }
+}
+static_assertions::assert_eq_size!(RegistryEpoch, u64);
 
 /// Existing slots derive from retained process roots; a new chunk keeps its
 /// ownership until install derives the ONE process-lifetime provenance root.
@@ -27,8 +51,12 @@ struct PreparedData {
 struct PreparedAtom {
     value: LispString,
     destination: AtomDestination,
-    next_len: usize,
+    next_len: NameAtomCount,
 }
+
+/// Number of initialized immutable name atoms, not bytes or a registry epoch.
+#[derive(Clone, Copy)]
+struct NameAtomCount(usize);
 
 enum AtomDestination {
     RetainedSlot(NonNull<LispString>),
@@ -37,10 +65,12 @@ enum AtomDestination {
 
 impl PreparedAtom {
     fn new(storage: &mut NameAtomStorage, name: &LispString) -> Result<Self, RegistrationError> {
-        let next_len = storage
-            .len
-            .checked_add(1)
-            .ok_or(RegistrationError::Exhausted)?;
+        let next_len = NameAtomCount(
+            storage
+                .len
+                .checked_add(1)
+                .ok_or(RegistrationError::Exhausted)?,
+        );
         let index = storage.len / NAME_ATOM_CHUNK;
         let offset = storage.len % NAME_ATOM_CHUNK;
         let destination = if offset == 0 {
@@ -96,7 +126,9 @@ impl PreparedAtom {
         // SAFETY: exclusive registry guard, a checked next slot, no previous
         // initialization, and property-free owned bytes retained forever.
         unsafe { slot.as_ptr().write(self.value) };
-        storage.len = self.next_len;
+        storage.len = self.next_len.0;
+        // SAFETY: the checked slot was just initialized above; storage retains
+        // its process-lifetime allocation root and immutable contents forever.
         NameAtomRef(unsafe { slot.as_ref() })
     }
 }
@@ -104,48 +136,50 @@ impl PreparedAtom {
 // Known retained Rust payload capacities only, excluding allocator/control
 // bytes. A winning actor charges shared registry growth once, never per World
 // member or losing contender. Detached preparations are not retained charges.
-fn storage_bytes(registry: &SymbolRegistry) -> usize {
-    fn map_bytes<K, V>(map: &FxHashMap<K, V>) -> usize {
-        map.capacity().saturating_mul(size_of::<(K, V)>())
+fn storage_bytes(registry: &SymbolRegistry) -> RetainedBytes {
+    fn map_bytes<K, V>(map: &FxHashMap<K, V>) -> RetainedBytes {
+        RetainedBytes::from(map.capacity().saturating_mul(size_of::<(K, V)>()))
     }
-    registry
-        .symbols
-        .capacity()
-        .saturating_mul(size_of::<SymbolSlot>())
-        .saturating_add(map_bytes(&registry.canonical_by_name))
-        .saturating_add(map_bytes(&registry.name_values))
-        .saturating_add(
-            registry
-                .names
-                .map
-                .capacity()
-                .saturating_mul(size_of::<(SymbolNameKey, NameId)>()),
-        )
-        .saturating_add(
-            registry
-                .names
-                .strings
-                .chunks
-                .capacity()
-                .saturating_mul(size_of::<NonNull<LispString>>()),
-        )
-        .saturating_add(
-            registry
-                .names
-                .strings
-                .chunks
-                .len()
-                .saturating_mul(NAME_ATOM_CHUNK.saturating_mul(size_of::<LispString>())),
-        )
-        .saturating_add(map_bytes(&registry.name_value_roots.by_heap))
-        .saturating_add(
-            registry
-                .name_value_roots
-                .by_heap
-                .values()
-                .map(map_bytes)
-                .fold(0usize, usize::saturating_add),
-        )
+    RetainedBytes::from(
+        registry
+            .symbols
+            .capacity()
+            .saturating_mul(size_of::<SymbolSlot>()),
+    )
+    .saturating_add(map_bytes(&registry.canonical_by_name))
+    .saturating_add(map_bytes(&registry.name_values))
+    .saturating_add(RetainedBytes::from(
+        registry
+            .names
+            .map
+            .capacity()
+            .saturating_mul(size_of::<(SymbolNameKey, NameId)>()),
+    ))
+    .saturating_add(RetainedBytes::from(
+        registry
+            .names
+            .strings
+            .chunks
+            .capacity()
+            .saturating_mul(size_of::<NonNull<LispString>>()),
+    ))
+    .saturating_add(RetainedBytes::from(
+        registry
+            .names
+            .strings
+            .chunks
+            .len()
+            .saturating_mul(NAME_ATOM_CHUNK.saturating_mul(size_of::<LispString>())),
+    ))
+    .saturating_add(map_bytes(&registry.name_value_roots.by_heap))
+    .saturating_add(
+        registry
+            .name_value_roots
+            .by_heap
+            .values()
+            .map(map_bytes)
+            .fold(RetainedBytes::default(), RetainedBytes::saturating_add),
+    )
 }
 
 impl PreparedData {
@@ -162,9 +196,7 @@ impl PreparedData {
         }
         let id =
             SymId(u32::try_from(registry.symbols.len()).map_err(|_| RegistrationError::Exhausted)?);
-        let next_epoch = symbol_registry_epoch_value()
-            .checked_add(1)
-            .ok_or(RegistrationError::Exhausted)?;
+        let next_epoch = RegistryEpoch::current().checked_successor()?;
         // A removed canonical mapping can leave an existing immutable atom.
         // That spelling reuses NameId, while the new canonical SymId is fresh.
         let (name_id, atom) = match registry.names.lookup_lisp_string(name) {
@@ -237,7 +269,7 @@ impl<'authority> InitialRegistryWriter<'authority> {
         &'writer mut self,
         value: TaggedValue,
         heap: HeapIdentity,
-        charged: &mut usize,
+        charged: &mut RetainedBytes,
     ) -> Result<PreparedFreshCanonical<'writer, 'authority>, RegistrationError> {
         let before = storage_bytes(&self.registry);
         let data = PreparedData::new(&mut self.registry, value, heap);
@@ -260,11 +292,12 @@ impl PreparedFreshCanonical<'_, '_> {
     /// among structural stores, and no fallible edge follows it. Thus an
     /// independent registry reader cannot see half a transaction, even though
     /// it does not participate in this World's authority word.
-    pub(crate) fn commit(self, charged: &mut usize) {
+    pub(crate) fn commit(self, charged: &mut RetainedBytes) {
         let Self { writer, data } = self;
         let registry = &mut *writer.registry;
         let before = storage_bytes(registry);
-        let atom_bytes = data.atom.as_ref().map_or(0, |atom| atom.value.sbytes());
+        let atom_bytes =
+            RetainedBytes::from(data.atom.as_ref().map_or(0, |atom| atom.value.sbytes()));
         if let Some(atom) = data.atom {
             let atom = atom.install(&mut registry.names.strings);
             registry
@@ -289,7 +322,7 @@ impl PreparedFreshCanonical<'_, '_> {
             .insert(data.metadata.name, data.metadata.id);
         // C5 deliberately publishes one epoch per fresh ID. Serial append's
         // narrower positive-cache invalidation policy remains unchanged.
-        symbol_registry_epoch().store(data.next_epoch, Ordering::Release);
+        data.next_epoch.publish();
         *charged = charged
             .saturating_add(storage_bytes(registry).saturating_sub(before))
             .saturating_add(atom_bytes);
@@ -341,7 +374,7 @@ pub(crate) fn fresh_registry_facts_for_test(
         id_present: registry.slot(id).is_some(),
         canonical_id: registry.lookup(spelling),
         atom_present: registry.names.lookup(spelling).is_some(),
-        bytes: storage_bytes(&registry),
+        bytes: usize::from(storage_bytes(&registry)),
     }
 }
 

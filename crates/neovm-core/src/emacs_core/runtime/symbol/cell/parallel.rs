@@ -2,23 +2,42 @@
 use super::*;
 use crate::tagged::gc::SymbolWriteToken;
 
+/// The complete initial value-cell arm, classified once from the optional
+/// retained VOID descriptor before detached symbol construction.
+pub(crate) enum InitialCell {
+    PlainUnbound,
+    SharedVoid(FwdRef),
+}
+
+impl From<Option<FwdRef>> for InitialCell {
+    fn from(void: Option<FwdRef>) -> Self {
+        match void {
+            None => Self::PlainUnbound,
+            Some(header) => Self::SharedVoid(header),
+        }
+    }
+}
+
 impl LispSymbol {
     /// Construct detached initial membership from guarded name metadata. The
     /// ordinary constructors resolve the registry again and cannot run below
     /// the C5 registry guard. The real slot still publishes arms before name.
     pub(crate) fn parallel_initial_member(
         name: NameId,
-        void: Option<FwdRef>,
+        initial: InitialCell,
         _: &SymbolWriteToken<'_>,
     ) -> Self {
         let mut symbol = Self::empty();
         symbol.name.store(name.0, Ordering::Relaxed);
         symbol.interned_global = true;
         symbol.set_interned(SymbolInterned::InternedInInitial);
-        if let Some(header) = void {
-            symbol.flags.set_redirect(SymbolRedirect::Forwarded);
-            symbol.flags.set_runtime_projected(true);
-            symbol.val = CellWord::forwarded(header);
+        match initial {
+            InitialCell::PlainUnbound => {}
+            InitialCell::SharedVoid(header) => {
+                symbol.flags.set_redirect(SymbolRedirect::Forwarded);
+                symbol.flags.set_runtime_projected(true);
+                symbol.val = CellWord::forwarded(header);
+            }
         }
         symbol
     }

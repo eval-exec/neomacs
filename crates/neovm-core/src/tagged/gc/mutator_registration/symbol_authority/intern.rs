@@ -1,6 +1,8 @@
 //! Initial-obarray name operations: operands and answers remain owner roots.
 use super::*;
-use crate::emacs_core::intern::parallel::{ExistingCanonicalSymbol, PreparedFreshCanonical};
+use crate::emacs_core::intern::parallel::{
+    ExistingCanonicalSymbol, PreparedFreshCanonical, RetainedBytes,
+};
 use crate::emacs_core::symbol::parallel::InitialMembership;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue as Value;
@@ -17,6 +19,24 @@ impl From<RegistrationError> for InitialInternError {
         Self::Authority(error)
     }
 }
+
+/// A bank index derived only from a real owner root home. The caller still
+/// checks that home's owner and generation before taking its operation lease.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub(super) struct OwnerRootIndex(usize);
+
+impl From<&OwnerRootSlot<'_>> for OwnerRootIndex {
+    fn from(home: &OwnerRootSlot<'_>) -> Self {
+        Self(home.index)
+    }
+}
+impl From<OwnerRootIndex> for usize {
+    fn from(index: OwnerRootIndex) -> Self {
+        index.0
+    }
+}
+static_assertions::assert_eq_size!(OwnerRootIndex, usize);
 
 impl KeeperSymbols<'_> {
     /// Refresh the explicit-heap process name index at EVERY stopped census.
@@ -186,7 +206,7 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         globals::check_home(self, name)?;
         globals::check_home(self, dst)?;
         self.initial_obarray_mut()?
-            .intern_into(name.index, dst.index)
+            .intern_into(OwnerRootIndex::from(name), OwnerRootIndex::from(&*dst))
     }
 
     fn initial_obarray_ref(
@@ -222,12 +242,17 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     ) -> Result<(), InitialInternError> {
         globals::check_home(self, name)?;
         globals::check_home(self, dst)?;
-        self.initial_obarray_ref()?.soft_into(name.index, dst.index)
+        self.initial_obarray_ref()?
+            .soft_into(OwnerRootIndex::from(name), OwnerRootIndex::from(&*dst))
     }
 }
 
 impl InitialObarrayRef<'_, '_, '_> {
-    fn soft_into(&mut self, name_index: usize, dst_index: usize) -> Result<(), InitialInternError> {
+    fn soft_into(
+        &mut self,
+        name_index: OwnerRootIndex,
+        dst_index: OwnerRootIndex,
+    ) -> Result<(), InitialInternError> {
         let answer = {
             let local = self
                 .run
@@ -237,7 +262,7 @@ impl InitialObarrayRef<'_, '_, '_> {
                 .ok_or(RegistrationError::StaleRegistration)?;
             let value = local
                 .root_scratch
-                .get(name_index)
+                .get(usize::from(name_index))
                 .ok_or(RegistrationError::StaleRegistration)?
                 .value();
             let name = value
@@ -277,7 +302,7 @@ impl InitialObarrayRef<'_, '_, '_> {
             .owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(dst_index))
+            .and_then(|local| local.root_scratch.get_mut(usize::from(dst_index)))
             .ok_or(RegistrationError::StaleRegistration)?;
         *dst = MarkWord::of(answer);
         Ok(())
@@ -300,7 +325,7 @@ impl CanonicalPreparation<'_, '_> {
         }
     }
 
-    fn commit(self, charged: &mut usize) {
+    fn commit(self, charged: &mut RetainedBytes) {
         match self {
             Self::Existing(_) => {}
             Self::Fresh(prepared) => prepared.commit(charged),
@@ -315,7 +340,7 @@ pub(super) fn publish_initial(
     heap: HeapIdentity,
     value: Value,
     dst: &mut MarkWord,
-    charged: &mut usize,
+    charged: &mut RetainedBytes,
     authority: &SymbolWriteToken<'_>,
 ) -> Result<(), InitialInternError> {
     let name = value
@@ -333,9 +358,9 @@ pub(super) fn publish_initial(
     let metadata = prepared.metadata();
     // SAFETY: exact era/World writer, with its guarded canonical metadata.
     // No recursive registry, serial projection-scope or mark-gate entry runs.
-    let (result, grown) = unsafe { symbols.backing.ensure_initial_member(metadata, authority) };
-    *charged = charged.saturating_add(grown);
-    if result == Err(RegistrationError::Poisoned) {
+    let accounting = unsafe { symbols.backing.ensure_initial_member(metadata, authority) };
+    *charged = charged.saturating_add(accounting.retained);
+    if accounting.result == Err(RegistrationError::Poisoned) {
         symbols.poison();
         #[cfg(test)]
         symbols.backing.record_initial_poison_for_test(
@@ -343,7 +368,7 @@ pub(super) fn publish_initial(
                 && symbols.word.load(Ordering::Acquire) == super::super::authority_word::WRITER,
         );
     }
-    result?;
+    accounting.result?;
     // No fallible edge remains after successful World publication. The fresh
     // record retains exclusive registry access and every required reservation.
     // Canonical mapping and epoch are installed before the rooted answer.
