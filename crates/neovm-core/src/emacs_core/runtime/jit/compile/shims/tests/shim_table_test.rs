@@ -83,7 +83,10 @@ fn aot_import_prefix_preserves_main_names_before_collection_shims() {
 
     // ABI31 appends collection imports to the exact legacy AOT prefix.
     // Selected Opt/refinement exports remain forbidden AOT imports.
-    assert_eq!(MIR_SHIM_NAMES.len(), 77);
+    // ABI52 appends the dedicated `fboundp` spec shim after the ABI31 block.
+    assert_eq!(MIR_SHIM_NAMES.len(), 78);
+    assert_eq!(MIR_SHIM_NAMES.last(), Some(&"neovm_jit_fboundp_spec"));
+    assert!(!MIR_SHIM_NAMES[..70].contains(&"neovm_jit_fboundp_spec"));
     assert_eq!(MIR_SHIM_NAMES.first(), Some(&"neovm_jit_hof_length"));
     assert_eq!(MIR_SHIM_NAMES.get(69), Some(&"neovm_jit_direct_framed"));
     assert!(!MIR_SHIM_NAMES[..70].contains(&"neovm_jit_string_collection_write"));

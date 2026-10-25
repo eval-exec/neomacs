@@ -582,10 +582,7 @@ pub(crate) fn builtin_fboundp(eval: &mut super::eval::Context, args: Vec<Value>)
 
 typed_subr! {
     pub(crate) fn builtin_fboundp_1(eval, symbol: SymId) -> EvalResult {
-        Ok(Value::bool_val(
-            symbol_function_cell_in_obarray(eval.obarray(), symbol)
-                .is_some_and(|function| !function.is_nil()),
-        ))
+        Ok(Value::bool_val(function_cell_is_bound(eval.obarray(), symbol)))
     }
 }
 
@@ -1480,6 +1477,17 @@ pub(crate) fn symbol_function_cell_in_obarray(obarray: &Obarray, symbol: SymId) 
         FunctionCellSnapshot::Bound(function) => Some(function),
         FunctionCellSnapshot::ExplicitlyUnbound | FunctionCellSnapshot::Empty => None,
     }
+}
+
+/// `fboundp`'s one answer for a symbol id: the function cell holds a non-NIL
+/// function. A cell bound to NIL (an `(fset 'x nil)`) is not fboundp. The
+/// builtin and the spec shims share this definition; none of them re-derives
+/// the rule. The body is the existing accessor's exact composition so that
+/// inlining it emits the callers' previous code (the spec shim is measured
+/// per call).
+#[inline(always)]
+pub(crate) fn function_cell_is_bound(obarray: &Obarray, symbol: SymId) -> bool {
+    symbol_function_cell_in_obarray(obarray, symbol).is_some_and(|function| !function.is_nil())
 }
 
 pub(crate) fn resolve_indirect_symbol_by_id_in_obarray(

@@ -7930,23 +7930,26 @@ fn lower_simple_op_arms(
             let status = if let Some(status) = direct_source_status {
                 status
             } else {
-                let call = match spec {
+                let call = match (spec, reg_args.as_ref()) {
                     // A closure source site's hit, and a constant site: the
                     // source shim, which answers STATUS_NEED_GENERIC for what
                     // its fast path declines.
-                    Some((
+                    (
+                        Some((
+                            _,
+                            _,
+                            slot_ptr,
+                            _,
+                            SpecCalleeKind::Source | SpecCalleeKind::Constant,
+                        )),
                         _,
-                        _,
-                        slot_ptr,
-                        _,
-                        SpecCalleeKind::Source | SpecCalleeKind::Constant,
-                    )) => {
+                    ) => {
                         let slot_v = fb.ins().iconst(types::I64, slot_ptr);
                         super::source_slots::emit_source_call(
                             fb, rt, slot_v, vmctx, func_val, args_addr, n_val, out_addr,
                         )
                     }
-                    Some((sym, expected, slot_ptr, slot_idx, SpecCalleeKind::Bytecode)) => {
+                    (Some((sym, expected, slot_ptr, slot_idx, SpecCalleeKind::Bytecode)), _) => {
                         // The callee's frame records the called symbol: the shim
                         // takes its tagged bits.
                         let sym_v = materialize_op_sym_value(fb, reloc_base, reloc_index, sym);
@@ -7965,7 +7968,31 @@ fn lower_simple_op_arms(
                             &[vmctx, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
                         )
                     }
-                    Some((sym, expected, slot_ptr, slot_idx, kind)) => {
+                    // A `fboundp` site calls the dedicated 4-argument shim
+                    // (`neovm_jit_fboundp_spec`): the quit poll, the
+                    // debugger/depth gates, the armed-epoch check and the
+                    // function-cell read, without the `kind`, `sym` and
+                    // `expected` words the generic pred shim carries. A miss
+                    // (stale epoch, a non-symbol argument, an armed debugger,
+                    // the depth limit) is STATUS_NEED_GENERIC, and the site's
+                    // generic fallback resolves the live binding exactly as
+                    // before. A site without register-collected args keeps the
+                    // generic pred arm below (which refuses it as before).
+                    (Some((_, _, slot_ptr, slot_idx, SpecCalleeKind::PredFboundp)), Some(args)) => {
+                        // PRESERVE emission order: create the generic-fallback
+                        // block FIRST (as the generic subr-kind arm does).
+                        if generic_fallback.is_none() {
+                            generic_fallback = Some(fb.create_block());
+                        }
+                        let slot_v =
+                            materialize_spec_slot(fb, aot, spec_slot_base, slot_ptr, slot_idx);
+                        let f = rt
+                            .refs
+                            .try_get(fb.func, Shim::FboundpSpec)
+                            .ok_or(CompileError::UnsupportedOp("fboundp-spec-refs"))?;
+                        fb.ins().call(f, &[vmctx, slot_v, args[0], out_addr])
+                    }
+                    (Some((sym, expected, slot_ptr, slot_idx, kind)), _) => {
                         // PRESERVE emission order: create the generic-fallback block
                         // FIRST (byte-identical to before B2), then the operands.
                         // A guarded site already made it (both edges enter it).
@@ -8076,7 +8103,7 @@ fn lower_simple_op_arms(
                     // `NEOVM_JIT_FEEDBACK` (JIT only): a site whose target the
                     // source's call-site table records calls the recording shim
                     // (P2.1 C3/C4); with the knob off there is no such site.
-                    None => match (!aot)
+                    (None, _) => match (!aot)
                         .then(|| super::call_feedback::recording_site_at(pc, rt))
                         .flatten()
                     {

@@ -9217,6 +9217,108 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
     }
 }
 
+/// A `PredFboundp` site lowers to the DEDICATED 4-argument shim
+/// (`neovm_jit_fboundp_spec`), not the generic pred shim: every call
+/// reaches it, and no other predicate site does. The other pred shims share
+/// `SUBR_SPEC_COUNT`, so the dedicated counter is the only way to tell.
+#[test]
+fn fboundp_sites_use_the_dedicated_shim() {
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::intern::{SymId, intern};
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context as *mut u8;
+    let leaf_for = |name: &str| {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![SymId(1)],
+            optional: Vec::new(),
+            rest: None,
+        });
+        f.lexical = true;
+        f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
+        f.constants = vec![Value::symbol(name)].into();
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        f
+    };
+    let f = leaf_for("fboundp");
+    let fboundp_leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    let _ = ev.debug_on_next_call_is_armed();
+    for arg in [
+        Value::symbol("car"),
+        Value::symbol("jit-fboundp-never"),
+        Value::NIL,
+        Value::make_int(1),
+    ] {
+        let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
+        match fboundp_leaf.call(ctx, &[arg]) {
+            NativeRun::Ok(_) => {}
+            NativeRun::Signal => {
+                let _ = take_pending_flow();
+            }
+            other => panic!(
+                "(fboundp {}) : {other:?}",
+                crate::emacs_core::print::print_value(&arg)
+            ),
+        }
+        assert_eq!(
+            FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed) - count0,
+            1,
+            "an fboundp site must reach the dedicated shim: ({})",
+            crate::emacs_core::print::print_value(&arg)
+        );
+    }
+    // An epoch move must RE-ARM the site through `subr_spec_armed` (the
+    // shim's slot carries the binding words for exactly this), not fall to
+    // the generic call forever: after an unrelated `fset`, the next call
+    // stays on the fast path and does not bounce generic.
+    #[cfg(debug_assertions)]
+    let (fast0, gen0) = (
+        SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed),
+        SUBR_SPEC_GENERIC_COUNT.load(Ordering::Relaxed),
+    );
+    ev.eval_str("(fset 'jit-fboundp-unrelated (lambda () 1))")
+        .expect("unrelated fset");
+    let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
+    match fboundp_leaf.call(ctx, &[Value::symbol("car")]) {
+        NativeRun::Ok(bits) => assert_eq!(
+            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            "t"
+        ),
+        other => panic!("after an unrelated epoch bump: {other:?}"),
+    }
+    assert_eq!(
+        FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed) - count0,
+        1,
+        "the epoch-moved call enters the dedicated shim"
+    );
+    #[cfg(debug_assertions)]
+    {
+        assert!(
+            SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed) > fast0,
+            "an unrelated epoch bump re-arms the fboundp site"
+        );
+        assert_eq!(
+            SUBR_SPEC_GENERIC_COUNT.load(Ordering::Relaxed),
+            gen0,
+            "the re-armed call does not bounce generic"
+        );
+    }
+    // A recordp site (its inline lowering disabled for this check) goes
+    // through the generic pred shim, which must not touch the fboundp
+    // shim's counter.
+    crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(false));
+    let f = leaf_for("recordp");
+    let recordp_leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    crate::emacs_core::jit::compile::force_inline_predicates_for_test(None);
+    let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
+    let _ = recordp_leaf.call(ctx, &[Value::make_int(1)]);
+    assert_eq!(
+        FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed),
+        count0,
+        "a recordp site must not reach the fboundp shim"
+    );
+}
+
 /// `(autoload-do-load FUNDEF FUNNAME MACRO-ONLY)` through `Op::Call`, at one,
 /// two and three arguments, is the GC-free predicate intrinsic
 /// (`SpecCalleeKind::PredAutoloadDoLoad`): a FUNDEF that is not an autoload

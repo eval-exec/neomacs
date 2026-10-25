@@ -2687,11 +2687,7 @@ pub extern "C" fn neovm_jit_pred_spec(
                     return STATUS_NEED_GENERIC;
                 };
                 Value::bool_val(
-                    crate::emacs_core::builtins::symbols::symbol_function_cell_in_obarray(
-                        ctx.obarray(),
-                        id,
-                    )
-                    .is_some_and(|function| !function.is_nil()),
+                    crate::emacs_core::builtins::symbols::function_cell_is_bound(ctx.obarray(), id),
                 )
             }
             // The registered `type-of`/`cl-type-of` bodies, which read the
@@ -2708,6 +2704,82 @@ pub extern "C" fn neovm_jit_pred_spec(
                 None => return STATUS_NEED_GENERIC,
             },
         };
+        // SAFETY: `out` is the generated code's result stack slot.
+        unsafe { *out = result.bits() as i64 };
+        STATUS_OK
+    })
+}
+
+/// Speculated `fboundp` call: the dedicated 4-argument shim. The sequence is
+/// exactly [`neovm_jit_pred_spec`]'s `PRED_KIND_FBOUNDP` arm — the quit poll,
+/// the debugger/depth gates, the armed-epoch check and the symbol's function
+/// cell read — without the `kind` argument, the site's `sym`/`expected` words
+/// and the arm dispatch. Those two words are read back from the slot
+/// (`SpecSlot::for_site` binds a `PredFboundp` slot like a `SubrGeneral` one)
+/// so the arming test is the full [`subr_spec_armed`]: a stale epoch whose
+/// live binding bits still match RE-ARMS the site and keeps the fast path,
+/// and only a changed binding (or an armed debugger, the depth limit, a
+/// pending overrides state) takes [`STATUS_NEED_GENERIC`] and the site's
+/// generic fallback — which then resolves the live binding, so `fset`/advice
+/// and the generic dispatch's Bcall depth accounting stay exact. Falling
+/// straight to the generic call on every epoch move would make one `fset`
+/// anywhere permanently slow every `fboundp` site.
+///
+/// GC-FREE INVARIANT (load-bearing): the generated caller roots nothing
+/// around this call, so no path here may allocate on the lisp heap or run
+/// lisp. `maybe_quit`'s Flow is Rust-heap only, the arming check only reads,
+/// and the cell read is a symbol-table lookup with no allocation or safe
+/// point. The skipped backtrace frame is unobservable: an armed hit cannot
+/// signal, GC or run lisp between push and pop.
+/// SAFETY + AOT-importable status: same as [`neovm_jit_call_subr_spec`].
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_fboundp_spec(ctx: *mut u8, slot: i64, a: i64, out: *mut i64) -> i64 {
+    jit_shim_contain!(ctx, STATUS_SIGNAL, {
+        #[cfg(debug_assertions)]
+        {
+            SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
+            FBOUNDP_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+        // SAFETY: see neovm_jit_call's function-level contract.
+        let ctx = unsafe { &mut *(ctx as *mut Context) };
+        if let Err(flow) = ctx.maybe_quit() {
+            stash_pending_flow(flow);
+            return STATUS_SIGNAL;
+        }
+        // SAFETY: slot points into the executing leaf's spec_slots.
+        let slot = unsafe { &*(slot as *const SpecSlot) };
+        debug_assert!(
+            slot.holds_subr_binding(),
+            "an fboundp site's slot carries its binding words"
+        );
+        let (sym, expected) = slot.subr_binding();
+        if ctx.debug_on_next_call_is_armed()
+            || ctx.depth >= ctx.max_depth
+            || !subr_spec_armed(ctx, sym.0 as i64, expected as i64, slot)
+        {
+            #[cfg(debug_assertions)]
+            SUBR_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
+            return STATUS_NEED_GENERIC;
+        }
+        #[cfg(debug_assertions)]
+        SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
+        let v = Value::from_bits(a as usize);
+        // `builtin_fboundp_1`: a symbol's function cell, read off the obarray
+        // with no allocation, no Lisp and no safe point (a symbol-with-pos is
+        // a symbol here exactly when the builtin says so, i.e. only while
+        // `symbols-with-pos-enabled` is on). Anything else bounces to the
+        // generic call, which signals `(wrong-type-argument symbolp V)` from a
+        // real frame.
+        let Some(id) = crate::emacs_core::builtins::symbols::symbol_id_checked(
+            &v,
+            ctx.symbols_with_pos_enabled,
+        ) else {
+            return STATUS_NEED_GENERIC;
+        };
+        let result = Value::bool_val(
+            crate::emacs_core::builtins::symbols::function_cell_is_bound(ctx.obarray(), id),
+        );
         // SAFETY: `out` is the generated code's result stack slot.
         unsafe { *out = result.bits() as i64 };
         STATUS_OK

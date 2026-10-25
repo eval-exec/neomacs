@@ -217,6 +217,13 @@ pub(crate) static SUBR_SPEC_CACHED_COUNT: AtomicU64 = AtomicU64::new(0);
 #[cfg(debug_assertions)]
 pub(crate) static SUBR_SPEC_GENERIC_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Debug-build counter of entries to the dedicated `fboundp` shim
+/// ([`neovm_jit_fboundp_spec`]). Proves a `PredFboundp` site reaches the
+/// 4-argument shim rather than the generic pred shim (both bump
+/// [`SUBR_SPEC_COUNT`], so only this can tell them apart).
+#[cfg(debug_assertions)]
+pub(crate) static FBOUNDP_SPEC_COUNT: AtomicU64 = AtomicU64::new(0);
+
 /// Debug-build counters for the R2 CallBuiltinSym intrinsic shims (Tier-A read
 /// `neovm_jit_cbsym_read` [COMMIT 5] + Tier-B dispatch-skip
 /// [`neovm_jit_cbsym_spec`]), mirroring `SUBR_SPEC_{COUNT,FAST,GENERIC}`. COUNT
@@ -908,6 +915,10 @@ pub(crate) static JIT_SHIM_TABLE: &[(&str, ShimAddr)] = &[
     (
         "neovm_jit_eq_incl_props_spec",
         ShimAddr(neovm_jit_eq_incl_props_spec as *const ()),
+    ),
+    (
+        "neovm_jit_fboundp_spec",
+        ShimAddr(neovm_jit_fboundp_spec as *const ()),
     ),
     (
         "neovm_jit_eq_slow",

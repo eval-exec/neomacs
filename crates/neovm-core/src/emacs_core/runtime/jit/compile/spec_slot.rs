@@ -153,10 +153,19 @@ impl SpecSlot {
 
     /// The slot a site of `kind` starts with, armed at `epoch`: a
     /// `SubrGeneral` site's carries its immutable binding words
-    /// ([`Self::bind_subr`]), every other starts empty.
+    /// ([`Self::bind_subr`]), and so does a `PredFboundp` site's — its
+    /// dedicated 4-argument shim ([`neovm_jit_fboundp_spec`]) recovers
+    /// `(symbol, expected)` from the slot to run `subr_spec_armed`'s
+    /// re-validation without carrying those words as arguments, so an epoch
+    /// move re-arms the site instead of falling to the generic call forever.
+    /// Every other kind starts empty (their shims pass the words as
+    /// arguments when they need them).
     pub(crate) fn for_site(kind: SpecCalleeKind, epoch: u64, sym: u32, expected: u64) -> Self {
         let slot = Self::at_epoch(epoch);
-        if kind == SpecCalleeKind::SubrGeneral {
+        if matches!(
+            kind,
+            SpecCalleeKind::SubrGeneral | SpecCalleeKind::PredFboundp
+        ) {
             slot.bind_subr(sym, expected);
         }
         slot

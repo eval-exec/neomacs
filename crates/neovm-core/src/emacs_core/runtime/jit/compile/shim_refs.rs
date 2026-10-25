@@ -175,6 +175,9 @@ pub(crate) enum Shim {
     UnbindCollection,
     SetcarCollection,
     SetcdrCollection,
+    /// `neovm_jit_fboundp_spec`: the dedicated 4-argument `fboundp` shim
+    /// (vmctx, slot, arg, out), appended after every existing ID.
+    FboundpSpec,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -266,6 +269,7 @@ impl Shim {
             Shim::UnbindCollection => "neovm_jit_unbind_collection",
             Shim::SetcarCollection => "neovm_jit_setcar_collection",
             Shim::SetcdrCollection => "neovm_jit_setcdr_collection",
+            Shim::FboundpSpec => "neovm_jit_fboundp_spec",
         }
     }
 
@@ -283,9 +287,11 @@ impl Shim {
             | Shim::SetcarCollection
             | Shim::SetcdrCollection => ShimGroup::CollectionJournal,
             Shim::UnobservedCollectionOwner => ShimGroup::CollectionObservationGate,
-            Shim::CallSubrSpec | Shim::PredSpec | Shim::EqInclPropsSpec | Shim::ArithSpec => {
-                ShimGroup::SubrSpec
-            }
+            Shim::CallSubrSpec
+            | Shim::PredSpec
+            | Shim::EqInclPropsSpec
+            | Shim::ArithSpec
+            | Shim::FboundpSpec => ShimGroup::SubrSpec,
             Shim::CbsymSpec | Shim::CbsymRead => ShimGroup::CbsymSpec,
             Shim::TierRequest
             | Shim::T2CallProf
@@ -454,6 +460,8 @@ impl Shim {
             // pred: (vmctx, kind, sym, expected, slot_ptr, a, out_ptr)
             // eq:   (vmctx, sym, expected, slot_ptr, a, b, out_ptr)
             Shim::PredSpec | Shim::EqInclPropsSpec => (&[Ptr, I64, I64, I64, I64, I64, Ptr], true),
+            // fboundp: (vmctx, slot_ptr, a, out_ptr) -> status
+            Shim::FboundpSpec => (&[Ptr, I64, I64, Ptr], true),
             // (vmctx, kind, sym, expected, slot_ptr, a, b, out_ptr)
             Shim::ArithSpec => (&[Ptr, I64, I64, I64, I64, I64, I64, Ptr], true),
             // (vmctx, sym, expected, slot, args, nargs, out, shape) -> status

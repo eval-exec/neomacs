@@ -140,7 +140,7 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // base (HEAP_JIT_CARD_TABLE) instead of testing the cons unlogged bitmap; the
 // cons-block trailer drops the unlogged and old bitmaps for one age byte per
 // cell (fewer cells per block), which those stores test.
-const ABI_TAG_VERSION: u32 = 51;
+const ABI_TAG_VERSION: u32 = 52;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
@@ -165,9 +165,9 @@ include!("shim_names.rs");
 /// AOT imports retain the original ABI26 prefix and add the ABI31 collection
 /// stores. Selected Opt and cold refinement exports remain JIT-only.
 const AOT_SHIM_NAMES: [&str;
-    NEOVM_JIT_AOT_ABI_SHIM_COUNT + NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES.len()] = {
+    NEOVM_JIT_AOT_ABI_SHIM_COUNT + NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES.len() + 1] = {
     let mut names =
-        [""; NEOVM_JIT_AOT_ABI_SHIM_COUNT + NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES.len()];
+        [""; NEOVM_JIT_AOT_ABI_SHIM_COUNT + NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES.len() + 1];
     let mut i = 0;
     while i < NEOVM_JIT_AOT_ABI_SHIM_COUNT {
         names[i] = NEOVM_JIT_SHIM_NAMES[i];
@@ -179,6 +179,8 @@ const AOT_SHIM_NAMES: [&str;
         i += 1;
         extra += 1;
     }
+    // ABI52: the appended dedicated `fboundp` spec shim.
+    names[i] = NEOVM_JIT_SHIM_NAMES[NEOVM_JIT_AOT_FBOUNDP_SHIM_INDEX];
     names
 };
 

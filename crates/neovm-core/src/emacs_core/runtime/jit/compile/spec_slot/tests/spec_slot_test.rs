@@ -65,7 +65,7 @@ fn every_site_kind_names_its_slot_kind() {
 }
 
 #[test]
-fn a_subr_general_slot_is_built_with_its_binding_and_the_others_empty() {
+fn a_subr_general_or_fboundp_slot_carries_its_binding_and_the_others_are_empty() {
     let expected =
         crate::emacs_core::value::Value::subr_from_sym_id(crate::emacs_core::intern::intern("car"))
             .bits() as u64;
@@ -74,6 +74,15 @@ fn a_subr_general_slot_is_built_with_its_binding_and_the_others_empty() {
     assert_eq!(bound.subr_binding(), (SymId(42), expected));
     assert_eq!(word_at(&bound, SPEC_SLOT_EPOCH_OFFSET), 7);
     assert!(bound.direct_entry().is_null());
+    // `PredFboundp` binds too: its dedicated 4-argument shim recovers the
+    // `(symbol, expected)` pair from the slot instead of carrying it as
+    // arguments, so `subr_spec_armed` can re-arm the site after an epoch
+    // move (`SpecSlot::for_site`'s doc).
+    let fboundp = SpecSlot::for_site(SpecCalleeKind::PredFboundp, 8, 43, expected);
+    assert!(fboundp.holds_subr_binding());
+    assert_eq!(fboundp.subr_binding(), (SymId(43), expected));
+    assert_eq!(word_at(&fboundp, SPEC_SLOT_EPOCH_OFFSET), 8);
+    assert!(fboundp.direct_entry().is_null());
     for kind in [
         SpecCalleeKind::Bytecode,
         SpecCalleeKind::PredRecordp,
