@@ -151,10 +151,10 @@ jobs:
   # The compile-fail contracts are #[ignore]d because each runner compiles
   # separate trybuild fixture crates, which does not fit a nextest per-test
   # watchdog; the default suites and the shard matrix therefore never run
-  # them. CI's only `--run-ignored only` job is the MELPA live canary, so this
-  # standalone job is their home. It needs the workspace checkout, not the
-  # nextest archive, and it stays out of the shard matrix: this is gate-wt.sh's
-  # compile-contracts step, both halves, with plain cargo test.
+  # them, so this standalone job is their home. It needs the workspace
+  # checkout, not the nextest archive, and it stays out of the shard matrix:
+  # this is gate-wt.sh's compile-contracts step, both halves, with plain
+  # cargo test.
   compile-contracts:
     name: compile contracts (linux x86_64)
     runs-on: ubuntu-24.04
@@ -607,53 +607,6 @@ jobs:
             tmp/neomacs-gui-tests
           if-no-files-found: ignore
           retention-days: 14
-
-  neomacs-melpa-live-canary:
-    name: MELPA live ecosystem canary (linux x86_64)
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: 1
-      TMPDIR: ${{ github.workspace }}/tmp
-      NEOMACS_BIN: ${{ github.workspace }}/target/release/neomacs
-      NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
-      NEOMACS_MELPA_ORACLE_EMACS: /opt/gnu-emacs-oracle/bin/emacs
-    steps:
-      - *checkout
-      - *prepare_workspace_tmp
-      - name: Install Linux ecosystem dependencies
-        run: scripts/ci/setup-linux.sh ecosystem
-      - name: Set up GNU Emacs oracle
-        uses: ./.github/actions/setup-gnu-emacs
-      - name: Set up Rust tooling
-        uses: ./.github/actions/setup-rust
-        with:
-          cache-key: ci-melpa-live-canary
-          # Runs prebuilt binaries out of the downloaded nextest archive and
-          # never invokes rustc, so a Cargo build cache here can never be read
-          # back.  Measured: these entries were ~246 MiB each and carried the
-          # SAME content hash as each other, in a 10 GiB store whose overflow
-          # was evicting the release caches.
-          cache: "false"
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
-          install-nextest: true
-      - *download_test_runtime
-      - *unpack_test_runtime
-      - *download_workspace_test_archive
-
-      - name: Run current MELPA ecosystem canary
-        run: |
-          cargo nextest run \
-            --archive-file neomacs-workspace-tests.tar.zst \
-            --extract-to "$TMPDIR/nextest" \
-            --run-ignored only \
-            -E 'package(neomacs-melpa-tests) and test(=live_melpa_ecosystem_installs_and_survives_restart)' \
-            --workspace-remap "$GITHUB_WORKSPACE" \
-            --success-output immediate \
-            --no-fail-fast
 
   doom-install-compatibility:
     name: doom install compatibility (linux x86_64)

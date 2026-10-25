@@ -20,9 +20,10 @@ phase-specific failures.
 - `frozen_packages.rs` exercises GNU Emacs's small checked-in package archive.
   It is a fast contract for dependency resolution, tar extraction, generated
   autoloads, byte compilation, and restart persistence.
-- `live_melpa.rs` hard-codes package names and versions, downloads one complete
-  dependency transaction below `./tmp`, then gives that same local transaction
-  to GNU Emacs and Neomacs. No third-party package payload is tracked by Git.
+- `../neomacs-melpa-test-support/src/source_lock.rs` builds every scenario's
+  packages from the revision pinned in `melpa-package-lock.tsv` (see "Package
+  lock" below), so a run never depends on current upstream state. No
+  third-party package payload is tracked by Git.
 - Multi-probe batches (`CachedPackageOracle::run_batch` /
   `parity_tests::batch_support`) run many named Elisp probes in one GNU Emacs
   process and one Neomacs process (setup once per editor; cases keep separate
@@ -72,8 +73,7 @@ phase-specific failures.
   geometry, cursor, face/style classes, and resolved RGB colors. A deliberately
   named raw-terminal checkpoint remains available for tests whose subject is
   the terminal wire representation itself, such as indexed palette values.
-The GNU package-resource contracts are required CI checks. The current MELPA
-oracle runs on scheduled and explicitly dispatched CI workflows.
+The GNU package-resource contracts are required CI checks.
 
 ## Package selection order
 
@@ -147,17 +147,6 @@ TMPDIR="$PWD/tmp" \
 NEOMACS_BIN="$PWD/target/release/neomacs" \
 NEOMACS_MELPA_ORACLE_EMACS="/home/exec/Projects/github.com/emacs-mirror/emacs/src/emacs" \
 cargo nextest run -p neomacs-melpa-tests --release --test melpa_tui \
-  --no-fail-fast
-```
-
-Run the live lifecycle canary explicitly:
-
-```sh
-TMPDIR="$PWD/tmp" \
-NEOMACS_BIN="$PWD/target/release/neomacs" \
-cargo nextest run -p neomacs-melpa-tests \
-  --run-ignored only \
-  -E 'test(=parity_tests::live_melpa::live_melpa_ecosystem_installs_and_survives_restart)' \
   --no-fail-fast
 ```
 

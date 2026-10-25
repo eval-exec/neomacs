@@ -149,9 +149,9 @@ slow-timeout = { period = "60s", terminate-after = 1 }
 
 # Package ecosystem tests launch full editor subprocesses. Package-cache
 # preparation uses a cross-process lock, so these tests can use the profile's
-# normal parallel scheduling. The live canary has its own per-process timeout
-# in the harness; Nextest's watchdog remains slightly wider so the harness can
-# emit phase-specific diagnostics first.
+# normal parallel scheduling. The harness gives each editor its own timeout and
+# phase-specific diagnostics; Nextest's watchdog remains wider so those
+# diagnostics arrive first.
 [[profile.default.overrides]]
 filter = 'package(neomacs-melpa-tests)'
 slow-timeout = { period = "960s", terminate-after = 1 }
