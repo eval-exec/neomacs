@@ -148,6 +148,63 @@ fn rename_buffer_via_cx_x_r_updates_current_buffer_name() {
 }
 
 #[test]
+fn killing_an_unshown_temp_buffer_after_rename_does_not_create_scratch() {
+    let (mut gnu, mut neo) = boot_pair("");
+
+    // Rename the initial *scratch* away, leaving no buffer by that name.
+    send_both(&mut gnu, &mut neo, "C-x x r");
+    let prompt_ready = |grid: &[String]| {
+        grid.iter()
+            .any(|row| row.contains("Rename buffer") && row.contains("to new name"))
+    };
+    gnu.read_until(Duration::from_secs(6), prompt_ready);
+    neo.read_until(Duration::from_secs(8), prompt_ready);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(300));
+    for session in [&mut gnu, &mut neo] {
+        session.send(b"renamed-scratch");
+    }
+    send_both(&mut gnu, &mut neo, "RET");
+    let renamed_ready = |grid: &[String]| grid.iter().any(|row| row.contains("renamed-scratch"));
+    gnu.read_until(Duration::from_secs(6), renamed_ready);
+    neo.read_until(Duration::from_secs(8), renamed_ready);
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+
+    // Kill a temporary buffer that no window shows.  GNU's kill-buffer only
+    // repairs windows that still display the dead buffer, so this must not
+    // recreate *scratch*.
+    send_both(&mut gnu, &mut neo, "M-:");
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    for session in [&mut gnu, &mut neo] {
+        session.send(br#"(with-temp-buffer (insert "temp body"))"#);
+    }
+    send_both(&mut gnu, &mut neo, "RET");
+    read_both(&mut gnu, &mut neo, Duration::from_secs(2));
+
+    send_both(&mut gnu, &mut neo, "C-x C-b");
+    let list_ready = |grid: &[String]| {
+        grid.iter().any(|row| row.contains("*Buffer List*"))
+            && grid.iter().any(|row| row.contains("renamed-scratch"))
+    };
+    gnu.read_until(Duration::from_secs(6), list_ready);
+    neo.read_until(Duration::from_secs(8), list_ready);
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    for (label, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        let grid = session.text_grid();
+        assert!(
+            !grid.iter().any(|row| row.contains("*scratch*")),
+            "{label} must not recreate *scratch* when an unshown temporary buffer is killed:\n{}",
+            grid.join("\n")
+        );
+    }
+
+    assert_pair_exact_display(
+        "killing_an_unshown_temp_buffer_after_rename_does_not_create_scratch",
+        &gnu,
+        &neo,
+    );
+}
+
+#[test]
 fn rename_buffer_empty_prompt_multiple_del_keeps_prompt() {
     let (mut gnu, mut neo) = boot_pair("");
 
