@@ -37607,3 +37607,7 @@ mod mini_root_minimum_test;
 #[cfg(test)]
 #[path = "overlay_string_window_wrap_test.rs"]
 mod overlay_string_window_wrap_test;
+
+#[cfg(test)]
+#[path = "narrow_root_eob_test.rs"]
+mod narrow_root_eob_test;

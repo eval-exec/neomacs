@@ -12,10 +12,11 @@ use crate::display_row::source_render::TextRowSourceRenderState;
 use crate::display_row::walk_state::{DisplayRowSourceStart, FaceScanCheckpoint};
 use crate::display_source_progress::DisplaySourceVisualRowProgress;
 use crate::display_text_window_row_lifecycle::{
-    TextWindowBodyInstallRenderContext, TextWindowBodyInstallRequest,
+    OrdinaryEobRowAdmission, TextWindowBodyInstallRenderContext, TextWindowBodyInstallRequest,
     TextWindowCursorPublishStatus, TextWindowFinishRequest, TextWindowFinishState,
     TextWindowTailFinalizeContext, TextWindowTailFinalizeRequest, TextWindowTailFinalizeState,
     TextWindowVisibilityRetryOutcome, TextWindowVisibilityRetryRequest,
+    ordinary_eob_row_is_visible,
 };
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{LayoutBufferView, ResolvedFace, RustBufferAccess};
@@ -461,6 +462,59 @@ where
         BufferSourceEobCursorRow::Unchanged
     };
 
+    // A consumed trailing newline can reach ZV without beginning its empty
+    // insertion row inside this viewport. Keep source progress separate from
+    // an actual enabled cursor-owning row, also when this nonselected window
+    // has no physical cursor style. Other source/partial-row policies stay in
+    // their existing paths above.
+    let ordinary_eob_row_admission = if point_is_visible_eob
+        && !tail_context.params.is_minibuffer()
+        && !tail_context.params.window_system
+        && !tail_context.params.force_start
+        && tail_context.retry_bounds.text_area_bottom() > tail_context.retry_bounds.text_area_top()
+        && !cursor_info.eob_row_candidates().any(|(_, kind)| {
+            kind == crate::display_cursor::EobCursorCandidateKind::ExplicitStringProperty
+        })
+        && source_render
+            .output_rows()
+            .iter()
+            .all(|row| row.end_source == neovm_core::window::DisplayRowEndSource::Buffer)
+    {
+        let point = crate::coords::layout_i64_char_pos_to_lisp_char_pos(
+            tail_context.params.point_charpos().get(),
+        );
+        let candidate_row = cursor_info
+            .eob_row_candidates()
+            .find_map(|(offset, _)| tail_context.display_text_row_base.checked_add(offset));
+        let visible =
+            source_render
+                .output_render()
+                .with_output_target_parts(|mut output, emitter, _| {
+                    let insertion = emitter.point_for_lisp_buffer_pos(point);
+                    candidate_row.is_some_and(|index| {
+                        output
+                            .builder()
+                            .current_window_row(index)
+                            .is_some_and(|row| {
+                                ordinary_eob_row_is_visible(
+                                    index,
+                                    row,
+                                    insertion,
+                                    tail_context.retry_bounds.text_area_top(),
+                                    tail_context.retry_bounds.text_area_bottom(),
+                                )
+                            })
+                    })
+                });
+        if visible {
+            OrdinaryEobRowAdmission::Visible
+        } else {
+            OrdinaryEobRowAdmission::Unavailable
+        }
+    } else {
+        OrdinaryEobRowAdmission::ExistingPolicy
+    };
+
     // GNU redisplay keeps iterating until point visibility converges or no
     // further progress can be made. Advance by actual rendered row spans
     // from this pass, since wrapped and variable-height lines are exactly
@@ -472,6 +526,7 @@ where
             point_is_visible_eob,
             buf_access,
         )
+        .with_ordinary_eob_row_admission(ordinary_eob_row_admission)
         .decide();
     BufferSourcePostLoopRenderOutcome {
         retry,
