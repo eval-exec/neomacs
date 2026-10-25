@@ -10,7 +10,8 @@ mod echo_message;
 
 use super::*;
 use crate::buffer::{BufferId, LispCharPos1};
-use crate::window::{FrameId, Window, WindowId};
+use crate::window::{FrameId, PreparedMiniResizeOutcome, Window, WindowId};
+use neomacs_display_protocol::types::Px;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::sync::OnceLock;
@@ -331,19 +332,23 @@ impl Context {
         if !gnu_redisplay_hooks_enabled() {
             return Ok(Value::NIL);
         }
-        self.apply_prepared_minibuffer_resize(frame, window, requested_height)
+        self.apply_prepared_minibuffer_resize(frame, window, Px(requested_height))
+            .map(|outcome| match outcome {
+                PreparedMiniResizeOutcome::Unchanged => Value::NIL,
+                PreparedMiniResizeOutcome::Committed => Value::T,
+            })
     }
 
     /// Resize through window.el's achievable root-window policy in either
     /// redisplay mode. The policy owns recursive child minima, fixed windows
     /// and the distribution of reclaimed space, not just a scalar root cap.
-    /// Return non-nil only when a live geometry change was committed.
+    /// Return a typed outcome only after a live geometry commit or refusal.
     pub fn apply_prepared_minibuffer_resize(
         &mut self,
         frame: FrameId,
         window: WindowId,
-        requested_height: f32,
-    ) -> EvalResult {
+        requested_height: Px,
+    ) -> Result<PreparedMiniResizeOutcome, Flow> {
         // Before window.el is installed, native bootstrap/layout fixtures have
         // only the frame geometry primitive. Never use this fallback after a
         // Lisp error or transfer, or in the GNU preparatory-hook path.
@@ -354,7 +359,7 @@ impl Context {
         {
             let resize = self.frames.get(frame).and_then(|state| {
                 if state.minibuffer_window == Some(window) {
-                    state.plan_mini_window_resize(requested_height, f32::MAX)
+                    state.plan_mini_window_resize(requested_height.get(), f32::MAX)
                 } else {
                     None
                 }
@@ -363,21 +368,24 @@ impl Context {
                 && let Some(state) = self.frames.get_mut(frame)
             {
                 state.apply_mini_window_resize(resize);
-                return Ok(Value::T);
+                return Ok(PreparedMiniResizeOutcome::Committed);
             }
-            return Ok(Value::NIL);
+            return Ok(PreparedMiniResizeOutcome::Unchanged);
         }
         let Some(state) = self.frames.get(frame) else {
-            return Ok(Value::NIL);
+            return Ok(PreparedMiniResizeOutcome::Unchanged);
         };
+        if state.minibuffer_window != Some(window) {
+            return Ok(PreparedMiniResizeOutcome::Unchanged);
+        }
         let Some(mini) = state.find_window(window) else {
-            return Ok(Value::NIL);
+            return Ok(PreparedMiniResizeOutcome::Unchanged);
         };
         let previous = mini.bounds().height.round() as i64;
-        let desired = requested_height.round() as i64;
+        let desired = requested_height.get().round() as i64;
         let delta = desired.saturating_sub(previous);
         if delta == 0 {
-            return Ok(Value::NIL);
+            return Ok(PreparedMiniResizeOutcome::Unchanged);
         }
         let root = state.root_window().id();
         let grow = self.funcall_general(
@@ -385,16 +393,16 @@ impl Context {
             vec![Value::make_window(root.0), Value::fixnum(-delta), Value::T],
         )?;
         let Some(grow) = grow.as_fixnum().filter(|grow| *grow != 0) else {
-            return Ok(Value::NIL);
+            return Ok(PreparedMiniResizeOutcome::Unchanged);
         };
         // grow_mini_window quietly refuses unachievable staged root sizes.
         // Validate before the public mini commit primitive, whose direct Lisp
         // entry intentionally signals on invalid staged geometry.
         let Some(state) = self.frames.get(frame) else {
-            return Ok(Value::NIL);
+            return Ok(PreparedMiniResizeOutcome::Unchanged);
         };
         if !crate::window::window_resize_check(state.tree(), state.tree().root_id(), false) {
-            return Ok(Value::NIL);
+            return Ok(PreparedMiniResizeOutcome::Unchanged);
         }
         if let Some(mini) = self
             .frames
@@ -403,13 +411,17 @@ impl Context {
         {
             mini.set_new_pixel(Some(previous.saturating_sub(grow)));
         } else {
-            return Ok(Value::NIL);
+            return Ok(PreparedMiniResizeOutcome::Unchanged);
         }
         let committed = super::super::window_cmds::builtin_resize_mini_window_internal(
             self,
             vec![Value::make_window(window.0)],
         )?;
-        Ok(committed)
+        Ok(if committed.is_truthy() {
+            PreparedMiniResizeOutcome::Committed
+        } else {
+            PreparedMiniResizeOutcome::Unchanged
+        })
     }
 
     /// Execute resize_mini_window's mini-only Lisp arm for one selected-mini

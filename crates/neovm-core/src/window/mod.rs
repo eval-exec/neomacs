@@ -6374,6 +6374,19 @@ impl Frame {
     }
 }
 
+/// Result of a prepared minibuffer resize under one exclusive Context borrow.
+/// The copied outcome owns no Lisp values or cross-mutator state; an unchanged
+/// result is distinct from a committed geometry update and from a Flow error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "the caller must distinguish a committed resize from no change"]
+pub enum PreparedMiniResizeOutcome {
+    Unchanged,
+    Committed,
+}
+
+static_assertions::assert_impl_all!(PreparedMiniResizeOutcome: Copy, Send, Sync);
+const _: () = assert!(std::mem::size_of::<PreparedMiniResizeOutcome>() == 1);
+
 /// A nonempty geometry change tied to one live minibuffer allocation.
 #[derive(Debug, PartialEq)]
 #[must_use = "a resize plan must be applied or explicitly discarded"]

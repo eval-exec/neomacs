@@ -498,9 +498,13 @@ fn prepared_mini_noop_does_not_publish_a_commit_or_physical_redraw() {
     let (mut eval, frame, mini, _, mini_height) = direct_mini_commit_fixture();
     eval.gnu_mark_frame_redisplay(frame);
     assert_eq!(
-        eval.apply_prepared_minibuffer_resize(frame, mini, mini_height as f32)
-            .expect("unchanged height"),
-        Value::NIL
+        eval.apply_prepared_minibuffer_resize(
+            frame,
+            mini,
+            neomacs_display_protocol::types::Px(mini_height as f32)
+        )
+        .expect("unchanged height"),
+        crate::window::PreparedMiniResizeOutcome::Unchanged
     );
     assert!(
         !eval
@@ -521,9 +525,13 @@ fn prepared_mini_commit_uses_the_same_primitive_publication_once() {
         .expect("deterministic achievable-size policy");
     eval.gnu_mark_frame_redisplay(frame);
     assert_eq!(
-        eval.apply_prepared_minibuffer_resize(frame, mini, mini_height as f32 + 1.0)
-            .expect("prepared commit"),
-        Value::T
+        eval.apply_prepared_minibuffer_resize(
+            frame,
+            mini,
+            neomacs_display_protocol::types::Px(mini_height as f32 + 1.0)
+        )
+        .expect("prepared commit"),
+        crate::window::PreparedMiniResizeOutcome::Committed
     );
     assert!(
         eval.gnu_redisplay_hooks
@@ -617,4 +625,44 @@ fn legacy_refused_mini_commit_does_not_invalidate_or_queue_physical_redraw() {
     assert_eq!(eval.redisplay_generation, generation_before);
     assert!(!eval.gnu_take_tty_frame_redraw(frame));
     assert!(eval.gnu_redisplay_hooks.redisplay_frames.is_empty());
+}
+
+#[test]
+fn prepared_mini_resize_refuses_an_ordinary_window_before_lisp_staging() {
+    let _policy = RedisplayHookPolicyGuard::gnu();
+    let (mut eval, frame, mini, _, _) = direct_mini_commit_fixture();
+    eval.eval_str("(progn (setq prepared-mini-invalid-target-calls 0) (fset 'window--resize-root-window-vertically '(lambda (&rest ignored) (setq prepared-mini-invalid-target-calls (1+ prepared-mini-invalid-target-calls)) 0)))")
+        .expect("observable root-sizing policy");
+    let state = eval.frames.get(frame).expect("frame");
+    let ordinary = state.root_window().id();
+    let root_before = *state.root_window().bounds();
+    let mini_before = *state.find_window(mini).expect("mini").bounds();
+    let generation_before = eval.redisplay_generation;
+    let result = eval.apply_prepared_minibuffer_resize(
+        frame,
+        ordinary,
+        neomacs_display_protocol::types::Px(root_before.height + 1.0),
+    );
+    assert_eq!(
+        eval.eval_str("prepared-mini-invalid-target-calls")
+            .expect("policy call count"),
+        Value::fixnum(0),
+        "an ordinary window must be refused before invoking arbitrary Lisp sizing policy"
+    );
+    assert_eq!(
+        result.expect("invalid mini target is an unchanged request"),
+        crate::window::PreparedMiniResizeOutcome::Unchanged
+    );
+    let state = eval.frames.get(frame).expect("frame");
+    assert_eq!(*state.root_window().bounds(), root_before);
+    assert_eq!(
+        *state.find_window(mini).expect("mini").bounds(),
+        mini_before
+    );
+    assert!(state.root_window().new_pixel().is_none());
+    assert!(state.find_window(mini).expect("mini").new_pixel().is_none());
+    assert_eq!(eval.redisplay_generation, generation_before);
+    assert!(eval.gnu_redisplay_hooks.redisplay_frames.is_empty());
+    assert!(eval.gnu_redisplay_hooks.frame_window_change.is_empty());
+    assert!(!eval.gnu_take_tty_frame_redraw(frame));
 }

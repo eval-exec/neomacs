@@ -3202,12 +3202,12 @@ impl LayoutEngine {
                             )
                         })
                         .collect();
-                    let committed = match evaluator.apply_prepared_minibuffer_resize(
+                    let resize_outcome = match evaluator.apply_prepared_minibuffer_resize(
                         frame_id,
                         neovm_core::window::WindowId(mini_params.window_id as u64),
-                        resize.height_px(),
+                        neomacs_display_protocol::types::Px(resize.height_px()),
                     ) {
-                        Ok(value) => value.is_truthy(),
+                        Ok(outcome) => outcome,
                         Err(flow) => {
                             evaluator.defer_redisplay_hook_flow(flow);
                             frame_window_end_attempts.reject_all(evaluator);
@@ -3217,15 +3217,45 @@ impl LayoutEngine {
                             return None;
                         }
                     };
-                    if !committed {
-                        let changed = before_sizing.iter().find_map(|(window, buffer, before)| {
-                            let after = evaluator
-                                .window_layout_attempt_freshness(frame_id, *window, *buffer);
-                            (before.is_none() || *before != after).then_some(*window)
-                        });
-                        if let Some(window) = changed {
-                            let request = FrameRelayoutRequest::LogicalInputsChanged {
-                                window_id: DisplayWindowId::new(window.0 as i64),
+                    match resize_outcome {
+                        neovm_core::window::PreparedMiniResizeOutcome::Unchanged => {
+                            let changed =
+                                before_sizing.iter().find_map(|(window, buffer, before)| {
+                                    let after = evaluator.window_layout_attempt_freshness(
+                                        frame_id, *window, *buffer,
+                                    );
+                                    (before.is_none() || *before != after).then_some(*window)
+                                });
+                            if let Some(window) = changed {
+                                let request = FrameRelayoutRequest::LogicalInputsChanged {
+                                    window_id: DisplayWindowId::new(window.0 as i64),
+                                };
+                                if !Self::accept_frame_relayout_request(
+                                    &mut layout_coordinator,
+                                    evaluator,
+                                    &mut frame_window_end_attempts,
+                                    presentation_id,
+                                    request,
+                                ) {
+                                    return None;
+                                }
+                                continue 'frame_layout;
+                            }
+                        }
+                        neovm_core::window::PreparedMiniResizeOutcome::Committed => {
+                            let required_height_px = evaluator
+                                .frame_manager()
+                                .get(frame_id)
+                                .and_then(|frame| {
+                                    frame.find_window(neovm_core::window::WindowId(
+                                        mini_params.window_id as u64,
+                                    ))
+                                })
+                                .map_or(resize.height_px(), |window| window.bounds().height);
+                            let request = FrameRelayoutRequest::Minibuffer {
+                                window_id: DisplayWindowId::new(mini_params.window_id),
+                                allocated_height_px: resize.previous_height_px(),
+                                required_height_px,
                             };
                             if !Self::accept_frame_relayout_request(
                                 &mut layout_coordinator,
@@ -3236,33 +3266,8 @@ impl LayoutEngine {
                             ) {
                                 return None;
                             }
-                            continue 'frame_layout;
+                            continue;
                         }
-                    } else {
-                        let required_height_px = evaluator
-                            .frame_manager()
-                            .get(frame_id)
-                            .and_then(|frame| {
-                                frame.find_window(neovm_core::window::WindowId(
-                                    mini_params.window_id as u64,
-                                ))
-                            })
-                            .map_or(resize.height_px(), |window| window.bounds().height);
-                        let request = FrameRelayoutRequest::Minibuffer {
-                            window_id: DisplayWindowId::new(mini_params.window_id),
-                            allocated_height_px: resize.previous_height_px(),
-                            required_height_px,
-                        };
-                        if !Self::accept_frame_relayout_request(
-                            &mut layout_coordinator,
-                            evaluator,
-                            &mut frame_window_end_attempts,
-                            presentation_id,
-                            request,
-                        ) {
-                            return None;
-                        }
-                        continue;
                     }
                 }
             }
