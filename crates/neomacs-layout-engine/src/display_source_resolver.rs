@@ -1453,7 +1453,8 @@ fn display_media_face_metrics(
 }
 
 pub(crate) fn same_resolved_face(lhs: &ResolvedFace, rhs: &ResolvedFace) -> bool {
-    lhs.fg == rhs.fg
+    lhs.tty_space_identity == rhs.tty_space_identity
+        && lhs.fg == rhs.fg
         && lhs.bg == rhs.bg
         && lhs.font_family == rhs.font_family
         && lhs.font_weight == rhs.font_weight

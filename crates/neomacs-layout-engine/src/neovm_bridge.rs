@@ -12,6 +12,7 @@
 //! only the initialized numeric mode; each scan borrows its own backend view
 //! and creates no buffer-specific or Lisp-state cache.
 
+use neomacs_display_protocol::face::TtySpaceIdentity;
 use neovm_core::emacs_core::eval::VariableView;
 use neovm_core::face::realization::BasicFace;
 use std::cmp::Ordering;
@@ -2410,6 +2411,16 @@ pub(crate) struct OverlayFacesAtPosition {
     /// resolved-face cache invalidates at every overlay boundary). `None` if
     /// there is no overlay ending ahead.
     pub(crate) next_boundary: Option<EmacsBytePos>,
+    /// GNU tests raw presence before filtering overlays by window or face.
+    present: bool,
+}
+
+impl OverlayFacesAtPosition {
+    pub(crate) fn into_sources(self, text_property: Option<Value>) -> OrderedFaceSources {
+        let mut sources = OrderedFaceSources::from_text_and_overlays(text_property, self.faces);
+        sources.has_overlays = self.present;
+        sources
+    }
 }
 
 /// One effective GNU character-property lookup prepared for a layout buffer.
@@ -2685,10 +2696,12 @@ pub(crate) fn overlay_faces_at<B: LayoutBufferView + ?Sized>(
 ) -> OverlayFacesAtPosition {
     let overlays = buffer.layout_overlays();
     let mut next_boundary: Option<EmacsBytePos> = None;
+    let mut present = false;
     // GNU `face_at_buffer_position` narrows its `endptr` at EVERY overlay end at
     // this position, not only at those carrying `face`, so a resolved-face cache
     // re-resolves at every overlay boundary.
     for oid in overlays.iter_overlays_at_emacs_byte_pos(bytepos) {
+        present = true;
         if let Some(end) = overlays.overlay_end_emacs_byte_pos(oid)
             && end.get() > bytepos.get()
         {
@@ -2709,6 +2722,7 @@ pub(crate) fn overlay_faces_at<B: LayoutBufferView + ?Sized>(
     OverlayFacesAtPosition {
         faces,
         next_boundary,
+        present,
     }
 }
 
@@ -3523,6 +3537,8 @@ pub struct ResolvedFace {
     /// Canonical forced basic realization, distinct even when its logical
     /// attributes equal another basic role's. Every logical merge clears it.
     canonical_tty_role: Option<BasicFace>,
+    /// Current logical default-slot identity, never inferred from arena ids.
+    pub(crate) tty_space_identity: Option<TtySpaceIdentity>,
     /// Per-face measured character advance width (from FontMetricsService, 0.0 = use default).
     font_char_width: f32,
     /// Per-face font ascent (from FontMetricsService, 0.0 = use default).
@@ -3572,6 +3588,7 @@ impl Default for ResolvedFace {
             color_state: FaceColorState::Seed,
             source_attributes: None,
             canonical_tty_role: None,
+            tty_space_identity: None,
             font_char_width: 0.0,
             font_ascent: 0.0,
             font_line_height: 0.0,
@@ -3625,6 +3642,7 @@ impl PartialEq for ResolvedFace {
             && self.terminal_inverse_video == other.terminal_inverse_video
             && self.color_state == other.color_state
             && self.canonical_tty_role == other.canonical_tty_role
+            && self.tty_space_identity == other.tty_space_identity
             && self.font_char_width == other.font_char_width
             && self.font_ascent == other.font_ascent
             && self.font_line_height == other.font_line_height
@@ -3636,6 +3654,28 @@ impl PartialEq for ResolvedFace {
 }
 
 impl ResolvedFace {
+    fn require_generic_tty_lookup(&mut self) {
+        self.canonical_tty_role = None;
+        self.tty_space_identity = None;
+    }
+
+    fn project_generic_tty_identity(
+        &mut self,
+        evaluator: &Context,
+        frame_id: FrameId,
+        attributes: &NeoFace,
+    ) {
+        self.tty_space_identity = evaluator
+            .cached_display_face_uses_default_slot_for_frame(frame_id, attributes)
+            .map(|is_default| {
+                if is_default {
+                    TtySpaceIdentity::CanonicalDefault
+                } else {
+                    TtySpaceIdentity::OtherRealized
+                }
+            });
+    }
+
     fn install_realized_tty_colors(&mut self, realized: &NeoFace) {
         // Read the retained pre-inverse channel state, never reverse-engineer
         // source colors from this face's already-inverted paint.
@@ -3665,6 +3705,7 @@ impl ResolvedFace {
         overlay_identity: Option<&std::sync::Arc<NeoFace>>,
     ) {
         self.canonical_tty_role = None;
+        self.tty_space_identity = None;
         let Some(source) = base.source_attributes.clone() else {
             return;
         };
@@ -3722,6 +3763,7 @@ impl ResolvedFace {
             && self.font_size == other.font_size
             && self.lisp_name == other.lisp_name
             && self.canonical_tty_role == other.canonical_tty_role
+            && self.tty_space_identity == other.tty_space_identity
             && self.color_state == other.color_state
             && self.underline_color == other.underline_color
             && self.terminal_underline_color == other.terminal_underline_color
@@ -3755,6 +3797,7 @@ impl ResolvedFace {
     /// other would put the writer back to guessing an index from RGB.
     fn set_foreground(&mut self, color: &NeoColor) {
         self.canonical_tty_role = None;
+        self.tty_space_identity = None;
         self.fg = color_to_pixel(color);
         self.terminal_fg = color.terminal;
         self.use_default_foreground = false;
@@ -3763,6 +3806,7 @@ impl ResolvedFace {
     /// Assign GNU's whole realized background from one realized colour.
     fn set_background(&mut self, color: &NeoColor) {
         self.canonical_tty_role = None;
+        self.tty_space_identity = None;
         self.bg = color_to_pixel(color);
         self.terminal_bg = color.terminal;
         self.use_default_background = false;
@@ -3774,6 +3818,7 @@ impl ResolvedFace {
     /// no colour for at all.
     fn set_frame_default_foreground(&mut self, pixel: u32) {
         self.canonical_tty_role = None;
+        self.tty_space_identity = None;
         self.fg = pixel;
         self.terminal_fg = None;
         self.use_default_foreground = true;
@@ -3783,6 +3828,7 @@ impl ResolvedFace {
     /// [`Self::set_frame_default_foreground`].
     fn set_frame_default_background(&mut self, pixel: u32) {
         self.canonical_tty_role = None;
+        self.tty_space_identity = None;
         self.bg = pixel;
         self.terminal_bg = None;
         self.use_default_background = true;
@@ -3829,6 +3875,7 @@ enum OrderedFaceSource {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OrderedFaceSources {
     sources: Vec<OrderedFaceSource>,
+    has_overlays: bool,
 }
 
 impl OrderedFaceSources {
@@ -3836,10 +3883,11 @@ impl OrderedFaceSources {
         text_property: Option<Value>,
         overlays_ascending: Vec<Value>,
     ) -> Self {
+        let has_overlays = !overlays_ascending.is_empty();
         let mut sources = Vec::with_capacity(
             usize::from(text_property.is_some()).saturating_add(overlays_ascending.len()),
         );
-        if let Some(value) = text_property {
+        if let Some(value) = text_property.filter(|value| !value.is_nil()) {
             sources.push(OrderedFaceSource::TextProperty(value));
         }
         sources.extend(
@@ -3847,11 +3895,14 @@ impl OrderedFaceSources {
                 .into_iter()
                 .map(OrderedFaceSource::Overlay),
         );
-        Self { sources }
+        Self {
+            sources,
+            has_overlays,
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.sources.is_empty()
+        self.sources.is_empty() && !self.has_overlays
     }
 
     pub(crate) fn single_value(&self) -> Option<Value> {
@@ -4582,6 +4633,7 @@ impl FaceResolver {
         );
         default.install_realized_tty_colors(&default_paint);
         default.canonical_tty_role = Some(BasicFace::Default);
+        default.tty_space_identity = Some(TtySpaceIdentity::CanonicalDefault);
         self.default_face = std::sync::Arc::new(default);
         self.tty_face_source = Some(BoundTtyFaceSource {
             frame_id,
@@ -4620,6 +4672,11 @@ impl FaceResolver {
                 .realize_face_with_source(&source, FaceRealizationSource::Complete(rooted_source));
             resolved.install_realized_tty_colors(&paint);
             resolved.canonical_tty_role = Some(role);
+            resolved.tty_space_identity = Some(if role == BasicFace::Default {
+                TtySpaceIdentity::CanonicalDefault
+            } else {
+                TtySpaceIdentity::OtherRealized
+            });
             resolved.lisp_name = Some(name.to_owned());
             resolved.face_id =
                 BasicFaceId::from_name(name).map_or(BasicFaceId::SENTINEL, u32::from);
@@ -4680,6 +4737,7 @@ impl FaceResolver {
             self.cached_tty_paint(face, &attributes, frame_id, evaluator.face_change_count())
         {
             paint.install(face);
+            face.project_generic_tty_identity(evaluator, frame_id, attributes.attributes());
             return true;
         }
         let Some(realized) =
@@ -4691,6 +4749,7 @@ impl FaceResolver {
         // key is read before the install writes realized colors into `face`.
         let probe_key = TtyPaintKey::of(face);
         face.install_realized_tty_colors(&realized);
+        face.project_generic_tty_identity(evaluator, frame_id, attributes.attributes());
         self.record_tty_paint(
             probe_key,
             face,
@@ -4732,6 +4791,11 @@ impl FaceResolver {
                 evaluator.face_change_count(),
             ) {
                 paint.install(face);
+                face.project_generic_tty_identity(
+                    evaluator,
+                    source.frame_id,
+                    attributes.attributes(),
+                );
                 return;
             }
             // Observe the actual demand entry, including pending/error/no-
@@ -4747,6 +4811,11 @@ impl FaceResolver {
             // (`realize_display_face_for_frame` returns the source unchanged);
             // such paint is transactional and must not seed the memo.
             if !evaluator.redisplay_hook_flow_pending() {
+                face.project_generic_tty_identity(
+                    evaluator,
+                    source.frame_id,
+                    attributes.attributes(),
+                );
                 self.record_tty_paint(
                     probe_key,
                     face,
@@ -4754,6 +4823,8 @@ impl FaceResolver {
                     source.frame_id,
                     evaluator.face_change_count(),
                 );
+            } else {
+                face.tty_space_identity = None;
             }
         }
     }
@@ -5649,6 +5720,7 @@ impl FaceResolver {
                 // frame slot.
                 resolved.face_id = 0;
                 resolved.canonical_tty_role = None;
+                resolved.tty_space_identity = None;
                 resolved.lisp_name = Some(face_id.name().to_string());
                 resolved
             }
@@ -5897,6 +5969,7 @@ impl FaceResolver {
             .unwrap_or(base);
         resolved.face_id = BasicFaceId::SENTINEL;
         resolved.canonical_tty_role = None;
+        resolved.tty_space_identity = None;
         resolved.lisp_name = Some(name.to_string());
         resolved
     }
@@ -5969,7 +6042,17 @@ impl FaceResolver {
                 FaceReferenceDiagnostics::Report,
             ));
         }
-        composition.realize(self, base)
+        if sources.is_empty() {
+            return None;
+        }
+        // Only a bound TTY lookup has a distinct default-slot identity
+        // when every source contributes no attributes. GUI/unbound walks
+        // retain the inherited face rather than manufacturing a new seam.
+        let mut resolved = composition
+            .realize(self, base)
+            .or_else(|| self.has_tty_realization().then(|| base.clone()))?;
+        resolved.require_generic_tty_lookup();
+        Some(resolved)
     }
 
     pub(crate) fn resolve_buffer_default_face<B: LayoutBufferView>(
@@ -6064,7 +6147,17 @@ impl FaceResolver {
                 FaceReferenceDiagnostics::Report,
             ));
         }
-        composition.realize(self, base)
+        if sources.is_empty() {
+            return None;
+        }
+        // Only a bound TTY lookup has a distinct default-slot identity
+        // when every source contributes no attributes. GUI/unbound walks
+        // retain the inherited face rather than manufacturing a new seam.
+        let mut resolved = composition
+            .realize(self, base)
+            .or_else(|| self.has_tty_realization().then(|| base.clone()))?;
+        resolved.require_generic_tty_lookup();
+        Some(resolved)
     }
 
     /// Resolve face attributes at a buffer position.
@@ -6103,7 +6196,7 @@ impl FaceResolver {
         if let Some(boundary) = overlays.next_boundary {
             min_next = min_next.min(buffer_emacs_byte_pos_to_charpos(buffer, boundary));
         }
-        let sources = OrderedFaceSources::from_text_and_overlays(face_prop, overlays.faces);
+        let sources = overlays.into_sources(face_prop);
         let resolved = self
             .resolve_buffer_face_sources_over(buffer, &base, &sources)
             .unwrap_or(base);
@@ -6136,13 +6229,19 @@ impl FaceResolver {
     ) -> ResolvedFace {
         let bytepos = buffer_charpos_to_emacs_byte_pos(buffer, CharPos0::new(anchor_charpos));
         let mut min_next = buffer.layout_point_max_char_pos().get();
-        let mut resolved = self.resolve_buffer_default_face(buffer);
-
-        if let Some(face_prop) = LayoutCharPropertyLookup::new(buffer, Value::symbol("face"))
-            .text_value_at(buffer, bytepos)
+        let remapping = BufferFaceRemapping::capture(buffer);
+        let mut resolved = self.resolve_remapped_default_face(remapping);
+        let face_prop = LayoutCharPropertyLookup::new(buffer, Value::symbol("face"))
+            .text_value_at(buffer, bytepos);
+        let generic_lookup = face_prop.is_some_and(|value| !value.is_nil())
+            || remapping.alist().is_some_and(|alist| !alist.is_nil());
+        if let Some(face_prop) = face_prop
             && let Some(next) = self.resolve_buffer_face_value_over(buffer, &resolved, &face_prop)
         {
             resolved = next;
+        }
+        if generic_lookup {
+            resolved.require_generic_tty_lookup();
         }
 
         if let Some(nc) = buffer.layout_next_text_prop_change_after_emacs_byte_pos(bytepos) {
@@ -6312,6 +6411,7 @@ impl FaceResolver {
             FaceRealizationSource::Complete(source) => {
                 rf.source_attributes = Some(source);
                 rf.canonical_tty_role = None;
+                rf.tty_space_identity = None;
             }
         }
 
@@ -6487,6 +6587,10 @@ fn apply_box_border(face: &mut ResolvedFace, border: &FaceDecoration<NeoBoxBorde
 #[cfg(test)]
 #[path = "neovm_bridge/tests/neovm_bridge_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "neovm_bridge/tests/tty_space_identity_test.rs"]
+mod tty_space_identity_test;
 
 #[cfg(test)]
 #[path = "neovm_bridge/tests/tty_paint_memo_test.rs"]

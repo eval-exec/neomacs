@@ -120,7 +120,7 @@ use crate::frame_face_arena::FrameFaceAttempt;
 
 use crate::neovm_bridge::{
     CharPropertySource, FaceResolver, LayoutBufferView, LayoutCharPropertyLookup,
-    OrderedFaceSources, OverlayDisplayString, ResolvedFace,
+    OverlayDisplayString, ResolvedFace,
 };
 
 use crate::types::LineWrapMode;

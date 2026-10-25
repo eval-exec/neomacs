@@ -510,6 +510,14 @@ impl From<BasicFaceId> for FaceId {
     }
 }
 
+/// GNU's default-space predicate distinguishes its default slot from another
+/// realized slot even when all Lisp attributes and terminal paint are equal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TtySpaceIdentity {
+    CanonicalDefault,
+    OtherRealized,
+}
+
 /// A face defines text styling (colors, font, decorations)
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -659,12 +667,18 @@ pub struct Face {
     /// Typed GNU-compatible vertical placement policy.
     #[serde(default)]
     pub underline_placement: UnderlinePosition,
+
+    /// Logical default-space identity, independent of the arena's numeric id.
+    /// None means the producer did not supply an authoritative TTY identity.
+    #[serde(default)]
+    pub tty_space_identity: Option<TtySpaceIdentity>,
 }
 
 impl Default for Face {
     fn default() -> Self {
         Self {
             id: FaceId::new(0),
+            tty_space_identity: Some(TtySpaceIdentity::CanonicalDefault),
             foreground: Color::WHITE,
             background: Color::BLACK,
             terminal_foreground: None,
@@ -706,6 +720,9 @@ impl Face {
     pub fn new(id: FaceId) -> Self {
         Self {
             id,
+            // Only the reserved basic default slot is known here. Dynamic
+            // ids require the producer's explicit logical declaration.
+            tty_space_identity: (id.get() == 0).then_some(TtySpaceIdentity::CanonicalDefault),
             ..Default::default()
         }
     }
@@ -887,6 +904,8 @@ impl FaceDataFFI {
         Face {
             // FFI edge: wrap the raw C-side face id into the typed FaceId here.
             id: FaceId::new(self.face_id),
+            // The legacy pixel-only FFI cannot prove a realized cache slot.
+            tty_space_identity: None,
             foreground: Color::from_pixel(self.fg),
             background: Color::from_pixel(self.bg),
             // A raw FFI pixel never went through `tty-color-desc`, so it has no

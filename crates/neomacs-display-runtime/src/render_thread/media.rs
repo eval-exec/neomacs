@@ -1090,6 +1090,7 @@ fn terminal_cell_face(
         .unwrap_or_else(|| "monospace".to_string());
     Face {
         id: face_id,
+        tty_space_identity: None,
         foreground: fg,
         background: Color::TRANSPARENT,
         terminal_foreground: None,

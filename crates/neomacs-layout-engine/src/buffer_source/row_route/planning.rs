@@ -481,10 +481,9 @@ pub(crate) fn routed_segment_item_face_diverges_with_realizer<B: LayoutBufferVie
     // Overlay faces merge AFTER the text face, ascending priority, via the
     // SAME shared collector the run resolution uses
     // (`BufferTextSourceCursor::face_at` -> `overlay_faces_at`).
-    let overlay_faces =
+    let sources =
         crate::neovm_bridge::overlay_faces_at(buffer, bytepos, face_resolver.current_window_id())
-            .faces;
-    let sources = OrderedFaceSources::from_text_and_overlays(text_face, overlay_faces);
+            .into_sources(text_face);
     if sources.is_empty() {
         // No face sources: the run resolves `Inherit` -> the active
         // (checkpoint) face id, which IS `expected_face_id`.

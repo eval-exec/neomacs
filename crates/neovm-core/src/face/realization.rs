@@ -407,6 +407,18 @@ impl FrameFaceRealizationCache {
             .find_map(|(source, realized)| (source == attributes).then_some(realized))
     }
 
+    /// Project the existing generic cache winner, not its equivalent paint.
+    /// Forced basic faces can shadow default with an identical attribute key.
+    pub(crate) fn lookup_uses_default_slot(&self, attributes: &Face) -> Option<bool> {
+        self.lookup(attributes)?;
+        Some(
+            self.default_lookup_position == DefaultLookupPosition::Winner
+                && self
+                    .basic(BasicFace::Default)
+                    .is_some_and(|(source, _)| source == attributes),
+        )
+    }
+
     pub(crate) fn insert(&mut self, attributes: Face, realized: Face) {
         if self
             .basic(BasicFace::Default)

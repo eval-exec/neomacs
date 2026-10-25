@@ -57,6 +57,7 @@ pub(crate) fn face_realization_identity(face: &Face) -> Face {
 fn same_face_realization(left: &Face, right: &Face) -> bool {
     let Face {
         id: _,
+        tty_space_identity,
         foreground,
         background,
         terminal_foreground,
@@ -90,7 +91,8 @@ fn same_face_realization(left: &Face, right: &Face) -> bool {
         stipple,
         underline_placement,
     } = left;
-    foreground == &right.foreground
+    tty_space_identity == &right.tty_space_identity
+        && foreground == &right.foreground
         && background == &right.background
         && terminal_foreground == &right.terminal_foreground
         && terminal_background == &right.terminal_background

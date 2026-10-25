@@ -1506,16 +1506,23 @@ impl TtyRif {
 
     /// Classify a resolved face for GNU's TTY trailing-space rule.
     ///
-    /// Layout interns faces by stable presentation identity, so the resolved
-    /// default face carried by a newline is not guaranteed to retain numeric
-    /// `FaceId(0)` (the Python fixture's default newline is `FaceId(21)`). The
-    /// TTY boundary canonicalizes those identities by their terminal-facing
-    /// attributes before assigning the closed erase class.
+    /// Arena ids and terminal paint do not identify GNU's default cache slot:
+    /// an equal-attribute forced margin slot is still non-default. The layout
+    /// producer carries that distinction into the existing cell erase class.
     fn blank_erase_for_packed(
         &self,
+        face_id: FaceId,
         attrs: PackedCellAttrs,
         default_face: &mut Option<PackedCellAttrs>,
     ) -> BlankErase {
+        if self
+            .faces
+            .get(&face_id)
+            .and_then(|face| face.tty_space_identity)
+            != Some(neomacs_display_protocol::face::TtySpaceIdentity::CanonicalDefault)
+        {
+            return BlankErase::Explicit;
+        }
         let default = *default_face
             .get_or_insert_with(|| PackedCellAttrs::new(self.resolve_attrs(FaceId::new(0))));
         if attrs == default {
@@ -2558,8 +2565,11 @@ impl TtyRif {
                                         ch: ' ',
                                         attrs,
                                         padding: false,
-                                        blank_erase: self
-                                            .blank_erase_for_packed(attrs, &mut default_face),
+                                        blank_erase: self.blank_erase_for_packed(
+                                            glyph.face_id,
+                                            attrs,
+                                            &mut default_face,
+                                        ),
                                     },
                                 );
                             }
@@ -2662,7 +2672,11 @@ impl TtyRif {
                                     attrs,
                                     padding: false,
                                     blank_erase: if ch == ' ' {
-                                        self.blank_erase_for_packed(attrs, &mut default_face)
+                                        self.blank_erase_for_packed(
+                                            glyph.face_id,
+                                            attrs,
+                                            &mut default_face,
+                                        )
                                     } else {
                                         BlankErase::Explicit
                                     },
@@ -2745,6 +2759,7 @@ impl TtyRif {
                             .rfind(|glyph| !glyph.padding)
                             .map(|glyph| {
                                 self.blank_erase_for_packed(
+                                    glyph.face_id,
                                     PackedCellAttrs::new(self.resolve_attrs(glyph.face_id)),
                                     &mut default_face,
                                 )

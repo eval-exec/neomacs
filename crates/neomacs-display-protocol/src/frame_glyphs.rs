@@ -1513,6 +1513,7 @@ impl FrameGlyphBuffer {
 
         Face {
             id: face_id,
+            tty_space_identity: None,
             foreground: fg,
             background: bg.unwrap_or(Color::TRANSPARENT),
             // Built from raw colours rather than from a realized face, so there

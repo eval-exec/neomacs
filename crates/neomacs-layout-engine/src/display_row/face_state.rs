@@ -32,6 +32,7 @@ fn underline_style_from_code(code: u8) -> UnderlineStyle {
 #[derive(Debug, Clone)]
 pub(crate) struct DisplayRowFace {
     pub(crate) face_id: FaceId,
+    pub(crate) tty_space_identity: Option<neomacs_display_protocol::face::TtySpaceIdentity>,
     pub(crate) foreground: Color,
     pub(crate) background: Color,
     /// The realized terminal colours, carried beside the pixels the GUI paints:
@@ -183,6 +184,7 @@ impl DisplayRowFace {
         };
         Self {
             face_id,
+            tty_space_identity: face.tty_space_identity,
             foreground: Color::from_pixel(face.fg),
             background: Color::from_pixel(face.bg),
             terminal_foreground: face.terminal_fg,
@@ -280,6 +282,7 @@ impl DisplayRowFace {
         }
         Face {
             id: self.face_id,
+            tty_space_identity: self.tty_space_identity,
             foreground: self.foreground,
             background: self.background,
             terminal_foreground: self.terminal_foreground,

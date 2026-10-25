@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn arena_id_does_not_declare_a_dynamic_faces_default_space_identity() {
+    assert_eq!(
+        Face::new(FaceId::new(0)).tty_space_identity,
+        Some(TtySpaceIdentity::CanonicalDefault)
+    );
+    assert_eq!(Face::new(FaceId::new(21)).tty_space_identity, None);
+    let mut interned_default = Face::new(FaceId::new(21));
+    interned_default.tty_space_identity = Some(TtySpaceIdentity::CanonicalDefault);
+    let mut equal_paint_other = interned_default.clone();
+    equal_paint_other.tty_space_identity = Some(TtySpaceIdentity::OtherRealized);
+    assert_ne!(interned_default, equal_paint_other);
+}
+
+#[test]
 fn box_line_width_preserves_gnu_inside_and_outside_semantics() {
     let scale = DeviceScale::new(2.0).unwrap();
     let inside = BoxLineWidth::from_gnu(-2);

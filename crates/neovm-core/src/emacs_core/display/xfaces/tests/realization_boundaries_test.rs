@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn default_slot_projection_observes_same_generation_winners_and_refuses_stale_cache() {
+    let mut context = crate::emacs_core::Context::new();
+    let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
+    let attributes = Face::default();
+    let generation = context.face_change_count;
+    let cache = &mut context.frames.get_mut(frame).unwrap().face_realization;
+    cache.prepare(generation, crate::face::FaceTable::new());
+    cache.insert_basic(BasicFace::Default, attributes.clone(), attributes.clone());
+    assert_eq!(
+        context.cached_display_face_uses_default_slot_for_frame(frame, &attributes),
+        Some(true)
+    );
+    context
+        .frames
+        .get_mut(frame)
+        .unwrap()
+        .face_realization
+        .insert_basic(BasicFace::Margin, attributes.clone(), attributes.clone());
+    assert_eq!(
+        context.cached_display_face_uses_default_slot_for_frame(frame, &attributes),
+        Some(false)
+    );
+    assert_eq!(context.face_change_count, generation);
+    context.face_change_count += 1;
+    assert_eq!(
+        context.cached_display_face_uses_default_slot_for_frame(frame, &attributes),
+        None
+    );
+}
+
+#[test]
 fn definition_root_lease_is_reused_until_source_retirement_and_keeps_old_sources_alive() {
     let mut context = crate::emacs_core::Context::new();
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);

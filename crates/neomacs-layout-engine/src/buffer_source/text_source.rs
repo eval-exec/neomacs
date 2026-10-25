@@ -18,8 +18,7 @@ use crate::display_source::{
     display_item_kind_for_text_source_char_with_tty_mapping,
 };
 use crate::neovm_bridge::{
-    LayoutBufferView, LayoutCharPropertyLookup, OrderedFaceSources, OverlayDisplayString,
-    RustTextPropAccess,
+    LayoutBufferView, LayoutCharPropertyLookup, OverlayDisplayString, RustTextPropAccess,
 };
 use crate::unicode::{EmacsTextStorage, decode_emacs_char, decode_utf8};
 use neomacs_display_protocol::face::BoxVerticalEdges;
@@ -714,9 +713,8 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         // Overlay faces come from the shared ascending-priority collector.
         // Preserve the complete logical source stack so the resolver merges
         // every lface attribute before realizing inverse-video once.
-        let overlays =
-            crate::neovm_bridge::overlay_faces_at(self.buffer, bytepos, self.window_id).faces;
-        let sources = OrderedFaceSources::from_text_and_overlays(text_face, overlays);
+        let sources = crate::neovm_bridge::overlay_faces_at(self.buffer, bytepos, self.window_id)
+            .into_sources(text_face);
         context.resolve_face_sources(self.base_face, &sources)
     }
 

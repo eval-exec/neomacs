@@ -756,6 +756,8 @@ fn tty_line_end_filler_from_a_nonzero_default_style_face_remains_erasable() {
     default_face.use_default_foreground = true;
     default_face.use_default_background = true;
     let mut resolved_default = Face::new(FaceId::new(21));
+    resolved_default.tty_space_identity =
+        Some(neomacs_display_protocol::face::TtySpaceIdentity::CanonicalDefault);
     resolved_default.use_default_foreground = true;
     resolved_default.use_default_background = true;
     state.faces.insert(FaceId::new(0), default_face);
@@ -801,6 +803,56 @@ fn tty_line_end_filler_from_a_nonzero_default_style_face_remains_erasable() {
             },
         ],
         "layout may intern GNU's default newline face under a nonzero stable FaceId",
+    );
+}
+
+#[test]
+fn tty_nondefault_logical_face_with_default_paint_writes_its_blank_tail() {
+    let mut state = FrameDisplayState::new(5, 1, 1.0, 1.0);
+    let mut default_face = Face::new(FaceId::new(0));
+    default_face.use_default_foreground = true;
+    default_face.use_default_background = true;
+    let mut margin_face = default_face.clone();
+    margin_face.id = FaceId::new(21);
+    margin_face.lisp_name = Some("margin".to_owned());
+    margin_face.tty_space_identity =
+        Some(neomacs_display_protocol::face::TtySpaceIdentity::OtherRealized);
+    state.faces.insert(FaceId::new(0), default_face);
+    state.faces.insert(FaceId::new(21), margin_face);
+
+    let mut matrix = GlyphMatrix::new(1, 5);
+    let row = neomacs_display_protocol::glyph_matrix::MatrixRow::make_mut(&mut matrix.rows[0]);
+    row.enabled = true;
+    row.glyphs[GlyphArea::Text.index()].push(Glyph::char('x', FaceId::new(21), 0));
+    row.glyphs[GlyphArea::Text.index()].push(Glyph::char(
+        ' ',
+        FaceId::new(21),
+        neomacs_display_protocol::glyph_matrix::NO_BUFFER_POSITION_CHARPOS,
+    ));
+    state.window_matrices.push(WindowMatrixEntry {
+        window_id: DisplayWindowId::new(1),
+        matrix,
+        pixel_bounds: Rect::new(0.0, 0.0, 5.0, 1.0),
+        text_pixel_bounds: Rect::new(0.0, 0.0, 5.0, 1.0),
+        text_clip_bounds: None,
+        selected: true,
+    });
+
+    let caps = TermCaps {
+        synchronized_output: false,
+        ..TermCaps::default()
+    };
+    let mut rif = TtyRif::new_with_caps(5, 1, caps);
+    rif.rasterize(&state);
+
+    assert_eq!(
+        rif.plan_for_test(),
+        vec![TermOp::WriteRun {
+            row: 0,
+            start: 0,
+            end: 5
+        }],
+        "GNU's equal-paint margin slot is not CHAR_GLYPH_SPACE_P default slot zero",
     );
 }
 
