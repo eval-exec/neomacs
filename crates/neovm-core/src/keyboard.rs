@@ -1633,6 +1633,24 @@ enum KeyEchoState {
     },
 }
 
+/// Which of GNU's two echo shapes a pending key string is built in.
+///
+/// `echo_now` starts echoing and decorates the key string with the "type more"
+/// dash and the keystroke-help hint (`echo_dash`, keyboard.c:552-600).  Every
+/// later key rebuilds the string from `this_command_keys` alone (`echo_update`,
+/// keyboard.c:596-626), which removes the dash and hint; the next read's
+/// `echo_dash` puts them back before it waits (keyboard.c:2759-2768).  A
+/// pending sub-read therefore stays decorated, while a command that completed
+/// keeps the plain string the last `echo_update` displayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyEchoDecoration {
+    /// An echo starts or is resumed for a new read: GNU `echo_now` /
+    /// `read_char` -> `echo_dash`.
+    Start,
+    /// A key arrived while echoing: GNU `echo_update` rebuilds without them.
+    Refresh,
+}
+
 impl crate::gc_trace::GcTrace for KeyEchoState {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
         self.trace_roots_with(&mut |root| roots.push(root));
@@ -3544,7 +3562,25 @@ impl crate::emacs_core::eval::Context {
         false
     }
 
+    /// GNU's key string for a pending sequence in the shape it has when an
+    /// echo starts: the key description plus `echo_dash`'s decorations.
     fn prefix_echo_message(&mut self, translated_events: &[Value]) -> Option<LispString> {
+        self.key_echo_message(translated_events, KeyEchoDecoration::Start)
+    }
+
+    /// The key string as GNU `echo_update` rebuilds it when a key arrives
+    /// while echoing: the pending keys alone.  The dash and the keystroke-help
+    /// hint are `echo_now`'s decorations, not part of the string, so a new key
+    /// clears them until the next idle period starts a fresh echo.
+    fn prefix_echo_plain_message(&mut self, translated_events: &[Value]) -> Option<LispString> {
+        self.key_echo_message(translated_events, KeyEchoDecoration::Refresh)
+    }
+
+    fn key_echo_message(
+        &mut self,
+        translated_events: &[Value],
+        decoration: KeyEchoDecoration,
+    ) -> Option<LispString> {
         let key_vec = Value::vector(translated_events.to_vec());
         let desc = crate::emacs_core::builtins::keymaps::builtin_key_description(
             vec![key_vec],
@@ -3558,9 +3594,11 @@ impl crate::emacs_core::eval::Context {
                 .is_some_and(|event| self.event_matches_help_char(event))
         {
             // GNU keyboard.c::echo_add_key appends this when a help event is
-            // the first echoed key, while waiting for the following help-map key.
+            // the first echoed key, while waiting for the following help-map
+            // key.  A rebuild starts from an empty echo string, so it re-adds
+            // the hint as well.
             message = message.concat(&help_event_echo_suffix());
-        } else {
+        } else if decoration == KeyEchoDecoration::Start {
             // GNU keyboard.c::echo_dash turns a pending prefix into a
             // mini-prompt for the next key, then help.el appends the default
             // keystroke-help hint when `echo-keystrokes-help' is enabled.
@@ -3620,8 +3658,13 @@ impl crate::emacs_core::eval::Context {
     /// to rebuild it when the next input event arrives.  `set_current_message`
     /// deliberately cancels any previous keyboard ownership, so ownership is
     /// installed only after the new message has been committed.
-    fn publish_key_echo_message(&mut self, events: &[Value], prompt: Option<LispString>) {
-        let Some(echo) = self.prefix_echo_message(events) else {
+    fn publish_key_echo_message(
+        &mut self,
+        events: &[Value],
+        prompt: Option<LispString>,
+        decoration: KeyEchoDecoration,
+    ) {
+        let Some(echo) = self.key_echo_message(events, decoration) else {
             return;
         };
         let message = match prompt.as_ref() {
@@ -3633,7 +3676,9 @@ impl crate::emacs_core::eval::Context {
     }
 
     /// Rebuild the complete pending keyboard echo after GNU `read_char` has
-    /// cleared the previous message and appended a newly read event.
+    /// cleared the previous message and appended a newly read event.  GNU's
+    /// `echo_update` rebuilds the key string without `echo_dash`'s dash and
+    /// help hint, so this uses the `Refresh` shape.
     fn refresh_immediate_key_echo(&mut self) {
         let prompt = match &self.command_loop.keyboard.kboard.key_echo_state {
             KeyEchoState::Inactive => return,
@@ -3643,7 +3688,28 @@ impl crate::emacs_core::eval::Context {
         if events.is_empty() {
             return;
         }
-        self.publish_key_echo_message(&events, prompt);
+        self.publish_key_echo_message(&events, prompt, KeyEchoDecoration::Refresh);
+    }
+
+    /// Re-apply the start decoration when a read begins while the pending
+    /// sequence is still being echoed.
+    ///
+    /// GNU `read_char` starts by calling `echo_dash` whenever the echo area
+    /// still holds this keyboard's echo (keyboard.c:2759-2768): the previous
+    /// key's `echo_update` rebuilt the string without the dash and help hint,
+    /// and the next read puts them back before it starts waiting.  That is why
+    /// a pending sub-read shows `C-q 1 0 1- (<f1> for help)` while the
+    /// completed command keeps the plain `C-q 1 0 1 RET` on screen.
+    fn redecorate_immediate_key_echo(&mut self) {
+        let prompt = match &self.command_loop.keyboard.kboard.key_echo_state {
+            KeyEchoState::Inactive => return,
+            KeyEchoState::Immediate { prompt } => prompt.clone(),
+        };
+        let events = self.command_loop.read_command_keys().to_vec();
+        if events.is_empty() {
+            return;
+        }
+        self.publish_key_echo_message(&events, prompt, KeyEchoDecoration::Start);
     }
 
     /// Arm GNU's delayed key echo only for an unbounded interactive read that
@@ -5809,6 +5875,9 @@ impl crate::emacs_core::eval::Context {
         let wait_mode = ReadCharWaitMode::from_timeout(timeout);
         let deadline = wait_mode.deadline();
         let idle_policy = wait_mode.idle_policy();
+        // GNU read_char re-decorates an echo that is already up before it
+        // starts waiting (keyboard.c:2759-2768).
+        self.redecorate_immediate_key_echo();
         let mut idle_auto_save_deadline = None;
         let mut key_echo_deadline = self.delayed_key_echo_deadline(timeout);
 
@@ -5988,7 +6057,11 @@ impl crate::emacs_core::eval::Context {
                         {
                             let events = self.command_loop.read_command_keys().to_vec();
                             if !events.is_empty() {
-                                self.publish_key_echo_message(&events, None);
+                                self.publish_key_echo_message(
+                                    &events,
+                                    None,
+                                    KeyEchoDecoration::Start,
+                                );
                                 self.redisplay()?;
                             }
                         }

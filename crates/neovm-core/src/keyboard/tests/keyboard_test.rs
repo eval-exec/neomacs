@@ -226,6 +226,37 @@ fn help_prefix_echo_faces_semantic_key_bindings() {
     }
 }
 
+/// GNU `keyboard.c`: `echo_now` decorates the pending key string with a dash
+/// and the keystroke-help hint (`echo_dash`), but the next key rebuilds the
+/// string from `this_command_keys` alone (`echo_update`), which drops both
+/// until the next idle period.  Neomacs rebuilt through the decorated shape
+/// on every key, so `C-q 1 0 1 RET` kept a trailing `- (<f1> for help)` that
+/// GNU never shows at that point (the TUI quoted-insert parity tests).
+#[test]
+fn pending_key_echo_drops_the_start_decoration_when_the_next_key_arrives() {
+    let mut eval = crate::emacs_core::Context::new();
+    eval.assign("help-char", Value::fixnum(8));
+    eval.assign("help-event-list", Value::list(vec![Value::symbol("help")]));
+    eval.assign("echo-keystrokes-help", Value::T);
+    let events = [Value::fixnum(17), Value::fixnum(49)]; // C-q 1
+
+    let start = eval.prefix_echo_message(&events).expect("start echo");
+    assert_eq!(
+        start.as_utf8_str().expect("UTF-8 start echo"),
+        "C-q 1- (C-h for help)",
+        "an echo that starts is decorated by `echo_dash`"
+    );
+
+    let refresh = eval
+        .prefix_echo_plain_message(&events)
+        .expect("refresh echo");
+    assert_eq!(
+        refresh.as_utf8_str().expect("UTF-8 refresh echo"),
+        "C-q 1",
+        "`echo_update` rebuilds the pending keys without the dash and hint"
+    );
+}
+
 #[test]
 fn presented_interactions_retain_exact_posn_string_until_retirement() {
     let mut interactions = PresentedInteractions::default();
