@@ -3603,7 +3603,8 @@ fn append_symbol_name_bytes_with_escape(
         let (ch, width) = if byte < 128 {
             (u32::from(byte), 1)
         } else if name.is_multibyte() {
-            crate::emacs_core::emacs_char::string_char_unchecked(&bytes[position..])
+            let (c, w) = crate::emacs_core::emacs_char::string_char_unchecked(&bytes[position..]);
+            (c.code(), w)
         } else {
             (crate::emacs_core::emacs_char::unibyte_to_char(byte), 1)
         };

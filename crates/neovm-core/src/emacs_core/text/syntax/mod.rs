@@ -1071,7 +1071,7 @@ impl<'a> BufferChars<'a> {
         let code = if !self.multibyte || slice[0] < 0x80 {
             slice[0] as u32
         } else {
-            crate::emacs_core::emacs_char::string_char(slice).0
+            crate::emacs_core::emacs_char::string_char(slice).0.code()
         };
         debug_assert_eq!(
             Some(code),
@@ -1398,7 +1398,7 @@ impl<'a> ParseBufferChars<'a> {
             if !self.multibyte || slice[0] < 0x80 {
                 slice[0] as u32
             } else {
-                crate::emacs_core::emacs_char::string_char(slice).0
+                crate::emacs_core::emacs_char::string_char(slice).0.code()
             }
         } else {
             self.buf

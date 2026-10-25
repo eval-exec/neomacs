@@ -1991,7 +1991,7 @@ fn lisp_string_chars(
         let tail = bytes.get(pos..).unwrap_or_default();
         let (code, width) = crate::heap_types::decode_declared_multibyte_char(tail);
         pos += width;
-        code
+        code.code()
     })
 }
 

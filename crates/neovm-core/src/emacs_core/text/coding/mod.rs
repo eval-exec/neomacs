@@ -1669,7 +1669,8 @@ fn first_emacs_char_code(value: Value) -> Option<i64> {
                 return Some(0);
             }
             let (ch, _) = if string.is_multibyte() {
-                super::emacs_char::string_char(string.as_bytes())
+                let (c, n) = super::emacs_char::string_char(string.as_bytes());
+                (c.code(), n)
             } else {
                 (string.as_bytes()[0] as u32, 1)
             };
@@ -3026,10 +3027,9 @@ fn scan_unencodable_positions(
     let mut byte = 0usize;
     let mut char_index = 0i64;
     while byte < text.len() {
-        let (code, len) = super::emacs_char::string_char(&text[byte..]);
+        let (ch, len) = super::emacs_char::string_char(&text[byte..]);
         byte += len;
-        let ch = EmacsChar::from_code(code).expect("decoded Emacs character");
-        let is_ascii = code < 0x80;
+        let is_ascii = ch.code() < 0x80;
         if !(repertoire.encodes(ch) || is_ascii && repertoire.ascii_compatible) {
             positions.push(base_pos + char_index);
             if positions.len() >= limit {
@@ -3817,7 +3817,7 @@ impl<'a> DetectSrc<'a> {
             // A genuine multibyte character: decode and negate.
             self.pos -= 1;
             let ch = crate::emacs_core::emacs_char::string_char_advance(self.bytes, &mut self.pos);
-            return Some(-(ch as i32));
+            return Some(-(ch.code() as i32));
         }
         Some(i32::from(c))
     }
@@ -5848,8 +5848,8 @@ fn safe_coding_systems_for_text(
     while byte < text.sbytes() {
         let (code, len) = super::emacs_char::string_char(&text.as_bytes()[byte..]);
         byte += len;
-        if code >= 0x80 {
-            chars.push(EmacsChar::from_code(code).expect("decoded Emacs character"));
+        if code.code() >= 0x80 {
+            chars.push(code);
         }
     }
     chars.sort_unstable();

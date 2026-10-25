@@ -547,7 +547,8 @@ pub(crate) fn casify_text_with_extents(
     let mut word_state = CasingWordState::Outside;
     while pos < bytes.len() {
         let (code, len) = if multibyte {
-            super::emacs_char::string_char(&bytes[pos..])
+            let (c, n) = super::emacs_char::string_char(&bytes[pos..]);
+            (c.code(), n)
         } else {
             (super::emacs_char::unibyte_to_char(bytes[pos]), 1)
         };
@@ -580,7 +581,7 @@ pub(crate) fn casify_text_with_extents(
             && was_inword
             && pos < bytes.len()
             && is_word(if multibyte {
-                super::emacs_char::string_char(&bytes[pos..]).0
+                super::emacs_char::string_char(&bytes[pos..]).0.code()
             } else {
                 super::emacs_char::unibyte_to_char(bytes[pos])
             });
@@ -1089,9 +1090,7 @@ fn lisp_string_char_codes(s: &LispString) -> impl Iterator<Item = u32> + '_ {
             return None;
         }
         if multibyte {
-            Some(crate::emacs_core::emacs_char::string_char_advance(
-                bytes, &mut pos,
-            ))
+            Some(crate::emacs_core::emacs_char::string_char_advance(bytes, &mut pos).code())
         } else {
             pos += 1;
             Some(u32::from(bytes[pos - 1]))
@@ -1532,7 +1531,7 @@ where
     while pos < bytes.len() {
         let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
         pos += len.max(1);
-        let ch = char::from_u32(code);
+        let ch = char::from_u32(code.code());
         if ch.is_some_and(&mut is_lower) {
             some_lowercase = true;
             if prev_is_word {

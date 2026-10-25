@@ -664,11 +664,11 @@ impl Facts {
         Self(self.0 & mask.0)
     }
 
-    /// The facts of the Emacs character `code` at input position `at`, whose
-    /// first byte is `first_byte`, under `syntax` (the base table, or the
-    /// real lookup inside a `syntax-table` property run).
+    /// The facts of `character` at input position `at`, whose first byte is
+    /// `first_byte`, under `syntax` (the base table, or the real lookup inside
+    /// a `syntax-table` property run).
     fn of_char(
-        code: u32,
+        character: emacs_char::EmacsChar,
         first_byte: u8,
         target_multibyte: bool,
         syntax: &dyn SyntaxLookup,
@@ -681,11 +681,10 @@ impl Facts {
         }
         if mask.0 & (Self::WORD.0 | Self::WORD_OR_SYMBOL.0 | Self::WIDE_WORD.0) != 0 {
             // Match the backtracker's full-code syntax and boundary facts.
-            let ch = emacs_char::EmacsChar::from_code_unchecked(code);
-            let class = syntax.emacs_char_syntax_at(ch, at);
+            let class = syntax.emacs_char_syntax_at(character, at);
             if class == SyntaxClass::Word {
                 facts |= Self::WORD.0 | Self::WORD_OR_SYMBOL.0;
-                if ch.code() > 0xFF {
+                if character.code() > 0xFF {
                     facts |= Self::WIDE_WORD.0;
                 }
             } else if class == SyntaxClass::Symbol {
@@ -867,7 +866,7 @@ impl Nfa {
         pattern: &CompiledPattern,
         text: &[u8],
         d: usize,
-        code: u32,
+        character: emacs_char::EmacsChar,
         len: usize,
         syntax: &dyn SyntaxLookup,
         mask: Facts,
@@ -881,7 +880,14 @@ impl Nfa {
         }
         ClassKey {
             accepts,
-            facts: Facts::of_char(code, text[d], pattern.target_multibyte, syntax, d, mask),
+            facts: Facts::of_char(
+                character,
+                text[d],
+                pattern.target_multibyte,
+                syntax,
+                d,
+                mask,
+            ),
         }
     }
 }
@@ -1106,15 +1112,16 @@ impl CharClasses {
                 return Ok((class, 1));
             }
         }
-        let (code, len) = re_text_char(text, d, pattern.target_multibyte)
+        let (ch, len) = re_text_char(text, d, pattern.target_multibyte)
             .expect("a class is asked for a character inside the text");
+        let code = ch.code();
         if !tabled {
             let slot = self.wide[code as usize % WIDE_SLOTS];
             if slot.0 == code {
                 return Ok((slot.1, len));
             }
         }
-        let key = nfa.class_key_at(pattern, text, d, code, len, base, self.mask);
+        let key = nfa.class_key_at(pattern, text, d, ch, len, base, self.mask);
         let class = self.intern(key)?;
         if tabled {
             self.byte_class[byte as usize] = class;
@@ -1141,9 +1148,9 @@ impl CharClasses {
         base: &BaseTableView<'_>,
         syntax: &dyn SyntaxLookup,
     ) -> Result<(u8, usize), TooManyClasses> {
-        let (code, len) = re_text_char(text, d, pattern.target_multibyte)
+        let (ch, len) = re_text_char(text, d, pattern.target_multibyte)
             .expect("a class is asked for a character inside the text");
-        let ch = emacs_char::EmacsChar::from_code_unchecked(code);
+        let code = ch.code();
         let promoted = syntax.emacs_char_syntax_at(ch, d);
         let current_symbol = if self.mask.contains(Facts::CURRENT_WORD_OR_SYMBOL) {
             SymbolMembership::of_current(text[d], pattern.target_multibyte, syntax, d, promoted)
@@ -1170,7 +1177,7 @@ impl CharClasses {
         let class = if promoted == base_promoted && current_symbol == base_current {
             self.class_at(nfa, pattern, text, d, base)?.0
         } else {
-            let key = nfa.class_key_at(pattern, text, d, code, len, syntax, self.mask);
+            let key = nfa.class_key_at(pattern, text, d, ch, len, syntax, self.mask);
             self.intern(key)?
         };
         self.positional[slot_index] = (code, here, class);
@@ -1211,11 +1218,11 @@ impl CharClasses {
         target_multibyte: bool,
         syntax: &dyn SyntaxLookup,
     ) -> Facts {
-        let (code, _) =
+        let (character, _) =
             re_text_char(text, at, target_multibyte).expect("the previous character exists");
         // These facts describe only the previous character of a candidate.
         let mask = Facts(self.mask.bits() & !Facts::CURRENT_WORD_OR_SYMBOL.bits());
-        Facts::of_char(code, text[at], target_multibyte, syntax, at, mask)
+        Facts::of_char(character, text[at], target_multibyte, syntax, at, mask)
     }
 }
 

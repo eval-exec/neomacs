@@ -3000,10 +3000,10 @@ fn classify_string_charsets(ls: &crate::heap_types::LispString) -> Vec<&'static 
             while pos < bytes.len() {
                 let (cp, len) = emacs_char::string_char(&bytes[pos..]);
                 pos += len;
-                per_char.push(if emacs_char::char_byte8_p(cp) {
+                per_char.push(if emacs_char::char_byte8_p(cp.code()) {
                     intern("eight-bit")
                 } else {
-                    reg.classify_char(cp as i64)
+                    reg.classify_char(cp.code() as i64)
                 });
             }
         } else {

@@ -486,7 +486,7 @@ fn base64_decode_region_multibyte_eight_bit_like_gnu() {
     assert_eq!(text.as_bytes(), &[0xC1, 0xBF]);
     let (ch, len) = crate::emacs_core::emacs_char::string_char(text.as_bytes());
     assert_eq!(len, 2);
-    assert_eq!(ch, 4194303);
+    assert_eq!(ch.code(), 4194303);
 }
 
 /// Bug 2a: encoding a region of a multibyte buffer containing a genuine

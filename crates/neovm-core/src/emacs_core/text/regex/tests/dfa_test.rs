@@ -448,8 +448,7 @@ fn classes_agree_with_the_matcher_tests_on_every_sample_character() {
                                 );
                                 checked += 1;
                             }
-                            let (code, _) = re_text_char(&text, d, multibyte).unwrap();
-                            let ch = emacs_char::EmacsChar::from_code_unchecked(code);
+                            let (ch, _) = re_text_char(&text, d, multibyte).unwrap();
                             let class_syntax = syntax.emacs_char_syntax_at(ch, d);
                             let mask = nfa.fact_mask();
                             let word = class_syntax == SyntaxClass::Word;

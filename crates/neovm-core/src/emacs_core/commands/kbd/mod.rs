@@ -182,7 +182,7 @@ fn decode_string_key_events(value: &Value) -> Result<Vec<KeyEvent>, String> {
         let mut pos = 0usize;
         while pos < ls.as_bytes().len() {
             let (code, len) = super::emacs_char::string_char(&ls.as_bytes()[pos..]);
-            out.push(key_event_from_char_code(code));
+            out.push(key_event_from_char_code(code.code()));
             pos += len;
         }
     } else {

@@ -1342,7 +1342,7 @@ fn common_prefix_byte_len(a: &[u8], b: &[u8], ignore_case: bool) -> usize {
         let eq = if ca == cb {
             true
         } else if ignore_case {
-            ascii_lower_codepoint(ca) == ascii_lower_codepoint(cb)
+            ascii_lower_codepoint(ca.code()) == ascii_lower_codepoint(cb.code())
         } else {
             false
         };

@@ -226,9 +226,7 @@ fn lisp_string_char_codes(string: &crate::heap_types::LispString) -> Vec<u32> {
     let mut pos = 0;
     let mut codes = Vec::new();
     while pos < bytes.len() {
-        codes.push(crate::emacs_core::emacs_char::string_char_advance(
-            bytes, &mut pos,
-        ));
+        codes.push(crate::emacs_core::emacs_char::string_char_advance(bytes, &mut pos).code());
     }
     codes
 }

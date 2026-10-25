@@ -1802,7 +1802,7 @@ fn walk_overlay_string(
 
         let (code, len) = if multibyte {
             let (code, len) = super::emacs_char::string_char(&bytes[byte_off..]);
-            (code, len.max(1))
+            (code.code(), len.max(1))
         } else {
             (bytes[byte_off] as u32, 1)
         };
@@ -3269,9 +3269,7 @@ fn mode_line_string_char_codes(string: &crate::heap_types::LispString) -> Vec<u3
         let mut codes = Vec::new();
         let mut pos = 0;
         while pos < bytes.len() {
-            codes.push(crate::emacs_core::emacs_char::string_char_advance(
-                bytes, &mut pos,
-            ));
+            codes.push(crate::emacs_core::emacs_char::string_char_advance(bytes, &mut pos).code());
         }
         codes
     } else {

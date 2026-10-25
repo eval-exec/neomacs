@@ -167,7 +167,7 @@ fn collect_insert_text_nonunicode_char_preserves_emacs_code() {
     // Raw byte 0x80 encodes as the overlong C0/C1 two-byte sequence
     // [0xC0, 0x80] in Emacs internal encoding.
     let (decoded, len) = crate::emacs_core::emacs_char::string_char(&result);
-    assert_eq!(decoded, code as u32);
+    assert_eq!(decoded.code(), code as u32);
     assert_eq!(len, result.len());
 }
 

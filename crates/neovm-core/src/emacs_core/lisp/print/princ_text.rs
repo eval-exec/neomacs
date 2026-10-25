@@ -120,7 +120,7 @@ pub(crate) fn princ_string_bytes(
                 // when an ordinary span separates runs, not once per head.
                 while raw_start < bytes.len() && matches!(bytes[raw_start], 0xC0 | 0xC1) {
                     let (code, len) = emacs_char::string_char(&bytes[raw_start..]);
-                    let byte = emacs_char::char_to_byte8(code);
+                    let byte = emacs_char::char_to_byte8(code.code());
                     out.extend_from_slice(&[
                         b'\\',
                         b'0' + (byte >> 6),

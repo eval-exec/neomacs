@@ -4022,7 +4022,11 @@ impl Buffer {
                 .text
                 .byte_at_emacs_byte_pos(pos.add_len(EmacsByteLen::new(offset)));
         }
-        Some(crate::emacs_core::emacs_char::string_char(&bytes[..length]).0)
+        Some(
+            crate::emacs_core::emacs_char::string_char(&bytes[..length])
+                .0
+                .code(),
+        )
     }
 
     /// Character immediately before Emacs byte position `pos`, or `None`.

@@ -242,7 +242,9 @@ fn expect_register(value: &Value) -> Result<char, Flow> {
                 ));
             }
             let code = if string.is_multibyte() {
-                crate::emacs_core::emacs_char::string_char(string.as_bytes()).0
+                crate::emacs_core::emacs_char::string_char(string.as_bytes())
+                    .0
+                    .code()
             } else {
                 string.as_bytes()[0] as u32
             };

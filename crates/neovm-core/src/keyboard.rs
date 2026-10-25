@@ -7854,7 +7854,8 @@ impl crate::emacs_core::eval::Context {
         let mut pos = 0;
         let mut idx = 0;
         while pos < key_bytes.len() {
-            let (mut code, len) = crate::emacs_core::emacs_char::string_char(&key_bytes[pos..]);
+            let (code, len) = crate::emacs_core::emacs_char::string_char(&key_bytes[pos..]);
+            let mut code = code.code();
             // Match GNU `keyboard.c:12239-12252`: byte8 chars are normalized
             // back to raw 8-bit bytes before the `M-x` special case runs.
             if crate::emacs_core::emacs_char::char_byte8_p(code) {

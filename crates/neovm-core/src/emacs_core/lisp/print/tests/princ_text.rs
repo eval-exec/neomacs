@@ -21,7 +21,7 @@ fn every_unibyte_value_is_a_valid_character_in_each_stream_domain() {
                 PrincStringOutput::CallbackCharacters => u32::from(byte),
                 PrincStringOutput::OctalByte8 => unreachable!("modes exclude escaping"),
             };
-            assert_eq!(code, expected);
+            assert_eq!(code.code(), expected);
             pos += len;
         }
         assert_eq!(pos, output.sbytes());
@@ -50,7 +50,7 @@ fn escaping_never_mistakes_unicode_or_nonunicode_characters_for_byte8() {
     let mut decoded = Vec::new();
     while pos < out.len() {
         let (code, len) = emacs_char::string_char(&out[pos..]);
-        decoded.push(code);
+        decoded.push(code.code());
         pos += len;
     }
     assert_eq!(&decoded[..3], &codes[..3]);

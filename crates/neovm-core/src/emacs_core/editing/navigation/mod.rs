@@ -1341,7 +1341,8 @@ pub(crate) fn builtin_skip_chars_forward_2(
                 let (code, len) = if !multibyte || window[off] < 0x80 {
                     (window[off] as u32, 1)
                 } else {
-                    crate::emacs_core::emacs_char::string_char(&window[off..])
+                    let (c, n) = crate::emacs_core::emacs_char::string_char(&window[off..]);
+                    (c.code(), n)
                 };
                 if !skip_char_matches(&char_set, code, &syntax_table) {
                     stopped = true;
@@ -1420,7 +1421,9 @@ pub(crate) fn builtin_skip_chars_backward_2(
                 let code = if !multibyte || window[start] < 0x80 {
                     window[start] as u32
                 } else {
-                    crate::emacs_core::emacs_char::string_char(&window[start..off]).0
+                    crate::emacs_core::emacs_char::string_char(&window[start..off])
+                        .0
+                        .code()
                 };
                 if !skip_char_matches(&char_set, code, &syntax_table) {
                     stopped = true;

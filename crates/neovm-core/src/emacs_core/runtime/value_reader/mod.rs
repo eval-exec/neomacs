@@ -3700,7 +3700,7 @@ impl<'a> Reader<'a> {
                 let width = emacs_char::bytes_by_char_head(bytes[0]);
                 if bytes.len() >= width && bytes[1..width].iter().all(|b| b & 0xC0 == 0x80) {
                     let (code, _) = emacs_char::string_char_unchecked(&bytes[..width]);
-                    Some((code, pos + width))
+                    Some((code.code(), pos + width))
                 } else {
                     // A malformed/truncated sequence consumes only its lead
                     // byte; subsequent bytes must still reach the parser.
@@ -3739,7 +3739,7 @@ impl<'a> Reader<'a> {
         if pos + width > self.limit {
             return None;
         }
-        Some((code, width))
+        Some((code.code(), width))
     }
 
     fn buffer_code_step(&self, input: &Buffer, pos: usize) -> Option<(u32, usize)> {
@@ -3766,13 +3766,14 @@ impl<'a> Reader<'a> {
         let (code, width) = match input
             .with_contiguous_emacs_byte_range(range, emacs_char::string_char)
         {
-            Some(decoded) => decoded,
+            Some((c, n)) => (c.code(), n),
             None => {
                 let mut tmp = [0u8; emacs_char::MAX_MULTIBYTE_LENGTH];
                 for (idx, slot) in tmp[..available].iter_mut().enumerate() {
                     *slot = input.emacs_byte_at_pos(range_start.add_len(EmacsByteLen::new(idx)))?;
                 }
-                emacs_char::string_char(&tmp[..available])
+                let (c, n) = emacs_char::string_char(&tmp[..available]);
+                (c.code(), n)
             }
         };
         if pos + width > self.limit {

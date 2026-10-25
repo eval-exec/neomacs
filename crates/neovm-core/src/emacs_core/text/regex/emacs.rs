@@ -2971,7 +2971,8 @@ fn decode_pattern_char(bytes: &[u8], pos: usize, multibyte: bool) -> Option<(u32
         return None;
     }
     if multibyte {
-        Some(emacs_char::string_char(&bytes[pos..]))
+        let (c, n) = emacs_char::string_char(&bytes[pos..]);
+        Some((c.code(), n))
     } else {
         Some((bytes[pos] as u32, 1))
     }
@@ -5006,21 +5007,25 @@ fn multibyte_translated_leading_code(
 ) -> (usize, usize) {
     let (c, len) = emacs_char::string_char(&text[pos..]);
     (
-        emacs_char::char_leading_code(table.translate(c)) as usize,
+        emacs_char::char_leading_code(table.translate(c.code())) as usize,
         len.max(1),
     )
 }
 
 /// Decode the Emacs character at `pos` (mirrors the `text_char` closure).
 #[inline]
-fn re_text_char(text: &[u8], pos: usize, target_multibyte: bool) -> Option<(u32, usize)> {
+fn re_text_char(
+    text: &[u8],
+    pos: usize,
+    target_multibyte: bool,
+) -> Option<(emacs_char::EmacsChar, usize)> {
     if pos >= text.len() {
         return None;
     }
     if target_multibyte {
         Some(emacs_char::string_char(&text[pos..]))
     } else {
-        Some((regex_unibyte_to_char(text[pos]), 1))
+        Some((emacs_char::EmacsChar::from_unibyte_byte(text[pos]), 1))
     }
 }
 
@@ -5054,7 +5059,7 @@ fn match_anychar_at(
         return None;
     }
     let (buf_ch, buf_len) = re_text_char(text, d, target_multibyte)?;
-    if re_tr(translate, buf_ch) == '\n' as u32 {
+    if re_tr(translate, buf_ch.code()) == '\n' as u32 {
         return None;
     }
     Some(buf_len)
@@ -5102,18 +5107,19 @@ fn match_exactn_char_at(
     let (buf_ch, buf_len) = re_text_char(text, d, target_multibyte)?;
     if target_multibyte {
         let (pat_ch, pat_len) = if pattern_multibyte {
-            emacs_char::string_char(&lit[lit_off..])
+            let (c, n) = emacs_char::string_char(&lit[lit_off..]);
+            (c.code(), n)
         } else {
             (regex_unibyte_to_char(lit[lit_off]), 1)
         };
-        if re_tr(translate, buf_ch) != pat_ch {
+        if re_tr(translate, buf_ch.code()) != pat_ch {
             return None;
         }
         Some((pat_len, buf_len))
     } else {
         let (pat_byte, pat_advance) = if pattern_multibyte {
             let (pat_ch, pat_len) = emacs_char::string_char(&lit[lit_off..]);
-            let byte = regex_char_to_unibyte(pat_ch)?;
+            let byte = regex_char_to_unibyte(pat_ch.code())?;
             (byte, pat_len)
         } else {
             (lit[lit_off], 1)
@@ -5238,7 +5244,7 @@ fn match_charset_at_slow(
 
     let class_case_mode = PosixClassCaseMode::from_translation(translate.as_ref());
     let (orig_ch, ch_len) = re_text_char(text, d, target_multibyte)?;
-    let mut ch = orig_ch;
+    let mut ch = orig_ch.code();
     let mut unibyte_char = false;
 
     if target_multibyte {
@@ -5276,7 +5282,7 @@ fn match_charset_at_slow(
                     .get(&charset_op_pos)
                     .copied()
                     .map(|bits| {
-                        posix_class_matches(orig_ch, bits, Some(d), syntax, class_case_mode)
+                        posix_class_matches(orig_ch.code(), bits, Some(d), syntax, class_case_mode)
                     })
                     .unwrap_or(false))
     } else {
@@ -5293,7 +5299,9 @@ fn match_charset_at_slow(
                 .charset_class_bits
                 .get(&charset_op_pos)
                 .copied()
-                .map(|bits| posix_class_matches(orig_ch, bits, Some(d), syntax, class_case_mode))
+                .map(|bits| {
+                    posix_class_matches(orig_ch.code(), bits, Some(d), syntax, class_case_mode)
+                })
                 .unwrap_or(false)
     };
 
@@ -5316,8 +5324,7 @@ fn match_syntaxspec_at(
         return None;
     }
     let (c, len) = re_text_char(text, d, target_multibyte)?;
-    let is = syntax.emacs_char_syntax_at(emacs_char::EmacsChar::from_code_unchecked(c), d) as u8
-        == class_byte;
+    let is = syntax.emacs_char_syntax_at(c, d) as u8 == class_byte;
     if is != negate { Some(len) } else { None }
 }
 
@@ -5335,8 +5342,7 @@ fn match_syntaxspecset_at(
         return None;
     }
     let (c, len) = re_text_char(text, d, target_multibyte)?;
-    let class =
-        syntax.emacs_char_syntax_at(emacs_char::EmacsChar::from_code_unchecked(c), d) as u16;
+    let class = syntax.emacs_char_syntax_at(c, d) as u16;
     if (mask >> class) & 1 != 0 {
         Some(len)
     } else {
@@ -5359,7 +5365,7 @@ fn match_categoryspec_at(
         return None;
     }
     let (c, len) = re_text_char(text, d, target_multibyte)?;
-    let has = syntax.char_has_category(regex_scalar_char(c), cat);
+    let has = syntax.char_has_category(regex_scalar_char(c.code()), cat);
     if has != negate { Some(len) } else { None }
 }
 
@@ -5379,13 +5385,14 @@ fn re_physical_boundary_syntax(
         SymbolCurrent,
     }
     let classify = |pos, domain| {
-        let code = match (domain, target_multibyte) {
-            (CharacterDomain::SymbolCurrent, false) => text.get(pos).map(|byte| u32::from(*byte)),
+        let character = match (domain, target_multibyte) {
+            (CharacterDomain::SymbolCurrent, false) => text
+                .get(pos)
+                .map(|byte| emacs_char::EmacsChar::from_code_unchecked(u32::from(*byte))),
             (CharacterDomain::Promoted, _) | (CharacterDomain::SymbolCurrent, true) => {
-                re_text_char(text, pos, target_multibyte).map(|(code, _)| code)
+                re_text_char(text, pos, target_multibyte).map(|(character, _)| character)
             }
         }?;
-        let character = emacs_char::EmacsChar::from_code_unchecked(code);
         Some((character, syntax.emacs_char_syntax_at(character, pos)))
     };
     let previous = || {
@@ -5452,8 +5459,8 @@ fn re_boundary_syntax(
     }
 
     let character = |pos| {
-        re_text_char(text, pos, target_multibyte).map(|(ch, _)| BoundarySyntaxCharacter {
-            character: emacs_char::EmacsChar::from_code_unchecked(ch),
+        re_text_char(text, pos, target_multibyte).map(|(character, _)| BoundarySyntaxCharacter {
+            character,
             byte_position: crate::buffer::EmacsBytePos::new(pos),
         })
     };
@@ -8148,7 +8155,7 @@ fn one_char_match_superset(buf: &CompiledPattern, pos: usize) -> Option<CharSupe
             // (GNU compares RE_STRING_CHAR of the stored bytes too).
             if buf.multibyte {
                 let (ch, _) = emacs_char::string_char(&bytecode[pos + 2..pos + 2 + count]);
-                set.add_char(ch);
+                set.add_char(ch.code());
             } else {
                 set.add_char(bytecode[pos + 2] as u32);
             }
@@ -8804,8 +8811,8 @@ fn compile_fastmap_walk(
                     // eight-bit character's own byte is a candidate too.
                     if pattern.multibyte && (first == 0xC0 || first == 0xC1) {
                         let (c, _) = emacs_char::string_char(&bytecode[pc..]);
-                        if emacs_char::char_byte8_p(c) {
-                            pattern.fastmap[emacs_char::char_to_byte8(c) as usize] = true;
+                        if emacs_char::char_byte8_p(c.code()) {
+                            pattern.fastmap[emacs_char::char_to_byte8(c.code()) as usize] = true;
                         }
                     }
                     if !pattern.multibyte && first >= 0x80 {

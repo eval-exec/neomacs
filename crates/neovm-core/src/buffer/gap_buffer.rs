@@ -322,7 +322,11 @@ impl GapBuffer {
         } else {
             (pos + self.gap_size(), self.buf.len())
         };
-        Some(crate::emacs_core::emacs_char::string_char(&self.buf[phys_start..phys_end]).0)
+        Some(
+            crate::emacs_core::emacs_char::string_char(&self.buf[phys_start..phys_end])
+                .0
+                .code(),
+        )
     }
 
     pub(crate) fn char_code_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<u32> {
