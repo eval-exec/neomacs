@@ -334,6 +334,16 @@ fn accept_process_output_drains_while_command_input_pending() {
     let drained = |grid: &[String]| grid.iter().any(|row| row.contains("APO-DRAIN-DONE"));
     wait_for_both(&mut gnu, &mut neo, Duration::from_secs(12), drained);
 
+    // The type-ahead letters self-insert only after the synchronous wait
+    // returns, so they are the last observable effect of the scenario. Wait
+    // for them on both editors and let the redisplay settle before the exact
+    // comparison: reading the grid the instant the drain marker appears can
+    // catch one editor still one redisplay behind the other (the shard-09
+    // run compared a stale screen and reported 1173 differing cells).
+    let typeahead = |grid: &[String]| grid.iter().any(|row| row.contains("apotypeahead"));
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), typeahead);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(500));
+
     assert!(
         drained(&gnu.text_grid()),
         "GNU: process output must drain while command input is pending \
