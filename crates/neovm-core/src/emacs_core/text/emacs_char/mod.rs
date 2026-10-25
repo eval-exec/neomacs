@@ -761,9 +761,11 @@ pub fn multibyte_length(bytes: &[u8], allow_8bit: bool) -> Option<usize> {
 ///
 /// This mirrors GNU `STRING_CHAR_AND_LENGTH`. The input must be a valid Emacs
 /// multibyte sequence (no bounds checking on continuation bytes beyond what the
-/// lead byte promises). A five-byte tail whose payload leaves the encodable
-/// `MAX_4_BYTE_CHAR..=MAX_5_BYTE_CHAR` range is not a character: it decodes as
-/// the lead byte, so every result stays inside [`EmacsChar`]'s domain.
+/// lead byte promises), and encoding validity is [`multibyte_length`]'s job:
+/// overlong tails decode by their payload, exactly as GNU's decoder does. The
+/// one range this decoder enforces is the character domain itself -- a
+/// five-byte tail whose payload exceeds [`MAX_CHAR`] cannot be an [`EmacsChar`]
+/// and decodes as its lead byte instead.
 pub fn string_char(bytes: &[u8]) -> (u32, usize) {
     debug_assert!(!bytes.is_empty());
     let b0 = bytes[0];
@@ -812,11 +814,12 @@ pub fn string_char(bytes: &[u8]) -> (u32, usize) {
             | ((bytes[2] as u32 & 0x3F) << 12)
             | ((bytes[3] as u32 & 0x3F) << 6)
             | (bytes[4] as u32 & 0x3F);
-        if c <= MAX_5_BYTE_CHAR {
+        if c <= MAX_CHAR {
             (c, 5)
         } else {
-            // Payload out of the five-byte range (e.g. F8 B8 ..): a five-byte
-            // tail with these bits is not an internal multibyte character.
+            // GNU's decoder assumes the payload is in range; F8 B8 96 B8 96
+            // (0xE16E16) is past even the character domain, so decode the lead
+            // byte rather than hand downstream code a non-EmacsChar code.
             (byte8_to_char(b0), 1)
         }
     } else {
