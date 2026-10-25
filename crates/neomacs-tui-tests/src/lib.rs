@@ -85,6 +85,21 @@ pub const ROWS: u16 = 50;
 /// `boundp` guard; `set` on an unbound symbol is safe.
 pub const QUIET_NATIVE_COMP_EVAL: &str = "--eval=(progn(set'native-comp-jit-compilation())(set'native-comp-async-report-warnings-errors'silent)(when(boundp'warning-suppress-types)(push'(native-compiler)warning-suppress-types))(mapc'kill-process(process-list)))";
 
+/// One `--eval` argv element that turns off `execute-extended-command`'s
+/// asynchronous binding/shortening suggestion.
+///
+/// The suggestion is an echo-area transient: two seconds after a command that
+/// has no key binding (or a shorter M-x name), EEC shows it with `sit-for` for
+/// another two seconds, then restores whatever the command itself wrote. A
+/// full-grid comparison samples the echo area once, and the two editors run
+/// their own command loops, so under a loaded CI shard their four-second
+/// windows can be seconds apart: the same sampled row is then GNU's restored
+/// message against Neomacs's suggestion (or the reverse) even though both
+/// execute the identical Lisp. Tests whose subject is not that transient get it
+/// off in both editors; `mx_suggestion` and source_navigation's suggestion case
+/// re-enable it explicitly.
+pub const QUIET_MX_SUGGESTION_EVAL: &str = "--eval=(setq suggest-key-bindings nil)";
+
 /// Initial terminal identity and geometry for a TUI process.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiTerminalConfig {
@@ -569,7 +584,13 @@ impl TuiSession {
         // native compiler can fail after startup and pop *Warnings*, which
         // pollutes the rendered screen unrelated to the command under test.
         let launch = TuiLaunch::new("emacs")
-            .args(["-nw", "-Q", "-no-comp-spawn", QUIET_NATIVE_COMP_EVAL])
+            .args([
+                "-nw",
+                "-Q",
+                "-no-comp-spawn",
+                QUIET_NATIVE_COMP_EVAL,
+                QUIET_MX_SUGGESTION_EVAL,
+            ])
             .args(extra_args.split_whitespace());
         Self::spawn_launch_with_erase_char(launch, "GNU", erase)
     }
@@ -593,7 +614,7 @@ impl TuiSession {
             bin.display()
         );
         let launch = TuiLaunch::new(bin.as_os_str())
-            .args(["-nw", "-Q"])
+            .args(["-nw", "-Q", QUIET_MX_SUGGESTION_EVAL])
             .args(extra_args.split_whitespace());
         Self::spawn_launch_with_erase_char(launch, "NEO", erase)
     }

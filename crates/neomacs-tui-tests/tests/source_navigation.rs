@@ -51,6 +51,10 @@ fn xref_find_definitions_and_go_back_from_elisp_symbol() {
 fn find_function_via_mx_opens_lisp_definition() {
     let (mut gnu, mut neo) = boot_pair("");
     disable_vc_backends(&mut gnu, &mut neo);
+    // The harness silences ECE's asynchronous binding suggestion so full-grid
+    // comparisons never race its four-second echo window; this test is about
+    // the suggestion itself.
+    eval_expression(&mut gnu, &mut neo, "(setq suggest-key-bindings t)");
 
     invoke_mx_command(&mut gnu, &mut neo, "find-function");
     wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {

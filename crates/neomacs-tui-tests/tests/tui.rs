@@ -104,6 +104,8 @@ mod mode_line_gc_lifetime_oracle;
 mod mode_line_numeric_padding_oracle;
 #[path = "modes.rs"]
 mod modes;
+#[path = "mx_suggestion.rs"]
+mod mx_suggestion;
 #[path = "org.rs"]
 mod org;
 #[cfg(test)]
