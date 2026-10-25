@@ -16645,6 +16645,13 @@ fn jit_subr_spec_pred_recordp_engages_and_matches() {
         crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    // This pins the SHIM's Gap-1 engagement (entry + armed fast counters);
+    // the default-on inline `recordp` lowering answers before the shim
+    // (`lowering::emit_inline_type_tag_predicate`), so that counter is not
+    // what this test is about. The inline path's parity, both modes and
+    // every miss path are pinned by
+    // `compile_test::type_tag_predicate_sites_answer_inline`.
+    crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(false));
     let mut ev = Context::new();
     // Root each cross-eval Rust local AT CREATION (see the swp-p test note).
     let hot = jit_subr_spec_caller("recordp", 1, true);
@@ -16693,6 +16700,7 @@ fn jit_subr_spec_pred_recordp_engages_and_matches() {
         );
         assert!(fast1 > fast0, "the armed predicate fast path must fire");
     }
+    crate::emacs_core::jit::compile::force_inline_predicates_for_test(None);
 }
 
 /// `vectorp` must stay a GENERAL site (correct through the real builtin, no

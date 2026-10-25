@@ -9371,7 +9371,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
     }
 }
 
-/// `symbol-with-pos-p` through `Op::Call` answers its armed hit
+/// `recordp` / `symbol-with-pos-p` through `Op::Call` answer their armed hit
 /// inline (`lowering::emit_inline_type_tag_predicate`): the shim's own entry
 /// guards, one veclike tag test and one pinned header byte. Every value
 /// answers inline — a non-veclike answers nil without a header read — and the
@@ -9379,7 +9379,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
 /// redefinition, an armed `debug-on-next-call`, a pending quit and a call at
 /// the eval-depth limit. The same body is compiled under both inline modes.
 #[test]
-fn symbol_with_pos_p_site_answers_inline() {
+fn type_tag_predicate_sites_answer_inline() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::{SymId, intern};
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -9406,9 +9406,15 @@ fn symbol_with_pos_p_site_answers_inline() {
         .expect("pool");
     crate::emacs_core::eval::push_scratch_gc_root(pool);
     let items = crate::emacs_core::value::list_to_vec(&pool).expect("list");
-    // GNU: "Ignore `symbols-with-pos-enabled'." — the tag alone.
-    let want = |item: &Value| item.is_symbol_with_pos();
-    for name in ["symbol-with-pos-p"] {
+    let want = |name: &str, item: &Value| {
+        if name == "recordp" {
+            item.is_record()
+        } else {
+            // GNU: "Ignore `symbols-with-pos-enabled'." — the tag alone.
+            item.is_symbol_with_pos()
+        }
+    };
+    for name in ["recordp", "symbol-with-pos-p"] {
         for inline in [true, false] {
             crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(inline));
             let f = site(name);
@@ -9427,7 +9433,7 @@ fn symbol_with_pos_p_site_answers_inline() {
                 };
                 assert_eq!(
                     got,
-                    Value::bool_val(want(&item)),
+                    Value::bool_val(want(name, &item)),
                     "({name} {}) inline={inline}",
                     crate::emacs_core::print::print_value(&item)
                 );
@@ -9445,7 +9451,7 @@ fn symbol_with_pos_p_site_answers_inline() {
         let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
         let _ = ev.debug_on_next_call_is_armed();
         let record = items[0];
-        let expected = Value::bool_val(want(&record));
+        let expected = Value::bool_val(want(name, &record));
         // A pending quit: the site takes the shim, which polls first and
         // signals.
         ev.set_quit_flag_value(Value::T);

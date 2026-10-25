@@ -319,8 +319,9 @@ pub(crate) fn jit_inline_type_of_on() -> bool {
     })
 }
 
-/// Answer `symbol-with-pos-p`'s veclike type-tag test inline at an armed JIT
-/// site (`lowering::emit_inline_type_tag_predicate`). Default on;
+/// Answer `recordp` and `symbol-with-pos-p`'s veclike type-tag test inline
+/// at an armed JIT site (`lowering::emit_inline_type_tag_predicate`). Default
+/// on;
 /// `NEOVM_JIT_INLINE_PREDICATES=off` calls `neovm_jit_pred_spec` at every
 /// site — the single-build A/B, and the identity check that the off mode
 /// emits the pre-existing CLIF byte for byte.

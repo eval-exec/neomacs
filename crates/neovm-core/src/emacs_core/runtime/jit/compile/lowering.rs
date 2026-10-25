@@ -1760,7 +1760,21 @@ fn emit_inline_predicate_guards(fb: &mut FunctionBuilder, rt: &RtCtx, slot: Clif
     miss
 }
 
-/// Lower `symbol-with-pos-p` at an armed JIT site: the shim's
+/// Whether a predicate site's kind has an inline lowering under the
+/// current compile-time knobs. Consulted BEFORE the slot address is
+/// materialized, so a disabled knob — and a kind with no inline lowering,
+/// such as `fboundp` — emits no CLIF at all.
+fn inline_pred_kind_on(kind: SpecCalleeKind) -> bool {
+    match kind {
+        SpecCalleeKind::PredTypeOf | SpecCalleeKind::PredClTypeOf => jit_inline_type_of_on(),
+        SpecCalleeKind::PredSymbolWithPos | SpecCalleeKind::PredRecordp => {
+            jit_inline_predicates_on()
+        }
+        _ => false,
+    }
+}
+
+/// Lower `recordp` / `symbol-with-pos-p` at an armed JIT site: the shim's
 /// whole hit path is the shared entry guards plus one pinned header word, so
 /// the site answers without the C-ABI shim frame (26 Ir of entry+epilogue
 /// and the kind dispatch) and without a call. `wanted` is the
@@ -7775,29 +7789,34 @@ fn lower_simple_op_arms(
             });
             // A JIT predicate site answers its armed hit inline and leaves every
             // other case to the shim below: `type-of`/`cl-type-of` a record
-            // (`emit_inline_record_type_of`), `symbol-with-pos-p` a veclike
-            // type tag (`emit_inline_type_tag_predicate`). The inline path
-            // stores nothing, so the merge meets the shim path's store record
-            // with this one.
+            // (`emit_inline_record_type_of`), `recordp`/`symbol-with-pos-p` a
+            // veclike type tag (`emit_inline_type_tag_predicate`). The inline
+            // path stores nothing, so the merge meets the shim path's store
+            // record with this one.
             let inline_pred = match (spec, &reg_args) {
-                (Some((_, _, slot_ptr, _, kind)), Some(args)) if !aot && !jit_force_slow_spec() => {
+                (Some((_, _, slot_ptr, _, kind)), Some(args))
+                    if !aot && !jit_force_slow_spec() && inline_pred_kind_on(kind) =>
+                {
                     let carry = rootwin_carry_snapshot();
                     let slot_v = fb.ins().iconst(types::I64, slot_ptr);
                     let emitted = match kind {
-                        SpecCalleeKind::PredTypeOf | SpecCalleeKind::PredClTypeOf
-                            if jit_inline_type_of_on() =>
-                        {
+                        SpecCalleeKind::PredTypeOf | SpecCalleeKind::PredClTypeOf => {
                             emit_inline_record_type_of(fb, rt, slot_v, args[0])
                         }
-                        SpecCalleeKind::PredSymbolWithPos if jit_inline_predicates_on() => {
-                            emit_inline_type_tag_predicate(
-                                fb,
-                                rt,
-                                slot_v,
-                                args[0],
-                                crate::tagged::header::VecLikeType::SymbolWithPos as u8,
-                            )
-                        }
+                        SpecCalleeKind::PredSymbolWithPos => emit_inline_type_tag_predicate(
+                            fb,
+                            rt,
+                            slot_v,
+                            args[0],
+                            crate::tagged::header::VecLikeType::SymbolWithPos as u8,
+                        ),
+                        SpecCalleeKind::PredRecordp => emit_inline_type_tag_predicate(
+                            fb,
+                            rt,
+                            slot_v,
+                            args[0],
+                            crate::tagged::header::VecLikeType::Record as u8,
+                        ),
                         _ => None,
                     };
                     emitted.map(|(merge, res)| (merge, res, carry))
