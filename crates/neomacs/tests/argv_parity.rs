@@ -17,7 +17,8 @@
 //! sorted/forwarded `command-line-args`. When a parity gap is known, the
 //! specific test remains ignored with that gap stated on the test itself.
 
-mod common;
+use crate::common;
+use crate::skip_unless_oracle;
 
 use common::{
     ProbeResult, oracle_enabled, run_neomacs, run_neomacs_with_stdin, run_oracle_emacs,

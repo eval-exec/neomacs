@@ -1,6 +1,5 @@
 //! Lane GDL oracle cases, isolated to keep compilation memory bounded.
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 #[cfg(test)]
 #[path = "../src/tests/gdl_ash_validation.rs"]
 mod gdl_ash_validation;

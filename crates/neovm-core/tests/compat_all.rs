@@ -7,8 +7,6 @@
 //! nothing at run time. `autotests = false` in Cargo.toml keeps the remaining
 //! integration targets explicit.
 
-mod common;
-
 #[path = "compat_advice_place_semantics.rs"]
 mod compat_advice_place_semantics;
 

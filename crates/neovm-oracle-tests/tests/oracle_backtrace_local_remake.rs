@@ -7,8 +7,7 @@
 //! Generate expectations with NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1,
 //! using GNU 31.1 and the mandatory PID sandbox.
 
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 use common::return_if_neovm_enable_oracle_proptest_not_set;
 

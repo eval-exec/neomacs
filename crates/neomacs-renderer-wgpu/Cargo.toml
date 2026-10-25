@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "WGPU text renderer primitives for Neomacs"
+autotests = false
 
 [features]
 default = []
@@ -50,3 +51,8 @@ image-extras.workspace = true
 
 [lints]
 workspace = true
+
+# Every file in tests/ is a module of this one binary.
+[[test]]
+name = "renderer"
+path = "tests/renderer.rs"

@@ -1,8 +1,7 @@
 //! Circular traversal parity with GNU Emacs 31.1. Refresh expectations using
 //! NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1.
 #![allow(dead_code)]
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 #[test]
 fn circular_lists_rassoc_oracle() {

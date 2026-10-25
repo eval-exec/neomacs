@@ -1,6 +1,5 @@
 //! GNU-backed regressions for lane GDN string representation and equality.
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 use common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]

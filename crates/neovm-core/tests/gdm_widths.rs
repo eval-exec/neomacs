@@ -1,5 +1,5 @@
 //! GNU-backed width policy regressions for the GDM lane.
-mod common;
+use crate::common;
 
 fn parity(form: &str, expected: expect_test::Expect) {
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {

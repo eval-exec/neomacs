@@ -7,6 +7,16 @@ license.workspace = true
 repository.workspace = true
 description = "Oracle-backed Elisp parity tests for NeoVM"
 
+# Every file in tests/ is a module of the ONE oracle test binary rooted at
+# tests/oracle.rs. Each former per-file binary statically linked neovm-core and
+# Cranelift again; nextest executes each test in its own process regardless of
+# how many binaries contain them.
+autotests = false
+
+[[test]]
+name = "oracle"
+path = "tests/oracle.rs"
+
 [dependencies]
 colored.workspace = true
 expect-test.workspace = true

@@ -1,5 +1,5 @@
 //! GNU casefiddle.c:480-518; insdel.c:1786-1803 regression coverage.
-mod common;
+use crate::common;
 use common::{run_neovm_eval, run_oracle_eval};
 
 fn parity(form: &str, expected: expect_test::Expect) {

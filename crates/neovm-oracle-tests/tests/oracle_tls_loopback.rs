@@ -1,5 +1,4 @@
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 #[path = "../../../test/support/tls_loopback.rs"]
 mod loopback;
 use common::return_if_neovm_enable_oracle_proptest_not_set;

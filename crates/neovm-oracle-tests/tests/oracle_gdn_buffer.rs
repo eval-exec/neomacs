@@ -1,6 +1,5 @@
 //! GNU-refreshed GDN editing primitive regressions.
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 #[test]
 fn oracle_gdn_buf07() {

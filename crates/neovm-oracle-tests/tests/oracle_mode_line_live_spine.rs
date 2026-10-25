@@ -1,7 +1,6 @@
 //! Active GNU mode-line oracle: batch GNU does not enter display_mode_element.
 
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::process::Command;

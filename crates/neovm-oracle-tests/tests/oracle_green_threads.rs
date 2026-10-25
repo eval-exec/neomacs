@@ -11,8 +11,7 @@
 //! `NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`; never hand-write answers.
 //! Run this generated Lisp only through the mandatory PID sandbox.
 
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 
 use common::return_if_neovm_enable_oracle_proptest_not_set;
 

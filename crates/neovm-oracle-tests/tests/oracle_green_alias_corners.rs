@@ -1,8 +1,7 @@
 //! GNU 31.1 oracles for alias target corners in Green mode.
 //! Refresh only via NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1 in the PID sandbox.
 
-#[path = "../src/common.rs"]
-mod common;
+use crate::common;
 use common::return_if_neovm_enable_oracle_proptest_not_set;
 const GREEN: &[(&str, &str)] = &[("NEOVM_THREADS", "green")];
 

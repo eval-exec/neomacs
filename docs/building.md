@@ -73,6 +73,27 @@ Replay a recording with `asciinema play <path>`. Set
 artifact root is resolved from the Cargo workspace. CI explicitly enables
 recording for TUI jobs and uploads the resulting casts.
 
+### Integration test target layout
+
+Each crate's integration tests live in ONE test binary. Every file under
+`crates/<name>/tests/` is a module of that binary, declared with
+`#[path = "..."] mod ...;` from a single root file (for example
+`crates/neomacs-tui-tests/tests/tui.rs`), and the crate sets
+`autotests = false` plus one `[[test]]` entry in `Cargo.toml`.
+
+Why: every integration target is a separate executable, and each executable
+statically links the crate's dependency closure (neovm-core and Cranelift for
+most suites). Nextest runs every test in its own process regardless of how
+many binaries contain them, so extra binaries only add link work. The TUI
+consolidation (commit 03d24940e5, 37 binaries to 1) and the `compat_all`
+binary in `neovm-core` are the reference examples.
+
+Exceptions must stay separate and are listed in
+`scripts/ci/check-test-targets.py`: custom harnesses (`harness = false`),
+targets CI selects with `--test`, and tests with a process-wide global
+allocator. CI runs that script in the lint workflow, so a new top-level
+`tests/foo.rs` cannot silently become another linked binary.
+
 ## Linux (Arch Linux)
 
 ```bash
