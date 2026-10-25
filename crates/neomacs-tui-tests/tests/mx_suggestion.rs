@@ -21,7 +21,15 @@ use std::time::Duration;
 #[test]
 fn mx_of_an_unbound_command_that_messages_matches_gnu_through_the_suggestion_phase() {
     let (mut gnu, mut neo) = boot_pair("");
-    eval_expression(&mut gnu, &mut neo, "(setq suggest-key-bindings t)");
+    // A numeric value is both the `run-at-time` delay (the command wrote to
+    // the echo area) and the `sit-for` hold, in seconds (simple.el
+    // `execute-extended-command`).  The default `t` means 2 + 2 seconds: a
+    // window short enough for a loaded CI runner to miss between two polls of
+    // the grid -- the shard-08 failure showed GNU's cast containing the
+    // suggestion while the harness had already read past it and compared the
+    // restored message.  Six seconds keeps the same observable messages and
+    // still lands inside this test's 10 s phase timeouts.
+    eval_expression(&mut gnu, &mut neo, "(setq suggest-key-bindings 6)");
 
     invoke_mx_command(&mut gnu, &mut neo, "whitespace-mode");
 
