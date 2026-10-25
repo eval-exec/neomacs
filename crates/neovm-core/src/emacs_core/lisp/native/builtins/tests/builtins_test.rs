@@ -1881,6 +1881,31 @@ fn kill_buffer_optional_arg_and_error_semantics() {
 }
 
 #[test]
+fn kill_buffer_of_an_unshown_buffer_does_not_create_scratch() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = super::super::eval::Context::new();
+    let scratch = eval.buffers.current_buffer().expect("bootstrap scratch").id;
+    eval.buffers
+        .rename_buffer(scratch, Value::string("renamed-scratch"))
+        .expect("rename *scratch*");
+    let temp = create_unique_test_buffer(&mut eval, " *kb-unshown*");
+
+    // GNU `Fkill_buffer` repairs windows with `replace_buffer_in_windows_safely`
+    // only when a window still shows the dead buffer (window.c
+    // `buffer_window_count`) and otherwise leaves `*scratch*` alone.  Killing a
+    // temporary buffer that no window displays must not materialize a new
+    // `*scratch*` (it would then show up in `list-buffers`).
+    assert_eq!(
+        builtin_kill_buffer(&mut eval, vec![temp]).unwrap(),
+        Value::T
+    );
+    assert!(
+        eval.buffers.find_buffer_by_name("*scratch*").is_none(),
+        "kill-buffer of an unshown buffer must not create *scratch*"
+    );
+}
+
+#[test]
 fn set_buffer_rejects_deleted_buffer_object() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();

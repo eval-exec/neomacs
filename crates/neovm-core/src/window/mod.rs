@@ -6941,6 +6941,32 @@ impl FrameManager {
             .sum()
     }
 
+    /// Number of live windows whose `buffer_id` is exactly `buffer`,
+    /// including minibuffer windows' leaf windows.
+    ///
+    /// [`Self::buffer_window_count`] resolves indirect buffers through the
+    /// live buffer table, so it reports zero for a buffer that has just been
+    /// removed from that table even while windows still reference its id.
+    /// GNU `replace_buffer_in_windows_safely` (window.c) gates its repair on
+    /// the incoming buffer's window count, which survives the buffer being
+    /// removed from `Vbuffer_alist`; this is the equivalent exact-id count.
+    pub fn window_count_showing_buffer(&self, buffer: BufferId) -> usize {
+        self.frames
+            .values()
+            .map(|frame| {
+                frame
+                    .tree()
+                    .leaf_ids()
+                    .into_iter()
+                    .filter(|id| frame.tree().find(*id).and_then(Window::buffer_id) == Some(buffer))
+                    .count()
+                    + usize::from(
+                        frame.minibuffer_leaf.as_ref().and_then(Window::buffer_id) == Some(buffer),
+                    )
+            })
+            .sum()
+    }
+
     /// GNU's `bset_redisplay` observes ordinary windows on every frame.
     /// Read only the live tree and completed display identities; detached
     /// windows and the inactive minibuffer cannot raise this predicate.
