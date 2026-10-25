@@ -61,11 +61,28 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
 
+      # Three consecutive archive runs (e314bf315b, 7a2607a224, e3f23e2adb)
+      # died during the final test-binary links with "The runner has received
+      # a shutdown signal", also with CARGO_BUILD_JOBS halved to 2, which
+      # points at the runner's disk rather than link RSS. Free the large
+      # preinstalled SDKs this job never uses before building.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Build and archive workspace tests
         # Build test binaries only for the packages the archive consumers run.
         # The excluded crates are dependencies, so their libraries are still
         # compiled; their own test harnesses are not linked into the archive.
+        # A background sampler records available memory and disk every 30 s,
+        # so a runner shutdown during the links shows which one ran out.
         run: |
+          ( while sleep 30; do
+              echo "resources $(date -u +%T) mem_avail_kB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo) disk_avail_kB=$(df --output=avail -k / | tail -1 | tr -d ' ')"
+            done ) &
           cargo nextest archive \
             --release \
             --workspace \
