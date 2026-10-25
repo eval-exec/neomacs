@@ -503,6 +503,11 @@ jobs:
       - *checkout
       - *prepare_workspace_tmp
       - uses: ./.github/actions/install-build-deps
+      # The font tests resolve their families through the system fontconfig;
+      # the build profile installs no fonts, so 18 CJK tests degraded to the
+      # primary font's .notdef advance (8.428711 px for every CJK scalar).
+      - name: Install display test fonts
+        run: scripts/ci/setup-linux.sh fonts
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:

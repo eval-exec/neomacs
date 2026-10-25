@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly usage="usage: $0 [--list] {build|oracle|ecosystem|release}"
+readonly usage="usage: $0 [--list] {build|oracle|ecosystem|fonts|release}"
 
 list_only=false
 if [[ ${1:-} == "--list" ]]; then
@@ -57,6 +57,19 @@ readonly -a video_backend_packages=(
     libgstreamer-plugins-base1.0-dev
 )
 
+# Fonts the layout-engine, renderer and GUI tests resolve through the system
+# fontconfig.  They are the environment contract of those tests, not build
+# inputs: char_width_dejavu_* names DejaVu, the face-realization tests name
+# Noto Sans (Mono), and the CJK families (gb2312 candidate queries, double-
+# width metrics, offscreen CJK glyph runs) need a wide CJK face; without one
+# every fallback collapses to the primary font's .notdef advance.
+readonly -a font_packages=(
+    fonts-noto-core
+    fonts-dejavu-core
+    fonts-ubuntu
+    fonts-noto-cjk
+)
+
 declare -a profile_packages=()
 declare -a required_commands=()
 requires_libfaketime=false
@@ -93,12 +106,16 @@ case "$profile" in
             sway
             wtype
             grim
-            fonts-noto-core
-            fonts-dejavu-core
-            fonts-ubuntu
+            "${font_packages[@]}"
         )
         required_commands=(gpg Xvfb xauth xdpyinfo xprop xwininfo xdotool wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim)
         requires_libfaketime=true
+        ;;
+    # Jobs that run the font-sensitive Rust tests (the display stack shards)
+    # but need no window system of their own.
+    fonts)
+        profile_packages=("${font_packages[@]}")
+        required_commands=(fc-match)
         ;;
     release)
         profile_packages=(rpm binutils cpio file dpkg-dev)
