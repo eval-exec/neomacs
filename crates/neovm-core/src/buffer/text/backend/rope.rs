@@ -203,7 +203,11 @@ impl RopeTextBackend {
             },
         )
         .expect("infallible chunk copy");
-        Some(crate::emacs_core::emacs_char::string_char(&tmp[..written]).0)
+        Some(
+            crate::emacs_core::emacs_char::string_char(&tmp[..written])
+                .0
+                .code(),
+        )
     }
 
     /// No cheap contiguous window: storage is chunked. Callers fall back to

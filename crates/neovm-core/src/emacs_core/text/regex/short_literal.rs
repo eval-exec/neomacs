@@ -89,7 +89,7 @@ impl Literal {
         let mut at = 0;
         while at < literal.len() {
             let (code, width) = emacs_char::string_char(&literal[at..]);
-            codes.push(code);
+            codes.push(code.code());
             at += width;
         }
         Some(Self {
@@ -133,7 +133,7 @@ impl Literal {
                     break;
                 }
                 let (actual, width) = re_text_char(text, at, true)?;
-                if width > stop - at || re_tr(&pattern.translate, actual) != code {
+                if width > stop - at || re_tr(&pattern.translate, actual.code()) != code {
                     matched = false;
                     break;
                 }

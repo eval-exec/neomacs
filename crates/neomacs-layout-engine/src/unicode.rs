@@ -28,10 +28,7 @@ pub(crate) fn decode_emacs_char(
         // glyphless, and printable classification (xdisp.c:8469-8481).  Use
         // the corresponding typed constructor here, while ASCII stays itself.
         EmacsTextStorage::Unibyte => Some((EmacsChar::from_unibyte_byte(first), 1)),
-        EmacsTextStorage::Multibyte => {
-            let (code, len) = string_char(bytes);
-            EmacsChar::from_code(code).map(|character| (character, len))
-        }
+        EmacsTextStorage::Multibyte => Some(string_char(bytes)),
     }
 }
 

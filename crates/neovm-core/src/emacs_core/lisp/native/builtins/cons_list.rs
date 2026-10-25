@@ -2126,7 +2126,9 @@ fn builtin_delete_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
                 let (code, len) = match storage {
                     crate::heap_types::LispStringStorageKind::Unibyte => (u32::from(bytes[pos]), 1),
                     crate::heap_types::LispStringStorageKind::Multibyte => {
-                        crate::emacs_core::emacs_char::string_char_unchecked(&bytes[pos..])
+                        let (c, n) =
+                            crate::emacs_core::emacs_char::string_char_unchecked(&bytes[pos..]);
+                        (c.code(), n)
                     }
                 };
                 if i64::from(code) == target {

@@ -3981,7 +3981,8 @@ impl Iterator for CodingSourceCodepoints<'_> {
         let (code, len) = if self.multibyte
             || crate::emacs_core::emacs_char::multibyte_length(source, true).is_some()
         {
-            crate::emacs_core::emacs_char::string_char(source)
+            let (c, n) = crate::emacs_core::emacs_char::string_char(source);
+            (c.code(), n)
         } else {
             (crate::emacs_core::emacs_char::unibyte_to_char(source[0]), 1)
         };

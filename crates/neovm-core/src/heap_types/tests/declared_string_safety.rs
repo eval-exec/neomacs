@@ -4,6 +4,13 @@ use crate::emacs_core::error::FlowRef;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
+/// Decode a declared character and expose its code, so the assertions below
+/// stay written in the code domain while the decoder returns `EmacsChar`.
+fn decode_code(bytes: &[u8]) -> (u32, usize) {
+    let (character, width) = decode_declared_multibyte_char(bytes);
+    (character.code(), width)
+}
+
 #[test]
 fn declared_string_character_access_is_bounded_and_count_driven() {
     let _ctx = Context::new();
@@ -42,8 +49,8 @@ fn declared_string_iteration_honors_character_limit_and_virtual_zero_tail() {
     assert_eq!(copy.sbytes(), 2);
     assert_eq!(copy.as_bytes(), b"ab");
     assert!(copy.has_trailing_nul());
-    assert_eq!(decode_declared_multibyte_char(&[]), (0, 1));
-    assert_eq!(decode_declared_multibyte_char("é".as_bytes()), (233, 2));
+    assert_eq!(decode_code(&[]), (0, 1));
+    assert_eq!(decode_code("é".as_bytes()), (233, 2));
 }
 
 #[test]
@@ -73,23 +80,14 @@ fn declared_string_invalid_heads_and_short_tails_stay_in_character_domain() {
         &[0xf8][..],
         &[0xf8, 0xbf, 0xbf, 0xbf, 0xbf][..],
     ] {
-        let (code, width) = decode_declared_multibyte_char(bytes);
-        assert!(
-            EmacsChar::from_code(code).is_some(),
-            "{bytes:x?}: {code:#x}"
-        );
+        let (code, width) = decode_code(bytes);
+        assert!(code <= MAX_CHAR, "{bytes:x?}: {code:#x}");
         assert!((1..=5).contains(&width));
     }
-    assert_eq!(decode_declared_multibyte_char(&[0x80]), (0x3fff80, 1));
-    assert_eq!(decode_declared_multibyte_char(&[0xff]), (MAX_CHAR, 1));
+    assert_eq!(decode_code(&[0x80]), (0x3fff80, 1));
+    assert_eq!(decode_code(&[0xff]), (MAX_CHAR, 1));
     // A full F8 tail can decode outside the 22-bit domain; it must become
     // a raw byte rather than reaching downstream character assertions.
-    assert_eq!(
-        decode_declared_multibyte_char(&[0xf8, 0xbf, 0xbf, 0xbf, 0xbf]),
-        (0x3ffff8, 1)
-    );
-    assert_eq!(
-        decode_declared_multibyte_char(&[0xe9, 0xe9, 0xe9]),
-        (0xaaa9, 3)
-    );
+    assert_eq!(decode_code(&[0xf8, 0xbf, 0xbf, 0xbf, 0xbf]), (0x3ffff8, 1));
+    assert_eq!(decode_code(&[0xe9, 0xe9, 0xe9]), (0xaaa9, 3));
 }

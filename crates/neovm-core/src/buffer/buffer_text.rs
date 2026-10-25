@@ -432,7 +432,7 @@ fn multibyte_chunk_contains_char_code(chunk: &[u8], code: u32, carry: &mut Vec<u
         }
 
         let (decoded, len) = crate::emacs_core::emacs_char::string_char(carry);
-        if decoded == code {
+        if decoded.code() == code {
             return true;
         }
         if len < carry.len() {
@@ -462,7 +462,7 @@ fn multibyte_chunk_contains_char_code(chunk: &[u8], code: u32, carry: &mut Vec<u
 
         let (decoded, len) =
             crate::emacs_core::emacs_char::string_char(&chunk[pos..pos + expected]);
-        if decoded == code {
+        if decoded.code() == code {
             return true;
         }
         pos += len;
@@ -1613,7 +1613,7 @@ impl BufferText {
         {
             return true;
         }
-        !carry.is_empty() && crate::emacs_core::emacs_char::string_char(&carry).0 == code
+        !carry.is_empty() && crate::emacs_core::emacs_char::string_char(&carry).0.code() == code
     }
 
     pub fn text_props_is_empty(&self) -> bool {

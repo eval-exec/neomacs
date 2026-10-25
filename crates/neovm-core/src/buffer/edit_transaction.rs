@@ -2194,7 +2194,7 @@ impl SameLenSubstitutionPlan {
             let (code, len) =
                 crate::emacs_core::emacs_char::string_char(&region_bytes[byte_offset..]);
             let clen = len.max(1);
-            if code == from_code {
+            if code.code() == from_code {
                 debug_assert_eq!(
                     clen,
                     to_bytes.len(),

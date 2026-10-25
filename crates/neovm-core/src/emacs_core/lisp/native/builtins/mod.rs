@@ -50,7 +50,7 @@ pub(crate) fn lisp_string_char_codes(string: &crate::heap_types::LispString) -> 
     for _ in 0..string.schars() {
         let tail = bytes.get(pos..).unwrap_or_default();
         let (cp, len) = crate::heap_types::decode_declared_multibyte_char(tail);
-        out.push(cp);
+        out.push(cp.code());
         pos += len;
     }
     out
@@ -77,7 +77,7 @@ pub(crate) fn lisp_string_char_at(
     let byte_pos = string.char_to_byte_pos(idx);
     let tail = bytes.get(byte_pos..).unwrap_or_default();
     let (cp, _) = crate::heap_types::decode_declared_multibyte_char(tail);
-    Some(cp)
+    Some(cp.code())
 }
 
 /// [`lisp_string_char_at`] for the string object `value`: the index goes
@@ -106,7 +106,7 @@ fn multibyte_string_value_char_at(
     let byte_pos = crate::emacs_core::string_pos_cache::string_char_to_byte(value, string, idx);
     let tail = string.as_bytes().get(byte_pos..).unwrap_or_default();
     let (cp, _) = crate::heap_types::decode_declared_multibyte_char(tail);
-    Some(cp)
+    Some(cp.code())
 }
 
 /// Iterate character codes via a closure (avoids allocation when possible).
@@ -125,7 +125,7 @@ pub(crate) fn for_each_lisp_string_char(
     for _ in 0..string.schars() {
         let tail = bytes.get(pos..).unwrap_or_default();
         let (cp, len) = crate::heap_types::decode_declared_multibyte_char(tail);
-        f(cp);
+        f(cp.code());
         pos += len;
     }
 }

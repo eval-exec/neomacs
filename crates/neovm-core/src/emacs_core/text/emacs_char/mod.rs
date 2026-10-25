@@ -757,7 +757,7 @@ pub fn multibyte_length(bytes: &[u8], allow_8bit: bool) -> Option<usize> {
     None
 }
 
-/// Decode one character from `bytes`, returning `(char_code, bytes_consumed)`.
+/// Decode one character from `bytes`, returning `(character, bytes_consumed)`.
 ///
 /// This mirrors GNU `STRING_CHAR_AND_LENGTH`. The input must be a valid Emacs
 /// multibyte sequence (no bounds checking on continuation bytes beyond what the
@@ -766,8 +766,26 @@ pub fn multibyte_length(bytes: &[u8], allow_8bit: bool) -> Option<usize> {
 /// one range this decoder enforces is the character domain itself -- a
 /// five-byte tail whose payload exceeds [`MAX_CHAR`] cannot be an [`EmacsChar`]
 /// and decodes as its lead byte instead.
-pub fn string_char(bytes: &[u8]) -> (u32, usize) {
+///
+/// Returning [`EmacsChar`] rather than a raw code keeps that invariant at every
+/// call site: downstream code has no way to receive an out-of-domain value.
+pub fn string_char(bytes: &[u8]) -> (EmacsChar, usize) {
     debug_assert!(!bytes.is_empty());
+    let (code, len) = decode_multibyte_char(bytes);
+    match EmacsChar::from_code(code) {
+        Some(character) => (character, len),
+        // GNU's decoder assumes the payload is in range; F8 B8 96 B8 96
+        // (0xE16E16) is past even the character domain, so decode the lead
+        // byte rather than hand downstream code a non-EmacsChar code.
+        None => (EmacsChar::from_byte8(bytes[0]), 1),
+    }
+}
+
+/// Raw multibyte arithmetic behind [`string_char`].
+///
+/// Kept private: it may produce a code outside the [`EmacsChar`] domain, and
+/// only [`string_char`] is allowed to turn that into a type value.
+fn decode_multibyte_char(bytes: &[u8]) -> (u32, usize) {
     let b0 = bytes[0];
 
     if b0 < 0x80 {
@@ -814,14 +832,7 @@ pub fn string_char(bytes: &[u8]) -> (u32, usize) {
             | ((bytes[2] as u32 & 0x3F) << 12)
             | ((bytes[3] as u32 & 0x3F) << 6)
             | (bytes[4] as u32 & 0x3F);
-        if c <= MAX_CHAR {
-            (c, 5)
-        } else {
-            // GNU's decoder assumes the payload is in range; F8 B8 96 B8 96
-            // (0xE16E16) is past even the character domain, so decode the lead
-            // byte rather than hand downstream code a non-EmacsChar code.
-            (byte8_to_char(b0), 1)
-        }
+        (c, 5)
     } else {
         // Invalid or truncated sequence — treat lead byte as raw byte
         (byte8_to_char(b0), 1)
@@ -834,8 +845,23 @@ pub fn string_char(bytes: &[u8]) -> (u32, usize) {
 /// `src/character.h`: callers that already own valid internal Lisp string
 /// bytes can skip continuation-byte and truncation checks in tight loops.
 /// Use [`string_char`] instead when malformed or incomplete input is possible.
+///
+/// The validity contract also guarantees the [`EmacsChar`] domain: debug builds
+/// assert it, release builds trust the caller, as with any unchecked API.
 #[inline]
-pub fn string_char_unchecked(bytes: &[u8]) -> (u32, usize) {
+pub fn string_char_unchecked(bytes: &[u8]) -> (EmacsChar, usize) {
+    let (code, len) = decode_multibyte_unchecked(bytes);
+    (EmacsChar::from_code_unchecked(code), len)
+}
+
+/// GNU's raw `string_char_and_length` arithmetic.
+///
+/// Kept crate-visible for callers that must inspect an out-of-domain result
+/// before committing it to an [`EmacsChar`] (see
+/// `heap_types::decode_declared_multibyte_char`); everyone else should use
+/// [`string_char`] or [`string_char_unchecked`].
+#[inline]
+pub(crate) fn decode_multibyte_unchecked(bytes: &[u8]) -> (u32, usize) {
     debug_assert!(!bytes.is_empty());
     let c = bytes[0] as i32;
     if (c & 0x80) == 0 {
@@ -880,12 +906,12 @@ pub fn raw_prev_char_len(bytes: &[u8], end: usize) -> usize {
 
 /// Like [`string_char`] but advance `pos` past the decoded character.
 ///
-/// Returns the decoded character code. Mirrors GNU `string_char_advance`.
+/// Returns the decoded character. Mirrors GNU `string_char_advance`.
 #[inline]
-pub fn string_char_advance(bytes: &[u8], pos: &mut usize) -> u32 {
-    let (c, len) = string_char(&bytes[*pos..]);
+pub fn string_char_advance(bytes: &[u8], pos: &mut usize) -> EmacsChar {
+    let (character, len) = string_char(&bytes[*pos..]);
     *pos += len;
-    c
+    character
 }
 
 /// Count how many characters are in `bytes`, treating it as a valid
@@ -978,7 +1004,7 @@ pub fn str_to_unibyte(src: &[u8]) -> Vec<u8> {
     let mut p = 0usize;
     while p < src.len() {
         let (c, len) = string_char(&src[p..]);
-        out.push((c & 0xFF) as u8);
+        out.push((c.code() & 0xFF) as u8);
         p += len.max(1);
     }
     out
@@ -1088,7 +1114,7 @@ pub fn str_as_unibyte(src: &[u8]) -> Vec<u8> {
         let len = bytes_by_char_head(src[p]);
         if p + len <= src.len() {
             let (c, _) = string_char_unchecked(&src[p..]);
-            out.push(char_to_byte8(c));
+            out.push(char_to_byte8(c.code()));
             p += len;
         } else {
             out.extend_from_slice(&src[p..]);
@@ -1128,7 +1154,7 @@ pub(crate) fn case_fold_match_len(hay: &[u8], at: usize, needle: &[u8]) -> Optio
         }
         let (hc, hl) = string_char(&hay[h..]);
         let (nc, nl) = string_char(&needle[n..]);
-        if emacs_downcase_code(hc) != emacs_downcase_code(nc) {
+        if emacs_downcase_code(hc.code()) != emacs_downcase_code(nc.code()) {
             return None;
         }
         h += hl.max(1);
@@ -1213,7 +1239,7 @@ pub fn string_escape_byte8(bytes: &[u8], multibyte: bool) -> Vec<u8> {
         let len = bytes_by_char_head(lead).min(bytes.len() - p);
         if char_byte8_head_p(lead) {
             let (c, n) = string_char_unchecked(&bytes[p..]);
-            let _ = write_octal(&mut out, char_to_byte8(c) as u32);
+            let _ = write_octal(&mut out, char_to_byte8(c.code()) as u32);
             p += n;
         } else {
             out.extend_from_slice(&bytes[p..p + len]);
@@ -1246,7 +1272,7 @@ pub fn strwidth(bytes: &[u8], multibyte: bool) -> usize {
     let mut p = 0usize;
     while p < bytes.len() {
         let (c, len) = string_char(&bytes[p..]);
-        if let Some(ch) = char::from_u32(c) {
+        if let Some(ch) = char::from_u32(c.code()) {
             total += crate::encoding::char_width(ch);
         } else {
             // Raw-byte / extended char: width 4 (octal display).
@@ -1539,9 +1565,9 @@ pub fn to_utf8_lossy(bytes: &[u8]) -> String {
     let mut pos = 0;
     while pos < bytes.len() {
         let (c, len) = string_char(&bytes[pos..]);
-        if char_byte8_p(c) {
+        if char_byte8_p(c.code()) {
             out.push('\u{FFFD}');
-        } else if let Some(ch) = char::from_u32(c) {
+        } else if let Some(ch) = char::from_u32(c.code()) {
             out.push(ch);
         } else {
             out.push('\u{FFFD}');

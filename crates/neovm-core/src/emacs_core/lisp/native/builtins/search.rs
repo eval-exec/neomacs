@@ -3554,7 +3554,9 @@ fn replace_match_declared_string(
         while byte < bytes.len() {
             let code_step = |offset| {
                 if replacement_string.is_multibyte() {
-                    crate::heap_types::decode_declared_multibyte_char(&bytes[offset..])
+                    let (c, n) =
+                        crate::heap_types::decode_declared_multibyte_char(&bytes[offset..]);
+                    (c.code(), n)
                 } else {
                     (u32::from(bytes[offset]), 1)
                 }

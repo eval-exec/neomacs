@@ -164,7 +164,7 @@ fn decode_emacs_internal(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<EmacsChar> 
         if let Some(width) = multibyte_length(available, true) {
             let (code, actual_width) = string_char(available);
             debug_assert_eq!(width, actual_width);
-            decoded.push(EmacsChar::from_code_unchecked(code));
+            decoded.push(code);
             consumed += width;
         } else {
             decoded.push(EmacsChar::from_byte8(first));

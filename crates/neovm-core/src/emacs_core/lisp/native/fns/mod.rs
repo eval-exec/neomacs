@@ -287,10 +287,10 @@ fn base64_encode_source_bytes(source: &[u8], multibyte: bool) -> Result<Cow<'_, 
     let mut pos = 0;
     while pos < source.len() {
         let (ch, len) = super::emacs_char::string_char(&source[pos..]);
-        if ch <= 0x7f {
-            bytes.push(ch as u8);
-        } else if super::emacs_char::char_byte8_p(ch) {
-            bytes.push(super::emacs_char::char_to_byte8(ch));
+        if ch.code() <= 0x7f {
+            bytes.push(ch.code() as u8);
+        } else if super::emacs_char::char_byte8_p(ch.code()) {
+            bytes.push(super::emacs_char::char_to_byte8(ch.code()));
         } else {
             return Err(signal(
                 "error",
@@ -1309,7 +1309,7 @@ pub(crate) fn builtin_string_make_unibyte(args: Vec<Value>) -> EvalResult {
             let mut pos = 0;
             while pos < src_bytes.len() {
                 let (cp, len) = crate::emacs_core::emacs_char::string_char(&src_bytes[pos..]);
-                out.push((cp & 0xFF) as u8);
+                out.push((cp.code() & 0xFF) as u8);
                 pos += len;
             }
             Ok(Value::heap_string(
@@ -1712,7 +1712,7 @@ impl<'a> CompareStringsChars<'a> {
         if self.multibyte {
             let (code, len) = crate::emacs_core::emacs_char::string_char(&self.bytes[self.pos..]);
             self.pos += len.max(1);
-            code
+            code.code()
         } else {
             let b = self.bytes[self.pos];
             self.pos += 1;

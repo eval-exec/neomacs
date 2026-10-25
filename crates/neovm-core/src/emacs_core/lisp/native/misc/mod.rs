@@ -496,7 +496,7 @@ pub(crate) fn builtin_subst_char_in_string(args: Vec<Value>) -> EvalResult {
     while pos < src_bytes.len() {
         let (code, len) = emacs_char::string_char(&src_bytes[pos..]);
         let clen = len.max(1);
-        if code == from_code {
+        if code.code() == from_code {
             out.extend_from_slice(to_bytes);
             changed = true;
         } else {
@@ -550,10 +550,10 @@ pub(crate) fn builtin_string_to_unibyte(args: Vec<Value>) -> EvalResult {
     while pos < src.len() {
         let (cp, len) = emacs_char::string_char(&src[pos..]);
         pos += len;
-        if cp <= 0x7F {
-            bytes.push(cp as u8);
-        } else if emacs_char::char_byte8_p(cp) {
-            bytes.push(emacs_char::char_to_byte8(cp));
+        if cp.code() <= 0x7F {
+            bytes.push(cp.code() as u8);
+        } else if emacs_char::char_byte8_p(cp.code()) {
+            bytes.push(emacs_char::char_to_byte8(cp.code()));
         } else {
             return Err(signal(
                 "error",
@@ -589,8 +589,8 @@ pub(crate) fn builtin_string_as_unibyte(args: Vec<Value>) -> EvalResult {
     let mut pos = 0;
     while pos < src.len() {
         let (cp, len) = emacs_char::string_char(&src[pos..]);
-        if emacs_char::char_byte8_p(cp) {
-            bytes.push(emacs_char::char_to_byte8(cp));
+        if emacs_char::char_byte8_p(cp.code()) {
+            bytes.push(emacs_char::char_to_byte8(cp.code()));
         } else {
             // Keep the raw encoding bytes
             bytes.extend_from_slice(&src[pos..pos + len]);

@@ -2226,7 +2226,7 @@ fn lisp_string_display_columns(text: &LispString) -> usize {
         let mut pos = 0usize;
         while pos < bytes.len() {
             let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-            total += char::from_u32(code)
+            total += char::from_u32(code.code())
                 .map(crate::encoding::char_width)
                 .unwrap_or(1);
             pos += len;

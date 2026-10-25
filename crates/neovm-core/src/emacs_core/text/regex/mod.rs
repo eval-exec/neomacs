@@ -2352,7 +2352,7 @@ fn literal_from_trivial_regexp(pattern: &[u8]) -> Option<Vec<u8>> {
     let mut pos = 0;
     while pos < pattern.len() {
         let (code, len) = crate::emacs_core::emacs_char::string_char(&pattern[pos..]);
-        if code == '\\' as u32 {
+        if code.code() == '\\' as u32 {
             pos += len;
             if pos >= pattern.len() {
                 return None;
@@ -2954,7 +2954,7 @@ fn literal_rfind(text: &str, literal: &str, case_fold: bool) -> Option<MatchGrou
 fn next_char_at(text: &[u8], at: usize, multibyte: bool) -> (u32, usize) {
     if multibyte {
         let (code, len) = crate::emacs_core::emacs_char::string_char(&text[at..]);
-        (code, len.max(1))
+        (code.code(), len.max(1))
     } else {
         (text[at] as u32, 1)
     }

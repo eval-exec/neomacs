@@ -3581,7 +3581,9 @@ pub(crate) fn font_at(eval: &mut super::eval::Context, args: Vec<Value>) -> Eval
             CharPos0::new(char_pos),
         );
         let code = if string.is_multibyte() {
-            crate::emacs_core::emacs_char::string_char(&string.as_bytes()[bytepos..]).0
+            crate::emacs_core::emacs_char::string_char(&string.as_bytes()[bytepos..])
+                .0
+                .code()
         } else {
             string.as_bytes()[bytepos] as u32
         };

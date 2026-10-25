@@ -15462,7 +15462,7 @@ fn format_message_and_message_signal_strict_format_errors() {
             if n == 0 {
                 break;
             }
-            codes.push(code);
+            codes.push(code.code());
             i += n;
         }
         assert_eq!(codes, vec![value as u32]);

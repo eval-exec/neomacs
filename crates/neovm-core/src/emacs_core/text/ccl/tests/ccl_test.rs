@@ -750,7 +750,7 @@ fn ccl_execute_on_string_writes_a_multibyte_constant_character() {
     let string = output.as_lisp_string().unwrap();
     assert!(string.is_multibyte());
     let (character, length) = crate::emacs_core::emacs_char::string_char(string.as_bytes());
-    assert_eq!(character, 0x3042);
+    assert_eq!(character.code(), 0x3042);
     assert_eq!(length, string.as_bytes().len());
 }
 

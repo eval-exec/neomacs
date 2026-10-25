@@ -80,7 +80,7 @@ impl Iterator for EmacsMultibyteChars<'_> {
         let (code, length) =
             crate::emacs_core::emacs_char::string_char(&self.bytes[self.position..]);
         self.position += length.max(1);
-        Some(code)
+        Some(code.code())
     }
 }
 
@@ -1581,7 +1581,7 @@ fn parse_format_spec(bytes: &[u8], pos: &mut usize) -> Result<ParsedFormatSpec, 
     let (conversion_code, conversion_len) =
         crate::emacs_core::emacs_char::string_char(&bytes[*pos..]);
     *pos += conversion_len;
-    spec.conversion = char::from_u32(conversion_code).unwrap_or('\u{FFFD}');
+    spec.conversion = char::from_u32(conversion_code.code()).unwrap_or('\u{FFFD}');
     Ok(ParsedFormatSpec {
         spec,
         consumed_chars: ascii_consumed + 1,
@@ -2820,7 +2820,10 @@ fn emacs_chars_count(data: &[u8]) -> usize {
 /// string yields one Emacs character per unit.
 fn next_format_unit(data: &[u8], pos: usize, encoding: FormatStringEncoding) -> (u32, usize) {
     match encoding {
-        FormatStringEncoding::Multibyte => crate::emacs_core::emacs_char::string_char(&data[pos..]),
+        FormatStringEncoding::Multibyte => {
+            let (c, n) = crate::emacs_core::emacs_char::string_char(&data[pos..]);
+            (c.code(), n)
+        }
         FormatStringEncoding::Unibyte => (data[pos] as u32, 1),
     }
 }
@@ -2844,11 +2847,11 @@ fn emacs_bytes_to_unibyte(mut data: Vec<u8>) -> Vec<u8> {
     let mut write = 0;
     while read < data.len() {
         let (code, length) = emacs_char::string_char(&data[read..]);
-        if code <= 0x7f || emacs_char::char_byte8_p(code) {
-            data[write] = if code <= 0x7f {
-                code as u8
+        if code.code() <= 0x7f || emacs_char::char_byte8_p(code.code()) {
+            data[write] = if code.code() <= 0x7f {
+                code.code() as u8
             } else {
-                emacs_char::char_to_byte8(code)
+                emacs_char::char_to_byte8(code.code())
             };
             write += 1;
         } else {
@@ -3046,10 +3049,10 @@ fn do_format(
                 let source_start = format_char_pos;
                 i += char_len;
                 format_char_pos += 1;
-                if code < 0x80 && matches!(quoting_style, FormatMessageQuotingStyle::None) {
-                    result.push(code as u8)?;
+                if code.code() < 0x80 && matches!(quoting_style, FormatMessageQuotingStyle::None) {
+                    result.push(code.code() as u8)?;
                 } else {
-                    let pushed = push_format_literal_code(&mut result, code, quoting_style)?;
+                    let pushed = push_format_literal_code(&mut result, code.code(), quoting_style)?;
                     if pushed.multibyte {
                         result.promote_multibyte()?;
                     }
@@ -3985,7 +3988,8 @@ pub(crate) fn builtin_string_width(ctx: &mut super::eval::Context, args: Vec<Val
         for _ in from..to {
             let (code, step) = if byte < data.len() {
                 if decode_multibyte {
-                    crate::heap_types::decode_declared_multibyte_char(&data[byte..])
+                    let (c, n) = crate::heap_types::decode_declared_multibyte_char(&data[byte..]);
+                    (c.code(), n)
                 } else {
                     (u32::from(data[byte]), 1)
                 }

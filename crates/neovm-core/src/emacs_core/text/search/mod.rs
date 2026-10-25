@@ -347,9 +347,8 @@ fn lisp_char_at_byte(
         return None;
     }
     if string.is_multibyte() {
-        Some(crate::emacs_core::emacs_char::string_char(
-            &string.as_bytes()[byte_pos..],
-        ))
+        let (c, n) = crate::emacs_core::emacs_char::string_char(&string.as_bytes()[byte_pos..]);
+        Some((c.code(), n))
     } else {
         Some((string.as_bytes()[byte_pos] as u32, 1))
     }

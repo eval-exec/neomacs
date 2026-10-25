@@ -1715,7 +1715,7 @@ pub(crate) fn dispatch_print_callback_emacs_chars(
     let mut pos = 0usize;
     while pos < bytes.len() {
         let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-        emit_char(Value::fixnum(code as i64))?;
+        emit_char(Value::fixnum(code.code() as i64))?;
         pos += len;
     }
     Ok(())

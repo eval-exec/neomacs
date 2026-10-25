@@ -2234,7 +2234,7 @@ fn check_translation(
                 let mut q = scan;
                 let c = string_char_advance(source, &mut q);
                 scan = q;
-                c as i64
+                c.code() as i64
             } else {
                 let b = source[scan] as i64;
                 scan += 1;
@@ -2421,7 +2421,7 @@ pub(crate) fn builtin_translate_region_internal(
         let (oc, len) = if multibyte {
             let mut q = p;
             let c = string_char_advance(&source, &mut q);
-            (c as i64, q - p)
+            (c.code() as i64, q - p)
         } else {
             (source[p] as i64, 1)
         };
@@ -2444,7 +2444,7 @@ pub(crate) fn builtin_translate_region_internal(
                     if bp < tt.len() {
                         let mut qq = bp;
                         let c = string_char_advance(tt, &mut qq);
-                        nc = c as i64;
+                        nc = c.code() as i64;
                         new_bytes = Some(tt[bp..qq].to_vec());
                     }
                 } else if (oc as usize) < tt.len() {

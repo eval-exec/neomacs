@@ -657,31 +657,31 @@ pub(crate) fn format_lisp_string_bytes_inner_emacs(
             // Peek at the next character for contextual octal escaping
             let next_code = if pos + len < data.len() {
                 let (nc, _) = emacs_char::string_char(&data[pos + len..]);
-                Some(nc)
+                Some(nc.code())
             } else {
                 None
             };
             pos += len;
 
             // Raw-byte character in multibyte string → octal escape
-            if emacs_char::char_byte8_p(code) {
-                let byte = emacs_char::char_to_byte8(code);
+            if emacs_char::char_byte8_p(code.code()) {
+                let byte = emacs_char::char_to_byte8(code.code());
                 push_octal_escape_contextual_u32(&mut out, byte, next_code);
                 need_nonhex = false;
                 continue;
             }
 
             // print-escape-multibyte: non-ASCII in multibyte strings → \xNNNN
-            if options.print_escape_multibyte && code > 0x7F {
-                let hex = format!("\\x{:04x}", code);
+            if options.print_escape_multibyte && code.code() > 0x7F {
+                let hex = format!("\\x{:04x}", code.code());
                 out.extend_from_slice(hex.as_bytes());
                 need_nonhex = true;
                 continue;
             }
 
             // ASCII-range handling
-            if code <= 0x7F {
-                let b = code as u8;
+            if code.code() <= 0x7F {
+                let b = code.code() as u8;
                 if is_hex_digit(b) && need_nonhex {
                     out.extend_from_slice(b"\\ ");
                     out.push(b);
@@ -716,7 +716,7 @@ pub(crate) fn format_lisp_string_bytes_inner_emacs(
 
             // Non-ASCII Unicode character: emit as Emacs encoding bytes
             let mut buf = [0u8; emacs_char::MAX_MULTIBYTE_LENGTH];
-            let n = emacs_char::char_string(code, &mut buf);
+            let n = emacs_char::char_string(code.code(), &mut buf);
             out.extend_from_slice(&buf[..n]);
             need_nonhex = false;
         } else {
@@ -817,9 +817,9 @@ pub(crate) fn display_width_emacs(data: &[u8], is_multibyte: bool) -> usize {
         while pos < data.len() {
             let (code, len) = emacs_char::string_char(&data[pos..]);
             pos += len;
-            if emacs_char::char_byte8_p(code) {
+            if emacs_char::char_byte8_p(code.code()) {
                 width += 4; // raw bytes display as \xNN (4 chars)
-            } else if let Some(ch) = char::from_u32(code) {
+            } else if let Some(ch) = char::from_u32(code.code()) {
                 width += crate::encoding::char_width(ch);
             } else {
                 width += 1;

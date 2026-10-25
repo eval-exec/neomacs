@@ -143,7 +143,7 @@ fn assoc_string_codes(value: &crate::heap_types::LispString) -> Vec<u32> {
         let mut pos = 0;
         while pos < bytes.len() {
             let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-            codes.push(code);
+            codes.push(code.code());
             pos += len.max(1);
         }
         codes
@@ -388,7 +388,7 @@ fn multibyte_string_has_non_ascii_non_raw_byte(s: &crate::heap_types::LispString
     let bytes = s.as_bytes();
     while pos < bytes.len() {
         let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-        if code > 0x7F && !crate::emacs_core::emacs_char::char_byte8_p(code) {
+        if code.code() > 0x7F && !crate::emacs_core::emacs_char::char_byte8_p(code.code()) {
             return true;
         }
         pos += len;

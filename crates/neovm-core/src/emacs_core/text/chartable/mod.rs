@@ -553,9 +553,9 @@ fn uniprop_compressed_string(value: Value) -> Option<Vec<u32>> {
     while pos < bytes.len() {
         let code = crate::emacs_core::emacs_char::string_char_advance(bytes, &mut pos);
         raw_codes.push(
-            crate::emacs_core::emacs_char::char_to_byte_safe(code)
+            crate::emacs_core::emacs_char::char_to_byte_safe(code.code())
                 .map(u32::from)
-                .unwrap_or(code),
+                .unwrap_or(code.code()),
         );
     }
     let codes = decode_byte8_pairs(raw_codes);

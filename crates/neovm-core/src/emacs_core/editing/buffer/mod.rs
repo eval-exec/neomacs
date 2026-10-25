@@ -1357,7 +1357,8 @@ fn compare_buffer_substring_strings(
         match (lp < left_bytes.len(), rp < right_bytes.len()) {
             (true, true) => {
                 let (a_code, a_len) = if left.is_multibyte() {
-                    crate::emacs_core::emacs_char::string_char(&left_bytes[lp..])
+                    let (c, n) = crate::emacs_core::emacs_char::string_char(&left_bytes[lp..]);
+                    (c.code(), n)
                 } else {
                     (
                         crate::emacs_core::emacs_char::unibyte_to_char(left_bytes[lp]),
@@ -1365,7 +1366,8 @@ fn compare_buffer_substring_strings(
                     )
                 };
                 let (b_code, b_len) = if right.is_multibyte() {
-                    crate::emacs_core::emacs_char::string_char(&right_bytes[rp..])
+                    let (c, n) = crate::emacs_core::emacs_char::string_char(&right_bytes[rp..]);
+                    (c.code(), n)
                 } else {
                     (
                         crate::emacs_core::emacs_char::unibyte_to_char(right_bytes[rp]),
@@ -1756,7 +1758,7 @@ fn decode_chars_with_byte_offsets(bytes: &[u8]) -> Vec<(u32, usize)> {
     let mut pos = 0usize;
     while pos < bytes.len() {
         let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-        out.push((code, pos));
+        out.push((code.code(), pos));
         pos += len.max(1);
     }
     out.push((0, bytes.len()));

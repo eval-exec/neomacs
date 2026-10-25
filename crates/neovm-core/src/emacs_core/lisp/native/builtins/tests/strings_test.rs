@@ -587,7 +587,7 @@ fn format_percent_c_matches_gnu_non_ascii_multibyte_width_and_precision() {
         let mut pos = 0usize;
         while pos < string.as_bytes().len() {
             let (code, len) = crate::emacs_core::emacs_char::string_char(&string.as_bytes()[pos..]);
-            out.push(code);
+            out.push(code.code());
             pos += len;
         }
         out

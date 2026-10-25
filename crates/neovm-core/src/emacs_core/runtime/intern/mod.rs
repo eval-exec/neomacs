@@ -120,7 +120,7 @@ fn format_lisp_symbol_name_for_diagnostic(name: &LispString) -> String {
     let mut pos = 0;
     while pos < bytes.len() {
         let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-        push_char(&mut out, code, confusing_prefix);
+        push_char(&mut out, code.code(), confusing_prefix);
         confusing_prefix = false;
         pos += len;
     }

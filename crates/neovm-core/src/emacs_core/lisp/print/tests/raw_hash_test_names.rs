@@ -10,7 +10,7 @@ fn character_codes(bytes: Vec<u8>) -> Value {
     let mut pos = 0;
     while pos < bytes.len() {
         let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-        codes.push(Value::fixnum(i64::from(code)));
+        codes.push(Value::fixnum(i64::from(code.code())));
         pos += len;
     }
     Value::list(codes)

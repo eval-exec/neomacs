@@ -107,7 +107,7 @@ pub(super) fn derive(pattern: &CompiledPattern, on: bool) -> Option<SuffixLitera
         return None;
     }
     let (first, first_len) = emacs_char::string_char(&literal[..len]);
-    if first < 0x80
+    if first.code() < 0x80
         || first_len > first_run_len
         || first_len + 1 != len
         || literal[first_len] >= 0x80

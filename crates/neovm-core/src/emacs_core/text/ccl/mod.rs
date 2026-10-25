@@ -1385,7 +1385,7 @@ fn ccl_string_input(string: &crate::heap_types::LispString) -> Vec<i64> {
     let mut position = 0usize;
     while position < bytes.len() {
         let (character, length) = crate::emacs_core::emacs_char::string_char(&bytes[position..]);
-        input.push(i64::from(character));
+        input.push(i64::from(character.code()));
         position += length;
     }
     input
