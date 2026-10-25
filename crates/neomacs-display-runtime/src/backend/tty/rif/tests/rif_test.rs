@@ -5065,3 +5065,78 @@ fn ncv_suppresses_the_underline_but_not_gnus_underline_color() {
         "GNU's Setulc guard does not consult ncv: {s:?}"
     );
 }
+
+#[test]
+fn frame_redraw_writes_the_grid_separators_erased_leading_spaces_after_real_raster() {
+    let caps = TermCaps {
+        synchronized_output: false,
+        ..TermCaps::default()
+    };
+    let mut rif = TtyRif::new_with_caps(40, 1, caps);
+    let mut old = make_grid_state(1, 0, 0.0, 0.0, 40, 1, "facet-02");
+    old.faces.insert(FaceId::new(0), Face::default());
+    rif.rasterize(&old);
+    rif.diff_and_render();
+    let _ = rif.take_output();
+    assert!(
+        (8..11).all(|col| rif.current.cells[col].materialization() == CellMaterialization::Erased)
+    );
+
+    let mut grid = make_grid_state(
+        1,
+        0,
+        0.0,
+        0.0,
+        40,
+        1,
+        "facet-02   |   facet-12   |   facet-22",
+    );
+    grid.faces.insert(FaceId::new(0), Face::default());
+    let mut known = rif.clone();
+    known.rasterize(&grid);
+    assert!(
+        (8..11)
+            .all(|col| known.desired.cells[col].materialization() == CellMaterialization::Erased)
+    );
+    let known_ops = known.plan_for_test();
+    assert!(known_ops.iter().any(|op| matches!(
+        op,
+        TermOp::WriteRun {
+            row: 0,
+            start: 11,
+            ..
+        }
+    )));
+    assert!(
+        !known_ops.iter().any(|op| matches!(
+            op,
+            TermOp::WriteRun {
+                row: 0,
+                start: 0..=10,
+                ..
+            }
+        )),
+        "known canonical blanks stay eligible for GNU implicit-space matching"
+    );
+
+    // The real frontend consumes the Context-owned request after layout and
+    // calls this existing obligation. No terminal dimensions or face changed.
+    rif.force_redraw();
+    rif.rasterize(&grid);
+    assert_eq!(
+        rif.plan_for_test(),
+        vec![
+            TermOp::WriteRun {
+                row: 0,
+                start: 0,
+                end: 38
+            },
+            TermOp::EraseToEol {
+                row: 0,
+                from: 38,
+                bg: None
+            },
+        ],
+        "GNU's unknown current-row branch writes the whole meaningful prefix, including the leading separator gap"
+    );
+}

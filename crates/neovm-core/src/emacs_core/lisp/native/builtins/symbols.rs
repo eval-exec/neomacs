@@ -3370,6 +3370,8 @@ pub(crate) fn builtin_resize_mini_window_internal(
 
     let char_width = frame.char_width;
     let char_height = frame.char_height;
+    let geometry_changed = root_height != root_new || mini_height != mini_new;
+    let is_tty = frame.effective_window_system().is_none();
     let root = frame.tree().root_id();
     crate::window::window_resize_apply(frame.tree_mut(), root, false, char_width, char_height);
     let mini = frame
@@ -3385,6 +3387,19 @@ pub(crate) fn builtin_resize_mini_window_internal(
     ));
     mini.set_new_pixel(None);
     frame.recalculate_minibuffer_bounds();
+    // Legacy has no GNU frame-local redisplay/current-matrix validity flag.
+    // A real allocation change must therefore forget the physical matrix,
+    // including a shrink/grow cycle completed before its next presentation.
+    // This uses existing output ownership, not the optional callback policy.
+    if geometry_changed && !eval.gnu_redisplay_hooks_policy_enabled() {
+        eval.invalidate_redisplay();
+        if is_tty {
+            eval.gnu_request_frame_redraw(fid);
+        }
+    }
+    // The successful primitive is the common GNU resize_mini_window_apply
+    // seam, including direct window.el calls outside preparatory redisplay.
+    eval.gnu_publish_mini_geometry_changed(fid);
     Ok(Value::T)
 }
 

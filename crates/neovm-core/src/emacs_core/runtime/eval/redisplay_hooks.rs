@@ -242,9 +242,20 @@ impl Context {
         if !gnu_redisplay_hooks_enabled() {
             return;
         }
+        // GNU resize_mini_window_apply (window.c:5876–5889) invalidates the
+        // whole current frame when redisplay was already pending. Both direct
+        // Lisp commits and preparatory commits pass through this publication.
+        let was_dirty = self.gnu_redisplay_hooks.redisplay_frames.contains(&frame);
+        let is_tty = self
+            .frames
+            .get(frame)
+            .is_some_and(|state| state.effective_window_system().is_none());
         self.gnu_mark_frame_redisplay(frame);
         self.gnu_mark_frame_window_change(frame);
         self.invalidate_redisplay();
+        if was_dirty && is_tty {
+            self.gnu_request_frame_redraw(frame);
+        }
     }
 
     /// Commit resize_mini_window's start without publishing a scroll callback.
@@ -369,8 +380,6 @@ impl Context {
             return Ok(Value::NIL);
         }
         let root = state.root_window().id();
-        let is_tty = state.effective_window_system().is_none();
-        let was_dirty = self.gnu_redisplay_hooks.redisplay_frames.contains(&frame);
         let grow = self.funcall_general(
             Value::symbol("window--resize-root-window-vertically"),
             vec![Value::make_window(root.0), Value::fixnum(-delta), Value::T],
@@ -400,12 +409,6 @@ impl Context {
             self,
             vec![Value::make_window(window.0)],
         )?;
-        if committed.is_truthy() {
-            self.gnu_publish_mini_geometry_changed(frame);
-            if was_dirty && is_tty {
-                self.gnu_request_frame_redraw(frame);
-            }
-        }
         Ok(committed)
     }
 
