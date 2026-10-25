@@ -538,3 +538,196 @@ fn a_caller_handler_catches_in_the_original_body_after_a_deopt() {
     }
     crate::emacs_core::jit::inline::force_inline_for_test(None);
 }
+
+/// A compile inside a real read scope must not acquire dependencies on
+/// constants the classic fuser never projected.
+#[test]
+fn classic_fuser_capture_ignores_unused_vector_constant() {
+    use crate::tagged::collection_reads::capture;
+
+    let mut ev = Context::new();
+    let unused = Value::vector(vec![Value::NIL]);
+    ev.bc_buf.push(unused);
+    let constants = vec![Value::symbol("fuser-preflight-symbol-only"), unused];
+    let ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
+    let feedback = vec![NumericFeedback::FixnumOnly; ops.len()];
+    let (fused, reads) = capture(|| fuse_calls(&ops, &constants, None, 0, &feedback));
+    assert!(fused.is_none());
+    let reads = reads.expect("ordinary fuser reads are capturable");
+    assert!(reads.unchanged());
+    assert!(unused.set_vector_slot(0, Value::T));
+    assert!(
+        reads.unchanged(),
+        "unused constant must not become a dependency"
+    );
+
+    let (_, observed) = capture(|| unused.as_vector_data().unwrap().len());
+    assert!(unused.set_vector_slot(0, Value::NIL));
+    assert!(
+        !observed.unwrap().unchanged(),
+        "the mutation control must invalidate"
+    );
+}
+
+/// Fixture coordinates remain distinct until the existing map/Value boundary.
+#[derive(Clone, Copy, Debug)]
+struct FixtureGnuByteOffset(usize);
+
+#[derive(Clone, Copy, Debug)]
+struct FixtureInstructionIndex(usize);
+
+impl From<(FixtureGnuByteOffset, FixtureInstructionIndex)>
+    for crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry
+{
+    fn from(
+        (byte_offset, instruction_index): (FixtureGnuByteOffset, FixtureInstructionIndex),
+    ) -> Self {
+        Self::new(byte_offset.0, instruction_index.0)
+    }
+}
+
+impl TryFrom<FixtureGnuByteOffset> for Value {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(byte_offset: FixtureGnuByteOffset) -> Result<Self, Self::Error> {
+        Ok(Self::make_int(i64::try_from(byte_offset.0)?))
+    }
+}
+
+/// Even a no-Call body retains CFG's first access to a mapped, parked
+/// Switch table; the preflight must not bypass that existing lazy seam.
+#[test]
+fn classic_fuser_no_call_switch_still_hydrates_parked_table() {
+    use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
+    use crate::emacs_core::value::HashTableTest;
+    use strum::IntoEnumIterator;
+
+    #[derive(Clone, Copy, Debug, strum::EnumIter)]
+    enum SwitchReachability {
+        Reachable,
+        Unreachable,
+    }
+
+    for reachability in SwitchReachability::iter() {
+        let mut ev = Context::new();
+        let table = Value::hash_table(HashTableTest::Eq);
+        ev.bc_buf.push(table);
+        let key = Value::make_int(7);
+        let hash_key = key.to_hash_key(&HashTableTest::Eq);
+        // Both Switch shapes are visited by CFG's whole-op leader pass before
+        // it propagates reachable depths. Match the fixture domain exhaustively.
+        let (byte_target, ops) = match reachability {
+            SwitchReachability::Unreachable => (
+                FixtureGnuByteOffset(12),
+                vec![
+                    Op::Goto(6),
+                    Op::Constant(0),
+                    Op::Constant(1),
+                    Op::Switch,
+                    Op::Constant(2),
+                    Op::Return,
+                    Op::Constant(3),
+                    Op::Return,
+                ],
+            ),
+            SwitchReachability::Reachable => (
+                FixtureGnuByteOffset(10),
+                vec![
+                    Op::Constant(0),
+                    Op::Constant(1),
+                    Op::Switch,
+                    Op::Constant(2),
+                    Op::Return,
+                    Op::Constant(3),
+                    Op::Return,
+                ],
+            ),
+        };
+        let target = Value::try_from(byte_target).expect("fixture byte offset fits a Lisp integer");
+        table
+            .with_hash_table_mut(|table| {
+                table.set_pending_dump_entries(vec![(hash_key, target, None)]);
+                assert!(table.needs_hydration());
+            })
+            .expect("rooted hash-table fixture");
+        let constants = vec![key, table, Value::make_int(71), Value::make_int(72)];
+        let offsets: Vec<GnuByteOffsetMapEntry> = (0..ops.len())
+            .map(|pc| (FixtureGnuByteOffset(pc * 2), FixtureInstructionIndex(pc)).into())
+            .collect();
+        let feedback = vec![NumericFeedback::FixnumOnly; ops.len()];
+        assert!(fuse_calls(&ops, &constants, Some(&offsets), 0, &feedback).is_none());
+        let ptr = table.as_veclike_ptr().expect("rooted hash-table header")
+            as *const crate::tagged::header::HashTableObj;
+        // SAFETY: table is a live hash-table Value rooted in ev.bc_buf on this
+        // mutator, whose heap allocation is stable. No mutation, safepoint or
+        // payload borrow intervenes between header projection and this read.
+        // A normal table accessor would hydrate and invalidate this assertion.
+        let still_parked = unsafe { (*ptr).table.needs_hydration() };
+        assert!(!still_parked, "reachability={reachability:?}");
+        let lookup_key = key.to_hash_key(&HashTableTest::Eq);
+        assert_eq!(
+            table
+                .as_hash_table()
+                .unwrap()
+                .data
+                .get(&lookup_key)
+                .copied(),
+            Some(target),
+        );
+    }
+}
+
+/// The preflight may read an unused bytecode header, but must not project
+/// its data: that accessor materializes genuine mapped pdump stubs.
+#[test]
+fn classic_fuser_header_scan_keeps_unused_pdump_bytecode_lazy() {
+    use crate::emacs_core::pdump::{dump_to_file, load_from_dump};
+
+    let mut ev = Context::new();
+    let mut callee = lexical_fn(
+        0,
+        vec![Op::Constant(0), Op::Return],
+        vec![Value::make_int(42)],
+    );
+    callee.gnu_byte_offset_map = Some(vec![
+        (FixtureGnuByteOffset(0), FixtureInstructionIndex(0)).into(),
+        (FixtureGnuByteOffset(1), FixtureInstructionIndex(1)).into(),
+    ]);
+    callee.gnu_bytecode_bytes = Some(crate::tagged::header::LispByteVec::owned(vec![0xC0, 0x87]));
+    ev.obarray
+        .set_symbol_value("fuser-unused-lazy-bytecode", Value::make_bytecode(callee));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fuser-lazy.pdump");
+    dump_to_file(&ev, &path).expect("dump bytecode fixture");
+    drop(ev);
+    let loaded = load_from_dump(&path).expect("load mapped bytecode fixture");
+    let unused = loaded
+        .obarray
+        .symbol_value_copied("fuser-unused-lazy-bytecode")
+        .expect("restored fixture root");
+    assert!(unused.is_bytecode());
+    assert!(
+        unused.bytecode_data_if_materialized().is_none(),
+        "fixture must be a real lazy stub"
+    );
+    assert!(!crate::tagged::collection_reads::is_active());
+    let constants = vec![Value::symbol("fuser-preflight-symbol-only"), unused];
+    for ops in [
+        vec![Op::Nil, Op::Return],
+        vec![Op::Constant(0), Op::Call(0), Op::Return],
+    ] {
+        let feedback = vec![NumericFeedback::FixnumOnly; ops.len()];
+        assert!(fuse_calls(&ops, &constants, None, 0, &feedback).is_none());
+        assert!(
+            unused.bytecode_data_if_materialized().is_none(),
+            "unused stub must stay lazy"
+        );
+    }
+    // Positive control: the same rooted object really can materialize through
+    // the production accessor, rather than being a forged or empty stub.
+    assert_eq!(
+        unused.get_bytecode_data().unwrap().constants[0],
+        Value::make_int(42)
+    );
+    assert!(unused.bytecode_data_if_materialized().is_some());
+}

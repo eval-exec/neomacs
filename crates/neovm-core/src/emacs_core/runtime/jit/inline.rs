@@ -435,6 +435,16 @@ pub(crate) fn fuse_calls(
         super::stats::record_inline("reject:caller-index-switch");
         return None;
     }
+    // Only direct bytecode constants can supply a static callee. Avoid the
+    // CFG/depth/tag analysis when there cannot be a splice. Preserve capture
+    // dependencies and CFG's lazy Switch-table projection on their old paths.
+    if !crate::tagged::collection_reads::is_active()
+        && !ops.iter().any(|op| matches!(op, Op::Switch))
+        && (!ops.iter().any(|op| matches!(op, Op::Call(_)))
+            || !constants.iter().any(|value| value.is_bytecode()))
+    {
+        return None;
+    }
     let cfg = analyze_cfg(ops, constants, offset_map, arity).ok()?;
     let caller_depth = op_depths(ops, &cfg)?;
     // The callee slot of an `Op::Call`, when it provably holds a constant.
