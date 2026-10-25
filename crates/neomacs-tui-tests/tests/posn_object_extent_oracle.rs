@@ -2,9 +2,12 @@
 //! Fresh live GNU31.1 expectations for the TTY current-matrix posn contract.
 //! Boundary, stale-tail and split cases compare the new sidecar's TEXT
 //! object dimensions, canonical iterator offsets and source identity to fresh
-//! GNU, retaining full captures. Main's documented col-row, hidden-EOB,
-//! unavailable-walk and named-chrome residuals are checked against the same
-//! binary with the extent knob OFF; this lane cannot change those residuals.
+//! GNU, retaining full captures. Main's documented col-row, hidden-EOB and
+//! named-chrome residuals are checked against the same binary with the extent
+//! knob OFF; this lane cannot change those residuals. The split-cold
+//! "unavailable" stage is not one of them: GNU hands a cold sibling the
+//! accepted frame cells through fake_current_matrices, so the sidecar's
+//! retained-partition answer owns that seam and is compared with live GNU.
 //! Other active cases retain their full normalized ten-cell comparisons.
 
 use neomacs_tui_tests::{TuiLaunch, TuiProcessOutcome, TuiSession, TuiTerminalConfig};
@@ -19,6 +22,10 @@ const PROBE_EL: &str = r##";;; -*- lexical-binding: t -*-
 (defun d5-extent-main-residual (label posn)
   ;; Only paths proven unchanged between e3941a387f and817b belong here.
   ;; The Rust test also requires these values to equal the explicit OFF arm.
+  ;; The split-cold "unavailable" stage is deliberately absent: GNU's
+  ;; fake_current_matrices hands a cold sibling the accepted frame cells, so
+  ;; the retained-partition sidecar owns that answer. It is compared with live
+  ;; GNU below instead of being frozen to the approximate-walk fallback.
   (let* ((case (getenv "NEOMACS_POSN_EXTENT_ORACLE_CASE"))
          (stage (car-safe label))
          (query (car-safe (cdr-safe label)))
@@ -26,11 +33,9 @@ const PROBE_EL: &str = r##";;; -*- lexical-binding: t -*-
                           (memq (car-safe stage) '(changed-hscroll new-matrix))
                           (memq query '(point back))
                           (= (nth 2 label) (point-max))))
-         (chrome (memq (nth 1 posn) '(mode-line header-line tab-line)))
-         (unavailable (eq stage 'unavailable)))
+         (chrome (memq (nth 1 posn) '(mode-line header-line tab-line))))
     (cond (chrome 'chrome)
           (hidden-eob 'hidden-eob)
-          (unavailable 'unavailable)
           (t 'col-row))))
 (defun d5-extent-project-contract (label posn)
   (let ((residual (d5-extent-main-residual label posn)))
@@ -41,11 +46,10 @@ const PROBE_EL: &str = r##";;; -*- lexical-binding: t -*-
      ((eq residual 'hidden-eob) 'preexisting-hidden-eob-visibility)
      (t (list (nth 0 posn) (nth 1 posn) (nth 2 posn) (nth 4 posn)
               (nth 5 posn)
-              ;; No canonical row producer ran at this deliberate seam.
-              ;; Main's fallback reports the clicked row below EOB; its
-              ;; offset is unchanged by the new matrix extent sidecar.
-              (if (eq residual 'unavailable)
-                  'preexisting-unavailable-walk-offset (nth 8 posn))
+              ;; The sidecar resolves a cold leaf from the accepted frame-pool
+              ;; partition, exactly where GNU's fake_current_matrices hands it
+              ;; accepted cells, so the offset cell is owned here too.
+              (nth 8 posn)
               (nth 9 posn))))))
 (defun d5-extent-project-residual (label posn)
   (let ((residual (d5-extent-main-residual label posn)))
@@ -53,7 +57,6 @@ const PROBE_EL: &str = r##";;; -*- lexical-binding: t -*-
           ((eq residual 'hidden-eob)
            (list (nth 0 posn) (nth 1 posn) (nth 2 posn)
                  (nth 4 posn) (nth 5 posn) (nth 6 posn)))
-          ((eq residual 'unavailable) (list (nth 6 posn) (nth 8 posn)))
           (t (list (nth 6 posn))))))
 (defun d5-extent-normalize (value)
   (cond ((windowp value) (list 'window (buffer-name (window-buffer value))))
