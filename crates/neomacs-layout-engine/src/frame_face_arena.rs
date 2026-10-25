@@ -217,6 +217,134 @@ pub(crate) struct FrameFaceAttempt {
     state: Rc<RefCell<FrameFaceAttemptState>>,
 }
 
+/// Exclusive owner of one speculative attempt's face table.
+///
+/// The output owner holds this value for the whole layout transaction; layout
+/// producers only ever receive [`FrameFaceAttempt`] handles.  Consuming the
+/// owner with [`FrameFaceTableAttempt::into_publication`] is the only way to
+/// obtain the finished table, so a table that was handed to the presented
+/// frame state cannot be observed through a live attempt: there is no `take`
+/// through `&self`.
+pub(crate) struct FrameFaceTableAttempt {
+    state: Rc<RefCell<FrameFaceAttemptState>>,
+}
+
+/// Why an attempt's table could not be handed off: a layout handle is still
+/// alive, so consuming the owner would leave that handle observing a state
+/// whose table has moved.  The table is left untouched and the frame is
+/// rejected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FrameFaceStillShared {
+    /// Strong attempt/owner handles at the failed hand-off.
+    pub(crate) handles: usize,
+}
+
+/// The publication step's exclusive claim on a finished attempt.
+///
+/// Built only by [`FrameFaceTableAttempt::into_publication`], which consumes
+/// the owner and proves no layout handle survives.  The attempt state is owned
+/// by value (no `Rc` remains), so no reader can observe the table after
+/// [`Self::install`] moves it into the presented frame state.
+pub(crate) struct FrameFacePublication {
+    state: FrameFaceAttemptState,
+    faces: FrameFaceMap,
+}
+
+impl FrameFacePublication {
+    /// Move the published table out and return the seal authority.
+    ///
+    /// The caller places the table in the presented frame state; one
+    /// transaction publishes it, so this is a move, never a copy.
+    pub(crate) fn install(self) -> (FrameFaceMap, FrameFaceSeal) {
+        let mut published: Vec<FaceId> = self.faces.keys().copied().collect();
+        published.sort_unstable();
+        (
+            self.faces,
+            FrameFaceSeal {
+                state: self.state,
+                published,
+            },
+        )
+    }
+}
+
+/// The seal authority for a table installed into the presented frame.
+///
+/// It carries the attempt's non-table state and the sorted published ids;
+/// `seal` consumes it, so one attempt can seal at most once.
+pub(crate) struct FrameFaceSeal {
+    state: FrameFaceAttemptState,
+    published: Vec<FaceId>,
+}
+
+impl FrameFaceSeal {
+    /// Commit the presented table after font realization.
+    ///
+    /// The table is the one this attempt published: it was moved into the
+    /// presented state, not copied, so the published namespace is exactly the
+    /// ids the layout transaction produced.  `seal` checks that no identity
+    /// was added, removed or re-keyed after the hand-off.  Styling cannot
+    /// diverge from a second copy because there is no second copy: the only
+    /// writer between `install` and `seal` is `realize_frame_fonts`, whose
+    /// enrichments mutate these same `Face` values.
+    pub(crate) fn seal(
+        self,
+        presented: &FrameFaceMap,
+    ) -> Result<FrameFaceArena, FrameFaceSealError> {
+        let mut finalized: Vec<FaceId> = presented.keys().copied().collect();
+        finalized.sort_unstable();
+        if self.published != finalized {
+            return Err(FrameFaceSealError::FaceSetChanged {
+                published: self.published,
+                finalized,
+            });
+        }
+        if let Some((table_id, face_id)) = presented
+            .iter()
+            .find_map(|(table_id, face)| (*table_id != face.id).then_some((*table_id, face.id)))
+        {
+            return Err(FrameFaceSealError::MismatchedFaceId { table_id, face_id });
+        }
+        Ok(FrameFaceArena {
+            owner: Arc::clone(&self.state.owner),
+            snapshot: Arc::new(FrameFaceSnapshot),
+            generation: self.state.generation.next(),
+            // The presented state and the committed arena are two owners; the
+            // remaining whole-table copy is this shared commit.
+            faces: Arc::new(presented.clone()),
+            realized: FrameFaceAttempt::fold_realized(&self.state),
+            resolved_memo: FrameFaceAttempt::fold_resolved_memo(&self.state),
+            next_face_id: self.state.next_face_id,
+        })
+    }
+}
+
+impl FrameFaceTableAttempt {
+    /// A cloneable layout handle for this attempt.  It can publish, bind and
+    /// read faces, but cannot yield the table.
+    pub(crate) fn handle(&self) -> FrameFaceAttempt {
+        FrameFaceAttempt {
+            state: Rc::clone(&self.state),
+        }
+    }
+
+    /// Consume the owner and move its table to the publication step.
+    ///
+    /// `Rc::try_unwrap` is the proof that no layout handle survives: the
+    /// attempt state is then owned by value, so no `FrameFaceAttempt` can
+    /// read the emptied table.  On failure nothing is moved and the frame is
+    /// rejected instead of exposing a handed-off-but-empty attempt.
+    pub(crate) fn into_publication(self) -> Result<FrameFacePublication, FrameFaceStillShared> {
+        // The owner is one of the strong handles; report only the layout
+        // handles that are keeping it shared.
+        let handles = Rc::strong_count(&self.state).saturating_sub(1);
+        let state = Rc::try_unwrap(self.state).map_err(|_| FrameFaceStillShared { handles })?;
+        let mut state = state.into_inner();
+        let faces = std::mem::take(&mut state.faces);
+        Ok(FrameFacePublication { state, faces })
+    }
+}
+
 /// Immutable face identities accompanying prepared rows.
 ///
 /// Unlike an arena or attempt this grants no identity-allocation or publication
@@ -398,16 +526,14 @@ pub(crate) enum FrameFaceReuseError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FrameFaceSealError {
-    ChangedRealization(FaceId),
-    ChangedFontBinding(FaceId),
+    /// The presented table no longer holds exactly the identities the layout
+    /// transaction published.
     FaceSetChanged {
         published: Vec<FaceId>,
         finalized: Vec<FaceId>,
     },
-    MismatchedFaceId {
-        table_id: FaceId,
-        face_id: FaceId,
-    },
+    /// A presented entry is stored under a key that is not its own face id.
+    MismatchedFaceId { table_id: FaceId, face_id: FaceId },
 }
 
 impl Default for FrameFaceArena {
@@ -495,19 +621,30 @@ impl FrameFaceArena {
         self.generation
     }
 
+    fn new_attempt_state(&self) -> FrameFaceAttemptState {
+        FrameFaceAttemptState {
+            owner: Arc::clone(&self.owner),
+            base_snapshot: Arc::clone(&self.snapshot),
+            generation: self.generation,
+            next_face_id: self.next_face_id.max(BasicFaceId::SENTINEL),
+            faces: HashMap::default(),
+            realized: Arc::clone(&self.realized),
+            fresh_realized: HashMap::default(),
+            resolved_memo: Arc::clone(&self.resolved_memo),
+            fresh_resolved_memo: HashMap::default(),
+        }
+    }
+
     pub(crate) fn begin_attempt(&self) -> FrameFaceAttempt {
         FrameFaceAttempt {
-            state: Rc::new(RefCell::new(FrameFaceAttemptState {
-                owner: Arc::clone(&self.owner),
-                base_snapshot: Arc::clone(&self.snapshot),
-                generation: self.generation,
-                next_face_id: self.next_face_id.max(BasicFaceId::SENTINEL),
-                faces: HashMap::default(),
-                realized: Arc::clone(&self.realized),
-                fresh_realized: HashMap::default(),
-                resolved_memo: Arc::clone(&self.resolved_memo),
-                fresh_resolved_memo: HashMap::default(),
-            })),
+            state: Rc::new(RefCell::new(self.new_attempt_state())),
+        }
+    }
+
+    /// Begin an attempt whose table an output owner can hand off by value.
+    pub(crate) fn begin_table_attempt(&self) -> FrameFaceTableAttempt {
+        FrameFaceTableAttempt {
+            state: Rc::new(RefCell::new(self.new_attempt_state())),
         }
     }
 
@@ -594,7 +731,7 @@ impl FrameFaceAttempt {
     ) -> Result<FaceId, FrameFacePublicationError> {
         self.use_face(face)
             .map_err(|_| FrameFacePublicationError::ForeignAttempt)?;
-        self.publish(face.face.clone())
+        self.publish_ref(&face.face)
             .map_err(FrameFacePublicationError::Conflict)
     }
 
@@ -615,7 +752,9 @@ impl FrameFaceAttempt {
         &mut self,
         face: Face,
     ) -> Result<RealizedFrameFace, FrameFaceConflict> {
-        self.publish(face.clone())?;
+        // Validate through the value that is about to be retained: an
+        // identity hit in the frame face table must not copy the face at all.
+        self.publish_ref(&face)?;
         Ok(RealizedFrameFace {
             face,
             attempt: Rc::downgrade(&self.state),
@@ -828,23 +967,28 @@ impl FrameFaceAttempt {
         Ok(())
     }
 
-    fn publish(&mut self, face: Face) -> Result<FaceId, FrameFaceConflict> {
+    /// Validate a publication through the already-realized face instead of a
+    /// speculative copy: the frame face cache is content-addressed, so a face
+    /// the table already holds is an identity hit, not a new value.  GNU's
+    /// `realize_face` (src/xfaces.c) likewise looks an equal realization up
+    /// and returns its id without copying the face.
+    fn publish_ref(&mut self, face: &Face) -> Result<FaceId, FrameFaceConflict> {
         let mut state = self.state.borrow_mut();
         let face_id = face.id;
-        if state.faces.get(&face_id) == Some(&face) {
+        if state.faces.get(&face_id) == Some(face) {
             return Ok(face_id);
         }
-        state.validate_face(&face)?;
+        state.validate_face(face)?;
         match state.faces.entry(face_id) {
             std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(face);
+                slot.insert(face.clone());
             }
-            std::collections::hash_map::Entry::Occupied(mut slot) if slot.get() != &face => {
-                if !merge_compatible_realization(slot.get_mut(), &face) {
+            std::collections::hash_map::Entry::Occupied(mut slot) if slot.get() != face => {
+                if !merge_compatible_realization(slot.get_mut(), face) {
                     return Err(FrameFaceConflict {
                         face_id,
                         existing: Box::new(slot.get().clone()),
-                        replacement: Box::new(face),
+                        replacement: Box::new(face.clone()),
                     });
                 }
             }
@@ -914,60 +1058,6 @@ impl FrameFaceAttempt {
             folded = state.fresh_resolved_memo.clone();
         }
         Arc::new(folded)
-    }
-
-    /// Seal the exact renderer-facing table produced by the layout transaction.
-    ///
-    /// Font realization may enrich a published face with an exact font file or
-    /// resolved-font handle after row construction. It may not add, remove, or
-    /// re-key face identities.
-    pub(crate) fn seal(
-        &self,
-        finalized_faces: FrameFaceMap,
-    ) -> Result<FrameFaceArena, FrameFaceSealError> {
-        let state = self.state.borrow();
-        let mut published: Vec<FaceId> = state.faces.keys().copied().collect();
-        let mut finalized: Vec<FaceId> = finalized_faces.keys().copied().collect();
-        published.sort_unstable();
-        finalized.sort_unstable();
-        if published != finalized {
-            return Err(FrameFaceSealError::FaceSetChanged {
-                published,
-                finalized,
-            });
-        }
-        if let Some((table_id, face_id)) = finalized_faces
-            .iter()
-            .find_map(|(table_id, face)| (*table_id != face.id).then_some((*table_id, face.id)))
-        {
-            return Err(FrameFaceSealError::MismatchedFaceId { table_id, face_id });
-        }
-        for (id, finalized) in &finalized_faces {
-            if !same_face_realization(&state.faces[id], finalized) {
-                return Err(FrameFaceSealError::ChangedRealization(*id));
-            }
-            let published = &state.faces[id];
-            if published
-                .font_file_path
-                .as_ref()
-                .is_some_and(|path| finalized.font_file_path.as_ref() != Some(path))
-                || published
-                    .default_resolved_font_id
-                    .as_ref()
-                    .is_some_and(|font| finalized.default_resolved_font_id.as_ref() != Some(font))
-            {
-                return Err(FrameFaceSealError::ChangedFontBinding(*id));
-            }
-        }
-        Ok(FrameFaceArena {
-            owner: Arc::clone(&state.owner),
-            snapshot: Arc::new(FrameFaceSnapshot),
-            generation: state.generation.next(),
-            faces: Arc::new(finalized_faces),
-            realized: Self::fold_realized(&state),
-            resolved_memo: Self::fold_resolved_memo(&state),
-            next_face_id: state.next_face_id,
-        })
     }
 }
 

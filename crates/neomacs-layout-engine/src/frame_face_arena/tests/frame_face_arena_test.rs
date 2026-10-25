@@ -144,20 +144,78 @@ fn prepared_output_rejects_identity_and_font_conflicts_without_partial_append() 
 }
 
 #[test]
-fn sealing_can_complete_but_not_replace_or_erase_an_exact_font_binding() {
-    let mut attempt = FrameFaceArena::default().begin_attempt();
+fn publication_requires_the_last_attempt_handle() {
+    let arena = FrameFaceArena::default();
+    let table = arena.begin_table_attempt();
+    let mut first = table.handle();
+    let second = table.handle();
+    let mut face = Face::new(FaceId::new(0));
+    face.font_size = 13.0;
+    first.import_face(face.clone()).unwrap();
+
+    let error = match table.into_publication() {
+        Ok(_) => panic!("a live layout handle must block the hand-off"),
+        Err(error) => error,
+    };
+    assert_eq!(error.handles, 2);
+    // The failed hand-off took nothing: both handles still read the table.
+    assert_eq!(first.face(face.id), Some(face.clone()));
+    assert_eq!(second.face(face.id), Some(face));
+}
+
+#[test]
+fn publication_moves_the_table_into_the_presented_state() {
+    let arena = FrameFaceArena::default();
+    let table = arena.begin_table_attempt();
+    let mut attempt = table.handle();
+    let face_id = attempt.reserve_dynamic_face();
+    let mut face = Face::new(face_id);
+    face.font_size = 13.0;
+    attempt.import_face(face.clone()).unwrap();
+    drop(attempt);
+
+    let (presented, seal) = table
+        .into_publication()
+        .expect("the sole handle was dropped")
+        .install();
+    assert_eq!(presented.len(), 1);
+    assert_eq!(presented.get(&face_id), Some(&face));
+    let sealed = seal.seal(&presented).expect("seal the moved table");
+
+    let mut replay = sealed.begin_attempt();
+    replay
+        .admit_retained(sealed.generation(), [face_id], &sealed)
+        .expect("admit face from sealed arena");
+    assert_eq!(replay.face(face_id), Some(face));
+}
+
+#[test]
+fn sealing_accepts_font_enrichment_of_the_installed_table() {
+    let arena = FrameFaceArena::default();
+    let table = arena.begin_table_attempt();
+    let mut attempt = table.handle();
     let mut face = Face::new(FaceId::new(0));
     face.font_file_path = Some("/fonts/primary.ttf".into());
     attempt.import_face(face.clone()).unwrap();
-    for replacement in [None, Some("/fonts/unrelated.ttf".into())] {
-        let mut finalized = attempt.faces();
-        finalized.get_mut(&face.id).unwrap().font_file_path = replacement;
-        assert!(attempt.seal(finalized).is_err());
-    }
-    let mut finalized = attempt.faces();
-    finalized.get_mut(&face.id).unwrap().font_ascent = 14;
-    finalized.get_mut(&face.id).unwrap().font_descent = 4;
-    assert!(attempt.seal(finalized).is_ok());
+    drop(attempt);
+
+    let (mut presented, seal) = table
+        .into_publication()
+        .expect("the sole handle was dropped")
+        .install();
+    // `realize_frame_fonts` enriches the same table entries after install;
+    // the enrichment is the sanctioned mutation of the handed-over table.
+    let entry = presented.get_mut(&face.id).unwrap();
+    entry.font_ascent = 14;
+    entry.font_descent = 4;
+    let sealed = seal
+        .seal(&presented)
+        .expect("sealing may enrich a published face");
+    let mut replay = sealed.begin_attempt();
+    replay
+        .admit_retained(sealed.generation(), [face.id], &sealed)
+        .expect("admit enriched face");
+    assert_eq!(replay.face(face.id).map(|face| face.font_ascent), Some(14));
 }
 
 #[test]
@@ -257,21 +315,51 @@ fn retained_faces_cannot_cross_frame_arenas_with_equal_generations() {
 }
 
 #[test]
-fn sealing_rejects_changed_styling_without_losing_the_published_face() {
+fn seal_rejects_a_presented_table_that_dropped_a_published_face() {
     let arena = FrameFaceArena::default();
-    let mut attempt = arena.begin_attempt();
+    let table = arena.begin_table_attempt();
+    let mut attempt = table.handle();
     let mut face = Face::new(FaceId::new(0));
     face.font_size = 13.0;
     attempt.import_face(face.clone()).unwrap();
+    drop(attempt);
 
-    let mut finalized = attempt.faces();
-    finalized.get_mut(&face.id).unwrap().font_size = 9.889436;
-    assert!(
-        attempt.seal(finalized).is_err(),
-        "font finalization must not change a published face's styling identity"
+    let (mut presented, seal) = table
+        .into_publication()
+        .expect("the sole handle was dropped")
+        .install();
+    presented.remove(&face.id);
+    assert_eq!(
+        seal.seal(&presented).err(),
+        Some(FrameFaceSealError::FaceSetChanged {
+            published: vec![face.id],
+            finalized: vec![],
+        })
     );
-    assert_eq!(attempt.face(face.id), Some(face));
-    assert!(attempt.seal(attempt.faces()).is_ok());
+}
+
+#[test]
+fn seal_rejects_a_rekeyed_presented_face() {
+    let arena = FrameFaceArena::default();
+    let table = arena.begin_table_attempt();
+    let mut attempt = table.handle();
+    let face = Face::new(FaceId::new(0));
+    attempt.import_face(face.clone()).unwrap();
+    drop(attempt);
+
+    let (mut presented, seal) = table
+        .into_publication()
+        .expect("the sole handle was dropped")
+        .install();
+    let wrong_id = FaceId::new(7);
+    *presented.get_mut(&face.id).unwrap() = Face::new(wrong_id);
+    assert_eq!(
+        seal.seal(&presented).err(),
+        Some(FrameFaceSealError::MismatchedFaceId {
+            table_id: face.id,
+            face_id: wrong_id,
+        })
+    );
 }
 
 use neomacs_display_protocol::types::Color;
@@ -801,21 +889,26 @@ fn retained_admission_cannot_overwrite_an_attempt_publication() {
 }
 
 #[test]
-fn sealing_commits_the_finalized_face_table_for_future_replay() {
+fn sealing_commits_the_installed_face_table_for_future_replay() {
     let arena = FrameFaceArena::default();
-    let mut attempt = arena.begin_attempt();
+    let table = arena.begin_table_attempt();
+    let mut attempt = table.handle();
     let face_id = attempt.reserve_dynamic_face();
     attempt
         .import_face(Face::new(face_id))
         .expect("publish semantic face");
+    drop(attempt);
 
-    let mut finalized_faces = attempt.faces();
-    finalized_faces
+    let (mut presented, seal) = table
+        .into_publication()
+        .expect("the sole handle was dropped")
+        .install();
+    presented
         .get_mut(&face_id)
         .expect("published face")
         .font_file_path = Some("/fonts/exact.ttf".to_owned());
-    let sealed = attempt
-        .seal(finalized_faces)
+    let sealed = seal
+        .seal(&presented)
         .expect("sealing may enrich a published face");
 
     let mut replay = sealed.begin_attempt();
@@ -831,11 +924,10 @@ fn sealing_commits_the_finalized_face_table_for_future_replay() {
 #[test]
 fn sealing_advances_the_generation() {
     let arena = FrameFaceArena::default();
-    let attempt = arena.begin_attempt();
+    let table = arena.begin_table_attempt();
+    let (presented, seal) = table.into_publication().expect("sole owner").install();
 
-    let sealed = attempt
-        .seal(HashMap::default())
-        .expect("seal empty attempt");
+    let sealed = seal.seal(&presented).expect("seal empty attempt");
 
     assert_ne!(
         sealed.generation(),

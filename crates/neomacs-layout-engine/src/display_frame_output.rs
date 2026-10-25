@@ -6,7 +6,9 @@ use crate::display_status_line::{
 use crate::display_text_output_install::install_output_resolved_face;
 use crate::display_text_window_row_lifecycle::TextWindowTerminalRightBorderRequest;
 use crate::font::metrics::FontMetrics;
-use crate::frame_face_arena::FrameFaceAttempt;
+use crate::frame_face_arena::{
+    FrameFaceAttempt, FrameFaceSeal, FrameFaceStillShared, FrameFaceTableAttempt,
+};
 use crate::neovm_bridge::ResolvedFace;
 use crate::output::builder::DisplayOutputBuilder;
 use crate::types::{FrameParams, WindowParams};
@@ -66,6 +68,40 @@ pub(crate) struct FrameOutputIdentity {
     pub(crate) no_accept_focus: bool,
 }
 
+/// Why finishing one frame output failed after the layout transaction.
+#[derive(Debug)]
+pub(crate) enum FrameOutputFinishError {
+    Chrome(ChromeLayoutError),
+    /// A layout handle outlived the publication step, so the attempt's face
+    /// table could not be handed off exclusively; the frame is rejected.
+    Faces(FrameFaceStillShared),
+}
+
+impl From<ChromeLayoutError> for FrameOutputFinishError {
+    fn from(error: ChromeLayoutError) -> Self {
+        Self::Chrome(error)
+    }
+}
+
+impl From<FrameFaceStillShared> for FrameOutputFinishError {
+    fn from(error: FrameFaceStillShared) -> Self {
+        Self::Faces(error)
+    }
+}
+
+impl std::fmt::Display for FrameOutputFinishError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Chrome(error) => write!(formatter, "frame chrome layout failed: {error:?}"),
+            Self::Faces(error) => write!(
+                formatter,
+                "frame face attempt is still shared by {} handles",
+                error.handles
+            ),
+        }
+    }
+}
+
 pub(crate) struct FrameOutputOwner {
     builder: DisplayOutputBuilder,
     pending_frame_chrome: Vec<ChromeBandRequest>,
@@ -113,9 +149,10 @@ impl FrameOutputOwner {
     pub(crate) fn finish(
         &mut self,
         frame_params: &FrameParams,
-    ) -> Result<FrameDisplayState, ChromeLayoutError> {
+        table: FrameFaceTableAttempt,
+    ) -> Result<(FrameDisplayState, FrameFaceSeal), FrameOutputFinishError> {
         let presentation_id = self.presentation_id;
-        let mut state = self.session().finish(frame_params)?;
+        let (mut state, seal) = self.session().finish(frame_params, table)?;
         state.presentation_id = presentation_id;
         let placement = state.frame_placement;
         state.frame_placement = neomacs_display_protocol::PresentedFramePlacement::new(
@@ -125,7 +162,7 @@ impl FrameOutputOwner {
             placement.outer_in_parent(),
             placement.z_order(),
         );
-        Ok(state)
+        Ok((state, seal))
     }
 
     pub(crate) fn add_frame_chrome_band(&mut self, request: ChromeBandRequest) {
@@ -354,24 +391,29 @@ impl<'builder, 'chrome> FrameOutputSession<'builder, 'chrome> {
         self.pending_frame_chrome.clear();
     }
 
-    fn finish(self, frame_params: &FrameParams) -> Result<FrameDisplayState, ChromeLayoutError> {
+    fn finish(
+        self,
+        frame_params: &FrameParams,
+        table: FrameFaceTableAttempt,
+    ) -> Result<(FrameDisplayState, FrameFaceSeal), FrameOutputFinishError> {
         let frame_cols = (frame_params.width / frame_params.char_width.max(1.0)) as usize;
         let frame_rows = (frame_params.height / frame_params.char_height.max(1.0)) as usize;
         let display_output_builder = std::mem::replace(self.builder, DisplayOutputBuilder::new());
-        let mut frame_display_state = display_output_builder.finish_with_pixel_size(
+        let (mut frame_display_state, seal) = display_output_builder.finish_publication(
             frame_cols,
             frame_rows,
             frame_params.char_width,
             frame_params.char_height,
             frame_params.width,
             frame_params.height,
-        );
+            table,
+        )?;
         frame_display_state.frame_chrome = FrameChrome::layout(
             FrameSize::new(frame_params.width, frame_params.height)?,
             std::mem::take(self.pending_frame_chrome),
         )?;
 
-        Ok(frame_display_state)
+        Ok((frame_display_state, seal))
     }
 }
 

@@ -285,7 +285,11 @@ fn frame_output_owner_publishes_canonical_frame_chrome_order() {
         FrameChromeContent::MenuBar(MenuBarContent::empty()),
     ));
 
-    let state = owner.finish(&frame_params()).expect("valid frame chrome");
+    let table = crate::frame_face_arena::FrameFaceArena::default().begin_table_attempt();
+    owner.set_face_attempt(table.handle());
+    let (state, _seal) = owner
+        .finish(&frame_params(), table)
+        .expect("valid frame chrome");
     let bands = state.frame_chrome.bands();
     assert_eq!(bands.len(), 3);
     assert_eq!(bands[0].kind(), FrameChromeKind::MenuBar);
@@ -314,7 +318,11 @@ fn frame_output_owner_uses_compact_bar_instead_of_split_menu_and_tool_bars() {
         ),
     ));
 
-    let state = owner.finish(&frame_params()).expect("valid frame chrome");
+    let table = crate::frame_face_arena::FrameFaceArena::default().begin_table_attempt();
+    owner.set_face_attempt(table.handle());
+    let (state, _seal) = owner
+        .finish(&frame_params(), table)
+        .expect("valid frame chrome");
     let bands = state.frame_chrome.bands();
     assert_eq!(bands.len(), 2);
     assert_eq!(bands[0].kind(), FrameChromeKind::CompactBar);

@@ -1433,16 +1433,20 @@ impl LayoutEngine {
     fn finish_frame_output(
         &mut self,
         frame_params: &FrameParams,
+        table: crate::frame_face_arena::FrameFaceTableAttempt,
     ) -> Result<
-        neomacs_display_protocol::glyph_matrix::FrameDisplayState,
-        neomacs_display_protocol::frame_chrome::ChromeLayoutError,
+        (
+            neomacs_display_protocol::glyph_matrix::FrameDisplayState,
+            crate::frame_face_arena::FrameFaceSeal,
+        ),
+        crate::display_frame_output::FrameOutputFinishError,
     > {
-        let mut state = self.frame_output.finish(frame_params)?;
+        let (mut state, seal) = self.frame_output.finish(frame_params, table)?;
         // Publish exact resolved font identities for every realized face so
         // the render thread rasterizes the same fonts layout measured with
         // (font realization / render boundary design, Phase 1).
         crate::font::metrics::realize_frame_fonts(&mut state, &mut self.font_metrics);
-        Ok(state)
+        Ok((state, seal))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1978,7 +1982,7 @@ impl LayoutEngine {
             curr_window_infos,
             retained_keys,
             accepted_window_chrome_metrics,
-            accepted_face_attempt,
+            accepted_face_table,
             accepted_window_navigation_intents,
             accepted_frame_navigation_intent,
         ) = 'frame_layout: loop {
@@ -2211,7 +2215,8 @@ impl LayoutEngine {
             // rejected pass. The replay budget in the same ledger is per
             // logical attempt, not per pass, so it stays.
             lisp_ledger.display_when.begin_frame_pass();
-            let mut face_attempt = committed_face_arena.begin_attempt();
+            let face_table = committed_face_arena.begin_table_attempt();
+            let mut face_attempt = face_table.handle();
             self.frame_output.set_face_attempt(face_attempt.clone());
             self.frame_output.set_presentation_id(presentation_id);
             let mut curr_window_infos: rustc_hash::FxHashMap<DisplayWindowId, WindowInfo> =
@@ -3273,7 +3278,7 @@ impl LayoutEngine {
                 curr_window_infos,
                 retained_keys,
                 accepted_window_chrome_metrics,
-                face_attempt,
+                face_table,
                 observed_window_navigation_intents,
                 observed_frame_navigation,
             );
@@ -3394,22 +3399,22 @@ impl LayoutEngine {
             }
         }
 
-        let mut frame_display_state = match self.finish_frame_output(&frame_params) {
-            Ok(state) => state,
-            Err(error) => {
-                tracing::error!(?error, "rejecting invalid frame chrome snapshot");
-                frame_window_end_attempts.reject_all(evaluator);
-                evaluator.retire_interaction_presentation(presentation_id);
-                return None;
-            }
-        };
+        let (mut frame_display_state, face_seal) =
+            match self.finish_frame_output(&frame_params, accepted_face_table) {
+                Ok(output) => output,
+                Err(error) => {
+                    tracing::error!(%error, "rejecting invalid frame chrome snapshot");
+                    frame_window_end_attempts.reject_all(evaluator);
+                    evaluator.retire_interaction_presentation(presentation_id);
+                    return None;
+                }
+            };
         frame_display_state.scroll_input_policy.x11_delta_factor = evaluator
             .variable_value_by_name("x-scroll-event-delta-factor")
             .and_then(|value| value.as_number_f64())
             .filter(|factor| factor.is_finite())
             .unwrap_or(1.0);
-        let sealed_face_arena = match accepted_face_attempt.seal(frame_display_state.faces.clone())
-        {
+        let sealed_face_arena = match face_seal.seal(&frame_display_state.faces) {
             Ok(arena) => arena,
             Err(error) => {
                 tracing::error!(?error, "rejecting incoherent frame face namespace");

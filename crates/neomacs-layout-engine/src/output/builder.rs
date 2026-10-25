@@ -14,7 +14,9 @@ use crate::display_cursor::{
 use crate::display_row::face_state::resolved_display_row_face;
 #[cfg(test)]
 use crate::font::metrics::FontMetrics;
-use crate::frame_face_arena::{FrameFaceArena, FrameFaceAttempt};
+use crate::frame_face_arena::{
+    FrameFaceArena, FrameFaceAttempt, FrameFaceSeal, FrameFaceStillShared, FrameFaceTableAttempt,
+};
 #[cfg(test)]
 use crate::neovm_bridge::ResolvedFace;
 use crate::output::frame_state::OutputFrameBuildState;
@@ -790,6 +792,29 @@ impl DisplayOutputBuilder {
         )
     }
 
+    fn finish_parts(
+        self,
+        frame_cols: usize,
+        frame_rows: usize,
+        char_width: f32,
+        char_height: f32,
+        frame_pixel_width: f32,
+        frame_pixel_height: f32,
+    ) -> (FrameDisplayState, FrameFaceAttempt) {
+        let Self {
+            window_state,
+            frame_state,
+            face_attempt,
+            ..
+        } = self;
+        let mut state = FrameDisplayState::new(frame_cols, frame_rows, char_width, char_height);
+        state.frame_pixel_width = frame_pixel_width;
+        state.frame_pixel_height = frame_pixel_height;
+        state.window_matrices = window_state.into_window_matrix_entries();
+        frame_state.install_into(&mut state);
+        (state, face_attempt)
+    }
+
     pub(crate) fn finish_with_pixel_size(
         self,
         frame_cols: usize,
@@ -799,20 +824,48 @@ impl DisplayOutputBuilder {
         frame_pixel_width: f32,
         frame_pixel_height: f32,
     ) -> FrameDisplayState {
-        let Self {
-            window_state,
-            frame_state,
-            face_attempt,
-            edit_sync: _,
-            edit_sync_reached: _,
-        } = self;
-        let mut state = FrameDisplayState::new(frame_cols, frame_rows, char_width, char_height);
-        state.frame_pixel_width = frame_pixel_width;
-        state.frame_pixel_height = frame_pixel_height;
-        state.window_matrices = window_state.into_window_matrix_entries();
-        frame_state.install_into(&mut state);
+        let (mut state, face_attempt) = self.finish_parts(
+            frame_cols,
+            frame_rows,
+            char_width,
+            char_height,
+            frame_pixel_width,
+            frame_pixel_height,
+        );
         state.faces = face_attempt.faces();
         state
+    }
+
+    /// Finish the frame output and hand the attempt's face table to the
+    /// presented state without copying it.
+    ///
+    /// The builder's layout handle is dropped first; `into_publication` then
+    /// consumes the exclusive table owner, so the handed-off table cannot be
+    /// observed through any surviving `FrameFaceAttempt`.  The one remaining
+    /// whole-table copy is the sheet the committed arena shares at seal.
+    pub(crate) fn finish_publication(
+        self,
+        frame_cols: usize,
+        frame_rows: usize,
+        char_width: f32,
+        char_height: f32,
+        frame_pixel_width: f32,
+        frame_pixel_height: f32,
+        table: FrameFaceTableAttempt,
+    ) -> Result<(FrameDisplayState, FrameFaceSeal), FrameFaceStillShared> {
+        let (mut state, face_attempt) = self.finish_parts(
+            frame_cols,
+            frame_rows,
+            char_width,
+            char_height,
+            frame_pixel_width,
+            frame_pixel_height,
+        );
+        drop(face_attempt);
+        let publication = table.into_publication()?;
+        let (faces, seal) = publication.install();
+        state.faces = faces;
+        Ok((state, seal))
     }
 }
 
