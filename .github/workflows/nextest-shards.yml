@@ -13,7 +13,9 @@ permissions:
 
 jobs:
   shards:
-    name: ${{ inputs.suite }} tests shard ${{ matrix.partition }}/20 (linux x86_64)
+    # Zero-padded shard label (01/20 .. 20/20) so the job list sorts in shard order;
+    # matrix.partition stays an integer for nextest's --partition slice:N/20.
+    name: ${{ inputs.suite }} tests shard ${{ matrix.partition < 10 && format('0{0}', matrix.partition) || matrix.partition }}/20 (linux x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.suite == 'oracle' && 120 || 60 }}
     env:
