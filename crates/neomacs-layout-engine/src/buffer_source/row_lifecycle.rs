@@ -528,7 +528,7 @@ impl<'a> BufferSourceEndOfBufferTailRenderContext<'a> {
             cursor_info,
             self.active_face_state,
             row_geometry,
-            row_progress.x(),
+            row_progress.x().get(),
             row_progress.col().get(),
         );
 
@@ -536,7 +536,7 @@ impl<'a> BufferSourceEndOfBufferTailRenderContext<'a> {
             let face_metrics = self.active_face_state.metrics();
             source_render.output_emitter().push_text_insertion_boundary(
                 layout_i64_char_pos_to_lisp_char_pos(self.charpos),
-                row_progress.x(),
+                row_progress.x().get(),
                 row_geometry.glyph_y(0.0),
                 face_metrics.char_width(),
                 row_geometry.height().max(face_metrics.row_height()),

@@ -50,6 +50,7 @@ use crate::types::{LineWrapMode, WindowParams, WindowSourceExtent};
 use crate::window_output::{
     TextWindowOutputTarget, TextWindowRedisplayPositions, WindowOutputEmitter,
 };
+use neomacs_display_protocol::types::Px;
 use neovm_core::buffer::CharLen;
 use neovm_core::emacs_core::image_catalog::ImageScaleEnvironment;
 
@@ -103,7 +104,7 @@ pub(crate) struct BufferSourceWalkSetup {
     pub(crate) hscroll_skip: HorizontalScrollSkipState,
     pub(crate) word_wrap: WordWrapRenderState,
     pub(crate) physical_line_tabs: DisplayPhysicalLineTabState,
-    pub(crate) row_text_start_x: f32,
+    pub(crate) row_text_start_x: Px,
     pub(crate) prefix_request: DisplayRowPrefixRequest,
     pub(crate) text_append_surface: DisplayRowAppendSurface,
     pub(crate) row_geometry_defaults: DisplayRowGeometryDefaults,
@@ -308,7 +309,7 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
             ),
             word_wrap: WordWrapRenderState::new(self.word_wrap),
             physical_line_tabs: DisplayPhysicalLineTabState::default(),
-            row_text_start_x: self.content_x,
+            row_text_start_x: Px(self.content_x),
             prefix_request: DisplayRowPrefixRequest::initial(
                 self.has_prefix,
                 self.has_line_default_prefix,

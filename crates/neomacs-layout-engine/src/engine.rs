@@ -1399,16 +1399,17 @@ impl LayoutEngine {
     fn output_window_automatic_mini_height_px(
         &self,
         params: &WindowParams,
-        fallback_row_height: f32,
-    ) -> Option<f32> {
-        if params.window_system {
+        fallback_row_height: Px,
+    ) -> Option<Px> {
+        let height = if params.window_system {
             // Preserve legacy GUI sizing; the automatic-tail correction is TTY-only.
             self.frame_output
-                .window_content_height_px(params.window_id, fallback_row_height)
+                .window_content_height_px(params.window_id, fallback_row_height.get())
         } else {
             self.frame_output
-                .mini_measurement_height_px(params.window_id, fallback_row_height)
-        }
+                .mini_measurement_height_px(params.window_id, fallback_row_height.get())
+        };
+        height.map(Px)
     }
 
     /// Keep inactive echo-area geometry renderer-visible without admitting it
@@ -3130,7 +3131,7 @@ impl LayoutEngine {
                 && mini_params.is_minibuffer()
                 && let Some(mini_content_height_px) = self.output_window_automatic_mini_height_px(
                     mini_params,
-                    frame_params.char_height.max(1.0),
+                    Px(frame_params.char_height.max(1.0)),
                 )
             {
                 let char_h = frame_params.char_height.max(1.0);
@@ -3170,7 +3171,7 @@ impl LayoutEngine {
                     .frame_manager()
                     .get(frame_id)
                     .and_then(|frame| {
-                        frame.plan_mini_window_resize(mini_content_height_px, max_mini_lines)
+                        frame.plan_mini_window_resize(mini_content_height_px.get(), max_mini_lines)
                     })
                     .filter(|resize| {
                         if resize.is_growth() {

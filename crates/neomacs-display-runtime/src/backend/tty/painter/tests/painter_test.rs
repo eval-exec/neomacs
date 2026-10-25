@@ -84,7 +84,10 @@ fn resized_native_output_clears_before_rows_and_retries_after_failed_flush() {
             PaintEvent::Finish
         ]
     );
-    assert!(rif.needs_physical_clear());
+    assert_eq!(
+        rif.physical_clear_requirement(),
+        PendingPhysicalClear::AfterResize
+    );
 
     painter.events.clear();
     painter.fail = false;
@@ -99,7 +102,7 @@ fn resized_native_output_clears_before_rows_and_retries_after_failed_flush() {
             PaintEvent::Finish
         ]
     );
-    assert!(!rif.needs_physical_clear());
+    assert_eq!(rif.physical_clear_requirement(), PendingPhysicalClear::None);
 
     painter.events.clear();
     rif.force_redraw();

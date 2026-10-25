@@ -4,7 +4,9 @@ use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use neomacs_display_runtime::backend::tty::rif::painter::{
     CellOutput, TtyPainter, encode_cells_with,
 };
-use neomacs_display_runtime::backend::tty::rif::{TerminalCursorShape, TtyCell, TtyRif};
+use neomacs_display_runtime::backend::tty::rif::{
+    PendingPhysicalClear, TerminalCursorShape, TtyCell, TtyRif,
+};
 use std::io::{self, Write};
 
 #[cfg(windows)]
@@ -327,7 +329,7 @@ pub(crate) fn render_to(
     caps: &Capabilities,
 ) -> io::Result<()> {
     if caps.ansi && !caps.needs_padding {
-        let clearing_resize = rif.needs_physical_clear();
+        let clear_requirement = rif.physical_clear_requirement();
         rif.diff_and_render();
         let body = rif.take_output();
         if body.is_empty() {
@@ -340,8 +342,9 @@ pub(crate) fn render_to(
         caps.reset_modes(&mut bytes);
         bytes.extend_from_slice(&body);
         if let Err(error) = bytes.write_to(output, caps) {
-            if clearing_resize {
-                rif.retry_physical_clear();
+            match clear_requirement {
+                PendingPhysicalClear::None => {}
+                PendingPhysicalClear::AfterResize => rif.retry_physical_clear(),
             }
             rif.force_redraw();
             return Err(error);

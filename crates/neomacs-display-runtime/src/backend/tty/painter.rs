@@ -1,5 +1,5 @@
 //! Structured output for terminals that cannot consume the ANSI encoder.
-use super::{CellAttrs, TerminalCursorShape, TtyCell, TtyRif};
+use super::{CellAttrs, PendingPhysicalClear, TerminalCursorShape, TtyCell, TtyRif};
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use std::io;
 
@@ -23,8 +23,9 @@ impl TtyRif {
         self.frame_stats = super::TtyFrameStats::default();
         let result = (|| {
             painter.begin(self.desired.width, self.desired.height)?;
-            if self.needs_physical_clear() {
-                painter.clear_screen()?;
+            match self.physical_clear_requirement() {
+                PendingPhysicalClear::None => {}
+                PendingPhysicalClear::AfterResize => painter.clear_screen()?,
             }
             for row in 0..self.desired.height {
                 // A damage frame (NEOMACS_TTY_DAMAGE) rasterized only the rows

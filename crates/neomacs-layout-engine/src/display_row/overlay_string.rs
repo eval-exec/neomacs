@@ -35,12 +35,13 @@ use crate::display_row::walk_state::{
     DisplayRowSourceStart, FaceScanCheckpoint, TextRowTransitionStatePolicy,
 };
 use crate::display_source::{LispStringPrefixProperties, LispStringSourceOrigin};
-use crate::display_source_progress::DisplaySourceVisualRowProgress;
+use crate::display_source_progress::{DisplaySourceContent, DisplaySourceVisualRowProgress};
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{
     LayoutBufferView, OverlayDisplayString, ResolvedFace, RustTextPropAccess,
 };
 use crate::types::{LayoutCharPos0, WindowParams};
+use neomacs_display_protocol::types::Px;
 use neovm_core::buffer::{CharPos0, DisplayColumn};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::value::get_string_text_properties_table_for_value;
@@ -181,19 +182,10 @@ impl<'a> OverlayStringRenderRequest<'a> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OverlayStringRowTransitions {
     Allow,
     Refuse,
-}
-
-impl OverlayStringRowTransitions {
-    fn refuses(self) -> bool {
-        match self {
-            Self::Allow => false,
-            Self::Refuse => true,
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -404,7 +396,7 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> OverlayStringRenderState<'a, FS>
             );
         if wrap_prefix {
             self.progress
-                .record_wrap_prefix_width((end.x_px() - position.x_px()).max(0.0));
+                .record_wrap_prefix_width(Px((end.x_px() - position.x_px()).max(0.0)));
         }
         self.progress.record_row_text_start();
     }
@@ -677,7 +669,7 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
         let position = state.progress.row_position();
         state
             .progress
-            .continue_after_visual_row(self.row_context.content_x());
+            .continue_after_visual_row(Px(self.row_context.content_x()));
         let plan = DisplayRowOverflowTransitionPlan::visual_wrap(
             VisualWrapBreak::MidElement,
             TextRowTransitionStatePolicy::visual_wrap(),
@@ -814,7 +806,7 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
     };
 
     while state.geometry.is_within_row_limit(row_limit) {
-        if state.progress.x() >= max_x && !row_context.append_surface.line_wrap().wraps() {
+        if state.progress.x().get() >= max_x && !row_context.append_surface.line_wrap().wraps() {
             break;
         }
 
@@ -844,8 +836,11 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         state.progress.apply_position(end);
 
         if matches!(stop, DisplayRowRenderStop::RowBreak(_)) {
-            if row_context.row_transitions.refuses() {
-                return DisplayRowTransitionContinuation::Exhausted;
+            match row_context.row_transitions {
+                OverlayStringRowTransitions::Allow => {}
+                OverlayStringRowTransitions::Refuse => {
+                    return DisplayRowTransitionContinuation::Exhausted;
+                }
             }
             state
                 .source_render
@@ -875,8 +870,11 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
                         .output_emitter()
                         .note_automatic_mini_row_truncation();
                 }
-                if row_context.row_transitions.refuses() {
-                    return DisplayRowTransitionContinuation::Exhausted;
+                match row_context.row_transitions {
+                    OverlayStringRowTransitions::Allow => {}
+                    OverlayStringRowTransitions::Refuse => {
+                        return DisplayRowTransitionContinuation::Exhausted;
+                    }
                 }
                 // GNU's pushed overlay-string iterator survives WINDOW_WRAP:
                 // only TRUNCATE skips to a logical newline. Retain the pending
@@ -884,7 +882,10 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
                 // An element that cannot fit even an empty row keeps the old
                 // bounded skip path rather than producing endless empty rows.
                 if row_context.append_surface.line_wrap().wraps()
-                    && state.progress.has_source_content(row_context.content_x())
+                    && match state.progress.source_content(Px(row_context.content_x())) {
+                        DisplaySourceContent::Empty => false,
+                        DisplaySourceContent::Present => true,
+                    }
                 {
                     // A visual row break consumes pushed string text, never
                     // the underlying buffer character at its anchor.

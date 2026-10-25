@@ -5,7 +5,7 @@
 //! and publication authority only in the enclosing window emitter.
 
 use super::snapshot_rows::PreparedWindowRows;
-use super::{DisplayRowTerminator, RowMetricsSnapshot};
+use super::{DisplayRowTerminator, RowMetricsSnapshot, RowVisibleStartPosition};
 use crate::display_status_line::DisplayRowOutputProgress;
 use neovm_core::buffer::LispCharPos1;
 use neovm_core::window::{
@@ -325,9 +325,17 @@ impl WindowRowGeometry {
     }
 
     /// Pen coordinates are relative to the first visible text-area X.
-    pub(super) fn current_row_at_or_before_first_visible_x(&self) -> bool {
-        self.current_row_progress
-            .is_some_and(|progress| progress.x <= 0)
+    pub(super) fn current_row_visible_start_position(&self) -> RowVisibleStartPosition {
+        match self.current_row_progress {
+            Some(progress) => {
+                if progress.x <= 0 {
+                    RowVisibleStartPosition::AtOrBefore
+                } else {
+                    RowVisibleStartPosition::After
+                }
+            }
+            None => RowVisibleStartPosition::Unavailable,
+        }
     }
 
     pub(super) fn current_row_has_output(&self) -> bool {

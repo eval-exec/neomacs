@@ -166,18 +166,21 @@ fn resize_clear_uses_the_entry_sequence_and_survives_a_failed_write_retry() {
     render_with_screen_clear_capability(&mut rif, &terminal);
     let output = rif.take_output();
     assert!(output.windows(clear.len()).any(|bytes| bytes == clear));
-    assert!(!rif.needs_physical_clear());
+    assert_eq!(rif.physical_clear_requirement(), PendingPhysicalClear::None);
 
     // The output owner calls this only if writing that resize update failed.
     rif.retry_physical_clear();
-    assert!(rif.needs_physical_clear());
+    assert_eq!(
+        rif.physical_clear_requirement(),
+        PendingPhysicalClear::AfterResize
+    );
     render_with_screen_clear_capability(&mut rif, &terminal);
     assert!(
         rif.take_output()
             .windows(clear.len())
             .any(|bytes| bytes == clear)
     );
-    assert!(!rif.needs_physical_clear());
+    assert_eq!(rif.physical_clear_requirement(), PendingPhysicalClear::None);
 }
 
 // ---------------------------------------------------------------------------

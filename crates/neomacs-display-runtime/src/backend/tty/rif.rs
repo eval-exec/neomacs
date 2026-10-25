@@ -541,11 +541,20 @@ pub struct TtyRif {
     damage: damage::DamageState,
 }
 
+/// Physical terminal obligation owned by one RIF and observed by its output
+/// owner. This copied value holds no Lisp roots or shared mutable state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PendingPhysicalClear {
+#[must_use = "the output owner must preserve the physical-clear obligation"]
+pub enum PendingPhysicalClear {
     None,
     AfterResize,
 }
+
+const _: () = assert!(std::mem::size_of::<PendingPhysicalClear>() == 1);
+const _: fn() = || {
+    fn require_copy_send_sync<T: Copy + Send + Sync>() {}
+    require_copy_send_sync::<PendingPhysicalClear>();
+};
 
 fn terminal_cursor_cell(x: f32, y: f32, char_width: f32, char_height: f32) -> (u16, u16) {
     let char_width = char_width.max(1.0);
@@ -1027,10 +1036,10 @@ impl TtyRif {
         self.terminal_cursor_shape.forget_after_redraw();
     }
 
-    /// Whether the next output must clear resize-invalidated terminal history.
+    /// The physical terminal obligation the next output must preserve.
     #[inline]
-    pub fn needs_physical_clear(&self) -> bool {
-        self.pending_physical_clear == PendingPhysicalClear::AfterResize
+    pub fn physical_clear_requirement(&self) -> PendingPhysicalClear {
+        self.pending_physical_clear
     }
 
     /// Retain the resize obligation when its encoded output could not be written.
@@ -1653,11 +1662,14 @@ impl TtyRif {
         // before the frame's glyphs are written, src/term.c:763).
         write_hide_cursor(&mut self.output);
 
-        if self.needs_physical_clear() {
-            // GNU clear_frame clears a garbaged/resized terminal before the
-            // fresh glyph matrix. Repainting alone cannot remove soft wraps
-            // left by an old-width update already in flight at resize.
-            emit_clear(&mut self.output);
+        match self.physical_clear_requirement() {
+            PendingPhysicalClear::None => {}
+            PendingPhysicalClear::AfterResize => {
+                // GNU clear_frame clears a garbaged/resized terminal before the
+                // fresh glyph matrix. Repainting alone cannot remove soft wraps
+                // left by an old-width update already in flight at resize.
+                emit_clear(&mut self.output);
+            }
         }
         self.encode_ops(&ops);
 

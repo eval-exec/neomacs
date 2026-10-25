@@ -1349,6 +1349,18 @@ impl From<u8> for MiniPrecedingZvByte {
     }
 }
 
+/// The current row pen's relation to its first visible text-area origin.
+/// An absent current row carries no permission to use the empty-row shortcut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowVisibleStartPosition {
+    Unavailable,
+    AtOrBefore,
+    After,
+}
+
+static_assertions::assert_impl_all!(RowVisibleStartPosition: Copy, Send, Sync);
+const _: () = assert!(std::mem::size_of::<RowVisibleStartPosition>() == 1);
+
 /// Numeric facts of one exclusive speculative emitter. They are discarded
 /// with that emitter on retry/completion, never published in the glyph matrix
 /// or shared with a mutator/retained cache.
@@ -1656,8 +1668,8 @@ impl WindowOutputEmitter {
         self.previous_automatic_mini_row_end
     }
 
-    pub(crate) fn current_row_at_or_before_first_visible_x(&self) -> bool {
-        self.geometry.current_row_at_or_before_first_visible_x()
+    pub(crate) fn current_row_visible_start_position(&self) -> RowVisibleStartPosition {
+        self.geometry.current_row_visible_start_position()
     }
 
     pub(crate) fn current_row_has_output(&self) -> bool {

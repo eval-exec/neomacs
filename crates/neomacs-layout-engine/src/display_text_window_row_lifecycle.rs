@@ -758,7 +758,11 @@ impl<'a> TextWindowTailFinalizeRequest<'a> {
                 {
                     use crate::output::window_state::AutomaticMiniTailHeight;
                     let height = if !output_emitter.current_row_has_output()
-                        && output_emitter.current_row_at_or_before_first_visible_x()
+                        && match output_emitter.current_row_visible_start_position() {
+                            crate::window_output::RowVisibleStartPosition::AtOrBefore => true,
+                            crate::window_output::RowVisibleStartPosition::After
+                            | crate::window_output::RowVisibleStartPosition::Unavailable => false,
+                        }
                         && context.params.wrap_mode == crate::types::LineWrapMode::Truncate
                     {
                         context.preceding_zv_byte.automatic_tail_height(

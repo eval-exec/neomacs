@@ -1,5 +1,6 @@
 use crate::display_row::builder::{DisplayPhysicalLineTabState, DisplayRowPosition};
 use crate::display_source::DisplaySourceTextPosition;
+use neomacs_display_protocol::types::Px;
 use neovm_core::buffer::DisplayColumn;
 
 pub(crate) struct DisplaySourceRowProgressState<'emit> {
@@ -54,7 +55,7 @@ pub(crate) struct DisplaySourceProgressState<'emit> {
     charpos: &'emit mut i64,
     row: DisplaySourceRowProgressState<'emit>,
     physical_line_tabs: Option<&'emit mut DisplayPhysicalLineTabState>,
-    row_text_start_x: Option<&'emit mut f32>,
+    row_text_start_x: Option<&'emit mut Px>,
 }
 
 impl<'emit> DisplaySourceProgressState<'emit> {
@@ -81,7 +82,7 @@ impl<'emit> DisplaySourceProgressState<'emit> {
         self
     }
 
-    pub(crate) fn with_row_text_start(mut self, x: &'emit mut f32) -> Self {
+    pub(crate) fn with_row_text_start(mut self, x: &'emit mut Px) -> Self {
         self.row_text_start_x = Some(x);
         self
     }
@@ -96,7 +97,7 @@ impl<'emit> DisplaySourceProgressState<'emit> {
 
     pub(crate) fn record_row_text_start(&mut self) {
         if let Some(start) = self.row_text_start_x.as_deref_mut() {
-            *start = self.row.x();
+            *start = Px(self.row.x());
         }
     }
 
@@ -186,13 +187,23 @@ impl<'emit> DisplaySourceProgressState<'emit> {
     }
 }
 
+/// Whether pushed source rendering advanced beyond the decorated text origin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DisplaySourceContent {
+    Empty,
+    Present,
+}
+
+static_assertions::assert_impl_all!(DisplaySourceContent: Copy, Send, Sync);
+const _: () = assert!(std::mem::size_of::<DisplaySourceContent>() == 1);
+
 /// The visual pen borrowed by a pushed source. Buffer source coordinates stay
 /// with the outer iterator; TAB progress and the decorated row's text origin
 /// stay shared, so an overlay cannot leave either describing the previous row.
 pub(crate) struct DisplaySourceVisualRowProgress<'a> {
     row: DisplaySourceRowProgressState<'a>,
     physical_line_tabs: Option<&'a mut DisplayPhysicalLineTabState>,
-    row_text_start_x: Option<&'a mut f32>,
+    row_text_start_x: Option<&'a mut Px>,
 }
 
 impl<'a> DisplaySourceVisualRowProgress<'a> {
@@ -212,7 +223,7 @@ impl<'a> DisplaySourceVisualRowProgress<'a> {
         self
     }
 
-    pub(crate) fn with_row_text_start(mut self, x: &'a mut f32) -> Self {
+    pub(crate) fn with_row_text_start(mut self, x: &'a mut Px) -> Self {
         self.row_text_start_x = Some(x);
         self
     }
@@ -233,8 +244,8 @@ impl<'a> DisplaySourceVisualRowProgress<'a> {
         )
     }
 
-    pub(crate) fn x(&self) -> f32 {
-        self.row.x()
+    pub(crate) fn x(&self) -> Px {
+        Px(self.row.x())
     }
     pub(crate) fn col(&self) -> DisplayColumn {
         DisplayColumn::new(self.row.col())
@@ -246,31 +257,36 @@ impl<'a> DisplaySourceVisualRowProgress<'a> {
         self.row.apply_position(position);
     }
 
-    pub(crate) fn has_source_content(&self, content_x: f32) -> bool {
-        self.x()
+    pub(crate) fn source_content(&self, content_x: Px) -> DisplaySourceContent {
+        if self.x()
             > self
                 .row_text_start_x
                 .as_deref()
                 .copied()
                 .unwrap_or(content_x)
+        {
+            DisplaySourceContent::Present
+        } else {
+            DisplaySourceContent::Empty
+        }
     }
 
     pub(crate) fn record_row_text_start(&mut self) {
         if let Some(start) = self.row_text_start_x.as_deref_mut() {
-            *start = self.row.x();
+            *start = Px(self.row.x());
         }
     }
 
-    pub(crate) fn continue_after_visual_row(&mut self, content_x: f32) {
-        let width = (self.x() - content_x).max(0.0);
+    pub(crate) fn continue_after_visual_row(&mut self, content_x: Px) {
+        let width = (self.x().get() - content_x.get()).max(0.0);
         if let Some(tabs) = self.physical_line_tabs.as_deref_mut() {
             tabs.continue_after_visual_row(width);
         }
     }
 
-    pub(crate) fn record_wrap_prefix_width(&mut self, width: f32) {
+    pub(crate) fn record_wrap_prefix_width(&mut self, width: Px) {
         if let Some(tabs) = self.physical_line_tabs.as_deref_mut() {
-            tabs.record_wrap_prefix(width);
+            tabs.record_wrap_prefix(width.get());
         }
     }
 
