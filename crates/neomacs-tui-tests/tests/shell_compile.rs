@@ -580,6 +580,11 @@ fn grep_empty_prompt_multiple_del_keeps_prompt() {
 #[test]
 fn diff_buffer_with_file_via_mx_shows_unsaved_changes() {
     let (mut gnu, mut neo) = boot_pair_editing_a_shared_file();
+    // The diff runs through compilation mode, whose buffer records the wall
+    // clock ("Diff started"/"Diff finished.  DATE"); the pair runs the two
+    // editors' commands seconds apart, so fix the clock as the compile and
+    // grep scenarios already do.
+    use_deterministic_compilation_exit_time(&mut gnu, &mut neo);
     let shared_path = write_shared_temp_file("diff-buffer-file.txt", "alpha\nbeta\n");
     open_shared_file(&mut gnu, &mut neo, &shared_path, "C-x C-f");
 

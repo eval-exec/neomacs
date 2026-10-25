@@ -265,23 +265,41 @@ pub fn use_backend_only_vc_mode_line(gnu: &mut TuiSession, neo: &mut TuiSession)
     eval_expression(gnu, neo, "(setq vc-display-status nil)");
 }
 
-/// Make GNU `compilation-handle-exit`'s two wall-clock fields deterministic.
+/// Make compilation and diff buffers' wall-clock annotations deterministic.
 ///
-/// The advice is scoped to that function: editor timers and process polling
-/// continue to observe real time, while the buffer annotation always receives
-/// the same timestamp and a 0.01-second elapsed duration in both sessions.
+/// The advice is scoped to `compilation-start`, `compilation-handle-exit` and
+/// `diff-sentinel`: editor timers and process polling continue to observe
+/// real time, while the buffers' "started at"/"finished" annotations always
+/// receive the same timestamp and a 0.01-second elapsed duration in both
+/// sessions.  Both editors necessarily run the command seconds apart (the pair
+/// sends the same key to each editor in turn), so the raw clock can never
+/// match.  `diff-sentinel` (lisp/vc/diff.el) writes its own "Diff finished"
+/// timestamp rather than going through compilation mode.
 pub fn use_deterministic_compilation_exit_time(gnu: &mut TuiSession, neo: &mut TuiSession) {
     let expression = r##"(progn
       (require 'compile)
       (require 'cl-lib)
+      (require 'diff)
       (defun neomacs-tui--stable-compilation-exit-time (original &rest args)
         (cl-letf (((symbol-function 'current-time-string)
                    (lambda (&optional _time _zone) "Wed Sep  2 00:00:00 2026"))
                   ((symbol-function 'float-time)
                    (lambda (&optional _time) (+ compilation--start-time 0.01))))
           (apply original args)))
+      (defun neomacs-tui--stable-compilation-start-time (original &rest args)
+        (cl-letf (((symbol-function 'current-time-string)
+                   (lambda (&optional _time _zone) "Wed Sep  2 00:00:00 2026")))
+          (apply original args)))
+      (defun neomacs-tui--stable-diff-sentinel-time (original &rest args)
+        (cl-letf (((symbol-function 'current-time-string)
+                   (lambda (&optional _time _zone) "Wed Sep  2 00:00:00 2026")))
+          (apply original args)))
       (advice-add 'compilation-handle-exit :around
-                  #'neomacs-tui--stable-compilation-exit-time))"##;
+                  #'neomacs-tui--stable-compilation-exit-time)
+      (advice-add 'compilation-start :around
+                  #'neomacs-tui--stable-compilation-start-time)
+      (advice-add 'diff-sentinel :around
+                  #'neomacs-tui--stable-diff-sentinel-time))"##;
     eval_expression(gnu, neo, expression);
 }
 
