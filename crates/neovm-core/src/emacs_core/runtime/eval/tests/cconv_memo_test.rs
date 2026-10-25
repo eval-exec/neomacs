@@ -1102,12 +1102,23 @@ fn collection_hooks_wait_for_the_end_of_an_observed_run() {
     assert_eq!(count(&eval, CconvMemoEvent::VerifyMismatch), 0);
     assert_eq!(count(&eval, CconvMemoEvent::GcHooksDeferred), deferrals + 1);
     // They ran before the creation returned.
+    let hooks = printed(
+        &mut eval,
+        "(list (fboundp 'cm-hooks-finalized) (> cm-hooks-gc-runs 0))",
+    );
+    // The registry state distinguishes a finalizer the forced collection kept
+    // alive (non-zero: a GC-reachability question) from one it doomed and
+    // drained (zero: the function call or the deferred batch was lost).  This
+    // test has failed on CI with the post-gc-hook having run while the
+    // finalizer did not; naming the branch in the failure message is what the
+    // next occurrence needs, since the run cannot be reproduced locally.
     assert_eq!(
-        printed(
-            &mut eval,
-            "(list (fboundp 'cm-hooks-finalized) (> cm-hooks-gc-runs 0))"
-        ),
-        "(t t)"
+        hooks,
+        "(t t)",
+        "deferred finalizer did not run; live_finalizers={} pending_doomed={} report={}",
+        eval.tagged_heap.live_finalizer_count(),
+        eval.tagged_heap.has_pending_doomed_finalizers(),
+        eval.cconv_memo_report(),
     );
 }
 
