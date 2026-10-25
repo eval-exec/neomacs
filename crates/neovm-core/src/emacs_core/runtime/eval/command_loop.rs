@@ -2372,7 +2372,11 @@ impl Context {
                 // Explicit GC: drive any in-flight cycle to completion, then run
                 // a fresh full stop-the-world collection of the current state
                 // (GNU `garbage-collect` semantics).
-                if (*heap_ptr).concurrent_mark_running() {
+                // An explicit marker join closes this heap's regions but
+                // leaves its mark and birth logs for termination/promotion.
+                // Joining again is idempotent; both states need the same
+                // stopped-mutator root reseed and completed mark before sweep.
+                if (*heap_ptr).mark_in_progress() {
                     self.terminate_concurrent_mark(heap_ptr);
                 }
                 if (*heap_ptr).sweep_in_progress() {

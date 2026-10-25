@@ -103,6 +103,72 @@ fn two_worlds_on_one_thread_collect_while_both_mark() {
     });
 }
 
+/// Start directly, without evaluator safe points that could terminate the
+/// worker before the fixture hands out a black cell. Worker scheduling cannot
+/// change the mutator-owned running flag or the region's used prefix.
+fn start_mark_without_safe_points(ev: &mut Context) {
+    ev.setup_thread_locals();
+    ev.gc_collect_from_current_roots_impl(true);
+    ev.tagged_heap.concurrent_begin();
+    let heap = ev.tagged_heap.heap_root().as_ptr();
+    // SAFETY: this thread owns the stopped World; no worker has launched yet.
+    unsafe { ev.seed_registered_mutator_roots_world_stopped(heap) };
+    ev.tagged_heap.launch_concurrent_mark();
+    ev.setup_thread_locals();
+    ev.tagged_heap.alloc_cons(
+        crate::tagged::value::TaggedValue::fixnum(17),
+        crate::tagged::value::TaggedValue::NIL,
+    );
+    assert!(ev.tagged_heap.alloc_regions_open());
+}
+
+fn forced_collection_after_two_world_marks(join_first: bool) {
+    let mut worlds = [Context::new(), Context::new()];
+    for ev in &mut worlds {
+        start_mark_without_safe_points(ev);
+    }
+    // B is installed while A's region closes. Closing must use A's owner,
+    // even though B remains in a concurrent mark on the same OS thread.
+    assert!(crate::tagged::gc::tagged_heap_is_current(
+        &worlds[1].tagged_heap
+    ));
+    if join_first {
+        worlds[0].finish_concurrent_mark().expect("join A");
+        assert!(!worlds[0].tagged_heap.alloc_regions_open());
+        assert!(worlds[0].tagged_heap.mark_in_progress());
+        assert!(!worlds[0].tagged_heap.concurrent_mark_running());
+    }
+    // Catch the regression so both real workers are joined on the red path.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        worlds[0].gc_collect_from_current_roots_impl(true);
+        assert!(!worlds[0].tagged_heap.mark_in_progress());
+        assert!(!worlds[0].tagged_heap.sweep_in_progress());
+        assert!(worlds[1].tagged_heap.concurrent_mark_running());
+        worlds[1].gc_collect_from_current_roots_impl(true);
+    }));
+    for ev in &mut worlds {
+        ev.setup_thread_locals();
+        ev.finish_concurrent_mark().expect("join before teardown");
+    }
+    if let Err(error) = result {
+        std::panic::resume_unwind(error);
+    }
+    // Prove another collection is safe after both cycles were consumed.
+    for ev in &mut worlds {
+        ev.gc_collect_from_current_roots_impl(true);
+    }
+}
+
+#[test]
+fn two_worlds_forced_collection_after_explicit_marker_join() {
+    forced_collection_after_two_world_marks(true);
+}
+
+#[test]
+fn two_worlds_forced_collection_without_explicit_marker_join_control() {
+    forced_collection_after_two_world_marks(false);
+}
+
 /// How many of this process's threads are collectors. Nextest runs each
 /// test in its own process, so only the test's own heaps count.
 #[cfg(target_os = "linux")]
