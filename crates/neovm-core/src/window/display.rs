@@ -236,15 +236,18 @@ fn frame_default_right_fringe_width(frame: &Frame) -> i32 {
 }
 
 fn frame_vertical_scroll_bar_side(frame: &Frame) -> Option<Value> {
+    // GNU gates the scroll-bar type on FRAME_WINDOW_P /
+    // FRAME_HAS_VERTICAL_SCROLL_BARS (src/window.c), so a terminal frame has
+    // no scroll bar no matter what its parameter alist says:
+    // `set-frame-parameter' on a tty is a no-op and every query stays zero.
+    // Trusting the stored parameter here reserved a column the TTY backend
+    // never paints and shrank window-body-width 80 -> 79.
+    if frame.effective_window_system().is_none() {
+        return None;
+    }
     let raw = frame
         .known_parameter(FrameParam::VerticalScrollBars)
-        .unwrap_or_else(|| {
-            if frame.effective_window_system().is_some() {
-                Value::symbol("right")
-            } else {
-                Value::NIL
-            }
-        });
+        .unwrap_or_else(|| Value::symbol("right"));
     match VerticalScrollBarType::from_symbol_value(&raw) {
         Some(side) => Some(side.symbol()),
         _ if raw.is_nil() => None,
@@ -254,6 +257,11 @@ fn frame_vertical_scroll_bar_side(frame: &Frame) -> Option<Value> {
 }
 
 fn frame_has_horizontal_scroll_bar(frame: &Frame) -> bool {
+    // Same FRAME_WINDOW_P gate as the vertical resolver: a tty frame has no
+    // scroll bar, so its horizontal parameter is inert.
+    if frame.effective_window_system().is_none() {
+        return false;
+    }
     let raw = frame
         .known_parameter(FrameParam::HorizontalScrollBars)
         .unwrap_or(Value::NIL);

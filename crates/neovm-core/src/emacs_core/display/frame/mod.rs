@@ -2478,6 +2478,16 @@ pub(crate) fn frame_parameter_value(
         FrameParamKey::Known(FrameParam::Visibility) => {
             return frame.visibility.lisp_value();
         }
+        // GNU's scroll-bar parameter getters report the REALIZED state
+        // (x_get_vertical_scroll_bars / x_get_horizontal_scroll_bars,
+        // src/frame.c), which is nil on a frame without a window system even
+        // after `set-frame-parameter' stored a value. The tty oracle reads
+        // this back and requires nil.
+        FrameParamKey::Known(FrameParam::VerticalScrollBars | FrameParam::HorizontalScrollBars)
+            if frame.effective_window_system().is_none() =>
+        {
+            return Value::NIL;
+        }
         FrameParamKey::Known(FrameParam::Font) if frame.effective_window_system().is_none() => {
             return Value::string("tty");
         }
