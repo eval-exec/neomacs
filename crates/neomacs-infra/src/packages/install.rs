@@ -254,6 +254,14 @@ pub fn deterministic_process_environment(
             std::ffi::OsString::from("NEOMACS_TEST_WORKSPACE_ROOT"),
             os_string(crate::workspace_root().as_os_str()),
         ),
+        // Where MELPA scenario sandboxes and their editor TMPDIRs live.  This
+        // is the melpa cache root (honoring CARGO_TARGET_DIR), not
+        // `<workspace>/tmp`; suites that guard their owned scratch trees must
+        // approve this root so a relocated target directory stays valid.
+        (
+            std::ffi::OsString::from("NEOMACS_TEST_SCRATCH_ROOT"),
+            os_string(crate::melpa_cache_root().as_os_str()),
+        ),
         (
             std::ffi::OsString::from("GIT_CEILING_DIRECTORIES"),
             os_string(crate::workspace_root().as_os_str()),

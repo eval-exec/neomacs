@@ -352,7 +352,7 @@ fn keyboard_quit_after_find_file_ctrl_h_returns_to_scratch() {
 #[test]
 fn list_directory_via_cx_cd_lists_entries() {
     let (mut gnu, mut neo) = boot_pair("");
-    let dir = TuiTempDirectory::new("neomacs-list-directory-");
+    let dir = TuiTempDirectory::new_with_private_parent("neomacs-list-directory-", "listing");
     fs::create_dir_all(dir.join("nested")).expect("create list-directory fixture");
     fs::write(dir.join("alpha.txt"), "alpha body\n").expect("write alpha fixture");
     fs::write(dir.join("beta.org"), "* beta heading\n").expect("write beta fixture");

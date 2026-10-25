@@ -14,7 +14,15 @@ use std::time::Duration;
 use support::*;
 
 fn make_git_project_fixture(label: &str) -> TuiTempDirectory {
-    let root = TuiTempDirectory::new(&format!("neomacs-project-root-{label}-"));
+    // `project-dired` lists the project root's `..` entry. Creating the root
+    // inside a private parent keeps that entry's metadata (link count, size,
+    // mtime) identical for the GNU and Neomacs runs; the system temp
+    // directory's link count moves with every parallel test that creates a
+    // directory there.
+    let root = TuiTempDirectory::new_with_private_parent(
+        &format!("neomacs-project-root-{label}-"),
+        "project",
+    );
     let src = root.join("src");
     fs::create_dir_all(&src).expect("create project fixture source directory");
     fs::write(root.join("README.md"), "# Neo project probe\n").expect("write project readme");

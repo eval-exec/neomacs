@@ -32,10 +32,9 @@ const TEST_PRELUDE: &str = r####"
 (defun ggf351-test-root (name)
   "Return a new owned test root for NAME, failing closed on unsafe input."
   (let* ((sandbox (getenv "NEOMACS_TEST_SANDBOX_ROOT"))
-         (workspace (getenv "NEOMACS_TEST_WORKSPACE_ROOT"))
-         (approved (and workspace
-                        (file-name-as-directory
-                         (expand-file-name "tmp" workspace)))))
+         (scratch (getenv "NEOMACS_TEST_SCRATCH_ROOT"))
+         (approved (and scratch
+                        (file-name-as-directory (file-truename scratch)))))
     (unless (and (stringp sandbox) (> (length sandbox) 1)
                  (file-name-absolute-p sandbox)
                  approved

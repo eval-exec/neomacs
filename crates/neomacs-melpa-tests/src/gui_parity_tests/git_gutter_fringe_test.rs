@@ -137,10 +137,9 @@ const GUI_PROBE: &str = r####"
       (when (buffer-live-p buffer) (kill-buffer buffer))))
 
   (let* ((sandbox (getenv "NEOMACS_TEST_SANDBOX_ROOT"))
-         (workspace (getenv "NEOMACS_TEST_WORKSPACE_ROOT"))
-         (approved (and workspace
-                        (file-name-as-directory
-                         (expand-file-name "tmp" workspace))))
+         (scratch (getenv "NEOMACS_TEST_SCRATCH_ROOT"))
+         (approved (and scratch
+                        (file-name-as-directory (file-truename scratch))))
          (root (and sandbox
                     (expand-file-name "git-gutter-fringe-gui" sandbox)))
          (real-git (or (executable-find "git" t)

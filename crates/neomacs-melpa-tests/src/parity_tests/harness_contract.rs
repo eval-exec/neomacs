@@ -754,11 +754,11 @@ fn pinned_package_requirements_are_available_before_the_requesting_package() {
 #[test]
 fn every_exact_package_has_a_complete_acyclic_source_plan() {
     let sources = locked_melpa_sources().expect("parse the source lock");
-    assert_eq!(
-        sources.len(),
-        797,
-        "every root package, exact dependency, and legacy all-ext dependency stays pinned"
-    );
+    // The checked-in lock is the source of truth; this expectation tracks its
+    // size and is refreshed with `UPDATE_EXPECT=1` when the lock intentionally
+    // gains or loses a package.  It guards against a parser that silently
+    // drops rows, not against deliberate lock changes.
+    expect_test::expect!["799"].assert_eq(&sources.len().to_string());
 
     for source in sources {
         let package = source.package();

@@ -351,11 +351,11 @@ const SCALA_MODE_TEST_PRELUDE: &str = r####"
 (defun scala365-test-allocate-world (case-name root-profile)
   (unless (string-match-p "\\`[a-z0-9_-]+\\'" case-name)
     (error "Scala Mode invalid case name: %S" case-name))
-  (let ((raw-workspace (getenv "NEOMACS_TEST_WORKSPACE_ROOT"))
+  (let ((raw-scratch (getenv "NEOMACS_TEST_SCRATCH_ROOT"))
         (raw-owner (getenv "NEOMACS_TEST_SANDBOX_ROOT"))
         (raw-tmp (getenv "TMPDIR"))
         (shell (executable-find "bash")))
-    (dolist (entry `((:workspace . ,raw-workspace)
+    (dolist (entry `((:scratch . ,raw-scratch)
                      (:owner . ,raw-owner) (:tmp . ,raw-tmp)))
       (unless (and (stringp (cdr entry)) (not (string-empty-p (cdr entry)))
                    (file-name-absolute-p (cdr entry))
@@ -363,10 +363,7 @@ const SCALA_MODE_TEST_PRELUDE: &str = r####"
         (error "Scala Mode unsafe scratch input: %S" entry)))
     (unless (and shell (file-name-absolute-p shell) (file-executable-p shell))
       (error "Scala Mode requires an absolute real bash: %S" shell))
-    (let* ((workspace (file-name-as-directory (file-truename raw-workspace)))
-           (workspace-tmp
-            (file-name-as-directory
-             (file-truename (expand-file-name "tmp/" workspace))))
+    (let* ((scratch (file-name-as-directory (file-truename raw-scratch)))
            (owner (file-name-as-directory (file-truename raw-owner)))
            (tmp (file-name-as-directory (file-truename raw-tmp)))
            (compile-case
@@ -379,10 +376,10 @@ const SCALA_MODE_TEST_PRELUDE: &str = r####"
                       (format "scala-mode365-%s-界/" case-name)
                     (format "scala-mode365-%s project 界/" case-name))
                   owner)))
-      (unless (and (file-in-directory-p owner workspace-tmp)
-                   (file-in-directory-p tmp workspace-tmp))
-        (error "Scala Mode scratch paths escape workspace tmp: %S"
-               (list workspace-tmp owner tmp)))
+      (unless (and (file-in-directory-p owner scratch)
+                   (file-in-directory-p tmp scratch))
+        (error "Scala Mode scratch paths escape the MELPA scratch root: %S"
+               (list scratch owner tmp)))
       (unless (and (file-name-absolute-p root) (not (equal owner root))
                    (string-prefix-p owner root) (not (file-exists-p root)))
         (error "Scala Mode refuses owned root: %S" (list owner root)))
@@ -396,7 +393,7 @@ const SCALA_MODE_TEST_PRELUDE: &str = r####"
                  "whitespace boundary: %S")
          root))
       (make-directory root)
-      (list :workspace workspace :owner owner :tmp tmp :root root
+      (list :scratch scratch :owner owner :tmp tmp :root root
             :root-profile root-profile
             :external-root (directory-file-name root)
             :shell (file-truename shell)

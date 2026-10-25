@@ -73,6 +73,7 @@ readonly -a font_packages=(
 declare -a profile_packages=()
 declare -a required_commands=()
 requires_libfaketime=false
+install_nerd_fonts=false
 case "$profile" in
     build)
         ;;
@@ -102,20 +103,23 @@ case "$profile" in
             kwin-x11
             dbus
             imagemagick
+            ripgrep
             weston
             sway
             wtype
             grim
             "${font_packages[@]}"
         )
-        required_commands=(gpg Xvfb xauth xdpyinfo xprop xwininfo xdotool wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim)
+        required_commands=(gpg rg Xvfb xauth xdpyinfo xprop xwininfo xdotool wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim)
         requires_libfaketime=true
+        install_nerd_fonts=true
         ;;
     # Jobs that run the font-sensitive Rust tests (the display stack shards)
     # but need no window system of their own.
     fonts)
         profile_packages=("${font_packages[@]}")
         required_commands=(fc-match)
+        install_nerd_fonts=true
         ;;
     release)
         profile_packages=(rpm binutils cpio file dpkg-dev)
@@ -156,6 +160,34 @@ pkg-config --modversion gstreamer-1.0
 if $requires_libfaketime; then
     dpkg -L libfaketime | grep -q '/libfaketime\.so\.1$'
 fi
+
+# The layout, renderer and GUI suites resolve the default family
+# "JetBrainsMono Nerd Font" and the Nerd Fonts glyph ranges through the system
+# fontconfig.  Ubuntu packages only the unpatched JetBrains Mono, so without a
+# patched family those tests degrade to the fontconfig fallback (Lato) and the
+# Nerd Font probes never publish a binding.  Nerd Fonts ships patched families
+# only as release artifacts; pin the artifact by version and sha256 instead of
+# trusting whichever font a host happens to have.
+if $install_nerd_fonts; then
+    nerd_fonts_version=3.4.0
+    nerd_fonts_sha256=ef552a3e638f25125c6ad4c51176a6adcdce295ab1d2ffacf0db060caf8c1582
+    nerd_fonts_dir=/usr/share/fonts/truetype/nerd-fonts
+    nerd_fonts_archive=$(mktemp)
+    curl -fsSL --retry 3 -o "$nerd_fonts_archive" \
+        "https://github.com/ryanoasis/nerd-fonts/releases/download/v${nerd_fonts_version}/JetBrainsMono.tar.xz"
+    printf '%s  %s\n' "$nerd_fonts_sha256" "$nerd_fonts_archive" | sha256sum -c -
+    sudo mkdir -p "$nerd_fonts_dir"
+    sudo tar -xJf "$nerd_fonts_archive" -C "$nerd_fonts_dir" \
+        JetBrainsMonoNerdFont-Regular.ttf \
+        JetBrainsMonoNerdFont-Bold.ttf \
+        JetBrainsMonoNerdFont-Italic.ttf \
+        JetBrainsMonoNerdFont-BoldItalic.ttf \
+        OFL.txt
+    rm -f "$nerd_fonts_archive"
+    sudo fc-cache -f "$nerd_fonts_dir"
+    fc-match -f '%{file}\n' "JetBrainsMono Nerd Font" | grep -Fq "$nerd_fonts_dir/"
+fi
+
 for program in "${required_commands[@]}"; do
     command -v "$program" >/dev/null
 done
