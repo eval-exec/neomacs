@@ -4,17 +4,46 @@
 //! whole-image decode, XPM, XBM, SVG — collapses the reason, so by the time
 //! nothing is left the only surviving facts are the source and its bytes. These
 //! are the sentences GNU's own loaders produce for the same four failures, as
-//! observed from GNU 31.1 under Xvfb (`tmp/imgmsg/`).
+//! observed from GNU 31.1 under Xvfb.
 
 use super::*;
 use neomacs_display_protocol::image_diagnostic::{
     ImageDiagnostic, ImageDiagnosticSubject, ImageFormatName, ImageLoadIdentity,
 };
 
+/// The probe files the GNU observations were made with.
+///
+/// They are written to a per-process temporary directory instead of being read
+/// from the lane scratch tree that recorded them (`tmp/imgmsg/`): that path is
+/// not part of the repository, so a clean checkout (and CI) had no file to
+/// open and reported `Cannot find image file` for every case.  The two inputs
+/// are tiny and their exact bytes are the point, so they are produced here.
 fn fixture(name: &str) -> String {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tmp/imgmsg/fixtures")
-        .join(name)
+    use std::sync::OnceLock;
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    let dir = DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("neomacs-image-decode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("decode diagnostic fixture directory");
+        // Found and opened; its signature is not PNG's.
+        std::fs::write(dir.join("notimage.png"), b"definitely not an image")
+            .expect("notimage.png fixture");
+        // The first 50 bytes of a real 1x1 PNG: signature, IHDR, IDAT header
+        // and 9 of the chunk's 13 data bytes.  The stream therefore ends
+        // inside IDAT, which `image` reports as UnexpectedEof and the
+        // diagnostic maps to libpng's `Read error`.
+        const TRUNCATED_PNG: &[u8] = &[
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, // signature
+            0x00, 0x00, 0x00, 0x0d, b'I', b'H', b'D', b'R', // IHDR length, type
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // width 1, height 1
+            0x08, 0x06, 0x00, 0x00, 0x00, // depth, color, compression, filter, interlace
+            0x1f, 0x15, 0xc4, 0x89, // IHDR CRC
+            0x00, 0x00, 0x00, 0x0d, b'I', b'D', b'A', b'T', // IDAT length, type
+            0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f, 0x0f, 0x00, // zlib + 7 data bytes
+        ];
+        std::fs::write(dir.join("truncated.png"), TRUNCATED_PNG).expect("truncated.png fixture");
+        dir
+    });
+    dir.join(name)
         .to_str()
         .expect("utf8 fixture path")
         .to_owned()
