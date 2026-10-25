@@ -1,0 +1,24 @@
+t
+t
+t
+t
+nil
+t
+nil
+t
+t
+(nil nil nil)
+(t t t)
+(t 97)
+(t nil nil void-function)
+(t nil nil)
+t
+(101 t nil)
+(nil nil)
+(t nil)
+t
+(t nil t)
+(t 73)
+(97 97)
+(97 nil)
+(void-variable 23)
