@@ -320,6 +320,42 @@ impl Context {
         if !gnu_redisplay_hooks_enabled() {
             return Ok(Value::NIL);
         }
+        self.apply_prepared_minibuffer_resize(frame, window, requested_height)
+    }
+
+    /// Resize through window.el's achievable root-window policy in either
+    /// redisplay mode. The policy owns recursive child minima, fixed windows
+    /// and the distribution of reclaimed space, not just a scalar root cap.
+    /// Return non-nil only when a live geometry change was committed.
+    pub fn apply_prepared_minibuffer_resize(
+        &mut self,
+        frame: FrameId,
+        window: WindowId,
+        requested_height: f32,
+    ) -> EvalResult {
+        // Before window.el is installed, native bootstrap/layout fixtures have
+        // only the frame geometry primitive. Never use this fallback after a
+        // Lisp error or transfer, or in the GNU preparatory-hook path.
+        if !gnu_redisplay_hooks_enabled()
+            && !self
+                .obarray
+                .fboundp("window--resize-root-window-vertically")
+        {
+            let resize = self.frames.get(frame).and_then(|state| {
+                if state.minibuffer_window == Some(window) {
+                    state.plan_mini_window_resize(requested_height, f32::MAX)
+                } else {
+                    None
+                }
+            });
+            if let Some(resize) = resize
+                && let Some(state) = self.frames.get_mut(frame)
+            {
+                state.apply_mini_window_resize(resize);
+                return Ok(Value::T);
+            }
+            return Ok(Value::NIL);
+        }
         let Some(state) = self.frames.get(frame) else {
             return Ok(Value::NIL);
         };

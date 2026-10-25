@@ -37599,3 +37599,7 @@ fn display_when_reuse_needs_a_valid_window_end_not_a_mode_line() {
 #[cfg(test)]
 #[path = "window_input_ownership_resolver_test.rs"]
 mod window_input_ownership_resolver_test;
+
+#[cfg(test)]
+#[path = "mini_root_minimum_test.rs"]
+mod mini_root_minimum_test;
