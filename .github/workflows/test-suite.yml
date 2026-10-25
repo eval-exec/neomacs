@@ -13,7 +13,11 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests cancel superseded runs. On main a running run always
+  # finishes: pushes land faster than the suite completes, and cancelling
+  # left main with no completed run for hours. GitHub keeps only the newest
+  # pending run per group, so intermediate pushes are covered by the next run.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
