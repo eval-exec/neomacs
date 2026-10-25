@@ -175,6 +175,20 @@ fn unchecked_decoder_matches_checked_decoder_for_valid_internal_bytes() {
     }
 }
 
+#[test]
+fn checked_decoder_keeps_an_out_of_range_five_byte_tail_in_the_character_domain() {
+    // F8 B8 96 B8 96 carries a 24-bit payload (0xE16E16).  GNU's five-byte
+    // form encodes only MAX_4_BYTE_CHAR..=MAX_5_BYTE_CHAR; a larger payload
+    // is not a character, and letting it out of the checked decoder reaches
+    // `EmacsChar::from_code_unchecked`'s assertion (regex fuzz artifact
+    // bfc34a9633d9bd0a2879e0552f0871a9eccf47d1).  Fall back to the lead
+    // byte, as `decode_declared_multibyte_char` already does.
+    let bytes = [0xF8, 0xB8, 0x96, 0xB8, 0x96];
+    let (code, len) = string_char(&bytes);
+    assert_eq!((code, len), (byte8_to_char(0xF8), 1));
+    assert!(EmacsChar::from_code(code).is_some(), "{code:#x}");
+}
+
 // -----------------------------------------------------------------------
 // chars_in_multibyte
 // -----------------------------------------------------------------------
