@@ -9371,6 +9371,167 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
     }
 }
 
+/// `symbol-with-pos-p` through `Op::Call` answers its armed hit
+/// inline (`lowering::emit_inline_type_tag_predicate`): the shim's own entry
+/// guards, one veclike tag test and one pinned header byte. Every value
+/// answers inline — a non-veclike answers nil without a header read — and the
+/// answer is the builtin's for every shape. The shim keeps every miss: a
+/// redefinition, an armed `debug-on-next-call`, a pending quit and a call at
+/// the eval-depth limit. The same body is compiled under both inline modes.
+#[test]
+fn symbol_with_pos_p_site_answers_inline() {
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::intern::{SymId, intern};
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context as *mut u8;
+    let site = |name: &str| {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![SymId(1)],
+            optional: Vec::new(),
+            rest: None,
+        });
+        f.lexical = true;
+        f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
+        f.constants = vec![Value::symbol(name)].into();
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        f
+    };
+    let pool = ev
+        .eval_str(
+            "(list (record 'foo 1) (record 'bar) (record (record 'eieio--class 'my-class) 2)
+                    (vector 1) (make-hash-table) (position-symbol 'y 3) (cons 1 2)
+                    (symbol-function 'car) (make-marker) 'sym nil t :kw 5 \"s\" 1.5)",
+        )
+        .expect("pool");
+    crate::emacs_core::eval::push_scratch_gc_root(pool);
+    let items = crate::emacs_core::value::list_to_vec(&pool).expect("list");
+    // GNU: "Ignore `symbols-with-pos-enabled'." — the tag alone.
+    let want = |item: &Value| item.is_symbol_with_pos();
+    for name in ["symbol-with-pos-p"] {
+        for inline in [true, false] {
+            crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(inline));
+            let f = site(name);
+            let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+            // Resolve the memoized debug-on-next-call cell the guards read.
+            let _ = ev.debug_on_next_call_is_armed();
+            #[cfg(debug_assertions)]
+            let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
+            for &item in &items {
+                let got = match leaf.call(ctx, &[item]) {
+                    NativeRun::Ok(bits) => Value::from_bits(bits),
+                    other => panic!(
+                        "({name} {}) inline={inline}: {other:?}",
+                        crate::emacs_core::print::print_value(&item)
+                    ),
+                };
+                assert_eq!(
+                    got,
+                    Value::bool_val(want(&item)),
+                    "({name} {}) inline={inline}",
+                    crate::emacs_core::print::print_value(&item)
+                );
+            }
+            #[cfg(debug_assertions)]
+            assert_eq!(
+                SUBR_SPEC_COUNT.load(Ordering::Relaxed) - shim0,
+                if inline { 0 } else { items.len() as u64 },
+                "{name} inline={inline}: the shim answers exactly when the knob is off"
+            );
+        }
+        // The other half of the protocol, with the inline path armed.
+        crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(true));
+        let f = site(name);
+        let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+        let _ = ev.debug_on_next_call_is_armed();
+        let record = items[0];
+        let expected = Value::bool_val(want(&record));
+        // A pending quit: the site takes the shim, which polls first and
+        // signals.
+        ev.set_quit_flag_value(Value::T);
+        let quit = leaf.call(ctx, &[record]);
+        ev.set_quit_flag_value(Value::NIL);
+        assert!(
+            matches!(quit, NativeRun::Signal),
+            "{name}: a pending quit signals at the call: {quit:?}"
+        );
+        let _ = take_pending_flow();
+        // An armed `debug-on-next-call` takes the shim.
+        let cell = ev
+            .obarray
+            .debug_on_next_call_bool_fwd(intern("debug-on-next-call"))
+            .expect("debug-on-next-call cell");
+        cell.set(true);
+        #[cfg(debug_assertions)]
+        let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
+        let _ = leaf.call(ctx, &[record]);
+        cell.set(false);
+        let _ = take_pending_flow();
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            SUBR_SPEC_COUNT.load(Ordering::Relaxed) - shim0,
+            1,
+            "{name}: an armed debug-on-next-call takes the shim"
+        );
+        // At the eval-depth limit the site takes the shim and from there the
+        // generic call, which counts the subr against `max-lisp-eval-depth`
+        // as GNU's `Bcall` does and signals; one below the limit the inline
+        // answer stands.
+        let (depth, max_depth) = (ev.depth, ev.max_depth);
+        ev.max_depth = 100;
+        ev.depth = 100;
+        match leaf.call(ctx, &[record]) {
+            NativeRun::Signal => {
+                let flow = take_pending_flow().expect("stashed flow");
+                let text = match Err::<Value, _>(flow).kinded() {
+                    Err(FlowKind::Signal(sig)) => format!(
+                        "{} {:?}",
+                        sig.symbol_name(),
+                        sig.data
+                            .iter()
+                            .map(crate::emacs_core::print::print_value)
+                            .collect::<Vec<_>>()
+                    ),
+                    other => format!("{other:?}"),
+                };
+                assert!(
+                    text.contains("max-lisp-eval-depth"),
+                    "{name} at the limit: the nesting error, got {text}"
+                );
+            }
+            other => panic!("({name}) at the depth limit: {other:?}"),
+        }
+        ev.depth = 99;
+        match leaf.call(ctx, &[record]) {
+            NativeRun::Ok(bits) => {
+                assert_eq!(Value::from_bits(bits), expected, "{name}: one below")
+            }
+            other => panic!("({name}) one below the limit: {other:?}"),
+        }
+        ev.depth = depth;
+        ev.max_depth = max_depth;
+        // A redefinition is honoured: the epoch move sends the site through
+        // the shim to the generic call.
+        let original = ev.obarray.symbol_function_id(intern(name)).expect("bound");
+        ev.eval_str(&format!("(fset '{name} (lambda (_) 'redefined))"))
+            .expect("fset");
+        match leaf.call(ctx, &[record]) {
+            NativeRun::Ok(bits) => assert_eq!(
+                crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+                "redefined",
+                "{name} redefined"
+            ),
+            other => panic!("redefined {name}: {other:?}"),
+        }
+        ev.obarray.set_symbol_function_id(intern(name), original);
+        match leaf.call(ctx, &[record]) {
+            NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits), expected, "{name} restored"),
+            other => panic!("restored {name}: {other:?}"),
+        }
+    }
+    crate::emacs_core::jit::compile::force_inline_predicates_for_test(None);
+}
+
 #[test]
 fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
     use crate::emacs_core::eval::Context;

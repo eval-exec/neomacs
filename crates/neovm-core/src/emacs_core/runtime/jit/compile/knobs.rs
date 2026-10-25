@@ -319,6 +319,40 @@ pub(crate) fn jit_inline_type_of_on() -> bool {
     })
 }
 
+/// Answer `symbol-with-pos-p`'s veclike type-tag test inline at an armed JIT
+/// site (`lowering::emit_inline_type_tag_predicate`). Default on;
+/// `NEOVM_JIT_INLINE_PREDICATES=off` calls `neovm_jit_pred_spec` at every
+/// site — the single-build A/B, and the identity check that the off mode
+/// emits the pre-existing CLIF byte for byte.
+pub(crate) fn jit_inline_predicates_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = INLINE_PREDICATES_TEST_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_JIT_INLINE_PREDICATES").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static INLINE_PREDICATES_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force `NEOVM_JIT_INLINE_PREDICATES` on/off on the current thread (tests
+/// only). Read at compile time by the lowering, so a test compiles the same
+/// body once under each mode.
+#[cfg(test)]
+pub(crate) fn force_inline_predicates_for_test(on: Option<bool>) {
+    INLINE_PREDICATES_TEST_OVERRIDE.with(|c| c.set(on));
+}
+
 /// Read a plain vector's or record's slot inline at JIT `aref` sites
 /// (`lowering::emit_inline_aref`). Default on; `NEOVM_JIT_INLINE_AREF=off`
 /// calls `neovm_jit_aref` at every site — the single-build A/B.

@@ -1671,6 +1671,155 @@ fn emit_inline_record_type_of(
     Some((merge, res))
 }
 
+/// The entry guards shared by the inline predicate lowerings: exactly the
+/// gate [`neovm_jit_pred_spec`] makes before its fast path
+/// (`ctx.debug_on_next_call_is_armed () || ctx.depth >= ctx.max_depth ||
+/// !subr_spec_armed`), folded into one test so a miss costs one branch.
+///
+/// * the site's armed epoch against the obarray's `function_epoch`
+///   (`subr_spec_armed`'s fast test; a redefinition moves the epoch);
+/// * the Context attention word under [`AttentionMask::INLINE_ENTRY`] (the
+///   quit flag, `throw-on-input`, active compiler overrides — the poll the
+///   skipped call would make, and the overrides that shadow function cells
+///   invisibly to the epoch);
+/// * the async attention word (profiler tick, pending OS signal, raised
+///   quit requests);
+/// * `debug-on-next-call`;
+/// * the eval-depth limit. The shipped inline `type-of` template omits this
+///   one (its callee would count against `max-lisp-eval-depth`); a predicate
+///   site must not, or a call at the limit would answer instead of raising
+///   GNU's `excessive-lisp-nesting`. Two loads and a compare buy the shim's
+///   exact behaviour.
+///
+/// Emits the branch to a fresh `miss` block and leaves the builder in the
+/// armed continuation. The caller seals `miss` once its last incoming edge
+/// exists (the shim-call edge, plus any predicate-specific bounce), and fills
+/// it with the unchanged `neovm_jit_pred_spec` call.
+fn emit_inline_predicate_guards(fb: &mut FunctionBuilder, rt: &RtCtx, slot: ClifValue) -> Block {
+    use super::jit_layout::CONTEXT_ATTENTION_OFFSET;
+    use super::jit_layout::{
+        CONTEXT_DEPTH_OFFSET, CONTEXT_MAX_DEPTH_OFFSET, DISPATCH_DEBUG_FWD_OFFSET,
+        DISPATCH_FUNCTION_EPOCH_OFFSET,
+    };
+    use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
+    let flags = MemFlagsData::trusted();
+    let slot_epoch_off = super::spec_slot::SPEC_SLOT_EPOCH_OFFSET;
+    let miss = fb.create_block();
+    let armed = fb.create_block();
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let dispatch = super::jit_layout::emit_dispatch_cells_base(fb, vmctx);
+    let epoch = fb.ins().load(
+        types::I64,
+        flags,
+        dispatch,
+        DISPATCH_FUNCTION_EPOCH_OFFSET as i32,
+    );
+    let armed_epoch = fb
+        .ins()
+        .load(types::I64, flags, slot, slot_epoch_off as i32);
+    let epoch_ok = fb.ins().icmp(IntCC::Equal, epoch, armed_epoch);
+    let attention = fb
+        .ins()
+        .uload32(flags, vmctx, CONTEXT_ATTENTION_OFFSET as i32);
+    let attention = band_imm_p(
+        fb,
+        attention,
+        i64::from(crate::emacs_core::eval::AttentionMask::INLINE_ENTRY.bits()),
+    );
+    // A JIT-only bake of a process address (the emitter is gated `!aot`).
+    let async_addr = fb.ins().iconst(
+        rt.ptr_ty,
+        crate::emacs_core::eval::ASYNC_ATTENTION.addr() as i64,
+    );
+    let async_word = fb.ins().uload32(flags, async_addr, 0);
+    // The `debug-on-next-call` cell: never null (an unresolved cell names a
+    // stand-in that reads armed).
+    let cell = fb
+        .ins()
+        .load(rt.ptr_ty, flags, dispatch, DISPATCH_DEBUG_FWD_OFFSET as i32);
+    let debug = super::atomic_forward::load_bool(fb, cell, LISP_BOOL_FWD_VALUE_OFFSET);
+    let depth = fb
+        .ins()
+        .load(types::I64, flags, vmctx, CONTEXT_DEPTH_OFFSET as i32);
+    let max_depth = fb
+        .ins()
+        .load(types::I64, flags, vmctx, CONTEXT_MAX_DEPTH_OFFSET as i32);
+    let at_limit = fb
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, depth, max_depth);
+    // `icmp` yields i8; the other words are i64.
+    let at_limit = fb.ins().uextend(types::I64, at_limit);
+    let set = fb.ins().bor(attention, async_word);
+    let set = fb.ins().bor(set, debug);
+    let set = fb.ins().bor(set, at_limit);
+    let clear = icmp_imm_p(fb, IntCC::Equal, set, 0);
+    let ok = fb.ins().band(epoch_ok, clear);
+    fb.ins().brif(ok, armed, &[], miss, &[]);
+    fb.switch_to_block(armed);
+    fb.seal_block(armed);
+    miss
+}
+
+/// Lower `symbol-with-pos-p` at an armed JIT site: the shim's
+/// whole hit path is the shared entry guards plus one pinned header word, so
+/// the site answers without the C-ABI shim frame (26 Ir of entry+epilogue
+/// and the kind dispatch) and without a call. `wanted` is the
+/// [`VecLikeType`](crate::tagged::header::VecLikeType) discriminant whose
+/// presence is the answer: a veclike of that type answers `t`, every other
+/// value — including every non-veclike, whose header must not be read —
+/// answers `nil`.
+///
+/// OBSERVATION: the only heap word read is `VecLikeHeader::type_tag`. It is
+/// written once by `VecLikeHeader::new` and never assigned again anywhere in
+/// the crate (no writer exists), so a collection-read observation of it would
+/// record a dependence no write can invalidate — the gate `veclike_type`
+/// takes exists for mutable collection CONTENTS, and this read takes none.
+/// The shipped inline `type-of` lowering (`emit_inline_record_type_of`)
+/// reads the same header through the same `MemFlagsData::trusted()` load;
+/// this follows that decision exactly. The argument keeps the object live
+/// (`arg` is live across the site, and the inline path allocates, calls and
+/// safepoints nowhere), so no collection or relocation can intervene between
+/// the tag test and the load.
+fn emit_inline_type_tag_predicate(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    slot: ClifValue,
+    arg: ClifValue,
+    wanted: u8,
+) -> Option<(Block, Variable)> {
+    use crate::tagged::header::VecLikeHeader;
+    let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
+    let flags = MemFlagsData::trusted();
+    let miss = emit_inline_predicate_guards(fb, rt, slot);
+    // The guard branch is `miss`'s only incoming edge.
+    fb.seal_block(miss);
+    let merge = fb.create_block();
+    let res = fb.declare_var(types::I64);
+    // A non-veclike is not a record / symbol-with-pos (and has no header to
+    // read): answer nil rather than taking the shim.
+    let object_block = fb.create_block();
+    let nil_block = fb.create_block();
+    let veclike = has_veclike_tag(fb, arg);
+    fb.ins().brif(veclike, object_block, &[], nil_block, &[]);
+    fb.switch_to_block(object_block);
+    fb.seal_block(object_block);
+    let object = band_imm_p(fb, arg, !(TAG_MASK as i64));
+    let type_tag = fb.ins().uload8(types::I64, flags, object, type_off as i32);
+    let is_wanted = icmp_imm_p(fb, IntCC::Equal, type_tag, wanted as i64);
+    let yes = fb.ins().iconst(types::I64, Value::T.bits() as i64);
+    let no = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
+    let answer = fb.ins().select(is_wanted, yes, no);
+    fb.def_var(res, answer);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(nil_block);
+    fb.seal_block(nil_block);
+    let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
+    fb.def_var(res, nil);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(miss);
+    Some((merge, res))
+}
+
 /// `emit_inline_aref` reads a record through `VectorObj`'s offsets.
 const fn const_assert_vector_record_share_layout() {
     use crate::tagged::header::{RecordObj, VectorObj};
@@ -7624,25 +7773,34 @@ fn lower_simple_op_arms(
                     fb.ins().iconst(types::I64, n as i64),
                 )
             });
-            // A JIT `type-of` / `cl-type-of` site answers a record inline and
-            // leaves everything else to the shim below (see
-            // `emit_inline_record_type_of`). The inline path stores nothing,
-            // so the merge meets the shim path's store record with this one.
-            let inline_type_of = match (spec, &reg_args) {
-                (
-                    Some((
-                        _,
-                        _,
-                        slot_ptr,
-                        _,
-                        SpecCalleeKind::PredTypeOf | SpecCalleeKind::PredClTypeOf,
-                    )),
-                    Some(args),
-                ) if !aot && !jit_force_slow_spec() && jit_inline_type_of_on() => {
+            // A JIT predicate site answers its armed hit inline and leaves every
+            // other case to the shim below: `type-of`/`cl-type-of` a record
+            // (`emit_inline_record_type_of`), `symbol-with-pos-p` a veclike
+            // type tag (`emit_inline_type_tag_predicate`). The inline path
+            // stores nothing, so the merge meets the shim path's store record
+            // with this one.
+            let inline_pred = match (spec, &reg_args) {
+                (Some((_, _, slot_ptr, _, kind)), Some(args)) if !aot && !jit_force_slow_spec() => {
                     let carry = rootwin_carry_snapshot();
                     let slot_v = fb.ins().iconst(types::I64, slot_ptr);
-                    emit_inline_record_type_of(fb, rt, slot_v, args[0])
-                        .map(|(merge, res)| (merge, res, carry))
+                    let emitted = match kind {
+                        SpecCalleeKind::PredTypeOf | SpecCalleeKind::PredClTypeOf
+                            if jit_inline_type_of_on() =>
+                        {
+                            emit_inline_record_type_of(fb, rt, slot_v, args[0])
+                        }
+                        SpecCalleeKind::PredSymbolWithPos if jit_inline_predicates_on() => {
+                            emit_inline_type_tag_predicate(
+                                fb,
+                                rt,
+                                slot_v,
+                                args[0],
+                                crate::tagged::header::VecLikeType::SymbolWithPos as u8,
+                            )
+                        }
+                        _ => None,
+                    };
+                    emitted.map(|(merge, res)| (merge, res, carry))
                 }
                 _ => None,
             };
@@ -7944,7 +8102,7 @@ fn lower_simple_op_arms(
             let result = fb
                 .ins()
                 .stack_load(rt.ptr_ty, types::I64, rt.call_result_slot, 0);
-            match inline_type_of {
+            match inline_pred {
                 Some((merge, res, carry)) => {
                     fb.def_var(res, result);
                     fb.ins().jump(merge, &[]);
