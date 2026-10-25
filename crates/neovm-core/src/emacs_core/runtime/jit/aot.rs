@@ -3541,6 +3541,68 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
                 c.label
             ));
         }
+        // The loader's slot-ownership contract: a screened-entry cache word is
+        // a code address whose `SubrFn` class only a provable subr site may
+        // hold, and a loader-ARMED `SubrGeneral` site must be armed with the
+        // site's binding words exactly like a JIT-compiled site. Plain
+        // asserts (not debug_assertions): the write they guard is a release
+        // hazard too. This is the regression check for the cross-session
+        // `cache on a subr site's slot` panic.
+        {
+            let id = g.jit_runtime().compiled_id_or_assign();
+            let leaf = super::cache::testkit_leaf_ptr(id)
+                .ok_or_else(|| format!("{}: leaf not in the compiled cache", c.label))?;
+            // SAFETY: the cache retains this leaf until `clear()` below, and
+            // nothing here runs Lisp or clears the cache while borrowing it.
+            let leaf = unsafe { &*leaf };
+            if leaf.spec_slots.len() != 1 || leaf.spec_slot_kinds.len() != 1 {
+                return Err(format!(
+                    "{}: expected one spec slot, got {} slots / {} kinds",
+                    c.label,
+                    leaf.spec_slots.len(),
+                    leaf.spec_slot_kinds.len()
+                ));
+            }
+            let slot = &leaf.spec_slots[0];
+            if slot.cached_subr_entry() != 0 && !slot.holds_subr_binding() {
+                return Err(format!(
+                    "{}: a screened-entry cache word was written onto a slot with no subr binding",
+                    c.label
+                ));
+            }
+            if c.label == "subr/consp" {
+                // The armed `SubrGeneral` site: binding words present and equal
+                // to the live cell, and the first fast call filled the cache.
+                if !slot.holds_subr_binding() {
+                    return Err(
+                        "subr/consp: armed SubrGeneral slot is missing its binding words".into(),
+                    );
+                }
+                let (bound_sym, bound_expected) = slot.subr_binding();
+                let live = load_ctx
+                    .obarray
+                    .symbol_function_id(intern(c.alias))
+                    .ok_or("subr/consp: alias unbound after the run")?;
+                if bound_sym != intern(c.alias) || bound_expected != live.bits() as u64 {
+                    return Err(format!(
+                        "subr/consp: slot binding ({bound_sym:?}, {bound_expected:#x}) != live ({:?}, {:#x})",
+                        intern(c.alias),
+                        live.bits()
+                    ));
+                }
+                if slot.cached_subr_entry() == 0 {
+                    return Err(
+                        "subr/consp: the AOT fast path did not fill the screened-entry cache"
+                            .into(),
+                    );
+                }
+            } else if slot.cached_subr_entry() != 0 {
+                return Err(format!(
+                    "{}: a non-subr spec site wrote the screened-entry cache",
+                    c.label
+                ));
+            }
+        }
         // Result equals the interpreter.
         let interp = {
             let h = mk_fn(c.alias, c.arity, &c.pushes);

@@ -953,10 +953,10 @@ impl CompiledLeaf {
         let mut spec_slots_vec: Vec<SpecSlot> = Vec::with_capacity(n_spec);
         let mut spec_expected_vec: Vec<u64> = Vec::with_capacity(n_spec);
         for site in spec_sites {
-            let (epoch, expected) = 'arm: {
+            let (epoch, expected, armed_sym) = 'arm: {
                 // No live obarray (test/testkit) → can't re-classify → DISARM.
                 let Some(ob) = obarray else {
-                    break 'arm (SPEC_EPOCH_DISARMED, 0);
+                    break 'arm (SPEC_EPOCH_DISARMED, 0, None);
                 };
                 // Recover the callee SymId from the leaf's OWN reloc vector (the same
                 // symbol the code loads via `materialize_op_sym_id`).
@@ -964,11 +964,11 @@ impl CompiledLeaf {
                     .get(site.callee_reloc_idx as usize)
                     .and_then(|v| v.as_bare_symbol_id())
                 else {
-                    break 'arm (SPEC_EPOCH_DISARMED, 0);
+                    break 'arm (SPEC_EPOCH_DISARMED, 0, None);
                 };
                 // The LIVE binding at load. A now-unbound symbol → DISARM.
                 let Some(cell) = ob.symbol_function_id(sym_id) else {
-                    break 'arm (SPEC_EPOCH_DISARMED, 0);
+                    break 'arm (SPEC_EPOCH_DISARMED, 0, None);
                 };
                 // RE-CLASSIFY exactly as `find_spec_sites` did (Bytecode fast-path,
                 // else the fixed-arity/Many subr classifier at the SAME nargs).
@@ -979,12 +979,30 @@ impl CompiledLeaf {
                 };
                 // ARM only on an EXACT discriminant match (never "builtin+arity").
                 if live_disc == Some(site.kind_disc) {
-                    (ob.function_epoch(), cell.bits() as u64)
+                    (ob.function_epoch(), cell.bits() as u64, Some(sym_id))
                 } else {
-                    (SPEC_EPOCH_DISARMED, 0)
+                    (SPEC_EPOCH_DISARMED, 0, None)
                 }
             };
-            spec_slots_vec.push(SpecSlot::at_epoch(epoch));
+            // Build the slot through the SAME constructor the JIT builder uses
+            // (`SpecSlot::for_site`): a loader-ARMED
+            // `SubrGeneral` site gets its binding words (`bind_subr`: the
+            // expected subr in `leaf`, the site symbol in `direct_consts`)
+            // exactly like a JIT-compiled site. That word pair is the in-band
+            // `SpecSlotKind::Subr` witness (`holds_subr_binding`) the
+            // screened-entry cache's write asserts and the Bcall trampoline's
+            // re-arm reads; before this, an AOT-armed subr site had an empty
+            // slot and `neovm_jit_call_subr_spec`'s first fast call wrote the
+            // cache onto a slot with no binding words (the cross-session
+            // `recordp`/`consp` selftest's `cache on a subr site's slot`).
+            // A disarmed site (or a kind without binding words) starts empty
+            // as before: SPEC_EPOCH_DISARMED never re-arms, and nothing that
+            // needs the binding words can reach it.
+            let slot = match (SpecCalleeKind::from_spec_disc(site.kind_disc), armed_sym) {
+                (Some(kind), Some(sym)) => SpecSlot::for_site(kind, epoch, sym.0, expected),
+                _ => SpecSlot::at_epoch(epoch),
+            };
+            spec_slots_vec.push(slot);
             spec_expected_vec.push(expected);
         }
         let spec_slots: Box<[SpecSlot]> = spec_slots_vec.into_boxed_slice();

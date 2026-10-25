@@ -1980,6 +1980,21 @@ pub(crate) fn compiled_regalloc_for_test(id: u64) -> Option<RegallocChoice> {
     })
 }
 
+/// The identity of the compiled leaf cached for `id`, for the crate's
+/// `#[doc(hidden)]` AOT self-tests. Those run from an integration-test
+/// binary (no `cfg(test)`), so they cannot use the test-only accessor
+/// below. Not a runtime contract: the caller must not keep the pointer
+/// across a cache clear or eviction.
+#[cfg(all(target_os = "linux", debug_assertions))]
+pub(crate) fn testkit_leaf_ptr(id: u64) -> Option<*const CompiledLeaf> {
+    COMPILED.with(|c| {
+        c.borrow()
+            .get(id)
+            .and_then(CacheEntry::live_leaf)
+            .map(Rc::as_ptr)
+    })
+}
+
 /// Test-only: the identity of the compiled leaf cached for `id`.
 #[cfg(test)]
 pub(crate) fn compiled_leaf_ptr_for_test(id: u64) -> Option<*const CompiledLeaf> {
