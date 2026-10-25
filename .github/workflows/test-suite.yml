@@ -482,13 +482,22 @@ jobs:
   neomacs-display-tests:
     name: display stack tests (linux x86_64)
     if: ${{ github.event_name != 'schedule' }}
-    needs: neomacs-workspace-test-archive
+    # The layout-engine tests bootstrap GNU Lisp through neovm-core, which
+    # reads the workspace's lisp/ tree.  The checkout has the tracked sources
+    # but not the generated ones (lisp/international/charscript.el,
+    # charprop.el) -- those come from `cargo xtask fresh-build --release` in
+    # the shared-runtime job, exactly as they do for every nextest shard.
+    # Without this artifact 24 display tests die in bootstrap with a
+    # `file-missing` signal.
+    needs: [neomacs-test-runtime, neomacs-workspace-test-archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
       TMPDIR: ${{ github.workspace }}/tmp
+      NEOMACS_BINARY_PATH: ${{ github.workspace }}/target/release/neomacs
+      NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
       NEXTEST_FILTER: "package(neomacs-display-protocol)|package(neomacs-display-runtime)|package(neomacs-layout-engine)|package(neomacs-renderer-wgpu)"
     steps:
       - *checkout
@@ -506,6 +515,8 @@ jobs:
           cache: "false"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
+      - *download_test_runtime
+      - *unpack_test_runtime
       - *download_workspace_test_archive
 
       - name: Run display stack tests
