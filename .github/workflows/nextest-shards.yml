@@ -121,7 +121,16 @@ jobs:
 
       - name: Run nextest shard
         env:
+          # Record the TUI casts we upload, but never pace them in CI: the
+          # harness contract (crates/neomacs-tui-tests/src/lib.rs) is that a
+          # recorded run must be the graded execution. With the default 2 s
+          # pacing a paired key costs 8 s, which both changes timing-sensitive
+          # screens (Beacon's transient blinks, process-output drains) and
+          # pushes the longest package-TUI suites past nextest's 600 s
+          # watchdog. Delay 0 keeps the casts and runs the same schedule as an
+          # unrecorded run.
           NEOMACS_TUI_RECORD: ${{ inputs.suite == 'tui' && 'on' || 'off' }}
+          NEOMACS_TUI_RECORD_DELAY_MS: "0"
         run: |
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \

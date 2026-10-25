@@ -19,7 +19,10 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
       TMPDIR: ${{ github.workspace }}/tmp
+      # Record TUI casts for triage, but never pace the graded run: pacing
+      # changes timing-sensitive screens and can trip the 600 s watchdog.
       NEOMACS_TUI_RECORD: on
+      NEOMACS_TUI_RECORD_DELAY_MS: "0"
       NEOMACS_MELPA_ORACLE_EMACS: /opt/gnu-emacs-oracle/bin/emacs
     steps:
       - name: Checkout

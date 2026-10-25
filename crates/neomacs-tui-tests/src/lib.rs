@@ -30,13 +30,20 @@
 //!   was killed, not hung; lower `NEOMACS_TUI_RECORD_DELAY_MS` whenever the
 //!   pacing is not the thing being inspected.
 //!
-//!   A recorded run is also a *different execution*, not an observation of the
-//!   graded one: inserting seconds between keys changes what the editor does
-//!   -- idle timers fire, the echo area clears, which-key pops up, async
-//!   completion lands mid-command -- so a recorded run may pass or fail
-//!   differently from the same scenario without recording. It is a
-//!   diagnostic for a human; CI must never set it, and a green recorded run
-//!   is not evidence that the graded run is green.
+//!   A *paced* recorded run is also a different execution, not an observation
+//!   of the graded one: inserting seconds between keys changes what the editor
+//!   does -- idle timers fire, the echo area clears, which-key pops up, async
+//!   completion lands mid-command -- so a paced run may pass or fail
+//!   differently from the same scenario without recording. It is a local
+//!   diagnostic for a human, and a green paced run is not evidence that the
+//!   graded run is green.
+//!
+//!   CI therefore records with `NEOMACS_TUI_RECORD_DELAY_MS=0`: the casts are
+//!   still uploaded for triage, but the shard runs the same unpaced schedule
+//!   as a non-recording run. Raising the delay in CI is not an option -- it
+//!   turns transient screen states (Beacon's blinks, process-output drains)
+//!   into timing races the paired driver cannot win, and ~75 paired keys of
+//!   pacing alone exhausts nextest's 600 s watchdog.
 //!
 //! - [`emacs_key`] translates Emacs key descriptions (`"C-x"`, `"M-x"`,
 //!   `"RET"`) into the raw bytes a terminal would send.

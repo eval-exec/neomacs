@@ -585,7 +585,10 @@ jobs:
 
       - name: Compare buffer-remapped prefix faces with GNU Emacs
         env:
+          # Record the cast for triage but do not pace the graded run; see
+          # crates/neomacs-tui-tests/src/lib.rs ("CI records without pacing").
           NEOMACS_TUI_RECORD: on
+          NEOMACS_TUI_RECORD_DELAY_MS: "0"
         run: |
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
