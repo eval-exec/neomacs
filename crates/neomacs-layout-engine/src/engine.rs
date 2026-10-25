@@ -1396,13 +1396,19 @@ impl LayoutEngine {
         self.frame_output.latest_window_info(window_id)
     }
 
-    fn output_window_content_height_px(
+    fn output_window_automatic_mini_height_px(
         &self,
-        window_id: i64,
+        params: &WindowParams,
         fallback_row_height: f32,
     ) -> Option<f32> {
-        self.frame_output
-            .window_content_height_px(window_id, fallback_row_height)
+        if params.window_system {
+            // Preserve legacy GUI sizing; the automatic-tail correction is TTY-only.
+            self.frame_output
+                .window_content_height_px(params.window_id, fallback_row_height)
+        } else {
+            self.frame_output
+                .mini_measurement_height_px(params.window_id, fallback_row_height)
+        }
     }
 
     /// Keep inactive echo-area geometry renderer-visible without admitting it
@@ -3122,8 +3128,8 @@ impl LayoutEngine {
                 && evaluator.gnu_redisplay_transaction_active())
                 && let Some(mini_params) = window_params_list.last()
                 && mini_params.is_minibuffer()
-                && let Some(mini_content_height_px) = self.output_window_content_height_px(
-                    mini_params.window_id,
+                && let Some(mini_content_height_px) = self.output_window_automatic_mini_height_px(
+                    mini_params,
                     frame_params.char_height.max(1.0),
                 )
             {
@@ -3144,8 +3150,9 @@ impl LayoutEngine {
                 // GNU `resize_mini_window` measures the mini-window's
                 // CONTENT height via `move_it_to (ZV)` (xdisp.c:13340) and
                 // shrinks a grow-only window when `height < old_height &&
-                // (exact_p || BEGV == ZV)` (xdisp.c:13395). An empty
-                // mini/echo buffer is exactly one line.
+                // (exact_p || BEGV == ZV)` (xdisp.c:13395). Empty accessible
+                // source permits shrinking; overlay strings still contribute
+                // their actual measured display height.
                 //
                 // The source was resolved before incremental classification,
                 // so this height and emptiness check refer to the same buffer

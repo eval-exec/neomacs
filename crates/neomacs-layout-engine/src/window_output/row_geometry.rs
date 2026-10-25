@@ -324,6 +324,12 @@ impl WindowRowGeometry {
         }
     }
 
+    /// Pen coordinates are relative to the first visible text-area X.
+    pub(super) fn current_row_at_or_before_first_visible_x(&self) -> bool {
+        self.current_row_progress
+            .is_some_and(|progress| progress.x <= 0)
+    }
+
     pub(super) fn current_row_has_output(&self) -> bool {
         self.current_row_progress.as_ref().is_some_and(|progress| {
             progress.x != progress.start_x

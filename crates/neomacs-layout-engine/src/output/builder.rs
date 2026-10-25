@@ -731,6 +731,13 @@ impl DisplayOutputBuilder {
             .window_content_height_px(window_id, fallback_row_height)
     }
 
+    pub(crate) fn install_automatic_mini_tail_height(
+        &mut self,
+        height: crate::output::window_state::AutomaticMiniTailHeight,
+    ) {
+        self.window_state.install_automatic_mini_tail_height(height);
+    }
+
     pub(crate) fn mini_measurement_height_px(
         &self,
         window_id: i64,

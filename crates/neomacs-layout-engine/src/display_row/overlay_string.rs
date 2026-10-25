@@ -842,6 +842,14 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         match stop {
             DisplayRowRenderStop::SourceExhausted => break,
             DisplayRowRenderStop::Clipped => {
+                if !row_context.append_surface.line_wrap().wraps() {
+                    // Numeric automatic-mini observation only: do not alter
+                    // the public row flags, glyphs or ordinary transition.
+                    state
+                        .source_render
+                        .output_emitter()
+                        .note_automatic_mini_row_truncation();
+                }
                 if row_context.row_transitions == OverlayStringRowTransitions::Refuse {
                     return DisplayRowTransitionContinuation::Exhausted;
                 }

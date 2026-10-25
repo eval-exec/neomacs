@@ -1328,6 +1328,62 @@ impl WindowChromeStringState {
     }
 }
 
+/// Native source-byte observation; Unknown never authorizes an EOB shortcut.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MiniPrecedingZvByte {
+    AtBufferStart,
+    Byte(u8),
+    Unknown,
+}
+
+/// Numeric facts of one exclusive speculative emitter. They are discarded
+/// with that emitter on retry/completion, never published in the glyph matrix
+/// or shared with a mutator/retained cache.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum AutomaticMiniRowEnd {
+    Ordinary,
+    Truncated,
+}
+
+impl MiniPrecedingZvByte {
+    /// Called only for a completed empty current row at/before first-visible X
+    /// in TRUNCATE mode. Keep GNU's mover and final-height guards distinct.
+    pub(crate) fn automatic_tail_height(
+        self,
+        previous_row: AutomaticMiniRowEnd,
+        height_px: f32,
+    ) -> crate::output::window_state::AutomaticMiniTailHeight {
+        use crate::output::window_state::AutomaticMiniTailHeight;
+        match previous_row {
+            AutomaticMiniRowEnd::Truncated => match self {
+                // move_it_to:11122–11145 exits before Y advance/metrics reset
+                // after a clipped final string line, including true ZV_BYTE==1.
+                Self::AtBufferStart => AutomaticMiniTailHeight::TruncatedLineStop { height_px },
+                Self::Byte(byte) => {
+                    if byte != b'\n' {
+                        AutomaticMiniTailHeight::TruncatedLineStop { height_px }
+                    } else {
+                        AutomaticMiniTailHeight::CurrentRow
+                    }
+                }
+                Self::Unknown => AutomaticMiniTailHeight::CurrentRow,
+            },
+            AutomaticMiniRowEnd::Ordinary => match self {
+                // resize_mini_window:13355–13368 suppresses last_height only
+                // for a real preceding non-LF byte, never merely empty BEGV..ZV.
+                Self::Byte(byte) => {
+                    if byte != b'\n' {
+                        AutomaticMiniTailHeight::ZeroMetricsTruncatedEnd { height_px }
+                    } else {
+                        AutomaticMiniTailHeight::CurrentRow
+                    }
+                }
+                Self::AtBufferStart | Self::Unknown => AutomaticMiniTailHeight::CurrentRow,
+            },
+        }
+    }
+}
+
 pub(crate) struct WindowOutputEmitter {
     query_target: Option<LayoutCharPos0>,
     // A stable buffer glyph completed a position query inside this row.
@@ -1343,6 +1399,8 @@ pub(crate) struct WindowOutputEmitter {
     frame_id: neovm_core::window::FrameId,
     window_id: neovm_core::window::WindowId,
     geometry: WindowRowGeometry,
+    current_automatic_mini_row_end: AutomaticMiniRowEnd,
+    previous_automatic_mini_row_end: AutomaticMiniRowEnd,
     logical_cursor: Option<WindowCursorPos>,
     phys_cursor: Option<WindowCursorSnapshot>,
     chrome_strings: WindowChromeStringState,
@@ -1447,6 +1505,8 @@ impl WindowOutputEmitter {
             frame_id,
             window_id,
             geometry: WindowRowGeometry::new(text_row_base, text_x, window_top),
+            current_automatic_mini_row_end: AutomaticMiniRowEnd::Ordinary,
+            previous_automatic_mini_row_end: AutomaticMiniRowEnd::Ordinary,
             logical_cursor: None,
             phys_cursor: None,
             chrome_strings: WindowChromeStringState::Building(Vec::new()),
@@ -1579,6 +1639,18 @@ impl WindowOutputEmitter {
     ) {
         self.geometry
             .restore_current_row_pen(position.x_px(), position.col());
+    }
+
+    pub(crate) fn note_automatic_mini_row_truncation(&mut self) {
+        self.current_automatic_mini_row_end = AutomaticMiniRowEnd::Truncated;
+    }
+
+    pub(crate) fn previous_automatic_mini_row_end(&self) -> AutomaticMiniRowEnd {
+        self.previous_automatic_mini_row_end
+    }
+
+    pub(crate) fn current_row_at_or_before_first_visible_x(&self) -> bool {
+        self.geometry.current_row_at_or_before_first_visible_x()
     }
 
     pub(crate) fn current_row_has_output(&self) -> bool {
@@ -1780,6 +1852,7 @@ impl WindowOutputEmitter {
         y: f32,
         x: f32,
     ) {
+        self.current_automatic_mini_row_end = AutomaticMiniRowEnd::Ordinary;
         self.geometry.note_query_y(y);
         let output_row = self.geometry.text_row_base + row as i64;
         let output_col = col as i64;
@@ -1897,6 +1970,8 @@ impl WindowOutputEmitter {
     }
 
     pub(crate) fn push_text_row(&mut self, row_y_start: f32, row_height: f32, row_ascent: f32) {
+        self.previous_automatic_mini_row_end = self.current_automatic_mini_row_end;
+        self.current_automatic_mini_row_end = AutomaticMiniRowEnd::Ordinary;
         self.geometry
             .push_text_row(row_y_start, row_height, row_ascent)
     }

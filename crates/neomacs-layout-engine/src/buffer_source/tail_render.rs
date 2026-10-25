@@ -219,23 +219,27 @@ impl<'a> BufferSourceTailRequestContext<'a> {
         text: &'request [u8],
         charpos: i64,
         point_is_visible_eob: bool,
+        preceding_zv_byte: crate::window_output::MiniPrecedingZvByte,
     ) -> TextWindowTailFinalizeRequest<'request> {
-        TextWindowTailFinalizeRequest::new(TextWindowTailFinalizeContext::new(
-            self.params,
-            text,
-            self.display_text_row_base,
-            self.text_area_left,
-            self.window_top,
-            self.text_y,
-            self.text_height,
-            self.char_width,
-            self.char_height,
-            self.window_start,
-            self.params.point_charpos().get(),
-            charpos,
-            point_is_visible_eob,
-            self.row_limit,
-        ))
+        TextWindowTailFinalizeRequest::new(
+            TextWindowTailFinalizeContext::new(
+                self.params,
+                text,
+                self.display_text_row_base,
+                self.text_area_left,
+                self.window_top,
+                self.text_y,
+                self.text_height,
+                self.char_width,
+                self.char_height,
+                self.window_start,
+                self.params.point_charpos().get(),
+                charpos,
+                point_is_visible_eob,
+                self.row_limit,
+            )
+            .with_preceding_zv_byte(preceding_zv_byte),
+        )
     }
 
     pub(crate) fn visibility_retry_request<'rows, 'buf, B>(
@@ -349,6 +353,7 @@ pub(crate) fn render_buffer_source_tail_and_decide_retry<
 where
     'surface: 'request,
 {
+    use crate::window_output::MiniPrecedingZvByte;
     if source_stop
         == crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::QueryTargetReached
     {
@@ -356,7 +361,7 @@ where
         // observed row's metrics, without EOB anchors or after-strings at the
         // unconsumed position. The final row remains a certified prefix.
         let finalized = tail_context
-            .tail_finalize_request(text, charpos, false)
+            .tail_finalize_request(text, charpos, false, MiniPrecedingZvByte::Unknown)
             .finalize_and_apply(TextWindowTailFinalizeState::new(
                 cursor_info,
                 row_geometry,
@@ -406,9 +411,35 @@ where
             face_scan,
         );
     let point_is_visible_eob = tail_progress.point_is_visible_eob();
+    // Observe one byte only after the whole source/string tail completes.
+    // A prefix or bounded stop cannot authorize GNU's exhausted-string exit.
+    // The borrowed view can read just before an empty narrowed BEGV==ZV;
+    // no text clone or live Lisp query is needed.
+    let preceding_zv_byte = match tail_progress.progress {
+        crate::buffer_source::row_lifecycle::BufferSourceEobTailProgress::Complete => {
+            if tail_context.params.is_minibuffer() && !tail_context.params.window_system {
+                // Rust EmacsBytePos is zero-based; GNU ZV_BYTE is one-based.
+                // GNU ZV_BYTE <= 1 is therefore Rust zv == 0, and GNU's
+                // FETCH_BYTE(ZV_BYTE - 1) is the byte at Rust zv - 1.
+                match buf_access.zv() {
+                    0 => MiniPrecedingZvByte::AtBufferStart,
+                    zv if zv > 0 => buf_access
+                        .byte_at(zv - 1)
+                        .map_or(MiniPrecedingZvByte::Unknown, MiniPrecedingZvByte::Byte),
+                    _ => MiniPrecedingZvByte::Unknown,
+                }
+            } else {
+                MiniPrecedingZvByte::Unknown
+            }
+        }
+        crate::buffer_source::row_lifecycle::BufferSourceEobTailProgress::SourceRowsExhausted
+        | crate::buffer_source::row_lifecycle::BufferSourceEobTailProgress::OverlayRowsExhausted => {
+            MiniPrecedingZvByte::Unknown
+        }
+    };
 
     let finalized = tail_context
-        .tail_finalize_request(text, charpos, point_is_visible_eob)
+        .tail_finalize_request(text, charpos, point_is_visible_eob, preceding_zv_byte)
         .finalize_and_apply(TextWindowTailFinalizeState::new(
             cursor_info,
             row_geometry,

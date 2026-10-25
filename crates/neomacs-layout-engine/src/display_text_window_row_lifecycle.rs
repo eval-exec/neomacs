@@ -286,6 +286,7 @@ pub(crate) struct TextWindowTailFinalizeContext<'a> {
     charpos: i64,
     point_is_visible_eob: bool,
     row_limit: DisplayRowLimit,
+    preceding_zv_byte: crate::window_output::MiniPrecedingZvByte,
 }
 
 pub(crate) struct TextWindowTailFinalizeState<'a, 'emit> {
@@ -659,7 +660,16 @@ impl<'a> TextWindowTailFinalizeContext<'a> {
             charpos,
             point_is_visible_eob,
             row_limit,
+            preceding_zv_byte: crate::window_output::MiniPrecedingZvByte::Unknown,
         }
+    }
+
+    pub(crate) fn with_preceding_zv_byte(
+        mut self,
+        byte: crate::window_output::MiniPrecedingZvByte,
+    ) -> Self {
+        self.preceding_zv_byte = byte;
+        self
     }
 }
 
@@ -726,13 +736,44 @@ impl<'a> TextWindowTailFinalizeRequest<'a> {
                     }
                 }
 
+                // GNU resize_mini_window (xdisp.c:13355–13368) uses the
+                // completed iterator's zero-current-metrics branch. The row's
+                // structural prefix minimum is not produced glyph metrics.
+                // A real prefix/glyph moves or marks emitter progress and must
+                // retain its current-row height. X is in visible text-area
+                // coordinates; hscroll skipping is already applied upstream.
+                let source_exhausted = context.charpos
+                    >= context.params.accessible_end_charpos().get();
+                if context.params.is_minibuffer()
+                    && !context.params.window_system
+                    && source_exhausted
+                    && row_geometry.is_within_row_limit(context.row_limit)
+                {
+                    use crate::output::window_state::AutomaticMiniTailHeight;
+                    let height = if !output_emitter.current_row_has_output()
+                        && output_emitter.current_row_at_or_before_first_visible_x()
+                        && context.params.wrap_mode == crate::types::LineWrapMode::Truncate
+                    {
+                        context.preceding_zv_byte.automatic_tail_height(
+                            output_emitter.previous_automatic_mini_row_end(),
+                            row_geometry.current_row_y(
+                                row_y_positions,
+                                context.text_y,
+                                context.char_h,
+                            ) - context.window_top,
+                        )
+                    } else {
+                        AutomaticMiniTailHeight::CurrentRow
+                    };
+                    output.builder().install_automatic_mini_tail_height(height);
+                }
+
                 let pending_row_finished = finish_pending_text_window_row(
                     output.reborrow(),
                     output_emitter,
                     TextWindowPendingRowFinish {
                         row_geometry,
-                        source_exhausted: context.charpos
-                            >= context.params.accessible_end_charpos().get(),
+                        source_exhausted,
                         row_limit: context.row_limit,
                         row_y_positions,
                         text_y: context.text_y,

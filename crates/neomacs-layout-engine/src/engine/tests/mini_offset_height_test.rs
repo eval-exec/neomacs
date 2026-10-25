@@ -26,7 +26,27 @@ enum CandidateTail {
     FinalText,
 }
 
-fn assert_wrapped_mini_offset_height(property: CandidateOverlayProperty, tail: CandidateTail) {
+#[derive(Clone, Copy, Debug)]
+enum MiniLinePolicy {
+    Wrap,
+    TruncateVirtualTail,
+    TruncateBufferNewline,
+    TruncateEmptyNarrowed(EmptyNarrowedPrefix),
+    TruncateTrulyEmptyUnclipped,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum EmptyNarrowedPrefix {
+    NonNewline,
+    Newline,
+    AtBufferStart,
+}
+
+fn assert_mini_offset_height(
+    property: CandidateOverlayProperty,
+    tail: CandidateTail,
+    line_policy: MiniLinePolicy,
+) {
     let _policy = RedisplayHookPolicyGuard::legacy();
     let mut eval =
         create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
@@ -66,56 +86,94 @@ fn assert_wrapped_mini_offset_height(property: CandidateOverlayProperty, tail: C
             .buffer_manager_mut()
             .get_mut(buffer_id)
             .expect("mini buffer");
-        buffer.insert("1/3    Switch to buffer (default *Messages*): truncation-");
-        buffer.set_buffer_local("truncate-lines", Value::NIL);
+        buffer.insert(match line_policy {
+            MiniLinePolicy::Wrap => "1/3    Switch to buffer (default *Messages*): truncation-",
+            MiniLinePolicy::TruncateVirtualTail => "truncation-",
+            MiniLinePolicy::TruncateBufferNewline => "truncation-\n",
+            MiniLinePolicy::TruncateEmptyNarrowed(EmptyNarrowedPrefix::NonNewline) => "A",
+            MiniLinePolicy::TruncateEmptyNarrowed(EmptyNarrowedPrefix::Newline) => "\n",
+            MiniLinePolicy::TruncateEmptyNarrowed(EmptyNarrowedPrefix::AtBufferStart)
+            | MiniLinePolicy::TruncateTrulyEmptyUnclipped => "",
+        });
+        buffer.set_buffer_local(
+            "truncate-lines",
+            match line_policy {
+                MiniLinePolicy::Wrap => Value::NIL,
+                MiniLinePolicy::TruncateVirtualTail
+                | MiniLinePolicy::TruncateBufferNewline
+                | MiniLinePolicy::TruncateEmptyNarrowed(_)
+                | MiniLinePolicy::TruncateTrulyEmptyUnclipped => Value::T,
+            },
+        );
         buffer.set_buffer_local("word-wrap", Value::NIL);
         let eob = buffer.point_max_emacs_byte_pos();
+        if matches!(
+            line_policy,
+            MiniLinePolicy::TruncateEmptyNarrowed(_) | MiniLinePolicy::TruncateTrulyEmptyUnclipped
+        ) {
+            buffer.narrow_to_emacs_byte_range(neovm_core::buffer::EmacsByteRange::new(eob, eob));
+            assert_eq!(
+                buffer.point_min_emacs_byte_pos(),
+                buffer.point_max_emacs_byte_pos()
+            );
+        }
         buffer.goto_emacs_byte_pos(eob);
     }
     let mini_id = eval
         .activate_minibuffer_window_for_buffer(buffer_id, LispString::from_utf8(""), None)
         .expect("activate mini")
         .expect("mini window");
-    let payload = format!(
-        " \n  truncation-{}\n  truncation-{}\n  truncation-{}{}",
-        "a".repeat(50),
-        "b".repeat(50),
-        "c".repeat(50),
-        match tail {
-            CandidateTail::FinalNewline => "\n",
-            CandidateTail::FinalText => "",
-        },
-    );
-    let payload = Value::string(payload);
-    eval.eval_form(Value::list(vec![
-        Value::symbol("put-text-property"),
-        Value::fixnum(0),
-        Value::fixnum(1),
-        Value::list(vec![Value::symbol("quote"), Value::symbol("cursor")]),
-        Value::T,
-        payload,
-    ]))
-    .expect("Vertico explicit cursor on the first virtual space");
-    {
-        let buffer = eval
-            .buffer_manager_mut()
-            .get_mut(buffer_id)
-            .expect("mini buffer");
-        let eob = buffer.point_max_emacs_byte_pos().get();
-        let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 0,
-            plist: Value::NIL,
-            buffer: Some(buffer.id()),
-            start: eob,
-            end: eob,
-            front_advance: false,
-            rear_advance: false,
-        });
-        buffer.overlays_mut().insert_overlay(overlay);
-        buffer
-            .overlays_mut()
-            .overlay_put(overlay, Value::symbol(property.name()), payload)
-            .expect("install candidate string");
+    // The real-buffer newline control isolates FETCH_BYTE(ZV_BYTE - 1).
+    // An EOB overlay after that newline has a different MOVE_TO_POS stop.
+    if !matches!(line_policy, MiniLinePolicy::TruncateBufferNewline) {
+        let candidate_width = match line_policy {
+            MiniLinePolicy::TruncateTrulyEmptyUnclipped => 1,
+            MiniLinePolicy::Wrap
+            | MiniLinePolicy::TruncateVirtualTail
+            | MiniLinePolicy::TruncateBufferNewline
+            | MiniLinePolicy::TruncateEmptyNarrowed(_) => 50,
+        };
+        let payload = format!(
+            " \n  truncation-{}\n  truncation-{}\n  truncation-{}{}",
+            "a".repeat(candidate_width),
+            "b".repeat(candidate_width),
+            "c".repeat(candidate_width),
+            match tail {
+                CandidateTail::FinalNewline => "\n",
+                CandidateTail::FinalText => "",
+            },
+        );
+        let payload = Value::string(payload);
+        eval.eval_form(Value::list(vec![
+            Value::symbol("put-text-property"),
+            Value::fixnum(0),
+            Value::fixnum(1),
+            Value::list(vec![Value::symbol("quote"), Value::symbol("cursor")]),
+            Value::T,
+            payload,
+        ]))
+        .expect("Vertico explicit cursor on the first virtual space");
+        {
+            let buffer = eval
+                .buffer_manager_mut()
+                .get_mut(buffer_id)
+                .expect("mini buffer");
+            let eob = buffer.point_max_emacs_byte_pos().get();
+            let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
+                serial: 0,
+                plist: Value::NIL,
+                buffer: Some(buffer.id()),
+                start: eob,
+                end: eob,
+                front_advance: false,
+                rear_advance: false,
+            });
+            buffer.overlays_mut().insert_overlay(overlay);
+            buffer
+                .overlays_mut()
+                .overlay_put(overlay, Value::symbol(property.name()), payload)
+                .expect("install candidate string");
+        }
     }
 
     let mut engine = LayoutEngine::new_without_font_metrics();
@@ -212,7 +270,7 @@ fn assert_wrapped_mini_offset_height(property: CandidateOverlayProperty, tail: C
         .expect("mini measurement result");
     let geometry = query.into_geometry().expect("canonical measurement rows");
     let diagnostic = format!(
-        "property={property:?} tail={tail:?} allocation={allocated_height} top={mini_top} \
+        "property={property:?} tail={tail:?} line_policy={line_policy:?} allocation={allocated_height} top={mini_top} \
          root_bottom={root_bottom} late_content={late_content_height} mini_measurement={measured_height}\n\
          raw(index,enabled,y,height,ends_at_zv,start,end,end_source,text)={raw_rows:?}\n\
          presentation_rows={presentation_rows}\nmeasurement_rows={:?}\n\
@@ -220,15 +278,29 @@ fn assert_wrapped_mini_offset_height(property: CandidateOverlayProperty, tail: C
         geometry.rows,
         public_queries.borrow(),
     );
-    // GNU resize_mini_window adds last_height only after returning zero
-    // current ascent/descent, unless the explicit TRUNCATE exception applies.
-    // This wrapped unit-cell fixture predicts automatic9 after the final
-    // virtual newline, while the public extent and positive rows remain8.
-    let expected_automatic = match tail {
-        CandidateTail::FinalNewline => 9.0,
-        CandidateTail::FinalText => 8.0,
+    // GNU xdisp.c:13355–13368 suppresses last_height only with zero current
+    // ascent/descent, TRUNCATE, current_x <= first_visible_x, and a non-newline
+    // final BUFFER byte. A virtual final newline cannot override that byte.
+    let (expected_public, expected_automatic) = match (line_policy, tail) {
+        (MiniLinePolicy::Wrap, CandidateTail::FinalNewline) => (Some(8.0), 9.0),
+        (MiniLinePolicy::Wrap, CandidateTail::FinalText) => (Some(8.0), 8.0),
+        (MiniLinePolicy::TruncateVirtualTail, _) => (Some(4.0), 4.0),
+        (MiniLinePolicy::TruncateBufferNewline, _) => (Some(1.0), 2.0),
+        (MiniLinePolicy::TruncateEmptyNarrowed(EmptyNarrowedPrefix::NonNewline), _) => (None, 4.0),
+        (MiniLinePolicy::TruncateEmptyNarrowed(EmptyNarrowedPrefix::Newline), _) => (None, 5.0),
+        (MiniLinePolicy::TruncateEmptyNarrowed(EmptyNarrowedPrefix::AtBufferStart), _) => {
+            (None, 4.0)
+        }
+        (MiniLinePolicy::TruncateTrulyEmptyUnclipped, _) => (None, 5.0),
     };
-    assert_eq!(public_height, 8.0, "public text extent: {diagnostic}");
+    // Narrowed-empty public query parity is a separate existing contract.
+    // Keep the query observable, preserving the seven original public checks.
+    if let Some(expected_public) = expected_public {
+        assert_eq!(
+            public_height, expected_public,
+            "public text extent: {diagnostic}"
+        );
+    }
     // late_content_height is retained as an observation, not forced to match
     // either API: the visible insertion-row materialization is a separate fact.
     assert_eq!(
@@ -253,24 +325,104 @@ fn assert_wrapped_mini_offset_height(property: CandidateOverlayProperty, tail: C
 
 #[test]
 fn active_mini_wrapped_before_string_final_newline_keeps_its_offset_row_height() {
-    assert_wrapped_mini_offset_height(
+    assert_mini_offset_height(
         CandidateOverlayProperty::BeforeString,
         CandidateTail::FinalNewline,
+        MiniLinePolicy::Wrap,
     );
 }
 
 #[test]
 fn active_mini_wrapped_after_string_final_newline_keeps_its_offset_row_height() {
-    assert_wrapped_mini_offset_height(
+    assert_mini_offset_height(
         CandidateOverlayProperty::AfterString,
         CandidateTail::FinalNewline,
+        MiniLinePolicy::Wrap,
     );
 }
 
 #[test]
 fn active_mini_wrapped_string_without_final_newline_has_no_extra_offset_row() {
-    assert_wrapped_mini_offset_height(
+    assert_mini_offset_height(
         CandidateOverlayProperty::BeforeString,
         CandidateTail::FinalText,
+        MiniLinePolicy::Wrap,
+    );
+}
+
+#[test]
+fn active_mini_truncated_before_string_virtual_newline_does_not_add_offset_height() {
+    assert_mini_offset_height(
+        CandidateOverlayProperty::BeforeString,
+        CandidateTail::FinalNewline,
+        MiniLinePolicy::TruncateVirtualTail,
+    );
+}
+
+#[test]
+fn active_mini_truncated_after_string_virtual_newline_does_not_add_offset_height() {
+    assert_mini_offset_height(
+        CandidateOverlayProperty::AfterString,
+        CandidateTail::FinalNewline,
+        MiniLinePolicy::TruncateVirtualTail,
+    );
+}
+
+#[test]
+fn active_mini_truncated_virtual_final_text_keeps_its_current_row_height() {
+    assert_mini_offset_height(
+        CandidateOverlayProperty::BeforeString,
+        CandidateTail::FinalText,
+        MiniLinePolicy::TruncateVirtualTail,
+    );
+}
+
+#[test]
+fn active_mini_truncated_buffer_newline_keeps_its_empty_source_row_height() {
+    assert_mini_offset_height(
+        CandidateOverlayProperty::BeforeString,
+        CandidateTail::FinalNewline,
+        MiniLinePolicy::TruncateBufferNewline,
+    );
+}
+
+// Both excluded GNU probe orders observed automatic heights 4/5/4 for
+// hidden non-LF / hidden LF / true empty. Narrowed-empty public query parity
+// is separate and is recorded without asserting GNU equivalence here.
+#[test]
+fn active_mini_empty_narrowed_after_nonnewline_uses_preceding_zv_byte() {
+    assert_mini_offset_height(
+        CandidateOverlayProperty::BeforeString,
+        CandidateTail::FinalNewline,
+        MiniLinePolicy::TruncateEmptyNarrowed(EmptyNarrowedPrefix::NonNewline),
+    );
+}
+
+#[test]
+fn active_mini_empty_narrowed_after_newline_keeps_its_offset_height() {
+    assert_mini_offset_height(
+        CandidateOverlayProperty::BeforeString,
+        CandidateTail::FinalNewline,
+        MiniLinePolicy::TruncateEmptyNarrowed(EmptyNarrowedPrefix::Newline),
+    );
+}
+
+#[test]
+fn active_mini_truly_empty_buffer_does_not_invent_a_preceding_zv_byte() {
+    assert_mini_offset_height(
+        CandidateOverlayProperty::BeforeString,
+        CandidateTail::FinalNewline,
+        MiniLinePolicy::TruncateEmptyNarrowed(EmptyNarrowedPrefix::AtBufferStart),
+    );
+}
+
+#[test]
+fn active_mini_truly_empty_unclipped_virtual_newline_keeps_its_offset_height() {
+    // Excluded GNU short-line probe: same final newline/true ZV_BYTE==1,
+    // but no MOVE_LINE_TRUNCATED, so automatic height is five, not four.
+    assert_mini_offset_height(
+        CandidateOverlayProperty::BeforeString,
+        CandidateTail::FinalNewline,
+        MiniLinePolicy::TruncateTrulyEmptyUnclipped,
     );
 }
