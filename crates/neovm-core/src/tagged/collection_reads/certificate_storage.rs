@@ -3,11 +3,12 @@
 //! Free buffers contain no World handle. A live CollectionReads owns its
 //! origin World and returns the buffer there, even after switching Worlds.
 use super::{LispCollectionRevision, capture_storage::CaptureReads};
+use rustc_hash::FxHashSet;
 use std::mem::{MaybeUninit, align_of, size_of};
 
 #[derive(Debug)]
 struct CertificateStorage {
-    reads: Vec<usize>,
+    reads: FxHashSet<usize>,
     revision: LispCollectionRevision,
 }
 
@@ -29,12 +30,11 @@ impl CertificatePool {
             // slots on acquisition so retirement itself never has to allocate.
             self.free.reserve(self.count - self.free.len());
             Box::new(CertificateStorage {
-                reads: Vec::new(),
+                reads: FxHashSet::default(),
                 revision,
             })
         });
         storage.reads.extend(reads.keys().copied());
-        storage.reads.sort_unstable();
         storage.revision = revision;
         CertificateLease {
             storage: Some(storage),
@@ -53,7 +53,7 @@ impl CertificatePool {
 type LegacySet = rustc_hash::FxHashSet<usize>;
 const LEASE_RESERVE: usize = size_of::<LegacySet>() - size_of::<usize>();
 
-/// A completed certificate sees only sorted immutable identities. Empty
+/// A completed certificate sees only immutable identities. Empty
 /// storage occurs only during retirement; all accessors remain total there.
 /// Preserve the old hash set's footprint in existing redisplay TLS caches.
 #[derive(Debug)]
@@ -69,26 +69,28 @@ const _: () = {
 };
 
 impl CertificateLease {
-    pub(super) fn as_slice(&self) -> &[usize] {
-        self.storage.as_ref().map_or(&[], |storage| &storage.reads)
+    pub(super) fn dependencies(&self) -> Option<(&FxHashSet<usize>, LispCollectionRevision)> {
+        self.storage
+            .as_ref()
+            .map(|storage| (&storage.reads, storage.revision))
     }
 
-    pub(super) fn iter(&self) -> std::slice::Iter<'_, usize> {
-        self.as_slice().iter()
-    }
-
-    pub(super) fn revision(&self) -> Option<LispCollectionRevision> {
-        self.storage.as_ref().map(|storage| storage.revision)
+    pub(super) fn iter(&self) -> impl Iterator<Item = &usize> {
+        self.storage.iter().flat_map(|storage| storage.reads.iter())
     }
 
     #[cfg(test)]
     pub(super) fn contains(&self, bits: &usize) -> bool {
-        self.as_slice().binary_search(bits).is_ok()
+        self.storage
+            .as_ref()
+            .is_some_and(|storage| storage.reads.contains(bits))
     }
 
     #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
-        self.as_slice().is_empty()
+        self.storage
+            .as_ref()
+            .is_none_or(|storage| storage.reads.is_empty())
     }
 }
 
@@ -97,16 +99,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pooled_certificate_does_not_retain_prior_dependencies() {
+        let mut pool = CertificatePool::default();
+        let mut reads = CaptureReads::default();
+        for (generation, count) in [24, 512, 0, 1].into_iter().enumerate() {
+            let revision = LispCollectionRevision::from_sequence(generation as u64);
+            let expected: std::collections::BTreeSet<_> =
+                (1..=count).map(|index| (index << 8) | generation).collect();
+            for &bits in &expected {
+                assert!(reads.insert_first(bits, revision));
+            }
+            let mut lease = pool.acquire(&reads, revision);
+            assert_eq!(lease.dependencies().unwrap().1, revision);
+            assert_eq!(lease.iter().count(), count);
+            for bits in 0..=((512 << 8) | generation) {
+                assert_eq!(lease.contains(&bits), expected.contains(&bits));
+            }
+            pool.recycle(&mut lease);
+            reads.clear();
+        }
+        assert_eq!(pool.count, 1, "all sizes reuse the same certificate lease");
+    }
+
+    #[test]
     fn retired_certificate_accessors_are_total() {
         let mut reads = CaptureReads::default();
         let revision = LispCollectionRevision::from_sequence(0);
         assert!(reads.insert_first(7, revision));
         let mut pool = CertificatePool::default();
         let mut lease = pool.acquire(&reads, revision);
-        assert_eq!(lease.as_slice(), &[7]);
+        assert!(lease.contains(&7));
+        assert_eq!(lease.dependencies().unwrap().1, revision);
         pool.recycle(&mut lease);
-        assert!(lease.as_slice().is_empty());
-        assert_eq!(lease.revision(), None);
+        assert!(lease.is_empty());
+        assert!(lease.dependencies().is_none());
         assert_eq!(lease.iter().count(), 0);
         assert!(!lease.contains(&7));
         pool.recycle(&mut lease);

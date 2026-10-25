@@ -279,9 +279,9 @@ impl CollectionReads {
     }
 
     pub fn unchanged(&self) -> bool {
-        self.reads.revision().is_some_and(|revision| {
-            unchanged_since(self.reads.as_slice(), revision, self.owner.store())
-        })
+        self.reads
+            .dependencies()
+            .is_some_and(|(reads, revision)| unchanged_since(reads, revision, self.owner.store()))
     }
 
     /// A nested cache hit reads its original dependencies transitively.
@@ -293,7 +293,7 @@ impl CollectionReads {
             return false;
         }
         if ACTIVE.with(Cell::get) {
-            for &bits in self.reads.as_slice() {
+            for &bits in self.reads.iter() {
                 // The original observation already published its sticky mark
                 // and this mutator's envelope. Certificates retain identities,
                 // not object storage: transitive reuse must not dereference an
@@ -316,14 +316,18 @@ impl Drop for CollectionReads {
     }
 }
 
-fn unchanged_since(reads: &[usize], revision: LispCollectionRevision, store: &StoreState) -> bool {
+fn unchanged_since(
+    reads: &FxHashSet<usize>,
+    revision: LispCollectionRevision,
+    store: &StoreState,
+) -> bool {
     let count = store.sequence().wrapping_sub(revision.sequence());
     if count > JOURNAL_SIZE as u64 {
         return false;
     }
     (1..=count).all(|offset| {
         let slot = revision.sequence().wrapping_add(offset) as usize % JOURNAL_SIZE;
-        reads.binary_search(&store.journal()[slot].get()).is_err()
+        !reads.contains(&store.journal()[slot].get())
     })
 }
 
