@@ -111,10 +111,21 @@ runs:
         # Real package notification tests use this build as both a client
         # and a private D-Bus service. Require the library rather than allowing
         # configure to silently omit its native primitives.
+        #
+        # --without-compress-install keeps the installed Lisp tree as plain
+        # .el. GNU's `make install` gzips it by default (Makefile.in:312,
+        # configure.ac:2073: GZIP_PROG, disabled only by this flag), and
+        # jka-compr then prints "uncompressing FILE.el.gz...done" into the
+        # message stream the MELPA and TUI parity harnesses compare against
+        # Neomacs -- the local parity reference is an in-tree build with plain
+        # .el files, so those lines exist only on CI. Decompression also makes
+        # every first require slow enough to trip the 180 s MELPA RestartProbe
+        # watchdog on a 4-core runner.
         ./configure --prefix=/opt/gnu-emacs-oracle \
           --with-x-toolkit=gtk3 --without-pgtk \
           --with-tree-sitter --with-dbus \
           --with-native-compilation=no \
+          --without-compress-install \
           --with-gnutls=ifavailable --with-xml2=ifavailable \
           --with-libgmp=ifavailable \
           --with-sound=no --without-gconf --without-gsettings \
