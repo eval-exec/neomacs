@@ -3324,7 +3324,7 @@ impl LispStringSourceFrame {
                 (_, None) => Vec::new(),
                 (LispStringCompositionSource::OriginalObject, Some(rules)) => match self.storage {
                     EmacsTextStorage::Multibyte => {
-                        rules.spans(&self.text_slice(0, self.char_count()))
+                        self.automatic_compositions_in(rules, 0, self.char_count())
                     }
                     EmacsTextStorage::Unibyte => Vec::new(),
                 },
@@ -3332,16 +3332,11 @@ impl LispStringSourceFrame {
                     .iter()
                     .filter(|region| region.end().get() <= self.char_count())
                     .flat_map(|region| {
-                        let start = region.start().get();
-                        rules
-                            .spans(&self.text_slice(start, region.end().get()))
-                            .into_iter()
-                            .map(move |span| {
-                                AutomaticCompositionSpan::new(
-                                    start + span.start(),
-                                    start + span.end(),
-                                )
-                            })
+                        self.automatic_compositions_in(
+                            rules,
+                            region.start().get(),
+                            region.end().get(),
+                        )
                     })
                     .collect(),
             };
@@ -3493,9 +3488,8 @@ impl LispStringSourceFrame {
                 );
             }
         }
-        if let Some(end) = self
-            .automatic_composition_at(start)
-            .filter(|&end| end <= property_end)
+        if let Some(end) =
+            self.automatic_composition_end(start, property_end, context.display_target())
         {
             self.char_index = end;
             return LispStringResolvedAction::Emit(
@@ -3572,6 +3566,85 @@ impl LispStringSourceFrame {
 
     fn char_count(&self) -> usize {
         self.char_byte_offsets.len().saturating_sub(1)
+    }
+
+    fn automatic_compositions_in(
+        &self,
+        rules: AutomaticCompositionRules,
+        start: usize,
+        end: usize,
+    ) -> Vec<AutomaticCompositionSpan> {
+        let mut spans = Vec::new();
+        let mut run_start = start;
+        // GNU stops its automatic-composition search at a newline. Other
+        // special source characters also retain their own ordinary handling.
+        // text_slice is only for plain runs: applying it to the complete
+        // before-string used to stop at its first newline (or assert in debug).
+        for position in start..=end {
+            if position < end
+                && self.char_at(position).is_some_and(|character| {
+                    matches!(
+                        classify_text_source_char(character),
+                        TextSourceCharClassification::Text(_)
+                    )
+                })
+            {
+                continue;
+            }
+            if run_start < position {
+                spans.extend(
+                    rules
+                        .spans(&self.text_slice(run_start, position))
+                        .into_iter()
+                        .map(|span| {
+                            AutomaticCompositionSpan::new(
+                                run_start + span.start(),
+                                run_start + span.end(),
+                            )
+                        }),
+                );
+            }
+            run_start = position.saturating_add(1);
+        }
+        spans
+    }
+
+    #[inline]
+    fn automatic_composition_end(
+        &self,
+        start: usize,
+        property_end: usize,
+        target: crate::display_property::DisplayPropertyTarget,
+    ) -> Option<usize> {
+        let end = self.automatic_composition_at(start)?;
+        if end <= property_end {
+            return Some(end);
+        }
+        // A terminal cluster belongs to its base cell's face. A face-only
+        // boundary cannot split its zero-width extenders. GUI font boundaries
+        // and every non-face property retain the existing conservative stop.
+        if target != crate::display_property::DisplayPropertyTarget::Terminal
+            || self.composition_prop_at(start).is_some()
+        {
+            return None;
+        }
+        let props = self.props.as_ref()?;
+        let face = Value::symbol(&FACE_PROPERTY);
+        let font_lock_face = Value::symbol(&FONT_LOCK_FACE_PROPERTY);
+        let mut base = props.get_properties_at_char_pos(CharPos0::new(start));
+        base.remove(&face);
+        base.remove(&font_lock_face);
+        let mut boundary = property_end;
+        while boundary < end {
+            let mut next = props.get_properties_at_char_pos(CharPos0::new(boundary));
+            next.remove(&face);
+            next.remove(&font_lock_face);
+            if next != base {
+                return None;
+            }
+            boundary = self.next_property_change(boundary).max(boundary + 1);
+        }
+        Some(end)
     }
 
     fn automatic_composition_at(&self, start: usize) -> Option<usize> {

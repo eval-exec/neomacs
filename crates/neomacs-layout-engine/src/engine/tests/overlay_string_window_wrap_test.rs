@@ -275,3 +275,174 @@ fn overlay_visual_wrap_keeps_its_unconsumed_buffer_anchor() {
         "continuing a string must not invent consumption of its buffer anchor"
     );
 }
+
+#[test]
+fn wrapping_overlay_string_preserves_automatic_combining_clusters() {
+    let payload = format!("truncation-{}", "a\u{301}".repeat(34));
+    let (_, _, _, rows, _, _) =
+        layout_main_text_rows_with_width("Z\n", 320, move |eval, _buffer| {
+            eval.eval_str(
+                r#"(setq auto-composition-mode t
+                         auto-composition-function 'auto-compose-chars
+                         composition-function-table (make-char-table nil))
+                    (aset composition-function-table #x301
+                          (list (vector ".́" 1 'font-shape-gstring)))"#,
+            )
+            .expect("explicit automatic composition rule");
+            install_before_string(eval, Value::string(payload));
+        });
+    let composed_marks = rows
+        .iter()
+        .flat_map(|row| row.glyphs[1].iter())
+        .filter_map(|glyph| match &glyph.glyph_type {
+            neomacs_display_protocol::glyph_matrix::GlyphType::Composite { text }
+            | neomacs_display_protocol::glyph_matrix::GlyphType::AutomaticComposite {
+                text, ..
+            } => Some(text),
+            _ => None,
+        })
+        .map(|text| text.chars().filter(|ch| *ch == '\u{301}').count())
+        .sum::<usize>();
+    assert_eq!(
+        composed_marks, 34,
+        "TTY automatic compositions must retain the mark in its base cell across overlay wraps"
+    );
+}
+
+fn install_default_combining_rules(eval: &mut Context) {
+    eval.eval_str(
+        r#"(setq auto-composition-mode t
+                 auto-composition-function 'auto-compose-chars
+                 composition-function-table (make-char-table nil))
+            (aset composition-function-table #x301
+                  (list (vector "\\c.\\c^+" 1 'compose-gstring-for-graphic)
+                        (vector nil 0 'compose-gstring-for-graphic)))
+            (let ((table (make-category-table)))
+              (define-category ?. "Graphic base" table)
+              (define-category ?^ "Nonspacing mark" table)
+              (modify-category-entry ?a ?. table)
+              (modify-category-entry #x301 ?^ table)
+              (set-category-table table))"#,
+    )
+    .expect("normal combining rule and its explicit category inputs");
+}
+
+fn assert_all_overlay_combining_pairs_are_automatic(rows: &[MatrixRow], expected: usize) {
+    let pairs: Vec<_> = rows
+        .iter()
+        .flat_map(|row| row.glyphs[GlyphArea::Text.index()].iter())
+        .filter_map(|glyph| match &glyph.glyph_type {
+            GlyphType::AutomaticComposite { text, terminal } if text.contains('\u{301}') => {
+                Some((text.as_ref(), terminal.width_cols))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        pairs.len(),
+        expected,
+        "every base+mark pair remains an automatic composition, including across property boundaries: {pairs:?}"
+    );
+    assert!(
+        pairs
+            .iter()
+            .all(|(text, width)| *text == "a\u{301}" && *width == 1),
+        "the default rule must preserve each mark in its own one-column base cell: {pairs:?}"
+    );
+}
+
+#[test]
+fn wrapping_overlay_string_preserves_default_combining_rules() {
+    let payload = format!("truncation-{}", "a\u{301}".repeat(32));
+    let (_, _, _, rows, _, _) =
+        layout_main_text_rows_with_width("Z\n", 320, move |eval, buffer| {
+            eval.buffer_manager_mut().set_current(buffer);
+            install_default_combining_rules(eval);
+            install_before_string(eval, Value::string(payload));
+        });
+    assert_all_overlay_combining_pairs_are_automatic(&rows, 32);
+}
+
+#[test]
+fn wrapping_overlay_string_preserves_default_composition_across_vertico_face_intervals() {
+    // Exact bounded all-candidate string and property intervals observed in
+    // both normally loaded peers. The last candidate's first base has the
+    // first-difference face; its U+0301 starts the following property interval.
+    let payload = format!(
+        " \ntruncation-日本語日本語日本語日本語日本語\ntruncation-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz\ntruncation-{}\n",
+        "a\u{301}".repeat(32)
+    );
+    assert_eq!(payload.chars().count(), 170);
+    let (_, _, _, rows, _, _) = layout_main_text_rows_with_width(
+        "Z\n",
+        320,
+        move |eval, buffer| {
+            eval.buffer_manager_mut().set_current(buffer);
+            install_default_combining_rules(eval);
+            eval.eval_form(Value::list(vec![
+                Value::symbol("setq"),
+                Value::symbol("overlay-combining-candidate"),
+                Value::string(payload),
+            ]))
+            .expect("actual formatted candidate object");
+            eval.eval_str(
+                r#"(put-text-property 0 1 'cursor t overlay-combining-candidate)
+                    (put-text-property 2 13 'face '(completions-common-part vertico-current) overlay-combining-candidate)
+                    (put-text-property 13 14 'face '(completions-first-difference vertico-current) overlay-combining-candidate)
+                    (put-text-property 14 29 'face 'vertico-current overlay-combining-candidate)
+                    (put-text-property 29 40 'face 'completions-common-part overlay-combining-candidate)
+                    (put-text-property 40 41 'face 'completions-first-difference overlay-combining-candidate)
+                    (put-text-property 94 105 'face 'completions-common-part overlay-combining-candidate)
+                    (put-text-property 105 106 'face 'completions-first-difference overlay-combining-candidate)"#,
+            )
+            .expect("actual Vertico property boundaries");
+            let candidate = eval
+                .eval_str("overlay-combining-candidate")
+                .expect("formatted candidate");
+            install_before_string(eval, candidate);
+        },
+    );
+    assert_all_overlay_combining_pairs_are_automatic(&rows, 32);
+}
+
+#[test]
+fn wrapping_overlay_string_composes_after_leading_newline() {
+    let payload = format!(" \ntruncation-{}\n", "a\u{301}".repeat(32));
+    let (_, _, _, rows, _, _) =
+        layout_main_text_rows_with_width("Z\n", 320, move |eval, buffer| {
+            eval.buffer_manager_mut().set_current(buffer);
+            install_default_combining_rules(eval);
+            install_before_string(eval, Value::string(payload));
+        });
+    assert_all_overlay_combining_pairs_are_automatic(&rows, 32);
+}
+
+#[test]
+fn automatic_overlay_composition_preserves_display_replacement_boundaries() {
+    let (_, _, _, rows, _, _) = layout_main_text_rows_with_width("Z\n", 320, |eval, buffer| {
+        eval.buffer_manager_mut().set_current(buffer);
+        install_default_combining_rules(eval);
+        let candidate = eval
+            .eval_str(
+                r#"(let ((candidate "á"))
+                         (put-text-property 1 2 'display "Q" candidate)
+                         candidate)"#,
+            )
+            .expect("display replacement on the mark");
+        install_before_string(eval, candidate);
+    });
+    let text: String = rows
+        .iter()
+        .map(|row| glyphs_logical_text(&row.glyphs[GlyphArea::Text.index()]))
+        .collect();
+    assert!(
+        text.contains("aQZ"),
+        "a composition must not consume the mark's higher-priority display replacement: {text:?}"
+    );
+    assert!(
+        rows.iter().all(|row| row.glyphs[GlyphArea::Text.index()]
+            .iter()
+            .all(|glyph| !matches!(&glyph.glyph_type, GlyphType::AutomaticComposite { text, .. } if text.contains('\u{301}')))),
+        "the replaced mark cannot also be emitted as an automatic extender"
+    );
+}
