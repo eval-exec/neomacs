@@ -49,7 +49,7 @@ std::cfg_select! {
         }
     }
     _ => {
-        pub(crate) fn register_subrs(ctx: &mut Context) {
+        pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
             let _ = ctx;
         }
     }
