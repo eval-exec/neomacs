@@ -29,12 +29,15 @@ const CHAR_MASK: u128 = (1 << 21) - 1;
 // Constant projections of the sole canonical scalar value; no cached keys.
 const CANONICAL_METADATA_MASK: u128 = (1u128 << 113) - 1;
 const DAMAGE_CONTENT_MASK: u128 = CANONICAL_METADATA_MASK & !(1u128 << MATERIALIZATION);
+// Exact current-default-space predicate: ignore only materialization/advance.
+const PRESERVABLE_BLANK_MASK: u128 = DAMAGE_CONTENT_MASK & !(1u128 << TERMINAL_ADVANCE);
 const PAINTER_VISIBLE_MASK: u128 =
     ATTRS_MASK | (CHAR_MASK << CHAR) | (1u128 << PADDING) | (1u128 << EXTENDERS_PRESENT);
 
 /// Ephemeral named construction value. It is consumed once and never stored
 /// beside the canonical cell metadata. All fields preserve their independent
 /// old semantic values; no constructor flag is inferred from another field.
+#[derive(Debug)]
 pub struct TtyCellValue {
     pub ch: char,
     pub attrs: CellAttrs,
@@ -121,13 +124,58 @@ fn encode_attrs(attrs: CellAttrs) -> u128 {
         | (u128::from(inverse) << INVERSE)
 }
 
+/// Call-local typed attributes, never retained alongside a canonical cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PackedCellAttrs(u128);
+
+impl PackedCellAttrs {
+    #[inline]
+    pub(super) fn new(attrs: CellAttrs) -> Self {
+        Self(encode_attrs(attrs))
+    }
+}
+
+/// Named private construction input; every non-attribute field stays independent.
+#[derive(Debug)]
+pub(super) struct PackedTtyCellValue {
+    pub(super) ch: char,
+    pub(super) attrs: PackedCellAttrs,
+    pub(super) blank_erase: BlankErase,
+    pub(super) materialization: CellMaterialization,
+    pub(super) padding: bool,
+    pub(super) extenders: Option<Box<str>>,
+    pub(super) terminal_advance: TerminalAdvance,
+}
+
 impl TtyCell {
     /// Construct the exact semantic value; no normalization or width inference.
     #[inline]
     pub fn new(value: TtyCellValue) -> Self {
+        let TtyCellValue {
+            ch,
+            attrs,
+            blank_erase,
+            materialization,
+            padding,
+            extenders,
+            terminal_advance,
+        } = value;
+        Self::from_packed(PackedTtyCellValue {
+            ch,
+            attrs: PackedCellAttrs::new(attrs),
+            blank_erase,
+            materialization,
+            padding,
+            extenders,
+            terminal_advance,
+        })
+    }
+
+    #[inline]
+    pub(super) fn from_packed(value: PackedTtyCellValue) -> Self {
         // Exhaustive named input: adding a construction field requires a
         // deliberate representation decision rather than a positional guess.
-        let TtyCellValue {
+        let PackedTtyCellValue {
             ch,
             attrs,
             blank_erase,
@@ -153,7 +201,7 @@ impl TtyCell {
             Some(extenders) => (true, extenders),
         };
         Self {
-            metadata: encode_attrs(attrs)
+            metadata: attrs.0
                 | (u128::from(u32::from(ch)) << CHAR)
                 | (blank << BLANK_ERASE)
                 | (materialized << MATERIALIZATION)
@@ -162,6 +210,27 @@ impl TtyCell {
                 | (u128::from(present) << EXTENDERS_PRESENT),
             extenders,
         }
+    }
+
+    /// Match the old current-default-space predicate without rich decoding.
+    /// Materialization and terminal advance are intentionally independent.
+    #[inline]
+    pub(super) fn preserved_blank_materialization(
+        &self,
+        attrs: PackedCellAttrs,
+    ) -> Option<CellMaterialization> {
+        let expected = attrs.0 | (u128::from(u32::from(' ')) << CHAR);
+        if self.metadata & PRESERVABLE_BLANK_MASK == expected {
+            Some(self.materialization())
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(super) fn has_attrs(&self, attrs: PackedCellAttrs) -> bool {
+        self.metadata & ATTRS_MASK == attrs.0
     }
 
     #[inline]

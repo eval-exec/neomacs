@@ -418,3 +418,121 @@ fn content_and_painter_projections_match_old_record_and_masks() {
         (1u128 << BLANK_ERASE) | (1u128 << TERMINAL_ADVANCE)
     );
 }
+
+#[test]
+fn packed_construction_and_attribute_match_preserve_independent_fields() {
+    assert_eq!(
+        CANONICAL_METADATA_MASK ^ PRESERVABLE_BLANK_MASK,
+        (1u128 << MATERIALIZATION) | (1u128 << TERMINAL_ADVANCE),
+    );
+    for attrs in attrs_values_for_match() {
+        for flags in 0..16 {
+            for cluster in [None, Some(""), Some("\u{301}"), Some("\u{200d}👩")] {
+                for ch in [' ', '🦀'] {
+                    let mut old = baseline();
+                    old.ch = ch;
+                    old.attrs = attrs;
+                    old.blank_erase = if flags & 1 == 0 {
+                        BlankErase::DefaultFace
+                    } else {
+                        BlankErase::Explicit
+                    };
+                    old.materialization = if flags & 2 == 0 {
+                        CellMaterialization::Erased
+                    } else {
+                        CellMaterialization::Written
+                    };
+                    old.padding = flags & 4 != 0;
+                    old.terminal_advance = if flags & 8 == 0 {
+                        TerminalAdvance::OneColumn
+                    } else {
+                        TerminalAdvance::TerminalResolved
+                    };
+                    old.extenders = cluster.map(Box::from);
+                    let packed = TtyCell::from_packed(PackedTtyCellValue {
+                        ch: old.ch,
+                        attrs: PackedCellAttrs::new(old.attrs),
+                        blank_erase: old.blank_erase,
+                        materialization: old.materialization,
+                        padding: old.padding,
+                        extenders: old.extenders.clone(),
+                        terminal_advance: old.terminal_advance,
+                    });
+                    assert_eq!(OldCell::unpack(&packed), old);
+                    assert_eq!(packed, old.pack());
+                    assert_eq!(packed.metadata & !CANONICAL_METADATA_MASK, 0);
+                    for other in attrs_values_for_match() {
+                        assert_eq!(
+                            packed.has_attrs(PackedCellAttrs::new(other)),
+                            old.attrs == other
+                        );
+                        let old_materialization = if old.ch == ' '
+                            && old.attrs == other
+                            && !old.padding
+                            && old.extenders.is_none()
+                            && old.blank_erase == BlankErase::DefaultFace
+                        {
+                            Some(old.materialization)
+                        } else {
+                            None
+                        };
+                        assert_eq!(
+                            packed.preserved_blank_materialization(PackedCellAttrs::new(other)),
+                            old_materialization,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn attrs_values_for_match() -> [CellAttrs; 12] {
+    [
+        CellAttrs::default(),
+        CellAttrs {
+            fg: Some(TerminalColor::Indexed(0)),
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            bg: Some(TerminalColor::Direct { r: 0, g: 0, b: 0 }),
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            bold: true,
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            italic: true,
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            underline: 255,
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            underline_color: Some(TerminalColor::Indexed(0)),
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            strikethrough: true,
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            inverse: true,
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            fg: Some(TerminalColor::Direct { r: 0, g: 0, b: 0 }),
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            bg: Some(TerminalColor::Indexed(0)),
+            ..CellAttrs::default()
+        },
+        CellAttrs {
+            underline_color: Some(TerminalColor::Direct { r: 0, g: 0, b: 0 }),
+            ..CellAttrs::default()
+        },
+    ]
+}

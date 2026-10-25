@@ -68,7 +68,24 @@ pub struct CellAttrs {
 
 #[path = "cell.rs"]
 mod cell;
+use cell::{PackedCellAttrs, PackedTtyCellValue};
 pub use cell::{TtyCell, TtyCellValue};
+// Ephemeral named raster inputs; no new field is stored in TtyRif or TtyGrid.
+#[derive(Debug)]
+struct PackedScalarCell {
+    ch: char,
+    attrs: PackedCellAttrs,
+    padding: bool,
+    blank_erase: BlankErase,
+}
+
+#[derive(Debug)]
+struct PackedClusterCell<'a> {
+    ch: char,
+    extenders: &'a str,
+    attrs: PackedCellAttrs,
+    padding: bool,
+}
 
 /// Provenance of the cursor advance caused by one logical terminal cell.
 ///
@@ -327,13 +344,53 @@ impl TtyGrid {
             }
             let idx = row * self.width + col;
             self.cells[idx] = TtyCell::new(TtyCellValue {
-                ch: ch,
-                attrs: attrs,
-                blank_erase: blank_erase,
+                ch,
+                attrs,
+                blank_erase,
                 materialization: CellMaterialization::Written,
-                padding: padding,
+                padding,
                 extenders: None,
                 terminal_advance: TerminalAdvance::for_scalar(ch, padding),
+            });
+        }
+    }
+
+    /// Same ordered scalar write/neutralization, with attributes already encoded.
+    #[inline]
+    fn set_packed(&mut self, row: usize, col: usize, value: PackedTtyCellValue) {
+        if row < self.height && col < self.width {
+            if let Some(written) = self.row_written.get_mut(row) {
+                *written = true;
+            }
+            if !value.padding {
+                self.neutralize_overwrite(row, col);
+            }
+            self.cells[row * self.width + col] = TtyCell::from_packed(value);
+        }
+    }
+
+    fn set_packed_cluster(&mut self, row: usize, col: usize, value: PackedClusterCell<'_>) {
+        if row < self.height && col < self.width {
+            if let Some(written) = self.row_written.get_mut(row) {
+                *written = true;
+            }
+            let idx = row * self.width + col;
+            let extenders = if value.extenders.is_empty() {
+                None
+            } else {
+                Some(Box::<str>::from(value.extenders))
+            };
+            if !value.padding {
+                self.neutralize_overwrite(row, col);
+            }
+            self.cells[idx] = TtyCell::from_packed(PackedTtyCellValue {
+                ch: value.ch,
+                attrs: value.attrs,
+                blank_erase: BlankErase::Explicit,
+                materialization: CellMaterialization::Written,
+                padding: value.padding,
+                extenders,
+                terminal_advance: TerminalAdvance::TerminalResolved,
             });
         }
     }
@@ -402,11 +459,11 @@ impl TtyGrid {
                 self.neutralize_overwrite(row, col);
             }
             self.cells[idx] = TtyCell::new(TtyCellValue {
-                ch: ch,
-                attrs: attrs,
+                ch,
+                attrs,
                 blank_erase: BlankErase::Explicit,
                 materialization: CellMaterialization::Written,
-                padding: padding,
+                padding,
                 extenders: ext,
                 terminal_advance: TerminalAdvance::TerminalResolved,
             });
@@ -1406,6 +1463,23 @@ impl TtyRif {
         }
     }
 
+    /// One value for the current consumed face run, scoped to one area/row call.
+    #[inline]
+    fn packed_attrs_for_run(
+        &self,
+        face_id: FaceId,
+        run: &mut Option<(FaceId, PackedCellAttrs)>,
+    ) -> PackedCellAttrs {
+        if let Some((previous, attrs)) = *run
+            && previous == face_id
+        {
+            return attrs;
+        }
+        let attrs = PackedCellAttrs::new(self.resolve_attrs(face_id));
+        *run = Some((face_id, attrs));
+        attrs
+    }
+
     /// Classify a resolved face for GNU's TTY trailing-space rule.
     ///
     /// Layout interns faces by stable presentation identity, so the resolved
@@ -1413,8 +1487,14 @@ impl TtyRif {
     /// `FaceId(0)` (the Python fixture's default newline is `FaceId(21)`). The
     /// TTY boundary canonicalizes those identities by their terminal-facing
     /// attributes before assigning the closed erase class.
-    fn blank_erase_for_face(&self, face_id: FaceId) -> BlankErase {
-        if self.resolve_attrs(face_id) == self.resolve_attrs(FaceId::new(0)) {
+    fn blank_erase_for_packed(
+        &self,
+        attrs: PackedCellAttrs,
+        default_face: &mut Option<PackedCellAttrs>,
+    ) -> BlankErase {
+        let default = *default_face
+            .get_or_insert_with(|| PackedCellAttrs::new(self.resolve_attrs(FaceId::new(0))));
+        if attrs == default {
             BlankErase::DefaultFace
         } else {
             BlankErase::Explicit
@@ -1442,45 +1522,53 @@ impl TtyRif {
     /// erased/written state when GNU considers a default-face blank implicit.
     /// Non-default blanks are always written, even when their SGR attributes
     /// happen to equal the terminal defaults.
-    fn set_desired_glyph_cell(
-        &mut self,
-        row: usize,
-        col: usize,
-        ch: char,
-        attrs: CellAttrs,
-        padding: bool,
-        blank_erase: BlankErase,
-    ) {
-        let preserved_materialization =
-            (blank_erase == BlankErase::DefaultFace && ch == ' ' && !padding)
+    fn set_desired_packed_glyph_cell(&mut self, row: usize, col: usize, value: PackedScalarCell) {
+        let materialization =
+            (value.blank_erase == BlankErase::DefaultFace && value.ch == ' ' && !value.padding)
                 .then(|| self.current.cells.get(row * self.current.width + col))
                 .flatten()
-                .filter(|current| {
-                    current.ch() == ' '
-                        && current.attrs() == attrs
-                        && !current.padding()
-                        && current.extenders().is_none()
-                        && current.blank_erase() == BlankErase::DefaultFace
-                })
-                .map(|current| current.materialization());
-        self.desired
-            .set_with_blank_erase(row, col, ch, attrs, padding, blank_erase);
-        if let Some(materialization) = preserved_materialization {
-            self.desired.cells[row * self.desired.width + col].set_materialization(materialization);
-        }
+                .and_then(|current| current.preserved_blank_materialization(value.attrs))
+                .unwrap_or(CellMaterialization::Written);
+        self.desired.set_packed(
+            row,
+            col,
+            PackedTtyCellValue {
+                ch: value.ch,
+                attrs: value.attrs,
+                blank_erase: value.blank_erase,
+                materialization,
+                padding: value.padding,
+                extenders: None,
+                terminal_advance: TerminalAdvance::for_scalar(value.ch, value.padding),
+            },
+        );
     }
 
     /// Write one grapheme into the cell at `*col` (advancing it), as a base
     /// character plus combining extenders. Zero-width format joiners/selectors
     /// (ZWJ, ZWNJ, variation selectors) that the GUI shaper would consume are
     /// dropped — a terminal would otherwise show them as their own mark.
-    fn write_grapheme_cell(&mut self, row: usize, col: &mut i64, text: &str, attrs: CellAttrs) {
+    fn write_grapheme_cell(
+        &mut self,
+        row: usize,
+        col: &mut i64,
+        text: &str,
+        attrs: PackedCellAttrs,
+    ) {
         let mut chars = text.chars().filter(|c| !is_tty_skippable_format(*c));
         let base = chars.next().unwrap_or(' ');
         let rest: String = chars.collect();
         if let Some(col) = visible_cell(*col, self.desired.width) {
-            self.desired
-                .set_cluster(row, col, base, &rest, attrs, false);
+            self.desired.set_packed_cluster(
+                row,
+                col,
+                PackedClusterCell {
+                    ch: base,
+                    extenders: &rest,
+                    attrs,
+                    padding: false,
+                },
+            );
         }
         *col = col.saturating_add(1);
     }
@@ -2185,7 +2273,7 @@ impl TtyRif {
             return;
         };
 
-        let attrs = self.resolve_attrs(fill.face_id);
+        let attrs = PackedCellAttrs::new(self.resolve_attrs(fill.face_id));
         let visible_rows =
             visible_cell_range(cell_rect.top, cell_rect.height(), self.desired.height);
         let visible_cols =
@@ -2195,7 +2283,19 @@ impl TtyRif {
                 continue;
             }
             for col in visible_cols.clone() {
-                self.desired.set(row, col, ' ', attrs, false);
+                self.desired.set_packed(
+                    row,
+                    col,
+                    PackedTtyCellValue {
+                        ch: ' ',
+                        attrs,
+                        blank_erase: BlankErase::DefaultFace,
+                        materialization: CellMaterialization::Written,
+                        padding: false,
+                        extenders: None,
+                        terminal_advance: TerminalAdvance::OneColumn,
+                    },
+                );
             }
         }
     }
@@ -2203,16 +2303,16 @@ impl TtyRif {
     /// Resolve the background face of an implicit blank from its semantic
     /// owner, never from whatever an earlier matrix happened to paint into the
     /// shared desired grid.
-    fn blank_cell_attrs(
+    fn blank_cell_face(
         &self,
         state: &FrameDisplayState,
         owner: TtyGlyphRowOwner,
         role: GlyphRowRole,
         local_col: i64,
         local_row: i64,
-    ) -> CellAttrs {
+    ) -> FaceId {
         let TtyGlyphRowOwner::Window(window_id) = owner else {
-            return self.resolve_attrs(FaceId::new(0));
+            return FaceId::new(0);
         };
         state
             .face_fills
@@ -2224,10 +2324,7 @@ impl TtyRif {
                     && projected_face_fill_rect(fill, state.char_width, state.char_height)
                         .is_some_and(|rect| rect.contains(local_col, local_row))
             })
-            .map_or_else(
-                || self.resolve_attrs(FaceId::new(0)),
-                |fill| self.resolve_attrs(fill.face_id),
-            )
+            .map_or_else(|| FaceId::new(0), |fill| fill.face_id)
     }
 
     fn rasterize_glyph_row(
@@ -2282,6 +2379,8 @@ impl TtyRif {
             let glyphs = &glyph_row.glyphs[area.index()];
             let mut glyph_idx = 0;
             let mut preceding_wide_base_visible = None;
+            let mut face_run = None;
+            let mut default_face = None;
             while glyph_idx < glyphs.len() {
                 let glyph = &glyphs[glyph_idx];
                 if col >= screen_width {
@@ -2289,15 +2388,17 @@ impl TtyRif {
                 }
 
                 if glyph.padding {
-                    let attrs = self.resolve_attrs(glyph.face_id);
+                    let attrs = self.packed_attrs_for_run(glyph.face_id, &mut face_run);
                     if let Some(col) = visible_cell(col, self.desired.width) {
-                        self.set_desired_glyph_cell(
+                        self.set_desired_packed_glyph_cell(
                             screen_row,
                             col,
-                            ' ',
-                            attrs,
-                            preceding_wide_base_visible.take().unwrap_or(true),
-                            BlankErase::Explicit,
+                            PackedScalarCell {
+                                ch: ' ',
+                                attrs,
+                                padding: preceding_wide_base_visible.take().unwrap_or(true),
+                                blank_erase: BlankErase::Explicit,
+                            },
                         );
                     }
                     col = col.saturating_add(1);
@@ -2305,7 +2406,7 @@ impl TtyRif {
                     continue;
                 }
 
-                let attrs = self.resolve_attrs(glyph.face_id);
+                let attrs = self.packed_attrs_for_run(glyph.face_id, &mut face_run);
                 let base_visible = visible_cell(col, self.desired.width).is_some();
                 // Composite glyphs (base char + grapheme-cluster
                 // extenders) occupy one cell whose content is the full
@@ -2322,13 +2423,15 @@ impl TtyRif {
                             }
                             let base_col = col;
                             if let Some(visible_col) = visible_cell(col, self.desired.width) {
-                                self.desired.set_cluster(
+                                self.desired.set_packed_cluster(
                                     screen_row,
                                     visible_col,
-                                    cell.base,
-                                    &cell.extenders,
-                                    attrs,
-                                    false,
+                                    PackedClusterCell {
+                                        ch: cell.base,
+                                        extenders: &cell.extenders,
+                                        attrs,
+                                        padding: false,
+                                    },
                                 );
                             }
                             col = col.saturating_add(1);
@@ -2337,13 +2440,16 @@ impl TtyRif {
                                     break;
                                 }
                                 if let Some(visible_col) = visible_cell(col, self.desired.width) {
-                                    self.set_desired_glyph_cell(
+                                    self.set_desired_packed_glyph_cell(
                                         screen_row,
                                         visible_col,
-                                        ' ',
-                                        attrs,
-                                        visible_cell(base_col, self.desired.width).is_some(),
-                                        BlankErase::Explicit,
+                                        PackedScalarCell {
+                                            ch: ' ',
+                                            attrs,
+                                            padding: visible_cell(base_col, self.desired.width)
+                                                .is_some(),
+                                            blank_erase: BlankErase::Explicit,
+                                        },
                                     );
                                 }
                                 col = col.saturating_add(1);
@@ -2408,13 +2514,16 @@ impl TtyRif {
                                 break;
                             }
                             if let Some(col) = visible_cell(col, self.desired.width) {
-                                self.set_desired_glyph_cell(
+                                self.set_desired_packed_glyph_cell(
                                     screen_row,
                                     col,
-                                    ' ',
-                                    attrs,
-                                    false,
-                                    self.blank_erase_for_face(glyph.face_id),
+                                    PackedScalarCell {
+                                        ch: ' ',
+                                        attrs,
+                                        padding: false,
+                                        blank_erase: self
+                                            .blank_erase_for_packed(attrs, &mut default_face),
+                                    },
                                 );
                             }
                             col = col.saturating_add(1);
@@ -2433,13 +2542,15 @@ impl TtyRif {
                                 break;
                             }
                             if let Some(col) = visible_cell(col, self.desired.width) {
-                                self.set_desired_glyph_cell(
+                                self.set_desired_packed_glyph_cell(
                                     screen_row,
                                     col,
-                                    ch,
-                                    attrs,
-                                    false,
-                                    BlankErase::Explicit,
+                                    PackedScalarCell {
+                                        ch,
+                                        attrs,
+                                        padding: false,
+                                        blank_erase: BlankErase::Explicit,
+                                    },
                                 );
                             }
                             col = col.saturating_add(1);
@@ -2453,13 +2564,15 @@ impl TtyRif {
                             // sub-cell space and emits one canonical blank.
                             GlyphlessPresentation::ThinSpace => {
                                 if let Some(col) = visible_cell(col, self.desired.width) {
-                                    self.set_desired_glyph_cell(
+                                    self.set_desired_packed_glyph_cell(
                                         screen_row,
                                         col,
-                                        ' ',
-                                        attrs,
-                                        false,
-                                        BlankErase::Explicit,
+                                        PackedScalarCell {
+                                            ch: ' ',
+                                            attrs,
+                                            padding: false,
+                                            blank_erase: BlankErase::Explicit,
+                                        },
                                     );
                                 }
                                 col = col.saturating_add(1);
@@ -2471,13 +2584,15 @@ impl TtyRif {
                             GlyphlessPresentation::EmptyBox | GlyphlessPresentation::HexCode => {
                                 let ch = glyph_to_char(glyph);
                                 if let Some(col) = visible_cell(col, self.desired.width) {
-                                    self.set_desired_glyph_cell(
+                                    self.set_desired_packed_glyph_cell(
                                         screen_row,
                                         col,
-                                        ch,
-                                        attrs,
-                                        false,
-                                        BlankErase::Explicit,
+                                        PackedScalarCell {
+                                            ch,
+                                            attrs,
+                                            padding: false,
+                                            blank_erase: BlankErase::Explicit,
+                                        },
                                     );
                                 }
                                 col = col.saturating_add(1);
@@ -2502,16 +2617,18 @@ impl TtyRif {
                             glyph_to_char(glyph)
                         };
                         if let Some(col) = visible_cell(col, self.desired.width) {
-                            self.set_desired_glyph_cell(
+                            self.set_desired_packed_glyph_cell(
                                 screen_row,
                                 col,
-                                ch,
-                                attrs,
-                                false,
-                                if ch == ' ' {
-                                    self.blank_erase_for_face(glyph.face_id)
-                                } else {
-                                    BlankErase::Explicit
+                                PackedScalarCell {
+                                    ch,
+                                    attrs,
+                                    padding: false,
+                                    blank_erase: if ch == ' ' {
+                                        self.blank_erase_for_packed(attrs, &mut default_face)
+                                    } else {
+                                        BlankErase::Explicit
+                                    },
                                 },
                             );
                         }
@@ -2523,13 +2640,15 @@ impl TtyRif {
                                 .is_some_and(|next_glyph| next_glyph.padding);
                         if glyph.wide && !next_is_explicit_padding && col < screen_width {
                             if let Some(col) = visible_cell(col, self.desired.width) {
-                                self.set_desired_glyph_cell(
+                                self.set_desired_packed_glyph_cell(
                                     screen_row,
                                     col,
-                                    ' ',
-                                    attrs,
-                                    base_visible,
-                                    BlankErase::Explicit,
+                                    PackedScalarCell {
+                                        ch: ' ',
+                                        attrs,
+                                        padding: base_visible,
+                                        blank_erase: BlankErase::Explicit,
+                                    },
                                 );
                             }
                             col = col.saturating_add(1);
@@ -2587,9 +2706,15 @@ impl TtyRif {
                         glyphs
                             .iter()
                             .rfind(|glyph| !glyph.padding)
-                            .map(|glyph| self.blank_erase_for_face(glyph.face_id))
+                            .map(|glyph| {
+                                self.blank_erase_for_packed(
+                                    PackedCellAttrs::new(self.resolve_attrs(glyph.face_id)),
+                                    &mut default_face,
+                                )
+                            })
                             .unwrap_or(BlankErase::DefaultFace)
                     };
+                    let mut tail_face_run = None;
                     while col < right_edge && col < screen_width {
                         if let Some(col) = visible_cell(col, self.desired.width) {
                             // A published FaceFillItem owns the resolved
@@ -2601,20 +2726,23 @@ impl TtyRif {
                             let local_col = i64::try_from(col)
                                 .unwrap_or(i64::MAX)
                                 .saturating_sub(frame_origin_col);
-                            let attrs = self.blank_cell_attrs(
+                            let face_id = self.blank_cell_face(
                                 state,
                                 owner,
                                 glyph_row.role,
                                 local_col,
                                 local_row,
                             );
-                            self.set_desired_glyph_cell(
+                            let attrs = self.packed_attrs_for_run(face_id, &mut tail_face_run);
+                            self.set_desired_packed_glyph_cell(
                                 screen_row,
                                 col,
-                                ' ',
-                                attrs,
-                                false,
-                                blank_erase,
+                                PackedScalarCell {
+                                    ch: ' ',
+                                    attrs,
+                                    padding: false,
+                                    blank_erase,
+                                },
                             );
                         }
                         col = col.saturating_add(1);
@@ -3661,3 +3789,7 @@ fn glyph_row_debug_text(row: &GlyphRow) -> String {
     }
     text
 }
+
+#[cfg(test)]
+#[path = "rif/tests/packed_raster_test.rs"]
+mod packed_raster_tests;
