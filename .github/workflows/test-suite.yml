@@ -61,27 +61,33 @@ jobs:
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
 
-      # Three consecutive archive runs (e314bf315b, 7a2607a224, e3f23e2adb)
-      # died during the final test-binary links with "The runner has received
-      # a shutdown signal", also with CARGO_BUILD_JOBS halved to 2, which
-      # points at the runner's disk rather than link RSS. Free the large
-      # preinstalled SDKs this job never uses before building.
-      - name: Free runner disk
+      # The final test-binary links exhaust the runner's 16 GB of RAM: on
+      # 88247db382 the resource sampler below showed MemAvailable falling from
+      # 4 GB to 60 MB during the links while disk stayed at 106 GB free, and the
+      # runner then shut down (exit 143) -- the same failure as e314bf315b,
+      # 7a2607a224 and e3f23e2adb. Freeing the unused SDKs keeps disk headroom;
+      # a 16 GB swap file absorbs the link peak so mold and two jobs stay.
+      - name: Free runner disk and add swap
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo fallocate -l 16G /swapfile-archive
+          sudo chmod 600 /swapfile-archive
+          sudo mkswap /swapfile-archive
+          sudo swapon /swapfile-archive
           df -h /
+          free -m
 
       - name: Build and archive workspace tests
         # Build test binaries only for the packages the archive consumers run.
         # The excluded crates are dependencies, so their libraries are still
         # compiled; their own test harnesses are not linked into the archive.
-        # A background sampler records available memory and disk every 30 s,
-        # so a runner shutdown during the links shows which one ran out.
+        # A background sampler records available memory, swap and disk every
+        # 30 s, so a runner shutdown during the links shows which one ran out.
         run: |
           ( while sleep 30; do
-              echo "resources $(date -u +%T) mem_avail_kB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo) disk_avail_kB=$(df --output=avail -k / | tail -1 | tr -d ' ')"
+              echo "resources $(date -u +%T) mem_avail_kB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo) swap_free_kB=$(awk '/SwapFree/ {print $2}' /proc/meminfo) disk_avail_kB=$(df --output=avail -k / | tail -1 | tr -d ' ')"
             done ) &
           cargo nextest archive \
             --release \
