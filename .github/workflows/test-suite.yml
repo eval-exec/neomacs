@@ -36,8 +36,11 @@ jobs:
       # perf-critical neomacs runtime ships from the separate test-runtime
       # job, never from these harness binaries.
       # If this OOMs on a hosted runner, halve CARGO_BUILD_JOBS before
-      # ever re-serializing the linker.
-      CARGO_BUILD_JOBS: "4"
+      # ever re-serializing the linker. Halved on 2026-10-25: with the merged
+      # per-crate test binaries and mold, two consecutive runs (e314bf315b,
+      # 7a2607a224) were killed (exit 143) during the final links, 13-19
+      # minutes in, with no compiler error.
+      CARGO_BUILD_JOBS: "2"
       CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
