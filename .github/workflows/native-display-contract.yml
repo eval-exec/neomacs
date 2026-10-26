@@ -76,10 +76,11 @@ jobs:
         run: cargo nextest run --locked -p neomacs-display-runtime --test gui_resources_test
       - name: Fractional input and gesture isolation
         run: cargo nextest run --locked -p neomacs-display-runtime --lib -E 'test(scroll_input)'
-      - name: Public Lisp resource, geometry and frame focus contracts
-        run: cargo nextest run --locked -p neovm-core --lib -E 'test(resources_test)|test(frame_resize_test)|test(frame_focus_input_tests)|test(cycling_test)'
       - name: Build matching executable and runtime image
         run: cargo xtask fresh-build --release
+      - name: Public Lisp resource, geometry and frame focus contracts
+        # Startup contexts need the generated Unicode tables and load definitions.
+        run: cargo nextest run --locked -p neovm-core --lib -E 'test(resources_test)|test(frame_resize_test)|test(frame_focus_input_tests)|test(cycling_test)'
       - name: Set resource font on ephemeral macOS runner
         if: runner.os == 'macOS'
         # Menlo 16 produces a 723px window, which AppKit constrains to 674px
