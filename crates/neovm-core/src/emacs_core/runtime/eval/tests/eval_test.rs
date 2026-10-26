@@ -5821,6 +5821,12 @@ fn fire_pending_timers_prefers_more_overdue_idle_timer_over_ordinary_timer() {
     )
     .expect("install timer ordering setup");
 
+    // Start idleness before the ordinary timer exists. The idle timer is due at
+    // idle start + 0 and the ordinary one at its creation + 5 ms, so the idle
+    // timer is the more overdue one by at least 5 ms in every schedule. Created
+    // the other way round, a setup slower than 5 ms (a loaded runner, the
+    // inline-off build) made the ordinary timer the more overdue one.
+    ev.timer_start_idle();
     ev.set_variable(
         "timer-list",
         Value::list(vec![gnu_timer_after(
@@ -5835,7 +5841,6 @@ fn fire_pending_timers_prefers_more_overdue_idle_timer_over_ordinary_timer() {
             "vm-idle-callback",
         )]),
     );
-    ev.timer_start_idle();
     thread::sleep(Duration::from_millis(20));
 
     ev.fire_pending_timers();
