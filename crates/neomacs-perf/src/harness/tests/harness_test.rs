@@ -1100,7 +1100,6 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         (os("NEOMACS_EDIT_SYNC_SOURCE_BUDGET_TRACE"), os("unrelated")),
         (os("NEOMACS_MODE_LINE_PROP_BORROW"), os("on")),
         (os("NEOMACS_MODE_LINE_PROP_SLICE"), os("on")),
-        (os("NEOMACS_MODE_LINE_PLAIN_FIELD"), os("on")),
         (os("NEOMACS_MODE_LINE_NUMERIC_PADDING"), os("on")),
         (
             os("NEOMACS_MODE_LINE_NUMERIC_PADDING_TRACE"),
@@ -1132,7 +1131,6 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
             "NEOMACS_EDIT_SYNC_SOURCE_BUDGET",
             "NEOMACS_EDIT_SYNC_STILL",
             "NEOMACS_MODE_LINE_NUMERIC_PADDING",
-            "NEOMACS_MODE_LINE_PLAIN_FIELD",
             "NEOMACS_MODE_LINE_PROP_BORROW",
             "NEOMACS_MODE_LINE_PROP_SLICE",
             "NEOMACS_OSR_DEBUG",

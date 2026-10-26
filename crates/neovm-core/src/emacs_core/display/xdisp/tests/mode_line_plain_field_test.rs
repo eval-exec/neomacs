@@ -1,23 +1,34 @@
-//! Direct property-free percent fields, compared with temporary segments.
+//! Direct native percent fields, compared with temporary segments.
 //! The owned-data trace follows the borrowed-property differential helper,
 //! which remains private and unchanged in its separate sibling module.
 
 use super::*;
 
-struct PlainFieldGuard;
+struct PlainFieldGuard {
+    previous: ModeLinePlainFieldPath,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PropertyRead {
+    Copied,
+    Borrowed,
+}
 
 impl PlainFieldGuard {
-    fn set(enabled: bool, borrowed: bool) -> Self {
-        set_mode_line_plain_field_for_test(Some(enabled));
-        set_mode_line_prop_borrow_for_test(Some(borrowed));
-        Self
+    fn set(path: ModeLinePlainFieldPath, properties: PropertyRead) -> Self {
+        let previous = set_mode_line_plain_field_for_test(path);
+        match properties {
+            PropertyRead::Copied => set_mode_line_prop_borrow_for_test(Some(false)),
+            PropertyRead::Borrowed => set_mode_line_prop_borrow_for_test(Some(true)),
+        }
+        Self { previous }
     }
 }
 
 impl Drop for PlainFieldGuard {
     fn drop(&mut self) {
         set_mode_line_prop_borrow_for_test(None);
-        set_mode_line_plain_field_for_test(None);
+        set_mode_line_plain_field_for_test(self.previous);
     }
 }
 
@@ -99,9 +110,14 @@ fn string_trace(eval: &mut Context, value: Value, order: PropertyOrder) -> Strin
     }
 }
 
-fn output_trace(setup: &str, enabled: bool, borrowed: bool, order: PropertyOrder) -> OutputTrace {
+fn output_trace(
+    setup: &str,
+    path: ModeLinePlainFieldPath,
+    properties: PropertyRead,
+    order: PropertyOrder,
+) -> OutputTrace {
     crate::test_utils::init_test_tracing();
-    let _guard = PlainFieldGuard::set(enabled, borrowed);
+    let _guard = PlainFieldGuard::set(path, properties);
     let mut eval = interactive_context();
     let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
     let frame_id = eval.frames.create_frame("plain-field", 800, 600, buffer_id);
@@ -179,12 +195,22 @@ fn output_trace(setup: &str, enabled: bool, borrowed: bool, order: PropertyOrder
 }
 
 fn compare(setup: &str) {
-    for borrowed in [false, true] {
-        let temporary = output_trace(setup, false, borrowed, PropertyOrder::Canonical);
-        let direct = output_trace(setup, true, borrowed, PropertyOrder::Canonical);
+    for properties in [PropertyRead::Copied, PropertyRead::Borrowed] {
+        let temporary = output_trace(
+            setup,
+            ModeLinePlainFieldPath::Temporary,
+            properties,
+            PropertyOrder::Canonical,
+        );
+        let direct = output_trace(
+            setup,
+            ModeLinePlainFieldPath::Direct,
+            properties,
+            PropertyOrder::Canonical,
+        );
         assert_eq!(
             direct, temporary,
-            "borrowed={borrowed}; format setup: {setup}"
+            "properties={properties:?}; format setup: {setup}"
         );
     }
 }
@@ -261,8 +287,11 @@ fn plain_percent_fields_preserve_multibyte_identity_like_temporary_segments() {
         ("", 3, None),
     ] {
         let mut identities = Vec::new();
-        for enabled in [false, true] {
-            let _guard = PlainFieldGuard::set(enabled, false);
+        for path in [
+            ModeLinePlainFieldPath::Temporary,
+            ModeLinePlainFieldPath::Direct,
+        ] {
+            let _guard = PlainFieldGuard::set(path, PropertyRead::Copied);
             let mut rendered = ModeLineRendered::default();
             append_mode_line_percent_string_spec(&mut rendered, spec, &properties, width);
             if let Some(precision) = precision {
@@ -297,8 +326,11 @@ fn empty_fields_preserve_ticks_intervals_sources_and_min_width_transitions() {
         .syntax_prop_free_run_end(CharPos0::ZERO, CharPos0::new(seed.char_len()));
     let properties = std::collections::HashMap::new();
     let mut traces = Vec::new();
-    for enabled in [false, true] {
-        let _guard = PlainFieldGuard::set(enabled, false);
+    for path in [
+        ModeLinePlainFieldPath::Temporary,
+        ModeLinePlainFieldPath::Direct,
+    ] {
+        let _guard = PlainFieldGuard::set(path, PropertyRead::Copied);
         let mut rendered = seed.clone();
         for (text, width) in [("", 0), ("été😀", -4), ("A", 7), ("", 3), ("café", 2)] {
             append_mode_line_percent_string_spec(&mut rendered, text, &properties, width);
@@ -324,10 +356,13 @@ fn propertized_fields_keep_graft_plist_order_and_ticks() {
         (Value::symbol("mouse-face"), Value::symbol("highlight")),
     ]);
     let mut traces = Vec::new();
-    for enabled in [false, true] {
-        let _guard = PlainFieldGuard::set(enabled, false);
+    for path in [
+        ModeLinePlainFieldPath::Temporary,
+        ModeLinePlainFieldPath::Direct,
+    ] {
+        let _guard = PlainFieldGuard::set(path, PropertyRead::Copied);
         let mut rendered = seed.clone();
-        // Both arms clone the same map/hasher, so exact plist order is stable.
+        // Borrowed iteration and the cloned reference retain the same map order.
         append_mode_line_percent_string_spec(&mut rendered, "éB", &properties, 7);
         append_mode_line_percent_string_spec(&mut rendered, "", &properties, 3);
         rendered.append_string_value_preserving_props(&source);
@@ -383,4 +418,44 @@ fn eval_source_mutation_and_fresh_mouse_targets_match_temporary_segments() {
                                   'local-map '(keymap (mouse-1 . ignore)))))
             "%-"))"#,
     );
+}
+
+#[test]
+fn native_fields_keep_rooted_grafts_and_syntax_ticks_across_collection() {
+    crate::test_utils::init_test_tracing();
+    static_assertions::const_assert_eq!(std::mem::size_of::<ModeLinePlainFieldPath>(), 1);
+    let mut eval = interactive_context();
+    let source = eval
+        .eval_str(r#"(propertize "前A" 'face 'bold 'syntax-table '(2))"#)
+        .expect("source");
+    eval.set_variable("d5-plain-field-source", source);
+    let syntax = eval.eval_str("'(3)").expect("syntax property");
+    eval.set_variable("d5-plain-field-syntax", syntax);
+    for properties in [
+        std::collections::HashMap::new(),
+        std::collections::HashMap::from([(Value::symbol("face"), Value::symbol("italic"))]),
+        std::collections::HashMap::from([
+            (Value::symbol("face"), Value::symbol("italic")),
+            (Value::symbol("syntax-table"), syntax),
+        ]),
+    ] {
+        let mut traces = Vec::new();
+        for path in [
+            ModeLinePlainFieldPath::Temporary,
+            ModeLinePlainFieldPath::Direct,
+        ] {
+            let _guard = PlainFieldGuard::set(path, PropertyRead::Copied);
+            let _roots = mode_line_gc::ScratchRoots::new();
+            let mut rendered = ModeLineRendered::default();
+            rendered.append_string_value_preserving_props(&source);
+            rendered.root_for_walk();
+            for (text, width) in [("", 0), ("abc", 7), ("été😀", -1), ("", 3), ("é", 1)] {
+                append_mode_line_percent_string_spec(&mut rendered, text, &properties, width);
+                eval.eval_str("(garbage-collect)").expect("collection");
+                rendered.append_string_value_preserving_props(&source);
+            }
+            traces.push(rendered_trace(&rendered));
+        }
+        assert_eq!(traces[1], traces[0]);
+    }
 }

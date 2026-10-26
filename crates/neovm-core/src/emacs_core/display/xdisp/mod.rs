@@ -23,7 +23,6 @@
 //! | `NEOMACS_POSN_BOUNDED_TEXT` | `on` | `off`; `on`/`1`/`true`/`yes` | Bound text copied by approximate window-position fallbacks |
 //! | `NEOMACS_MODE_LINE_PROP_SLICE` | `off` | `off`; `on`/`1`/`true`/`yes` | Clip and graft literal source intervals with one plist copy |
 //! | `NEOMACS_MODE_LINE_PROP_BORROW` | `off` | `off`; `on`/`1`/`true`/`yes` | Borrow source string intervals during synchronous mode-line property reads |
-//! | `NEOMACS_MODE_LINE_PLAIN_FIELD` | `off` | `off`; `on`/`1`/`true`/`yes` | Append property-free percent text directly to the mode-line output |
 //! | `NEOMACS_MODE_LINE_NUMERIC_PADDING` | `on` | `off`; `on`/`1`/`true`/`yes` | Keep numeric-wrapper padding independent of inherited mode-line properties |
 //! | `NEOMACS_REDISPLAY_GNU_HOOKS` | `off` | `off`; `on`/`1`/`true`/`yes` | GNU redisplay transaction, owned pre targets, live hook order and core configuration-hook default; selected-mini preparation; renderer-inert snapshot positions |
 
@@ -3207,7 +3206,7 @@ fn append_mode_line_source_slice(
                 .append_source_slice_at_char_offset(source, range, offset);
         }
     } else {
-        target.append_properties(&source.slice_char_range(range), offset.get());
+        target.append_properties(&source.slice_char_range(range), offset);
     }
 }
 
@@ -3340,31 +3339,31 @@ impl ModeLineRendered {
         }
     }
 
-    fn append_properties(&mut self, other: &TextPropertyTable, offset: usize) {
+    fn append_properties(&mut self, other: &TextPropertyTable, offset: CharLen) {
         if let Some(roots) = &mut self.gc_roots {
-            self.text_props.append_shifted_at_char_offset_with_roots(
-                other,
-                CharLen::new(offset),
-                |value| mode_line_gc::pin_accumulator_value(roots, value),
-            );
-        } else {
             self.text_props
-                .append_shifted_at_char_offset(other, CharLen::new(offset));
+                .append_shifted_at_char_offset_with_roots(other, offset, |value| {
+                    mode_line_gc::pin_accumulator_value(roots, value)
+                });
+        } else {
+            self.text_props.append_shifted_at_char_offset(other, offset);
         }
     }
 
-    fn plain(text: impl Into<String>) -> Self {
-        let text = text.into();
-        let multibyte = text.chars().any(|c| !c.is_ascii());
-        Self {
-            text: text.chars().map(|c| c as u32).collect(),
-            multibyte,
-            text_props: TextPropertyTable::new(),
-            source_spans: Vec::new(),
-            min_width_transitions: Vec::new(),
-            gc_roots: None,
-            numeric_padding: Default::default(),
-        }
+    fn plain(text: impl AsRef<str>) -> Self {
+        let mut rendered = Self::default();
+        rendered.append_plain_utf8(text.as_ref());
+        rendered
+    }
+
+    /// Native UTF-8 fields have no Lisp-string source or min-width sidecar.
+    /// The caller owns the output exclusively; no reference or shared cache
+    /// survives the append, and this operation cannot invoke Lisp.
+    fn append_plain_utf8(&mut self, text: &str) -> CharRange {
+        let start = CharPos0::new(self.char_len());
+        self.multibyte |= text.chars().any(|ch| !ch.is_ascii());
+        self.text.extend(text.chars().map(u32::from));
+        CharRange::new(start, CharPos0::new(self.char_len()))
     }
 
     fn append_rendered(&mut self, other: &Self) {
@@ -3373,7 +3372,7 @@ impl ModeLineRendered {
         self.numeric_padding
             .append_shifted(&other.numeric_padding, char_offset);
         self.text.extend_from_slice(&other.text);
-        self.append_properties(&other.text_props, char_offset);
+        self.append_properties(&other.text_props, CharLen::new(char_offset));
         for span in &other.source_spans {
             self.pin_value(span.source());
         }
@@ -3443,7 +3442,7 @@ impl ModeLineRendered {
                 self.text.extend(mode_line_string_char_codes(string));
                 self.record_source_span(char_offset, self.char_len(), *value, 0);
                 with_mode_line_string_properties(*value, |props| {
-                    self.append_properties(props, char_offset);
+                    self.append_properties(props, CharLen::new(char_offset));
                 });
             }
             None => {
@@ -3856,13 +3855,11 @@ impl ModeLineRendered {
         if self.text.is_empty() || props.is_empty() {
             return;
         }
-        for (name, value) in props {
-            self.text_props.put_property_in_char_range(
-                display_char_range(0, self.char_len()),
-                name,
-                value,
-            );
-        }
+        overlay_mode_line_property_map(
+            &mut self.text_props,
+            CharRange::from_start_len(CharPos0::ZERO, CharLen::new(self.text.len())),
+            &props,
+        );
         self.pin_properties();
     }
 
@@ -4043,36 +4040,41 @@ fn append_mode_line_rendered_segment(
     result.append_rendered(&segment);
 }
 
-/// Immutable process selector published by OnceLock. The direct field append
-/// uses only its caller's exclusive rendered output and retains no Lisp state;
-/// independent mutators never share formatter data through this selector.
-#[inline]
-fn mode_line_plain_field_enabled() -> bool {
-    #[cfg(test)]
-    if let Some(enabled) = MODE_LINE_PLAIN_FIELD_OVERRIDE.with(std::cell::Cell::get) {
-        return enabled;
+/// Apply the source format's map in its existing iteration order. Both
+/// temporary Lisp-text segments and directly emitted native fields use this
+/// definition, retaining the property table's canonical insertion semantics.
+fn overlay_mode_line_property_map(
+    table: &mut TextPropertyTable,
+    range: CharRange,
+    properties: &std::collections::HashMap<Value, Value>,
+) {
+    if range.is_empty() {
+        return;
     }
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        matches!(
-            std::env::var("NEOMACS_MODE_LINE_PLAIN_FIELD")
-                .ok()
-                .map(|value| value.trim().to_ascii_lowercase())
-                .as_deref(),
-            Some("on" | "1" | "true" | "yes")
-        )
-    })
+    for (&name, &value) in properties {
+        table.put_property_in_char_range(range, name, value);
+    }
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+enum ModeLinePlainFieldPath {
+    #[default]
+    Direct,
+    Temporary,
+}
+
+// Reuses the existing test-only selector slot; no product TLS or runtime
+// measurement selector. The guard restores the previous path on every exit.
 #[cfg(test)]
 thread_local! {
-    static MODE_LINE_PLAIN_FIELD_OVERRIDE: std::cell::Cell<Option<bool>> =
-        const { std::cell::Cell::new(None) };
+    static MODE_LINE_PLAIN_FIELD_OVERRIDE: std::cell::Cell<ModeLinePlainFieldPath> =
+        const { std::cell::Cell::new(ModeLinePlainFieldPath::Direct) };
 }
 
 #[cfg(test)]
-fn set_mode_line_plain_field_for_test(enabled: Option<bool>) {
-    MODE_LINE_PLAIN_FIELD_OVERRIDE.with(|cell| cell.set(enabled));
+fn set_mode_line_plain_field_for_test(path: ModeLinePlainFieldPath) -> ModeLinePlainFieldPath {
+    MODE_LINE_PLAIN_FIELD_OVERRIDE.with(|cell| cell.replace(path))
 }
 
 fn append_mode_line_percent_string_spec(
@@ -4081,31 +4083,37 @@ fn append_mode_line_percent_string_spec(
     props_at_percent: &std::collections::HashMap<Value, Value>,
     field_width: i64,
 ) {
-    if props_at_percent.is_empty() && mode_line_plain_field_enabled() {
-        let char_offset = result.char_len();
-        // ModeLineRendered::plain decodes UTF-8 chars to these same codes.
-        // Extend the final buffer directly, avoiding its temporary String,
-        // character-code Vec, and second copy. This field has no source or
-        // min-width sidecar to append.
-        result.multibyte |= spec.chars().any(|ch| !ch.is_ascii());
-        result.text.extend(spec.chars().map(|ch| ch as u32));
-        let rendered_len = (result.char_len() - char_offset) as i64;
-        if field_width > 0 && rendered_len < field_width {
-            result.pad_plain_spaces((field_width - rendered_len) as usize);
+    #[cfg(test)]
+    match MODE_LINE_PLAIN_FIELD_OVERRIDE.with(std::cell::Cell::get) {
+        ModeLinePlainFieldPath::Direct => {}
+        ModeLinePlainFieldPath::Temporary => {
+            append_mode_line_percent_segment(
+                result,
+                ModeLineRendered::plain(spec),
+                props_at_percent,
+                field_width,
+            );
+            return;
         }
-        // Preserve the empty segment's property mutation/syntax ticks and
-        // cache revalidation. Its empty graft changes no interval boundaries.
-        result
-            .text_props
-            .append_shifted_at_char_offset(&TextPropertyTable::new(), CharLen::new(char_offset));
-        return;
     }
-    append_mode_line_percent_segment(
-        result,
-        ModeLineRendered::plain(spec),
+
+    let emitted = result.append_plain_utf8(spec);
+    // The parser's nonpositive width means no minimum. Convert once at this
+    // boundary; every position and length below is measured in characters.
+    let minimum = CharLen::new(usize::try_from(field_width).unwrap_or_default());
+    let padding = minimum.saturating_sub(emitted.len());
+    result.pad_plain_spaces(padding.get());
+    let field_len = emitted.len().add_len(padding);
+    let mut properties = TextPropertyTable::new();
+    overlay_mode_line_property_map(
+        &mut properties,
+        CharRange::from_start_len(CharPos0::ZERO, field_len),
         props_at_percent,
-        field_width,
     );
+    // Keep the same local property graft, even for an empty field/map: its
+    // mutation/syntax ticks and newly copied plist roots are observable by
+    // later formatter elements. Native fields add no source/min-width record.
+    result.append_properties(&properties, CharLen::new(emitted.start().get()));
 }
 
 fn append_mode_line_percent_segment(
