@@ -58,6 +58,7 @@ enum ActivationState {
     Selected {
         epoch: u64,
         lambda: SymId,
+        subset: ReturnSubset,
         instruction: Instruction,
     },
     Returned {
@@ -127,6 +128,16 @@ impl<'era> RunAccess<'_, 'era> {
         cache: &mut FunctionCallCache<'era>,
         activation: &mut FunctionActivation<'era>,
     ) -> Result<(), FunctionError> {
+        self.call_begin_with_subset(symbol, cache, activation, ReturnSubset::Scalar)
+    }
+
+    pub(super) fn call_begin_with_subset(
+        &mut self,
+        symbol: &SymbolHandle,
+        cache: &mut FunctionCallCache<'era>,
+        activation: &mut FunctionActivation<'era>,
+        subset: ReturnSubset,
+    ) -> Result<(), FunctionError> {
         check_run(self)?;
         globals::check_home(self, &cache.home)?;
         globals::check_home(self, &activation.home)?;
@@ -136,7 +147,8 @@ impl<'era> RunAccess<'_, 'era> {
         if matches!(activation.state, ActivationState::Selected { .. }) {
             return Err(FunctionError::ActiveActivation);
         }
-        self.symbol_ref(symbol)?.select_call(cache, activation)
+        self.symbol_ref(symbol)?
+            .select_call(cache, activation, subset)
     }
 
     /// At most two finite instructions; one unit validates and yields, the
@@ -169,15 +181,16 @@ impl<'era> RunAccess<'_, 'era> {
                 ActivationState::Selected {
                     epoch,
                     lambda,
+                    subset,
                     instruction,
                 } => {
-                    let answer = write::scalar_return(definition, lambda)
-                        .ok_or(FunctionError::UnsupportedDefinition)?;
+                    let answer = constant::decode(definition, lambda, subset)?;
                     match instruction {
                         Instruction::Validate => {
                             activation.state = ActivationState::Selected {
                                 epoch,
                                 lambda,
+                                subset,
                                 instruction: Instruction::Return,
                             }
                         }
@@ -221,6 +234,7 @@ impl SymbolRef<'_, '_, '_> {
         &mut self,
         cache: &mut FunctionCallCache<'_>,
         activation: &mut FunctionActivation<'_>,
+        subset: ReturnSubset,
     ) -> Result<(), FunctionError> {
         let symbols = &self.run.owner.registry.symbols;
         let since = (cache.symbol == Some(self.key))
@@ -264,7 +278,7 @@ impl SymbolRef<'_, '_, '_> {
             if definition.is_nil() {
                 return Err(FunctionError::VoidFunction);
             }
-            write::scalar_return(definition, lambda).ok_or(FunctionError::UnsupportedDefinition)?;
+            constant::decode(definition, lambda, subset)?;
             (clock, unchanged, lambda, definition)
         };
         let local = self
@@ -296,6 +310,7 @@ impl SymbolRef<'_, '_, '_> {
         activation.state = ActivationState::Selected {
             epoch: clock,
             lambda,
+            subset,
             instruction: Instruction::Validate,
         };
         Ok(())

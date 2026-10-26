@@ -22,3 +22,6 @@ mod tests;
 
 #[cfg(not(feature = "gc-memory-telemetry"))]
 pub(crate) mod boundary;
+
+#[cfg(not(feature = "gc-memory-telemetry"))]
+pub(super) mod names;

@@ -227,8 +227,9 @@ impl<'era> RunAccess<'_, 'era> {
 impl SymbolMut<'_, '_, '_> {
     pub(super) fn write_function_into(
         &mut self,
-        index: usize,
+        index: OwnerRootIndex,
         update: FunctionUpdate,
+        subset: super::functions::ReturnSubset,
     ) -> Result<(), FunctionError> {
         let registry = self.run.owner.registry;
         let dst = self
@@ -236,13 +237,20 @@ impl SymbolMut<'_, '_, '_> {
             .owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(index))
+            .and_then(|local| local.root_scratch.get_mut(usize::from(index)))
             .ok_or(RegistrationError::StaleRegistration)?;
         let authority = SymbolWriteToken {
             _word: &registry.symbols.word,
             _thread: PhantomData,
         };
-        functions::write::publish(&registry.symbols, self.key.symbol, update, dst, &authority)
+        functions::write::publish(
+            &registry.symbols,
+            self.key.symbol,
+            update,
+            dst,
+            &authority,
+            subset,
+        )
     }
 
     fn store_into(&mut self, index: usize, value: Value, answer: Value) -> Result<(), GlobalError> {

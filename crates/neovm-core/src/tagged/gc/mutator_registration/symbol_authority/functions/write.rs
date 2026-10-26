@@ -52,14 +52,21 @@ impl FunctionState {
 
 /// The initial closed call subset: no callbacks, mutable captures, alias
 /// resolution or internal UNBOUND. The shared graph is immutable in this era.
-fn closed_definition(value: Value, lambda: SymId) -> bool {
-    value.is_nil() || scalar_return(value, lambda).is_some()
+fn validate_definition(
+    value: Value,
+    lambda: SymId,
+    subset: ReturnSubset,
+) -> Result<(), FunctionError> {
+    if value.is_nil() {
+        return Ok(());
+    }
+    constant::decode(value, lambda, subset).map(|_| ())
 }
 
 /// Serial preparation may retain an existing compiled constant as an opaque
 /// read/replacement target. Never materialize a saved-image function here,
 /// and never inspect bytecode data during an overlapping owner operation.
-/// Restricted execution and changed fset inputs still use closed_definition.
+/// Restricted execution and changed fset inputs still validate their typed subset.
 fn opaque_initial_bytecode(value: Value) -> bool {
     use crate::emacs_core::bytecode::Op;
 
@@ -85,22 +92,6 @@ fn opaque_initial_bytecode(value: Value) -> bool {
     })
 }
 
-pub(super) fn scalar_return(value: Value, lambda: SymId) -> Option<Value> {
-    if !value.is_cons() || value.cons_car_unobserved().as_bare_symbol_id() != Some(lambda) {
-        return None;
-    }
-    let args = value.cons_cdr_unobserved();
-    if !args.is_cons() || !args.cons_car_unobserved().is_nil() {
-        return None;
-    }
-    let body = args.cons_cdr_unobserved();
-    if !body.is_cons() || !body.cons_cdr_unobserved().is_nil() {
-        return None;
-    }
-    let answer = body.cons_car_unobserved();
-    (answer.is_nil() || answer.is_t() || answer.is_fixnum()).then_some(answer)
-}
-
 fn keeper_compiler_quiescent() -> bool {
     #[cfg(feature = "jit")]
     {
@@ -115,6 +106,14 @@ impl ParallelHeapEra<'_> {
     /// Reserve this existing symbol's stamp and one original-target journal
     /// slot before ANY owner registers. No running write grows Rust metadata.
     pub fn prepare_function_symbol(&self, key: &SymbolHandle) -> Result<(), FunctionError> {
+        self.prepare_function_subset(key, ReturnSubset::Scalar)
+    }
+
+    pub(super) fn prepare_function_subset(
+        &self,
+        key: &SymbolHandle,
+        subset: ReturnSubset,
+    ) -> Result<(), FunctionError> {
         let registry = self.registry();
         if registry.keeper_thread != std::thread::current().id() {
             return Err(RegistrationError::WrongThread.into());
@@ -145,7 +144,9 @@ impl ParallelHeapEra<'_> {
         // SAFETY: retained backing, identity checked and exclusive admission.
         let initial = unsafe { symbols.backing.prepare_function(key.symbol, &authority) }?;
         if let FunctionCellSnapshot::Bound(value) = initial {
-            if !closed_definition(value, lambda) && !opaque_initial_bytecode(value) {
+            if validate_definition(value, lambda, subset).is_err()
+                && !opaque_initial_bytecode(value)
+            {
                 return Err(FunctionError::UnsupportedDefinition);
             }
         }
@@ -174,6 +175,16 @@ impl<'era> RunAccess<'_, 'era> {
         src: &OwnerRootSlot<'era>,
         dst: &mut OwnerRootSlot<'era>,
     ) -> Result<(), FunctionError> {
+        self.fset_with_subset(symbol, src, dst, ReturnSubset::Scalar)
+    }
+
+    pub(super) fn fset_with_subset(
+        &mut self,
+        symbol: &SymbolHandle,
+        src: &OwnerRootSlot<'era>,
+        dst: &mut OwnerRootSlot<'era>,
+        subset: ReturnSubset,
+    ) -> Result<(), FunctionError> {
         globals::check_home(self, src)?;
         globals::check_home(self, dst)?;
         let value = self
@@ -183,8 +194,11 @@ impl<'era> RunAccess<'_, 'era> {
             .and_then(|local| local.root_scratch.get(src.index))
             .ok_or(RegistrationError::StaleRegistration)?
             .value();
-        self.symbol_mut(symbol)?
-            .write_function_into(dst.index, FunctionUpdate::Fset(value))
+        self.symbol_mut(symbol)?.write_function_into(
+            super::super::intern::OwnerRootIndex::from(&*dst),
+            FunctionUpdate::Fset(value),
+            subset,
+        )
     }
 
     /// Store the explicit-unbound state, returning the original symbol even
@@ -195,8 +209,11 @@ impl<'era> RunAccess<'_, 'era> {
         dst: &mut OwnerRootSlot<'era>,
     ) -> Result<(), FunctionError> {
         globals::check_home(self, dst)?;
-        self.symbol_mut(symbol)?
-            .write_function_into(dst.index, FunctionUpdate::Fmakunbound)
+        self.symbol_mut(symbol)?.write_function_into(
+            super::super::intern::OwnerRootIndex::from(&*dst),
+            FunctionUpdate::Fmakunbound,
+            ReturnSubset::Scalar,
+        )
     }
 }
 
@@ -206,6 +223,7 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
     update: FunctionUpdate,
     dst: &mut MarkWord,
     authority: &SymbolWriteToken<'_>,
+    subset: ReturnSubset,
 ) -> Result<(), FunctionError> {
     // SAFETY: private token comes from the matching identity-checked writer;
     // no running reader touches this vector, and it never grows here.
@@ -216,7 +234,7 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
         .ok_or(RegistrationError::Publication)?;
     let answer = match update {
         FunctionUpdate::Fset(value) => {
-            if !closed_definition(value, record.lambda) {
+            if validate_definition(value, record.lambda, subset).is_err() {
                 // An admitted compiled definition may be returned unchanged,
                 // never installed in a different cell or executed here. Check
                 // exact complete state before epoch planning, preserving the

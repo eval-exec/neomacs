@@ -1,5 +1,10 @@
 //! Direct function-cell answers move into owner roots under symbol authority.
 mod call;
+mod constant;
+mod name;
+pub(super) use constant::ReturnSubset;
+#[cfg(test)]
+pub(in crate::tagged::gc::mutator_registration) use name::PreparedNameFunction;
 pub(super) mod write;
 use super::*;
 use crate::emacs_core::symbol::FunctionCellSnapshot;

@@ -8,6 +8,8 @@ pub use intern::InitialInternError;
 mod functions;
 #[cfg(test)]
 pub use functions::FunctionOpKind;
+#[cfg(test)]
+pub(super) use functions::PreparedNameFunction;
 pub use functions::{FunctionActivation, FunctionCallCache, FunctionError, FunctionStep};
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod closed_graph;

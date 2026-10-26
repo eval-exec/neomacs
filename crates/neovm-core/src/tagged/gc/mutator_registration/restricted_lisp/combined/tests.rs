@@ -85,9 +85,6 @@ fn running_expected(request: RunningRequest) -> Result<(), PreparationError> {
         RunningRequest::FunctionIntern => Err(PreparationError::Missing(
             MissingCapability::FunctionInternTransfer,
         )),
-        RunningRequest::ManagedNameCall => Err(PreparationError::Missing(
-            MissingCapability::ImmutableNameReturn,
-        )),
     }
 }
 fn stopped_expected(request: StoppedRequest) -> Result<(), PreparationError> {
@@ -222,9 +219,6 @@ fn intended_red(backing: PlainSymbolBacking, missing: MissingCapability) {
         MissingCapability::FunctionInternTransfer => {
             (RunningRequest::FunctionIntern, StoppedRequest::Noop)
         }
-        MissingCapability::ImmutableNameReturn => {
-            (RunningRequest::ManagedNameCall, StoppedRequest::Noop)
-        }
         MissingCapability::AllOwnerMinor => (RunningRequest::Noop, StoppedRequest::Minor),
     };
     let result =
@@ -265,16 +259,14 @@ red!(
     VoidProjection,
     FunctionInternTransfer
 );
-red!(
-    p3sym_c6_red_name_return_plain,
-    Unprojected,
-    ImmutableNameReturn
-);
-red!(
-    p3sym_c6_red_name_return_projected,
-    VoidProjection,
-    ImmutableNameReturn
-);
+#[test]
+fn p3sym_c6_name_return_plain() {
+    super::super::super::symbol_functions::names::return_case(PlainSymbolBacking::Unprojected);
+}
+#[test]
+fn p3sym_c6_name_return_projected() {
+    super::super::super::symbol_functions::names::return_case(PlainSymbolBacking::Projected);
+}
 #[test]
 fn p3sym_c6_keeper_census_plain() {
     assert_eq!(
@@ -352,6 +344,8 @@ fn p3sym_c6_typed_tape_refuses_every_excluded_operation() {
     ] {
         let result = CombinedTape::admit(
             vec![
+                CombinedInstruction::GlobalToHome { destination: home },
+                CombinedInstruction::CallToHome { destination: home },
                 CombinedInstruction::Safepoint,
                 CombinedInstruction::Excluded(excluded),
             ],

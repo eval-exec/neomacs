@@ -118,7 +118,6 @@ impl CombinedTape {
 enum MissingCapability {
     GlobalFunctionTransfer,
     FunctionInternTransfer,
-    ImmutableNameReturn,
     AllOwnerMinor,
 }
 impl MissingCapability {
@@ -126,7 +125,6 @@ impl MissingCapability {
         match self {
             Self::GlobalFunctionTransfer => "combined_global_function_transfer",
             Self::FunctionInternTransfer => "combined_function_intern_transfer",
-            Self::ImmutableNameReturn => "immutable_managed_name_return",
             Self::AllOwnerMinor => "all_owner_stopped_minor",
         }
     }
@@ -142,7 +140,6 @@ enum RunningRequest {
     Noop,
     GlobalFunction,
     FunctionIntern,
-    ManagedNameCall,
 }
 #[derive(Clone, Copy)]
 enum StoppedRequest {
@@ -179,9 +176,6 @@ impl PendingC6 {
             )),
             RunningRequest::FunctionIntern => Err(PreparationError::Missing(
                 MissingCapability::FunctionInternTransfer,
-            )),
-            RunningRequest::ManagedNameCall => Err(PreparationError::Missing(
-                MissingCapability::ImmutableNameReturn,
             )),
         }
     }
