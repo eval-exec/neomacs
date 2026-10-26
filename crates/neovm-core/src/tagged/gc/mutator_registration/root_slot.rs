@@ -87,6 +87,28 @@ impl RootSlotOps for OwnerRootSlot<'_> {
 impl RootedSlot for OwnerRootSlot<'_> {}
 
 impl<'owner, 'era> RunAccess<'owner, 'era> {
+    /// Closed C6 executor primitive: discard one census value, without opening
+    /// an allocator slice or lending any graph mutation/decoding authority.
+    #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+    pub(super) fn clear_owner_root_for_test(
+        &mut self,
+        home: &OwnerRootSlot<'era>,
+    ) -> Result<(), RegistrationError> {
+        self.owner.check_thread()?;
+        if self.symbol_loan {
+            return Err(RegistrationError::OutstandingLoan);
+        }
+        symbol_authority::check_owner_home_for_test(self, home)?;
+        let destination = self
+            .owner
+            .local
+            .as_mut()
+            .and_then(|local| local.root_scratch.get_mut(home.index))
+            .ok_or(RegistrationError::StaleRegistration)?;
+        *destination = super::super::mark_word::MarkWord::of(TaggedValue::NIL);
+        Ok(())
+    }
+
     /// Terminal negative-fixture cleanup only. This erases this resident
     /// owner's private homes after poison; it grants no World/heap authority
     /// and cannot make the failed era resumable. Production poison checks
@@ -116,9 +138,10 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         Ok(())
     }
 
-    /// C4's opaque cache/activation owns this freshly reserved home. Unlike
-    /// operand homes it is never exposed or clonable through that API. NIL
-    /// needs no heap import seal, and the pre-reserved bank never grows here.
+    /// Reserve a NIL census home without a managed import. C4 cache/activation
+    /// keep their returned handles private; C6's closed test executor also
+    /// uses this leaf to initialize operand homes. NIL needs no heap import
+    /// seal, and the pre-reserved bank never grows here.
     pub(super) fn private_nil_root(&mut self) -> Result<OwnerRootSlot<'era>, RegistrationError> {
         self.owner.check_thread()?;
         if self.symbol_loan {

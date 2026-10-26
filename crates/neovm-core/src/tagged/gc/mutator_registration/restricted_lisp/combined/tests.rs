@@ -79,12 +79,6 @@ fn classify(error: &PreparationError) -> Retry {
 fn running_expected(request: RunningRequest) -> Result<(), PreparationError> {
     match request {
         RunningRequest::Noop => Ok(()),
-        RunningRequest::GlobalFunction => Err(PreparationError::Missing(
-            MissingCapability::GlobalFunctionTransfer,
-        )),
-        RunningRequest::FunctionIntern => Err(PreparationError::Missing(
-            MissingCapability::FunctionInternTransfer,
-        )),
     }
 }
 fn stopped_expected(request: StoppedRequest) -> Result<(), PreparationError> {
@@ -213,12 +207,6 @@ fn fixture(
 
 fn intended_red(backing: PlainSymbolBacking, missing: MissingCapability) {
     let (running, stopped) = match missing {
-        MissingCapability::GlobalFunctionTransfer => {
-            (RunningRequest::GlobalFunction, StoppedRequest::Noop)
-        }
-        MissingCapability::FunctionInternTransfer => {
-            (RunningRequest::FunctionIntern, StoppedRequest::Noop)
-        }
         MissingCapability::AllOwnerMinor => (RunningRequest::Noop, StoppedRequest::Minor),
     };
     let result =
@@ -239,26 +227,34 @@ macro_rules! red {
         }
     };
 }
-red!(
-    p3sym_c6_red_global_function_plain,
-    Unprojected,
-    GlobalFunctionTransfer
-);
-red!(
-    p3sym_c6_red_global_function_projected,
-    VoidProjection,
-    GlobalFunctionTransfer
-);
-red!(
-    p3sym_c6_red_function_intern_plain,
-    Unprojected,
-    FunctionInternTransfer
-);
-red!(
-    p3sym_c6_red_function_intern_projected,
-    VoidProjection,
-    FunctionInternTransfer
-);
+#[test]
+fn p3sym_c6_global_function_plain() {
+    super::execution_tests::transfer_case(
+        PlainSymbolBacking::Unprojected,
+        super::execution_tests::Transfer::Function,
+    );
+}
+#[test]
+fn p3sym_c6_global_function_projected() {
+    super::execution_tests::transfer_case(
+        PlainSymbolBacking::Projected,
+        super::execution_tests::Transfer::Function,
+    );
+}
+#[test]
+fn p3sym_c6_function_intern_plain() {
+    super::execution_tests::transfer_case(
+        PlainSymbolBacking::Unprojected,
+        super::execution_tests::Transfer::Intern,
+    );
+}
+#[test]
+fn p3sym_c6_function_intern_projected() {
+    super::execution_tests::transfer_case(
+        PlainSymbolBacking::Projected,
+        super::execution_tests::Transfer::Intern,
+    );
+}
 #[test]
 fn p3sym_c6_name_return_plain() {
     super::super::super::symbol_functions::names::return_case(PlainSymbolBacking::Unprojected);
@@ -351,8 +347,12 @@ fn p3sym_c6_typed_tape_refuses_every_excluded_operation() {
     ] {
         let result = CombinedTape::admit(
             vec![
-                CombinedInstruction::GlobalToHome { destination: home },
-                CombinedInstruction::CallToHome { destination: home },
+                CombinedInstruction::GlobalToHome {
+                    input: InputIndex(0),
+                    destination: home,
+                },
+                CombinedInstruction::CallBegin,
+                CombinedInstruction::CallStep { destination: home },
                 CombinedInstruction::Safepoint,
                 CombinedInstruction::Excluded(excluded),
             ],
@@ -363,9 +363,16 @@ fn p3sym_c6_typed_tape_refuses_every_excluded_operation() {
     }
     let tape = CombinedTape::admit(
         vec![
-            CombinedInstruction::GlobalToHome { destination: home },
-            CombinedInstruction::HomeToFunction { source: home },
-            CombinedInstruction::CallToHome { destination: home },
+            CombinedInstruction::GlobalToHome {
+                input: InputIndex(0),
+                destination: home,
+            },
+            CombinedInstruction::HomeToFunction {
+                source: home,
+                destination: home,
+            },
+            CombinedInstruction::CallBegin,
+            CombinedInstruction::CallStep { destination: home },
             CombinedInstruction::InitialIntern {
                 name: home,
                 destination: home,
@@ -373,12 +380,12 @@ fn p3sym_c6_typed_tape_refuses_every_excluded_operation() {
             CombinedInstruction::Safepoint,
         ],
         capacity,
-        SuccessfulStepBudget::try_from(5).unwrap(),
+        SuccessfulStepBudget::try_from(6).unwrap(),
     )
     .unwrap();
-    assert_eq!(tape.instructions.len(), 5);
+    assert_eq!(tape.instructions.len(), 6);
     assert_eq!(tape.capacity, capacity);
-    assert_eq!(tape.steps, SuccessfulStepBudget::try_from(5).unwrap());
+    assert_eq!(tape.steps, SuccessfulStepBudget::try_from(6).unwrap());
     assert_eq!(RootRegister::checked(2, capacity), Err(TapeError::Register));
     assert_eq!(RootCapacity::try_from(0), Err(TapeError::Capacity));
     assert_eq!(

@@ -1,9 +1,10 @@
-//! C6.1 typed preparation surface. The mixed executor, keeper census and
-//! stopped minor are deliberately absent until their individual engine stages.
-//! Nothing in this cfg(test) module is a production implementation or fast path.
+//! Closed C6 mixed tapes; no generic VM, mutable graph or generated-code entry.
+//! Cross-owner collector witnesses and the stopped minor are separate stages.
 use super::*;
 use std::num::NonZeroU32;
 
+mod execution_tests;
+mod executor;
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,9 +14,12 @@ struct RootCapacity(NonZeroU32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SuccessfulStepBudget(NonZeroU32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InputIndex(u16);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TapeError {
     Capacity,
     Register,
+    Input,
     StepBudget,
     Excluded(ExcludedOperation),
 }
@@ -65,15 +69,32 @@ enum ExcludedOperation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CombinedInstruction {
     GlobalToHome {
+        input: InputIndex,
+        destination: RootRegister,
+    },
+    HomeToGlobal {
+        input: InputIndex,
+        source: RootRegister,
         destination: RootRegister,
     },
     HomeToFunction {
         source: RootRegister,
-    },
-    CallToHome {
         destination: RootRegister,
     },
+    CallBegin,
+    CallStep {
+        destination: RootRegister,
+    },
+    ClearCache,
+    ClearActivation,
+    ClearHome {
+        home: RootRegister,
+    },
     InitialIntern {
+        name: RootRegister,
+        destination: RootRegister,
+    },
+    InitialSoft {
         name: RootRegister,
         destination: RootRegister,
     },
@@ -92,46 +113,67 @@ impl CombinedTape {
         capacity: RootCapacity,
         steps: SuccessfulStepBudget,
     ) -> Result<Self, TapeError> {
+        let tape = Self {
+            instructions,
+            capacity,
+            steps,
+        };
+        tape.validate()?;
+        Ok(tape)
+    }
+
+    fn validate(&self) -> Result<(), TapeError> {
+        if self.instructions.len() > STEP_CAP as usize {
+            return Err(TapeError::StepBudget);
+        }
         // Inspect every instruction before roots or owners are admitted. No
         // generated-code entry or mutable shared graph operation can hide here.
-        for instruction in &instructions {
+        for instruction in &self.instructions {
             match *instruction {
-                CombinedInstruction::GlobalToHome { destination }
-                | CombinedInstruction::CallToHome { destination } => {
-                    RootRegister::checked(destination.0, capacity)?;
+                CombinedInstruction::GlobalToHome { destination, .. }
+                | CombinedInstruction::CallStep { destination } => {
+                    RootRegister::checked(destination.0, self.capacity)?;
                 }
-                CombinedInstruction::HomeToFunction { source } => {
-                    RootRegister::checked(source.0, capacity)?;
+                CombinedInstruction::HomeToGlobal {
+                    source,
+                    destination,
+                    ..
                 }
-                CombinedInstruction::InitialIntern { name, destination } => {
-                    RootRegister::checked(name.0, capacity)?;
-                    RootRegister::checked(destination.0, capacity)?;
+                | CombinedInstruction::HomeToFunction {
+                    source,
+                    destination,
+                } => {
+                    RootRegister::checked(source.0, self.capacity)?;
+                    RootRegister::checked(destination.0, self.capacity)?;
                 }
-                CombinedInstruction::Safepoint => {}
+                CombinedInstruction::InitialIntern { name, destination }
+                | CombinedInstruction::InitialSoft { name, destination } => {
+                    RootRegister::checked(name.0, self.capacity)?;
+                    RootRegister::checked(destination.0, self.capacity)?;
+                }
+                CombinedInstruction::ClearHome { home } => {
+                    RootRegister::checked(home.0, self.capacity)?;
+                }
+                CombinedInstruction::CallBegin
+                | CombinedInstruction::ClearCache
+                | CombinedInstruction::ClearActivation
+                | CombinedInstruction::Safepoint => {}
                 CombinedInstruction::Excluded(operation) => {
                     return Err(TapeError::Excluded(operation));
                 }
             }
         }
-        Ok(Self {
-            instructions,
-            capacity,
-            steps,
-        })
+        Ok(())
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MissingCapability {
-    GlobalFunctionTransfer,
-    FunctionInternTransfer,
     AllOwnerMinor,
 }
 impl MissingCapability {
     fn name(self) -> &'static str {
         match self {
-            Self::GlobalFunctionTransfer => "combined_global_function_transfer",
-            Self::FunctionInternTransfer => "combined_function_intern_transfer",
             Self::AllOwnerMinor => "all_owner_stopped_minor",
         }
     }
@@ -145,8 +187,6 @@ enum PreparationError {
 #[derive(Clone, Copy)]
 enum RunningRequest {
     Noop,
-    GlobalFunction,
-    FunctionIntern,
 }
 #[derive(Clone, Copy)]
 enum StoppedRequest {
@@ -178,12 +218,6 @@ impl PendingC6 {
             .map_err(PreparationError::Global)?;
         match request {
             RunningRequest::Noop => Ok(()),
-            RunningRequest::GlobalFunction => Err(PreparationError::Missing(
-                MissingCapability::GlobalFunctionTransfer,
-            )),
-            RunningRequest::FunctionIntern => Err(PreparationError::Missing(
-                MissingCapability::FunctionInternTransfer,
-            )),
         }
     }
     fn stopped(
@@ -218,3 +252,4 @@ impl PendingC6 {
 static_assertions::assert_eq_size!(RootRegister, u16);
 static_assertions::assert_eq_size!(RootCapacity, u32);
 static_assertions::assert_eq_size!(SuccessfulStepBudget, u32);
+static_assertions::assert_eq_size!(InputIndex, u16);

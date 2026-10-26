@@ -75,6 +75,17 @@ pub(in crate::tagged::gc::mutator_registration) struct AdmittedCombinedInputs {
     inputs: Box<[CombinedInput]>,
 }
 impl AdmittedCombinedInputs {
+    pub(in crate::tagged::gc::mutator_registration) fn validate_running(
+        &self,
+        run: &RunAccess<'_, '_>,
+    ) -> Result<(), RegistrationError> {
+        self.target.validate_running(run)?;
+        for input in &self.inputs {
+            run.check_symbol(&input.key)?;
+        }
+        Ok(())
+    }
+
     pub(in crate::tagged::gc::mutator_registration) fn inputs(&self) -> &[CombinedInput] {
         &self.inputs
     }

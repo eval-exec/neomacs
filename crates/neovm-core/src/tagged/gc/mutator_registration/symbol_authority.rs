@@ -1,6 +1,13 @@
 //! Sealed symbol authority; running values move only between owner root homes.
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 pub(super) mod combined_inputs;
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+pub(super) fn check_owner_home_for_test(
+    run: &RunAccess<'_, '_>,
+    home: &OwnerRootSlot<'_>,
+) -> Result<(), RegistrationError> {
+    globals::check_home(run, home)
+}
 mod globals;
 mod intern;
 mod roots;
