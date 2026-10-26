@@ -9249,6 +9249,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
         Value::NIL,
         Value::make_int(1),
     ] {
+        #[cfg(debug_assertions)]
         let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
         match fboundp_leaf.call(ctx, &[arg]) {
             NativeRun::Ok(_) => {}
@@ -9260,6 +9261,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
                 crate::emacs_core::print::print_value(&arg)
             ),
         }
+        #[cfg(debug_assertions)]
         assert_eq!(
             FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed) - count0,
             1,
@@ -9278,6 +9280,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
     );
     ev.eval_str("(fset 'jit-fboundp-unrelated (lambda () 1))")
         .expect("unrelated fset");
+    #[cfg(debug_assertions)]
     let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
     match fboundp_leaf.call(ctx, &[Value::symbol("car")]) {
         NativeRun::Ok(bits) => assert_eq!(
@@ -9286,6 +9289,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
         ),
         other => panic!("after an unrelated epoch bump: {other:?}"),
     }
+    #[cfg(debug_assertions)]
     assert_eq!(
         FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed) - count0,
         1,
@@ -9310,8 +9314,10 @@ fn fboundp_sites_use_the_dedicated_shim() {
     let f = leaf_for("recordp");
     let recordp_leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     crate::emacs_core::jit::compile::force_inline_predicates_for_test(None);
+    #[cfg(debug_assertions)]
     let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
     let _ = recordp_leaf.call(ctx, &[Value::make_int(1)]);
+    #[cfg(debug_assertions)]
     assert_eq!(
         FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed),
         count0,
