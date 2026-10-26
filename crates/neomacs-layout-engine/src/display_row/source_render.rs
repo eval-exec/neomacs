@@ -1003,6 +1003,12 @@ impl<FS: crate::neovm_bridge::FaceServices> TextRowLineEndFaceResolver<'_, '_, '
 impl<FS: crate::neovm_bridge::FaceServices> LineEndFaceResolver
     for TextRowLineEndFaceResolver<'_, '_, '_, FS>
 {
+    fn default_padding_face_id(&mut self) -> FaceId {
+        let mut face = self.render.faces.default_face();
+        self.render.realize_face_for_display(&mut face);
+        self.install_named_face(&face)
+    }
+
     fn trailing_whitespace_face_id(&mut self) -> FaceId {
         let face = self.render.resolve_named_face("trailing-whitespace");
         self.install_named_face(&face)

@@ -52,6 +52,9 @@ mod oracle_dual_width_text;
 #[path = "oracle_face_theme.rs"]
 mod oracle_face_theme;
 
+#[path = "oracle_fill_column_stipple.rs"]
+mod oracle_fill_column_stipple;
+
 #[path = "oracle_font_coverage.rs"]
 mod oracle_font_coverage;
 

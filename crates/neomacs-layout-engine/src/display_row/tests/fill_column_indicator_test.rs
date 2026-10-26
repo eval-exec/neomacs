@@ -23,7 +23,7 @@ fn fill(gap_px: f32, gap_cols: u16) -> FillColumnIndicatorFill {
     FillColumnIndicatorFill {
         gap_px,
         gap_cols,
-        gap_face_id: FCI_FACE,
+        gap_face_id: TEXT_FACE,
         indicator_char: '│',
         indicator_face_id: FCI_FACE,
         tail_px: 0.0,
@@ -74,7 +74,7 @@ fn short_line_gets_gap_stretch_then_indicator_char() {
         matches!(glyphs[1].glyph_type, GlyphType::Stretch { .. }),
         "the gap is a stretch"
     );
-    assert_eq!(glyphs[1].face_id, FCI_FACE);
+    assert_eq!(glyphs[1].face_id, TEXT_FACE);
     assert_eq!(glyphs[1].pixel_width, 24.0);
     assert!(
         matches!(glyphs[2].glyph_type, GlyphType::Char { ch: '│' }),
@@ -141,6 +141,10 @@ fn extend_row_wraps_indicator_in_extend_stretches() {
 struct TestFaces;
 
 impl super::LineEndFaceResolver for TestFaces {
+    fn default_padding_face_id(&mut self) -> FaceId {
+        TEXT_FACE
+    }
+
     fn trailing_whitespace_face_id(&mut self) -> FaceId {
         unreachable!("no trailing-whitespace step in this test")
     }

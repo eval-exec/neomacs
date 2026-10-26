@@ -268,6 +268,10 @@ pub(crate) struct LineEndFillGeometry {
 /// contain those steps (no indicator, trailing disabled) may implement them
 /// as unreachable.
 pub(crate) trait LineEndFaceResolver {
+    /// Resolve the displayed buffer's default face for padding before an
+    /// indicator. The indicator's own foreground, bitmap, and decorations
+    /// belong only to its character cell (GNU `extend_face_id`).
+    fn default_padding_face_id(&mut self) -> FaceId;
     fn trailing_whitespace_face_id(&mut self) -> FaceId;
     /// Resolve the `fill-column-indicator` face, with its background
     /// overridden by `extend_bg` when an `:extend` highlight is active so the
@@ -282,6 +286,10 @@ pub(crate) trait LineEndFaceResolver {
 pub(crate) struct NoNamedLineEndFaces;
 
 impl LineEndFaceResolver for NoNamedLineEndFaces {
+    fn default_padding_face_id(&mut self) -> FaceId {
+        unreachable!("plan() emits no indicator padding without an indicator config")
+    }
+
     fn trailing_whitespace_face_id(&mut self) -> FaceId {
         unreachable!("plan() emits no trailing-whitespace step without the enabled flag")
     }
@@ -420,13 +428,15 @@ fn resolve_indicator_fill<R: LineEndFaceResolver>(
             }
         }
         None => {
-            // Plain row: the gap is transparent (fill-column-indicator has no
-            // background) and there is no tail past the indicator.
+            // GNU pads with the window's default face, then merges the
+            // indicator face only for its single character cell. Sharing that
+            // face with the gap would tile its stipple across all padding.
+            let padding_face_id = resolver.default_padding_face_id();
             let face_id = resolver.fill_column_indicator_face_id(None);
             FillColumnIndicatorFill {
                 gap_px,
                 gap_cols,
-                gap_face_id: face_id,
+                gap_face_id: padding_face_id,
                 indicator_char: indicator.ch,
                 indicator_face_id: face_id,
                 tail_px: 0.0,
