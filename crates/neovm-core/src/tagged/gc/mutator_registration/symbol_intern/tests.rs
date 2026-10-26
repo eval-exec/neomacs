@@ -1,10 +1,12 @@
 //! Real small World, exact rooted string operands and independent teardown.
+use super::super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::{Mutator, PlainSymbolBacking, RendezvousError};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 use std::cell::RefCell;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -35,17 +37,16 @@ impl Drop for FixtureGuard<'_> {
                 .clear_root_slots()
                 .map_err(|e| format!("C5 cleanup clear: {e:?}"))?;
             drop(self.inputs.take());
-            for _ in 0..10_000 {
-                match owner.retire_rooted(&[]) {
-                    Ok(()) => return Ok(()),
-                    Err(failed) if failed.reason == RendezvousError::Busy => {
-                        owner = failed.into_owner();
-                        std::thread::yield_now();
-                    }
-                    Err(failed) => return Err(format!("C5 cleanup retirement: {failed:?}")),
-                }
-            }
-            Err("C5 cleanup retirement remained Busy".into())
+            retry_owned(
+                Deadline::contention(),
+                owner,
+                |owner| owner.retire_rooted(&[]),
+                |failed| match contention::rendezvous(&failed.reason) {
+                    Retry::Busy => ControlFlow::Continue(failed.into_owner()),
+                    Retry::Refuse => ControlFlow::Break(failed),
+                },
+            )
+            .map_err(|failed| format!("C5 cleanup retirement: {failed:?}"))
         })();
         *self.cleanup.borrow_mut() = Some(result);
     }
@@ -306,14 +307,11 @@ fn intern_retry<'era>(
     name: &OwnerRootSlot<'era>,
     dst: &mut OwnerRootSlot<'era>,
 ) -> Result<(), crate::tagged::gc::InitialInternError> {
-    use crate::tagged::gc::{InitialInternError, RegistrationError};
-    for _ in 0..10_000 {
-        match run.initial_intern_into(name, dst) {
-            Err(InitialInternError::Authority(RegistrationError::Busy)) => std::thread::yield_now(),
-            result => return result,
-        }
-    }
-    Err(InitialInternError::Authority(RegistrationError::Busy))
+    contention::retry(
+        Deadline::contention(),
+        || run.initial_intern_into(name, dst),
+        contention::initial_intern,
+    )
 }
 fn existing_intern(kind: PlainSymbolBacking, query: Query) {
     fixture(kind, query, |run, homes| {
@@ -408,16 +406,13 @@ fn soft_retry<'era>(
     name: &OwnerRootSlot<'era>,
     dst: &mut OwnerRootSlot<'era>,
 ) -> Result<(), crate::tagged::gc::InitialInternError> {
-    use crate::tagged::gc::{InitialInternError, RegistrationError};
-    // Refused acquisition is legal. Only the completed result is unwrapped
-    // by the single-owner behavioral fixtures; every Busy releases its loan.
-    for _ in 0..10_000 {
-        match run.initial_intern_soft_into(name, dst) {
-            Err(InitialInternError::Authority(RegistrationError::Busy)) => std::thread::yield_now(),
-            result => return result,
-        }
-    }
-    Err(InitialInternError::Authority(RegistrationError::Busy))
+    // Refused acquisition is legal. Every Busy releases its loan before the
+    // shared elapsed-time retry yields; a refusal stays a typed error.
+    contention::retry(
+        Deadline::contention(),
+        || run.initial_intern_soft_into(name, dst),
+        contention::initial_intern,
+    )
 }
 fn soft(kind: PlainSymbolBacking, query: Query) {
     let expected = match query {

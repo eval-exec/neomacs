@@ -1,5 +1,6 @@
-//! Real finite-attempt histories. Every actor uses its own rooted operands;
+//! Real deadline-bounded contention histories. Every actor uses its own rooted operands;
 //! no Value, cell reference or Context view crosses an actor boundary.
+use super::contention as retry_protocol;
 use super::*;
 use crate::emacs_core::intern::{SymId, parallel::name_publication_for_test};
 use crate::emacs_core::symbol::parallel::InitialInternFacts;
@@ -7,7 +8,6 @@ use crate::tagged::gc::{
     FunctionError, GlobalError, HeapIdentity, InitialInternError, MutatorPermit, ParallelHeapEra,
     RegistrationError, SymbolHandle,
 };
-use contention::RetryBudget;
 use std::collections::BTreeSet;
 use std::sync::Barrier;
 
@@ -46,19 +46,21 @@ impl From<FunctionError> for Failure {
     }
 }
 impl Failure {
-    fn busy(&self) -> bool {
-        matches!(
-            self,
-            Self::Control(RegistrationError::Busy)
-                | Self::Global(GlobalError::Authority(RegistrationError::Busy))
-                | Self::Intern(InitialInternError::Authority(RegistrationError::Busy))
-                | Self::Function(FunctionError::Authority(RegistrationError::Busy))
-        )
+    fn retry(&self) -> Retry {
+        match self {
+            Self::Control(error) => retry_protocol::registration(error),
+            Self::Global(error) => retry_protocol::global(error),
+            Self::Intern(error) => retry_protocol::initial_intern(error),
+            Self::Function(error) => retry_protocol::function(error),
+            Self::Fixture(_) => Retry::Refuse,
+        }
     }
     fn explanation(&self) -> String {
         match self {
             Self::Fixture(message) => (*message).to_owned(),
-            other => format!("{other:?}"),
+            Self::Control(_) | Self::Global(_) | Self::Intern(_) | Self::Function(_) => {
+                format!("{self:?}")
+            }
         }
     }
 }
@@ -77,43 +79,58 @@ fn attempt_observed<'era, T>(
     mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<T, Failure>,
     mut refused: impl FnMut(&Mutator<'era>, &Failure) -> Result<(), String>,
 ) -> Result<T, String> {
-    let mut budget = RetryBudget::new();
-    loop {
-        let result = match owner.run_access() {
-            Ok(mut run) => body(&mut run),
-            Err(error) => Err(error.into()),
-        };
-        match result {
-            Err(error) if error.busy() => {
-                refused(owner, &error)?;
-                budget
-                    .wait(operation, &error)
-                    .map_err(|error| format!("{error}; {}", contention::diagnostics(owner)))?;
+    retry_protocol::retry(
+        Deadline::contention(),
+        || {
+            let result = match owner.run_access() {
+                Ok(mut run) => body(&mut run),
+                Err(error) => Err(error.into()),
+            };
+            // The failed RunAccess has ended before observation or yielding.
+            if let Err(error) = &result {
+                if let Retry::Busy = error.retry() {
+                    if let Err(message) = refused(owner, error) {
+                        return Err(AttemptFailure::Observation(message));
+                    }
+                }
             }
-            result => {
-                return result
-                    .map_err(|error| format!("C5 history {operation}: {}", error.explanation()));
-            }
-        }
-    }
+            result.map_err(AttemptFailure::Operation)
+        },
+        |failure| match failure {
+            AttemptFailure::Operation(error) => error.retry(),
+            AttemptFailure::Observation(_) => Retry::Refuse,
+        },
+    )
+    .map_err(|failure| match failure {
+        AttemptFailure::Operation(error) => format!(
+            "C5 history {operation}: {}; {}",
+            error.explanation(),
+            contention::diagnostics(owner),
+        ),
+        AttemptFailure::Observation(message) => message,
+    })
+}
+
+enum AttemptFailure {
+    Operation(Failure),
+    Observation(String),
 }
 
 fn activate<'era>(
-    mut permit: MutatorPermit<'era>,
+    permit: MutatorPermit<'era>,
     heap: HeapIdentity,
     id: u64,
 ) -> Result<Mutator<'era>, String> {
-    let mut budget = RetryBudget::new();
-    loop {
-        match permit.activate(heap, id) {
-            Ok(owner) => return Ok(owner),
-            Err(failed) if failed.reason == RegistrationError::Busy => {
-                permit = failed.into_permit();
-                budget.wait("activate", &RegistrationError::Busy)?;
-            }
-            Err(failed) => return Err(format!("C5 history activation: {failed:?}")),
-        }
-    }
+    retry_owned(
+        Deadline::contention(),
+        permit,
+        |permit| permit.activate(heap, id),
+        |failed| match retry_protocol::registration(&failed.reason) {
+            Retry::Busy => ControlFlow::Continue(failed.into_permit()),
+            Retry::Refuse => ControlFlow::Break(failed),
+        },
+    )
+    .map_err(|failed| format!("C5 history activation: {failed:?}"))
 }
 
 fn guarded<'era, T>(
@@ -125,17 +142,17 @@ fn guarded<'era, T>(
     let cleared = attempt(&mut owner, "clear_root_slots", |run| {
         Ok(run.clear_root_slots()?)
     });
-    let mut budget = RetryBudget::new();
-    loop {
-        match owner.retire_rooted(&[]) {
-            Ok(()) => return cleared.and(outcome),
-            Err(failed) if failed.reason == RendezvousError::Busy => {
-                owner = failed.into_owner();
-                budget.wait("retire_rooted", &RendezvousError::Busy)?;
-            }
-            Err(failed) => return Err(format!("C5 history retirement: {failed:?}")),
-        }
-    }
+    retry_owned(
+        Deadline::contention(),
+        owner,
+        |owner| owner.retire_rooted(&[]),
+        |failed| match retry_protocol::rendezvous(&failed.reason) {
+            Retry::Busy => ControlFlow::Continue(failed.into_owner()),
+            Retry::Refuse => ControlFlow::Break(failed),
+        },
+    )
+    .map_err(|failed| format!("C5 history retirement: {failed:?}"))?;
+    cleared.and(outcome)
 }
 
 struct ActorHomes<'era> {

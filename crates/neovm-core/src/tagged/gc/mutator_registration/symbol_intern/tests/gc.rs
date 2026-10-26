@@ -2,7 +2,7 @@
 //! The suspended shell/input holders must not mask a missing stopped census.
 use super::*;
 use crate::tagged::gc::mutator_registration::image::PublishedGcWork;
-use crate::tagged::gc::{AllStopped, GlobalError, ParallelHeapEra, RegistrationError};
+use crate::tagged::gc::{AllStopped, ParallelHeapEra};
 
 #[derive(Default, Debug)]
 struct Ledger {
@@ -81,6 +81,11 @@ fn round(
     owner: &mut Mutator<'_>,
     words: [usize; 2],
 ) -> (Ledger, [bool; 2], Option<Vec<u8>>, u64) {
+    // This synchronous keeper fixture needs AllStopped heap access inside
+    // the interval; with_native_extent is for non-keeper blocking owners and
+    // forbids that access. Keep this explicit pair and suppress unrelated
+    // native-return probes while it drives both completed collections.
+    let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
     owner.enter_native(&[]).unwrap();
     let mut stopped = match era.stop() {
         Ok(stopped) => stopped,
@@ -134,15 +139,12 @@ fn round(
 
 fn clear_holders<'era>(run: &mut RunAccess<'_, 'era>, homes: &mut Homes<'era>) {
     for holder in [homes.old_handle, homes.equal_holder] {
-        let mut outcome = Err(GlobalError::Authority(RegistrationError::Busy));
-        for _ in 0..10_000 {
-            outcome = run.sym_makunbound_into(&holder, &mut homes.dst);
-            if outcome != Err(GlobalError::Authority(RegistrationError::Busy)) {
-                break;
-            }
-            std::thread::yield_now();
-        }
-        outcome.expect("clear the actual serial input holder");
+        contention::retry(
+            Deadline::contention(),
+            || run.sym_makunbound_into(&holder, &mut homes.dst),
+            contention::global,
+        )
+        .expect("clear the actual serial input holder");
     }
     // Drop every ordinary name home from the canonical bank. The retained
     // transport roots are only NIL/NIL/23, and this minimal shell has NO

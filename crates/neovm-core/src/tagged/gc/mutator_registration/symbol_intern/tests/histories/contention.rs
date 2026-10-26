@@ -1,7 +1,7 @@
 //! Native scheduling is not bounded by a count of yield calls. Keep a finite
-//! deadline, pause briefly under sustained refusal, and name the stalled op.
+//! shared elapsed-time deadline and name the stalled op.
 use super::*;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub(super) fn diagnostics(owner: &Mutator<'_>) -> String {
     format!(
@@ -10,42 +10,6 @@ pub(super) fn diagnostics(owner: &Mutator<'_>) -> String {
         owner.entry.admission.load(Ordering::Acquire),
         owner.registry.phase.load()
     )
-}
-
-pub(super) struct RetryBudget {
-    started: Instant,
-    refusals: usize,
-}
-impl RetryBudget {
-    pub(super) fn new() -> Self {
-        Self {
-            started: Instant::now(),
-            refusals: 0,
-        }
-    }
-
-    // Call only after the failed RunAccess/lease has ended. No authority or
-    // owner-root borrow survives this scheduling point.
-    pub(super) fn wait(
-        &mut self,
-        operation: &str,
-        error: &impl std::fmt::Debug,
-    ) -> Result<(), String> {
-        self.refusals += 1;
-        let elapsed = self.started.elapsed();
-        if elapsed >= Duration::from_secs(10) {
-            return Err(format!(
-                "C5 history contention budget exhaustion in {operation}: {error:?}, {} refusals in {elapsed:?}",
-                self.refusals
-            ));
-        }
-        if self.refusals % 64 == 0 {
-            std::thread::park_timeout(Duration::from_millis(1));
-        } else {
-            std::thread::yield_now();
-        }
-        Ok(())
-    }
 }
 
 #[test]
