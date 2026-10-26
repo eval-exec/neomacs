@@ -88,6 +88,9 @@ fn round_with_preflight(
     names: [usize; 2],
     before_collection: impl FnOnce(),
 ) -> (Ledger, [bool; 2], Option<Vec<u8>>, u64) {
+    let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
+    // This synchronous keeper performs stopped heap work itself; the native
+    // blocking-call wrapper excludes keeper callers and heap access in its body.
     owner.enter_native(&[]).unwrap();
     let mut stopped = match era.stop() {
         Ok(stopped) => stopped,
@@ -157,10 +160,10 @@ fn round_with_preflight(
 
 fn pause<'era>(session: &Session, owner: &mut Mutator<'era>, frame: &mut Frame<'era>) {
     loop {
-        match session.step(owner, frame).unwrap() {
+        match session.wait_step(owner, frame).unwrap() {
             Step::Safepoint => return,
             Step::Progress => {}
-            Step::Retry => thread::yield_now(),
+            Step::Retry => unreachable!("wait_step resolves contention"),
             Step::Done => panic!("executor expected a collection boundary"),
         }
     }

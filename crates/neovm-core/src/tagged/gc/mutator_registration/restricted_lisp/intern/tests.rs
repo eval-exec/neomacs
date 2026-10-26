@@ -56,9 +56,9 @@ fn drive<'era>(
     frame: &mut Frame<'era>,
 ) -> Result<(), ExecError> {
     loop {
-        match session.step(owner, frame)? {
+        match session.wait_step(owner, frame)? {
             Step::Done => return Ok(()),
-            Step::Retry => thread::yield_now(),
+            Step::Retry => unreachable!("wait_step resolves contention"),
             Step::Progress | Step::Safepoint => {}
         }
     }
@@ -268,7 +268,7 @@ fn p3sym_c5_executor_wrong_type_preserves_destination_and_pc() {
 }
 
 #[test]
-fn p3sym_c5_executor_busy_has_separate_budget_and_retries_same_pc() {
+fn p3sym_c5_executor_busy_has_elapsed_deadline_and_retries_same_pc() {
     for op in [intern(0, 1), soft(0, 1)] {
         let creates = matches!(op, Op::Intern(InternOp::InitialIntern { .. }));
         case(
@@ -285,7 +285,7 @@ fn p3sym_c5_executor_busy_has_separate_budget_and_retries_same_pc() {
                     assert_eq!(frame.machine.pc, 1);
                     assert_eq!(words(owner, frame), before);
                     assert_eq!(frame.steps_left, steps);
-                    assert_eq!(frame.refusals_left, REFUSAL_CAP - 1);
+
                     assert_eq!(
                         owner.entry.admission.load(Ordering::Acquire),
                         super::super::super::admission::AdmissionWord::OUT
@@ -294,13 +294,20 @@ fn p3sym_c5_executor_busy_has_separate_budget_and_retries_same_pc() {
                         assert_eq!(run.symbol_word_for_test(), 0);
                         Ok(())
                     }));
-                    frame.refusals_left = 0;
+                    frame.pending_deadline = Deadline::expired_for_test();
                     assert_eq!(
                         session.step(owner, frame),
                         Err(ExecError::Registration(RegistrationError::Busy))
                     );
                     assert_eq!(frame.machine.pc, 1);
                     assert_eq!(frame.steps_left, steps);
+                    // The driver must preserve the terminal expired Busy,
+                    // rather than starting another contention allowance.
+                    assert_eq!(
+                        session.wait_step(owner, frame),
+                        Err(ExecError::Registration(RegistrationError::Busy))
+                    );
+                    assert_eq!(words(owner, frame), before);
                 });
                 assert_eq!(
                     crate::emacs_core::intern::parallel::identity_census_for_test(),
@@ -310,7 +317,7 @@ fn p3sym_c5_executor_busy_has_separate_budget_and_retries_same_pc() {
                 assert_eq!(session.step(owner, frame), Err(ExecError::Backedge));
                 assert_eq!(frame.machine.pc, 1);
                 frame.steps_left = steps;
-                frame.refusals_left = REFUSAL_CAP;
+                frame.pending_deadline = Deadline::contention();
                 drive(session, owner, frame).unwrap();
                 assert_eq!(
                     crate::emacs_core::intern::parallel::identity_census_for_test(),

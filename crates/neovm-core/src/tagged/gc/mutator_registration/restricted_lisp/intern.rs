@@ -4,7 +4,10 @@ use super::*;
 use crate::emacs_core::intern::SymId;
 use crate::tagged::gc::{GlobalError, InitialInternError, SymbolHandle};
 
-const REFUSAL_CAP: u32 = 1 << 20;
+use crate::tagged::gc::mutator_registration::symbol_functions::retry::{
+    self as contention, Deadline, Retry, retry, retry_owned,
+};
+use std::ops::ControlFlow;
 
 pub(super) fn check_tape(
     ops: &[Op],
@@ -138,7 +141,7 @@ struct Frame<'era> {
     slots: Vec<OwnerRootSlot<'era>>,
     machine: Machine,
     steps_left: u32,
-    refusals_left: u32,
+    pending_deadline: Deadline,
 }
 #[derive(Debug, PartialEq, Eq)]
 enum AdmissionError {
@@ -152,6 +155,13 @@ enum Step {
     Safepoint,
     Progress,
     Retry,
+}
+
+/// Only an observable retry outcome is contention. A terminal step error,
+/// including the pending instruction's expired Busy, must return unchanged.
+enum PendingStepError {
+    Contended,
+    Refused(ExecError),
 }
 
 impl Session {
@@ -225,7 +235,7 @@ impl Session {
             slots,
             machine: Machine::new(),
             steps_left: STEP_CAP,
-            refusals_left: REFUSAL_CAP,
+            pending_deadline: Deadline::contention(),
         })
     }
 
@@ -273,20 +283,42 @@ impl Session {
         };
         match result {
             Err(ExecError::Registration(RegistrationError::Busy)) => {
-                // Contention is not a completed tape operation. Its separate
-                // finite refusal allowance returns Busy, never a fake backedge.
-                frame.refusals_left = frame
-                    .refusals_left
-                    .checked_sub(1)
-                    .ok_or(ExecError::Registration(RegistrationError::Busy))?;
+                // A pending instruction retains one elapsed deadline. Busy
+                // consumes no program step and changes neither PC nor roots.
+                frame
+                    .pending_deadline
+                    .check(ExecError::Registration(RegistrationError::Busy))?;
                 Ok(Step::Retry)
             }
             Ok(step) => {
                 frame.steps_left -= 1;
+                frame.pending_deadline = Deadline::contention();
                 Ok(step)
             }
             Err(error) => Err(error),
         }
+    }
+
+    fn wait_step<'era>(
+        &self,
+        owner: &mut Mutator<'era>,
+        frame: &mut Frame<'era>,
+    ) -> Result<Step, ExecError> {
+        retry(
+            Deadline::contention(),
+            || match self.step(owner, frame).map_err(PendingStepError::Refused)? {
+                Step::Retry => Err(PendingStepError::Contended),
+                step @ (Step::Done | Step::Safepoint | Step::Progress) => Ok(step),
+            },
+            |error| match error {
+                PendingStepError::Contended => Retry::Busy,
+                PendingStepError::Refused(_) => Retry::Refuse,
+            },
+        )
+        .map_err(|error| match error {
+            PendingStepError::Contended => ExecError::Registration(RegistrationError::Busy),
+            PendingStepError::Refused(error) => error,
+        })
     }
 
     fn apply<'era>(

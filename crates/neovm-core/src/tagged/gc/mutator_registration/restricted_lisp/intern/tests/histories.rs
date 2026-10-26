@@ -31,38 +31,21 @@ struct Receipt {
     registry_after: (u64, usize),
 }
 
-fn waited(start: Instant, refusals: &mut usize, operation: &str) -> Result<(), String> {
-    *refusals += 1;
-    if start.elapsed() >= Duration::from_secs(10) {
-        return Err(format!(
-            "C5 executor {operation} remained Busy ({refusals} refusals)"
-        ));
-    }
-    // Every scheduling point is outside RunAccess and every slice/lease.
-    if *refusals % 64 == 0 {
-        thread::park_timeout(Duration::from_millis(1));
-    } else {
-        thread::yield_now();
-    }
-    Ok(())
-}
 fn activate<'era>(
-    mut permit: MutatorPermit<'era>,
+    permit: MutatorPermit<'era>,
     heap: HeapIdentity,
     id: u64,
 ) -> Result<Mutator<'era>, String> {
-    let start = Instant::now();
-    let mut refusals = 0;
-    loop {
-        match permit.activate(heap, id) {
-            Ok(owner) => return Ok(owner),
-            Err(failed) if failed.reason == RegistrationError::Busy => {
-                permit = failed.into_permit();
-                waited(start, &mut refusals, "activation")?;
-            }
-            Err(failed) => return Err(format!("C5 executor activation: {failed:?}")),
-        }
-    }
+    retry_owned(
+        Deadline::contention(),
+        permit,
+        |permit| permit.activate(heap, id),
+        |failed| match contention::registration(&failed.reason) {
+            Retry::Busy => ControlFlow::Continue(failed.into_permit()),
+            Retry::Refuse => ControlFlow::Break(failed),
+        },
+    )
+    .map_err(|failed| format!("C5 executor activation: {failed:?}"))
 }
 fn guarded<'era, T>(
     mut owner: Mutator<'era>,
@@ -71,20 +54,19 @@ fn guarded<'era, T>(
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut owner)))
         .unwrap_or_else(|_| Err("C5 executor actor assertion".into()));
     // Body/partial Frame homes have ended even if seeding or execution failed.
-    let cleared = with_run(&mut owner, |run| Ok(run.clear_root_slots()?))
+    let cleared = retry_exec(|| with_run(&mut owner, |run| Ok(run.clear_root_slots()?)))
         .map_err(|error| format!("C5 executor clear: {error:?}"));
-    let start = Instant::now();
-    let mut refusals = 0;
-    loop {
-        match owner.retire_rooted(&[]) {
-            Ok(()) => return cleared.and(outcome),
-            Err(failed) if failed.reason == RendezvousError::Busy => {
-                owner = failed.into_owner();
-                waited(start, &mut refusals, "retirement")?;
-            }
-            Err(failed) => return Err(format!("C5 executor retirement: {failed:?}")),
-        }
-    }
+    retry_owned(
+        Deadline::contention(),
+        owner,
+        |owner| owner.retire_rooted(&[]),
+        |failed| match contention::rendezvous(&failed.reason) {
+            Retry::Busy => ControlFlow::Continue(failed.into_owner()),
+            Retry::Refuse => ControlFlow::Break(failed),
+        },
+    )
+    .map_err(|failed| format!("C5 executor retirement: {failed:?}"))?;
+    cleared.and(outcome)
 }
 fn pump<'era>(
     session: &Session,
@@ -92,21 +74,16 @@ fn pump<'era>(
     frame: &mut Frame<'era>,
     pause: bool,
 ) -> Result<(), String> {
-    let mut start = Instant::now();
-    let mut refusals = 0;
     loop {
         match session
-            .step(owner, frame)
+            .wait_step(owner, frame)
             .map_err(|error| format!("C5 executor step: {error:?}"))?
         {
             Step::Done if !pause => return Ok(()),
             Step::Done => return Err("C5 executor omitted its first safepoint".into()),
             Step::Safepoint if pause => return Ok(()),
-            Step::Retry => waited(start, &mut refusals, "pending tape instruction")?,
-            Step::Progress | Step::Safepoint => {
-                start = Instant::now();
-                refusals = 0;
-            }
+            Step::Retry => unreachable!("wait_step resolves contention"),
+            Step::Progress | Step::Safepoint => {}
         }
     }
 }
@@ -155,23 +132,13 @@ fn actor<'era>(
         pump(session, owner, frame, false)?;
         let result = read_words(owner, frame)?;
         // Observation only: actual rooted output must grant symbol authority.
-        let start = Instant::now();
-        let mut refusals = 0;
-        loop {
-            let observed = with_run(owner, |run| {
+        retry_exec(|| {
+            with_run(owner, |run| {
                 run.initial_symbol_handle(&frame.slots[2])?;
                 Ok(())
-            });
-            match observed {
-                Err(ExecError::Registration(RegistrationError::Busy)) => {
-                    waited(start, &mut refusals, "rooted answer observation")?;
-                }
-                result => {
-                    result.map_err(|error| format!("C5 executor rooted answer: {error:?}"))?;
-                    break;
-                }
-            }
-        }
+            })
+        })
+        .map_err(|error| format!("C5 executor rooted answer: {error:?}"))?;
         let id = TaggedValue::from_bits(result[2])
             .as_bare_symbol_id()
             .ok_or("C5 executor answer is not a bare symbol")?;
