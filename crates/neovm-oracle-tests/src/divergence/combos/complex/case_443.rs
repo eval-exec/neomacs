@@ -213,11 +213,11 @@ fn div_cx443_process_pipe_pty_exit() {
     crate::common::assert_oracle_parity_expect(
         r##"(list (condition-case e
     (let ((p (make-process :name "cx443-pipe" :command '("sh" "-c" "exit 0") :connection-type 'pipe :buffer nil)))
-      (accept-process-output p 2) (process-exit-status p))
+      (neovm--oracle-settle-process p 600) (process-exit-status p))
   (error (car e)))
   (condition-case e
     (let ((p (make-process :name "cx443-pty" :command '("sh" "-c" "exit 42") :connection-type 'pty :buffer nil)))
-      (accept-process-output p 2) (process-exit-status p))
+      (neovm--oracle-settle-process p 600) (process-exit-status p))
   (error (car e))))"##,
         expect,
     );

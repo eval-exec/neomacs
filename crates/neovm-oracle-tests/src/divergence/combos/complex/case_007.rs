@@ -73,7 +73,7 @@ fn div_cx7_process_filter_swap() {
   (let ((p (make-process :name "neo-cx7-fs" :command '("echo" "hello")
                          :buffer nil)))
     (set-process-filter p (lambda (proc msg) (push msg f1)))
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (set-process-filter p (lambda (proc msg) (push :second-filter f2)))
     (delete-process p))
   (list (if f1 t nil) f2))

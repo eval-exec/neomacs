@@ -203,7 +203,7 @@ fn div_cx5_process_sentinel_lifecycle() {
 (let (sentinel-fired)
   (let ((p (make-process :name "neo-cx5-sl" :command '("true")
                          :sentinel (lambda (proc event) (push event sentinel-fired)))))
-    (accept-process-output p 2))
+    (neovm--oracle-settle-process p 600))
   (if sentinel-fired (car sentinel-fired) :no-sentinel))
 "##,
         expect,

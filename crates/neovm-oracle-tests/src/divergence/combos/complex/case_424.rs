@@ -36,7 +36,7 @@ fn div_cx424_process_status_exit() {
 (let ((proc (make-process :name "neo-cx424-pe"
                           :command '("sh" "-c" "exit 42")
                           :connection-type 'pipe :buffer nil)))
-  (accept-process-output proc 2)
+  (neovm--oracle-settle-process proc 600)
   (prog1 (process-exit-status proc)
     (delete-process proc)))
 "##,

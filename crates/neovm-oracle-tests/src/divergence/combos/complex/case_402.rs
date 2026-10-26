@@ -42,7 +42,7 @@ fn div_cx402_process_buffer_output() {
                             :connection-type 'pipe :buffer buf)))
     (set-process-sentinel proc #'ignore)
     (set-process-query-on-exit-flag proc nil)
-    (accept-process-output proc 2)
+    (neovm--oracle-settle-process proc 600)
     (delete-process proc))
   (prog1 (with-current-buffer buf
            (string-trim-right (buffer-string) "\n"))

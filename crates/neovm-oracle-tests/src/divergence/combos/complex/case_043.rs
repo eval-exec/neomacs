@@ -246,7 +246,7 @@ fn div_cx43_process_output_multibyte_narrowed_buffer_coding_mega() {
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (widen)
            (list (buffer-string) (string-bytes (buffer-string))))

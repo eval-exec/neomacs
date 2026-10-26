@@ -38,7 +38,7 @@ fn div_cx40_process_coding_narrow_output_mega() {
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (let ((narrowed (buffer-string)))
              (widen)
@@ -450,7 +450,7 @@ fn div_cx40_process_env_coding_exitcode_mega() {
          (buffer-string)))
       (exit-result
        (let ((p (make-process :name "neo-cx40-pe" :command '("sh" "-c" "exit 5"))))
-         (accept-process-output p 2)
+         (neovm--oracle-settle-process p 600)
          (process-exit-status p))))
   (list (string-trim env-result) coding-result exit-result))
 "##,

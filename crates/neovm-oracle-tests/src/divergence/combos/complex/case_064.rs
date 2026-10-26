@@ -219,7 +219,7 @@ fn div_cx64_set_process_coding_system_round_trip() {
                          :command '("sh" "-c" "printf '\\xe4\\xb8\\x96\\xe7\\x95\\x8c'")
                          :buffer buf)))
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05))
   (let ((decode-system (process-coding-system (get-process "neo-cx64-cs"))))
     (prog1 (list (with-current-buffer buf (buffer-string))

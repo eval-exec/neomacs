@@ -8,7 +8,7 @@ fn div_cx543_process_status_exit() {
     let expect = expect_test::expect![[r#""OK exit""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(let ((p (make-process :name "cx543" :command '("true") :connection-type 'pipe :buffer nil)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (prog1 (process-status p) (delete-process p)))
 "##,
         expect,
@@ -21,7 +21,7 @@ fn div_cx543_process_exit_status() {
     let expect = expect_test::expect![[r#""OK 42""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(let ((p (make-process :name "cx543-es" :command '("sh" "-c" "exit 42") :connection-type 'pipe :buffer nil)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (prog1 (process-exit-status p) (delete-process p)))
 "##,
         expect,
@@ -61,7 +61,7 @@ fn div_cx543_process_mark() {
     let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(let ((p (make-process :name "cx543-pm" :command '("echo" "mark") :connection-type 'pipe :buffer nil)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (prog1 (markerp (process-mark p)) (delete-process p)))
 "##,
         expect,
@@ -168,7 +168,7 @@ fn div_cx543_process_query_exit() {
     let expect = expect_test::expect![[r#""OK 99""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(let ((p (make-process :name "cx543-qe" :command '("sh" "-c" "exit 99") :connection-type 'pipe :buffer nil)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (prog1 (process-exit-status p) (delete-process p)))
 "##,
         expect,

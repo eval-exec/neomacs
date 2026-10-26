@@ -247,7 +247,7 @@ fn div_cx31_process_output_to_buffer_with_text_properties() {
     (put-text-property 1 4 'face 'bold))
   (let ((p (make-process :name "neo-cx31-ot" :command '("echo" "output")
                          :buffer buf)))
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (list (buffer-string)
                  (text-properties-at 0)

@@ -103,7 +103,7 @@ fn div_cx299_process_environment_override_with_multiple_vars() {
                             :buffer buf
                             :environment (append '("NEO_A=alpha" "NEO_B=beta" "NEO_C=gamma")
                                                  process-environment))))
-      (accept-process-output p 2)
+      (neovm--oracle-settle-process p 600)
       (sit-for 0.05)
       (let ((content (string-trim (with-current-buffer buf (buffer-string)))))
         (kill-buffer buf)

@@ -20,7 +20,7 @@ fn div_cx170_mega_eieio_clloop_hash_marker_overlay_undo_narrow_env() {
                         (string-trim (shell-command-to-string "echo $NEO_CX170"))))
              (exit-code (let ((p (make-process :name "neo-cx170-ec"
                                                 :command '("sh" "-c" "exit 5"))))
-                          (accept-process-output p 2)
+                          (neovm--oracle-settle-process p 600)
                           (process-exit-status p)))
              (ht (make-hash-table :test 'equal)))
         (puthash "alpha" 1 ht)
@@ -77,7 +77,7 @@ fn div_cx170_mega_subprocess_buflocal_textprop_marker_overlay_undo() {
                          :command '("sh" "-c" "printf 'SUBPROC'")
                          :buffer buf)))
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05))
   (with-current-buffer buf
     (widen)

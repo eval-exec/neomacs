@@ -277,7 +277,7 @@ fn div_cx39_process_exit_code_make_exit_3() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((p (make-process :name "neo-cx39-e3" :command '("sh" "-c" "exit 3"))))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (process-exit-status p))
 "##,
         expect,

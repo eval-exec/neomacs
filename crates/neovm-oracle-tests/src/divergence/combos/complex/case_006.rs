@@ -48,7 +48,7 @@ fn div_cx6_set_process_coding_system_output() {
     ;; case only asserts explicit process-output decoding.
     (set-process-sentinel p #'ignore)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (buffer-string))
 "##,
         expect,
@@ -139,7 +139,7 @@ fn div_cx6_write_region_to_process_stdin() {
                          :buffer (current-buffer) :connection-type 'pipe)))
     (write-region "hello via cat\n" nil p)
     (process-send-eof p)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (buffer-string))
 "##,
         expect,
@@ -341,8 +341,8 @@ fn div_cx6_process_connection_type_pipe_vs_pty() {
                          :connection-type t))
       (p2 (make-process :name "neo-cx6-pipe" :command '("echo" "pipe")
                         :connection-type 'pipe)))
-  (accept-process-output p1 1)
-  (accept-process-output p2 1)
+  (neovm--oracle-settle-process p1 600)
+  (neovm--oracle-settle-process p2 600)
   (list (processp p1) (processp p2) (eq (process-status p1) 'exit)))
 "##,
         expect,

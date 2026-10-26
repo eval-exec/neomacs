@@ -78,7 +78,7 @@ fn div_cx21_process_filter_buffer_mod_undo() {
                                    (with-current-buffer buf
                                      (goto-char (point-max))
                                      (insert str))))))
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (let ((content (buffer-string)))
              (undo)
@@ -309,7 +309,7 @@ fn div_cx21_process_exit_code_via_call_process_vs_make_process() {
         r##"
 (list (call-process "sh" nil nil nil "-c" "exit 7")
       (let ((p (make-process :name "neo-cx21-ec" :command '("sh" "-c" "exit 7"))))
-        (accept-process-output p 2)
+        (neovm--oracle-settle-process p 600)
         (process-exit-status p)))
 "##,
         expect,

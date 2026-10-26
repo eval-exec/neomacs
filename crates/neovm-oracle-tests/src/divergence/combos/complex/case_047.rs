@@ -18,7 +18,7 @@ fn div_cx47_process_filter_buffer_textprop_overlay_narrow_undo_mega() {
     (narrow-to-region 1 7))
   (let ((p (make-process :name "neo-cx47-fp" :command '("echo" "out")
                          :buffer buf)))
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (widen)
            (let ((content (buffer-string)))

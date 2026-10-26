@@ -18,7 +18,7 @@ fn div_cx277_make_process_with_environment_override() {
                             :command '("sh" "-c" "echo $NEO_CX277_VAR")
                             :buffer buf
                             :environment (cons "NEO_CX277_VAR=hello-env" process-environment))))
-      (accept-process-output p 2)
+      (neovm--oracle-settle-process p 600)
       (sit-for 0.05)
       (let ((content (string-trim (with-current-buffer buf (buffer-string)))))
         (kill-buffer buf)
@@ -41,7 +41,7 @@ fn div_cx277_process_connection_type_pipe() {
                         :command '("echo" "via-pipe")
                         :buffer buf
                         :connection-type 'pipe)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((content (string-trim (with-current-buffer buf (buffer-string)))))
     (kill-buffer buf)
@@ -64,7 +64,7 @@ fn div_cx277_process_stderr_to_filter() {
                               :command '("sh" "-c" "echo OUT; echo ERR >&2")
                               :buffer stdout-buf
                               :stderr (lambda (proc data) (push data stderr-data)))))
-        (accept-process-output p 2)
+        (neovm--oracle-settle-process p 600)
         (sit-for 0.05)
         (let ((out (string-trim (with-current-buffer stdout-buf (buffer-string))))
               (err (string-trim (apply #'concat (nreverse stderr-data)))))
@@ -85,7 +85,7 @@ fn div_cx277_process_noquery_flag() {
 (let ((p (make-process :name "neo-cx277-noquery"
                         :command '("echo" "test")
                         :noquery t)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (list (processp p)
         (process-name p)
@@ -190,7 +190,7 @@ fn div_cx277_process_filter_default_appends_to_buffer() {
        (p (make-process :name "neo-cx277-defflt"
                         :command '("echo" "default-filter")
                         :buffer buf)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((content (string-trim (with-current-buffer buf (buffer-string)))))
     (kill-buffer buf)
@@ -220,7 +220,7 @@ fn div_cx277_process_with_marker_overlay_undo_narrow_mega() {
                          :command '("sh" "-c" "printf 'PROCENV'")
                          :buffer buf
                          :environment (cons "NEO_CX277_MEGA=v" process-environment))))
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05))
   (let ((content (with-current-buffer buf (buffer-string))))
     (with-current-buffer buf

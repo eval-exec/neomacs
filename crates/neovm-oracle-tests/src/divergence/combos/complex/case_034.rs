@@ -151,7 +151,7 @@ fn div_cx34_process_sentinel_exit_code_exit_signal_consistency() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((p (make-process :name "neo-cx34-sc" :command '("sh" "-c" "exit 5"))))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (list (process-status p) (process-exit-status p) (process-live-p p)))
 "##,
         expect,

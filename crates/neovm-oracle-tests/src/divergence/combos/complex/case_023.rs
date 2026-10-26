@@ -336,7 +336,7 @@ fn div_cx23_process_send_string_then_receive_hash() {
         (data "hash this content for round-trip\n"))
     (process-send-string p data)
     (process-send-eof p)
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (secure-hash 'md5 (apply #'concat (nreverse received)))))
 "##,
         expect,

@@ -49,7 +49,7 @@ fn div_cx9_process_exit_code_zero() {
 (let (ev)
   (let ((p (make-process :name "neo-cx9-e0" :command '("true")
                          :sentinel (lambda (proc event) (setq ev event)))))
-    (accept-process-output p 2))
+    (neovm--oracle-settle-process p 600))
   ev)
 "##,
         expect,
@@ -65,7 +65,7 @@ fn div_cx9_process_exit_code_42() {
 (let (ev)
   (let ((p (make-process :name "neo-cx9-e42" :command '("sh" "-c" "exit 42")
                          :sentinel (lambda (proc event) (setq ev event)))))
-    (accept-process-output p 2))
+    (neovm--oracle-settle-process p 600))
   ev)
 "##,
         expect,
@@ -81,7 +81,7 @@ fn div_cx9_process_exit_code_255() {
 (let (ev)
   (let ((p (make-process :name "neo-cx9-e255" :command '("sh" "-c" "exit 255")
                          :sentinel (lambda (proc event) (setq ev event)))))
-    (accept-process-output p 2))
+    (neovm--oracle-settle-process p 600))
   ev)
 "##,
         expect,
@@ -95,7 +95,7 @@ fn div_cx9_process_status_after_exit() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((p (make-process :name "neo-cx9-ps" :command '("sh" "-c" "exit 7"))))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (list (process-status p)
         (process-exit-status p)
         (process-live-p p)))
@@ -186,7 +186,7 @@ fn div_cx9_set_process_coding_then_output_multibyte() {
     ;; This case is about explicit process decoding, so suppress sentinel text.
     (set-process-sentinel p #'ignore)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (list (buffer-string) (string-bytes (buffer-string)) (length (buffer-string)))))
 "##,
         expect,

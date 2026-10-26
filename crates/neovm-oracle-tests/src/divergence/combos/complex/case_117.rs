@@ -68,7 +68,7 @@ fn div_cx117_process_sentinel_runs_on_exit() {
   (let ((p (make-process :name "neo-cx117-sent"
                          :command '("sh" "-c" "exit 7")
                          :sentinel (lambda (proc ev) (push ev events)))))
-    (accept-process-output p 2)
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05)
     (list (nreverse events)
           (process-exit-status p)
@@ -93,7 +93,7 @@ fn div_cx117_process_send_string_to_stdin() {
                         :connection-type 'pipe)))
   (process-send-string p "alpha beta gamma\n")
   (process-send-eof p)
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((content (with-current-buffer buf (buffer-string))))
     (kill-buffer buf)
@@ -116,7 +116,7 @@ fn div_cx117_process_connection_type_pipe_vs_pty() {
                                  :command '("echo" "via-pipe")
                                  :buffer buf-pipe
                                  :connection-type 'pipe)))
-      (accept-process-output p-pipe 2)
+      (neovm--oracle-settle-process p-pipe 600)
       (sit-for 0.05)
       (let ((pipe-content (with-current-buffer buf-pipe (buffer-string))))
         (kill-buffer buf-pipe)
@@ -139,7 +139,7 @@ fn div_cx117_make_process_with_environment_override() {
                             :command '("sh" "-c" "echo $NEO_CX117")
                             :buffer buf
                             :environment (cons "NEO_CX117=hello-env" process-environment))))
-      (accept-process-output p 2)
+      (neovm--oracle-settle-process p 600)
       (sit-for 0.05)
       (let ((content (string-trim (with-current-buffer buf (buffer-string)))))
         (kill-buffer buf)
@@ -161,7 +161,7 @@ fn div_cx117_process_filter_no_buffer_no_filter_appends_nowhere() {
                          :command '("sh" "-c" "printf 'no buffer here'")
                          :buffer nil
                          :filter (lambda (proc data) (push data collected)))))
-    (accept-process-output p 2)
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05)
     (apply #'concat (nreverse collected))))
 "##,
@@ -181,7 +181,7 @@ fn div_cx117_process_stderr_capture() {
            (p (make-process :name "neo-cx117-err"
                             :command '("sh" "-c" "echo 'to stderr' >&2; echo 'to stdout'")
                             :stderr stderr-buf)))
-      (accept-process-output p 2)
+      (neovm--oracle-settle-process p 600)
       (sit-for 0.05)
       (let ((stderr-content (string-trim (with-current-buffer stderr-buf (buffer-string)))))
         (kill-buffer stderr-buf)
@@ -261,7 +261,7 @@ fn div_cx117_process_with_marker_overlay_undo_narrow_mega() {
   (let ((p (make-process :name "neo-cx117-mega-p"
                          :command '("sh" "-c" "printf 'SUB-OUT'")
                          :buffer buf)))
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05))
   (let ((content (with-current-buffer buf (buffer-string))))
     (with-current-buffer buf

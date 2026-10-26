@@ -234,7 +234,7 @@ fn div_cx403_process_filter_insert_buffer() {
       (proc (make-process :name "neo-cx403-proc"
                           :command '("sh" "-c" "echo hello from proc")
                           :connection-type 'pipe :buffer buf)))
-  (accept-process-output proc 2)
+  (neovm--oracle-settle-process proc 600)
   (prog1 (with-current-buffer buf
            (string-trim-right (buffer-string)))
     (kill-buffer buf)))

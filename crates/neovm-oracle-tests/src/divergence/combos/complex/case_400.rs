@@ -394,7 +394,7 @@ fn div_cx400_process_filter_multibyte_coding() {
                             :connection-type 'pipe :buffer nil
                             :coding 'utf-8-unix
                             :filter (lambda (p s) (push s received)))))
-    (accept-process-output proc 2))
+    (neovm--oracle-settle-process proc 600))
   (let ((output (apply #'concat (nreverse received))))
     (list (string-bytes output) (length output)
           (string= output "café世界\n"))))

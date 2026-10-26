@@ -15,7 +15,7 @@ fn div_cx412_process_send_string() {
 (let ((proc (make-process :name "neo-cx412-ps"
                           :command '("sh" "-c" "exit 42")
                           :connection-type 'pipe :buffer nil)))
-  (accept-process-output proc 2)
+  (neovm--oracle-settle-process proc 600)
   (let ((status (process-status proc)))
     (delete-process proc)
     status))

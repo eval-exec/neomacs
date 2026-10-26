@@ -303,7 +303,7 @@ fn div_cx100_mega_time_process_env_exitcode_buflocal_undo_invis_textprop() {
                   (string-trim (shell-command-to-string "echo $NEO_CX100"))))
        (exit-code (let ((p (make-process :name "neo-cx100-mega-ec"
                                           :command '("sh" "-c" "exit 13"))))
-                    (accept-process-output p 2)
+                    (neovm--oracle-settle-process p 600)
                     (process-exit-status p)))
        (t0 (encode-time 0 0 12 15 6 2024 nil)))
   (with-temp-buffer

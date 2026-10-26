@@ -196,7 +196,7 @@ fn div_cx422_process_filter_modify_buffer() {
                             :connection-type 'pipe :buffer buf)))
     (set-process-sentinel proc #'ignore)
     (set-process-query-on-exit-flag proc nil)
-    (accept-process-output proc 2)
+    (neovm--oracle-settle-process proc 600)
     (prog1 (with-current-buffer buf
              (string-trim-right (buffer-string)))
       (kill-buffer buf))))

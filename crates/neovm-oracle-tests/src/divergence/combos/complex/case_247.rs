@@ -161,7 +161,7 @@ fn div_cx247_process_mark_position_query() {
        (p (make-process :name "neo-cx247-mark"
                         :command '("echo" "mark")
                         :buffer buf)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((mark (process-mark p)))
     (prog1 (list (markerp mark)
@@ -188,7 +188,7 @@ fn div_cx247_send_string_and_eof_round_trip() {
                         :connection-type 'pipe)))
   (process-send-string p "alpha beta gamma\n")
   (process-send-eof p)
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((content (string-trim (with-current-buffer buf (buffer-string)))))
     (kill-buffer buf)

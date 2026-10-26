@@ -37,7 +37,7 @@ fn div_cx427_process_mark_filter_sentinel() {
 (let ((proc (make-process :name "neo-cx427-pm"
                           :command '("echo" "test")
                           :connection-type 'pipe :buffer nil)))
-  (accept-process-output proc 2)
+  (neovm--oracle-settle-process proc 600)
   (prog1 (list (markerp (process-mark proc))
                (functionp (process-filter proc))
                (functionp (process-sentinel proc)))

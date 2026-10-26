@@ -337,7 +337,7 @@ fn div_cx28_process_output_coding_system_after_set() {
     ;; about decoding after `set-process-coding-system`.
     (set-process-sentinel p #'ignore)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (list (buffer-string) (length (buffer-string)) (string-bytes (buffer-string))))
 "##,
         expect,

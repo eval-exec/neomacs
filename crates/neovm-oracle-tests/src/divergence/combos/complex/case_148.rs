@@ -14,7 +14,7 @@ fn div_cx148_process_mark_position_query() {
        (p (make-process :name "neo-cx148-mark"
                         :command '("echo" "hi")
                         :buffer buf)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((mark (process-mark p)))
     (prog1 (list (markerp mark)
@@ -79,7 +79,7 @@ fn div_cx148_process_filter_vs_buffer_append() {
                         :command '("echo" "via-filter")
                         :buffer buf
                         :filter (lambda (proc data) (push data filter-collected)))))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((buf-content (with-current-buffer buf (buffer-string))))
     (kill-buffer buf)
@@ -101,7 +101,7 @@ fn div_cx148_process_default_filter_appends_to_buffer() {
        (p (make-process :name "neo-cx148-defflt"
                         :command '("echo" "default-filter")
                         :buffer buf)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((content (string-trim (with-current-buffer buf (buffer-string)))))
     (kill-buffer buf)
@@ -124,12 +124,12 @@ fn div_cx148_set_process_buffer_change_after_creation() {
        (p (make-process :name "neo-cx148-switchbuf"
                         :command '("echo" "switch")
                         :buffer buf-a)))
-  (accept-process-output p 1)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((in-a (with-current-buffer buf-a (buffer-string))))
     (set-process-buffer p buf-b)
     (process-send-string p "second")
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05)
     (let ((in-a-after (with-current-buffer buf-a (buffer-string)))
           (in-b-after (with-current-buffer buf-b (buffer-string))))
@@ -156,7 +156,7 @@ fn div_cx148_process_stderr_separate_capture() {
                             :command '("sh" "-c" "echo OUT; echo ERR >&2")
                             :buffer stdout-buf
                             :stderr err-buf)))
-      (accept-process-output p 2)
+      (neovm--oracle-settle-process p 600)
       (sit-for 0.05)
       (let ((out (string-trim (with-current-buffer stdout-buf (buffer-string))))
             (err (string-trim (with-current-buffer err-buf (buffer-string)))))
@@ -182,7 +182,7 @@ fn div_cx148_process_stderr_to_filter() {
                               :command '("sh" "-c" "echo OUT; echo ERR >&2")
                               :buffer stdout-buf
                               :stderr (lambda (proc data) (push data stderr-data)))))
-        (accept-process-output p 2)
+        (neovm--oracle-settle-process p 600)
         (sit-for 0.05)
         (let ((out (string-trim (with-current-buffer stdout-buf (buffer-string))))
               (err (string-trim (apply #'concat (nreverse stderr-data)))))
@@ -224,8 +224,8 @@ fn div_cx148_process_connection_type_pipe_vs_pty_query() {
            (p-pty (make-process :name "neo-cx148-pty"
                                 :command '("echo" "pty")
                                 :connection-type 'pty)))
-      (accept-process-output p-pipe 1)
-      (accept-process-output p-pty 1)
+      (neovm--oracle-settle-process p-pipe 600)
+      (neovm--oracle-settle-process p-pty 600)
       (sit-for 0.05)
       (prog1 (list (processp p-pipe)
                    (processp p-pty)
@@ -258,7 +258,7 @@ fn div_cx148_process_with_marker_overlay_undo_narrow_mega() {
   (let ((p (make-process :name "neo-cx148-mega-p"
                          :command '("sh" "-c" "printf 'PROC'")
                          :buffer buf)))
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05))
   (let ((content (with-current-buffer buf (buffer-string))))
     (with-current-buffer buf

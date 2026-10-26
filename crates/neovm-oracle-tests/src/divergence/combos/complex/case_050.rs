@@ -75,7 +75,7 @@ fn div_cx50_process_output_buffer_overlay_narrow_textprop_undo_evaporate_mega() 
   (let ((p (make-process :name "neo-cx50-po" :command '("echo" "café")
                          :buffer buf)))
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (widen)
            (let ((content (buffer-string)))

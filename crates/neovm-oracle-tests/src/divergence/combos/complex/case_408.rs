@@ -189,7 +189,7 @@ fn div_cx408_process_list_live_delete() {
 (let ((proc (make-process :name "neo-cx408-pl"
                           :command '("sh" "-c" "exit 0")
                           :connection-type 'pipe :buffer nil)))
-  (accept-process-output proc 2)
+  (neovm--oracle-settle-process proc 600)
   (let ((live (process-live-p proc)))
     (delete-process proc)
     (list live

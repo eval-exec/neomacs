@@ -335,8 +335,8 @@ fn div_cx11_process_filter_accumulate_concat() {
                          :buffer nil
                          :filter (lambda (proc msg)
                                    (with-current-buffer buf (insert msg))))))
-    (accept-process-output p 1)
-    (accept-process-output p 0.5))
+    (neovm--oracle-settle-process p 600)
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf (buffer-string))
     (kill-buffer buf)))
 "##,

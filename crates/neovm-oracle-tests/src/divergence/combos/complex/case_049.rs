@@ -93,7 +93,7 @@ fn div_cx49_process_output_decode_encode_roundtrip_through_buffer_mega() {
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (with-current-buffer buf
     (let ((content (buffer-string)))
       (encode-coding-region 1 (point-max) 'utf-8)

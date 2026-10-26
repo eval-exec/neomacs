@@ -110,7 +110,7 @@ fn div_cx337_process_environment_override_with_multiple_vars() {
                             :buffer buf
                             :environment (append '("NEO_A=alpha" "NEO_B=beta" "NEO_C=gamma")
                                                  process-environment))))
-      (accept-process-output p 2)
+      (neovm--oracle-settle-process p 600)
       (sit-for 0.05)
       (let ((content (string-trim (with-current-buffer buf (buffer-string)))))
         (kill-buffer buf)
@@ -136,7 +136,7 @@ fn div_cx337_process_stderr_capture_separate_buffer() {
                             :command '("sh" "-c" "echo OUT; echo ERR >&2")
                             :buffer stdout-buf
                             :stderr stderr-buf)))
-      (accept-process-output p 2)
+      (neovm--oracle-settle-process p 600)
       (sit-for 0.05)
       (let ((out (string-trim (with-current-buffer stdout-buf (buffer-string))))
             (err (string-trim (with-current-buffer stderr-buf (buffer-string)))))
@@ -189,7 +189,7 @@ fn div_cx337_process_send_string_and_eof_round_trip() {
                         :connection-type 'pipe)))
   (process-send-string p "alpha beta gamma\n")
   (process-send-eof p)
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((content (string-trim (with-current-buffer buf (buffer-string)))))
     (kill-buffer buf)
@@ -230,7 +230,7 @@ fn div_cx337_process_mark_position_query() {
        (p (make-process :name "neo-cx337-mark"
                         :command '("echo" "mark-test")
                         :buffer buf)))
-  (accept-process-output p 2)
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((mark (process-mark p)))
     (prog1 (list (markerp mark)

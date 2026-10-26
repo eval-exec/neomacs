@@ -289,7 +289,7 @@ fn div_cx37_process_exit_code_consistency_call_vs_make() {
         r##"
 (let ((call-code (call-process "sh" nil nil nil "-c" "exit 3")))
   (let ((p (make-process :name "neo-cx37-ec" :command '("sh" "-c" "exit 3"))))
-    (accept-process-output p 2)
+    (neovm--oracle-settle-process p 600)
     (list call-code (process-exit-status p))))
 "##,
         expect,

@@ -126,7 +126,7 @@ fn div_cx41_process_buffer_marker_undo_overlay_narrow_mega() {
       (narrow-to-region 2 9)))
   (let ((p (make-process :name "neo-cx41-pm" :command '("echo" "out")
                          :buffer buf)))
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (widen)
            (list (buffer-string) (point-min) (point-max)

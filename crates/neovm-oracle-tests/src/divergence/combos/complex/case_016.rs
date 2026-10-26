@@ -182,7 +182,7 @@ fn div_cx16_process_send_buffer_narrow() {
                          :buffer nil :connection-type 'pipe)))
     (process-send-region p (point-min) (point-max))
     (process-send-eof p)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (widen)
   (buffer-string))
 "##,

@@ -369,7 +369,7 @@ fn div_cx22_process_list_filter_dead() {
     crate::common::assert_oracle_parity_expect(
         r##"
   (let ((p (make-process :name "neo-cx22-pl" :command '("true"))))
-    (accept-process-output p 2)
+    (neovm--oracle-settle-process p 600)
     (let ((live-before (process-live-p p)))
       (delete-process p)
       (let ((process-count 0))

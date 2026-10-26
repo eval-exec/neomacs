@@ -83,7 +83,7 @@ fn div_cx42_process_sentinel_make_vs_call_exit_detail() {
 (let (sentinel-ev)
   (let ((p (make-process :name "neo-cx42-se" :command '("sh" "-c" "exit 42")
                          :sentinel (lambda (proc event) (setq sentinel-ev event)))))
-    (accept-process-output p 2))
+    (neovm--oracle-settle-process p 600))
   (list sentinel-ev
         (call-process "sh" nil nil nil "-c" "exit 42")))
 "##,
@@ -202,7 +202,7 @@ fn div_cx42_process_output_buffer_overlay_textprop_mega() {
       (overlay-put ov 'face 'italic)))
   (let ((p (make-process :name "neo-cx42-po" :command '("echo" "output-line")
                          :buffer buf)))
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (list (buffer-string)
                  (text-properties-at 0)

@@ -400,7 +400,7 @@ fn div_cx27_process_send_string_then_query_buffer_size() {
     (set-process-sentinel p #'ignore)
     (process-send-string p "exactly 30 characters....\n")
     (process-send-eof p)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (list (buffer-size) (buffer-string)))
 "##,
         expect,

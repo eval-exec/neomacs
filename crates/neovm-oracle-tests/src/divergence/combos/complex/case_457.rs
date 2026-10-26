@@ -53,7 +53,7 @@ fn div_cx457_start_process_sync() {
   (let ((p (start-process "cx457" (current-buffer) "echo" "test")))
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
-    (accept-process-output p 2))
+    (neovm--oracle-settle-process p 600))
   (string-trim-right (buffer-string)))"##,
         expect,
     );

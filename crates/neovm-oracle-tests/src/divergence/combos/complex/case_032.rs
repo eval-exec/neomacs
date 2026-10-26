@@ -206,7 +206,7 @@ fn div_cx32_process_buffer_with_invisible_text_output() {
                          :buffer buf)))
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf (buffer-string))
     (kill-buffer buf)))
 "##,

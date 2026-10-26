@@ -110,7 +110,7 @@ fn div_cx8_process_sentinel_event_data() {
 (let (events)
   (let ((p (make-process :name "neo-cx8-sl" :command '("sh" "-c" "exit 3")
                          :sentinel (lambda (proc event) (push event events)))))
-    (accept-process-output p 2))
+    (neovm--oracle-settle-process p 600))
   (if events (car events) :no-event))
 "##,
         expect,

@@ -13,7 +13,7 @@ fn div_cx46_process_sentinel_filter_buffer_undo_mega() {
   (with-current-buffer buf (buffer-enable-undo) (insert "ORIG"))
   (let ((p (make-process :name "neo-cx46-sf" :command '("echo" "output")
                          :buffer buf :sentinel (lambda (proc ev) (setq se ev)))))
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (let ((content (buffer-string)))
              (undo)
@@ -302,7 +302,7 @@ fn div_cx46_process_send_string_newline_filter_buffer_textprop_mega() {
                                      (push str filter-data)))))
       (process-send-string p "line1\nline2\n")
       (process-send-eof p)
-      (accept-process-output p 1)))
+      (neovm--oracle-settle-process p 600)))
   (prog1 (with-current-buffer buf
            (widen)
            (list (buffer-string)
