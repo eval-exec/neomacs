@@ -106,3 +106,101 @@ fn a_bounded_last_row_does_not_own_unmeasured_source() {
     assert_eq!(lookup(&truncated, 50), Some(0));
     assert_eq!(lookup(&truncated, 51), None);
 }
+
+fn eob_overlay_snapshot(two_lines: bool, extra_rows: usize) -> WindowDisplaySnapshot {
+    use crate::window::DisplayRowEndSource;
+
+    let end = if two_lines { 8 } else { 4 };
+    let mut rows = Vec::new();
+    if two_lines {
+        rows.push(row(0, 1, 4));
+    }
+    let mut source = row(rows.len() as i64, if two_lines { 5 } else { 1 }, end);
+    source.end_source = DisplayRowEndSource::OverlayAfterString;
+    rows.push(source);
+    for _ in 0..extra_rows {
+        let mut inserted = row(rows.len() as i64, end, end);
+        inserted.end_source = DisplayRowEndSource::OverlayAfterString;
+        rows.push(inserted);
+    }
+    rows.push(DisplayRowSnapshot {
+        row: rows.len() as i64,
+        ..Default::default()
+    });
+    WindowDisplaySnapshot {
+        rows,
+        ..Default::default()
+    }
+}
+
+fn overlay_motion(
+    snapshot: &WindowDisplaySnapshot,
+    end: i64,
+    origin: i64,
+    lines: i64,
+) -> RowMotion {
+    use crate::buffer::{CharLen, CharPos0, CharRange};
+
+    vertical_motion_on_rows(
+        snapshot,
+        MotionRequest {
+            buffer: BufferId(1),
+            window: None,
+            origin: LispCharPos1::new(origin),
+            rows: lines,
+            goal_column: None,
+        },
+        AccessibleCharRange::new(CharRange::from_start_len(
+            CharPos0::new(0),
+            CharLen::new((end - 1) as usize),
+        )),
+        LineWrap::WindowWrap,
+    )
+}
+
+#[test]
+fn eob_overlay_motion_stops_at_the_source_boundary_without_counting_virtual_rows() {
+    for extra_rows in 0..3 {
+        let snapshot = eob_overlay_snapshot(false, extra_rows);
+        for origin in [1, 4] {
+            for lines in [1, 2, 10] {
+                let motion = overlay_motion(&snapshot, 4, origin, lines)
+                    .settled()
+                    .expect("EOB is covered even without a later buffer-source row");
+                assert_eq!((motion.moved, motion.target.as_i64()), (0, 4));
+            }
+            for lines in [0, -1] {
+                let motion = overlay_motion(&snapshot, 4, origin, lines)
+                    .settled()
+                    .expect("virtual EOB rows must not affect backward or zero motion");
+                assert_eq!((motion.moved, motion.target.as_i64()), (0, 1));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_source_row_ending_in_an_eob_overlay_keeps_its_line_start() {
+    for extra_rows in 0..3 {
+        let snapshot = eob_overlay_snapshot(true, extra_rows);
+        for (origin, lines, expected) in [
+            (1, 1, (1, 5)),
+            (1, 2, (1, 8)),
+            (8, 1, (0, 8)),
+            (8, -1, (-1, 1)),
+            (8, 0, (0, 5)),
+        ] {
+            let motion = overlay_motion(&snapshot, 8, origin, lines)
+                .settled()
+                .expect("motion resolves the source row before its virtual tail");
+            assert_eq!((motion.moved, motion.target.as_i64()), expected);
+        }
+    }
+}
+
+#[test]
+fn an_overlay_at_a_partial_query_boundary_still_requires_more_source_rows() {
+    let snapshot = eob_overlay_snapshot(false, 2);
+    assert!(overlay_motion(&snapshot, 8, 1, 1).settled().is_none());
+    assert!(overlay_motion(&snapshot, 8, 7, 1).settled().is_none());
+}

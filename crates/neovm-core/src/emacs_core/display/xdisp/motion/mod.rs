@@ -402,7 +402,22 @@ fn vertical_motion_on_rows(
 ) -> RowMotion {
     use crate::window::DisplayRowEndSource;
 
-    let rows = snapshot_text_rows(snapshot);
+    let mut rows = snapshot_text_rows(snapshot);
+    // Further newlines in an EOB overlay all carry the same source anchor.
+    // They add no reachable buffer row: GNU's motion stops at ZV without
+    // counting those virtual rows as additional source-line steps.
+    while rows.len() > 1 {
+        let last = rows[rows.len() - 1];
+        let previous = rows[rows.len() - 2];
+        if !last.end_source.is_overlay_string()
+            || !previous.end_source.is_overlay_string()
+            || last.end_buffer_pos != Some(accessible.end_lisp())
+            || previous.end_buffer_pos != Some(accessible.end_lisp())
+        {
+            break;
+        }
+        rows.pop();
+    }
     let Some(mut current_idx) =
         snapshot_row_index_for_pos_or_truncated_line(&rows, request.origin, accessible.end_lisp())
     else {
@@ -427,6 +442,12 @@ fn vertical_motion_on_rows(
     // original physical index so traversed replacement rows remain counted.
     let current = rows[current_idx];
     if request.rows > 0 && current.end_source.is_overlay_string() {
+        if current.end_buffer_pos == Some(accessible.end_lisp()) {
+            return RowMotion::AccessibleBoundary(MeasuredMotion {
+                target: accessible.end_lisp(),
+                moved: 0,
+            });
+        }
         let mut first_step = current_idx + 1;
         while first_step < rows.len() && rows[first_step].end_source.is_overlay_string() {
             first_step += 1;
@@ -502,10 +523,15 @@ fn vertical_motion_on_rows(
     }
     let mut target_idx = target_idx as usize;
     if request.rows > 0 {
-        while target_idx + 1 < rows.len() && rows[target_idx].end_source.is_overlay_string() {
+        while target_idx + 1 < rows.len()
+            && rows[target_idx].end_source.is_overlay_string()
+            && rows[target_idx].end_buffer_pos != Some(accessible.end_lisp())
+        {
             target_idx += 1;
         }
-        if rows[target_idx].end_source.is_overlay_string() {
+        if rows[target_idx].end_source.is_overlay_string()
+            && rows[target_idx].end_buffer_pos != Some(accessible.end_lisp())
+        {
             return RowMotion::NeedsMoreRows;
         }
     }

@@ -76,6 +76,8 @@ mod display_motion;
 #[cfg(test)]
 #[path = "../../tests/engine_fontification_motion_test.rs"]
 mod fontification_motion;
+#[path = "motion_overlay_eob_test.rs"]
+mod motion_overlay_eob_test;
 
 #[path = "chrome_memo_engine_test.rs"]
 mod chrome_memo_engine_test;
