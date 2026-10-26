@@ -27,8 +27,17 @@ thread_local! {
     /// Start without font metrics to avoid the ~500ms cosmic-text font
     /// database scan on first access. The GUI path enables cosmic metrics
     /// explicitly; the TTY path leaves it disabled.
-    pub static REDISPLAY_RUNTIME: RedisplayRuntime = RedisplayRuntime::new_without_font_metrics();
+    ///
+    /// The runtime lives on the heap behind a fixed-size handle. Stored inline,
+    /// its ~19 KB were part of every thread's static TLS block, so each new
+    /// field grew TLS and moved the `%fs` offsets of every later thread-local
+    /// (no-new-TLS-bytes rule; b184 measured +16 bytes from two new fields).
+    pub static REDISPLAY_RUNTIME: Box<RedisplayRuntime> =
+        Box::new(RedisplayRuntime::new_without_font_metrics());
 }
+
+// The thread-local slot holds only the handle, whatever `RedisplayRuntime` grows to.
+const _: () = assert!(std::mem::size_of::<Box<RedisplayRuntime>>() == std::mem::size_of::<usize>());
 
 // ── Layout helpers ────────────────────────────────────────────────────────
 
@@ -408,7 +417,7 @@ pub(crate) fn install_headless_tty_redisplay(
 ) {
     // No primary terminal exists. Explicit/attached TTYs own their renderers
     // and are the only valid destination for this redisplay.
-    REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
     evaluator.redisplay_fn = Some(Box::new(move |eval: &mut Context| {
         if let Some(render) = try_render_selected_auxiliary.as_mut() {
             render(eval);
@@ -444,7 +453,7 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
     // FontMetricsService so char_advance,
     // status_line_font_metrics, etc. fall back to the
     // char-cell grid.
-    REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
     evaluator.redisplay_fn = Some(Box::new(move |eval: &mut Context| {
         eval.setup_thread_locals();
         // The selected frame determines the output device.  An explicit

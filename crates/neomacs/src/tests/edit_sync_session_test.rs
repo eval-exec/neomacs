@@ -67,7 +67,7 @@ impl Session {
             ROWS as u32,
             bootstrap_tty_display_config(Interactivity::Interactive),
         );
-        REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+        REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
         let mut damage = TtyRif::new(COLS, ROWS);
         damage.set_damage_mode(TtyDamageMode::Verify);
         let mut session = Self {
@@ -83,7 +83,7 @@ impl Session {
     /// with a fresh runtime's full layout of the same state.
     pub(super) fn frame(&mut self, label: &str) -> LayoutStats {
         let (root, children) = run_tty_layout_tree(&mut self.eval).expect("a TTY presentation");
-        let stats = REDISPLAY_RUNTIME.with(RedisplayRuntime::last_layout_stats);
+        let stats = REDISPLAY_RUNTIME.with(|runtime| runtime.last_layout_stats());
         for rif in [&mut self.incremental, &mut self.damage] {
             rif.rasterize_presentations(&root, &children);
             rif.diff_and_render();

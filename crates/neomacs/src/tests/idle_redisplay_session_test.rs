@@ -20,7 +20,7 @@ fn an_idle_redisplay_skips_layout_in_a_real_session() {
         36,
         bootstrap_tty_display_config(Interactivity::Interactive),
     );
-    REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
     let layouts = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let counter = layouts.clone();
     eval.redisplay_fn = Some(Box::new(move |eval| {

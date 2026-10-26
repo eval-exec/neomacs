@@ -148,7 +148,7 @@ fn session_with(silent: bool, identity: TtyRowIdentity) -> Renderers {
         ROWS as u32,
         bootstrap_tty_display_config(Interactivity::Interactive),
     );
-    REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
     let mut r = Renderers::new(silent, identity);
     r.frame(&mut eval, "startup");
     r.step(&mut eval, "load source", SOURCE);
