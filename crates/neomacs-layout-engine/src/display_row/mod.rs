@@ -317,6 +317,14 @@ impl<'a> DisplayRowLispStringSourceRequest<'a> {
 }
 
 impl<'a> DisplayRowLispStringSourceRenderRequest<'a> {
+    pub(crate) fn with_chrome_primitive_reuse(
+        mut self,
+        reuse: builder::ChromePrimitiveReuse,
+    ) -> Self {
+        self.row_request.chrome_primitive_reuse = reuse;
+        self
+    }
+
     pub(crate) fn with_append_start_policy(
         mut self,
         append_start_policy: DisplayRowAppendStartPolicy,
@@ -556,6 +564,7 @@ struct DisplayRowRenderPlan<'a> {
     symbol_values: std::collections::HashMap<String, Value>,
     image_scale_environment: ImageScaleEnvironment,
     line_wrap: DisplayRowLineWrap,
+    chrome_primitive_reuse: builder::ChromePrimitiveReuse,
 }
 
 pub(crate) struct DisplayRowSourceRenderRequest<'a> {
@@ -574,6 +583,7 @@ pub(crate) struct DisplayRowSourceRenderRequest<'a> {
     /// renders into, resolved once from `WindowParams` and carried to the
     /// glyph writer so it can decide GNU's image-crop rule with it.
     line_wrap: DisplayRowLineWrap,
+    chrome_primitive_reuse: builder::ChromePrimitiveReuse,
 }
 
 impl<'a> DisplayRowSourceRenderRequest<'a> {
@@ -598,6 +608,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
             symbol_values: std::collections::HashMap::new(),
             image_scale_environment: ImageScaleEnvironment::default(),
             line_wrap,
+            chrome_primitive_reuse: builder::ChromePrimitiveReuse::Canonical,
         }
     }
 
@@ -630,6 +641,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
             symbol_values,
             image_scale_environment,
             line_wrap,
+            chrome_primitive_reuse: builder::ChromePrimitiveReuse::Canonical,
         }
     }
 
@@ -895,6 +907,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
             symbol_values: self.symbol_values,
             image_scale_environment: self.image_scale_environment,
             line_wrap: self.line_wrap,
+            chrome_primitive_reuse: self.chrome_primitive_reuse,
         }
     }
 }
@@ -1124,6 +1137,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             symbol_values,
             image_scale_environment,
             line_wrap,
+            chrome_primitive_reuse,
         } = plan;
         context.face_ids().reserve_after(base_face_id);
         let mut face_realizer = DisplayRowFaceRealizer::new(&mut *self.font_metrics);
@@ -1309,7 +1323,10 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                             area,
                             item_append_start_policy,
                         );
-                    row_writer.push_item(render_item.row_item_for_write())
+                    row_writer.push_item_with_chrome_reuse(
+                        render_item.row_item(),
+                        &chrome_primitive_reuse,
+                    )
                 }
                 DisplayRowItemMeasurement::TextRun(measurement) => {
                     let mut glyph_measurer = DisplayRowGlyphMeasurer::with_mode(
@@ -1331,7 +1348,10 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                             area,
                             item_append_start_policy,
                         );
-                    row_writer.push_item(render_item.row_item_for_write())
+                    row_writer.push_item_with_chrome_reuse(
+                        render_item.row_item(),
+                        &chrome_primitive_reuse,
+                    )
                 }
             };
             exact_integer_pen =

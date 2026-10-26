@@ -33,7 +33,9 @@
 //! * `verify`: a hit renders anyway and compares the two rows; a mismatch is
 //!   logged and counted, and the rendered row stands.
 
+mod glyph_reservoir;
 mod source_projection;
+pub(crate) use glyph_reservoir::ChromeGlyphReservoir;
 mod value_comparison;
 use source_projection::ChromeSourceProjection;
 pub(crate) use source_projection::{
@@ -127,6 +129,24 @@ pub(crate) fn chrome_row_role(kind: WindowChromeKind) -> GlyphRowRole {
     }
 }
 
+/// Whether this render has captured automatic composition rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChromeCompositionRules {
+    Absent,
+    Present,
+}
+
+impl From<&Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>>
+    for ChromeCompositionRules
+{
+    fn from(rules: &Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>) -> Self {
+        match rules {
+            Some(_) => Self::Present,
+            None => Self::Absent,
+        }
+    }
+}
+
 /// The inputs of one chrome row render other than the string itself.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ChromeRowInputs {
@@ -142,7 +162,7 @@ pub(crate) struct ChromeRowInputs {
     /// Identity of the buffer's `glyphless-char-display` table, if any. Its
     /// contents are covered by `char_table_revision`.
     pub(crate) glyphless_table_bits: Option<usize>,
-    pub(crate) automatic_composition: bool,
+    pub(crate) automatic_composition: ChromeCompositionRules,
     pub(crate) face_change_count: u64,
     pub(crate) char_table_revision: neovm_core::window::CharTableLayoutRevision,
     pub(crate) media_generation: u64,
@@ -154,11 +174,52 @@ pub(crate) struct ChromeRowInputs {
 /// Everything a chrome row render reads, as plain data.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ChromeRowFingerprint {
+    context: ChromeRowContext,
+    text: ChromeTextContent,
+}
+
+/// Shared paint/source context. Derived equality is the single admission rule
+/// for both full-row equality and primitive reuse when only text changes.
+#[derive(Clone, Debug, PartialEq)]
+struct ChromeRowContext {
     inputs: ChromeRowInputs,
-    text: Box<[u8]>,
-    multibyte: bool,
+    storage: ChromeTextStorage,
     props: Box<[u8]>,
     spans: Box<[ChromeSpanShape]>,
+    root_alias: ChromeRootAlias,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChromeTextContent(Box<[u8]>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChromeTextStorage {
+    Unibyte,
+    Multibyte,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChromeSourceIndex(usize);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChromeRootAlias {
+    Separate,
+    Source(ChromeSourceIndex),
+}
+
+impl From<usize> for ChromeSourceIndex {
+    fn from(index: usize) -> Self {
+        Self(index)
+    }
+}
+
+impl From<Option<ChromeSourceIndex>> for ChromeRootAlias {
+    fn from(index: Option<ChromeSourceIndex>) -> Self {
+        match index {
+            Some(index) => Self::Source(index),
+            None => Self::Separate,
+        }
+    }
 }
 
 /// One source span: where it sits in the output, where it starts in its
@@ -236,34 +297,34 @@ impl ChromeRowFingerprint {
                 (spans, root_index, None)
             }
         };
-        let mut text = Vec::with_capacity(string.as_bytes().len() + 8);
-        text.extend_from_slice(string.as_bytes());
-        text.extend_from_slice(
-            &root_index
-                .map_or(u64::MAX, |index| index as u64)
-                .to_le_bytes(),
-        );
         Some((
             Self {
-                inputs,
-                text: text.into_boxed_slice(),
-                multibyte: string.is_multibyte(),
-                props: encoder.finish(),
-                spans,
+                context: ChromeRowContext {
+                    inputs,
+                    storage: if string.is_multibyte() {
+                        ChromeTextStorage::Multibyte
+                    } else {
+                        ChromeTextStorage::Unibyte
+                    },
+                    props: encoder.finish(),
+                    spans,
+                    root_alias: ChromeRootAlias::from(root_index.map(ChromeSourceIndex::from)),
+                },
+                text: ChromeTextContent(string.as_bytes().into()),
             },
             bindings,
         ))
     }
 
     pub(crate) fn kind(&self) -> WindowChromeKind {
-        self.inputs.kind
+        self.context.inputs.kind
     }
 
     /// The first part of `self` that differs from `other`, for the miss
     /// diagnostics (`RUST_LOG=neomacs::chrome_memo=debug`).
     pub(crate) fn first_difference(&self, other: &Self) -> Option<&'static str> {
-        let a = &self.inputs;
-        let b = &other.inputs;
+        let a = &self.context.inputs;
+        let b = &other.context.inputs;
         [
             (a.kind != b.kind, "kind"),
             (
@@ -301,10 +362,13 @@ impl ChromeRowFingerprint {
             ),
             (a.media_generation != b.media_generation, "media_generation"),
             (a.symbol_values != b.symbol_values, "symbol_values"),
-            (self.text != other.text, "text"),
-            (self.multibyte != other.multibyte, "multibyte"),
-            (self.props != other.props, "props"),
-            (self.spans != other.spans, "spans"),
+            (
+                self.text != other.text || self.context.root_alias != other.context.root_alias,
+                "text",
+            ),
+            (self.context.storage != other.context.storage, "multibyte"),
+            (self.context.props != other.context.props, "props"),
+            (self.context.spans != other.context.spans, "spans"),
         ]
         .into_iter()
         .find_map(|(differs, name)| differs.then_some(name))
@@ -546,6 +610,15 @@ impl ChromeMemo {
                     .first_difference(fingerprint)
                     .unwrap_or("no retained row")
             })
+    }
+
+    /// An immutable primitive reservoir for this render's canonical source walk.
+    /// Full-row hits return before requesting this narrower miss-path admission.
+    pub(crate) fn glyph_reservoir(
+        &self,
+        fingerprint: &ChromeRowFingerprint,
+    ) -> Option<ChromeGlyphReservoir> {
+        ChromeGlyphReservoir::capture(self, fingerprint)
     }
 
     /// The previous row for `fingerprint`'s kind, when it was rendered from

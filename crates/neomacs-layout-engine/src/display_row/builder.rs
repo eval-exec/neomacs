@@ -34,6 +34,15 @@ use neomacs_display_protocol::types::FaceId;
 
 use crate::display_text_run_measurement::DisplayTextRunMeasurement;
 
+/// A retained owner is supplied only after the ordinary whole-row memo misses.
+/// Natural source requests retain the canonical append path.
+#[derive(Default)]
+pub(crate) enum ChromePrimitiveReuse {
+    #[default]
+    Canonical,
+    Retained(crate::incremental_layout::chrome_memo::ChromeGlyphReservoir),
+}
+
 /// Stamp one source item's affine GNU box-run terminals onto the concrete
 /// glyph slice it produced. Padding never owns an edge; clipping can suppress
 /// the source end until the item is completed on a later row.
@@ -1981,6 +1990,156 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
     pub(crate) fn with_buffer_tab_admission(mut self) -> Self {
         self.buffer_tab_admission = true;
         self
+    }
+
+    pub(crate) fn push_item_with_chrome_reuse(
+        &mut self,
+        item: &DisplayItem,
+        reuse: &ChromePrimitiveReuse,
+    ) -> DisplayRowAppendProgress {
+        match reuse {
+            ChromePrimitiveReuse::Canonical => {}
+            ChromePrimitiveReuse::Retained(reservoir) => {
+                if let Some(progress) = self.try_push_reused_chrome_text(item, reservoir) {
+                    return progress;
+                }
+            }
+        }
+        self.push_item(item.clone())
+    }
+
+    /// Rebind independent paint primitives through the current canonical item.
+    /// Validation finishes before the receiving row or its token tables change.
+    fn try_push_reused_chrome_text(
+        &mut self,
+        item: &DisplayItem,
+        reservoir: &crate::incremental_layout::chrome_memo::ChromeGlyphReservoir,
+    ) -> Option<DisplayRowAppendProgress> {
+        use neovm_core::buffer::{CharLen, CharPos0, CharRange, EmacsByteLen};
+        let DisplayItemKind::TextRun(run) = &item.kind else {
+            return None;
+        };
+        match run.composition {
+            DisplayTextComposition::UnicodeFallback | DisplayTextComposition::Independent => {}
+            DisplayTextComposition::Automatic(_) => return None,
+        }
+        if item.layout != DisplayItemLayout::default()
+            || self.writer.area != GlyphArea::Text
+            || self.text_run_measurement.is_some()
+        {
+            return None;
+        }
+        let (
+            DisplaySourcePosition::LispString {
+                source_id,
+                char_index: start,
+                byte_index: start_byte,
+            },
+            DisplaySourcePosition::LispString {
+                source_id: end_source,
+                char_index: end,
+                byte_index: end_byte,
+            },
+        ) = (&item.span.start, &item.span.end)
+        else {
+            return None;
+        };
+        if source_id.get() != super::DisplayRowLispStringSourceId::ROOT.raw()
+            || source_id != end_source
+            || start != start_byte
+            || end != end_byte
+            || end < start
+        {
+            return None;
+        }
+        let range = CharRange::new(CharPos0::new(*start), CharPos0::new(*end));
+        let face_id = self.writer.face_id(item.face);
+        let glyphs = reservoir.glyphs_for(range, &run.text, face_id)?;
+        // Run boundaries may change when a neighboring character becomes a
+        // special display item. Only the existing pure fixed-cell capability
+        // certifies that reused advances do not depend on prior shaping runs.
+        let fixed = self
+            .writer
+            .glyph_measurer
+            .as_deref()?
+            .fixed_terminal_cell_advances(face_id, self.writer.layout.char_width_px.max(1.0))?;
+        let advance = fixed.advance_for_columns(1)?;
+        if glyphs.iter().any(|glyph| glyph.pixel_width != advance) {
+            return None;
+        }
+        match run.composition {
+            DisplayTextComposition::UnicodeFallback => {
+                let first = run.text.chars().next()?;
+                if self.writer.text_char_state(first).kind()
+                    != DisplayRowTextCharState::independent(first).kind()
+                {
+                    return None;
+                }
+            }
+            DisplayTextComposition::Independent => {}
+            DisplayTextComposition::Automatic(_) => return None,
+        }
+        let end_x = glyphs
+            .iter()
+            .fold(self.position.x_px(), |x, glyph| x + glyph.pixel_width);
+        if !self.position.x_px().is_finite() || !end_x.is_finite() || end_x > self.max_x_px {
+            return None;
+        }
+
+        let start_position = self.position;
+        let glyph_start = self.area_len();
+        let mapping = DisplayTextSourceMapping::NaturalText;
+        let source = mapping.resolve(&item.span, self.writer.row);
+        let pointer_metadata = item
+            .pointer_appearance
+            .as_ref()
+            .and_then(|appearance| appearance.glyph_metadata())
+            .and_then(|appearance| self.writer.row.intern_pointer_appearance(appearance));
+        let mut metrics = DisplayRowWriteMetrics::default();
+        let mut slots = Vec::with_capacity(glyphs.len());
+        for (ordinal, retained) in glyphs.iter().enumerate() {
+            // Admission proves one printable ASCII byte, source character and
+            // primitive per ordinal. Convert at the existing untyped mapping API.
+            let char_offset = CharLen::new(ordinal);
+            let byte_offset = EmacsByteLen::new(ordinal);
+            let mut glyph = retained.clone();
+            glyph.provenance = source.provenance(char_offset.get());
+            glyph.pointer_appearance = pointer_metadata;
+            let written = DisplayRowWriteMetrics::from_glyphs(
+                std::slice::from_ref(&glyph),
+                self.writer.layout.char_width_px,
+            );
+            slots.push(
+                DisplayRowGlyphSlot::with_pointer_appearance(
+                    mapping.slot_source(&item.span.start, char_offset.get(), byte_offset.get()),
+                    self.position.x_px(),
+                    self.position.col(),
+                    written.width_px(),
+                    written.width_cols(),
+                    item.pointer_appearance.clone(),
+                )
+                .with_text_glyph_offset(char_offset.get()),
+            );
+            self.writer.row.glyphs[GlyphArea::Text.index()].push(glyph);
+            self.advance(written);
+            metrics.add(written);
+        }
+        self.writer.row.displays_text = true;
+        self.writer
+            .apply_item_layout_since(glyph_start, face_id, item.layout);
+        self.apply_item_box_run_topology(
+            glyph_start,
+            item.box_run_membership,
+            item.box_vertical_edges,
+            true,
+        );
+        Some(DisplayRowAppendProgress::new(
+            start_position,
+            self.position,
+            metrics,
+            DisplayRowAppendStatus::Complete,
+            slots,
+        ))
     }
 
     pub(crate) fn push_item(&mut self, item: DisplayItem) -> DisplayRowAppendProgress {

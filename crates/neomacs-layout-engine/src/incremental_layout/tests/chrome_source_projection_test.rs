@@ -18,7 +18,8 @@ fn inputs() -> ChromeRowInputs {
         base_face: ResolvedFace::default(),
         image_scale_environment: ImageScaleEnvironment::default(),
         glyphless_table_bits: None,
-        automatic_composition: false,
+        automatic_composition:
+            crate::incremental_layout::chrome_memo::ChromeCompositionRules::Absent,
         face_change_count: 0,
         char_table_revision: neovm_core::window::CharTableLayoutRevision::default(),
         media_generation: 0,

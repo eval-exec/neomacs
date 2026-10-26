@@ -175,6 +175,69 @@ fn a_mode_line_whose_text_changed_renders_again() {
 }
 
 #[test]
+fn chrome_partial_reuse_keeps_fresh_eval_roots_help_and_width_transitions() {
+    let _memo = MemoGuard::set(ChromeMemoMode::On);
+    let mut frame = MemoFrame::new(120, 8);
+    let mut canonical = MemoFrame::new(120, 8);
+    for frame in [&mut frame, &mut canonical] {
+        frame
+            .eval
+            .eval_str(
+                r#"
+      (set (make-local-variable 'mode-line-format)
+        '("-" (:eval (progn
+                        (setq neo-evals (1+ neo-evals))
+                        (garbage-collect)
+                        (propertize (copy-sequence "stable")
+                                    'face 'bold 'mouse-face 'highlight
+                                    'help-echo neo-help
+                                    'local-map (list 'keymap))))
+          " L%l " (:propertize "tail" face (:box (:line-width -1)))))
+    "#,
+            )
+            .expect("collecting formatter");
+        frame.step("(set-buffer-modified-p t)");
+    }
+    let count = |frame: &mut MemoFrame| {
+        frame
+            .eval
+            .eval_str("neo-evals")
+            .expect("count")
+            .as_int()
+            .expect("integer")
+    };
+    for line in [9, 10, 11, 99, 100, 101] {
+        let before = count(&mut frame);
+        let canonical_before = count(&mut canonical);
+        let form = format!(
+            "(progn (setq neo-help \"help-{line}\") (goto-char (point-min)) (forward-line {}) (set-buffer-modified-p t))",
+            line - 1
+        );
+        {
+            let _canonical = MemoGuard::set(ChromeMemoMode::Off);
+            canonical.step(&form);
+        }
+        {
+            let _reuse = MemoGuard::set(ChromeMemoMode::On);
+            frame.step(&form);
+        }
+        // A fresh layout may settle more than once; compare the canonical
+        // sequence rather than inventing a fixed callback count for it.
+        assert_eq!(
+            count(&mut frame) - before,
+            count(&mut canonical) - canonical_before,
+            "line {line}: callback count"
+        );
+        assert!(
+            frame
+                .chrome_strings()
+                .iter()
+                .any(|(_, _, help)| help.contains(&format!("help-{line}")))
+        );
+    }
+}
+
+#[test]
 fn a_changed_help_echo_is_presented_from_this_evaluation() {
     let _memo = MemoGuard::set(ChromeMemoMode::On);
     let mut frame = MemoFrame::new(30, 10);
