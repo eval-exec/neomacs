@@ -13,6 +13,11 @@ use std::process::Command;
 
 use tempfile::{NamedTempFile, TempDir};
 
+#[path = "form_source.rs"]
+mod form_source;
+
+use form_source::{FormSourceCheck, check_form_source};
+
 /// Locale used when recording the checked-in GNU Emacs expectations.
 ///
 /// Collation is locale-sensitive, so inheriting the developer's locale would
@@ -37,6 +42,14 @@ const SNAPSHOT_HOST: &str = "oracle-host";
 
 pub(crate) struct OracleSandbox {
     case_root: TempDir,
+    /// Private temporary-file root for this case.
+    ///
+    /// This deliberately does not inherit the outer `TMPDIR`: when a suite
+    /// runs with `TMPDIR=/tmp`, inheriting it makes the snapshot normalizer
+    /// rewrite every literal `/tmp` in a form's output. A per-case root keeps
+    /// literal paths observable while still giving `temporary-file-directory`
+    /// a stable `[SESSION-TMPDIR]` token.
+    session_root: TempDir,
     home_root: PathBuf,
     form_path: PathBuf,
     load_root: PathBuf,
@@ -83,8 +96,10 @@ enum CaseFilesystemPolicy {
 
 impl OracleSandbox {
     pub(crate) fn new(form: &str, load_files: &[&str], load_root: &Path) -> Result<Self, String> {
+        validate_form_source(form)?;
         let project_root = project_root();
         let case_root = create_case_tempdir_in(&project_root)?;
+        let session_root = create_case_tempdir_in(&project_root)?;
         let home_root = case_root.path().join("home");
         fs::create_dir(&home_root).map_err(|error| {
             format!(
@@ -100,6 +115,7 @@ impl OracleSandbox {
 
         Ok(Self {
             case_root,
+            session_root,
             home_root,
             form_path,
             load_root: load_root.to_path_buf(),
@@ -180,7 +196,10 @@ impl OracleSandbox {
                 Some(scratch_root.as_os_str().to_os_string())
             }
             CaseFilesystemPolicy::Private | CaseFilesystemPolicy::ExposedAsTestTempDirectory => {
-                explicit_tmpdir.or_else(|| std::env::var_os("TMPDIR"))
+                let tmpdir = explicit_tmpdir
+                    .unwrap_or_else(|| self.session_root.path().as_os_str().to_os_string());
+                command.env("TMPDIR", &tmpdir);
+                Some(tmpdir)
             }
         };
         let load_files = self
@@ -220,6 +239,51 @@ impl OracleSandbox {
     pub(crate) fn create_fixture_tempdir() -> Result<TempDir, String> {
         create_case_tempdir_in(&project_root())
     }
+}
+
+/// Validate a form source before any engine receives it.
+///
+/// `OracleSandbox::new` calls this for every evaluation.  Assertion helpers
+/// that can return before constructing a sandbox (the AOT battery when it is
+/// disabled) call it directly so a skipped test cannot hide a malformed form.
+pub(crate) fn validate_form_source(form: &str) -> Result<(), String> {
+    match check_form_source(form) {
+        FormSourceCheck::Complete => Ok(()),
+        rejected => Err(rejected_form_source_error(form, rejected)),
+    }
+}
+
+/// Error for a form source that GNU's reader would not consume completely.
+///
+/// The test name comes from the test harness thread (nextest/libtest name each
+/// case thread after its test), and the source prefix makes the defect
+/// actionable even when a runner executes a test on an unnamed thread.
+fn rejected_form_source_error(form: &str, rejected: FormSourceCheck) -> String {
+    let test = std::thread::current()
+        .name()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "<unknown test>".to_owned());
+    format!(
+        "oracle form source rejected for test `{test}`: {rejected}\n\
+         form starts: {}\n\
+         The oracle eval loop reads top-level forms until end-of-file; a source it \
+         cannot read completely is never evaluated and would leave a stale expectation. \
+         Balance the embedded Lisp or remove the trailing text.",
+        form_source_excerpt(form)
+    )
+}
+
+fn form_source_excerpt(form: &str) -> String {
+    let mut chars = form.chars();
+    let mut excerpt: String = chars.by_ref().take(96).collect();
+    if chars.next().is_some() {
+        excerpt.push('…');
+    }
+    excerpt
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 pub(crate) fn project_root() -> PathBuf {

@@ -1255,6 +1255,8 @@ fn final_aot_loads(stats: &str) -> Option<u64> {
 /// never reached the preload, P4.2 B2); this makes that a failure.
 pub(crate) fn assert_oracle_parity_under_aot_expect(form: &str, expected: expect_test::Expect) {
     ensure_nonempty_form(form).expect("form should not be empty");
+    oracle_sandbox::validate_form_source(form)
+        .expect("oracle form source should read completely");
     let eval_program = EvalProgram::Normalized;
     let mode = OracleMode::from_env();
     // Refreshing the GNU expectation needs no Neomacs binary.
