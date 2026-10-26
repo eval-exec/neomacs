@@ -1210,6 +1210,21 @@ pub(crate) fn signal_with_data(symbol: impl IntoConditionSym, data: Value) -> Fl
     signal_with_data_internal(symbol, data, false)
 }
 
+/// GNU `eval.c` `signal_error`: signal `error` with MESSAGE and ARG.
+///
+/// A proper-list ARG contributes its elements to the signal data; any other
+/// ARG is a single datum.  GNU's `signal_error` is used by special forms that
+/// pass a malformed subform (for example `let`'s multi-value binding), and the
+/// flattened data is observable through `condition-case`'s error object.
+pub(crate) fn signal_error_with_arg(message: &str, arg: Value) -> Flow {
+    let mut data = vec![Value::string(message)];
+    match super::value::list_to_vec(&arg) {
+        Some(items) => data.extend(items),
+        None => data.push(arg),
+    }
+    signal(LispCondition::Error, data)
+}
+
 fn signal_with_data_internal(
     symbol: impl IntoConditionSym,
     data: Value,

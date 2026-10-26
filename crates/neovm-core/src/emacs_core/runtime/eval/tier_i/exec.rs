@@ -1237,12 +1237,9 @@ impl Context {
                     value_tail = value_tail.cons_cdr();
                     if !value_tail.is_nil() {
                         context.bc_buf.truncate(temps_base);
-                        return Err(signal(
-                            LispCondition::Error,
-                            vec![
-                                Value::string("`let' bindings can have only one value-form"),
-                                element,
-                            ],
+                        return Err(signal_error_with_arg(
+                            "`let' bindings can have only one value-form",
+                            element,
                         ));
                     }
                     let init = match compiled.and_then(|c| c.init.as_ref()) {
@@ -1456,12 +1453,9 @@ impl Context {
                     let init_form = value_tail.cons_car();
                     value_tail = value_tail.cons_cdr();
                     if !value_tail.is_nil() {
-                        return Err(signal(
-                            LispCondition::Error,
-                            vec![
-                                Value::string("`let' bindings can have only one value-form"),
-                                binding,
-                            ],
+                        return Err(signal_error_with_arg(
+                            "`let' bindings can have only one value-form",
+                            binding,
                         ));
                     }
                     match compiled.and_then(|c| c.init.as_ref()) {
