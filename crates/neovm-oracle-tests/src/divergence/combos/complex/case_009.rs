@@ -328,23 +328,33 @@ fn div_cx9_unicode_charset_vs_eightbit_in_decode() {
 #[test]
 fn div_cx9_multi_process_output_ordering() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (\"first\" \"second\" \"third\")""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"neo-cx9-mp0\" \"first\") (\"neo-cx9-mp1\" \"second\") (\"neo-cx9-mp2\" \"third\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let (results)
+(let (procs)
   (dolist (cmd '(("echo" "first") ("echo" "second") ("echo" "third")))
-    (let ((buf (generate-new-buffer " *neo-cx9-mp*")))
-      (make-process :name (format "neo-cx9-mp%d" (length results))
-                    :command cmd :buffer buf :connection-type 'pipe
-                    :sentinel (lambda (proc ev)
-                                (when (eq (process-status proc) 'exit)
-                                  (push (with-current-buffer (process-buffer proc)
-                                          (string-trim (buffer-string)))
-                                        results)
-                                  (kill-buffer (process-buffer proc))))))
+    (push (make-process :name (format "neo-cx9-mp%d" (length procs))
+                        :command cmd
+                        :buffer (generate-new-buffer " *neo-cx9-mp*")
+                        :connection-type 'pipe
+                        :sentinel #'ignore)
+          procs)
     (sit-for 0.01))
-  (sit-for 0.1)
-  (nreverse results))
+  (setq procs (nreverse procs))
+  ;; The order in which concurrently running children are reaped is not
+  ;; defined in either engine.  Wait for every child to exit, then report
+  ;; each child's output keyed by its process name in start order.
+  (dolist (proc procs)
+    (while (process-live-p proc) (accept-process-output proc 0.05)))
+  (dolist (proc procs)
+    (while (accept-process-output proc 0)))
+  (mapcar (lambda (proc)
+            (list (process-name proc)
+                  (with-current-buffer (process-buffer proc)
+                    (string-trim (buffer-string)))))
+          procs))
 "##,
         expect,
     );
