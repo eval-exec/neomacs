@@ -1501,11 +1501,49 @@ impl Drop for StoppedAllocatorState<'_> {
     }
 }
 
+/// A consumed, heap-identified census of every published owner's young log.
+/// The stopped job still retains its real stop/proof; this receipt does not
+/// grant heap access and cannot survive as a reusable permission.
+#[must_use]
+pub(super) struct CapturedParallelYoung {
+    heap: HeapIdentity,
+    _confined: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl CapturedParallelYoung {
+    pub(super) fn check_heap(self, heap: HeapIdentity) -> Result<(), YoungRegistryError> {
+        if self.heap != heap {
+            return Err(YoungRegistryError::WrongHeap);
+        }
+        Ok(())
+    }
+}
+static_assertions::assert_not_impl_any!(CapturedParallelYoung: Send, Sync, Clone, Copy);
+
 impl ConsStopAll<'_> {
     /// Capture every owner's pending young blocks before an eager major.
     /// Existing promotion clears their flags only after marking finishes.
     #[cold]
     pub(in crate::tagged::gc) fn capture_parallel_major(
+        &mut self,
+        logs: &mut impl ParallelYoungLogs,
+    ) -> Result<(), YoungRegistryError> {
+        self.capture_parallel_young(logs)
+    }
+
+    /// Both cycle kinds consume the same complete pending census. Promotion
+    /// chooses the sweep scope later; capture never clears a young flag.
+    pub(in crate::tagged::gc) fn capture_parallel_minor(
+        &mut self,
+        logs: &mut impl ParallelYoungLogs,
+    ) -> Result<CapturedParallelYoung, YoungRegistryError> {
+        self.capture_parallel_young(logs)?;
+        Ok(CapturedParallelYoung {
+            heap: self.state.identity,
+            _confined: std::marker::PhantomData,
+        })
+    }
+
+    fn capture_parallel_young(
         &mut self,
         logs: &mut impl ParallelYoungLogs,
     ) -> Result<(), YoungRegistryError> {

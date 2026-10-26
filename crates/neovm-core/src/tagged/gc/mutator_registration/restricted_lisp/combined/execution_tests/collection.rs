@@ -1,5 +1,7 @@
 //! Real independent owners, exact root families, and completed full jobs.
 //! Counterfactual omissions inspect copied ledgers, never a damaged live heap.
+mod minor_adapter;
+
 use super::*;
 use crate::tagged::gc::mutator_registration::image::PublishedGcWork;
 use std::sync::mpsc;
@@ -40,6 +42,7 @@ enum Scenario {
     Transfer,
     Noop,
     Unwind,
+    MinorAdapter,
 }
 enum GraphSetup {
     Empty,
@@ -254,7 +257,9 @@ fn clear_operands() -> Vec<CombinedInstruction> {
 fn program(role: Role, scenario: Scenario) -> CombinedTape {
     match scenario {
         Scenario::Transfer => {}
-        Scenario::Noop | Scenario::Unwind => return tape(vec![CombinedInstruction::Safepoint; 4]),
+        Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
+            return tape(vec![CombinedInstruction::Safepoint; 4]);
+        }
     }
     let mut code = Vec::new();
     for phase in [
@@ -524,6 +529,10 @@ fn cohort(
                             panic!("controlled cohort unwind after native publication")
                         }
                         Scenario::Transfer | Scenario::Noop => {}
+                        Scenario::MinorAdapter => {
+                            minor_adapter::exercise(&era, graph, cohort, &commands, &await_all);
+                            return;
+                        }
                     }
                     for phase in [
                         Phase::Function,
@@ -537,7 +546,7 @@ fn cohort(
                         await_all();
                         match scenario {
                             Scenario::Noop => continue,
-                            Scenario::Transfer | Scenario::Unwind => {}
+                            Scenario::Transfer | Scenario::Unwind | Scenario::MinorAdapter => {}
                         }
                         match phase {
                             Phase::Selected => {}
@@ -727,4 +736,41 @@ fn p3sym_c6_cohort_unwind_releases_every_owner() {
         error.downcast_ref::<&str>(),
         Some(&"controlled cohort unwind after native publication")
     );
+}
+
+#[test]
+fn p3sym_c6_minor_adapter_two_plain() {
+    cohort(
+        PlainSymbolBacking::Unprojected,
+        Cohort::Two,
+        Scenario::MinorAdapter,
+    )
+    .unwrap();
+}
+#[test]
+fn p3sym_c6_minor_adapter_two_projected() {
+    cohort(
+        PlainSymbolBacking::Projected,
+        Cohort::Two,
+        Scenario::MinorAdapter,
+    )
+    .unwrap();
+}
+#[test]
+fn p3sym_c6_minor_adapter_four_plain() {
+    cohort(
+        PlainSymbolBacking::Unprojected,
+        Cohort::Four,
+        Scenario::MinorAdapter,
+    )
+    .unwrap();
+}
+#[test]
+fn p3sym_c6_minor_adapter_four_projected() {
+    cohort(
+        PlainSymbolBacking::Projected,
+        Cohort::Four,
+        Scenario::MinorAdapter,
+    )
+    .unwrap();
 }

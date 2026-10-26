@@ -230,6 +230,15 @@ pub(crate) enum MinorCollectionAdmissionError {
 
 static_assertions::assert_impl_all!(MinorCollectionAdmissionError: Send, Sync, std::fmt::Debug);
 
+/// Parallel capture failures remain separate from the legacy admission enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub(super) enum ParallelMinorAdmissionError {
+    #[error(transparent)]
+    Admission(#[from] MinorCollectionAdmissionError),
+    #[error(transparent)]
+    Capture(#[from] super::young_registry::YoungRegistryError),
+}
+
 impl TaggedHeap {
     /// Future global stop-all-mutators handshake belongs before this entry:
     /// join the collector, park every mutator and wait for all barrier appends.
@@ -240,11 +249,7 @@ impl TaggedHeap {
     pub(crate) fn begin_minor_collection(&mut self) -> Result<(), MinorCollectionAdmissionError> {
         // Admission precedes EVERY mutation, even for a GEN0 heap. Joining a
         // worker alone does not finish its major's residual mark or sweep.
-        facade_mark::CollectorQuiescence::check(self)
-            .map_err(|_| MinorCollectionAdmissionError::CollectorBusy)?;
-        if !self.generational.enabled {
-            return Err(MinorCollectionAdmissionError::GenerationalDisabled);
-        }
+        self.check_minor_admission()?;
         debug_assert!(
             !self.concurrent_mark_running
                 && !self.mark_in_progress
@@ -276,6 +281,54 @@ impl TaggedHeap {
                     .expect("minor capture uses this heap canonical registry");
             })
             .expect("minor admission returned every young-only loan");
+        self.begin_captured_minor_marking();
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub(super) fn check_minor_admission(&mut self) -> Result<(), MinorCollectionAdmissionError> {
+        facade_mark::CollectorQuiescence::check(self)
+            .map_err(|_| MinorCollectionAdmissionError::CollectorBusy)?;
+        if !self.generational.enabled {
+            return Err(MinorCollectionAdmissionError::GenerationalDisabled);
+        }
+        Ok(())
+    }
+
+    /// The real parallel job already captured all published young payloads.
+    /// Never enter the serial registry again: it cannot resolve peer IDs.
+    #[cold]
+    pub(super) fn begin_parallel_minor_collection(
+        &mut self,
+        capture: super::cons_allocator::CapturedParallelYoung,
+        _proof: &scan_contract::ParallelStoppedMutatorsProof<'_>,
+    ) -> Result<(), ParallelMinorAdmissionError> {
+        self.check_minor_admission()?;
+        capture.check_heap(self.heap_identity())?;
+        if self.generational.verify {
+            // SAFETY: the matching real parallel proof remains borrowed by
+            // this job; all regions are closed, and capture already drained
+            // EVERY peer payload into allocator-owned mark work. This bridge
+            // only verifies the now-canonical work, never captures peer logs.
+            unsafe { scan_contract::SingleMutatorWorld::from_heap(self) }.with_stopped_heap(
+                |heap, proof| {
+                    let logs = super::young_registry::StoppedYoungLogs::new(
+                        &mut heap._satb_layout_reserve,
+                        proof,
+                    )?;
+                    // SAFETY: the same complete stopped extent and unique
+                    // heap loan exclude all allocators throughout this check.
+                    let allocator = unsafe { heap.cons_allocator.stopped_world() };
+                    allocator.verify_young_at_begin(&heap.cons_blocks, &logs)
+                },
+            )??;
+        }
+        self.begin_captured_minor_marking();
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn begin_captured_minor_marking(&mut self) {
         self.generational.cycle = GenerationCycle::Minor;
         self.generational.promo.clear();
         self.incremental_mark_us = 0;
@@ -283,7 +336,6 @@ impl TaggedHeap {
         self.pace_mark_start_bytes = self.bytes_since_gc();
         self.begin_collection_with(false);
         self.mark_in_progress = true;
-        Ok(())
     }
 
     /// Marking and all fixpoints execute on the stopped mutator, then eager

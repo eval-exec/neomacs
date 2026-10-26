@@ -159,6 +159,10 @@ fn parallel_major_refuses_missing_peer_before_draining_either_payload() {
                 stopped.capture_parallel_major(&mut logs),
                 Err(YoungRegistryError::UnknownRegistration)
             ));
+            assert!(matches!(
+                stopped.capture_parallel_minor(&mut logs),
+                Err(YoungRegistryError::UnknownRegistration)
+            ));
             assert_eq!(logs.legacy.blocks(), &bases[..1]);
             assert_eq!(logs.peer.blocks(), &bases[1..]);
             assert!(stopped.state.mark_work.is_empty());

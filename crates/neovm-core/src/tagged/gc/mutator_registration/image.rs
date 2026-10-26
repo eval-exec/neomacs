@@ -435,7 +435,7 @@ impl PublishedGcImage {
         );
     }
 
-    pub(super) fn finish_major_response(&mut self, generational: bool) {
+    pub(super) fn finish_collection_response(&mut self, generational: bool) {
         // This is a charged live balance, not lifetime allocation history or
         // object ownership. Owner 0 retains the exact post-sweep aggregate;
         // peers start accruing new local credits after this response.

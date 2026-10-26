@@ -1,5 +1,8 @@
 //! Keeper-only full collection over owned publications. No heap loan escapes.
-use super::super::cons_allocator::ParallelYoungLogs;
+use super::super::cons_allocator::{CapturedParallelYoung, ParallelYoungLogs};
+use super::super::generational::{
+    GenerationCycle, MinorCollectionAdmissionError, ParallelMinorAdmissionError,
+};
 use super::super::young_registry::YoungBlockLog;
 use super::super::*;
 use super::image::{CollectionHistory, CollectionWork};
@@ -11,6 +14,33 @@ use super::*;
 mod weak_policy_tests;
 
 pub type CollectionError = RendezvousError;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum MinorCollectionError {
+    #[error("minor collection requires the generational collector")]
+    GenerationalDisabled,
+    #[error(transparent)]
+    Collection(#[from] CollectionError),
+}
+
+static_assertions::assert_impl_all!(MinorCollectionError: Send, Sync, Copy);
+
+fn minor_admission(error: ParallelMinorAdmissionError) -> CollectionError {
+    match error {
+        ParallelMinorAdmissionError::Admission(MinorCollectionAdmissionError::CollectorBusy) => {
+            RendezvousError::Busy
+        }
+        ParallelMinorAdmissionError::Admission(
+            MinorCollectionAdmissionError::GenerationalDisabled,
+        ) => RendezvousError::Publication,
+        ParallelMinorAdmissionError::Capture(error) => error.into(),
+    }
+}
+
+enum YoungCapture {
+    Major,
+    Minor(CapturedParallelYoung),
+}
 
 impl From<YoungRegistryError> for RendezvousError {
     fn from(error: YoungRegistryError) -> Self {
@@ -249,6 +279,47 @@ impl<'heap> ParallelHeapEra<'heap> {
         &self,
         stopped: &mut AllStopped<'_>,
     ) -> Result<CollectionReport, CollectionError> {
+        self.collect_stopped_kind(stopped, GenerationCycle::Major)
+    }
+
+    /// A genuine all-owner minor, with the same checked current root census,
+    /// image transfer, eager promotion/sweep and response restoration as full.
+    /// GEN0 refusal happens before entering the terminal trace callback.
+    #[cold]
+    pub fn collect_stopped_minor(
+        &self,
+        stopped: &mut AllStopped<'_>,
+    ) -> Result<CollectionReport, MinorCollectionError> {
+        self.check_collection(stopped)?;
+        {
+            let mut slot = self
+                .collector
+                .try_borrow_mut()
+                .map_err(|_| RendezvousError::Busy)?;
+            let heap = slot
+                .as_mut()
+                .ok_or(RendezvousError::Publication)?
+                .registration_heap_mut();
+            match heap.check_minor_admission() {
+                Ok(()) => {}
+                Err(MinorCollectionAdmissionError::CollectorBusy) => {
+                    return Err(RendezvousError::Busy.into());
+                }
+                Err(MinorCollectionAdmissionError::GenerationalDisabled) => {
+                    return Err(MinorCollectionError::GenerationalDisabled);
+                }
+            }
+        }
+        self.collect_stopped_kind(stopped, GenerationCycle::Minor)
+            .map_err(MinorCollectionError::Collection)
+    }
+
+    #[cold]
+    fn collect_stopped_kind(
+        &self,
+        stopped: &mut AllStopped<'_>,
+        kind: GenerationCycle,
+    ) -> Result<CollectionReport, CollectionError> {
         self.check_collection(stopped)?;
         let registry = self.registry();
         let (keys, entries) = {
@@ -332,6 +403,7 @@ impl<'heap> ParallelHeapEra<'heap> {
                         guard,
                         registry,
                         self.weak_sweep_permit().is_some(),
+                        kind,
                     )?;
                     let mut images = ImageSession::take(registry, &entries, &keys)?;
                     let report =
@@ -356,6 +428,7 @@ struct StoppedCollectorJob<'heap, 'stop, 'era> {
     _stopped: &'stop AllStopped<'era>,
     epoch: u64,
     weak_sweep: bool,
+    kind: GenerationCycle,
 }
 impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
     fn new(
@@ -364,6 +437,7 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         stopped: &'stop AllStopped<'era>,
         registry: &Registry,
         weak_sweep: bool,
+        kind: GenerationCycle,
     ) -> Result<Self, CollectionError> {
         if !stopped.matches_registry(registry) || heap.heap_identity() != registry.heap {
             return Err(RendezvousError::Identity);
@@ -377,6 +451,7 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             _stopped: stopped,
             epoch: stopped.epoch().get(),
             weak_sweep,
+            kind,
         })
     }
     fn run(
@@ -414,13 +489,18 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
                 .expect("published peer")
                 .add_collection_scalars(heap);
         }
-        capture_young(heap, images)?;
+        let captured = capture_young(heap, images, self.kind)?;
         for item in &images.work {
             heap.mapped_remembered.extend(item.mapped.iter().copied());
         }
         let bytes_before = heap.live_bytes();
         let started = std::time::Instant::now();
-        heap.begin_stw_collection();
+        match captured {
+            YoungCapture::Major => heap.begin_stw_collection(),
+            YoungCapture::Minor(capture) => heap
+                .begin_parallel_minor_collection(capture, self._proof)
+                .map_err(minor_admission)?,
+        }
         // SAFETY: the matching Baton produced stable frozen World slots;
         // all buffer/owner borrows ended before the complete stopped job.
         unsafe {
@@ -435,21 +515,29 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         for item in &images.work {
             trace_work(heap, item);
         }
-        // This scoped keeper job never sends/clones a live heap borrow.
-        // Existing worker MarkAll remains exclusively on its serial path.
-        let mark_started = std::time::Instant::now();
-        heap.mark_all();
-        if self.weak_sweep {
-            heap.mark_and_sweep_weak_tables();
+        match self.kind {
+            GenerationCycle::Major => {
+                // This scoped keeper job never sends/clones a live heap borrow.
+                // Existing worker MarkAll remains exclusively on its serial path.
+                let mark_started = std::time::Instant::now();
+                heap.mark_all();
+                if self.weak_sweep {
+                    heap.mark_and_sweep_weak_tables();
+                }
+                if !heap.weak_hash_tables.is_empty() {
+                    return Err(RendezvousError::Publication);
+                }
+                heap.finalize_collection(
+                    mark_started.elapsed().as_micros() as u64,
+                    bytes_before,
+                    started,
+                );
+            }
+            GenerationCycle::Minor => {
+                heap.complete_minor_collection();
+                heap.finish_incremental_sweep_now();
+            }
         }
-        if !heap.weak_hash_tables.is_empty() {
-            return Err(RendezvousError::Publication);
-        }
-        heap.finalize_collection(
-            mark_started.elapsed().as_micros() as u64,
-            bytes_before,
-            started,
-        );
         facade_mark::CollectorQuiescence::check(heap).map_err(|_| RendezvousError::Publication)?;
         let allocated_count = heap.current_mutator_gc().allocated_count;
         let memory_use_counts = heap.memory_use_counts_snapshot();
@@ -462,7 +550,7 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             image
                 .as_mut()
                 .expect("published peer")
-                .finish_major_response(generational);
+                .finish_collection_response(generational);
         }
         let image_words: usize = images
             .work
@@ -477,7 +565,10 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             .sum();
         let report = CollectionReport {
             epoch,
-            major: true,
+            major: match self.kind {
+                GenerationCycle::Major => true,
+                GenerationCycle::Minor => false,
+            },
             roots: root_count + image_words,
             frozen_owners,
             cycle: heap.gc_collections(),
@@ -604,7 +695,8 @@ impl ParallelYoungLogs for YoungImages<'_> {
 fn capture_young(
     heap: &mut TaggedHeap,
     images: &mut ImageSession<'_>,
-) -> Result<(), CollectionError> {
+    kind: GenerationCycle,
+) -> Result<YoungCapture, CollectionError> {
     let ids = images.images.iter().map(|(entry, _)| entry.young).collect();
     let identity = heap.heap_identity();
     let heap = &mut *heap;
@@ -619,7 +711,15 @@ fn capture_young(
         peers: &mut images.images[1..],
     };
     if heap.generational.enabled {
-        stopped.capture_parallel_major(&mut logs)?;
+        match kind {
+            GenerationCycle::Major => {
+                stopped.capture_parallel_major(&mut logs)?;
+                Ok(YoungCapture::Major)
+            }
+            GenerationCycle::Minor => Ok(YoungCapture::Minor(
+                stopped.capture_parallel_minor(&mut logs)?,
+            )),
+        }
     } else {
         for id in logs.ids.clone() {
             let log = logs.resolve_mut(id)?;
@@ -627,8 +727,11 @@ fn capture_young(
                 return Err(RendezvousError::Publication);
             }
         }
+        match kind {
+            GenerationCycle::Major => Ok(YoungCapture::Major),
+            GenerationCycle::Minor => Err(RendezvousError::Publication),
+        }
     }
-    Ok(())
 }
 
 fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {

@@ -23,7 +23,7 @@ mod run_slice;
 mod table_allocation;
 mod table_authority;
 mod weak_policy;
-pub use collection::{CollectionError, CollectionReport};
+pub use collection::{CollectionError, CollectionReport, MinorCollectionError};
 use gate::RegistryGuard;
 pub use root_slot::OwnerRootSlot;
 pub use run_slice::{RunSlice, SliceRoot};

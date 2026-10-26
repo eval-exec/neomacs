@@ -84,7 +84,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     assert_eq!(heap.total_allocated_bytes(), before_bytes);
     let gen1 = heap.generational_enabled();
     history.restore(&mut heap, gen1);
-    peer.finish_major_response(gen1);
+    peer.finish_collection_response(gen1);
     assert_eq!(heap.current_mutator_gc().memory_use_counts, own_memory);
     assert_eq!(heap.total_allocated_bytes(), own_bytes);
     assert_eq!(heap.current_mutator_gc().allocated_count, after_count);
