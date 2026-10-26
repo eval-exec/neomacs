@@ -254,46 +254,92 @@ fn run_editor(
     })
 }
 
-fn normalize_gui_stderr(stderr: String) -> Result<String, String> {
-    // GNU's GIO warning prefixes the same infrastructure condition with a
-    // process id and wall-clock timestamp. Preserve the exact condition while
-    // classifying only those two host-only fields. Every unrelated byte and
-    // line remains visible, including leading blank lines and diagnostics
-    // adjacent to the known warning.
+/// A stderr line that describes the host's graphics or desktop stack rather
+/// than editor behaviour. Whether one appears depends on the runner (a
+/// compiled GSettings schema source, an X server with DRI3), so the same
+/// probe prints it on one machine and not on another; it is classified out
+/// of the recorded stderr. Every other line stays visible byte for byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostDiagnostic {
+    /// GNU's GLib `g_settings_schema_source_lookup` assertion on a host with
+    /// no schema source. GLib prefixes it with the process id and a
+    /// wall-clock timestamp and writes a blank line before it.
+    GioSchemaSourceMissing,
+    /// Mesa's EGL/Vulkan notices on an X server without DRI3 (Xvfb).
+    MesaWithoutDri3,
+}
+
+enum GuiStderrLine<'a> {
+    Host(HostDiagnostic),
+    Editor(&'a str),
+}
+
+const MESA_WITHOUT_DRI3_LINES: [&str; 4] = [
+    "libEGL warning: DRI3 error: Could not get DRI3 device",
+    "libEGL warning: Ensure your X server supports DRI3 to get accelerated rendering",
+    "MESA: info: vulkan: No DRI3 support detected - required for presentation",
+    "Note: you can probably enable DRI3 in your Xorg config",
+];
+
+fn classify_gui_stderr_line(line: &str) -> Result<GuiStderrLine<'_>, String> {
     const MARKER: &str = "): GLib-GIO-CRITICAL **: ";
     const CONDITION: &str = "g_settings_schema_source_lookup: assertion 'source != NULL' failed";
-    const CANONICAL: &str =
-        "GLib-GIO-CRITICAL: g_settings_schema_source_lookup: assertion 'source != NULL' failed";
 
+    if MESA_WITHOUT_DRI3_LINES.contains(&line) {
+        return Ok(GuiStderrLine::Host(HostDiagnostic::MesaWithoutDri3));
+    }
+    if !(line.contains("GLib-GIO-CRITICAL") || line.contains(CONDITION)) {
+        return Ok(GuiStderrLine::Editor(line));
+    }
+    // A line that mentions the GIO condition but is not exactly GLib's form
+    // fails closed: only the known host warning may be classified out.
+    let malformed = || format!("malformed volatile GNU GIO warning: {line:?}");
+    let after_program = line.strip_prefix("(emacs:").ok_or_else(malformed)?;
+    let (pid, after_marker) = after_program.split_once(MARKER).ok_or_else(malformed)?;
+    let timestamp = after_marker
+        .strip_suffix(&format!(": {CONDITION}"))
+        .ok_or_else(malformed)?;
+    if pid.is_empty()
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || !valid_gio_timestamp(timestamp)
+    {
+        return Err(malformed());
+    }
+    Ok(GuiStderrLine::Host(HostDiagnostic::GioSchemaSourceMissing))
+}
+
+fn normalize_gui_stderr(stderr: String) -> Result<String, String> {
     let mut normalized = String::with_capacity(stderr.len());
+    // GLib writes the blank line that precedes its critical message; hold a
+    // blank line until the next line shows whose it is.
+    let mut held_blank_line = false;
     for segment in stderr.split_inclusive('\n') {
         let (line, newline) = segment
             .strip_suffix('\n')
             .map_or((segment, ""), |line| (line, "\n"));
-        let mentions_known_warning = line.contains("GLib-GIO-CRITICAL") || line.contains(CONDITION);
-        if !mentions_known_warning {
-            normalized.push_str(line);
-            normalized.push_str(newline);
+        if line.is_empty() && !newline.is_empty() {
+            if held_blank_line {
+                normalized.push('\n');
+            }
+            held_blank_line = true;
             continue;
         }
-
-        let Some(after_program) = line.strip_prefix("(emacs:") else {
-            return Err(format!("malformed volatile GNU GIO warning: {line:?}"));
-        };
-        let Some((pid, after_marker)) = after_program.split_once(MARKER) else {
-            return Err(format!("malformed volatile GNU GIO warning: {line:?}"));
-        };
-        let Some(timestamp) = after_marker.strip_suffix(&format!(": {CONDITION}")) else {
-            return Err(format!("malformed volatile GNU GIO warning: {line:?}"));
-        };
-        if pid.is_empty()
-            || !pid.bytes().all(|byte| byte.is_ascii_digit())
-            || !valid_gio_timestamp(timestamp)
-        {
-            return Err(format!("malformed volatile GNU GIO warning: {line:?}"));
+        match classify_gui_stderr_line(line)? {
+            GuiStderrLine::Host(HostDiagnostic::GioSchemaSourceMissing) => {
+                held_blank_line = false;
+            }
+            GuiStderrLine::Host(HostDiagnostic::MesaWithoutDri3) => {}
+            GuiStderrLine::Editor(line) => {
+                if std::mem::take(&mut held_blank_line) {
+                    normalized.push('\n');
+                }
+                normalized.push_str(line);
+                normalized.push_str(newline);
+            }
         }
-        normalized.push_str(CANONICAL);
-        normalized.push_str(newline);
+    }
+    if held_blank_line {
+        normalized.push('\n');
     }
     Ok(normalized)
 }
@@ -316,16 +362,34 @@ fn gui_stderr_normalization_preserves_unrelated_diagnostics() {
         "before\n\n",
         "(emacs:12345): GLib-GIO-CRITICAL **: 04:23:40.175: ",
         "g_settings_schema_source_lookup: assertion 'source != NULL' failed\n",
-        "after\n",
+        "after\n\n",
+        "libEGL warning: DRI3 error: Could not get DRI3 device\n",
+        "libEGL warning: Ensure your X server supports DRI3 to get accelerated rendering\n",
+        "MESA: info: vulkan: No DRI3 support detected - required for presentation\n",
+        "Note: you can probably enable DRI3 in your Xorg config\n",
+        "last\n",
     );
     assert_eq!(
-        normalize_gui_stderr(stderr.into()).expect("normalize exact volatile GNU warning"),
-        concat!(
-            "before\n\n",
-            "GLib-GIO-CRITICAL: ",
-            "g_settings_schema_source_lookup: assertion 'source != NULL' failed\n",
-            "after\n",
+        normalize_gui_stderr(stderr.into()).expect("classify exact host diagnostics"),
+        "before\nafter\n\nlast\n",
+        "host diagnostics and GLib's own blank line are classified out; \
+         the editor's blank line before the Mesa notices stays"
+    );
+    assert_eq!(
+        normalize_gui_stderr(
+            concat!(
+                "\n(emacs:7): GLib-GIO-CRITICAL **: 23:59:59.999: ",
+                "g_settings_schema_source_lookup: assertion 'source != NULL' failed\n",
+            )
+            .into()
         )
+        .expect("classify a lone GIO warning"),
+        "",
+        "a host with no schema source and a host with one record the same stderr"
+    );
+    assert_eq!(
+        normalize_gui_stderr("a\n\n\nb\n".into()).expect("plain blank lines"),
+        "a\n\n\nb\n"
     );
     assert!(
         normalize_gui_stderr(
@@ -333,6 +397,6 @@ fn gui_stderr_normalization_preserves_unrelated_diagnostics() {
                 .into()
         )
         .is_err(),
-        "already-normalized or malformed warning input must fail closed"
+        "a GIO warning that is not exactly GLib's form must fail closed"
     );
 }
