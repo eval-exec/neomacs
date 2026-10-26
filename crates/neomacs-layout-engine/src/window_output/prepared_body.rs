@@ -3,7 +3,7 @@
 
 use super::row_geometry::WindowRowGeometry;
 use super::snapshot_rows::PreparedWindowRows;
-use super::{DisplayRowTerminator, DisplayRowTerminatorCell};
+use super::{DisplayRowTerminator, DisplayRowTerminatorCell, DisplayTextRowMetrics};
 use crate::display_item::DisplaySourcePosition;
 use crate::row_layout::program::{ComputedRow, ComputedRowEnd, RowProgramError};
 use neomacs_display_protocol::glyph_matrix::GlyphRow;
@@ -112,7 +112,12 @@ pub(crate) fn position_buffer_rows(
                 ),
             ));
         }
-        geometry.push_text_row(y, computed.row.height_px, computed.row.ascent_px);
+        geometry.push_text_row(DisplayTextRowMetrics {
+            y,
+            height: computed.row.height_px,
+            ascent: computed.row.ascent_px,
+            line_spacing: computed.row.line_spacing_px,
+        });
         computed.row.pixel_y = y - window_top;
         computed.row.start_charpos = start.get();
         computed.row.end_charpos =

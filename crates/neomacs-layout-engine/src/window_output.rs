@@ -456,7 +456,7 @@ pub(crate) fn finish_text_window_row(
 ) -> DisplayTextRowFinish {
     let display_row_index = output_emitter.current_display_text_row_index();
     let finish = finish_display_text_row(output.builder(), display_row_index, metrics);
-    output_emitter.push_text_row(metrics.y, metrics.height, metrics.ascent);
+    output_emitter.push_text_row(metrics);
     finish
 }
 
@@ -472,7 +472,7 @@ pub(crate) fn finish_and_end_text_window_row(
     output_builder.install_output_row_lifecycle(OutputRowLifecycleRequest::finalize(
         request.display_row_index(),
     ));
-    output_emitter.push_text_row(metrics.y, metrics.height, metrics.ascent);
+    output_emitter.push_text_row(metrics);
     DisplayTextRowFinish {
         display_row_index,
         metrics: matrix_metrics,
@@ -1988,11 +1988,10 @@ impl WindowOutputEmitter {
         self.geometry.note_truncated_end(end);
     }
 
-    pub(crate) fn push_text_row(&mut self, row_y_start: f32, row_height: f32, row_ascent: f32) {
+    pub(crate) fn push_text_row(&mut self, metrics: DisplayTextRowMetrics) {
         self.previous_automatic_mini_row_end = self.current_automatic_mini_row_end;
         self.current_automatic_mini_row_end = AutomaticMiniRowEnd::Ordinary;
-        self.geometry
-            .push_text_row(row_y_start, row_height, row_ascent)
+        self.geometry.push_text_row(metrics)
     }
 
     pub(crate) fn push_reused_chrome(&mut self, rows: Vec<DisplayRowSnapshot>) {

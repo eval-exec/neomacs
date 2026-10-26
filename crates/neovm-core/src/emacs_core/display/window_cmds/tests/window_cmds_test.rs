@@ -10057,6 +10057,7 @@ fn window_end_reads_the_atomic_record_when_a_snapshot_disagrees() {
                 row: 0,
                 y: 0,
                 height: 16,
+                extra_line_spacing: 0,
                 start_x: 0,
                 start_col: 0,
                 end_x: 0,
@@ -10931,6 +10932,249 @@ fn recenter_uses_current_buffer_point_for_selected_window() {
         .map(format_eval_result)
         .collect::<Vec<_>>();
     assert_eq!(results[0], "OK (7 4 4)");
+}
+
+fn graphical_recenter_context(
+    row_height: i64,
+    extra_line_spacing: i64,
+    body_height: i64,
+    mut first_query_form: Option<String>,
+) -> Context {
+    use crate::window::{
+        DisplayRowSnapshot, WindowDisplaySnapshot, WindowLayoutQuery, WindowLayoutQueryOutcome,
+        WindowLayoutQueryScope,
+    };
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.set_variable("noninteractive", Value::NIL);
+    let buffer = eval.buffers.create_buffer("*bottom-recenter-pixels*");
+    eval.buffers.set_current(buffer);
+    eval.buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"line\n".repeat(100));
+    let frame = eval.frames.create_frame("F1", 800, 600, buffer);
+    let window = eval.frames.get(frame).expect("frame").selected_window;
+    {
+        let frame = eval.frames.get_mut(frame).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.initial = false;
+        frame.char_height = 10.0;
+        frame
+            .find_window_mut(window)
+            .expect("window")
+            .bounds_mut()
+            .height = body_height as f32;
+    }
+    eval.eval_str(
+        "(setq mode-line-format nil header-line-format nil tab-line-format nil scroll-margin 0)
+         (goto-char 246)",
+    )
+    .expect("point on line 50, without window chrome");
+
+    // Display-host metrics can differ from the canonical frame font, as with
+    // fallback fonts and line spacing. The public command must use those rows.
+    eval.install_window_layout_query(move |eval, queried_frame, queried_window, scope| {
+        assert_eq!(queried_frame, frame);
+        assert_eq!(queried_window, window);
+        if let Some(form) = first_query_form.take() {
+            // Fontification can run Lisp without editing the source. Point
+            // changes must invalidate the whole placement measurement too.
+            eval.eval_str(&form).expect("display callback");
+        }
+        let viewport_start = match eval
+            .frames
+            .get(frame)
+            .and_then(|frame| frame.find_window(window))
+        {
+            Some(crate::window::Window::Leaf { window_start, .. }) => *window_start,
+            _ => return WindowLayoutQueryOutcome::Unavailable,
+        };
+        let viewport_count = (body_height as usize).div_ceil(row_height as usize);
+        let (start, count) = match scope {
+            WindowLayoutQueryScope::Rows { start, count } => (start, count.get()),
+            WindowLayoutQueryScope::Pixels { start, height } => {
+                (start, height.get().div_ceil(row_height as usize))
+            }
+            WindowLayoutQueryScope::Viewport => (viewport_start, viewport_count),
+            WindowLayoutQueryScope::Position { target } => {
+                let through_target =
+                    ((target.as_i64() - viewport_start.as_i64()).max(0) / 5 + 1) as usize;
+                (viewport_start, through_target.min(viewport_count))
+            }
+            WindowLayoutQueryScope::TextExtent { .. } => {
+                return WindowLayoutQueryOutcome::Unavailable;
+            }
+        };
+        let first_line = (start.as_i64() - 1) / 5;
+        let rows: Vec<_> = (first_line..101)
+            .take(count)
+            .enumerate()
+            .map(|(row, line)| DisplayRowSnapshot {
+                row: row as i64,
+                y: row as i64 * row_height,
+                height: row_height,
+                extra_line_spacing,
+                start_buffer_pos: Some(LispCharPos1::new(line * 5 + 1)),
+                end_buffer_pos: Some(LispCharPos1::new((line * 5 + 5).min(501))),
+                end_x: 32,
+                end_col: 4,
+                ..Default::default()
+            })
+            .collect();
+        let end = rows
+            .last()
+            .and_then(|row| row.end_buffer_pos)
+            .unwrap_or(start);
+        let layout_freshness = eval.window_display_snapshot_freshness(frame, window, buffer);
+        WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(
+            end,
+            Some(WindowDisplaySnapshot {
+                window_id: window,
+                rows,
+                layout_freshness,
+                ..Default::default()
+            }),
+        ))
+    });
+    eval
+}
+
+#[test]
+fn graphical_bottom_recenter_fits_measured_rows_without_moving_point() {
+    // The 100-pixel text body fits five measured 20-pixel rows, including
+    // point's row, instead of nine canonical 10-pixel rows above point.
+    let mut eval = graphical_recenter_context(20, 0, 100, None);
+    let result = eval
+        .eval_str(
+            "(progn (recenter -1)
+                    (list (line-number-at-pos (window-start))
+                          (line-number-at-pos) (point)
+                          (window-body-height nil t) (window-body-height)))",
+        )
+        .expect("graphical bottom recenter");
+    assert_eq!(
+        super::super::print::print_value(&result),
+        "(46 50 246 100 10)"
+    );
+}
+
+#[test]
+fn graphical_bottom_recenter_keeps_start_when_row_advance_fills_body() {
+    let mut eval = graphical_recenter_context(100, 20, 100, None);
+    // GNU checks the remaining pixel budget before excluding the final row's
+    // extra spacing. A full-body row advance leaves no backward budget, so
+    // recenter returns without changing the existing viewport or point.
+    let result = eval
+        .eval_str(
+            "(progn (set-window-start nil 236)
+                    (recenter -1)
+                    (list (line-number-at-pos (window-start))
+                          (line-number-at-pos) (point)
+                          (window-body-height nil t) (window-body-height)))",
+        )
+        .expect("full-body row leaves recenter start unchanged");
+    assert_eq!(
+        super::super::print::print_value(&result),
+        "(48 50 246 100 10)"
+    );
+}
+
+#[test]
+fn graphical_bottom_recenter_remeasures_point_changed_by_display_callback() {
+    let mut eval = graphical_recenter_context(20, 0, 30, Some("(goto-char 296)".to_owned()));
+    // The callback moves point from line 50 to line 60 without changing the
+    // buffer's modification tick. Only its own 20-pixel row fits the 30-pixel
+    // body, so this measurement settles with one query. Placement must follow
+    // the live point without restoring it or publishing its old placement.
+    let result = eval
+        .eval_str(
+            "(progn (recenter -1)
+                    (list (line-number-at-pos (window-start))
+                          (line-number-at-pos) (point)
+                          (window-body-height nil t) (window-body-height)))",
+        )
+        .expect("point mutation restarts recenter measurement");
+    assert_eq!(
+        super::super::print::print_value(&result),
+        "(60 60 296 30 3)"
+    );
+}
+
+#[test]
+fn graphical_bottom_recenter_keeps_its_target_when_display_callback_selects_another_window() {
+    for same_frame in [true, false] {
+        let mut eval = graphical_recenter_context(
+            20,
+            0,
+            100,
+            Some(
+                "(progn (goto-char 296)
+                        (select-window recenter-other-window)
+                        (make-local-variable 'scroll-margin)
+                        (setq scroll-margin 0)
+                        (save-current-buffer
+                          (set-buffer (window-buffer recenter-original-window))
+                          (goto-char 246)))"
+                    .to_owned(),
+            ),
+        );
+        let frame = eval.frames.selected_frame().expect("frame").id;
+        let original = eval.frames.get(frame).expect("frame").selected_window;
+        let other_buffer = eval.buffers.create_buffer("*other-recenter-window*");
+        eval.buffers
+            .get_mut(other_buffer)
+            .expect("other buffer")
+            .insert("Other window\n");
+        let other = if same_frame {
+            eval.frames
+                .split_window(
+                    frame,
+                    original,
+                    crate::window::SplitDirection::Horizontal,
+                    other_buffer,
+                    None,
+                    crate::window::SplitPlacement::AfterTarget,
+                )
+                .expect("split the graphical window horizontally")
+        } else {
+            let other_frame = eval.frames.create_frame("F2", 800, 600, other_buffer);
+            let other_frame = eval.frames.get_mut(other_frame).expect("other frame");
+            other_frame.set_window_system(Some(Value::symbol("neo")));
+            other_frame.initial = false;
+            other_frame.selected_window
+        };
+        eval.set_variable("recenter-original-window", Value::make_window(original.0));
+        eval.set_variable("recenter-other-window", Value::make_window(other.0));
+
+        // Recenter retains the original window and its buffer-local margin.
+        // Its callback saves point at line 60 by selecting a different window,
+        // then leaves buffer point on line 50 without changing window point.
+        // A retry must keep that target and policy without stealing selection
+        // or replacing the original window's independent point with buffer point.
+        let result = eval
+            .eval_str(
+                "(progn (select-window recenter-original-window)
+                    (make-local-variable 'scroll-margin)
+                    (setq scroll-margin 1)
+                    (recenter -1)
+                    (list (eq (selected-window) recenter-other-window)
+                          (eq (current-buffer) (window-buffer recenter-other-window))
+                          (window-point recenter-original-window)
+                          (save-current-buffer
+                            (set-buffer (window-buffer recenter-original-window))
+                            (list (line-number-at-pos (window-start recenter-original-window))
+                                  (line-number-at-pos (window-point recenter-original-window))
+                                  (line-number-at-pos)))))",
+            )
+            .expect("recenter follows its original window across callback selection");
+        assert_eq!(
+            super::super::print::print_value(&result),
+            "(t t 296 (57 60 50))",
+            "same_frame={same_frame}"
+        );
+    }
 }
 
 #[test]

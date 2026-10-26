@@ -2834,9 +2834,9 @@ pub(crate) fn builtin_window_point(
         Window::Leaf {
             buffer_id, point, ..
         } => {
-            let selected_live_window = frames.get(fid).is_some_and(|frame| {
-                frame.selected_window == wid && frame.selected_window != WindowId(0)
-            });
+            let selected_live_window = frames
+                .selected_frame()
+                .is_some_and(|frame| frame.id == fid && frame.selected_window == wid);
             if selected_live_window && let Some(buffer) = buffers.get(*buffer_id) {
                 return Ok(Value::fixnum(
                     buffer.point_char_pos().get().saturating_add(1) as i64,
@@ -6491,9 +6491,18 @@ fn plan_scroll_by_screen_lines(
 /// point appears at the center of the window, or at line ARG from the
 /// top (or bottom if ARG is negative).
 pub(crate) fn builtin_recenter(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    use crate::emacs_core::xdisp::motion::recenter::{RecenterTarget, resolve};
+
     expect_max_args("recenter", &args, 2)?;
     let redraw = RecenterRedraw::from_call(eval, &args);
-    let Some((fid, wid, buffer_id, pt, target_line)) = recenter_backward_origin(eval, &args)?
+    let Some(RecenterOrigin {
+        frame: fid,
+        window: wid,
+        buffer: buffer_id,
+        point: pt,
+        placement,
+        canonical_rows: target_line,
+    }) = recenter_backward_origin(eval, &args)?
     else {
         return Ok(Value::NIL);
     };
@@ -6513,13 +6522,20 @@ pub(crate) fn builtin_recenter(eval: &mut super::eval::Context, args: Vec<Value>
     // way redisplay counts them. Walking buffer newlines here instead made a
     // hidden line consume one of the ARG lines and left window-start one line
     // short of GNU's.
-    let (pos, _moved) = crate::emacs_core::indent::screen_line_motion_target(
-        eval,
-        buffer_id,
-        pt,
-        None,
-        -target_line,
-    )?;
+    let pos = match resolve(eval, fid, wid, buffer_id, placement)? {
+        Some(RecenterTarget::Keep) => return Ok(Value::NIL),
+        Some(RecenterTarget::Start(position)) => position,
+        None => {
+            crate::emacs_core::indent::screen_line_motion_target(
+                eval,
+                buffer_id,
+                pt,
+                None,
+                -target_line,
+            )?
+            .0
+        }
+    };
 
     {
         let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
@@ -6591,17 +6607,23 @@ impl RecenterRedraw {
     }
 }
 
-/// Resolve everything `recenter` needs before it moves: the window to restart,
-/// the buffer and point it restarts around, and how many screen lines above
-/// point the new window-start sits.
-///
-/// `Ok(None)` means there is nothing to recenter (the selected window is not a
-/// leaf), which GNU also answers with nil.
-#[allow(clippy::type_complexity)]
+struct RecenterOrigin {
+    frame: FrameId,
+    window: WindowId,
+    buffer: BufferId,
+    point: EmacsBytePos,
+    placement: crate::emacs_core::xdisp::motion::recenter::RecenterPlacement,
+    canonical_rows: i64,
+}
+
+/// Resolve the target window, source point and requested placement before
+/// redraw. Canonical rows retain the initial-frame/batch fallback geometry.
+/// `Ok(None)` means the selected window is not a leaf.
 fn recenter_backward_origin(
     eval: &mut super::eval::Context,
     args: &[Value],
-) -> Result<Option<(FrameId, WindowId, BufferId, EmacsBytePos, i64)>, Flow> {
+) -> Result<Option<RecenterOrigin>, Flow> {
+    use crate::emacs_core::xdisp::motion::recenter::RecenterPlacement;
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
 
     let wh = window_body_height_impl(frames, buffers, vec![])
@@ -6610,18 +6632,8 @@ fn recenter_backward_origin(
         .unwrap_or(24);
 
     // Determine target line from top of window where point should appear.
-    let target_line = match args.first().and_then(|v| v.as_fixnum()) {
-        Some(n) => {
-            if n >= 0 {
-                n
-            } else {
-                // Negative: count from bottom.
-                (wh + n).max(0)
-            }
-        }
-        None if args.first().is_some_and(|v| !v.is_nil()) => wh / 2, // non-integer truthy = center
-        _ => wh / 2,                                                 // nil or absent = center
-    };
+    let placement = RecenterPlacement::from_argument(args.first());
+    let target_line = placement.canonical_rows(wh);
 
     // Compute new window-start by moving backward target_line lines from point.
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
@@ -6657,7 +6669,14 @@ fn recenter_backward_origin(
     let accessible = buf.accessible_emacs_byte_region();
     let pt = accessible.clamp(buf.lisp_pos_to_emacs_byte_pos(window_point));
 
-    Ok(Some((fid, wid, buffer_id, pt, target_line)))
+    Ok(Some(RecenterOrigin {
+        frame: fid,
+        window: wid,
+        buffer: buffer_id,
+        point: pt,
+        placement,
+        canonical_rows: target_line,
+    }))
 }
 
 // ===========================================================================

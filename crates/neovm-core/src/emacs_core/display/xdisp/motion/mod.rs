@@ -8,6 +8,7 @@ mod measurement;
 pub(crate) mod paging;
 pub(crate) mod pixels;
 mod policy;
+pub(crate) mod recenter;
 pub(crate) use policy::ScrollGoal;
 
 use crate::buffer::{AccessibleCharRange, BufferId, LispCharPos1};

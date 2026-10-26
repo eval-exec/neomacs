@@ -86,6 +86,7 @@ fn install_mouse_help_echo_snapshot_with_value(eval: &mut Context, help: Value) 
             row: 0,
             y: 0,
             height: 16,
+            extra_line_spacing: 0,
             start_x: 0,
             start_col: 0,
             end_x: 0,

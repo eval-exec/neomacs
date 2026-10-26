@@ -2597,8 +2597,11 @@ pub struct DisplayRowSnapshot {
     pub row: i64,
     /// Y relative to the window's top edge, in pixels.
     pub y: i64,
-    /// Row height in pixels.
+    /// Vertical row advance in pixels, including `extra_line_spacing`.
     pub height: i64,
+    /// Extra spacing after this row, included in `height`. GNU recentering
+    /// excludes the last requested row's trailing spacing when fitting bottom.
+    pub extra_line_spacing: i64,
     /// X position where redisplay started emitting this row, relative to the
     /// text area's left edge.
     pub start_x: i64,
