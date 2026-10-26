@@ -21,8 +21,16 @@ use support::*;
 /// The shared probe program: three named faces covering the spec shapes
 /// helm/terminal packages rely on, plus an anonymous plist face, rendered
 /// into one fundamental-mode buffer at a known position.
+///
+/// `show-paren-mode` is turned off for the whole probe: its highlight is
+/// painted by GNU's `show-paren-delay` idle timer, so a probe whose point
+/// sits on a bracket (the `:extend` action row) would otherwise compare a
+/// screen captured before the timer fired in one editor and after it fired
+/// in the other.  Paren highlighting has its own parity test
+/// (`face_parity.rs`).
 const FACE_PROBE_FORM: &str = r##"
 (progn
+  (show-paren-mode -1)
   (switch-to-buffer (get-buffer-create "probe-faces"))
   (fundamental-mode)
   (erase-buffer)
