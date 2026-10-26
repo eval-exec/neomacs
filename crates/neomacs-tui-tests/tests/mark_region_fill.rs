@@ -671,15 +671,24 @@ fn set_variable_fill_column_via_mx_updates_buffer_local_value() {
 
 #[test]
 fn recenter_top_bottom_cycle_via_cl() {
+    assert_recenter_top_bottom_cycle_via_cl("ascii", "");
+}
+
+#[test]
+fn recenter_top_bottom_cycle_via_cl_box_drawing() {
+    assert_recenter_top_bottom_cycle_via_cl("box-drawing", "│ ├ └ ");
+}
+
+fn assert_recenter_top_bottom_cycle_via_cl(scenario: &str, prefix: &str) {
     let (mut gnu, mut neo) = boot_pair("");
     let mut contents = String::new();
-    for line in 1..=80 {
-        contents.push_str(&format!("recenter line {line:02}\n"));
+    for line in 1..=200 {
+        contents.push_str(&format!("{prefix}recenter line {line:02}\n"));
     }
     open_home_file(
         &mut gnu,
         &mut neo,
-        "recenter-usage.txt",
+        &format!("recenter-{scenario}.txt"),
         &contents,
         "C-x C-f",
     );
@@ -687,27 +696,43 @@ fn recenter_top_bottom_cycle_via_cl() {
     send_both(&mut gnu, &mut neo, "C-s");
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
     for session in [&mut gnu, &mut neo] {
-        session.send(b"recenter line 40");
+        session.send(b"recenter line 100");
     }
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
     send_both(&mut gnu, &mut neo, "RET");
 
-    let found = |grid: &[String]| grid.iter().any(|row| row.contains("recenter line 40"));
+    let found = |grid: &[String]| grid.iter().any(|row| row.contains("recenter line 100"));
     gnu.read_until(Duration::from_secs(6), found);
     neo.read_until(Duration::from_secs(8), found);
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
 
-    send_both(&mut gnu, &mut neo, "C-l");
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-    assert_pair_exact_display("recenter_top_bottom_cycle_via_cl/middle", &gnu, &neo);
-
-    send_both(&mut gnu, &mut neo, "C-l");
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-    assert_pair_exact_display("recenter_top_bottom_cycle_via_cl/top", &gnu, &neo);
-
-    send_both(&mut gnu, &mut neo, "C-l");
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-    assert_pair_exact_display("recenter_top_bottom_cycle_via_cl/bottom", &gnu, &neo);
+    let gnu_column = gnu.screen().cursor_position().1;
+    let neo_column = neo.screen().cursor_position().1;
+    let mut cursor_rows = Vec::new();
+    for placement in ["middle", "top", "bottom"] {
+        send_both(&mut gnu, &mut neo, "C-l");
+        read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+        assert_pair_exact_display(
+            &format!("recenter_top_bottom_cycle_via_cl/{scenario}/{placement}"),
+            &gnu,
+            &neo,
+        );
+        assert_eq!(gnu.screen().cursor_position().1, gnu_column);
+        assert_eq!(neo.screen().cursor_position().1, neo_column);
+        assert!(
+            neo.row_text(neo.screen().cursor_position().0)
+                .contains("recenter line 100")
+        );
+        cursor_rows.push(neo.screen().cursor_position().0);
+    }
+    assert!(cursor_rows[1] < cursor_rows[0]);
+    assert!(cursor_rows[0] < cursor_rows[2]);
+    let mode_line = neo
+        .text_grid()
+        .iter()
+        .position(|row| row.contains(&format!("recenter-{scenario}.txt")))
+        .expect("recenter buffer's mode line must be visible");
+    assert_eq!(usize::from(cursor_rows[2]) + 1, mode_line);
 }
 
 #[test]

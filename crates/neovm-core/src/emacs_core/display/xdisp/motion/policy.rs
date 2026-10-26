@@ -32,7 +32,20 @@ pub(super) struct ScrollPolicy {
 
 impl ScrollPolicy {
     pub fn capture(eval: &Context) -> Self {
-        let value = |name| eval.visible_variable_value_or_nil(name);
+        Self::from_values(eval, |name| eval.visible_variable_value_or_nil(name))
+    }
+
+    /// A captured window retains its own buffer-local viewport policy when
+    /// layout Lisp switches the current buffer or selected window.
+    pub fn capture_for_buffer(eval: &Context, buffer: BufferId) -> Self {
+        Self::from_values(eval, |name| {
+            eval.variables()
+                .value_in_buffer_by_name(eval.buffers.get(buffer), name)
+                .unwrap_or(Value::NIL)
+        })
+    }
+
+    fn from_values(eval: &Context, value: impl Fn(&str) -> Value) -> Self {
         let maximum_margin = value("maximum-scroll-margin").as_float().unwrap_or(0.25);
         let continues_scroll = crate::emacs_core::builtins::symbol_property_get(
             eval,

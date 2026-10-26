@@ -25,7 +25,12 @@ fn geometry(frozen: bool) -> WindowRowGeometry {
 fn close(geometry: &mut WindowRowGeometry, row: i64, points: &[DisplayPointSnapshot]) {
     geometry.begin_current_row_progress(Some(row as usize), row, 0, row * 16, 0);
     geometry.points.extend_from_slice(points);
-    geometry.push_text_row((row * 16) as f32, 16.0, 12.0);
+    geometry.push_text_row(DisplayTextRowMetrics {
+        y: (row * 16) as f32,
+        height: 16.0,
+        ascent: 12.0,
+        line_spacing: 0.0,
+    });
 }
 
 #[test]

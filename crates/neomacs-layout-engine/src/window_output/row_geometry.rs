@@ -5,7 +5,9 @@
 //! and publication authority only in the enclosing window emitter.
 
 use super::snapshot_rows::PreparedWindowRows;
-use super::{DisplayRowTerminator, RowMetricsSnapshot, RowVisibleStartPosition};
+use super::{
+    DisplayRowTerminator, DisplayTextRowMetrics, RowMetricsSnapshot, RowVisibleStartPosition,
+};
 use crate::display_status_line::DisplayRowOutputProgress;
 use neovm_core::buffer::LispCharPos1;
 use neovm_core::window::{
@@ -658,7 +660,13 @@ impl WindowRowGeometry {
         self.truncated_end_buffer_pos = Some(end);
     }
 
-    pub(super) fn push_text_row(&mut self, row_y_start: f32, row_height: f32, row_ascent: f32) {
+    pub(super) fn push_text_row(&mut self, metrics: DisplayTextRowMetrics) {
+        let DisplayTextRowMetrics {
+            y: row_y_start,
+            height: row_height,
+            ascent: row_ascent,
+            line_spacing,
+        } = metrics;
         self.note_query_y(row_y_start);
         self.note_query_metrics(row_height, row_ascent);
         if self.rows.len() >= 256 {
@@ -688,6 +696,7 @@ impl WindowRowGeometry {
             row: row_progress.row,
             y: row_progress.y,
             height: row_height.max(1.0).round() as i64,
+            extra_line_spacing: line_spacing.max(0.0).round() as i64,
             start_x: row_progress.start_x,
             start_col: row_progress.start_col,
             end_x: row_progress.x,
@@ -732,6 +741,7 @@ impl WindowRowGeometry {
             row: row_progress.row,
             y: row_progress.y,
             height: progress.height().round() as i64,
+            extra_line_spacing: 0,
             start_x: row_progress.start_x,
             start_col: row_progress.start_col,
             end_x: row_progress.x,

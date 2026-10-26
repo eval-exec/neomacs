@@ -261,6 +261,7 @@ fn emitted_row(
         row,
         y,
         height,
+        extra_line_spacing: 0,
         start_x: 0,
         start_col: 0,
         end_x: 0,

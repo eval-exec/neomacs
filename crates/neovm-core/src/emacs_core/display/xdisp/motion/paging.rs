@@ -209,52 +209,142 @@ pub(crate) fn try_scroll(
     commit_scroll_plan(eval, |eval| plan_scroll(eval, argument, direction))
 }
 
+/// Scrolling follows the selection on each retry; recentering retains the
+/// window captured when its command began, even if layout Lisp selects another.
+#[derive(Clone, Copy)]
+pub(super) enum MeasurementTarget {
+    Selected,
+    Fixed {
+        frame: FrameId,
+        window: WindowId,
+        buffer: BufferId,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ViewportIdentity {
+    frame: FrameId,
+    window: WindowId,
+    buffer: BufferId,
+}
+
+impl MeasurementTarget {
+    fn resolve(self, eval: &Context) -> Result<Option<ViewportIdentity>, Flow> {
+        match self {
+            Self::Selected => {
+                let Some(frame) = eval.frames.selected_frame() else {
+                    return Ok(None);
+                };
+                let Some(buffer) = frame
+                    .find_window(frame.selected_window)
+                    .and_then(Window::buffer_id)
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(ViewportIdentity {
+                    frame: frame.id,
+                    window: frame.selected_window,
+                    buffer,
+                }))
+            }
+            Self::Fixed {
+                frame,
+                window,
+                buffer,
+            } => {
+                if eval
+                    .frames
+                    .get(frame)
+                    .and_then(|frame| frame.find_window(window))
+                    .and_then(Window::buffer_id)
+                    != Some(buffer)
+                    || eval.buffers.get(buffer).is_none()
+                {
+                    return Err(failure("Viewport window changed during measurement"));
+                }
+                Ok(Some(ViewportIdentity {
+                    frame,
+                    window,
+                    buffer,
+                }))
+            }
+        }
+    }
+
+    fn policy(self, eval: &Context, identity: ViewportIdentity) -> ScrollPolicy {
+        match self {
+            Self::Selected => ScrollPolicy::capture(eval),
+            Self::Fixed { .. } => ScrollPolicy::capture_for_buffer(eval, identity.buffer),
+        }
+    }
+}
+
+fn synchronize_selected_point(eval: &mut Context) {
+    if let Some(frame) = eval.frames.selected_frame().map(|frame| frame.id) {
+        crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
+            &mut eval.frames,
+            &mut eval.buffers,
+            frame,
+        );
+    }
+}
+
 /// Both graphical and terminal planners cross Lisp-bearing measurement.
 /// Keep one transaction boundary around the entire plan, not each query.
 pub(crate) fn commit_scroll_plan<Plan: Into<ScrollPlan>>(
     eval: &mut Context,
-    mut measure: impl FnMut(&mut Context) -> Result<Option<Plan>, Flow>,
+    measure: impl FnMut(&mut Context) -> Result<Option<Plan>, Flow>,
 ) -> Result<bool, Flow> {
+    let Some(plan) = measure_stable_plan(eval, MeasurementTarget::Selected, measure)? else {
+        return Ok(false);
+    };
+    let plan = plan.into();
+    plan.viewport.commit(eval)?;
+    eval.scroll_goal = plan.goal;
+    Ok(true)
+}
+
+/// All queries contributing to a viewport decision must describe the same
+/// source, point, geometry and scrolling policy, including after fontification.
+pub(super) fn measure_stable_plan<Plan>(
+    eval: &mut Context,
+    target: MeasurementTarget,
+    mut measure: impl FnMut(&mut Context) -> Result<Option<Plan>, Flow>,
+) -> Result<Option<Plan>, Flow> {
     // Fontification is Lisp and may edit the source, resize a window, or
     // change its restrictions. Per-query freshness is insufficient: all
     // measurements in a plan must belong to one coherent input state.
     for _ in 0..12 {
         eval.maybe_quit()?;
         eval.sync_pending_resize_events();
-        let Some(frame) = eval.frames.selected_frame() else {
-            return Ok(false);
+        let Some(identity) = target.resolve(eval)? else {
+            return Ok(None);
         };
-        let frame_id = frame.id;
-        let window_id = frame.selected_window;
-        let Some(buffer_id) = frame.find_window(window_id).and_then(Window::buffer_id) else {
-            return Ok(false);
-        };
-        crate::window::window_markers::sync_all_frames_for_buffer(&mut eval.frames, buffer_id);
-        crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-            &mut eval.frames,
-            &mut eval.buffers,
-            frame_id,
-        );
-        let before = eval.window_layout_attempt_freshness(frame_id, window_id, buffer_id);
-        let policy = ScrollPolicy::capture(eval);
+        let ViewportIdentity {
+            frame,
+            window,
+            buffer,
+        } = identity;
+        crate::window::window_markers::sync_all_frames_for_buffer(&mut eval.frames, buffer);
+        synchronize_selected_point(eval);
+        let before = eval.window_layout_attempt_freshness(frame, window, buffer);
+        let policy = target.policy(eval, identity);
         let plan = measure(eval);
-        let after = eval.window_layout_attempt_freshness(frame_id, window_id, buffer_id);
-        if before != after || policy != ScrollPolicy::capture(eval) {
+        // Only the globally selected window takes point from its buffer.
+        // Other windows keep their independent marker, including a fixed
+        // recenter target which its callback has just deselected.
+        synchronize_selected_point(eval);
+        let after = eval.window_layout_attempt_freshness(frame, window, buffer);
+        if target.resolve(eval)? != Some(identity)
+            || before != after
+            || policy != target.policy(eval, identity)
+        {
             continue;
         }
-        return match plan? {
-            Some(plan) => {
-                let plan = plan.into();
-                plan.viewport.commit(eval)?;
-                eval.scroll_goal = plan.goal;
-                Ok(true)
-            }
-            None => Ok(false),
-        };
+        return plan;
     }
     Err(failure("Scroll measurement did not converge"))
 }
-
 fn plan_scroll(
     eval: &mut Context,
     argument: Option<Value>,

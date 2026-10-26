@@ -22,8 +22,13 @@ fn unfinished_row_moves_to_worker_with_rewind_and_terminator_state() {
     ));
     geometry.note_display_string_wrap(LispCharPos1::new(3));
     let prepared = std::thread::spawn(move || {
-        geometry.push_text_row(20.0, 16.0, 12.0);
-        assert_eq!(geometry.row_metrics()[0].height(), 16.0);
+        geometry.push_text_row(DisplayTextRowMetrics {
+            y: 20.0,
+            height: 19.0,
+            ascent: 12.0,
+            line_spacing: 3.0,
+        });
+        assert_eq!(geometry.row_metrics()[0].height(), 19.0);
         assert_eq!(geometry.row_metrics()[0].ascent(), 12.0);
         geometry.finish(8)
     })
@@ -31,6 +36,9 @@ fn unfinished_row_moves_to_worker_with_rewind_and_terminator_state() {
     .unwrap();
     assert_eq!(prepared.rows.len(), 1);
     let row = &prepared.rows[0];
+    // Preserve both the vertical advance and its trailing spacing across the
+    // worker handoff; consumers must distinguish them when fitting the last row.
+    assert_eq!((row.height, row.extra_line_spacing), (19, 3));
     assert_eq!(row.start_buffer_pos, Some(LispCharPos1::new(1)));
     assert_eq!(row.end_buffer_pos, Some(LispCharPos1::new(3)));
     assert_eq!(row.end_source, DisplayRowEndSource::DisplayStringWrap);

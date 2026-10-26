@@ -79,6 +79,9 @@ mod idle_timer_output;
 #[path = "integer_width.rs"]
 mod integer_width;
 
+#[path = "recenter_box_drawing.rs"]
+mod recenter_box_drawing;
+
 #[path = "interaction_geometry.rs"]
 mod interaction_geometry;
 

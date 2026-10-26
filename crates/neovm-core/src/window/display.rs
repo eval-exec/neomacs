@@ -715,11 +715,19 @@ impl crate::emacs_core::eval::Context {
         {
             crate::window::window_markers::sync_all_frames_for_buffer(&mut self.frames, buffer_id);
         }
-        crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-            &mut self.frames,
-            &mut self.buffers,
-            frame_id,
-        );
+        // A queried frame need not be globally selected. Its locally selected
+        // window still owns an independent point marker in that case.
+        if self
+            .frames
+            .selected_frame()
+            .is_some_and(|frame| frame.id == frame_id)
+        {
+            crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
+                &mut self.frames,
+                &mut self.buffers,
+                frame_id,
+            );
+        }
         let adapter = std::mem::replace(
             &mut self.window_layout_query_adapter,
             WindowLayoutQueryAdapter::Running,
