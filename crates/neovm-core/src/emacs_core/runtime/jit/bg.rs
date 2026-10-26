@@ -61,6 +61,7 @@
 //!   ready, and none probes before.
 
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroU8;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -1447,10 +1448,17 @@ pub(crate) fn stress_mix(seq: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Upper bound of the soak's fake-running probes for one finished job (the
+/// skip count is `1..=STRESS_PROBE_SKIP_MAX`). `NonZeroU8` makes the zero
+/// bound that would panic the skip-count modulus unrepresentable. The test
+/// that must out-probe a late install derives its bound from this one
+/// definition.
+const STRESS_PROBE_SKIP_MAX: NonZeroU8 = NonZeroU8::new(4).unwrap();
+
 /// Probes a finished job of `seq` still reads as running under stress.
 fn stress_probe_skips(seq: u64) -> u8 {
     if stress_enabled() {
-        1 + (stress_mix(seq) % 4) as u8
+        1 + (stress_mix(seq) % u64::from(STRESS_PROBE_SKIP_MAX.get())) as u8
     } else {
         0
     }

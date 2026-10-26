@@ -119,13 +119,14 @@ fn run(stress: bool) {
     // A finished job installs at its function's next probe, but the
     // background stress soak (`NEOVM_JIT_BG_STRESS`, on for `stress` runs)
     // deliberately makes a finished job read as running for 1..=4 further
-    // probes (`bg::stress_probe_skips`), and the worker can finish after the
-    // drive's last call: "install late under stress" is exactly that case.
-    // One warm run is then a single probe per caller, not a guaranteed
-    // install, so give each caller up to 4 skips + the install probe (with
-    // margin) through cheap no-op mappings before the warm run exercises the
-    // installed leaves.
-    const INSTALL_PROBES: usize = 8;
+    // probes (`bg::stress_probe_skips`'s STRESS_PROBE_SKIP_MAX, a
+    // NonZeroU8), and the worker can finish after the drive's last call:
+    // "install late under stress" is exactly that case. One warm run is then
+    // a single probe per caller, not a guaranteed install, so give each
+    // caller up to the soak's skip bound + the install probe (with one probe
+    // of margin) through cheap no-op mappings before the warm run exercises
+    // the installed leaves.
+    const INSTALL_PROBES: usize = STRESS_PROBE_SKIP_MAX.get() as usize + 2;
     for _ in 0..INSTALL_PROBES {
         if leaf_inlines(&mut ctx, "hbg-incs", "mapcar")
             && leaf_inlines(&mut ctx, "hbg-walk", "mapc")
