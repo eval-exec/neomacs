@@ -9,6 +9,16 @@ on:
       - crates/neomacs-display-runtime/src/render_thread/tests/scroll_input_test.rs
       - crates/neomacs-display-runtime/src/window_identity.rs
       - crates/neomacs-gui-tests/tests/native_display.rs
+      - crates/neomacs-gui-tests/tests/native_display/frame_focus_windows.rs
+      - crates/neomacs-gui-tests/fixtures/native-frame-focus.el
+      - crates/neovm-core/src/keyboard/tests/frame_focus_input_test.rs
+      - crates/neovm-core/src/emacs_core/display/frame/**
+      - crates/neovm-core/src/emacs_core/display/window_cmds/mod.rs
+      - crates/neovm-core/src/keyboard.rs
+      - crates/neovm-core/src/window/mod.rs
+      - crates/neomacs-display-runtime/src/render_thread/window_events.rs
+      - crates/neomacs-display-runtime/src/render_thread/frame_windows.rs
+      - crates/neomacs/src/input_bridge.rs
       - crates/neomacs-gui-tests/fixtures/native-scroll-contract.el
       - crates/neomacs-perf/fixtures/scrolling-content.el
       - .github/workflows/native-display-contract.yml
@@ -57,14 +67,17 @@ jobs:
           cache-key: native-display-${{ matrix.target }}
           target: ${{ matrix.target }}
           install-nextest: 'true'
+      - name: Compile the native Windows focus driver before building the runtime
+        if: runner.os == 'Windows'
+        run: cargo nextest list --locked -p neomacs-gui-tests --test native_display -E 'test(native_windows_focus)'
       - name: Native resource adapters
         # Registry/defaults contracts have no Linux tests; nextest rejects an empty run.
         if: runner.os != 'Linux'
         run: cargo nextest run --locked -p neomacs-display-runtime --test gui_resources_test
       - name: Fractional input and gesture isolation
         run: cargo nextest run --locked -p neomacs-display-runtime --lib -E 'test(scroll_input)'
-      - name: Public Lisp resource and geometry contracts
-        run: cargo nextest run --locked -p neovm-core --lib -E 'test(resources_test)|test(frame_resize_test)'
+      - name: Public Lisp resource, geometry and frame focus contracts
+        run: cargo nextest run --locked -p neovm-core --lib -E 'test(resources_test)|test(frame_resize_test)|test(frame_focus_input_tests)|test(cycling_test)'
       - name: Build matching executable and runtime image
         run: cargo xtask fresh-build --release
       - name: Set resource font on ephemeral macOS runner
@@ -87,5 +100,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-display-${{ matrix.target }}
-          path: target/neomacs-gui-tests/native-display-*/
+          path: |
+            target/neomacs-gui-tests/native-display-*/
+            tmp/neomacs-gui-tests/native-display-*/
           if-no-files-found: warn

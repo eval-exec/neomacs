@@ -1,6 +1,6 @@
 ;;; native-frame-focus.el --- Observe native frame input routing -*- lexical-binding: t -*-
 
-;; Shared with GNU Emacs: input and focus come exclusively from X11, not
+;; Shared with GNU Emacs: input and focus come from the native backend, not
 ;; execute-kbd-macro, unread-command-events, or a test-only input API.
 (require 'json)
 (setq inhibit-startup-screen t

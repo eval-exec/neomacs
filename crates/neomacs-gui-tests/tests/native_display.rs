@@ -8,6 +8,10 @@ use std::{fs, path::PathBuf, time::Duration};
 #[path = "native_display/linux_scroll.rs"]
 mod linux_scroll;
 
+#[cfg(windows)]
+#[path = "native_display/frame_focus_windows.rs"]
+mod frame_focus_windows;
+
 #[test]
 // Prerequisites: requires a fresh release binary/pdump and a native graphical session.
 fn native_startup_font_and_resize_contract() {

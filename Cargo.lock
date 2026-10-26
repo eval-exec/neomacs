@@ -4013,6 +4013,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols-wlr",
  "wgpu",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

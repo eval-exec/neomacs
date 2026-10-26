@@ -17,6 +17,7 @@ mod extended_keysyms;
 #[path = "fontset_family_only_test.rs"]
 mod fontset_family_only;
 mod frame_bar_parameters;
+mod frame_focus;
 mod idle_timer_output;
 mod pixel_measurement;
 mod process_plist_isolation;
