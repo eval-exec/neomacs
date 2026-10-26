@@ -144,6 +144,22 @@ impl Context {
 }
 
 impl Baton {
+    /// Validate the original allocation designators of this retained World.
+    /// Pointer comparison itself borrows neither symbol nor projection storage.
+    pub(crate) fn check_symbol_root_designators(
+        &self,
+        backing: &crate::emacs_core::symbol::parallel::SymbolBacking,
+    ) -> Result<(), crate::tagged::gc::RegistrationError> {
+        use crate::tagged::gc::RegistrationError;
+        if !self.held_here() {
+            return Err(RegistrationError::WrongThread);
+        }
+        let obarray = std::ptr::NonNull::new(self.world.obarray.get())
+            .ok_or(RegistrationError::Publication)?;
+        let projections = std::ptr::NonNull::from(&self.world.thread_projections);
+        backing.check_root_designators(obarray, projections)
+    }
+
     /// Enumerate frozen shared storage once, after all ACKs, with no Context
     /// view, heap borrow, owner-slab walk, lazy initialization or Lisp callback.
     /// Marker unlink slots are valid only for the caller's stopped phase.
@@ -151,7 +167,7 @@ impl Baton {
     #[inline(never)]
     pub(crate) fn collect_parallel_world_roots(
         &self,
-        stopped: &AllStopped<'_>,
+        stopped: &mut AllStopped<'_>,
         out: &mut Vec<TaggedValue>,
     ) -> Result<Vec<*mut *mut crate::tagged::header::MarkerObj>, RendezvousError> {
         if !self.held_here() {
@@ -167,11 +183,13 @@ impl Baton {
         {
             return Err(RendezvousError::Publication);
         }
-        let projections = self
-            .world
-            .thread_projections
-            .try_borrow()
-            .map_err(|_| RendezvousError::Busy)?;
+        // All symbol/projection access requires the same checked receiver.
+        // Drop it before any collector/table bridge can borrow the stop.
+        {
+            let symbols = stopped.symbols()?;
+            symbols.append_current_symbol_roots(self, out)?;
+            symbols.append_current_projection_roots(self, out)?;
+        }
         // SAFETY: the unique keeper retains the World; AllStopped checked this
         // heap, keeper and every participant's publication. No participant can
         // access shared managers, no owner/reference loan survives, and only
@@ -181,11 +199,9 @@ impl Baton {
             let world = &self.world;
             let mut visit = |value| out.push(value);
             (&*world.owned_roots.get()).trace_roots(&mut visit);
-            projections.trace_roots(&mut visit);
             for value in (&*world.treesit.get()).roots() {
                 visit(value);
             }
-            (&*world.obarray.get()).trace_roots_with(&mut visit);
             (&*world.watchers.get()).trace_roots_with(&mut visit);
             (&*world.autoloads.get()).trace_roots_with(&mut visit);
             (&*world.frames.get()).trace_roots_with(&mut visit);

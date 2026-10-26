@@ -213,27 +213,21 @@ impl Baton {
     /// still enumerates the complete World through its production root path.
     pub(crate) fn symbol_root_ledger_for_test(
         &self,
-        stopped: &crate::tagged::gc::AllStopped<'_>,
+        stopped: &mut crate::tagged::gc::AllStopped<'_>,
     ) -> Result<(Vec<usize>, Vec<usize>), crate::tagged::gc::RendezvousError> {
-        use crate::gc_trace::GcTrace;
         use crate::tagged::gc::{RegistrationError, RendezvousError};
 
         if !self.held_here() {
             return Err(RegistrationError::WrongThread.into());
         }
         stopped.check_world_roots(self.parallel_heap_identity())?;
-        let table = self
-            .world
-            .thread_projections
-            .try_borrow()
-            .map_err(|_| RendezvousError::Busy)?;
+        let authority = stopped.symbols()?;
         let mut projections = Vec::new();
-        table.trace_roots(&mut |value| projections.push(value.bits()));
+        authority.append_current_projection_roots(self, &mut projections)?;
         let mut symbols = Vec::new();
-        // SAFETY: original retained World root, matching AllStopped, zero
-        // symbol authority, and no overlapping Context/owner/collector view.
-        unsafe { &*self.world.obarray.get() }
-            .trace_roots_with(&mut |value| symbols.push(value.bits()));
+        authority.append_current_symbol_roots(self, &mut symbols)?;
+        let projections = projections.into_iter().map(TaggedValue::bits).collect();
+        let symbols = symbols.into_iter().map(TaggedValue::bits).collect();
         Ok((symbols, projections))
     }
 }

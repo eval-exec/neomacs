@@ -119,7 +119,6 @@ enum MissingCapability {
     GlobalFunctionTransfer,
     FunctionInternTransfer,
     ImmutableNameReturn,
-    KeeperSymbolCensus,
     AllOwnerMinor,
 }
 impl MissingCapability {
@@ -128,7 +127,6 @@ impl MissingCapability {
             Self::GlobalFunctionTransfer => "combined_global_function_transfer",
             Self::FunctionInternTransfer => "combined_function_intern_transfer",
             Self::ImmutableNameReturn => "immutable_managed_name_return",
-            Self::KeeperSymbolCensus => "keeper_symbols_root_census",
             Self::AllOwnerMinor => "all_owner_stopped_minor",
         }
     }
@@ -190,13 +188,19 @@ impl PendingC6 {
     fn stopped(
         request: StoppedRequest,
         symbols: &crate::tagged::gc::KeeperSymbols<'_>,
+        keeper: &crate::emacs_core::eval::world::Baton,
     ) -> Result<(), PreparationError> {
-        let _retained_stop_receiver = symbols;
         match request {
             StoppedRequest::Noop => Ok(()),
-            StoppedRequest::KeeperCensus => Err(PreparationError::Missing(
-                MissingCapability::KeeperSymbolCensus,
-            )),
+            StoppedRequest::KeeperCensus => {
+                let mut roots = Vec::new();
+                symbols
+                    .append_current_symbol_roots(keeper, &mut roots)
+                    .map_err(PreparationError::Authority)?;
+                symbols
+                    .append_current_projection_roots(keeper, &mut roots)
+                    .map_err(PreparationError::Authority)
+            }
             StoppedRequest::Minor => {
                 Err(PreparationError::Missing(MissingCapability::AllOwnerMinor))
             }

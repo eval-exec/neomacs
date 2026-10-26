@@ -12,7 +12,7 @@ pub(super) struct Ledger {
     pub(super) extra_work: usize,
 }
 
-pub(super) fn ledger(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>) -> Ledger {
+pub(super) fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
     let mut result = Ledger::default();
     let keeper = era.keeper.as_ref().unwrap();
     let mut world = Vec::new();
@@ -65,7 +65,7 @@ fn round(
     owner.enter_native(&[]).unwrap();
     let mut stopped = era.stop().unwrap();
     era.return_cons_storage(&stopped).unwrap();
-    let before = ledger(era, &stopped);
+    let before = ledger(era, &mut stopped);
     let report = era.collect_stopped(&mut stopped).unwrap();
     let live = era
         .with_stopped_heap_for_test(&stopped, |heap| {

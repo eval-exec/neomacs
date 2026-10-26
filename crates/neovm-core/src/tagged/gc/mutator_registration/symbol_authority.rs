@@ -1,6 +1,7 @@
 //! Sealed symbol authority; running values move only between owner root homes.
 mod globals;
 mod intern;
+mod roots;
 pub use globals::GlobalError;
 pub(crate) use globals::{SymbolReadToken, SymbolWriteToken};
 pub use intern::InitialInternError;
@@ -140,6 +141,7 @@ pub struct SymbolMut<'lease, 'owner, 'era> {
     run: &'lease mut RunAccess<'owner, 'era>,
     key: SymbolHandle,
 }
+#[must_use = "the keeper receiver retains the exclusive stop borrow"]
 pub struct KeeperSymbols<'stop> {
     registry: &'stop Registry,
     _stop: PhantomData<&'stop mut AllStopped<'stop>>,

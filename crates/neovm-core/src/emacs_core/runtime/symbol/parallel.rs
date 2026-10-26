@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 mod functions;
+mod roots;
 pub(crate) use functions::FunctionUpdate;
 mod intern;
 mod write;

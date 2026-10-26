@@ -93,9 +93,7 @@ fn running_expected(request: RunningRequest) -> Result<(), PreparationError> {
 fn stopped_expected(request: StoppedRequest) -> Result<(), PreparationError> {
     match request {
         StoppedRequest::Noop => Ok(()),
-        StoppedRequest::KeeperCensus => Err(PreparationError::Missing(
-            MissingCapability::KeeperSymbolCensus,
-        )),
+        StoppedRequest::KeeperCensus => Ok(()),
         StoppedRequest::Minor => Err(PreparationError::Missing(MissingCapability::AllOwnerMinor)),
     }
 }
@@ -195,7 +193,7 @@ fn fixture(
         let mut stopped = era.stop().unwrap();
         let answer = {
             let symbols = stopped.symbols().unwrap();
-            PendingC6::stopped(stopped_request, &symbols)
+            PendingC6::stopped(stopped_request, &symbols, era.keeper.as_ref().unwrap())
         };
         assert_eq!(
             answer,
@@ -226,9 +224,6 @@ fn intended_red(backing: PlainSymbolBacking, missing: MissingCapability) {
         }
         MissingCapability::ImmutableNameReturn => {
             (RunningRequest::ManagedNameCall, StoppedRequest::Noop)
-        }
-        MissingCapability::KeeperSymbolCensus => {
-            (RunningRequest::Noop, StoppedRequest::KeeperCensus)
         }
         MissingCapability::AllOwnerMinor => (RunningRequest::Noop, StoppedRequest::Minor),
     };
@@ -280,16 +275,32 @@ red!(
     VoidProjection,
     ImmutableNameReturn
 );
-red!(
-    p3sym_c6_red_keeper_census_plain,
-    Unprojected,
-    KeeperSymbolCensus
-);
-red!(
-    p3sym_c6_red_keeper_census_projected,
-    VoidProjection,
-    KeeperSymbolCensus
-);
+#[test]
+fn p3sym_c6_keeper_census_plain() {
+    assert_eq!(
+        fixture(
+            PlainSymbolBacking::Unprojected,
+            RunningRequest::Noop,
+            StoppedRequest::KeeperCensus,
+            FixtureBody::Request,
+        )
+        .unwrap(),
+        Ok(())
+    );
+}
+#[test]
+fn p3sym_c6_keeper_census_projected() {
+    assert_eq!(
+        fixture(
+            PlainSymbolBacking::VoidProjection,
+            RunningRequest::Noop,
+            StoppedRequest::KeeperCensus,
+            FixtureBody::Request,
+        )
+        .unwrap(),
+        Ok(())
+    );
+}
 red!(p3sym_c6_red_minor_plain, Unprojected, AllOwnerMinor);
 red!(p3sym_c6_red_minor_projected, VoidProjection, AllOwnerMinor);
 
