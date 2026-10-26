@@ -34,9 +34,13 @@ fn div_v8_make_process_filter_accumulate_status() {
                            :filter (lambda (p s) (push s acc) (with-current-buffer (process-buffer p) (insert s)))
                            :sentinel (lambda (&rest _) nil))))
   (set-process-query-on-exit-flag proc nil)
-  (accept-process-output proc 1)
-  (accept-process-output proc 1)
-  (accept-process-output proc 1)
+  ;; A fixed number of one-second accepts races the child's exit on a loaded
+  ;; runner.  Wait for the child to exit, then drain the queued output and
+  ;; the terminal status before reading process-list/status.
+  (let ((deadline (+ (float-time) 30)))
+    (while (and (process-live-p proc) (< (float-time) deadline))
+      (accept-process-output proc 0.05)))
+  (while (accept-process-output proc 0))
   (list (eq (process-buffer proc) buf)
         (process-name proc)
         (processp proc)
