@@ -515,7 +515,10 @@ fn assert_pair_display_report(
             report.unexpected().len() - 40
         );
     }
-    panic!("{label} violated exact TUI display parity");
+    panic!(
+        "{label} violated exact TUI display parity ({}; {})",
+        gnu.name, neo.name
+    );
 }
 
 /// Predicate: the `*scratch*` buffer is visible with its default content.

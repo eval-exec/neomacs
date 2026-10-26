@@ -46,11 +46,30 @@ impl PollEvents {
     }
 }
 
+/// Bytes transferred by one transport read or write, before input accounting.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+struct TransportByteCount(usize);
+
+impl TransportByteCount {
+    const fn as_usize(self) -> usize {
+        self.0
+    }
+}
+
+impl From<TransportByteCount> for InputByteCount {
+    fn from(bytes: TransportByteCount) -> Self {
+        Self(bytes.0)
+    }
+}
+
+static_assertions::assert_eq_size!(TransportByteCount, usize);
+
 /// Private and sealed by this module: fake controls exercise the same owner as
 /// the real PTY. A WouldBlock read is the only ordinary empty-drain boundary.
 trait Transport {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize>;
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize>;
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<TransportByteCount>;
+    fn write(&mut self, bytes: &[u8]) -> io::Result<TransportByteCount>;
     fn resize(&mut self, size: TerminalSize) -> io::Result<()>;
     fn wait(&mut self, timeout: Duration) -> io::Result<Readiness>;
     fn wait_writable(&mut self, timeout: Duration) -> io::Result<WriteReadiness>;
@@ -117,17 +136,17 @@ impl PtyTransport {
 }
 
 impl Transport for PtyTransport {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<TransportByteCount> {
         match self.pty.read(buffer) {
             // Linux PTY masters report EIO when the last slave closes. This is
             // terminal EOF, not a fabricated successful input completion.
-            Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(0),
-            result => result,
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(TransportByteCount(0)),
+            result => result.map(TransportByteCount),
         }
     }
 
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.pty.write(bytes)
+    fn write(&mut self, bytes: &[u8]) -> io::Result<TransportByteCount> {
+        self.pty.write(bytes).map(TransportByteCount)
     }
 
     fn resize(&mut self, size: TerminalSize) -> io::Result<()> {
@@ -198,12 +217,12 @@ impl<T: Transport> Owner<T> {
                 return Err(TransportError::DrainDeadline);
             }
             match self.transport.read(&mut buffer) {
-                Ok(0) => {
+                Ok(TransportByteCount(0)) => {
                     self.read_state = ReadState::Closed;
                     self.emit(PtyOutputKind::OutputClosed)?;
                     return Ok(());
                 }
-                Ok(length) => self.emit(PtyOutputKind::Data(buffer[..length].into()))?,
+                Ok(length) => self.emit(PtyOutputKind::Data(buffer[..length.as_usize()].into()))?,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
                 Err(error) => return Err(TransportError::Read(error)),
@@ -224,7 +243,9 @@ impl<T: Transport> Owner<T> {
             reason,
         };
         loop {
-            if request.cancellation.is_cancelled() || stop.is_cancelled() {
+            if request.cancellation.state() == CancellationState::Cancelled
+                || stop.state() == CancellationState::Cancelled
+            {
                 return Err(failed(InputFailure::Cancelled));
             }
             if Instant::now() >= request.deadline {
@@ -237,28 +258,32 @@ impl<T: Transport> Owner<T> {
                 ReadState::Closed => return Err(TransportError::Closed),
                 ReadState::Open => {}
             }
-            if request.cancellation.is_cancelled() || stop.is_cancelled() {
+            if request.cancellation.state() == CancellationState::Cancelled
+                || stop.state() == CancellationState::Cancelled
+            {
                 return Err(failed(InputFailure::Cancelled));
             }
             if bytes.is_empty() {
                 return Ok(InputByteCount(0));
             }
             match self.transport.write(bytes) {
-                Ok(0) => return Err(failed(InputFailure::ZeroWrite)),
+                Ok(TransportByteCount(0)) => return Err(failed(InputFailure::ZeroWrite)),
                 Ok(length) => {
-                    let committed = InputByteCount(length);
+                    let committed = InputByteCount::from(length);
                     self.emit(PtyOutputKind::InputCommitted {
                         request: request.id,
-                        bytes: bytes[..length].into(),
+                        bytes: bytes[..length.as_usize()].into(),
                     })?;
-                    if length != bytes.len() {
+                    if length.as_usize() != bytes.len() {
                         return Err(TransportError::Input {
                             committed,
                             requested,
                             reason: InputFailure::PartialWrite,
                         });
                     }
-                    if request.cancellation.is_cancelled() || stop.is_cancelled() {
+                    if request.cancellation.state() == CancellationState::Cancelled
+                        || stop.state() == CancellationState::Cancelled
+                    {
                         return Err(TransportError::Input {
                             committed,
                             requested,
@@ -286,7 +311,9 @@ impl<T: Transport> Owner<T> {
     }
 
     fn perform(&mut self, request: Request, stop: &Cancellation) -> Result<(), TransportError> {
-        let result = if request.cancellation.is_cancelled() || stop.is_cancelled() {
+        let result = if request.cancellation.state() == CancellationState::Cancelled
+            || stop.state() == CancellationState::Cancelled
+        {
             Err(TransportError::Cancelled)
         } else {
             match &request.action {
@@ -365,7 +392,7 @@ fn run_transport<T: Transport>(
                 Err(TryRecvError::Disconnected) => return Ok(()),
                 Err(TryRecvError::Empty) => {}
             }
-            if stop.is_cancelled() {
+            if stop.state() == CancellationState::Cancelled {
                 return owner.drain_available(Instant::now() + Duration::from_secs(1));
             }
             match owner.read_state {

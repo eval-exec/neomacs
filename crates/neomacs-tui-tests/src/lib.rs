@@ -1030,6 +1030,18 @@ struct SessionTerminal {
     transport_state: ObservedTransportState,
 }
 
+impl std::fmt::Debug for SessionTerminal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionTerminal")
+            .field("size", &self.parser.screen().size())
+            .field("recent_output_bytes", &self.recent_output.len())
+            .field("observations", &self.observations)
+            .field("transport_state", &self.transport_state)
+            .field("recording_path", &self.recording.path())
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ObservedTransportState {
     Open,

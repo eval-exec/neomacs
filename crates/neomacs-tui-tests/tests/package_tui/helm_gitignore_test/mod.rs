@@ -373,19 +373,9 @@ fn helm_gitignore_public_workflows_match_gnu() {
     );
     let gnu_save_path = pair.gnu.home_dir().join(".gitignore");
     let neo_save_path = pair.neo.home_dir().join(".gitignore");
-    pair.gnu.send_keys("M->");
-    pair.gnu
-        .send(b"\n# Project-local release artifacts\nrelease-output/\n");
-    pair.gnu.send_keys("C-x C-w");
-    pair.gnu.send(gnu_save_path.as_os_str().as_encoded_bytes());
-    pair.gnu.send_key("RET");
+    edit_and_write_gitignore(&mut pair.gnu, &gnu_save_path);
     if neo_generated {
-        pair.neo.send_keys("M->");
-        pair.neo
-            .send(b"\n# Project-local release artifacts\nrelease-output/\n");
-        pair.neo.send_keys("C-x C-w");
-        pair.neo.send(neo_save_path.as_os_str().as_encoded_bytes());
-        pair.neo.send_key("RET");
+        edit_and_write_gitignore(&mut pair.neo, &neo_save_path);
     }
     let saved_relative = ".gitignore";
     let deadline = Instant::now() + STAGE_TIMEOUT;
@@ -447,22 +437,8 @@ fn helm_gitignore_public_workflows_match_gnu() {
     );
     open_helm_gitignore(&mut pair, &mut divergences);
     send_to_both(&mut pair, |session| session.send(b"visual"));
-    let failure = |grid: &[String]| {
-        grid.iter().any(|row| {
-            row.contains("Keyword argument")
-                || row.contains("Wrong number of arguments")
-                || row.contains("wrong-number-of-arguments")
-        })
-    };
-    wait_for_progress(
-        &mut pair,
-        "list HTTP failure",
-        STAGE_TIMEOUT,
-        failure,
-        &mut divergences,
-    );
-    assert_terminal_failure_parity(
-        &pair,
+    let observed_failures = observe_terminal_failures(&mut pair, STAGE_TIMEOUT);
+    observed_failures.assert_parity(
         "list connection-close failure",
         expect![
             "pattern: visual [error in process sentinel: Keyword argument :data not one of (:error-thrown :&allow-other-keys&rest :)]"

@@ -68,9 +68,20 @@ fn eval_defun_via_cmeta_x_defines_current_elisp_function() {
     send_both(&mut gnu, &mut neo, "C-M-x");
     read_both(&mut gnu, &mut neo, Duration::from_secs(2));
     eval_expression(&mut gnu, &mut neo, "(neo-eval-defun-probe)");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(6), |grid| {
-        grid.iter().any(|row| row.contains("value-from-eval-defun"))
-    });
+    // The buffer already contains the return string before this invocation.
+    // Only its exact echo result witnesses that the call has completed.
+    let returned = |grid: &[String]| {
+        grid.last()
+            .is_some_and(|row| row.trim() == "\"value-from-eval-defun\"")
+    };
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(6), returned);
+    for session in [&gnu, &neo] {
+        assert!(
+            returned(&session.text_grid()),
+            "{} did not finish evaluating the defined function",
+            session.name
+        );
+    }
     assert_pair_exact_display(
         "eval_defun_via_cmeta_x_defines_current_elisp_function",
         &gnu,
@@ -81,6 +92,10 @@ fn eval_defun_via_cmeta_x_defines_current_elisp_function() {
 #[test]
 fn imenu_via_mx_jumps_to_named_elisp_defun() {
     let (mut gnu, mut neo) = boot_pair("");
+    // Imenu leaves point on the definition's opening paren. Its navigation
+    // result is independent of show-paren's idle-timer presentation; that
+    // feature has its own positive parity test in face_parity.rs.
+    eval_expression(&mut gnu, &mut neo, "(show-paren-mode -1)");
     let name = "imenu-probe.el";
     let initial = "(defun neo-imenu-alpha ()\n  1)\n\n(defun neo-imenu-beta ()\n  2)\n";
 

@@ -156,8 +156,19 @@ fn open_session(pair: &mut PackageTuiPair, current: &str) -> Result<(), String> 
         wait_for(
             session,
             Duration::from_secs(8),
-            "the fixture's three candidates",
-            |grid| candidate_rows(grid, PREFIX).len() == NAMES.len(),
+            "the typed fixture prefix and its three filtered candidates",
+            |grid| {
+                // The unfiltered session can already contain all three
+                // fixture rows while another buffer is selected. Neither
+                // those rows nor a partial input proves this command's filter.
+                grid.iter().any(|row| {
+                    row.contains(PROMPT)
+                        && row
+                            .split_once(": ")
+                            .is_some_and(|(_, input)| input.trim_end() == PREFIX)
+                }) && count_indicator_in(grid, PROMPT) == "1/3"
+                    && candidate_rows(grid, PREFIX).len() == NAMES.len()
+            },
         );
     })?;
     assert_candidate_state(pair, PREFIX, PROMPT, "1/3", Some(current));

@@ -4,8 +4,10 @@ use super::super::scenario::{
 use super::super::{CachedMelpaOracle, HELM_GITIGNORE_MELPA_PIN};
 use super::prelude::*;
 use expect_test::expect;
+use neomacs_infra::packages::elisp_string;
 use neomacs_tui_tests::{Snapshot, TuiSession};
 use std::fs;
+use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -210,10 +212,8 @@ pub(super) fn assert_helm_semantic_snapshot(
     }
 }
 
-pub(super) fn terminal_failure_snapshot(session: &TuiSession) -> String {
-    session
-        .text_grid()
-        .into_iter()
+fn terminal_failure_text(grid: Vec<String>) -> String {
+    grid.into_iter()
         .filter_map(|row| {
             let row = row.trim();
             (row.contains("Keyword argument")
@@ -225,6 +225,120 @@ pub(super) fn terminal_failure_snapshot(session: &TuiSession) -> String {
         .join("\n")
 }
 
+pub(super) fn terminal_failure_snapshot(session: &TuiSession) -> String {
+    terminal_failure_text(session.text_grid())
+}
+
+#[derive(Debug)]
+enum TerminalFailureObservation {
+    NotObserved,
+    Observed(String),
+}
+
+/// Owns only this wait's exact observations. The exclusive pair borrow blocks
+/// later input until the consuming assertion ends this observation attempt.
+#[must_use = "consume the observed terminal failures before driving the pair"]
+pub(super) struct PairedTerminalFailures<'pair> {
+    pair: &'pair mut PackageTuiPair,
+    gnu: TerminalFailureObservation,
+    neo: TerminalFailureObservation,
+}
+
+impl std::fmt::Debug for PairedTerminalFailures<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairedTerminalFailures")
+            .field("gnu", &self.gnu)
+            .field("neo", &self.neo)
+            .finish_non_exhaustive()
+    }
+}
+
+pub(super) fn observe_terminal_failures(
+    pair: &mut PackageTuiPair,
+    timeout: Duration,
+) -> PairedTerminalFailures<'_> {
+    let deadline = Instant::now() + timeout;
+    let mut gnu = TerminalFailureObservation::NotObserved;
+    let mut neo = TerminalFailureObservation::NotObserved;
+    while Instant::now() < deadline {
+        // Neither editor waits behind the other's full deadline: the error
+        // can disappear while the other process is still reaching its error.
+        for (session, observation) in [(&mut pair.gnu, &mut gnu), (&mut pair.neo, &mut neo)] {
+            match observation {
+                TerminalFailureObservation::Observed(_) => {}
+                TerminalFailureObservation::NotObserved => {
+                    let observed = session
+                        .observe_at_fence()
+                        .expect("Helm Gitignore terminal-failure fence");
+                    let text = terminal_failure_text(observed.text_grid());
+                    if text.is_empty() {
+                        session.read(
+                            deadline
+                                .saturating_duration_since(Instant::now())
+                                .min(Duration::from_millis(50)),
+                        );
+                    } else {
+                        *observation = TerminalFailureObservation::Observed(text);
+                    }
+                }
+            }
+        }
+        match (&gnu, &neo) {
+            (TerminalFailureObservation::Observed(_), TerminalFailureObservation::Observed(_)) => {
+                break;
+            }
+            (TerminalFailureObservation::NotObserved, TerminalFailureObservation::NotObserved)
+            | (TerminalFailureObservation::NotObserved, TerminalFailureObservation::Observed(_))
+            | (TerminalFailureObservation::Observed(_), TerminalFailureObservation::NotObserved) => {
+            }
+        }
+    }
+    PairedTerminalFailures { pair, gnu, neo }
+}
+
+impl PairedTerminalFailures<'_> {
+    pub(super) fn assert_parity(
+        self,
+        stage: &str,
+        expected: impl Snapshot,
+        divergences: &mut Vec<String>,
+    ) {
+        let gnu = match self.gnu {
+            TerminalFailureObservation::Observed(text) => text,
+            TerminalFailureObservation::NotObserved => panic!(
+                "GNU {stage} screen did not reach expected state:\n{}",
+                self.pair.gnu.text_grid().join("\n")
+            ),
+        };
+        let neo = match self.neo {
+            TerminalFailureObservation::Observed(text) => text,
+            TerminalFailureObservation::NotObserved => {
+                divergences.push(format!(
+                    "Neomacs {stage} screen did not reach the GNU state:\n{}",
+                    self.pair.neo.text_grid().join("\n")
+                ));
+                String::new()
+            }
+        };
+        assert_terminal_failure_text_parity(stage, &gnu, &neo, expected, divergences);
+    }
+}
+
+fn assert_terminal_failure_text_parity(
+    stage: &str,
+    gnu: &str,
+    neo: &str,
+    expected: impl Snapshot,
+    divergences: &mut Vec<String>,
+) {
+    expected.assert_snapshot(gnu);
+    if neo != gnu {
+        divergences.push(format!(
+            "{stage} terminal failure differs:\nGNU:\n{gnu}\nNeomacs:\n{neo}"
+        ));
+    }
+}
+
 pub(super) fn assert_terminal_failure_parity(
     pair: &PackageTuiPair,
     stage: &str,
@@ -232,13 +346,8 @@ pub(super) fn assert_terminal_failure_parity(
     divergences: &mut Vec<String>,
 ) {
     let gnu = terminal_failure_snapshot(&pair.gnu);
-    expected.assert_snapshot(&gnu);
     let neo = terminal_failure_snapshot(&pair.neo);
-    if neo != gnu {
-        divergences.push(format!(
-            "{stage} terminal failure differs:\nGNU:\n{gnu}\nNeomacs:\n{neo}"
-        ));
-    }
+    assert_terminal_failure_text_parity(stage, &gnu, &neo, expected, divergences);
 }
 
 pub(super) fn navigate_to_visual_studio_code(
@@ -299,6 +408,79 @@ pub(super) fn navigate_to_visual_studio_code(
     selection_reached
 }
 
+const PROJECT_RELEASE_TAIL: &str = "\n# Project-local release artifacts\nrelease-output/\n";
+const WRITE_FILE_PROMPT: &str = "Write file: ";
+
+#[derive(Clone, Copy, Debug)]
+enum SaveStage<'filename> {
+    EditedTail,
+    WriteFilePrompt,
+    EmptyFilename,
+    Filename(&'filename str),
+}
+
+fn wait_for_save_stage(session: &mut TuiSession, deadline: Instant, stage: SaveStage<'_>) {
+    loop {
+        let observed = session
+            .observe_at_fence()
+            .expect("Helm Gitignore edit/save observation fence");
+        let grid = observed.text_grid();
+        let reached = match stage {
+            SaveStage::EditedTail => PROJECT_RELEASE_TAIL
+                .lines()
+                .filter(|line| !line.is_empty())
+                // The edited window occupies only the left pane of a row.
+                .all(|line| grid.iter().any(|row| row.contains(line))),
+            SaveStage::WriteFilePrompt => grid
+                .last()
+                .is_some_and(|row| row.starts_with(WRITE_FILE_PROMPT)),
+            SaveStage::EmptyFilename => grid
+                .last()
+                .is_some_and(|row| row.trim_end() == WRITE_FILE_PROMPT.trim_end()),
+            SaveStage::Filename(expected) => {
+                grid.last().is_some_and(|row| row.trim_end() == expected)
+            }
+        };
+        if reached {
+            return;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "{} did not reach Helm Gitignore save stage {stage:?}:\n{}",
+            session.name,
+            grid.join("\n")
+        );
+        session.read(remaining.min(Duration::from_millis(50)));
+    }
+}
+
+pub(super) fn edit_and_write_gitignore(session: &mut TuiSession, path: &Path) {
+    let filename = path
+        .to_str()
+        .expect("owned Gitignore fixture path is UTF-8");
+    let expected = format!("{WRITE_FILE_PROMPT}{filename}");
+    let (_, columns) = session.screen_size();
+    assert!(
+        expected.is_ascii() && expected.len() < usize::from(columns),
+        "owned Gitignore filename must fit completely on its prompt row"
+    );
+    // One observation budget covers this editor's edit and filename stages.
+    // Transport operations retain their separate existing request deadlines.
+    let deadline = Instant::now() + Duration::from_secs(8);
+    session.send_keys("M->");
+    session.send(PROJECT_RELEASE_TAIL.as_bytes());
+    wait_for_save_stage(session, deadline, SaveStage::EditedTail);
+    session.send_keys("C-x C-w");
+    wait_for_save_stage(session, deadline, SaveStage::WriteFilePrompt);
+    // Clear the default path so its shadow cannot obscure the requested name.
+    session.send_keys("C-a C-k");
+    wait_for_save_stage(session, deadline, SaveStage::EmptyFilename);
+    session.send(filename.as_bytes());
+    wait_for_save_stage(session, deadline, SaveStage::Filename(&expected));
+    session.send_key("RET");
+}
+
 pub(super) fn eval_both(pair: &mut PackageTuiPair, form: &str) {
     send_to_both(pair, |session| {
         session.send_key("M-:");
@@ -308,15 +490,31 @@ pub(super) fn eval_both(pair: &mut PackageTuiPair, form: &str) {
 }
 
 pub(super) fn capture_editor(session: &mut TuiSession, stage: &str, editor: &str) -> String {
+    let path = session.home_dir().join(format!("{stage}.state"));
+    let pending_stage = format!("{stage}.pending");
+    let pending_path = session.home_dir().join(format!("{pending_stage}.state"));
+    for capture_path in [&path, &pending_path] {
+        assert!(
+            !capture_path
+                .try_exists()
+                .expect("inspect owned capture path"),
+            "{editor} capture stage {stage:?} must use fresh paths: {capture_path:?}"
+        );
+    }
+    // with-temp-file exposes its empty/truncated destination before writing
+    // finishes. Publish the unchanged capture only after that helper returns
+    // and closes the file; both paths share the editor's owned HOME directory.
+    let pending = elisp_string(&pending_stage);
+    let pending_file = elisp_string(&format!("{pending_stage}.state"));
+    let final_file = elisp_string(&format!("{stage}.state"));
     session.send_key("M-:");
     session.send(
         format!(
-            r#"(progn (neomacs-helm-gitignore-tui-await-http-idle) (neomacs-helm-gitignore-tui-capture {stage:?}))"#
+            r#"(progn (neomacs-helm-gitignore-tui-await-http-idle) (prog1 (neomacs-helm-gitignore-tui-capture {pending}) (rename-file (expand-file-name {pending_file} (getenv "HOME")) (expand-file-name {final_file} (getenv "HOME")) nil)))"#
         )
         .as_bytes(),
     );
     session.send_key("RET");
-    let path = session.home_dir().join(format!("{stage}.state"));
     let deadline = Instant::now() + STAGE_TIMEOUT;
     loop {
         session.read(Duration::from_millis(10));

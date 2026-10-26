@@ -31,24 +31,81 @@ fn boot_pair_plain() -> (TuiSession, TuiSession) {
     (gnu, neo)
 }
 
-/// Install the dot mode line and force N full mode-line re-evaluations with
-/// redisplays on both sessions.
-fn install_and_force_updates(gnu: &mut TuiSession, neo: &mut TuiSession, rounds: usize) {
-    eval_expression(gnu, neo, INSTALL_DOT_MODE_LINE);
-    for _ in 0..rounds {
-        eval_expression(
-            gnu,
-            neo,
+#[derive(Debug)]
+enum ForcedUpdateRound {
+    First,
+    Second,
+    Third,
+    Fourth,
+    Fifth,
+}
+
+#[derive(Debug)]
+enum DotModeLineCommand {
+    Install,
+    Force(ForcedUpdateRound),
+}
+
+/// Observe the current command's computed result before sending another M-:.
+fn observe_dot_command(gnu: &mut TuiSession, neo: &mut TuiSession, command: DotModeLineCommand) {
+    let (operation, ordinal) = match command {
+        DotModeLineCommand::Install => (INSTALL_DOT_MODE_LINE, 0),
+        DotModeLineCommand::Force(round) => (
             "(progn (force-mode-line-update t) (redisplay) (sit-for 0))",
+            match round {
+                ForcedUpdateRound::First => 1,
+                ForcedUpdateRound::Second => 2,
+                ForcedUpdateRound::Third => 3,
+                ForcedUpdateRound::Fourth => 4,
+                ForcedUpdateRound::Fifth => 5,
+            },
+        ),
+    };
+    let expression = format!("(progn {operation} (format \"dot-update-%d\" {ordinal}))");
+    let expected = format!("\"dot-update-{ordinal}\"");
+    eval_expression(gnu, neo, &expression);
+    let completed = |grid: &[String]| {
+        grid.last()
+            .is_some_and(|row| row.trim() == expected.as_str())
+    };
+    for session in [gnu, neo] {
+        session.read_until(Duration::from_secs(8), completed);
+        let grid = session.text_grid();
+        // The full result is absent from the expression's input, and differs
+        // for installation and every round, so an older frame cannot pass.
+        assert!(
+            completed(&grid),
+            "{} did not complete {expected}:\n{}",
+            session.name,
+            grid.join("\n")
         );
-        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            grid.iter().any(|row| row.trim() == "A·B·C"),
+            "{} lost a mode-line dot after {expected}:\n{}",
+            session.name,
+            grid.join("\n")
+        );
+    }
+}
+
+/// Install the dot mode line and observe five full mode-line re-evaluations.
+fn install_and_force_updates(gnu: &mut TuiSession, neo: &mut TuiSession) {
+    observe_dot_command(gnu, neo, DotModeLineCommand::Install);
+    for round in [
+        ForcedUpdateRound::First,
+        ForcedUpdateRound::Second,
+        ForcedUpdateRound::Third,
+        ForcedUpdateRound::Fourth,
+        ForcedUpdateRound::Fifth,
+    ] {
+        observe_dot_command(gnu, neo, DotModeLineCommand::Force(round));
     }
 }
 
 #[test]
 fn mode_line_unicode_dot_stays_a_dot_across_forced_updates() {
     let (mut gnu, mut neo) = boot_pair_plain();
-    install_and_force_updates(&mut gnu, &mut neo, 5);
+    install_and_force_updates(&mut gnu, &mut neo);
 
     // The reporter saw a CORRECT first frame and a later escaped one, so the
     // assertion must hold after arbitrarily many re-evaluations, not only on

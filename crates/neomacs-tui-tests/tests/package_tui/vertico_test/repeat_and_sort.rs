@@ -24,6 +24,7 @@
 use std::time::Duration;
 
 use expect_test::expect_file;
+use neomacs_tui_tests::TuiSession;
 
 use super::harness::*;
 use super::prelude::*;
@@ -40,6 +41,40 @@ const NAMES: [&str; 3] = ["quartz-zz", "quartz-aaa", "quartz-mm"];
 
 /// What the package's default sort function makes of them.
 const DEFAULT_ORDER: [&str; 3] = ["quartz-mm", "quartz-zz", "quartz-aaa"];
+
+const REPLAY_ORDER: [&str; 2] = ["quartz-mm", "quartz-aaa"];
+
+#[derive(Clone, Copy, Debug)]
+enum RepeatPhase {
+    Original,
+    Replayed,
+}
+
+fn wait_for_candidates(session: &mut TuiSession, phase: RepeatPhase) {
+    let (count, candidates): (&str, &[&str]) = match phase {
+        RepeatPhase::Original => ("1/3", &DEFAULT_ORDER),
+        RepeatPhase::Replayed => ("1/2", &REPLAY_ORDER),
+    };
+    wait_for(
+        session,
+        Duration::from_secs(8),
+        &format!("the filtered repeat candidates {phase:?}"),
+        |grid| {
+            count_indicator_in(grid, PROMPT) == count
+                && prompt_row_in(grid)
+                    .and_then(|row| grid.get(usize::from(row) + 1..))
+                    .is_some_and(|rows| {
+                        rows.iter()
+                            .map(|row| row.trim())
+                            .filter(|row| !row.is_empty())
+                            .eq(candidates.iter().copied())
+                    })
+                && grid
+                    .iter()
+                    .any(|row| row.contains(PROMPT) && row.trim_end().ends_with(PREFIX))
+        },
+    );
+}
 
 pub(super) fn run() {
     let prelude = repeat_vertico(&fixture_buffers(&NAMES.map(str::to_owned)));
@@ -63,12 +98,9 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
     })?;
     both(pair, "type the fixture prefix", |session| {
         session.send(b"quartz-");
-        wait_for(
-            session,
-            Duration::from_secs(8),
-            "the fixture's three candidates",
-            |grid| candidate_rows(grid, PREFIX).len() == NAMES.len(),
-        );
+        // All three fixture names also occur in the unfiltered four-candidate
+        // frame. The prompt and package count must describe the filtered list.
+        wait_for_candidates(session, RepeatPhase::Original);
     })?;
     assert_order(pair, &DEFAULT_ORDER, "the package's default sort function");
     record_checkpoint(
@@ -85,7 +117,12 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
             session,
             Duration::from_secs(8),
             "the accepted buffer",
-            |grid| grid.iter().any(|row| row.contains("quartz-zz")),
+            |grid| {
+                !grid.iter().any(|row| row.contains(PROMPT))
+                    && mode_line_row_in(grid)
+                        .and_then(|row| grid.get(usize::from(row)))
+                        .is_some_and(|row| row.contains("quartz-zz"))
+            },
         );
     })?;
     assert_eq!(
@@ -98,6 +135,7 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
     // candidate that was current when the session ended.
     both(pair, "replay the session", |session| {
         invoke(session, "vertico-repeat", PROMPT);
+        wait_for_candidates(session, RepeatPhase::Replayed);
     })?;
     assert_eq!(
         minibuffer_input(&pair.neo, PROMPT),
@@ -140,12 +178,7 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
             |grid| grid.iter().any(|row| row.contains(PROMPT)),
         );
         session.send(b"quartz-");
-        wait_for(
-            session,
-            Duration::from_secs(8),
-            "the remaining candidates",
-            |grid| count_indicator_in(grid, PROMPT) != "1/3",
-        );
+        wait_for_candidates(session, RepeatPhase::Replayed);
     })?;
     assert_candidate_state(pair, PREFIX, PROMPT, "1/2", Some("quartz-mm"));
     Ok(())

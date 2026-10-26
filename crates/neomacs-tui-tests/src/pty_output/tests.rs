@@ -15,7 +15,7 @@ enum FakeRead {
 #[derive(Debug)]
 enum FakeWrite {
     Full,
-    Partial(InputByteCount),
+    Partial(TransportByteCount),
     Zero,
     Failure(io::ErrorKind),
     CancelAfter(Arc<Cancellation>),
@@ -30,14 +30,14 @@ struct FakeTransport {
 }
 
 impl Transport for FakeTransport {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<TransportByteCount> {
         match self.reads.pop_front().unwrap_or(FakeRead::Empty) {
             FakeRead::Data(bytes) => {
                 buffer[..bytes.len()].copy_from_slice(bytes);
-                Ok(bytes.len())
+                Ok(TransportByteCount(bytes.len()))
             }
             FakeRead::Empty => Err(io::ErrorKind::WouldBlock.into()),
-            FakeRead::Eof => Ok(0),
+            FakeRead::Eof => Ok(TransportByteCount(0)),
             FakeRead::Failure(kind) => Err(kind.into()),
             FakeRead::Interrupted => Err(io::ErrorKind::Interrupted.into()),
             FakeRead::Cancel(cancellation) => {
@@ -47,7 +47,7 @@ impl Transport for FakeTransport {
         }
     }
 
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<TransportByteCount> {
         let length = match self.writes.pop_front().unwrap_or(FakeWrite::Full) {
             FakeWrite::Full => bytes.len(),
             FakeWrite::Partial(length) => length.as_usize(),
@@ -61,7 +61,7 @@ impl Transport for FakeTransport {
         if length != 0 {
             self.committed.push(bytes[..length].into());
         }
-        Ok(length)
+        Ok(TransportByteCount(length))
     }
 
     fn resize(&mut self, size: TerminalSize) -> io::Result<()> {
@@ -163,7 +163,7 @@ fn already_available_output_precedes_the_committed_input_fence() {
 #[test]
 fn a_partial_write_records_only_its_committed_prefix_and_fails() {
     let (mut owner, receiver) = owner(FakeTransport {
-        writes: [FakeWrite::Partial(InputByteCount(2))].into(),
+        writes: [FakeWrite::Partial(TransportByteCount(2))].into(),
         ..Default::default()
     });
     assert!(
@@ -539,8 +539,8 @@ fn dropped_ticket_cancels_its_request_and_invalidates_the_session() {
     let ticket = pump.input(b"key").unwrap();
     drop(ticket);
     let request = requests.try_recv().unwrap();
-    assert!(request.cancellation.is_cancelled());
-    assert!(pump.stop.is_cancelled());
+    assert_eq!(request.cancellation.state(), CancellationState::Cancelled);
+    assert_eq!(pump.stop.state(), CancellationState::Cancelled);
     assert!(matches!(
         pump.input(b"second"),
         Err(TransportError::Cancelled)
@@ -581,8 +581,8 @@ fn observer_failure_cancels_without_erasing_an_already_committed_prefix() {
     });
     assert!(matches!(result, Err(TransportError::Observer(_))));
     assert_eq!(committed, b"key");
-    assert!(request.cancellation.is_cancelled());
-    assert!(pump.stop.is_cancelled());
+    assert_eq!(request.cancellation.state(), CancellationState::Cancelled);
+    assert_eq!(pump.stop.state(), CancellationState::Cancelled);
 }
 
 #[test]
@@ -639,8 +639,8 @@ fn a_foreign_completion_is_rejected_before_the_observer_can_apply_it() {
         Err(TransportError::RequestMismatch)
     ));
     assert!(applied.is_empty());
-    assert!(request.cancellation.is_cancelled());
-    assert!(pump.stop.is_cancelled());
+    assert_eq!(request.cancellation.state(), CancellationState::Cancelled);
+    assert_eq!(pump.stop.state(), CancellationState::Cancelled);
 }
 
 #[test]

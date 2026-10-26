@@ -1,7 +1,7 @@
 use super::super::scenario::PackageTuiPair;
 use super::prelude::*;
 use neomacs_tui_tests::{RawTerminalSnapshot, Snapshot, TuiSession};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(super) fn lifecycle_report(pair: &PackageTuiPair, gnu: bool) -> String {
     let grid = if gnu {
@@ -24,26 +24,46 @@ pub(super) fn wait_for<F>(
 ) where
     F: Fn(&[String]) -> bool,
 {
-    session.read_until(timeout, |grid| predicate(grid));
-    let grid = session.text_grid();
-    assert!(
-        predicate(&grid),
-        "{} timed out waiting for {description}:\n{}",
-        session.name,
-        grid.join("\n")
-    );
+    let deadline = Instant::now() + timeout;
+    loop {
+        let observed = session
+            .observe_at_fence()
+            .expect("Leuven ordered terminal observation");
+        let grid = observed.text_grid();
+        if predicate(&grid) {
+            return;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "{} timed out waiting for {description}:\n{}",
+            session.name,
+            grid.join("\n")
+        );
+        session.read(remaining.min(Duration::from_millis(50)));
+    }
 }
 
 pub(super) fn invoke(session: &mut TuiSession, command: &str, ready: &str) {
-    session.send_keys("M-x");
+    // Prompt entry and literal consumption share the existing input budget.
+    // A successful PTY write alone does not establish minibuffer consumption.
+    let input_deadline = Instant::now() + Duration::from_secs(8);
+    session.send_key("M-x");
     wait_for(
         session,
-        Duration::from_secs(8),
+        input_deadline.saturating_duration_since(Instant::now()),
         &format!("M-x prompt before {command}"),
-        |grid| grid.iter().any(|row| row.contains("M-x")),
+        |grid| grid.last().is_some_and(|row| row.trim_end() == "M-x"),
     );
     session.send(command.as_bytes());
-    session.send_keys("RET");
+    let entered = format!("M-x {command}");
+    wait_for(
+        session,
+        input_deadline.saturating_duration_since(Instant::now()),
+        &format!("M-x literal before submitting {command}"),
+        |grid| grid.last().is_some_and(|row| row.trim_end() == entered),
+    );
+    session.send_key("RET");
     wait_for(
         session,
         // The first real theme command cold-loads Org and reapplies its faces.

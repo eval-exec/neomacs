@@ -1,228 +1,155 @@
 #![cfg(unix)]
 //! TUI tests for child frame visibility lifecycle.
 //!
-//! Exercises the `set-frame-parameter 'visibility` → host notification
-//! path that was previously broken (GUI child frames were not removed
-//! from the compositor cache when hidden via `modify-frame-parameters`).
-//!
-//! These tests use `eval_expression` to drive both GNU Emacs and Neomacs
-//! through the same elisp, then verify the echo area or buffer content
-//! matches. In TUI mode child frames are not composited as floating
-//! overlays, but the underlying frame visibility state and the
-//! `(frame-visible-p)` predicate are still meaningful and must match.
+//! GNU's `make-frame-invisible` only hides child frames on a text terminal
+//! (`frame.c`, `Fmake_frame_invisible`). Each probe therefore creates a child,
+//! samples its actual visibility transitions in one expression, and restores
+//! the parent before observing the result. No M-: command is sent to a hidden
+//! frame. The computed result cannot be mistaken for the expression's input.
 
 use crate::support;
 
 use std::time::Duration;
 use support::*;
 
-/// `make-frame-invisible` then `make-frame-visible` should work
-/// and report correct visibility state via `frame-visible-p`.
+#[derive(Clone, Copy, Debug)]
+enum VisibilityProbe {
+    MakeInvisibleVisible,
+    SetParameter,
+    Iconify,
+    ChildLifecycle,
+    ParameterRoundtrip,
+    MultipleToggles,
+}
+
+fn assert_visibility_probe(probe: VisibilityProbe) {
+    let (label, body, expected_states) = match probe {
+        VisibilityProbe::MakeInvisibleVisible => (
+            "frame_visibility_toggle_via_make_frame_invisible_visible",
+            r#"(let ((before (frame-visible-p cf)) hidden)
+                 (make-frame-invisible cf t)
+                 (setq hidden (frame-visible-p cf))
+                 (make-frame-visible cf)
+                 (list before hidden (frame-visible-p cf)))"#,
+            "(t nil t)",
+        ),
+        VisibilityProbe::SetParameter => (
+            "frame_visibility_via_set_frame_parameter_nil",
+            r#"(let ((before (frame-visible-p cf)) hidden)
+                 (set-frame-parameter cf 'visibility nil)
+                 (setq hidden (frame-visible-p cf))
+                 (set-frame-parameter cf 'visibility t)
+                 (list before hidden (frame-visible-p cf)))"#,
+            "(t nil t)",
+        ),
+        VisibilityProbe::Iconify => (
+            "frame_visibility_via_iconify_frame",
+            // GNU documents `make-invisible` as a child-frame iconify policy
+            // (`frame.c`, `Ficonify_frame`; lispref, `iconify-child-frame`).
+            r#"(let ((iconify-child-frame 'make-invisible)
+                     (before (frame-visible-p cf)) hidden)
+                 (iconify-frame cf)
+                 (setq hidden (frame-visible-p cf))
+                 (make-frame-visible cf)
+                 (list before hidden (frame-visible-p cf)))"#,
+            "(t nil t)",
+        ),
+        VisibilityProbe::ChildLifecycle => (
+            "child_frame_visibility_lifecycle",
+            r#"(let ((before (frame-visible-p cf)))
+                 (set-frame-parameter cf 'visibility nil)
+                 (list (frame-live-p cf) before (frame-visible-p cf)))"#,
+            "(t t nil)",
+        ),
+        VisibilityProbe::ParameterRoundtrip => (
+            "frame_parameter_visibility_roundtrip",
+            r#"(let ((before (frame-parameter cf 'visibility)) hidden)
+                 (set-frame-parameter cf 'visibility nil)
+                 (setq hidden (frame-parameter cf 'visibility))
+                 (set-frame-parameter cf 'visibility t)
+                 (list before hidden (frame-parameter cf 'visibility)))"#,
+            "(t nil t)",
+        ),
+        VisibilityProbe::MultipleToggles => (
+            "frame_visibility_multiple_toggles",
+            r#"(let (states)
+                 (dotimes (_ 3)
+                   (let ((before (frame-visible-p cf)) hidden)
+                     (make-frame-invisible cf t)
+                     (setq hidden (frame-visible-p cf))
+                     (make-frame-visible cf)
+                     (push (list before hidden (frame-visible-p cf)) states)))
+                 (nreverse states))"#,
+            "((t nil t) (t nil t) (t nil t))",
+        ),
+    };
+    let (mut gnu, mut neo) = boot_pair("");
+    let expression = format!(
+        r#"(let* ((parent (selected-frame))
+                  (cf (make-frame `((parent-frame . ,parent)
+                                    (width . 30) (height . 5)
+                                    (minibuffer . nil))))
+                  (states (unwind-protect
+                              {body}
+                            (make-frame-visible cf)
+                            (select-frame parent)
+                            (delete-frame cf))))
+             (format "visibility:%S" states))"#
+    );
+    eval_expression(&mut gnu, &mut neo, &expression);
+    let expected = format!("\"visibility:{expected_states}\"");
+    let completed = |grid: &[String]| {
+        grid.last()
+            .is_some_and(|row| row.trim() == expected.as_str())
+    };
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(10), completed);
+    // wait_for_both is a bounded observation, not an assertion. Require each
+    // editor's actual result before comparing the rest of the terminal.
+    for session in [&gnu, &neo] {
+        let grid = session.text_grid();
+        assert!(
+            completed(&grid),
+            "{} did not finish {label} with {expected}:\n{}",
+            session.name,
+            grid.join("\n")
+        );
+    }
+    assert_pair_exact_display(label, &gnu, &neo);
+}
+
+/// `make-frame-invisible` and `make-frame-visible` sample visible, hidden,
+/// and restored states on the same child.
 #[test]
 fn frame_visibility_toggle_via_make_frame_invisible_visible() {
-    let (mut gnu, mut neo) = boot_pair("");
-
-    // Check initial visibility
-    eval_expression(&mut gnu, &mut neo, "(frame-visible-p (selected-frame))");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("t"))
-    });
-
-    // Make invisible (force since it's the only frame)
-    eval_expression(
-        &mut gnu,
-        &mut neo,
-        "(make-frame-invisible (selected-frame) t)",
-    );
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-
-    // Verify invisible
-    eval_expression(&mut gnu, &mut neo, "(frame-visible-p (selected-frame))");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("nil"))
-    });
-
-    // Make visible again
-    eval_expression(&mut gnu, &mut neo, "(make-frame-visible (selected-frame))");
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-
-    // Verify visible again
-    eval_expression(&mut gnu, &mut neo, "(frame-visible-p (selected-frame))");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("t"))
-    });
-    assert_pair_exact_display(
-        "frame_visibility_toggle_via_make_frame_invisible_visible",
-        &gnu,
-        &neo,
-    );
+    assert_visibility_probe(VisibilityProbe::MakeInvisibleVisible);
 }
 
-/// `set-frame-parameter 'visibility nil` should hide the frame,
-/// matching `make-frame-invisible` behavior.
+/// The visibility parameter hides and restores a child frame.
 #[test]
 fn frame_visibility_via_set_frame_parameter_nil() {
-    let (mut gnu, mut neo) = boot_pair("");
-
-    // Verify initially visible
-    eval_expression(&mut gnu, &mut neo, "(frame-visible-p (selected-frame))");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("t"))
-    });
-
-    // Hide via set-frame-parameter (this was the broken path)
-    eval_expression(
-        &mut gnu,
-        &mut neo,
-        "(set-frame-parameter nil 'visibility nil)",
-    );
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-
-    // Verify invisible
-    eval_expression(&mut gnu, &mut neo, "(frame-visible-p (selected-frame))");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("nil"))
-    });
-
-    // Restore via set-frame-parameter
-    eval_expression(
-        &mut gnu,
-        &mut neo,
-        "(set-frame-parameter nil 'visibility t)",
-    );
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-
-    // Verify visible
-    eval_expression(&mut gnu, &mut neo, "(frame-visible-p (selected-frame))");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("t"))
-    });
-    assert_pair_exact_display("frame_visibility_via_set_frame_parameter_nil", &gnu, &neo);
+    assert_visibility_probe(VisibilityProbe::SetParameter);
 }
 
-/// `iconify-frame` should hide the frame.
+/// The explicit `make-invisible` child iconify policy hides the child.
 #[test]
 fn frame_visibility_via_iconify_frame() {
-    let (mut gnu, mut neo) = boot_pair("");
-
-    eval_expression(&mut gnu, &mut neo, "(iconify-frame (selected-frame))");
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-
-    // Verify invisible (iconified frames report nil for frame-visible-p)
-    eval_expression(&mut gnu, &mut neo, "(frame-visible-p (selected-frame))");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("nil"))
-    });
-    assert_pair_exact_display("frame_visibility_via_iconify_frame", &gnu, &neo);
+    assert_visibility_probe(VisibilityProbe::Iconify);
 }
 
-/// Create a child frame, verify it exists, hide it via
-/// `set-frame-parameter 'visibility nil`, then verify its
-/// visibility state matches GNU.
+/// A created child stays live while hidden, then is cleaned up.
 #[test]
 fn child_frame_visibility_lifecycle() {
-    let (mut gnu, mut neo) = boot_pair("");
-
-    // Exercise the complete lifecycle in one expression so the temporary
-    // frame cannot become the input frame for a later M-: invocation.
-    eval_expression(
-        &mut gnu,
-        &mut neo,
-        "(let ((cf (make-frame `((parent-frame . ,(selected-frame)) \
-                                  (width . 30) (height . 5) \
-                                  (minibuffer . nil))))) \
-          (unwind-protect \
-              (progn \
-                (set-frame-parameter cf 'visibility nil) \
-                (prin1-to-string \
-                  (list (frame-live-p cf) (frame-visible-p cf)))) \
-            (delete-frame cf)))",
-    );
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(10), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("(t nil)"))
-    });
-    assert_pair_exact_display("child_frame_visibility_lifecycle", &gnu, &neo);
+    assert_visibility_probe(VisibilityProbe::ChildLifecycle);
 }
 
-/// Visibility parameter should be stored and retrievable via
-/// `frame-parameter`.
+/// The visibility parameter records both hidden and restored states.
 #[test]
 fn frame_parameter_visibility_roundtrip() {
-    let (mut gnu, mut neo) = boot_pair("");
-
-    // Set visibility to nil via set-frame-parameter
-    eval_expression(
-        &mut gnu,
-        &mut neo,
-        "(set-frame-parameter nil 'visibility nil)",
-    );
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-
-    // Read it back
-    eval_expression(
-        &mut gnu,
-        &mut neo,
-        "(prin1-to-string (frame-parameter nil 'visibility))",
-    );
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("nil"))
-    });
-
-    // Set back to t
-    eval_expression(
-        &mut gnu,
-        &mut neo,
-        "(set-frame-parameter nil 'visibility t)",
-    );
-    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
-
-    // Read it back
-    eval_expression(
-        &mut gnu,
-        &mut neo,
-        "(prin1-to-string (frame-parameter nil 'visibility))",
-    );
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-        grid.iter().rev().take(4).any(|row| row.contains("t"))
-    });
-    assert_pair_exact_display("frame_parameter_visibility_roundtrip", &gnu, &neo);
+    assert_visibility_probe(VisibilityProbe::ParameterRoundtrip);
 }
 
-/// Multiple visibility toggles in sequence should be consistent.
+/// Three complete hide/show cycles retain every transition on the same child.
 #[test]
 fn frame_visibility_multiple_toggles() {
-    let (mut gnu, mut neo) = boot_pair("");
-
-    for _ in 0..3 {
-        // Hide
-        eval_expression(
-            &mut gnu,
-            &mut neo,
-            "(make-frame-invisible (selected-frame) t)",
-        );
-        read_both(&mut gnu, &mut neo, Duration::from_millis(500));
-
-        eval_expression(
-            &mut gnu,
-            &mut neo,
-            "(prin1-to-string (frame-visible-p (selected-frame)))",
-        );
-        wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-            grid.iter().rev().take(4).any(|row| row.contains("nil"))
-        });
-
-        // Show
-        eval_expression(&mut gnu, &mut neo, "(make-frame-visible (selected-frame))");
-        read_both(&mut gnu, &mut neo, Duration::from_millis(500));
-
-        eval_expression(
-            &mut gnu,
-            &mut neo,
-            "(prin1-to-string (frame-visible-p (selected-frame)))",
-        );
-        wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
-            grid.iter().rev().take(4).any(|row| row.contains("t"))
-        });
-    }
-    assert_pair_exact_display("frame_visibility_multiple_toggles", &gnu, &neo);
+    assert_visibility_probe(VisibilityProbe::MultipleToggles);
 }

@@ -165,6 +165,12 @@ impl PtyOutputEvent {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CancellationState {
+    Active,
+    Cancelled,
+}
+
 #[derive(Debug, Default)]
 struct Cancellation(AtomicBool);
 
@@ -173,8 +179,11 @@ impl Cancellation {
         self.0.store(true, Ordering::Release);
     }
 
-    fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+    fn state(&self) -> CancellationState {
+        match self.0.load(Ordering::Acquire) {
+            false => CancellationState::Active,
+            true => CancellationState::Cancelled,
+        }
     }
 }
 
@@ -196,7 +205,9 @@ struct Request {
 
 impl Request {
     fn ensure_active(&self, stop: &Cancellation) -> Result<(), TransportError> {
-        if self.cancellation.is_cancelled() || stop.is_cancelled() {
+        if self.cancellation.state() == CancellationState::Cancelled
+            || stop.state() == CancellationState::Cancelled
+        {
             return Err(TransportError::Cancelled);
         }
         if Instant::now() >= self.deadline {
@@ -277,7 +288,7 @@ impl PtyOutputPump {
     }
 
     fn request(&mut self, action: Action) -> Result<PendingInput<'_>, TransportError> {
-        if self.stop.is_cancelled() {
+        if self.stop.state() == CancellationState::Cancelled {
             return Err(TransportError::Cancelled);
         }
         let id = self.request_counter.next()?;

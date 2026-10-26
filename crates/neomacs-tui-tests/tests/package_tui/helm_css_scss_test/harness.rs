@@ -4,24 +4,36 @@ use super::preludes::*;
 use expect_test::expect;
 use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(super) fn wait_for<F>(session: &mut TuiSession, label: &str, predicate: F)
 where
     F: Fn(&[String]) -> bool + Copy,
 {
-    session.read_until(Duration::from_secs(20), predicate);
-    assert!(
-        predicate(&session.text_grid()),
-        "{label} did not reach the expected terminal state:\n{}",
-        session.text_grid().join("\n")
-    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let observed = session
+            .observe_at_fence()
+            .expect("Helm CSS/SCSS observation fence");
+        let grid = observed.text_grid();
+        if predicate(&grid) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{label} did not reach the expected terminal state:\n{}",
+            grid.join("\n")
+        );
+        session.read(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(50)),
+        );
+    }
 }
 
 pub(super) fn send_default_probe(session: &mut TuiSession) {
-    session.send_key("M-x");
-    session.send(b"neomacs-hcss-default-run");
-    session.send_key("RET");
+    invoke(session, "neomacs-hcss-default-run");
 }
 
 pub(super) fn semantic_rows(session: &TuiSession) -> String {
@@ -38,7 +50,20 @@ pub(super) fn semantic_rows(session: &TuiSession) -> String {
 
 pub(super) fn invoke(session: &mut TuiSession, command: &str) {
     session.send_key("M-x");
+    wait_for(session, "extended-command prompt entry", |grid| {
+        grid.last()
+            .is_some_and(|row| row.trim_start().starts_with("M-x "))
+    });
     session.send(command.as_bytes());
+    // A returned source frame is not command-loop completion, and committed
+    // PTY bytes do not prove minibuffer consumption. RET must follow the full
+    // literal's paint, not a partial prefix left while Helm unwinds.
+    let entered = format!("M-x {command}");
+    wait_for(
+        session,
+        &format!("extended-command literal {command:?}"),
+        |grid| grid.last().is_some_and(|row| row.trim_end() == entered),
+    );
     session.send_key("RET");
 }
 

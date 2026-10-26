@@ -239,6 +239,26 @@ fn query_replace_question_mark_shows_query_help_without_replacing() {
     );
 }
 
+#[derive(Debug)]
+enum ReplacementLiteralObservation {
+    Pending(String),
+    Consumed,
+}
+
+fn replacement_literal_observation(
+    observed: &neomacs_tui_tests::FencedTerminal<'_>,
+) -> ReplacementLiteralObservation {
+    let mut grid = observed.text_grid();
+    let minibuffer = grid.pop().unwrap_or_default();
+    if minibuffer.contains("omega")
+        && (minibuffer.contains("with:") || minibuffer.contains("with "))
+    {
+        ReplacementLiteralObservation::Consumed
+    } else {
+        ReplacementLiteralObservation::Pending(minibuffer)
+    }
+}
+
 #[test]
 fn query_replace_keyboard_quit_leaves_buffer_unchanged() {
     let (mut gnu, mut neo) = boot_pair("");
@@ -266,6 +286,33 @@ fn query_replace_keyboard_quit_leaves_buffer_unchanged() {
 
     for session in [&mut gnu, &mut neo] {
         session.send(b"omega");
+    }
+    // A committed PTY write does not mean the editor consumed the literal.
+    // C-g may preempt queued typing, so observe its paint in each minibuffer
+    // through the same ordering owner before sending the cancellation key.
+    for session in [&mut gnu, &mut neo] {
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        loop {
+            let observed = session.observe_at_fence().expect("replacement input fence");
+            match replacement_literal_observation(&observed) {
+                ReplacementLiteralObservation::Consumed => break,
+                ReplacementLiteralObservation::Pending(minibuffer) => assert!(
+                    std::time::Instant::now() < deadline,
+                    "{} did not consume replacement literal: {minibuffer:?}",
+                    session.name,
+                ),
+            }
+            session.read(deadline.saturating_duration_since(std::time::Instant::now()));
+        }
+    }
+    // Retain the same semantic condition at both final ordered observations.
+    let gnu_observed = gnu.observe_at_fence().expect("final GNU replacement fence");
+    let neo_observed = neo.observe_at_fence().expect("final Neo replacement fence");
+    for observed in [&gnu_observed, &neo_observed] {
+        assert!(matches!(
+            replacement_literal_observation(observed),
+            ReplacementLiteralObservation::Consumed
+        ));
     }
     send_both(&mut gnu, &mut neo, "C-g");
 

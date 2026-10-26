@@ -66,8 +66,8 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
         wait_for(
             session,
             Duration::from_secs(8),
-            "a full candidate window",
-            |grid| candidate_rows(grid, PREFIX).len() == usize::from(WINDOW),
+            "the typed fixture prefix and its candidate window",
+            |grid| fixture_candidates(grid) == FixtureCandidates::FilteredWindow,
         );
     })?;
 
@@ -80,7 +80,7 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
         "the vertical display shows vertico-count candidates"
     );
 
-    toggle(pair, "M-G", "the grid display")?;
+    toggle(pair, DisplayLayout::Grid)?;
     assert_grid(pair);
     record_checkpoint(
         pair,
@@ -89,7 +89,7 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
         expect_file!["snapshots/multiform_grid_plain_grid.plain"],
     );
 
-    toggle(pair, "M-F", "the flat display")?;
+    toggle(pair, DisplayLayout::Flat)?;
     assert_flat(pair);
     record_checkpoint(
         pair,
@@ -101,7 +101,7 @@ fn run_body(pair: &mut PackageTuiPair) -> Result<(), String> {
     // `vertico-multiform-vertical` is the same key sequence with no display
     // mode behind it: it turns the current one off, and the session is back to
     // one candidate per row in the minibuffer's own window.
-    toggle(pair, "M-V", "the vertical display")?;
+    toggle(pair, DisplayLayout::Vertical)?;
     assert_candidate_state(pair, PREFIX, PROMPT, "1/30", Some("facet-01"));
     assert_eq!(
         candidate_rows(&pair.gnu.text_grid(), PREFIX).len(),
@@ -195,8 +195,8 @@ fn open_session(pair: &mut PackageTuiPair) -> Result<(), String> {
         wait_for(
             session,
             Duration::from_secs(8),
-            "a full candidate window",
-            |grid| candidate_rows(grid, PREFIX).len() == usize::from(WINDOW),
+            "the typed fixture prefix and its candidate window",
+            |grid| fixture_candidates(grid) == FixtureCandidates::FilteredWindow,
         );
     })
 }
@@ -248,16 +248,78 @@ const SEVENTH_QUICK_KEY: &str = "ja facet-07";
 /// default, which the prelude leaves alone.
 const WINDOW: u16 = 10;
 
+/// The flat layout's visible candidates at this terminal width.
+const FLAT_CANDIDATES: &str = "{facet-01 | facet-02 | facet-03 | …}";
+
+/// The input must have reached Vertico before its initially visible candidate
+/// rows can witness a filtered session. The prompt may preselect itself.
+#[derive(Debug, Eq, PartialEq)]
+enum FixtureCandidates {
+    Pending,
+    FilteredWindow,
+}
+
+fn fixture_candidates(grid: &[String]) -> FixtureCandidates {
+    let total = format!("/{TOTAL}");
+    let filtered = grid.iter().any(|row| {
+        row.contains(PROMPT)
+            && row
+                .split_once(": ")
+                .is_some_and(|(_, input)| input.trim_end() == PREFIX)
+    }) && count_indicator_in(grid, PROMPT).ends_with(total.as_str())
+        && candidate_rows(grid, PREFIX).len() == usize::from(WINDOW);
+    if filtered {
+        FixtureCandidates::FilteredWindow
+    } else {
+        FixtureCandidates::Pending
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DisplayLayout {
+    Grid,
+    Flat,
+    Vertical,
+}
+
 /// Press one of `vertico-multiform-map`'s display keys in both peers.
 ///
 /// Each toggle is a command that runs inside the completion session, so the
 /// wait is for the layout it leaves behind rather than for a marker.
-fn toggle(pair: &mut PackageTuiPair, key: &str, description: &str) -> Result<(), String> {
+fn toggle(pair: &mut PackageTuiPair, layout: DisplayLayout) -> Result<(), String> {
+    let (key, description) = match layout {
+        DisplayLayout::Grid => ("M-G", "the grid display"),
+        DisplayLayout::Flat => ("M-F", "the flat display"),
+        DisplayLayout::Vertical => ("M-V", "the vertical display"),
+    };
+    let flat_input = format!("{PREFIX} {FLAT_CANDIDATES}");
     both(pair, description, |session| {
         session.send_key(key);
-        wait_for(session, Duration::from_secs(8), description, |grid| {
-            grid.iter().any(|row| row.contains(PREFIX))
-        });
+        wait_for(
+            session,
+            Duration::from_secs(8),
+            description,
+            |grid| match layout {
+                DisplayLayout::Grid => {
+                    fixture_candidates(grid) == FixtureCandidates::FilteredWindow
+                        && candidate_cells(grid, PREFIX).len() == TOTAL
+                }
+                DisplayLayout::Flat => {
+                    count_indicator_in(grid, PROMPT) == "1/30"
+                        && grid.iter().any(|row| {
+                            row.contains(PROMPT)
+                                && row.split_once(": ").is_some_and(|(_, input)| {
+                                    input.trim_end() == flat_input.as_str()
+                                })
+                        })
+                        && candidate_rows(grid, PREFIX).is_empty()
+                }
+                DisplayLayout::Vertical => {
+                    fixture_candidates(grid) == FixtureCandidates::FilteredWindow
+                        && candidate_cells(grid, PREFIX).len() == usize::from(WINDOW)
+                }
+            },
+        );
     })
 }
 
@@ -322,7 +384,7 @@ fn assert_flat(pair: &PackageTuiPair) {
     );
     let line = exact_row(&pair.gnu, PROMPT);
     assert!(
-        line.contains("{facet-01 | facet-02 | facet-03 | …}"),
+        line.contains(FLAT_CANDIDATES),
         "the flat display does not fit its candidates the way the width says: {line}"
     );
 }

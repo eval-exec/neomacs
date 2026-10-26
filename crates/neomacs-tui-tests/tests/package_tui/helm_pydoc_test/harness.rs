@@ -31,12 +31,55 @@ where
     operation(&mut pair.neo);
 }
 
+#[derive(Clone, Copy, Debug)]
+enum PydocInputStage {
+    Prompt,
+    Literal,
+}
+
+impl PydocInputStage {
+    fn expected_input(self) -> &'static str {
+        match self {
+            Self::Prompt => "M-x",
+            Self::Literal => "M-x helm-pydoc",
+        }
+    }
+}
+
+fn wait_for_pydoc_input(session: &mut TuiSession, deadline: Instant, stage: PydocInputStage) {
+    loop {
+        let observed = session
+            .observe_at_fence()
+            .expect("Helm Pydoc command observation fence");
+        let grid = observed.text_grid();
+        if grid
+            .last()
+            .is_some_and(|row| row.trim_end() == stage.expected_input())
+        {
+            return;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "{} did not consume Helm Pydoc command {stage:?}:\n{}",
+            session.name,
+            grid.join("\n")
+        );
+        session.read(remaining.min(Duration::from_millis(50)));
+    }
+}
+
 pub(super) fn open_pydoc(pair: &mut PackageTuiPair) {
-    send_to_both(pair, |session| {
+    for session in [&mut pair.gnu, &mut pair.neo] {
+        // Committed bytes can precede minibuffer consumption while the prior
+        // Helm command unwinds. Submit RET only after the full literal is painted.
+        let input_deadline = Instant::now() + Duration::from_secs(8);
         session.send_key("M-x");
+        wait_for_pydoc_input(session, input_deadline, PydocInputStage::Prompt);
         session.send(b"helm-pydoc");
+        wait_for_pydoc_input(session, input_deadline, PydocInputStage::Literal);
         session.send_key("RET");
-    });
+    }
     wait_for_both(pair, Duration::from_secs(12), |grid| {
         grid.iter().any(|row| row.contains("Imported Modules"))
             && grid.iter().any(|row| row.contains("Installed Modules"))

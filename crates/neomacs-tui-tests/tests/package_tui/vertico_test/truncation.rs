@@ -204,12 +204,24 @@ fn open_session(pair: &mut PackageTuiPair, description: &str, input: &str) {
             "the switch-to-buffer prompt",
             |grid| grid.iter().any(|row| row.contains(PROMPT)),
         );
-        session.send(format!("{PREFIX}{input}").as_bytes());
+        let typed_input = format!("{PREFIX}{input}");
+        let candidate_count = if input.is_empty() { TOTAL } else { 1 };
+        let indicator = format!("1/{candidate_count}");
+        session.send(typed_input.as_bytes());
         wait_for(
             session,
             Duration::from_secs(8),
-            "the fixture's candidates",
-            |grid| (1..=TOTAL).contains(&candidate_rows(grid, PREFIX).len()),
+            "the typed input and its filtered candidates",
+            |grid| {
+                // Opening the session already shows fixture rows, before any
+                // input is processed. The narrow prompt wraps onto a second
+                // row, so locate its input after the colon on either row.
+                grid.iter().any(|row| {
+                    row.split_once(": ")
+                        .is_some_and(|(_, value)| value.trim_end() == typed_input.as_str())
+                }) && count_indicator_in(grid, PROMPT) == indicator
+                    && candidate_rows(grid, PREFIX).len() == candidate_count
+            },
         );
     })
     .expect("both peers open the session");

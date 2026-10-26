@@ -314,7 +314,10 @@ impl PackageTuiPair {
     }
 
     pub fn assert_display(&mut self, checkpoint: DisplayCheckpoint) {
-        let label = format!("{}: {}", self.label, checkpoint.label);
+        let label = format!(
+            "{}: {} ({}; {})",
+            self.label, checkpoint.label, self.gnu.name, self.neo.name
+        );
         let marker = format!("display: {}", checkpoint.label);
         self.gnu.mark_recording(&marker);
         self.neo.mark_recording(&marker);
