@@ -2648,6 +2648,56 @@ impl DisplayRowEndSource {
     }
 }
 
+/// Physical distance to the end of a completely measured EOB overlay stream.
+///
+/// The distance is relative to the row where the first string at this anchor
+/// started. It survives query-row translation and includes an empty final row
+/// that the renderer need not publish. Source anchors and display-row distance
+/// therefore remain separate facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompletedEobOverlayMotionExtent {
+    anchor: LispCharPos1,
+    following_rows: usize,
+}
+
+impl CompletedEobOverlayMotionExtent {
+    /// Refuse a completion before the stream's first physical row rather than
+    /// turning an invalid interval into a large unsigned distance.
+    pub const fn from_physical_rows(
+        anchor: LispCharPos1,
+        first_row: usize,
+        completion_row: usize,
+    ) -> Option<Self> {
+        match completion_row.checked_sub(first_row) {
+            Some(following_rows) => Some(Self {
+                anchor,
+                following_rows,
+            }),
+            None => None,
+        }
+    }
+
+    pub const fn anchor(self) -> LispCharPos1 {
+        self.anchor
+    }
+
+    pub const fn following_rows(self) -> usize {
+        self.following_rows
+    }
+}
+
+/// An EOB source position does not prove that its virtual overlay tail ended.
+/// Only the producer that drains all strings can publish `Complete`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EobOverlayMotionCoverage {
+    #[default]
+    NotObserved,
+    Incomplete {
+        anchor: LispCharPos1,
+    },
+    Complete(CompletedEobOverlayMotionExtent),
+}
+
 /// Registry index of a fringe bitmap, as handed out by `define-fringe-bitmap`
 /// and stored in a bitmap symbol's `fringe` property.
 ///
@@ -2956,6 +3006,8 @@ pub struct WindowDisplaySnapshot {
     pub point_rows: Option<DisplayPointRows>,
     /// Visible row metrics, sorted by `row`.
     pub rows: Vec<DisplayRowSnapshot>,
+    /// Completion evidence for the virtual display tail at accessible EOB.
+    pub eob_overlay_motion: EobOverlayMotionCoverage,
     /// The displayed buffer's `modified_tick` when this snapshot was produced.
     /// The snapshot is a redisplay cache; a display primitive that reads it
     /// (e.g. `vertical-motion` with a column target) must treat it as valid
@@ -3796,6 +3848,7 @@ impl PartialEq for WindowDisplaySnapshot {
             && self.logical_cursor == other.logical_cursor
             && self.phys_cursor == other.phys_cursor
             && self.rows == other.rows
+            && self.eob_overlay_motion == other.eob_overlay_motion
             && self.buffer_modiff == other.buffer_modiff
             && self.layout_freshness == other.layout_freshness
             && self.window_end_record == other.window_end_record
@@ -3822,6 +3875,7 @@ impl Default for WindowDisplaySnapshot {
             points: Vec::new(),
             point_rows: None,
             rows: Vec::new(),
+            eob_overlay_motion: EobOverlayMotionCoverage::NotObserved,
             buffer_modiff: None,
             layout_freshness: None,
             posn_matrix: None,
@@ -9256,3 +9310,7 @@ impl GcTrace for WindowTree {
 #[cfg(test)]
 #[path = "tests/window_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/eob_overlay_motion_test.rs"]
+mod eob_overlay_motion_tests;

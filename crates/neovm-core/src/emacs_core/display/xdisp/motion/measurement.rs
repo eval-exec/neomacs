@@ -167,6 +167,19 @@ pub(super) fn resolve(
         if rows.is_empty() {
             return Err(failed("Display motion measurement has no source rows"));
         }
+        let incomplete_eob_tail = request.rows > 0
+            && request.goal_column.is_none()
+            && matches!(
+                snapshot.eob_overlay_motion,
+                crate::window::EobOverlayMotionCoverage::Incomplete { anchor }
+                    if anchor == accessible.end_lisp()
+            )
+            && snapshot_row_index_for_pos_or_truncated_line(
+                &rows,
+                request.origin,
+                accessible.end_lisp(),
+            )
+            .is_some();
         if request.rows < 0
             && snapshot_row_index_for_pos(&rows, request.origin).is_some()
             && start > accessible.start_lisp()
@@ -177,9 +190,13 @@ pub(super) fn resolve(
                 .get(request.buffer)
                 .expect("validated source buffer");
             start = backtrack(buffer, start, backtrack_lines);
-        } else if rows.last().and_then(|row| row.end_buffer_pos) == Some(accessible.end_lisp()) {
+        } else if rows.last().and_then(|row| row.end_buffer_pos) == Some(accessible.end_lisp())
+            && !incomplete_eob_tail
+        {
             // More rows cannot expose an origin missing from complete source
-            // coverage. Do not double the allocation forever at EOB.
+            // coverage. An observed, unfinished EOB overlay is different: its
+            // source anchor is covered, but its physical traversal still needs
+            // rows. Do not terminate that query just because it reached ZV.
             return Err(failed(
                 "Display motion origin is outside measured source coverage",
             ));

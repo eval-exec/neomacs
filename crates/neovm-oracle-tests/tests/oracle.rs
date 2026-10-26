@@ -49,6 +49,9 @@ mod oracle_divergence_combo_strict;
 #[path = "oracle_dual_width_text.rs"]
 mod oracle_dual_width_text;
 
+#[path = "oracle_eob_overlay_motion.rs"]
+mod oracle_eob_overlay_motion;
+
 #[path = "oracle_face_theme.rs"]
 mod oracle_face_theme;
 

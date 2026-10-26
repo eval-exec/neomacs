@@ -549,6 +549,24 @@ impl<'a> BufferSourceEndOfBufferTailRenderContext<'a> {
             );
         }
 
+        // Source coverage at ZV does not certify an unmeasured overlay tail.
+        // If the bounded walk cannot begin that tail, preserve the distinction
+        // so motion can request a larger observation instead of settling here.
+        if tail.is_at_accessible_end()
+            && (self.overlay_policy != BufferSourceEobOverlayPolicy::Render
+                || !self.overlay_context.should_render(row_geometry))
+            && let Some(window) = self.overlay_context.string_window_id()
+            && !RustTextPropAccess::new_for_window(buffer, window)
+                .overlay_strings_at(self.charpos)
+                .is_empty()
+        {
+            source_render
+                .output_emitter()
+                .mark_eob_overlay_motion_incomplete(layout_i64_char_pos_to_lisp_char_pos(
+                    self.charpos,
+                ));
+        }
+
         let mut progress = if point_is_visible_eob
             && !self.overlay_context.should_render(row_geometry)
             && !row_geometry.is_within_row_limit(self.overlay_context.row_limit_for_eob_proof())

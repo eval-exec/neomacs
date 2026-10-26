@@ -12,6 +12,7 @@ mod buffer_local_completion;
 mod coding_detection;
 mod coding_save;
 mod dual_width_fixed_pitch;
+mod eob_overlay_motion;
 #[path = "fontset_family_only_test.rs"]
 mod fontset_family_only;
 mod frame_bar_parameters;
