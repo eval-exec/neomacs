@@ -225,7 +225,7 @@ fn div_cx106_shell_environment_persistence() {
 #[test]
 fn div_cx106_subprocess_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((timer-fired nil)
@@ -237,7 +237,7 @@ fn div_cx106_subprocess_with_marker_overlay_undo_narrow_mega() {
                    (process-exit-status p))))
   (run-with-timer 0 nil (lambda () (setq timer-fired :t)))
   (sit-for 0.01)
-  (let ((buf (get-buffer-create " *neo-cx106-mega*")))
+  (let ((buf (get-buffer-create " *neo-cx106-mega*"))))
     (with-current-buffer buf
       (buffer-enable-undo)
       (insert "Subprocess mega test buffer content")

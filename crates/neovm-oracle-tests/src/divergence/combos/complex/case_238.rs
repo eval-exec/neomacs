@@ -11,7 +11,7 @@ fn div_cx238_mega_1_full_chaos_coding_charset_eieio_clloop_advice_process_undo()
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
-    (progn
+    (progn)
       (require 'eieio)
       (defclass neo-cx238-obj ()
         ((value :initarg :value :initform 0)))

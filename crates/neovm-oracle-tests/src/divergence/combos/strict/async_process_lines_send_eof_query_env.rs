@@ -43,18 +43,18 @@ fn div_j2_process_lines_with_error() {
 #[test]
 fn div_j2_process_send_string_and_eof() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-variable proc)""#]];
+    let expect = expect_test::expect![[r#""OK (\"hello\\n\" exit)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((buf (generate-new-buffer " *probe-send*"))
        (proc (make-process :name "probe-psend"
                            :command (list shell-file-name shell-command-switch "cat")
                            :buffer buf
-                           :sentinel (lambda (&rest _) nil)))))
+                           :sentinel (lambda (&rest _) nil))))
   (set-process-query-on-exit-flag proc nil)
   (process-send-string proc "hello\n")
   (process-send-eof proc)
-  (accept-process-output proc 1)
+  (neovm--oracle-settle-process proc 600)
   (list (with-current-buffer buf (buffer-string))
         (process-status proc)))
 "##,
@@ -101,18 +101,18 @@ fn div_j2_process_environment_option() {
 #[test]
 fn div_j2_process_send_string_return() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-variable proc)""#]];
+    let expect = expect_test::expect![[r#""OK (nil #<process probe-psr> exit \"x\\n\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((buf (generate-new-buffer " *probe-sr*"))
        (proc (make-process :name "probe-psr"
                            :command (list shell-file-name shell-command-switch "cat")
                            :buffer buf
-                           :sentinel (lambda (&rest _) nil)))))
+                           :sentinel (lambda (&rest _) nil))))
   (set-process-query-on-exit-flag proc nil)
   (list (process-send-string proc "x\n")
         (process-send-eof proc)
-        (accept-process-output proc 1)
+        (neovm--oracle-settle-process proc 600)
         (with-current-buffer buf (buffer-string))))
 "##,
         expect,

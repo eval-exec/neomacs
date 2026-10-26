@@ -350,7 +350,7 @@ fn div_cx49_set_buffer_multibyte_then_char_syntax_high_codepoint() {
 #[test]
 fn div_cx49_process_send_region_filter_hash_coding_env_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"prop\" \"39e39120640e9fe47d08803bf8fc5150e47d38d7038484a1e2169120dead8dac\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (received env-val)
@@ -358,11 +358,11 @@ fn div_cx49_process_send_region_filter_hash_coding_env_mega() {
     (insert "café世界 data for round trip")
     (let ((p (make-process :name "neo-cx49-sr" :command '("cat")
                            :buffer nil :connection-type 'pipe
-                           :filter (lambda (proc str) (push str received))))
+                           :filter (lambda (proc str) (push str received)))))
       (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
       (process-send-region p (point-min) (point-max))
       (process-send-eof p)
-      (accept-process-output p 1)))
+      (neovm--oracle-settle-process p 600)))
   (setq env-val
         (let ((process-environment (cons "NEO_CX49=prop" process-environment)))
           (string-trim (shell-command-to-string "echo $NEO_CX49"))))

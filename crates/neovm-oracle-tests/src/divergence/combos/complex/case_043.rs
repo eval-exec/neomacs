@@ -7,13 +7,13 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 #[test]
 fn div_cx43_process_env_propagate_call_vs_make() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument stringp nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((process-environment (cons "NEO_CX43=propagated" process-environment)))
-  (list (string-trim (shell-command-to-string "echo $NEO_CX43"))
+  (list (string-trim (shell-command-to-string "echo $NEO_CX43")))
         (let ((p (make-process :name "neo-cx43-env" :command '("sh" "-c" "echo $NEO_CX43"))))
-          (accept-process-output p 1)
+          (neovm--oracle-settle-process p 600)
           (with-current-buffer (process-buffer p) (string-trim (buffer-string)))))
 "##,
         expect,

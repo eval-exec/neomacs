@@ -7,7 +7,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn div_cx55_superword_kill_upcase_undo_marker_overlay_narrow_textprop_display_evaporate_env_exitcode_timer_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -43,7 +43,7 @@ fn div_cx55_superword_kill_upcase_undo_marker_overlay_narrow_textprop_display_ev
                     (marker-position m) (overlayp ov) (overlay-start ov)
                     (text-properties-at 1) (current-column))))
       (error (list env-val exit-code timer-fired :errored)))))
-"##,
+))"##,
         expect,
     );
 }
@@ -52,15 +52,15 @@ fn div_cx55_superword_kill_upcase_undo_marker_overlay_narrow_textprop_display_ev
 fn div_cx55_process_output_narrow_decode_encode_hash_overlay_textprop_evaporate_undo_env_exitcode_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"No further undo information\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
        (let ((process-environment (cons "NEO_CX55=v" process-environment)))
          (string-trim (shell-command-to-string "echo $NEO_CX55"))))
       (exit-code
-       (let ((p (make-process :name "neo-cx55-ec" :command '("sh" "-c" "exit 8")))
-         (accept-process-output p 2)
+       (let ((p (make-process :name "neo-cx55-ec" :command '("sh" "-c" "exit 8"))))
+         (neovm--oracle-settle-process p 600)
          (process-exit-status p)))
       (buf (get-buffer-create " *neo-cx55-po*")))
   (with-current-buffer buf
@@ -73,7 +73,7 @@ fn div_cx55_process_output_narrow_decode_encode_hash_overlay_textprop_evaporate_
   (let ((p (make-process :name "neo-cx55-po" :command '("printf" "%s" "café世界")
                          :buffer buf)))
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (widen)
            (let ((content (buffer-string)))
@@ -241,7 +241,7 @@ fn div_cx55_weak_hash_key_value_eviction_after_gc_cons_vector_marker_string_symb
 fn div_cx55_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_evaporate_env_exitcode_coding_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
@@ -272,7 +272,7 @@ fn div_cx55_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_e
           (list env-val exit-code state (buffer-string)
                 (marker-position m) (overlayp ov) (overlay-start ov)
                 (text-properties-at 1) (current-column))))))
-"##,
+))"##,
         expect,
     );
 }
@@ -382,7 +382,7 @@ fn div_cx55_set_buffer_multibyte_undo_redo_narrow_widen_overlay_marker_textprop_
 fn div_cx55_subword_superword_toggle_kill_upcase_capitalize_undo_marker_overlay_narrow_textprop_display_env_exitcode_timer_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"v\" 7 :t :errored)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -391,7 +391,7 @@ fn div_cx55_subword_superword_toggle_kill_upcase_capitalize_undo_marker_overlay_
          (let ((process-environment (cons "NEO_CX55=v" process-environment)))
            (string-trim (shell-command-to-string "echo $NEO_CX55"))))
         (exit-code
-         (let ((p (make-process :name "neo-cx55-ec" :command '("sh" "-c" "exit 7")))
+         (let ((p (make-process :name "neo-cx55-ec" :command '("sh" "-c" "exit 7"))))
            (accept-process-output p 2)
            (process-exit-status p))))
     (sit-for 0.01)

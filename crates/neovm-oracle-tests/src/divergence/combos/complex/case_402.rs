@@ -351,14 +351,13 @@ fn div_cx402_font_spec_match() {
 #[test]
 fn div_cx402_format_prompt_default() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""OK (\"Enter name: \" \"Enter name (default default): \" \"Select file (default /tmp/foo): \")""#
-    ]];
+    let expect = expect_test::expect![[r#""OK (\"Enter name: \" \"Enter name (default default): \" \"Select file (default [SESSION-TMPDIR]/foo): \")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (list (format-prompt "Enter name" nil)
       (format-prompt "Enter name" "default")
-      (format-prompt "Select file" "/tmp/foo"))
+      (format-prompt "Select file"
+                     (expand-file-name "foo" temporary-file-directory)))
 "##,
         expect,
     );

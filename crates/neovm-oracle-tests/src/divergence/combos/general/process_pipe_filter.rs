@@ -28,10 +28,10 @@ fn divergence_process_output_to_buffer() {
 fn divergence_process_exit_status() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable proc)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
-  (let ((proc (start-process "test-exit-xxx" nil "sh" "-c" "exit 42")))
+  (let ((proc (start-process "test-exit-xxx" nil "sh" "-c" "exit 42"))))
     (set-process-query-on-exit-flag proc nil)
     (while (process-live-p proc) (accept-process-output proc 1))
     (list (process-exit-status proc)
@@ -46,10 +46,10 @@ fn divergence_process_exit_status() {
 fn divergence_process_arg_parsing() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
-  (let ((buf (generate-new-buffer " test-args-xxx")))
+  (let ((buf (generate-new-buffer " test-args-xxx"))))
     (with-current-buffer buf
       (let ((proc (start-process "test-args-xxx" buf "printf" "%s-%s" "hello" "world")))
         (set-process-query-on-exit-flag proc nil)

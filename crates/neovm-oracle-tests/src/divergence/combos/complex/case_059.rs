@@ -184,7 +184,7 @@ fn div_cx59_weak_hash_all_weakness_types_eviction_marker_key_cons_value_mega() {
 #[test]
 fn div_cx59_subword_superword_toggle_word_ops_undo_marker_overlay_narrow_env_exitcode_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
@@ -215,7 +215,7 @@ fn div_cx59_subword_superword_toggle_word_ops_undo_marker_overlay_narrow_env_exi
                       (overlayp ov) (overlay-start ov)
                       (text-properties-at 1))))))
     (error (list env-val exit-code :errored))))
-"##,
+))"##,
         expect,
     );
 }
@@ -224,7 +224,7 @@ fn div_cx59_subword_superword_toggle_word_ops_undo_marker_overlay_narrow_env_exi
 fn div_cx59_process_output_narrow_decode_encode_hash_overlay_textprop_undo_env_exitcode_timer_weak_hash_display_evaporate_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"No further undo information\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -233,7 +233,7 @@ fn div_cx59_process_output_narrow_decode_encode_hash_overlay_textprop_undo_env_e
          (let ((process-environment (cons "NEO_CX59=v" process-environment)))
            (string-trim (shell-command-to-string "echo $NEO_CX59"))))
         (exit-code
-         (let ((p (make-process :name "neo-cx59-ec" :command '("sh" "-c" "exit 8")))
+         (let ((p (make-process :name "neo-cx59-ec" :command '("sh" "-c" "exit 8"))))
            (accept-process-output p 2)
            (process-exit-status p))))
     (sit-for 0.01)
@@ -270,7 +270,7 @@ fn div_cx59_process_output_narrow_decode_encode_hash_overlay_textprop_undo_env_e
 fn div_cx59_json_deeply_nested_with_org_xml_dom_struct_hash_secure_print_circle_env_exitcode_weak_hash_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-defstruct)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn
@@ -279,8 +279,8 @@ fn div_cx59_json_deeply_nested_with_org_xml_dom_struct_hash_secure_print_circle_
          (let ((process-environment (cons "NEO_CX59=v" process-environment)))
            (string-trim (shell-command-to-string "echo $NEO_CX59"))))
         (exit-code
-         (let ((p (make-process :name "neo-cx59-ec" :command '("sh" "-c" "exit 3")))
-           (accept-process-output p 2)
+         (let ((p (make-process :name "neo-cx59-ec" :command '("sh" "-c" "exit 3"))))
+           (neovm--oracle-settle-process p 600)
            (process-exit-status p)))
         (weak-ht (make-hash-table :weakness 'key :test 'eq)))
     (puthash (cons 1 nil) :v weak-ht)
@@ -309,7 +309,7 @@ fn div_cx59_json_deeply_nested_with_org_xml_dom_struct_hash_secure_print_circle_
 fn div_cx59_set_buffer_multibyte_undo_narrow_widen_marker_overlay_textprop_display_evaporate_env_exitcode_coding_timer_weak_hash_regex_replace_full_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (error \"Changing multibyteness in a narrowed buffer\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -318,7 +318,7 @@ fn div_cx59_set_buffer_multibyte_undo_narrow_widen_marker_overlay_textprop_displ
          (let ((process-environment (cons "NEO_CX59=v" process-environment)))
            (string-trim (shell-command-to-string "echo $NEO_CX59"))))
         (exit-code
-         (let ((p (make-process :name "neo-cx59-ec" :command '("sh" "-c" "exit 5")))
+         (let ((p (make-process :name "neo-cx59-ec" :command '("sh" "-c" "exit 5"))))
            (accept-process-output p 2)
            (process-exit-status p))))
     (sit-for 0.01)

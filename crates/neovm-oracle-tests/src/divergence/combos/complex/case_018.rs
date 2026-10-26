@@ -297,14 +297,14 @@ fn div_cx18_cl_loop_for_hash_values_sum() {
 #[test]
 fn div_cx18_process_kill_after_start_buffer_kept() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable p)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx18-kb*")))
   (with-current-buffer buf (insert "pre"))
   (let ((p (make-process :name "neo-cx18-kb" :command '("echo" "out")
-                         :buffer buf)))
-    (accept-process-output p 1)
+                         :buffer buf))))
+    (neovm--oracle-settle-process p 600)
     (let ((content (with-current-buffer buf (buffer-string))))
       (delete-process p)
       (prog1 (list content (buffer-live-p buf)

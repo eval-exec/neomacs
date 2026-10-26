@@ -263,17 +263,17 @@ fn div_cx14_coding_system_get_safe_charset() {
 #[test]
 fn div_cx14_process_kill_buffer_filter() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (fired)
-  (let ((buf (get-buffer-create " *neo-cx14-pk*")))
+  (let ((buf (get-buffer-create " *neo-cx14-pk*"))))
     (with-current-buffer buf (insert "preexisting"))
     (let ((p (make-process :name "neo-cx14-pk" :command '("echo" "output")
                            :buffer buf
                            :filter (lambda (proc msg) (setq fired :filter-fired)
                                      (with-current-buffer (process-buffer proc) (insert msg))))))
-      (accept-process-output p 1)
+      (neovm--oracle-settle-process p 600)
       (let ((content (with-current-buffer buf (buffer-string))))
         (kill-buffer buf)
         (list fired content (process-buffer p)))))

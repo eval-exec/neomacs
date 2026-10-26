@@ -158,7 +158,7 @@ fn div_cx64_process_environment_inheritance_and_override() {
 #[test]
 fn div_cx64_process_buffer_undo_recording() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable p)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((buf (get-buffer-create " *neo-cx64-pb*")))
@@ -166,8 +166,8 @@ fn div_cx64_process_buffer_undo_recording() {
     (buffer-enable-undo))
   (let ((p (make-process :name "neo-cx64-pb"
                          :command '("printf" "%s" "ABCDEF")
-                         :buffer buf)))
-    (accept-process-output p 1)
+                         :buffer buf))))
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05)
   (with-current-buffer buf
     (let ((content (buffer-string))

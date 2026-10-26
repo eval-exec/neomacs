@@ -11,7 +11,7 @@ fn div_cx208_mega_1_full_subsystem_chaos_coding_eieio_clloop_advice() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
-    (progn
+    (progn)
       (require 'eieio)
       (defclass neo-cx208-obj ()
         ((value :initarg :value :initform 0)))

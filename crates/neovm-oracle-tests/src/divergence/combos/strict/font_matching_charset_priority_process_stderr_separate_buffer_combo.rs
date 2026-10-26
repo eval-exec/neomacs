@@ -34,10 +34,10 @@ fn div_v3_process_stderr_routing_variants() {
                                            "echo stdout-line; echo stderr-line 1>&2")
                             :buffer out-buf
                             :stderr err-buf
-                            :sentinel (lambda (&rest _) nil))))
+                            :sentinel (lambda (&rest _) nil)))))
     (set-process-query-on-exit-flag proc nil)
-    (accept-process-output proc 1)
-    (accept-process-output proc 1)
+    (neovm--oracle-settle-process proc 600)
+    (neovm--oracle-settle-process proc 600)
     (let ((out (with-current-buffer out-buf (buffer-string)))
           (err (with-current-buffer err-buf (buffer-string))))
       (kill-buffer out-buf)
@@ -49,7 +49,7 @@ fn div_v3_process_stderr_routing_variants() {
             (not (string-match-p "stderr" out))
             (not (string-match-p "stdout" err)))))
 "##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable proc)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

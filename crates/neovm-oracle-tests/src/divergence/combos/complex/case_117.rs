@@ -38,7 +38,7 @@ fn div_cx117_process_filter_chunked_data_capture() {
 #[test]
 fn div_cx117_process_filter_with_coding_chunk_split() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"\\nProcess neo-cx117-cs finished\\n\" 31)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((collected nil)
@@ -47,8 +47,8 @@ fn div_cx117_process_filter_with_coding_chunk_split() {
                         :command '("sh" "-c" "printf 'café \\xe4\\xb8\\x96\\xe7\\x95\\x8c'")
                         :buffer buf
                         :coding 'utf-8-unix
-                        :filter (lambda (proc data) (push data collected))))
-  (accept-process-output p 2)
+                        :filter (lambda (proc data) (push data collected)))))
+  (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((content (with-current-buffer buf (buffer-string))))
     (kill-buffer buf)

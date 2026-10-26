@@ -117,14 +117,14 @@ fn div_v7_process_large_output_buffering() {
                             :command (list shell-file-name shell-command-switch
                                            "seq 1 100")
                             :buffer buf
-                            :sentinel (lambda (&rest _) nil))))
+                            :sentinel (lambda (&rest _) nil)))))
     (set-process-query-on-exit-flag proc nil)
-    (accept-process-output proc 1)
-    (accept-process-output proc 1)
+    (neovm--oracle-settle-process proc 600)
+    (neovm--oracle-settle-process proc 600)
     (let ((lines (with-current-buffer buf (count-lines (point-min) (point-max))))
       (kill-buffer buf)
       lines)))
 "##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable proc)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

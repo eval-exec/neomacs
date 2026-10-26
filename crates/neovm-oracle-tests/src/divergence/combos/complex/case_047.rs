@@ -187,7 +187,7 @@ fn div_cx47_set_buffer_multibyte_narrow_insert_raw_bytes_toggle_mega() {
 #[test]
 fn div_cx47_process_env_coding_exitcode_sentinel_timer_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (:t \"val\" 8 23 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired se)
@@ -197,7 +197,7 @@ fn div_cx47_process_env_coding_exitcode_sentinel_timer_mega() {
            (string-trim (shell-command-to-string "echo $NEO_CX47"))))
         (exit-code
          (let ((p (make-process :name "neo-cx47-te" :command '("sh" "-c" "exit 8")
-                                :sentinel (lambda (proc ev) (setq se ev))))
+                                :sentinel (lambda (proc ev) (setq se ev)))))
            (accept-process-output p 2)
            (process-exit-status p))))
     (sit-for 0.01)

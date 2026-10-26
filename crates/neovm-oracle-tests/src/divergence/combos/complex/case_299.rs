@@ -205,7 +205,7 @@ fn div_cx299_process_with_marker_overlay_undo_narrow_mega() {
                          :buffer buf)))
     (process-put p 'neo-cx299-tag :mega)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
-    (accept-process-output p 1)
+    (neovm--oracle-settle-process p 600)
     (sit-for 0.05))
   (let ((content (with-current-buffer buf (buffer-string))))
     (with-current-buffer buf
@@ -215,7 +215,7 @@ fn div_cx299_process_with_marker_overlay_undo_narrow_mega() {
                          (text-properties-at 1))))
         (undo)
         (kill-buffer buf)
-        (list state (buffer-string)))))))
+        (list state (buffer-string))))))
 "##,
         expect,
     )

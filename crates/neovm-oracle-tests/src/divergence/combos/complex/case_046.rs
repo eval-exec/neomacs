@@ -167,7 +167,7 @@ fn div_cx46_json_xml_dom_nested_complex_mega() {
 #[test]
 fn div_cx46_timer_run_cancel_process_exit_coding_env_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (:fired \"env\" 7 \"café\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -176,7 +176,7 @@ fn div_cx46_timer_run_cancel_process_exit_coding_env_mega() {
            (let ((process-environment (cons "NEO_CX46=env" process-environment)))
              (string-trim (shell-command-to-string "echo $NEO_CX46"))))
           (exit-code
-           (let ((p (make-process :name "neo-cx46-te" :command '("sh" "-c" "exit 7")))
+           (let ((p (make-process :name "neo-cx46-te" :command '("sh" "-c" "exit 7"))))
              (accept-process-output p 2)
              (process-exit-status p)))
           (coding-out

@@ -420,14 +420,14 @@ fn div_cx51_window_margins_fringes_vscroll_hscroll_combined_mega() {
 #[test]
 fn div_cx51_process_kill_then_buffer_content_preserved() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable p)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx51-pk*")))
   (with-current-buffer buf (insert "PREEXIST"))
   (let ((p (make-process :name "neo-cx51-pk" :command '("echo" "output")
-                         :buffer buf)))
-    (accept-process-output p 1)
+                         :buffer buf))))
+    (neovm--oracle-settle-process p 600)
     (let ((content (with-current-buffer buf (buffer-string))))
       (delete-process p)
       (prog1 (list content

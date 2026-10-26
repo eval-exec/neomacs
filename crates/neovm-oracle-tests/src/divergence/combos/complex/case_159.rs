@@ -8,7 +8,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 #[test]
 fn div_cx159_mega_eieio_clloop_eval_macro_undo_buflocal_process_timer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
+    let expect = expect_test::expect![[r#""OK (:errored args-out-of-range)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -57,7 +57,7 @@ fn div_cx159_mega_eieio_clloop_eval_macro_undo_buflocal_process_timer() {
                     (widen)
                     (list snapshot (buffer-string) (marker-position m)
                           (overlay-start ov) (overlay-end ov)
-                          (text-properties-at 1))))))))))
+                          (text-properties-at 1)))))))))
   (error (list :errored (car e))))
 "##,
         expect,

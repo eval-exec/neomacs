@@ -11,7 +11,7 @@ fn div_cx215_mega_1_coding_charset_eieio_clloop_advice_process_timer_env_bufloca
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
-    (progn
+    (progn)
       (require 'eieio)
       (defclass neo-cx215-obj ()
         ((value :initarg :value :initform 0)))

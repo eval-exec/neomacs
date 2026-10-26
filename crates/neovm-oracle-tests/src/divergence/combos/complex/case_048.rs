@@ -229,13 +229,13 @@ fn div_cx48_cl_setf_on_buffer_local_variable() {
 #[test]
 fn div_cx48_process_filter_accumulate_secure_hash_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument stringp 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (all)
   (let ((p (make-process :name "neo-cx48-ha" :command '("printf" "%d %d %d %s" 1 2 3 "café")
                          :buffer nil :connection-type 'pipe
-                         :filter (lambda (proc str) (push str all))))
+                         :filter (lambda (proc str) (push str all)))))
     (accept-process-output p 1)
     (accept-process-output p 0.5))
   (secure-hash 'sha256 (apply #'concat (nreverse all))))

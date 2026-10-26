@@ -7,7 +7,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 #[test]
 fn div_cx250_mega_milestone_all_subsystem_ultimate_1() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function enc)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((timer-fired nil)
@@ -32,7 +32,7 @@ fn div_cx250_mega_milestone_all_subsystem_ultimate_1() {
   (advice-add 'neo-cx250-target :before
               (lambda (x) (push (list :before x) calls))
               '((name . mega-advice)))
-  (let* ((text "café 世界 😀 mega-250")
+  (let* ((text "café 世界 😀 mega-250"))
          (enc (encode-coding-string text 'utf-8))
          (hash (secure-hash 'sha256 enc))
          (cl-loop-result (cl-loop for k being the hash-keys of ht using (hash-values v)

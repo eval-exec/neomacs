@@ -38,7 +38,7 @@ fn div_cx54_superword_subword_toggle_kill_undo_marker_overlay_textprop_narrow_me
 fn div_cx54_process_output_env_coding_exitcode_timer_narrow_overlay_textprop_undo_evaporate_display_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"No further undo information\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired se)
@@ -48,7 +48,7 @@ fn div_cx54_process_output_env_coding_exitcode_timer_narrow_overlay_textprop_und
            (string-trim (shell-command-to-string "echo $NEO_CX54"))))
         (exit-code
          (let ((p (make-process :name "neo-cx54-ec" :command '("sh" "-c" "exit 6")
-                                :sentinel (lambda (proc ev) (setq se ev))))
+                                :sentinel (lambda (proc ev) (setq se ev)))))
            (accept-process-output p 2)
            (process-exit-status p)))
         (buf (get-buffer-create " *neo-cx54-po*")))
@@ -192,7 +192,7 @@ fn div_cx54_window_config_register_split_merge_narrow_widen_marker_overlay_textp
 fn div_cx54_set_buffer_multibyte_undo_redo_narrow_widen_marker_overlay_textprop_display_evaporate_env_exitcode_coding_timer_full_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (error \"Changing multibyteness in a narrowed buffer\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -201,7 +201,7 @@ fn div_cx54_set_buffer_multibyte_undo_redo_narrow_widen_marker_overlay_textprop_
          (let ((process-environment (cons "NEO_CX54=v" process-environment)))
            (string-trim (shell-command-to-string "echo $NEO_CX54"))))
         (exit-code
-         (let ((p (make-process :name "neo-cx54-ec" :command '("sh" "-c" "exit 3")))
+         (let ((p (make-process :name "neo-cx54-ec" :command '("sh" "-c" "exit 3"))))
            (accept-process-output p 2)
            (process-exit-status p))))
     (sit-for 0.01)

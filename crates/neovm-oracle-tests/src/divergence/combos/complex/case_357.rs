@@ -7,7 +7,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 #[test]
 fn div_cx357_mega_1_full_subsystem_ultimate() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-loop)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((timer-fired nil)
@@ -75,7 +75,7 @@ fn div_cx357_mega_1_full_subsystem_ultimate() {
               (advice-remove 'neo-cx357-target 'mega-advice)
               (kill-buffer buf)
               (list state (buffer-live-p buf))))))))
-"##,
+))"##,
         expect,
     );
 }

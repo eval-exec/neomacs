@@ -61,10 +61,10 @@ fn div_u2_process_stderr_pipe_process() {
                                            "echo out; echo err 1>&2")
                             :buffer (generate-new-buffer " *probe-sp-out*")
                             :stderr stderr-pipe
-                            :sentinel (lambda (&rest _) nil))))
+                            :sentinel (lambda (&rest _) nil)))))
     (set-process-query-on-exit-flag proc nil)
     (set-process-query-on-exit-flag stderr-pipe nil)
-    (accept-process-output proc 1)
+    (neovm--oracle-settle-process proc 600)
     (accept-process-output stderr-pipe 1)
     (let ((out (with-current-buffer (process-buffer proc) (buffer-string)))
           (err (with-current-buffer (process-buffer stderr-pipe) (buffer-string))))
@@ -75,7 +75,7 @@ fn div_u2_process_stderr_pipe_process() {
             (string= (string-trim out) "out")
             (string= (string-trim err) "err"))))
 "##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable proc)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

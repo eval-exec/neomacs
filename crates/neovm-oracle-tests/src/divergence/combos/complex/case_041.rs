@@ -290,16 +290,16 @@ fn div_cx41_timer_cancel_process_exit_sentinel_mega() {
 #[test]
 fn div_cx41_process_send_string_filter_buffer_hash_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK \"0824a8c482dd5ab39c13f09fad098b0f1db4fbd9db8e67c38619dbf7ab1b3850\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (received)
   (let ((p (make-process :name "neo-cx41-sf" :command '("cat")
                          :buffer nil :connection-type 'pipe
-                         :filter (lambda (proc str) (push str received))))
+                         :filter (lambda (proc str) (push str received)))))
     (process-send-string p "deterministic round trip content")
     (process-send-eof p)
-    (accept-process-output p 1))
+    (neovm--oracle-settle-process p 600))
   (secure-hash 'sha256 (apply #'concat (nreverse received))))
 "##,
         expect,

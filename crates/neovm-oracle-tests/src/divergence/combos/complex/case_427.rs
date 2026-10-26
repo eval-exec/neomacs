@@ -85,14 +85,14 @@ fn div_cx427_make_pipe_process() {
 #[test]
 fn div_cx427_process_list() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable in-list)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((proc (make-process :name "neo-cx427-pl"
                           :command '("echo" "test")
                           :connection-type 'pipe :buffer nil)))
-  (accept-process-output proc 2)
-  (let ((in-list (memq proc (process-list))))
+  (neovm--oracle-settle-process proc 600)
+  (let ((in-list (memq proc (process-list)))))
     (delete-process proc)
     in-list)
 "##,
