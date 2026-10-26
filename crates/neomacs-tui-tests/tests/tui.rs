@@ -13,6 +13,7 @@ mod coding_detection;
 mod coding_save;
 mod dual_width_fixed_pitch;
 mod eob_overlay_motion;
+mod extended_keysyms;
 #[path = "fontset_family_only_test.rs"]
 mod fontset_family_only;
 mod frame_bar_parameters;
