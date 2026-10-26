@@ -57,9 +57,8 @@ fn drive<'era>(
 ) -> Result<(), ExecError> {
     loop {
         match session.wait_step(owner, frame)? {
-            Step::Done => return Ok(()),
-            Step::Retry => unreachable!("wait_step resolves contention"),
-            Step::Progress | Step::Safepoint => {}
+            ReadyStep::Done => return Ok(()),
+            ReadyStep::Progress | ReadyStep::Safepoint => {}
         }
     }
 }

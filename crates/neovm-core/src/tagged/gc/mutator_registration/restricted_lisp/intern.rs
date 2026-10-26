@@ -157,6 +157,15 @@ enum Step {
     Retry,
 }
 
+/// A successful waiting step cannot contain the retry state consumed inside
+/// wait_step. Callers match only real program progress or completion.
+#[derive(Debug, PartialEq, Eq)]
+enum ReadyStep {
+    Done,
+    Safepoint,
+    Progress,
+}
+
 /// Only an observable retry outcome is contention. A terminal step error,
 /// including the pending instruction's expired Busy, must return unchanged.
 enum PendingStepError {
@@ -303,12 +312,14 @@ impl Session {
         &self,
         owner: &mut Mutator<'era>,
         frame: &mut Frame<'era>,
-    ) -> Result<Step, ExecError> {
+    ) -> Result<ReadyStep, ExecError> {
         retry(
             Deadline::contention(),
             || match self.step(owner, frame).map_err(PendingStepError::Refused)? {
                 Step::Retry => Err(PendingStepError::Contended),
-                step @ (Step::Done | Step::Safepoint | Step::Progress) => Ok(step),
+                Step::Done => Ok(ReadyStep::Done),
+                Step::Safepoint => Ok(ReadyStep::Safepoint),
+                Step::Progress => Ok(ReadyStep::Progress),
             },
             |error| match error {
                 PendingStepError::Contended => Retry::Busy,

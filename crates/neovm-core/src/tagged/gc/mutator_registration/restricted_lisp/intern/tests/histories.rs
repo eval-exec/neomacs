@@ -79,11 +79,10 @@ fn pump<'era>(
             .wait_step(owner, frame)
             .map_err(|error| format!("C5 executor step: {error:?}"))?
         {
-            Step::Done if !pause => return Ok(()),
-            Step::Done => return Err("C5 executor omitted its first safepoint".into()),
-            Step::Safepoint if pause => return Ok(()),
-            Step::Retry => unreachable!("wait_step resolves contention"),
-            Step::Progress | Step::Safepoint => {}
+            ReadyStep::Done if !pause => return Ok(()),
+            ReadyStep::Done => return Err("C5 executor omitted its first safepoint".into()),
+            ReadyStep::Safepoint if pause => return Ok(()),
+            ReadyStep::Progress | ReadyStep::Safepoint => {}
         }
     }
 }

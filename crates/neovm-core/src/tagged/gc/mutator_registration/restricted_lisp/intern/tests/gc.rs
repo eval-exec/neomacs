@@ -161,10 +161,9 @@ fn round_with_preflight(
 fn pause<'era>(session: &Session, owner: &mut Mutator<'era>, frame: &mut Frame<'era>) {
     loop {
         match session.wait_step(owner, frame).unwrap() {
-            Step::Safepoint => return,
-            Step::Progress => {}
-            Step::Retry => unreachable!("wait_step resolves contention"),
-            Step::Done => panic!("executor expected a collection boundary"),
+            ReadyStep::Safepoint => return,
+            ReadyStep::Progress => {}
+            ReadyStep::Done => panic!("executor expected a collection boundary"),
         }
     }
 }
