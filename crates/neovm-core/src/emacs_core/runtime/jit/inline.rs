@@ -38,6 +38,7 @@
 //! wrong one is the mistake that made `(1+ 3.0)` return a shifted pointer.
 
 use super::compile::analyze_cfg;
+use super::compile::body_analysis::CompileBody;
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
@@ -420,6 +421,7 @@ fn callee_depths(callee: &ByteCodeFunction, nargs: usize) -> Option<Vec<usize>> 
 
 /// Splice every admissible constant-bytecode call in `ops`. `None` when there
 /// is nothing to inline (the caller then compiles unchanged).
+#[cfg(test)]
 pub(crate) fn fuse_calls(
     ops: &[Op],
     constants: &[Value],
@@ -427,6 +429,19 @@ pub(crate) fn fuse_calls(
     arity: usize,
     caller_feedback: &[NumericFeedback],
 ) -> Option<FusedBody> {
+    let body = CompileBody::from_legacy_parts(ops, constants, arity, offset_map, 0);
+    fuse_calls_from_body(&body, caller_feedback)
+}
+
+/// Admission guards remain before the lease: a refusal must not trigger
+/// analysis or alter the source's collection-read observations.
+pub(crate) fn fuse_calls_from_body(
+    body: &CompileBody<'_>,
+    caller_feedback: &[NumericFeedback],
+) -> Option<FusedBody> {
+    let ops = body.ops();
+    let constants = body.constants();
+    let offset_map = body.as_offset_map();
     // A jump table resolves through the GNU byte-offset map, which this pass
     // rewrites. Without one, the table's fixnums ARE instruction indices, held
     // inside a constant hash table nothing here touches — and every splice
@@ -445,8 +460,9 @@ pub(crate) fn fuse_calls(
     {
         return None;
     }
-    let cfg = analyze_cfg(ops, constants, offset_map, arity).ok()?;
-    let caller_depth = op_depths(ops, &cfg)?;
+    let source = body.source_cfg().ok()?;
+    let cfg = source.as_ref();
+    let caller_depth = op_depths(ops, cfg)?;
     // The callee slot of an `Op::Call`, when it provably holds a constant.
     let mut tags: Vec<Option<u16>> = Vec::new();
     let entry = super::compile::spec_tag_entry_states(ops, constants, &cfg.leaders);

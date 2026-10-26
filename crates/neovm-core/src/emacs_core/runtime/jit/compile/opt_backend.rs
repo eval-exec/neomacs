@@ -359,32 +359,20 @@ pub(super) fn lower_best_requested(
     opt_params: Option<ir::ParamShape>,
     opt_request: Option<CompileRequest>,
 ) -> Result<CompiledLeaf, CompileError> {
-    if let Some(params) = opt_params {
-        match lower_leaf_full_osr_with_plan_impl(
-            ops,
-            constants,
-            arity,
-            offset_map,
-            obarray,
-            osr_pc,
-            prefix,
-            Some(params),
-            None,
-            opt_request,
-        ) {
-            Ok(leaf) => return Ok(leaf),
-            Err(error) => {
-                record(None, &format!("opt-bail:{error:?}"), ops.len(), 0);
-                tracing::debug!(target: "neovm_jit::opt", ?error, "opt backend declined; keeping baseline");
-            }
-        }
-    }
-    lower_leaf_full_osr(ops, constants, arity, offset_map, obarray, osr_pc, prefix)
+    let body = CompileBody::from_legacy_parts(ops, constants, arity, offset_map, prefix);
+    lower_best_body(
+        &body,
+        obarray,
+        EntryPoint::from(osr_pc),
+        opt_params,
+        opt_request,
+    )
 }
 
 /// A selected attempt never generates baseline code on failure: its source
 /// owner re-enters the legacy MIR frontend. Threading: request and parameters
 /// are compiler-owned scalars; no runtime or mutator storage is introduced.
+#[cfg(test)]
 #[cold]
 #[inline(never)]
 pub(super) fn lower_selected_requested(
@@ -398,23 +386,50 @@ pub(super) fn lower_selected_requested(
     params: ir::ParamShape,
     request: CompileRequest,
 ) -> Result<CompiledLeaf, CompileError> {
-    lower_leaf_full_osr_with_plan_impl(
-        ops,
-        constants,
-        arity,
-        offset_map,
-        obarray,
-        osr_pc,
-        prefix,
-        Some(params),
-        None,
-        Some(request),
+    let body = CompileBody::from_legacy_parts(ops, constants, arity, offset_map, prefix);
+    lower_selected_body(&body, obarray, EntryPoint::from(osr_pc), params, request)
+}
+
+/// Single opt-attempt/refusal/baseline-fallback authority. Legacy tuple entry
+/// points construct fresh owners and delegate here; immutable non-Switch CFG
+/// success may be shared between this attempt and its unchanged fallback.
+pub(super) fn lower_best_body(
+    body: &CompileBody<'_>,
+    obarray: Option<&Obarray>,
+    entry: EntryPoint,
+    opt_params: Option<ir::ParamShape>,
+    opt_request: Option<CompileRequest>,
+) -> Result<CompiledLeaf, CompileError> {
+    if let Some(params) = opt_params {
+        match lower_leaf_body_with_plan(body, entry, obarray, Some(params), None, opt_request) {
+            Ok(leaf) => return Ok(leaf),
+            Err(error) => {
+                record(None, &format!("opt-bail:{error:?}"), body.ops().len(), 0);
+                tracing::debug!(target: "neovm_jit::opt", ?error, "opt backend declined; keeping baseline");
+            }
+        }
+    }
+    lower_leaf_body_with_plan(body, entry, obarray, None, None, None)
+}
+
+/// Same selected-attempt refusal contract, with no independently supplied
+/// source tuple beside the owner.
+#[cold]
+#[inline(never)]
+pub(super) fn lower_selected_body(
+    body: &CompileBody<'_>,
+    obarray: Option<&Obarray>,
+    entry: EntryPoint,
+    params: ir::ParamShape,
+    request: CompileRequest,
+) -> Result<CompiledLeaf, CompileError> {
+    lower_leaf_body_with_plan(body, entry, obarray, Some(params), None, Some(request)).inspect_err(
+        |error| {
+            record(None, &format!("opt-bail:{error:?}"), body.ops().len(), 0);
+            tracing::debug!(target: "neovm_jit::opt", ?error,
+                "selected opt backend declined; restoring legacy frontend");
+        },
     )
-    .inspect_err(|error| {
-        record(None, &format!("opt-bail:{error:?}"), ops.len(), 0);
-        tracing::debug!(target: "neovm_jit::opt", ?error,
-            "selected opt backend declined; restoring legacy frontend");
-    })
 }
 
 fn census_path() -> Option<&'static std::path::Path> {

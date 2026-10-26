@@ -68,7 +68,10 @@
 //! code: it flows as its `usize` bit pattern (`i64` in CLIF), exactly as the
 //! interpreter stores it.
 
+pub(crate) mod body_analysis;
 pub(crate) mod param_shape;
+
+use body_analysis::{CompileBody, EntryPoint};
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
@@ -1102,7 +1105,7 @@ fn compile_bytecode_function_inner(
 ) -> Result<CompiledLeaf, CompileError> {
     use super::stats::{CompilePhase, enter_phase};
     let gate_phase = enter_phase(CompilePhase::Gate);
-    let ops = f.executable_ops();
+    let function_view = body_analysis::FunctionView::new(f);
     let params = JitParamShape::try_from(f)?;
     let optional = params.optional();
     let required = params.required();
@@ -1126,14 +1129,9 @@ fn compile_bytecode_function_inner(
     // A `make-closure`-patched source: leading constant slots are per-instance.
     // The MIR tier bakes every constant, so it is skipped; the baseline gets
     // the masked view for its analyses and loads the prefix through the callee.
-    let dynamic_prefix = f.jit_runtime().patched_prefix();
-    let masked;
-    let constants: &[Value] = if dynamic_prefix > 0 {
-        masked = mask_dynamic_prefix(&f.constants, dynamic_prefix);
-        &masked
-    } else {
-        &f.constants
-    };
+    let source_body = CompileBody::for_function(function_view, params);
+    let dynamic_prefix = source_body.as_prefix_slots();
+    let constants = source_body.constants();
     // P2.3's opt-in front splices before the backend decision. Legacy MIR
     // cannot preserve the v2 annotations, so a fused-v2 body stays on the
     // baseline until the opt builder consumes its frame states. Off keeps
@@ -1164,9 +1162,16 @@ fn compile_bytecode_function_inner(
     });
     opt_backend::build_census(f, early_fused.as_deref());
     let fused_v2 = early_fused.as_ref().is_some_and(|body| body.is_v2());
-    let (ops, constants) = early_fused.as_ref().map_or((ops, constants), |body| {
-        (body.ops.as_slice(), body.constants.as_slice())
-    });
+    let early_body;
+    let body = match &early_fused {
+        Some(fused) => {
+            early_body = CompileBody::for_early_fused(&source_body, fused);
+            &early_body
+        }
+        None => &source_body,
+    };
+    let ops = body.ops();
+    let constants = body.constants();
     // MIR funnel instrumentation (`NEOVM_JIT_COMPILE_STATS=1`): the MIR tier is
     // the ONLY place inlining, cross-boundary unboxing and guard elision happen,
     // so a body that never reaches it gets none of them. Count each gate
@@ -1205,14 +1210,10 @@ fn compile_bytecode_function_inner(
         && !reopt_gate
         && !fused_v2)
         .then(|| {
-            mir::build_mir_with_feedback(
-                ops,
-                constants,
-                f.executable_gnu_byte_offset_map(),
-                native_arity,
-                jit_mir_reach(),
-                &active_numeric_feedback,
-            )
+            let source = body.source_cfg()?;
+            mir::build_mir_from_source(&source, jit_mir_reach(), &|pc| {
+                active_numeric_feedback(usize::from(pc))
+            })
         });
     if let Some(built) = mir_built
         && let Ok(mut mir) = built.inspect_err(|e| {
@@ -1341,21 +1342,21 @@ fn compile_bytecode_function_inner(
         inline::jit_inline_on()
             .then(|| {
                 let caller_feedback: Vec<_> = (0..ops.len()).map(active_numeric_feedback).collect();
-                inline::fuse_calls(
-                    ops,
-                    constants,
-                    f.executable_gnu_byte_offset_map(),
-                    native_arity,
-                    &caller_feedback,
-                )
+                inline::fuse_calls_from_body(body, &caller_feedback)
             })
             .flatten()
             .map(std::rc::Rc::new)
     };
-    let (ops, constants) = match &fused {
-        Some(fused) => (fused.ops.as_slice(), fused.constants.as_slice()),
-        None => (ops, constants),
+    let fused_body;
+    let body = match &fused {
+        Some(fused) => {
+            fused_body = CompileBody::for_fused(body, fused);
+            &fused_body
+        }
+        None => body,
     };
+    let ops = body.ops();
+    let constants = body.constants();
     drop(fuse_phase);
     // A selected source can grow during static fusion. Check the final slice
     // before SSA and emit the existing baseline once when it exceeds the bound;
@@ -1400,50 +1401,24 @@ fn compile_bytecode_function_inner(
     ) && !reopt_gate
         && selected_final_size
     {
-        opt_backend::lower_selected_requested(
-            ops,
-            constants,
-            native_arity,
-            match &fused {
-                Some(fused) => fused.offset_map.as_deref(),
-                None => f.executable_gnu_byte_offset_map(),
-            },
+        opt_backend::lower_selected_body(
+            body,
             obarray,
-            None,
-            dynamic_prefix,
+            EntryPoint::Function,
             opt_params.expect("selected opt parameters"),
             opt_request.expect("selected compiler request"),
         )
         .inspect_err(|_| *selected_declined = true)?
     } else if let Some(request) = opt_request {
-        opt_backend::lower_best_requested(
-            ops,
-            constants,
-            native_arity,
-            match &fused {
-                Some(fused) => fused.offset_map.as_deref(),
-                None => f.executable_gnu_byte_offset_map(),
-            },
+        opt_backend::lower_best_body(
+            body,
             obarray,
-            None,
-            dynamic_prefix,
+            EntryPoint::Function,
             opt_params,
             Some(request),
         )?
     } else {
-        opt_backend::lower_best(
-            ops,
-            constants,
-            native_arity,
-            match &fused {
-                Some(fused) => fused.offset_map.as_deref(),
-                None => f.executable_gnu_byte_offset_map(),
-            },
-            obarray,
-            None,
-            dynamic_prefix,
-            opt_params,
-        )?
+        opt_backend::lower_best_body(body, obarray, EntryPoint::Function, opt_params, None)?
     };
     leaf.required = required;
     leaf.has_rest = has_rest;
@@ -3607,6 +3582,27 @@ fn lower_leaf_full_osr_with_plan_impl(
     opt_override: Option<&super::opt::ir::Func>,
     opt_request: Option<CompileRequest>,
 ) -> Result<CompiledLeaf, CompileError> {
+    let body = CompileBody::from_legacy_parts(ops, constants, arity, offset_map, dynamic_prefix);
+    lower_leaf_body_with_plan(
+        &body,
+        EntryPoint::from(osr_pc),
+        obarray,
+        opt_params,
+        opt_override,
+        opt_request,
+    )
+}
+
+fn lower_leaf_body_with_plan(
+    body: &CompileBody<'_>,
+    entry: EntryPoint,
+    obarray: Option<&Obarray>,
+    opt_params: Option<super::opt::ir::ParamShape>,
+    opt_override: Option<&super::opt::ir::Func>,
+    opt_request: Option<CompileRequest>,
+) -> Result<CompiledLeaf, CompileError> {
+    let ops = body.ops();
+    let osr_pc = Option::<usize>::from(entry);
     // Count actual opt construction at this single normal/OSR seam. This
     // cold report never enables runtime observation, naming or source heat.
     let construction_site = if opt_params.is_some() || opt_override.is_some() {
@@ -3622,14 +3618,14 @@ fn lower_leaf_full_osr_with_plan_impl(
     // Every analysis and the reloc collection below see the MASKED view; only
     // the emitter's `Op::Constant` arm knows the prefix (it loads those slots
     // through the callee at run time).
-    let masked;
-    let constants: &[Value] = if dynamic_prefix > 0 {
-        masked = mask_dynamic_prefix(constants, dynamic_prefix);
-        &masked
-    } else {
-        constants
-    };
-    let cfg = analyze_cfg(ops, constants, offset_map, arity)?;
+    let lower_body = body.for_lowering();
+    let body = lower_body.as_ref();
+    let source = body.source_cfg()?;
+    let ops = source.ops();
+    let constants = source.constants();
+    let arity = usize::from(source.entry_depth());
+    let dynamic_prefix = body.as_prefix_slots();
+    let cfg = source.as_ref();
     let sqrt_witnesses = if (opt_params.is_some() || opt_override.is_some())
         && jit_opt_passes().sink
         && jit_opt_mode() == OptMode::Opt

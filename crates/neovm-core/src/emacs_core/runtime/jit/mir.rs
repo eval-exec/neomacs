@@ -30,7 +30,10 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use super::compile::{CompileError, MirReach, analyze_cfg, simple_effect};
+#[cfg(test)]
+use super::compile::analyze_cfg;
+use super::compile::body_analysis::{CfgLease, CompileBody, SourceOpIndex};
+use super::compile::{CompileError, MirReach, simple_effect};
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::NumericFeedback;
@@ -396,9 +399,22 @@ pub(crate) fn build_mir_with_feedback(
     reach: MirReach,
     feedback: &dyn Fn(usize) -> NumericFeedback,
 ) -> Result<MirFunction, CompileError> {
-    // Reuse the baseline CFG analysis (block leaders + entry stack depths),
-    // with the baseline's GNU byte-offset map (see `build_mir`).
-    let cfg = analyze_cfg(ops, constants, offset_map, arity)?;
+    let body = CompileBody::from_legacy_parts(ops, constants, arity, offset_map, 0);
+    let source = body.source_cfg()?;
+    build_mir_from_source(&source, reach, &|pc| feedback(usize::from(pc)))
+}
+
+/// A lease supplies the paired source and canonical CFG; callers cannot pass
+/// an independently selected constant pool, addressing map or entry depth.
+pub(crate) fn build_mir_from_source(
+    source: &CfgLease<'_, '_>,
+    reach: MirReach,
+    feedback: &dyn Fn(SourceOpIndex) -> NumericFeedback,
+) -> Result<MirFunction, CompileError> {
+    let ops = source.ops();
+    let constants = source.constants();
+    let arity = usize::from(source.entry_depth());
+    let cfg = source.as_ref();
     let n = ops.len();
 
     let mut b = Builder {
@@ -545,7 +561,7 @@ pub(crate) fn build_mir_with_feedback(
                     let pre = stack.clone();
                     let before = insts.len();
                     lower_value_op(&mut b, op, constants, &mut stack, &mut insts)?;
-                    let float_site = feedback(i) == NumericFeedback::Float;
+                    let float_site = feedback(SourceOpIndex::from(i)) == NumericFeedback::Float;
                     for inst in &mut insts[before..] {
                         inst.pc = i;
                         inst.pre_stack = pre.clone();
