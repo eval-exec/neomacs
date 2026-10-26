@@ -8,16 +8,15 @@ use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest
 // Build doc → complex heading clone → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo5_clone() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function org-clone-subtree)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* T\n** Sub1\n** Sub2")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (list (org-element-property :level h)
@@ -39,16 +38,15 @@ fn combo5_clone() {
 // Build doc → complex sort → verify order
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo5_sort() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Nothing to sort\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* TODO C\n* DONE A\n* TODO B\n* DONE D")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (list (org-element-property :raw-value h)
@@ -71,16 +69,15 @@ fn combo5_sort() {
 // Build doc → complex toggle heading/item → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo5_toggle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:init (\"H1\" \"H2\" \"H3\")) (:after-toggle ((headline \"H1\") (headline \"H3\"))) (:after-restore (\"H1\" \"H2\" \"H3\")) (:after-toggle2 ((headline \"H1\") (headline \"H2\"))))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H1\n* H2\n* H3")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (org-element-property :raw-value h)))) r)
@@ -113,16 +110,15 @@ fn combo5_toggle() {
 // Build doc → complex move subtree → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo5_move_subtree() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Cannot move past superior level or buffer limit\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* A\n** A1\n* B\n** B1\n* C\n** C1")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (list (org-element-property :level h)
@@ -150,16 +146,15 @@ fn combo5_move_subtree() {
 // Build doc → complex narrow + show → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo5_narrow_show() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:narrowed \"*** H3\\nBody\") (:context \"*** H3\\nBody\") (:widened \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\") (:overview \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\") (:reveal \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H1\n** H2\n*** H3\nBody\n* H1b\n** H2b\nSub")
-  (let ((r ''))
+  (let ((r nil))
     ;; narrow to H2
     (goto-char (point-min))
     (search-forward "H2\n")
@@ -190,16 +185,15 @@ fn combo5_narrow_show() {
 // Build doc → complex list struct → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo5_list_struct() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Cannot indent the first item of a list\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "- A\n  - B\n  - C\n- D\n  - E\n    - F")
-  (let ((r ''))
+  (let ((r nil))
     ;; list struct
     (let ((struct (org-list-struct)))
       (push (list :struct struct) r)
@@ -259,16 +253,15 @@ fn combo5_export_string() {
 // Build doc → complex element map with predicate → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo5_map_pred() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:all (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:todo (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:done (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:first \"A\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* TODO A\n* DONE B\n* TODO C\n* DONE D\n* WAITING E")
-  (let ((r ''))
+  (let ((r nil))
     ;; all
     (push (list :all (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (org-element-property :raw-value h)))) r)

@@ -8,16 +8,15 @@ use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest
 // Build doc → complex element map with predicate → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo9_map_pred() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:all (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:todo (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:done (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:first \"A\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* TODO A\n* DONE B\n* TODO C\n* DONE D\n* WAITING E")
-  (let ((r ''))
+  (let ((r nil))
     ;; all
     (push (list :all (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (org-element-property :raw-value h)))) r)
@@ -100,16 +99,15 @@ fn combo9_element_props() {
 // Build doc → complex element cache → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo9_cache() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function org-element-cache-status)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H\nBody")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial cache
     (let ((s (org-element-cache-status)))
       (push (list :init-size (plist-get s :size)) r))
@@ -134,16 +132,15 @@ fn combo9_cache() {
 // Build doc → complex indent → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo9_indent() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:init \"* H1\\nBody\\n** H2\\nSub\\n*** H3\\nDeep\") (:indents nil) (:buffer-indents ((1 \"\") (2 #(\"  \" 0 2 (face org-indent))) (3 #(\"*\" 0 1 (face org-indent))) (4 #(\"    \" 0 4 (face org-indent))) (5 #(\"**\" 0 2 (face org-indent))) (6 #(\"      \" 0 6 (face org-indent))))))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H1\nBody\n** H2\nSub\n*** H3\nDeep")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (buffer-substring-no-properties (point-min) (point-max))) r)
     ;; indent mode
@@ -173,16 +170,15 @@ fn combo9_indent() {
 // Build doc → complex lint → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo9_lint() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:lint-count 1) (:content \"* H\\nSCHEDULED: <invalid>\\nBody [[broken]]\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H\nSCHEDULED: <invalid>\nBody [[broken]]")
-  (let ((r ''))
+  (let ((r nil))
     ;; lint
     (push (list :lint-count (length (org-lint))) r)
     ;; verify buffer unchanged
@@ -196,16 +192,15 @@ fn combo9_lint() {
 // Build doc → complex sort → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo9_sort() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Nothing to sort\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* TODO C\n* DONE A\n* TODO B\n* DONE D")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (list (org-element-property :raw-value h)
@@ -228,16 +223,15 @@ fn combo9_sort() {
 // Build doc → complex clone → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo9_clone() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function org-clone-subtree)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* T\n** Sub1\n** Sub2")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (list (org-element-property :level h)
@@ -259,16 +253,15 @@ fn combo9_clone() {
 // Build doc → complex toggle → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo9_toggle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:init (\"H1\" \"H2\" \"H3\")) (:after-toggle ((headline \"H1\") (headline \"H3\"))) (:after-restore (\"H1\" \"H2\" \"H3\")) (:after-toggle2 ((headline \"H1\") (headline \"H2\"))))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H1\n* H2\n* H3")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (org-element-property :raw-value h)))) r)
@@ -301,16 +294,15 @@ fn combo9_toggle() {
 // Build doc → complex move subtree → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo9_move() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Cannot move past superior level or buffer limit\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* A\n** A1\n* B\n** B1\n* C\n** C1")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (org-element-map (org-element-parse-buffer) 'headline
                         (lambda (h) (list (org-element-property :level h)

@@ -8,16 +8,15 @@ use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest
 // Build doc → complex list struct → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo10_list_struct() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Cannot indent the first item of a list\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "- A\n  - B\n  - C\n- D\n  - E\n    - F")
-  (let ((r ''))
+  (let ((r nil))
     ;; list struct
     (let ((struct (org-list-struct)))
       (push (list :struct struct) r)
@@ -77,16 +76,15 @@ fn combo10_export_string() {
 // Build doc → complex element map all types → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo10_map_all() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:element-count 0) (:element-types nil) (:object-count 0) (:object-types nil) (:headlines 3) (:paragraphs 3) (:items 2) (:tables 1) (:src-blocks 1))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "#+TITLE: T\n* TODO [#A] H1 :t1:\nSCHEDULED: <2026-01-15>\nBody *bold* /italic/ [[http://a][Link]] $x^2$\n** H2\n- [X] a\n- [ ] b\n| x | y |\n| 1 | 2 |\n#+BEGIN_SRC emacs-lisp\n(+ 1)\n#+END_SRC\n* DONE H3\n:PROPERTIES:\n:A: 1\n:END:\nCLOCK: [2026-01-10 10:00]--[2026-01-10 11:00] =>  1:00")
-  (let ((r ''))
+  (let ((r nil))
     ;; element types
     (let ((types (org-element-map (org-element-parse-buffer) 'element 'org-element-type)))
       (push (list :element-count (length types)) r)
@@ -110,16 +108,15 @@ fn combo10_map_all() {
 // Build doc → complex clock + planning → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo10_clock() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""ERR (error \"Invalid date: \")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* TODO T\nSCHEDULED: <2026-01-15>\nDEADLINE: <2026-01-20>\n:LOGBOOK:\nCLOCK: [2026-01-10 10:00]--[2026-01-10 11:30] =>  1:30\nCLOCK: [2026-01-11 14:00]--[2026-01-11 15:00] =>  1:00\n:END:\nBody")
-  (let ((r ''))
+  (let ((r nil))
     ;; planning
     (push (list :planning (org-element-map (org-element-parse-buffer) 'planning
                             (lambda (p) (list (when (org-element-property :scheduled p) "S")
@@ -148,16 +145,15 @@ fn combo10_clock() {
 // Build doc → complex footnote → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo10_footnotes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:refs (\"1\" \"2\" \"3\" \"1\")) (:defs ((\"1\" \"First def\") (\"2\" \"Second def\") (\"3\" \"Third def\"))) (:ref-count 4) (:def-count 3))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "Para1[fn:1] text[fn:2] more[fn:3] end\n\nPara2[fn:1] ref\n\n[fn:1] First def\n[fn:2] Second def\n[fn:3] Third def")
-  (let ((r ''))
+  (let ((r nil))
     ;; refs
     (push (list :refs (org-element-map (org-element-parse-buffer) 'footnote-reference
                         (lambda (f) (org-element-property :label f)))) r)
@@ -179,16 +175,15 @@ fn combo10_footnotes() {
 // Build doc → complex link → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo10_links() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:links ((\"http\" \"//a.com\" \"http://a.com\") (\"file\" \"b.el\" \"file:b.el\") (\"id\" \"xxx\" \"id:xxx\") (\"mailto\" \"d@e.com\" \"mailto:d@e.com\") (\"news\" \"comp\" \"news:comp\"))) (:count 5) (:types (\"http\" \"file\" \"id\" \"mailto\" \"news\")))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H\n[[http://a.com][A]] and [[file:b.el]] and [[id:xxx][C]] and [[mailto:d@e.com]] and [[news:comp]]")
-  (let ((r ''))
+  (let ((r nil))
     ;; link details
     (push (list :links (org-element-map (org-element-parse-buffer) 'link
                           (lambda (l) (list (org-element-property :type l)
@@ -208,16 +203,15 @@ fn combo10_links() {
 // Build doc → complex keyword → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo10_keywords() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:keywords ((\"TITLE\" \"Test\") (\"AUTHOR\" \"Me\") (\"DATE\" \"2026-01-15\") (\"OPTIONS\" \"toc:nil\") (\"FILETAGS\" \":t1:t2:\") (\"STARTUP\" \"overview\") (\"CATEGORY\" \"c\") (\"LANGUAGE\" \"en\"))) (:collected ((\"TITLE\" \"Test\") (\"AUTHOR\" \"Me\") (\"DATE\" \"2026-01-15\") (\"OPTIONS\" \"toc:nil\") (\"FILETAGS\" \":t1:t2:\"))))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "#+TITLE: Test\n#+AUTHOR: Me\n#+DATE: 2026-01-15\n#+OPTIONS: toc:nil\n#+FILETAGS: :t1:t2:\n#+STARTUP: overview\n#+CATEGORY: c\n#+LANGUAGE: en")
-  (let ((r ''))
+  (let ((r nil))
     ;; keywords
     (push (list :keywords (org-element-map (org-element-parse-buffer) 'keyword
                             (lambda (k) (list (org-element-property :key k)
@@ -233,16 +227,15 @@ fn combo10_keywords() {
 // Build doc → complex entity → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo10_entities() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:entities ((\"alpha\" \"α\" \"\\\\alpha\" \"&alpha;\") (\"beta\" \"β\" \"\\\\beta\" \"&beta;\") (\"gamma\" \"γ\" \"\\\\gamma\" \"&gamma;\") (\"Agrave\" \"À\" \"\\\\`{A}\" \"&Agrave;\") (\"copy\" \"©\" \"\\\\textcopyright{}\" \"&copy;\") (\"deg\" \"°\" \"\\\\textdegree{}\" \"&deg;\") (\"pm\" \"±\" \"\\\\textpm{}\" \"&plusmn;\") (\"times\" \"×\" \"\\\\texttimes{}\" \"&times;\"))) (:count 8))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "Text \\alpha \\beta \\gamma \\Agrave \\copy \\deg \\pm \\times")
-  (let ((r ''))
+  (let ((r nil))
     ;; entities
     (push (list :entities (org-element-map (org-element-parse-buffer) 'entity
                             (lambda (e) (list (org-element-property :name e)
@@ -260,16 +253,15 @@ fn combo10_entities() {
 // Build doc → complex latex → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo10_latex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:fragments (\"$x^2$\" \"$$y=mx+b$$\" \"\\\\(z\\\\)\" \"\\\\[w\\\\]\")) (:entities (\"alpha\")) (:frag-count 4) (:ent-count 1))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "Text $x^2$ $$y=mx+b$$ and \\(z\\) \\[w\\] \\alpha")
-  (let ((r ''))
+  (let ((r nil))
     ;; latex fragments
     (push (list :fragments (org-element-map (org-element-parse-buffer) 'latex-fragment
                               (lambda (l) (org-element-property :value l)))) r)
@@ -288,16 +280,15 @@ fn combo10_latex() {
 // Build doc → complex timestamp → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo10_timestamps() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:timestamps ((active-range 2026 1 20 nil nil) (inactive 2026 1 30 nil nil) (active 2026 2 1 cumulate 1))) (:count 3) (:types (active-range inactive active)))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* T\nSCHEDULED: <2026-01-15 Wed>\n* U\n<2026-01-20>--<2026-01-25>\n* V\n[2026-01-30]\n* W\n<2026-02-01 +1w>")
-  (let ((r ''))
+  (let ((r nil))
     ;; timestamps
     (push (list :timestamps (org-element-map (org-element-parse-buffer) 'timestamp
                               (lambda (ts) (list (org-element-property :type ts)

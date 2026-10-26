@@ -351,16 +351,15 @@ fn combo4_cache() {
 // Build doc → complex indent → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo4_indent() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:init \"* H1\\nBody\\n** H2\\nSub\\n*** H3\\nDeep\") (:indents nil) (:buffer-indents ((1 \"\") (2 #(\"  \" 0 2 (face org-indent))) (3 #(\"*\" 0 1 (face org-indent))) (4 #(\"    \" 0 4 (face org-indent))) (5 #(\"**\" 0 2 (face org-indent))) (6 #(\"      \" 0 6 (face org-indent))))))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H1\nBody\n** H2\nSub\n*** H3\nDeep")
-  (let ((r ''))
+  (let ((r nil))
     ;; initial
     (push (list :init (buffer-substring-no-properties (point-min) (point-max))) r)
     ;; indent mode
@@ -390,16 +389,15 @@ fn combo4_indent() {
 // Build doc → complex lint → verify
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo4_lint() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 14)""#]];
+    let expect = expect_test::expect![[r#""OK ((:lint-count 1) (:content \"* H\\nSCHEDULED: <invalid>\\nBody [[broken]]\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H\nSCHEDULED: <invalid>\nBody [[broken]]")
-  (let ((r ''))
+  (let ((r nil))
     ;; lint
     (push (list :lint-count (length (org-lint))) r)
     ;; verify buffer unchanged
