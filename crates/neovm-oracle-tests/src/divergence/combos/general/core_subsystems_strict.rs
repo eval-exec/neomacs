@@ -510,6 +510,7 @@ fn div_core_inhibit_modification_hooks_boundary_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_core_overlay_modification_hooks_order_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

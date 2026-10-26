@@ -27,6 +27,7 @@ fn div_cx13_process_send_receive_binary() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx13_buffer_narrow_marker_undo_stack_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();

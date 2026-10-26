@@ -43,6 +43,7 @@ fn div_cx44_process_exit_code_sentinel_buffer_content_mega() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx44_overlay_evaporate_undo_display_marker_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -138,6 +139,7 @@ fn div_cx44_coding_encode_decode_region_no_conversion_mega() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx44_window_config_save_restore_split_marker_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();

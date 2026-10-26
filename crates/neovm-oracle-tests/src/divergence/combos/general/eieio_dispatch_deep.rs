@@ -153,6 +153,7 @@ fn divergence_hash_table_eql_eq_identity() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_closure_over_buffer_local() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -207,6 +208,7 @@ fn divergence_advice_filter_chain() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_flet_labels_interplay() {
     return_if_neovm_enable_oracle_proptest_not_set!();

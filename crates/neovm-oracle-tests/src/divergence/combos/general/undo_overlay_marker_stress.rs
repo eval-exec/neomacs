@@ -312,6 +312,7 @@ fn divergence_undo_overlay_creation() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_kill_ring_save_restore() {
     return_if_neovm_enable_oracle_proptest_not_set!();

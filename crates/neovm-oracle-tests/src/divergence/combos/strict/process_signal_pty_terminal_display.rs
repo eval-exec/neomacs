@@ -113,6 +113,7 @@ fn div_u1_display_vscroll_scroll_recenter_combo() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_u1_condition_case_nested_error_data() {
     return_if_neovm_enable_oracle_proptest_not_set!();

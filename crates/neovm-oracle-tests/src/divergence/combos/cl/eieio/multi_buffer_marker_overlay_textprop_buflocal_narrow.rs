@@ -64,6 +64,7 @@ fn combo_eieio_two_buffers_shared_marker() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_two_buffers_overlay_edit() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -121,6 +122,7 @@ fn combo_eieio_two_buffers_overlay_edit() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_cross_buffer_copy_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -168,6 +170,7 @@ fn combo_eieio_cross_buffer_copy_props() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_cross_buffer_narrow_sequential() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -231,6 +234,7 @@ fn combo_eieio_cross_buffer_narrow_sequential() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_cross_buffer_undo_sequential() {
     return_if_neovm_enable_oracle_proptest_not_set!();

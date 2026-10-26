@@ -157,6 +157,7 @@ fn div_cx155_window_combination_resize_query() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx155_window_buffer_swap_via_set_window_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();

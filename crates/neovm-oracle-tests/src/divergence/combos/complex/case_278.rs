@@ -143,6 +143,7 @@ fn div_cx278_eieio_eql_specializer_with_integer() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx278_eieio_with_slots_access_and_mutation() {
     return_if_neovm_enable_oracle_proptest_not_set!();

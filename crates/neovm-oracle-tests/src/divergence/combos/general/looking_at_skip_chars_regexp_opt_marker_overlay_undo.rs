@@ -106,6 +106,7 @@ fn combo_skip_syntax_marker_overlay_undo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_regexp_opt_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

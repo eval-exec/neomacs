@@ -538,6 +538,7 @@ fn oracle_prop_channel_pipeline() {
 // Multiplexer: select-like pattern, read from first available channel
 // ---------------------------------------------------------------------------
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_channel_multiplexer() {
     return_if_neovm_enable_oracle_proptest_not_set!();

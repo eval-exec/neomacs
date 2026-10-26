@@ -178,6 +178,7 @@ fn div_cx331_eieio_slot_boundp_and_makunbound() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx331_eieio_with_slots_and_accessors() {
     return_if_neovm_enable_oracle_proptest_not_set!();

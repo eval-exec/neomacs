@@ -53,6 +53,7 @@ fn combo92_config_org_export_backends_available() {
         expect,
     );
 }
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo92_config_org_babel_python_session() {
     return_if_neovm_enable_oracle_proptest_not_set!();

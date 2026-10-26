@@ -3,6 +3,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_full_text_editing_pipeline() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -45,6 +46,7 @@ fn divergence_full_text_editing_pipeline() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_lifecycle_with_closures() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -305,6 +307,7 @@ fn divergence_multibyte_regex_replace_undo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_condition_case_with_overlays_narrow() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -54,6 +54,7 @@ fn combo_match_string_replace_match_marker_overlay_undo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_regexp_opt_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

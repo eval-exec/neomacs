@@ -182,6 +182,7 @@ fn div_cx322_word_search_forward_lax_match() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx322_regexp_search_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();

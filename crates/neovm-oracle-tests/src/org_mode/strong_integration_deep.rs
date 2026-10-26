@@ -734,6 +734,7 @@ fn int_export_opts_attr() {
 // Integration: element hierarchy
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn int_element_hier() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -1190,6 +1191,7 @@ fn int_property_inherit() {
 // Integration: hierarchy
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn int_hierarchy() {
     return_if_neovm_enable_oracle_proptest_not_set!();

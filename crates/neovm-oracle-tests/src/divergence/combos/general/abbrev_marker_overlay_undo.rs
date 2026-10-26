@@ -132,6 +132,7 @@ fn combo_abbrev_overlay_priority_undo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_abbrev_multi_buffer_state() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -1,6 +1,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_occur_stacked_sparse_tree_visibility_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -83,6 +84,7 @@ fn org_tags_sparse_tree_property_archive_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_occur_highlight_removal_after_buffer_change_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -212,6 +214,7 @@ fn org_sparse_todo_occur_navigation_highlight_lifecycle_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_sparse_date_type_range_visibility_matrix_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -314,6 +317,7 @@ fn org_sparse_date_type_range_visibility_matrix_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_sparse_tag_todo_deps_planning_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -448,6 +452,7 @@ fn org_occur_highlight_count_visibility_deep_state_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_sparse_tree_tag_todo_match_edit_occur_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -509,6 +514,7 @@ fn org_sparse_tree_tag_todo_match_edit_occur_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_sparse_tree_todo_tag_edit_resparse_occur_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();

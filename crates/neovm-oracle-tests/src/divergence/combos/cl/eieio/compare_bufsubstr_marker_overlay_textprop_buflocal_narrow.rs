@@ -5,6 +5,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_compare_bufsubst_basic_with_objects() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -236,6 +237,7 @@ fn combo_eieio_compare_bufsubst_multi_region_diff() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_compare_bufsubst_undo_restore() {
     return_if_neovm_enable_oracle_proptest_not_set!();

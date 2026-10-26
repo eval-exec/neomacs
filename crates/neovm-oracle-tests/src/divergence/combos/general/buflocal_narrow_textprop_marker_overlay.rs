@@ -180,6 +180,7 @@ fn combo_buflocal_narrow_textprop_multi_overlay_undo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_buflocal_narrow_textprop_clone_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

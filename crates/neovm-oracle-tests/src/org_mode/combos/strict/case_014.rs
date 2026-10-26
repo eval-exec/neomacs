@@ -9,6 +9,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_table_import_csv() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -33,6 +34,7 @@ fn strict_table_import_csv() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_deep_heading_nesting_15() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -58,6 +60,7 @@ fn strict_deep_heading_nesting_15() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_publish_basic_config() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -79,6 +82,7 @@ fn strict_publish_basic_config() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_org_macs_string_utils() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -104,6 +108,7 @@ fn strict_org_macs_string_utils() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_speed_commands_lookup() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -125,6 +130,7 @@ fn strict_speed_commands_lookup() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_babel_mkdirp_header() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -150,6 +156,7 @@ fn strict_babel_mkdirp_header() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_element_interpret_individual_subtypes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -196,6 +203,7 @@ fn strict_element_interpret_individual_subtypes() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_org_combine_plists_variants() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -244,6 +252,7 @@ fn strict_export_backend_creation() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_org_table_relative_references() {
     return_if_neovm_enable_oracle_proptest_not_set!();

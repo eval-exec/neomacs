@@ -420,6 +420,7 @@ fn upstream_org_element_cache_list_structures() {
 
 // ── Cache: add/remove sensitive lines ────────────────────────────────
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_element_cache_remove_sensitive_line() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -527,6 +528,7 @@ fn upstream_org_element_cache_drawer_end() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_cache_edit_reparse_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

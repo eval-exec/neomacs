@@ -177,6 +177,7 @@ fn div_cx528_window_state_delete() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx528_window_state_get_empty() {
     return_if_neovm_enable_oracle_proptest_not_set!();

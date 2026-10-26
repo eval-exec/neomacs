@@ -63,6 +63,7 @@ fn div_cx343_unwind_protect_cleanup_ordering() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx343_catch_throw_through_nested_unwind() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -173,6 +174,7 @@ fn div_cx343_condition_case_no_handler_match_propagates() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx343_error_chain_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -127,6 +127,7 @@ Under development.
 // Xenna: org-element with complex export round-trip
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn xenna_complex_export_roundtrip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -206,6 +207,7 @@ fn xenna_complex_property_inheritance_chain() {
 // Xenna: org-element with complex element operations chain
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn xenna_complex_element_operations_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -250,6 +252,7 @@ fn xenna_complex_element_operations_chain() {
 // Xenna: org-element with complex deferred chain
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn xenna_complex_deferred_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();

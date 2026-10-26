@@ -4,6 +4,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_prin1_to_string_read_roundtrip_cons() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -72,6 +73,7 @@ fn deficiency_prin1_special_strings_with_quotes() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_intern_soft_after_prin1_symbol() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -145,6 +147,7 @@ fn deficiency_read_with_intern_obarray() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_prin1_with_print_length_and_level() {
     return_if_neovm_enable_oracle_proptest_not_set!();

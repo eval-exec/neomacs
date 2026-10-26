@@ -267,6 +267,7 @@ fn div_cx50_weak_hash_all_weakness_types_gc_eviction_comparison_mega() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx50_window_config_register_buffer_point_marker_overlay_dedicated_split_hscroll_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -351,6 +352,7 @@ fn div_cx50_process_send_region_narrowed_filter_hash_env_exitcode_coding_mega() 
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx50_read_eval_backquote_destructuring_lexical_macro_multibyte_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();

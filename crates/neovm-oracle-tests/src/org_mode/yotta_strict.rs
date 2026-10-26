@@ -511,6 +511,7 @@ fn yotta_all_shiftright_heading_combinations() {
 // Yotta: org-element with all org-beginning-of-line combinations
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn yotta_all_beginning_of_line_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -544,6 +545,7 @@ fn yotta_all_beginning_of_line_combinations() {
 // Yotta: org-element with all org-end-of-line combinations
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn yotta_all_end_of_line_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();

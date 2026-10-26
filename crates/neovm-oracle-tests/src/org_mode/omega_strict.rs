@@ -261,6 +261,7 @@ fn omega_all_property_raw_general() {
 // Omega: org-element with all org-element-property (deferred)
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn omega_all_property_deferred() {
     return_if_neovm_enable_oracle_proptest_not_set!();

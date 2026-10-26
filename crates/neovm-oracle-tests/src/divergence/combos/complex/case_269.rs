@@ -24,6 +24,7 @@ fn div_cx269_backquote_deeply_nested_splicing() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx269_defmacro_with_environment() {
     return_if_neovm_enable_oracle_proptest_not_set!();

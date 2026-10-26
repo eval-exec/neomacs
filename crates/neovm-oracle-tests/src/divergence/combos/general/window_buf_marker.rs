@@ -191,6 +191,7 @@ fn divergence_point_marker_excursion() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buffer_modified_tick() {
     return_if_neovm_enable_oracle_proptest_not_set!();

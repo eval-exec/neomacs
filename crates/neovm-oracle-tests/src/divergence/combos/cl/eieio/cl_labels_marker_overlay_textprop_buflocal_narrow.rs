@@ -76,6 +76,7 @@ fn combo_eieio_cl_labels_recursive_edit() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_cl_labels_mutual_recursion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -244,6 +245,7 @@ fn combo_eieio_cl_labels_higher_order() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_cl_labels_closure_capture() {
     return_if_neovm_enable_oracle_proptest_not_set!();

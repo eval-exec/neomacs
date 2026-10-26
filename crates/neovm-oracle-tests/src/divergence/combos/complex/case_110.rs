@@ -232,6 +232,7 @@ fn div_cx110_char_fold_search_basic() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx110_search_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();

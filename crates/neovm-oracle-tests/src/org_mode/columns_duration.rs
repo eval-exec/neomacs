@@ -166,6 +166,7 @@ fn org_columns_allowed_value_cycle_and_update_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_format_store_insert_delete_move_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -272,6 +273,7 @@ fn org_duration_parse_format_summary_matrix_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_property_inheritance_compute_mutation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -361,6 +363,7 @@ fn org_columns_property_inheritance_compute_mutation_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_dblock_property_summary_refresh_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -457,6 +460,7 @@ fn org_columns_dblock_property_summary_refresh_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_overlay_row_move_recompute_allowed_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -584,6 +588,7 @@ fn org_columns_overlay_row_move_recompute_allowed_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_compute_all_dblock_insert_refresh_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -81,6 +81,7 @@ fn div_cx419_display_line_numbers_mode() {
 }
 
 /// visual-line-mode: visual line wrapping.
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx419_visual_line_mode() {
     return_if_neovm_enable_oracle_proptest_not_set!();

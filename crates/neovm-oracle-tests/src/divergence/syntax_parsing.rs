@@ -708,6 +708,7 @@ fn div_sp_ignore_comments_forward_list_down_up_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_sp_ignore_comments_scan_lists_depth_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

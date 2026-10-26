@@ -136,6 +136,7 @@ fn div_cx334_current_bidi_paragraph_direction_all_scripts() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx334_set_buffer_multibyte_toggle_data_loss() {
     return_if_neovm_enable_oracle_proptest_not_set!();

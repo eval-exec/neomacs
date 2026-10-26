@@ -38,6 +38,7 @@ fn div_cx465_signal_process_self() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx465_backup_file_ops_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();

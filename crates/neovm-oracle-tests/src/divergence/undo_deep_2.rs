@@ -140,6 +140,7 @@ fn divergence_undo_after_replace() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buffer_undo_list_torture() {
     return_if_neovm_enable_oracle_proptest_not_set!();

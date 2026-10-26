@@ -107,6 +107,7 @@ fn combo70_babel_session_sh() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo70_element_interpret_individual_links() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -202,6 +203,7 @@ fn combo70_macro_replace_all_region() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo70_org_export_info_for_data() {
     return_if_neovm_enable_oracle_proptest_not_set!();

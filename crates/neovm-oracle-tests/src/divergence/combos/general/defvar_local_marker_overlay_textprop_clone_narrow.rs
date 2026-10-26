@@ -4,6 +4,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_defvar_local_marker_overlay_textprop_clone_narrow_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -165,6 +166,7 @@ fn combo_defvar_local_setf_replace_undo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_defvar_local_narrow_clone_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

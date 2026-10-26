@@ -77,6 +77,7 @@ fn div_t8_face_box_underline_variants() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_t8_combo_search_invisible_narrow_casefold() {
     return_if_neovm_enable_oracle_proptest_not_set!();

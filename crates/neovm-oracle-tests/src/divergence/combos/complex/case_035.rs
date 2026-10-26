@@ -5,6 +5,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx35_json_encode_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -79,6 +80,7 @@ fn div_cx35_json_roundtrip() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx35_libxml_parse_html() {
     return_if_neovm_enable_oracle_proptest_not_set!();

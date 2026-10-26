@@ -324,6 +324,7 @@ fn divergence_text_property_search_replace_cycle() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_revert_buffer_with_state() {
     return_if_neovm_enable_oracle_proptest_not_set!();

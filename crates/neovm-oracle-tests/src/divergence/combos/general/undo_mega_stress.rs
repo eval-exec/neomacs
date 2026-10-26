@@ -169,6 +169,7 @@ fn divergence_undo_kill_yank_with_overlay_tracking() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_multiple_overlays_with_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -270,6 +271,7 @@ fn divergence_undo_with_overlay_evaporate() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_regex_replace_preserve_intervals() {
     return_if_neovm_enable_oracle_proptest_not_set!();

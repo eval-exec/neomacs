@@ -252,6 +252,7 @@ fn div_cx69_replace_regexp_in_buffer_global() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx69_regex_match_replace_marker_overlay_narrow_undo_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();

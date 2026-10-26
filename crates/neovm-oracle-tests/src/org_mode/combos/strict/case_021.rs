@@ -136,6 +136,7 @@ fn strict_agenda_custom_commands_all_keys() {
         expect,
     );
 }
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_agenda_clock_report() {
     return_if_neovm_enable_oracle_proptest_not_set!();

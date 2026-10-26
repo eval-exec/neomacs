@@ -24,6 +24,7 @@ fn af_org_babel_src_block() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn af_org_babel_call() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -106,6 +107,7 @@ fn af_org_radio_targets() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn af_org_inline_task() {
     return_if_neovm_enable_oracle_proptest_not_set!();

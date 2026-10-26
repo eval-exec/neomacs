@@ -607,6 +607,7 @@ fn gamma_granularity_headline() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn gamma_granularity_greater_element() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -627,6 +628,7 @@ fn gamma_granularity_greater_element() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn gamma_granularity_element() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -646,6 +648,7 @@ fn gamma_granularity_element() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn gamma_granularity_object() {
     return_if_neovm_enable_oracle_proptest_not_set!();

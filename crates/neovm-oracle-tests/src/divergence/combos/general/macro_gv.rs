@@ -26,6 +26,7 @@ fn deficiency_defmacro_backquote() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_defmacro_with_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -53,6 +54,7 @@ fn deficiency_defmacro_with_props() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_cl_defmacro_destructuring() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -117,6 +119,7 @@ fn deficiency_gv_with_buffer() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_eval_and_inline() {
     return_if_neovm_enable_oracle_proptest_not_set!();

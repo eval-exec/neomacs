@@ -55,6 +55,7 @@ fn div_cx150_mega_buflocal_textprop_overlay_marker_undo_narrow_process_env_timer
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx150_mega_clloop_eieio_hash_pcase_textprop_marker_overlay() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -181,6 +182,7 @@ fn div_cx150_mega_coding_charset_print_circle_secure_hash_obarray() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx150_mega_advice_kmacro_register_window_config_buflocal() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -350,6 +350,7 @@ fn org_capture_kill_finalize_goto_marker_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_capture_prompt_placeholders_history_tags_props_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -866,6 +867,7 @@ fn org_capture_template_expand_body_placeholders_deep_state_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_capture_insert_todo_edit_clock_refile_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();

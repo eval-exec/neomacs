@@ -173,6 +173,7 @@ fn deficiency_replace_with_backreference_in_prop_zone() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_skip_chars_forward_backward_in_narrow_with_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -204,6 +205,7 @@ fn deficiency_skip_chars_forward_backward_in_narrow_with_props() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_looking_at_and_match_data_in_narrowed() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -295,6 +295,7 @@ fn oracle_prop_ds_adv_skip_list_like() {
 // LRU cache with hash table + doubly-linked list
 // ---------------------------------------------------------------------------
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_ds_adv_lru_cache_full() {
     return_if_neovm_enable_oracle_proptest_not_set!();

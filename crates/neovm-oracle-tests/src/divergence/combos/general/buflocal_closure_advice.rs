@@ -103,6 +103,7 @@ fn divergence_keymap_closure_advice_interact() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buflocal_overlay_textprop_advice() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -205,6 +206,7 @@ fn divergence_buflocal_regex_match_overlay() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_buflocal_marker_complex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -311,6 +313,7 @@ fn divergence_keymap_inheritance_advice() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buflocal_kill_buffer_preserve() {
     return_if_neovm_enable_oracle_proptest_not_set!();

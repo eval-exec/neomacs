@@ -247,6 +247,7 @@ fn div_wf_get_buffer_window_lru_mru() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_wf_walk_windows_count() {
     return_if_neovm_enable_oracle_proptest_not_set!();

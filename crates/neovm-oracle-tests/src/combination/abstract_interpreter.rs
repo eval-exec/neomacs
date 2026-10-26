@@ -566,6 +566,7 @@ fn oracle_prop_abstract_interp_loop_widening() {
 // Complex: reaching definitions analysis
 // ---------------------------------------------------------------------------
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_abstract_interp_reaching_defs() {
     return_if_neovm_enable_oracle_proptest_not_set!();

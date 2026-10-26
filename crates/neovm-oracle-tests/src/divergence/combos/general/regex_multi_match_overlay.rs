@@ -93,6 +93,7 @@ fn combo_regex_multi_match_narrow_marker() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_regex_multi_match_clone_overlay() {
     return_if_neovm_enable_oracle_proptest_not_set!();

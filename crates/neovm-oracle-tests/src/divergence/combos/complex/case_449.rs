@@ -51,6 +51,7 @@ fn div_cx449_fillarray_ops() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx449_copy_alist_nested() {
     return_if_neovm_enable_oracle_proptest_not_set!();

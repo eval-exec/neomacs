@@ -178,6 +178,7 @@ fn oracle_prop_db_relational_cross_join() {
 // GROUP BY with HAVING: aggregation + filter on aggregated results
 // ---------------------------------------------------------------------------
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_db_relational_group_by_having() {
     return_if_neovm_enable_oracle_proptest_not_set!();

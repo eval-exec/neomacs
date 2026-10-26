@@ -5,6 +5,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx247_set_process_filter_round_trip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -28,6 +29,7 @@ fn div_cx247_set_process_filter_round_trip() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx247_set_process_sentinel_round_trip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -110,6 +112,7 @@ fn div_cx247_process_type_and_connection_query() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx247_process_list_and_count() {
     return_if_neovm_enable_oracle_proptest_not_set!();

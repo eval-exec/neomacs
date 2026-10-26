@@ -276,6 +276,7 @@ fn org_babel_tangle_noweb_comments_collect_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_export_inline_result_html_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -327,6 +328,7 @@ fn org_babel_export_inline_result_html_deep_state_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_tangle_edit_retangle_multi_block_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();

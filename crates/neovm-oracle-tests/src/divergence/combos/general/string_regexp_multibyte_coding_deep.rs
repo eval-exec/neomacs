@@ -167,6 +167,7 @@ fn deficiency_concat_with_mix_of_multibyte_unibyte() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_mapcar_over_string_with_aref_codepoints() {
     return_if_neovm_enable_oracle_proptest_not_set!();

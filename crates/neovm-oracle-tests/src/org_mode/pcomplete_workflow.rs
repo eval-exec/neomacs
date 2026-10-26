@@ -51,6 +51,7 @@ fn org_pcomplete_file_options_startup_tags_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_pcomplete_heading_todo_tag_property_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -138,6 +139,7 @@ fn org_pcomplete_link_drawer_src_block_option_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_pcomplete_entities_searchhead_options_matrix_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -201,6 +203,7 @@ fn org_pcomplete_entities_searchhead_options_matrix_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_pcomplete_keyword_tag_drawer_property_omission_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

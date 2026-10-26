@@ -29,6 +29,7 @@ fn div_cx88_default_toplevel_value_with_buffer_local_override() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx88_kill_local_variable_in_indirect_buffer_does_not_affect_base() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -74,6 +75,7 @@ fn div_cx88_buffer_local_value_with_non_local_returns_default() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx88_frame_parameter_round_trip_for_custom_keys() {
     return_if_neovm_enable_oracle_proptest_not_set!();

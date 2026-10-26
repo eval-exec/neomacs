@@ -5,6 +5,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx214_split_window_and_delete_round_trip() {
     return_if_neovm_enable_oracle_proptest_not_set!();

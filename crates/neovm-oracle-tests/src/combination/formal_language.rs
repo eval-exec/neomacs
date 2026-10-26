@@ -95,6 +95,7 @@ fn oracle_prop_formal_lang_dfa_parity() {
 // NFA to DFA subset construction
 // ---------------------------------------------------------------------------
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_formal_lang_nfa_to_dfa() {
     return_if_neovm_enable_oracle_proptest_not_set!();

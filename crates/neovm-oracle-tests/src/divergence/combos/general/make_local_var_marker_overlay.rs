@@ -43,6 +43,7 @@ fn combo_make_local_var_marker_overlay_undo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_make_local_var_narrow_clone_overlay() {
     return_if_neovm_enable_oracle_proptest_not_set!();

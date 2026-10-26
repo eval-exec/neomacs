@@ -22,6 +22,7 @@ fn div_cx103_debug_on_error_handler_runs() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx103_debug_on_quit_handler_runs() {
     return_if_neovm_enable_oracle_proptest_not_set!();

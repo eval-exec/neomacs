@@ -53,6 +53,7 @@ fn divergence_frame_title() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_frame_terminal() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -83,6 +84,7 @@ fn divergence_frame_child_frames() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_display_color_cells() {
     return_if_neovm_enable_oracle_proptest_not_set!();

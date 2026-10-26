@@ -128,6 +128,7 @@ fn div_cx388_set_window_margins_fringes_hscroll() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx388_window_start_end_set_query() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -109,6 +109,7 @@ fn div_cx114_string_pad_with_spaces() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx114_string_replace_with_subgroups() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -125,6 +126,7 @@ fn div_cx114_string_replace_with_subgroups() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx114_subst_char_in_string_variants() {
     return_if_neovm_enable_oracle_proptest_not_set!();

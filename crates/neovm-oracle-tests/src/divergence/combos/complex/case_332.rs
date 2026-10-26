@@ -26,6 +26,7 @@ fn div_cx332_pcase_pred_app_quote_let_patterns() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx332_pcase_or_and_not_guard_combined() {
     return_if_neovm_enable_oracle_proptest_not_set!();

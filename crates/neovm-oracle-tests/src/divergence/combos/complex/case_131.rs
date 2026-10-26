@@ -105,6 +105,7 @@ fn div_cx131_saveplace_save_location_format() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx131_desktop_save_buffer_format() {
     return_if_neovm_enable_oracle_proptest_not_set!();

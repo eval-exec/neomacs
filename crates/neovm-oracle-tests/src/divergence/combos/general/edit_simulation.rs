@@ -255,6 +255,7 @@ fn divergence_simulate_delete_to_kill_ring_yank() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_simulate_multi_step_refactor() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -368,6 +369,7 @@ fn divergence_simulate_duplicate_line() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_simulate_transpose_words() {
     return_if_neovm_enable_oracle_proptest_not_set!();

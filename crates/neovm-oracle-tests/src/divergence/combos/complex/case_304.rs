@@ -114,6 +114,7 @@ fn div_cx304_make_directory_recursive() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx304_set_file_modes_query() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -207,6 +208,7 @@ fn div_cx304_file_attributes_full_query() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx304_file_io_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();

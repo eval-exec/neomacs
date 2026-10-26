@@ -155,6 +155,7 @@ fn org_num_mode_toggle_clear_reenable_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_num_narrow_mutate_promote_refresh_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

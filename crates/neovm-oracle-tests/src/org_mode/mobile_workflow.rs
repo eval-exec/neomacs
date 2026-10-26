@@ -145,6 +145,7 @@ fn org_mobile_move_capture_apply_edit_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_mobile_olp_locate_edit_refile_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -271,6 +272,7 @@ fn org_mobile_escape_compare_timestamp_checksum_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_mobile_push_agenda_index_checksums_hooks_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

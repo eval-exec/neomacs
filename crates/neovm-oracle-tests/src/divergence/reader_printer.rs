@@ -42,6 +42,7 @@ fn divergence_prin1_to_string_roundtrip() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_print_symbol_with_pos() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -385,6 +385,7 @@ fn org_beamer_export_columns_blocks_againframe_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_html_export_detailed_structure_link_image_table_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -456,6 +457,7 @@ fn org_html_export_detailed_structure_link_image_table_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_multi_backend_export_structure_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

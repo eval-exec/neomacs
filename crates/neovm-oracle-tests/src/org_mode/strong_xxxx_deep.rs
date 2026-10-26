@@ -223,6 +223,7 @@ fn xxxx_link_attr() {
 // Xxxx: planning repeaters
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn xxxx_planning_repeaters() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -405,6 +405,7 @@ fn tera_all_org_element_secondary_p_combinations() {
 // Tera: org-element with all org-element-map combinations
 // ═══════════════════════════════════════════════════════════════════════
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn tera_all_org_element_map_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();

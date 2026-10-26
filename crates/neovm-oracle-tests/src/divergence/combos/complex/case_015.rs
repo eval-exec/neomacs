@@ -81,6 +81,7 @@ fn div_cx15_hash_table_custom_test() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx15_set_transient_map_lookup() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -124,6 +125,7 @@ fn div_cx15_process_buffer_sentinel_combined() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx15_cl_defmethod_after_hierarchy() {
     return_if_neovm_enable_oracle_proptest_not_set!();

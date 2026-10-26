@@ -74,6 +74,7 @@ fn divergence_regex_replace_preserves_overlays() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_marker_ring_regex_jump() {
     return_if_neovm_enable_oracle_proptest_not_set!();

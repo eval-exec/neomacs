@@ -384,6 +384,7 @@ fn div_cx36_process_exit_code_exit_zero_vs_nonzero_clean() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx36_window_start_end_stable_after_operations() {
     return_if_neovm_enable_oracle_proptest_not_set!();

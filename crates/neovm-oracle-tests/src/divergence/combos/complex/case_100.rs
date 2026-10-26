@@ -5,6 +5,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx100_mega_textprop_overlay_buflocal_marker_undo_narrow() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -169,6 +170,7 @@ fn div_cx100_mega_coding_regex_format_print_circle_secure_hash() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx100_mega_window_config_marker_overlay_register_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

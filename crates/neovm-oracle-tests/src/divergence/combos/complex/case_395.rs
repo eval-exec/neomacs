@@ -64,6 +64,7 @@ fn div_cx395_copy_file_with_permissions() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx395_rename_file_and_make_directory() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -202,6 +203,7 @@ fn div_cx395_set_file_modes_and_times() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx395_file_io_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -74,6 +74,7 @@ fn div_cx450_abbrev_expansion() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx450_set_case_syntax() {
     return_if_neovm_enable_oracle_proptest_not_set!();

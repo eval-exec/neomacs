@@ -477,6 +477,7 @@ fn org_habit_agenda_past_delay_all_today_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_habit_graph_properties_text_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

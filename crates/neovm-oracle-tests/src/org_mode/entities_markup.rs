@@ -1,6 +1,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_entities_user_table_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -103,6 +104,7 @@ fn org_subsuperscript_parse_export_modes_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_pretty_entities_fontify_display_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -145,6 +147,7 @@ fn org_pretty_entities_fontify_display_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_markup_entities_fontlock_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

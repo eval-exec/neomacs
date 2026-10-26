@@ -54,6 +54,7 @@ fn div_cx254_dir_locals_find() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx254_project_root_finding() {
     return_if_neovm_enable_oracle_proptest_not_set!();

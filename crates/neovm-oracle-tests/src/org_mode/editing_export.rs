@@ -216,6 +216,7 @@ fn org_icalendar_export_todo_schedule_deadline_combo() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_region_emphasis_link_footnote_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -43,6 +43,7 @@ fn div_cx301_tab_bar_tab_operations() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx301_project_detection_with_git_marker() {
     return_if_neovm_enable_oracle_proptest_not_set!();

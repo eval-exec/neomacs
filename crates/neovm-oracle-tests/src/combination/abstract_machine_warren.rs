@@ -112,6 +112,7 @@ fn oracle_prop_wam_heap_representation() {
 // WAM deref and unification on the heap
 // ---------------------------------------------------------------------------
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_wam_unification() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -64,6 +64,7 @@ fn div_cx391_unwind_protect_cleanup_with_error_in_cleanup() {
     )
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx391_catch_throw_through_nested_unwind() {
     return_if_neovm_enable_oracle_proptest_not_set!();

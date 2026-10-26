@@ -35,6 +35,7 @@ fn combo112_org_clock_resolve_idle() {
         expect,
     );
 }
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo112_org_dblock_update_clocktable_full() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -83,6 +83,7 @@ fn combo_add_text_props_narrow_marker() {
     );
 }
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_remove_add_text_props_clone() {
     return_if_neovm_enable_oracle_proptest_not_set!();

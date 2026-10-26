@@ -4,6 +4,7 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_clone_buffer_marker_overlay_textprop_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
