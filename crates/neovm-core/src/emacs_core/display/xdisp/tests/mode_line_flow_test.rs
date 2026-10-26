@@ -216,3 +216,51 @@ fn mode_line_snapshot_hook_preserves_original_nonlocal_exit() {
     assert!(eval.frame_snapshot_fn.is_some());
     assert!(!eval.has_mode_line_display_flow());
 }
+
+#[test]
+fn mode_line_frame_title_uses_noprop_fields_without_point_queries() {
+    let mut eval = context();
+    let bid = eval.buffers.current_buffer_id().expect("current buffer");
+    let frame_id = eval.frames.create_frame("title-fields", 80, 24, bid);
+    assert!(eval.frames.select_frame(frame_id));
+    let window = Value::make_window(
+        eval.frames
+            .selected_frame()
+            .expect("frame")
+            .selected_window
+            .0,
+    );
+    // GNU xdisp.c decode_mode_spec ignores these point-dependent fields for
+    // MODE_LINE_TITLE. Parsed minimum widths still pad the empty fields.
+    let rendered = try_format_frame_title_for_display(
+        &mut eval,
+        Value::string("%l|%3c|%C"),
+        window,
+        Value::NIL,
+        80,
+    )
+    .expect("title fields");
+    assert_eq!(rendered.as_utf8_str(), Some("|   |"));
+    let format = eval
+        .eval_str(r#"'(:propertize "X" face bold mode-line-elt-no 999)"#)
+        .expect("property-bearing title input");
+    let plain = try_format_frame_title_for_display(&mut eval, format, window, Value::NIL, 80)
+        .expect("title drops all properties like store_mode_line_noprop");
+    eval.set_variable("ep30-title-result", plain);
+    assert_eq!(plain.as_utf8_str(), Some("X"));
+    assert!(
+        eval.eval_str("(text-properties-at 0 ep30-title-result)")
+            .expect("title properties")
+            .is_nil()
+    );
+    // FRAME_MESSAGE_BUF_SIZE is 4*FRAME_COLS; GNU's fallback fills size-1.
+    let dashes =
+        try_format_frame_title_for_display(&mut eval, Value::string("%-"), window, Value::NIL, 80)
+            .expect("title dash fallback");
+    assert_eq!(dashes.as_utf8_str(), Some("-".repeat(319).as_str()));
+    // A positive field fitting lots_of_dashes selects its complete140 bytes.
+    let dashes =
+        try_format_frame_title_for_display(&mut eval, Value::string("%1-"), window, Value::NIL, 80)
+            .expect("title dash literal");
+    assert_eq!(dashes.as_utf8_str(), Some("-".repeat(140).as_str()));
+}

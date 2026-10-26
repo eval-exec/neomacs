@@ -109,9 +109,9 @@ impl DynamicSymbols {
     }
 }
 
-static_assertions::assert_not_impl_any!(ModeLinePercentContext: Sync);
+static_assertions::assert_not_impl_any!(ModeLinePercentContext<'static>: Sync);
 
-impl ModeLinePercentContext {
+impl ModeLinePercentContext<'_> {
     #[inline]
     pub(super) fn resolve_dynamic_symbol(&self, name: &'static str) -> ResolvedModeLineSymbol {
         self.dynamic_symbols.borrow_mut().resolve(name)

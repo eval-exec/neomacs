@@ -31,14 +31,11 @@ fn gc_mode_line_rehomed_predecessor_plist_survives_eval() {
         .object_interval_plist_runs_for_char_len(CharLen::new(3));
     for (run, expected) in runs.iter().take(2).zip([73, 74]) {
         let plist = run.plist();
-        assert!(eval.tagged_heap.owns_heap_value_for_test(plist));
-        assert_eq!(
-            plist.cons_car().bits(),
-            Value::symbol("review-property").bits()
-        );
-        assert_eq!(
-            plist.cons_cdr().cons_car().bits(),
-            Value::fixnum(expected).bits()
+        mode_line_gc_roots::assert_owned_property(
+            &eval,
+            plist,
+            Value::symbol("review-property"),
+            Value::fixnum(expected),
         );
     }
     assert!(runs.len() >= 2);

@@ -3,6 +3,52 @@
 use super::*;
 use crate::emacs_core::Context;
 
+// Inspect every retained cons before following it; an added formatter-owned
+// property may precede the fixture key. Property order is not an ownership
+// contract, and the new ordinal's spine must survive collection too.
+pub(super) fn assert_owned_property(
+    eval: &Context,
+    mut plist: Value,
+    property: Value,
+    expected: Value,
+) {
+    let mut found = false;
+    while plist.is_cons() {
+        assert!(
+            eval.tagged_heap.owns_heap_value_for_test(plist),
+            "retained property name cell"
+        );
+        let name = plist.cons_car();
+        assert_ne!(
+            name.bits(),
+            Value::DEAD.bits(),
+            "a retained property name was swept"
+        );
+        let rest = plist.cons_cdr();
+        assert!(rest.is_cons(), "retained property value cell");
+        assert!(
+            eval.tagged_heap.owns_heap_value_for_test(rest),
+            "retained property value ownership"
+        );
+        let value = rest.cons_car();
+        assert_ne!(
+            value.bits(),
+            Value::DEAD.bits(),
+            "a retained property value was swept"
+        );
+        if name.bits() == property.bits() {
+            assert_eq!(value.bits(), expected.bits());
+            found = true;
+        }
+        plist = rest.cons_cdr();
+    }
+    assert!(plist.is_nil(), "proper retained property list");
+    assert!(
+        found,
+        "fixture property remains in the complete retained plist"
+    );
+}
+
 #[derive(Clone, Copy)]
 enum PropertySource {
     PropertizeElement,
@@ -127,18 +173,12 @@ fn assert_accumulated_property_survives(
     let plist = first.plist();
     assert!(plist.is_cons(), "the property spine must be retained");
 
-    // A freed cons has car == Value::DEAD (bits 4). Compare raw bits before
-    // any property-name/string access so the regression reports its cause
-    // instead of dereferencing that null-string poison, as chrome memo did.
-    let name = plist.cons_car();
-    assert_eq!(
-        name.bits(),
-        Value::symbol("u34-mode-line-gc-property").bits(),
-        "the accumulated property's cons was swept during the later :eval"
+    assert_owned_property(
+        &eval,
+        plist,
+        Value::symbol("u34-mode-line-gc-property"),
+        Value::fixnum(73),
     );
-    let rest = plist.cons_cdr();
-    assert!(rest.is_cons(), "the property's value cell must be retained");
-    assert_eq!(rest.cons_car().bits(), Value::fixnum(73).bits());
     // A previous :eval can contribute a fresh source string that is retained
     // only in the display sidecar after its temporary evaluator root ends.
     // Check the arena's allocation bitmap without reading the string payload.

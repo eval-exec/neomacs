@@ -59,7 +59,7 @@ pub(super) fn eval_form(eval: &mut super::super::eval::Context, form: &Value) ->
 
 #[cold]
 #[inline(never)]
-fn handle_error(
+pub(super) fn handle_error(
     eval: &mut super::super::eval::Context,
     form: &Value,
     result: EvalResult,

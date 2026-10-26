@@ -3,8 +3,8 @@
 //! GNU keeps all of this in C globals (or KBOARD/terminal fields, not per
 //! thread either), so every owner of a World must see the same values. The
 //! World holds one [`GlobalState`]; each owner's Context reaches a field
-//! through its [`WorldSlot`] (the one access path), and the four values too
-//! small to hold a slot in place through the accessors below.
+//! through its [`WorldSlot`] (the one access path), and accessor-owned native fields
+//! through the narrow methods below.
 
 use super::*;
 use std::ptr::NonNull;
@@ -23,6 +23,9 @@ macro_rules! global_state {
             pub(crate) input_mode_interrupt: bool,
             /// print.c `external_debugging_output`'s stream.
             pub(crate) debugging_output_file: Option<std::fs::File>,
+            /// xdisp.c `mode_line_elt_no` and its active output scope. Accessor
+            /// owned so adding formatter state does not move Context/JIT fields.
+            pub(crate) mode_line_output: crate::emacs_core::xdisp::ModeLineOutputOwner,
         }
 
         /// One owner's slots over a World's [`GlobalState`].
@@ -148,13 +151,18 @@ impl GlobalState {
             message_buf_print: false,
             input_mode_interrupt: true,
             debugging_output_file: None,
+            mode_line_output: Default::default(),
         }
     }
 }
 
 impl Context {
+    pub(crate) fn mode_line_output_owner(&self) -> crate::emacs_core::xdisp::ModeLineOutputOwner {
+        self.global_state().mode_line_output.clone()
+    }
+
     /// The World's GNU-global state, reached from this owner's `quit_char`
-    /// slot (the four values below have no slot of their own).
+    /// slot (accessor-owned fields have no Context slot of their own).
     #[inline]
     fn global_state(&self) -> &GlobalState {
         let field = self.quit_char.cell().as_ptr();

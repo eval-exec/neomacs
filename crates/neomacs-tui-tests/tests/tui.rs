@@ -184,3 +184,4 @@ mod minibuffer_selected_window;
 mod treesit_debug_mode_line;
 
 mod encoded_file;
+mod mode_line_element_attribution_oracle;

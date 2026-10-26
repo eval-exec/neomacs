@@ -6,7 +6,9 @@ use crate::emacs_core::eval::{
     save_scratch_gc_roots, set_scratch_gc_root,
 };
 
-#[inline]
+// Keep the native root set and its borrowed rendered fields visible at walk
+// entry, including when STRING and DISPLAY share the collector.
+#[inline(always)]
 fn visit_rendered_roots(rendered: &ModeLineRendered, mut visit: impl FnMut(Value)) {
     // These are freshly copied plist spines; rooting a source string does not
     // retain the destination's interval conses.
@@ -75,7 +77,7 @@ pub(super) fn pin_accumulator_value(roots: &mut AccumulatorRoots, value: Value) 
     }
 }
 
-#[inline]
+#[inline(always)]
 pub(super) fn pin_rendered_scratch(rendered: &ModeLineRendered) -> AccumulatorRoots {
     let mut roots = AccumulatorRoots::default();
     visit_rendered_roots(rendered, |value| pin_accumulator_value(&mut roots, value));

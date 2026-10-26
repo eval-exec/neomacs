@@ -28,7 +28,11 @@
 
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;
+mod mode_line_output;
 mod mode_line_point;
+mod mode_line_string;
+pub(crate) use mode_line_output::ModeLineOutputOwner;
+use mode_line_output::{ElementAttribution, ModeLineOutputScope, ModeLineStringTarget};
 
 #[inline]
 pub fn mode_line_flow_enabled() -> bool {
@@ -55,8 +59,8 @@ pub(crate) use super::invisibility::{Invisibility, text_prop_means_invisible};
 use super::symbol::LispVariableLocality;
 use super::value::*;
 use crate::buffer::{
-    AccessibleEmacsByteRange, Buffer, BufferId, CharLen, CharPos0, CharRange, EmacsBytePos,
-    EmacsByteRange, LispCharPos1, TextPropertyTable,
+    AccessibleEmacsByteRange, Buffer, BufferId, CharLen, CharPos0, CharRange, DisplayColumn,
+    EmacsBytePos, EmacsByteRange, LispCharPos1, TextPropertyTable,
 };
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range};
@@ -2101,7 +2105,15 @@ pub fn try_format_mode_line_for_display_with_sources(
     buffer: Value,
     target_cols: usize,
 ) -> Result<ModeLineDisplayOutput, Flow> {
-    try_format_mode_line_display(eval, format_val, window, buffer, target_cols, true)
+    try_format_mode_line_display(
+        eval,
+        format_val,
+        window,
+        buffer,
+        ModeLineDisplayDestination::Rows {
+            columns: DisplayColumn::new(target_cols),
+        },
+    )
 }
 
 /// Frame-title evaluation uses the same safe evaluator, but unlike actual
@@ -2122,18 +2134,36 @@ pub fn try_format_frame_title_for_display(
             target_cols,
         ));
     }
-    try_format_mode_line_display(eval, format_val, window, buffer, target_cols, false)
-        .map(ModeLineDisplayOutput::into_value)
+    try_format_mode_line_display(
+        eval,
+        format_val,
+        window,
+        buffer,
+        ModeLineDisplayDestination::FrameTitle {
+            frame_columns: DisplayColumn::new(target_cols),
+        },
+    )
+    .map(ModeLineDisplayOutput::into_value)
 }
 
+#[derive(Clone, Copy)]
+enum ModeLineDisplayDestination {
+    Rows { columns: DisplayColumn },
+    FrameTitle { frame_columns: DisplayColumn },
+}
+
+#[inline(always)]
 fn try_format_mode_line_display(
     eval: &mut super::eval::Context,
     format_val: Value,
     window: Value,
     buffer: Value,
-    target_cols: usize,
-    save_match_data: bool,
+    destination: ModeLineDisplayDestination,
 ) -> Result<ModeLineDisplayOutput, Flow> {
+    let save_match_data = match destination {
+        ModeLineDisplayDestination::Rows { .. } => true,
+        ModeLineDisplayDestination::FrameTitle { .. } => false,
+    };
     let args = [format_val, Value::NIL, window, buffer];
     validate_optional_window_designator(
         eval,
@@ -2213,7 +2243,13 @@ fn try_format_mode_line_display(
     let result_value = if format_val.is_nil() {
         Ok(ModeLineDisplayOutput::from_root_string(Value::string("")))
     } else {
-        let face_spec = resolve_mode_line_face_spec(&args);
+        let face_spec = match destination {
+            ModeLineDisplayDestination::Rows { .. } => resolve_mode_line_face_spec(&args),
+            ModeLineDisplayDestination::FrameTitle { .. } => ModeLineFaceSpec {
+                no_props: true,
+                face: None,
+            },
+        };
         let mut pctx = build_mode_line_percent_context(
             &eval.frames,
             &eval.buffers,
@@ -2221,8 +2257,11 @@ fn try_format_mode_line_display(
             eval.variables(),
             args.get(2),
         );
-        pctx.target = ModeLineTarget::Display {
-            columns: target_cols,
+        pctx.target = match destination {
+            ModeLineDisplayDestination::Rows { columns } => ModeLineTarget::Display { columns },
+            ModeLineDisplayDestination::FrameTitle { frame_columns } => {
+                ModeLineTarget::Title { frame_columns }
+            }
         };
         pctx.point.enter_context(
             &mut eval.frames,
@@ -2242,13 +2281,13 @@ fn try_format_mode_line_display(
             {
                 eval.push_specpdl_root(value);
             }
-            let output = format_mode_line_recursive(
+            let output = format_mode_line_for_target(
                 eval,
                 &pctx,
                 &format_val,
                 &mut rendered,
-                0,
-                false,
+                0.into(),
+                mode_line_string::Risk::Trusted,
                 title_selection.as_mut(),
             )
             .map(|()| rendered.into_display_output(face_spec));
@@ -2309,6 +2348,7 @@ pub(crate) fn finish_format_mode_line_in_eval(
         } else {
             let format_val = args[0];
             let face_spec = resolve_mode_line_face_spec(args);
+            let output_scope = ModeLineOutputScope::enter(eval, args)?;
             let mut pctx = build_mode_line_percent_context(
                 &eval.frames,
                 &eval.buffers,
@@ -2316,6 +2356,7 @@ pub(crate) fn finish_format_mode_line_in_eval(
                 eval.variables(),
                 args.get(2),
             );
+            pctx.target = output_scope.target();
             let point_selection = if mode_line_flow_policy::enabled() {
                 mode_line_point::PointSelection::CurrentBuffer
             } else {
@@ -2336,13 +2377,13 @@ pub(crate) fn finish_format_mode_line_in_eval(
                 {
                     eval.push_specpdl_root(value);
                 }
-                let output = format_mode_line_recursive(
+                let output = format_mode_line_for_target(
                     eval,
                     &pctx,
                     &format_val,
                     &mut result,
-                    0,
-                    false,
+                    0.into(),
+                    mode_line_string::Risk::Trusted,
                     selection.as_mut(),
                 )
                 .map(|()| result.into_value(face_spec));
@@ -2628,7 +2669,7 @@ fn mode_line_conditional_branch(cdr: Value, branch_is_then: bool) -> Option<Valu
 ///
 /// Corresponds to the `struct window *w` and `struct frame *f` parameters
 /// in GNU's `decode_mode_spec` (xdisp.c:29083).
-struct ModeLinePercentContext {
+struct ModeLinePercentContext<'scope> {
     /// Identity reuse is scoped to this formatter pass and existing registry epoch.
     dynamic_symbols: std::cell::RefCell<mode_line_symbols::DynamicSymbols>,
     /// Internal zero-based character offset of the first visible character.
@@ -2653,7 +2694,7 @@ struct ModeLinePercentContext {
     /// GNU's closed `mode_line_target` state.  This controls the target-specific
     /// `%-` expansion without letting an untyped optional width conflate string
     /// formatting with direct display formatting.
-    target: ModeLineTarget,
+    target: ModeLineTarget<'scope>,
     /// Context walks read live PT and the original window's shared counter;
     /// read-only split entry points retain their isolated native snapshot.
     point: mode_line_point::PointContext,
@@ -2671,13 +2712,30 @@ enum BufferCodingDisplay {
     UnibyteBlank,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum ModeLineTarget {
-    #[default]
-    String,
-    Display {
-        columns: usize,
-    },
+#[derive(Clone, Copy, Debug)]
+enum ModeLineTarget<'scope> {
+    String(ModeLineStringTarget<'scope>),
+    NoProperties,
+    Display { columns: DisplayColumn },
+    Title { frame_columns: DisplayColumn },
+}
+
+static_assertions::assert_impl_all!(ModeLineTarget<'static>: Copy);
+const _: () = assert!(!std::mem::needs_drop::<ModeLineTarget<'static>>());
+
+impl ModeLineTarget<'_> {
+    fn enter_element(&self) -> Result<(), Flow> {
+        match self {
+            Self::String(owner) => owner.advance().map(|_| ()),
+            Self::NoProperties | Self::Display { .. } | Self::Title { .. } => Ok(()),
+        }
+    }
+}
+
+impl Default for ModeLineTarget<'_> {
+    fn default() -> Self {
+        Self::NoProperties
+    }
 }
 
 impl BufferCodingDisplay {
@@ -2699,7 +2757,7 @@ impl BufferCodingDisplay {
     }
 }
 
-impl Default for ModeLinePercentContext {
+impl Default for ModeLinePercentContext<'_> {
     fn default() -> Self {
         Self {
             dynamic_symbols: Default::default(),
@@ -2709,20 +2767,20 @@ impl Default for ModeLinePercentContext {
             buffer_coding: BufferCodingDisplay::Multibyte { mnemonic: '-' },
             frame_coding_mnemonics: FrameCodingMnemonics::WindowSystem,
             eol_indicator: None,
-            target: ModeLineTarget::String,
+            target: ModeLineTarget::default(),
             point: mode_line_point::PointContext::default(),
         }
     }
 }
 
 /// Build a `ModeLinePercentContext` from frame/window/buffer state.
-fn build_mode_line_percent_context(
+fn build_mode_line_percent_context<'scope>(
     frames: &crate::window::FrameManager,
     buffers: &crate::buffer::BufferManager,
     coding_systems: Option<&crate::emacs_core::coding::CodingSystemManager>,
     vars: VariableView<'_>,
     window_arg: Option<&Value>,
-) -> ModeLinePercentContext {
+) -> ModeLinePercentContext<'scope> {
     let mut ctx = ModeLinePercentContext {
         buffer_coding: BufferCodingDisplay::Multibyte { mnemonic: '-' },
         ..Default::default()
@@ -2968,6 +3026,7 @@ fn coding_system_eol_indicator_value(
 /// Check if a directory path looks like a Tramp remote path.
 ///
 /// Tramp paths match `/METHOD:...` where METHOD is a lowercase alpha string.
+#[inline(always)]
 fn is_remote_directory(dir: &str) -> bool {
     if !dir.starts_with('/') {
         return false;
@@ -3317,6 +3376,7 @@ struct ModeLineFaceSpec {
 }
 
 impl ModeLineRendered {
+    #[inline(always)]
     fn root_for_walk(&mut self) {
         if self.gc_roots.is_none() {
             self.gc_roots = Some(mode_line_gc::pin_rendered_scratch(self));
@@ -3636,9 +3696,11 @@ impl ModeLineRendered {
         });
     }
 
-    fn apply_propertize_properties(&mut self, props: Value, target: ModeLineTarget) {
+    fn apply_propertize_properties(&mut self, props: Value, target: &ModeLineTarget<'_>) {
         match target {
-            ModeLineTarget::String => {
+            ModeLineTarget::String(_)
+            | ModeLineTarget::NoProperties
+            | ModeLineTarget::Title { .. } => {
                 self.materialize_display_min_width(props);
                 self.overlay_properties(props);
             }
@@ -3943,6 +4005,14 @@ impl ModeLineRendered {
     fn into_value(self, face_spec: ModeLineFaceSpec) -> Value {
         self.into_display_output(face_spec).into_value()
     }
+
+    fn apply_element_attribution(&mut self, range: CharRange, attribution: ElementAttribution) {
+        if range.is_empty() {
+            return;
+        }
+        attribution.apply_to_table(&mut self.text_props, range);
+        self.pin_properties();
+    }
 }
 
 fn mode_line_display_min_width(props: Value) -> Option<ModeLineMinWidthRun> {
@@ -4149,7 +4219,7 @@ fn append_mode_line_string_in_state(
     buffers: &crate::buffer::BufferManager,
     processes: &crate::emacs_core::process::ProcessManager,
     command_loop_depth: usize,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     result: &mut ModeLineRendered,
     value: &Value,
     literal: bool,
@@ -4163,17 +4233,132 @@ fn append_mode_line_string_in_state(
         pctx,
         result,
         value,
-        literal,
+        ModeLineLiteral::from(literal),
+        NoModeLineNativeFieldLimit,
         &mut mode_line_point::Access::Snapshot,
     );
 }
 
 fn append_mode_line_string_in_eval(
     eval: &mut super::eval::Context,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     result: &mut ModeLineRendered,
     value: &Value,
     literal: bool,
+) {
+    append_mode_line_string_in_eval_with_field_limit(
+        eval,
+        pctx,
+        result,
+        value,
+        ModeLineLiteral::from(literal),
+        NoModeLineNativeFieldLimit,
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModeLineLiteral {
+    Literal,
+    Expand,
+}
+
+impl From<bool> for ModeLineLiteral {
+    fn from(literal: bool) -> Self {
+        if literal { Self::Literal } else { Self::Expand }
+    }
+}
+
+/// Parsed native percent minimum width, before a stored target applies its
+/// character/column budget. Construction preserves the nonnegative i64 domain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ModeLineNativeFieldWidth(i64);
+
+static_assertions::assert_eq_size!(ModeLineNativeFieldWidth, i64);
+static_assertions::assert_impl_all!(ModeLineNativeFieldWidth: Copy, Send, Sync);
+
+impl ModeLineNativeFieldWidth {
+    const ZERO: Self = Self(0);
+    const MAX: Self = Self(i64::MAX);
+
+    #[inline(always)]
+    fn parse_ascii_prefix(characters: &[char]) -> (Self, CharLen) {
+        let mut width = Self::ZERO;
+        let mut consumed = 0;
+        for &character in characters {
+            let Some(digit) = character.to_digit(10) else {
+                break;
+            };
+            width.0 = width.0.saturating_mul(10).saturating_add(i64::from(digit));
+            consumed += 1;
+        }
+        (width, CharLen::new(consumed))
+    }
+
+    fn is_empty(self) -> bool {
+        self == Self::ZERO
+    }
+
+    fn exceeds_char_len(self, length: CharLen) -> bool {
+        Self::try_from(length).is_ok_and(|length| self.0 > length.0)
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    fn cap_to_platform_character_domain(self) -> Self {
+        Self(self.0.min(i64::from(u32::MAX)))
+    }
+}
+
+impl From<ModeLineNativeFieldWidth> for i64 {
+    fn from(width: ModeLineNativeFieldWidth) -> Self {
+        width.0
+    }
+}
+
+impl TryFrom<ModeLineNativeFieldWidth> for CharLen {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(width: ModeLineNativeFieldWidth) -> Result<Self, Self::Error> {
+        usize::try_from(width.0).map(Self::new)
+    }
+}
+
+impl TryFrom<CharLen> for ModeLineNativeFieldWidth {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(length: CharLen) -> Result<Self, Self::Error> {
+        i64::try_from(length.get()).map(Self)
+    }
+}
+
+trait ModeLineNativeFieldLimit {
+    fn cap(&self, field_width: ModeLineNativeFieldWidth) -> ModeLineNativeFieldWidth;
+
+    #[inline(always)]
+    fn store_width(&self, field_width: ModeLineNativeFieldWidth) -> ModeLineNativeFieldWidth {
+        field_width
+    }
+}
+
+struct NoModeLineNativeFieldLimit;
+
+impl ModeLineNativeFieldLimit for NoModeLineNativeFieldLimit {
+    #[inline(always)]
+    fn cap(&self, field_width: ModeLineNativeFieldWidth) -> ModeLineNativeFieldWidth {
+        // Retain the character-domain bound on 32-bit targets; 64-bit native
+        // output needs no conversion. Stored targets own their CharLen cap.
+        #[cfg(target_pointer_width = "32")]
+        let field_width = field_width.cap_to_platform_character_domain();
+        field_width
+    }
+}
+
+fn append_mode_line_string_in_eval_with_field_limit(
+    eval: &mut super::eval::Context,
+    pctx: &ModeLinePercentContext<'_>,
+    result: &mut ModeLineRendered,
+    value: &Value,
+    literal: ModeLineLiteral,
+    limit: impl ModeLineNativeFieldLimit,
 ) {
     let command_loop_depth = eval.recursive_command_loop_depth();
     let vars = VariableView::new(&eval.obarray, &eval.owner);
@@ -4188,6 +4373,7 @@ fn append_mode_line_string_in_eval(
         result,
         value,
         literal,
+        limit,
         &mut access,
     );
 }
@@ -4199,10 +4385,11 @@ fn append_mode_line_string_with_point_access(
     buffers: &crate::buffer::BufferManager,
     processes: &crate::emacs_core::process::ProcessManager,
     command_loop_depth: usize,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     result: &mut ModeLineRendered,
     value: &Value,
-    literal: bool,
+    literal: ModeLineLiteral,
+    limit: impl ModeLineNativeFieldLimit,
     point_access: &mut mode_line_point::Access<'_>,
 ) {
     // `%` is ASCII (0x25), which can never appear as a UTF-8 continuation or
@@ -4215,7 +4402,7 @@ fn append_mode_line_string_with_point_access(
     } else {
         return;
     };
-    if literal || !has_percent {
+    if literal == ModeLineLiteral::Literal || !has_percent {
         result.append_string_value_preserving_props(value);
     } else {
         expand_mode_line_percent_in_state(
@@ -4228,6 +4415,7 @@ fn append_mode_line_string_with_point_access(
             value,
             result,
             point_access,
+            limit,
         );
     }
 }
@@ -4273,15 +4461,39 @@ impl ModeLineTailCycle {
 /// - `(:eval FORM)`: evaluate FORM, use result as format
 /// - `(:propertize ELT PROPS...)`: process ELT and apply text properties
 /// - A cons `(SYMBOL . REST)`: if SYMBOL's value is non-nil, process REST
-fn format_mode_line_recursive(
+fn format_mode_line_for_target(
     eval: &mut super::eval::Context,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     format: &Value,
     result: &mut ModeLineRendered,
-    depth: usize,
-    risky: bool,
+    depth: mode_line_string::ElementDepth,
+    risk: mode_line_string::Risk,
     selection: Option<&mut mode_line_flow_policy::FormatSelection>,
 ) -> Result<(), Flow> {
+    match &pctx.target {
+        ModeLineTarget::Display { .. } => {
+            format_mode_line_recursive(eval, pctx, format, result, depth, risk, selection)
+        }
+        ModeLineTarget::String(_) | ModeLineTarget::NoProperties | ModeLineTarget::Title { .. } => {
+            mode_line_string::format(eval, pctx, format, result, depth, risk, selection)
+        }
+    }
+}
+
+fn format_mode_line_recursive(
+    eval: &mut super::eval::Context,
+    pctx: &ModeLinePercentContext<'_>,
+    format: &Value,
+    result: &mut ModeLineRendered,
+    depth: mode_line_string::ElementDepth,
+    risk: mode_line_string::Risk,
+    selection: Option<&mut mode_line_flow_policy::FormatSelection>,
+) -> Result<(), Flow> {
+    let depth = depth.get();
+    let risky = match risk {
+        mode_line_string::Risk::Trusted => false,
+        mode_line_string::Risk::Untrusted => true,
+    };
     if depth > 20 {
         return Ok(()); // Guard against infinite recursion
     }
@@ -4299,7 +4511,7 @@ fn format_mode_line_recursive(
 
 fn format_mode_line_recursive_rooted(
     eval: &mut super::eval::Context,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     format: &Value,
     result: &mut ModeLineRendered,
     depth: usize,
@@ -4342,8 +4554,8 @@ fn format_mode_line_recursive_rooted(
                         pctx,
                         &val,
                         result,
-                        depth + 1,
-                        risky || !symbol.is_risky(&eval.obarray),
+                        (depth + 1).into(),
+                        (risky || !symbol.is_risky(&eval.obarray)).into(),
                         selection.as_deref_mut(),
                     )?;
                 }
@@ -4375,8 +4587,8 @@ fn format_mode_line_recursive_rooted(
                         pctx,
                         &val,
                         result,
-                        depth + 1,
-                        risky,
+                        (depth + 1).into(),
+                        risky.into(),
                         selection.as_deref_mut(),
                     )?;
                 }
@@ -4395,11 +4607,11 @@ fn format_mode_line_recursive_rooted(
                         pctx,
                         &elt,
                         &mut nested,
-                        depth + 1,
-                        risky,
+                        (depth + 1).into(),
+                        risky.into(),
                         selection.as_deref_mut(),
                     )?;
-                    nested.apply_propertize_properties(cdr.cons_cdr(), pctx.target);
+                    nested.apply_propertize_properties(cdr.cons_cdr(), &pctx.target);
                     result.append_rendered(&nested);
                 }
                 return Ok(());
@@ -4412,8 +4624,8 @@ fn format_mode_line_recursive_rooted(
                     pctx,
                     &cdr,
                     &mut nested,
-                    depth + 1,
-                    risky,
+                    (depth + 1).into(),
+                    risky.into(),
                     selection.as_deref_mut(),
                 )?;
                 append_mode_line_numeric_segment(
@@ -4438,8 +4650,8 @@ fn format_mode_line_recursive_rooted(
                         pctx,
                         &branch,
                         result,
-                        depth + 1,
-                        risky,
+                        (depth + 1).into(),
+                        risky.into(),
                         selection.as_deref_mut(),
                     )?;
                 } else if let Some(branch) = mode_line_conditional_branch(cdr, false) {
@@ -4448,8 +4660,8 @@ fn format_mode_line_recursive_rooted(
                         pctx,
                         &branch,
                         result,
-                        depth + 1,
-                        risky,
+                        (depth + 1).into(),
+                        risky.into(),
                         selection.as_deref_mut(),
                     )?;
                 }
@@ -4469,8 +4681,8 @@ fn format_mode_line_recursive_rooted(
                     pctx,
                     &element,
                     result,
-                    depth + 1,
-                    risky,
+                    (depth + 1).into(),
+                    risky.into(),
                     selection.as_deref_mut(),
                 )?;
                 tail = tail.cons_cdr();
@@ -4496,7 +4708,7 @@ fn format_mode_line_recursive_in_state(
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
     processes: &crate::emacs_core::process::ProcessManager,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     format: &Value,
     result: &mut ModeLineRendered,
     depth: usize,
@@ -4577,7 +4789,7 @@ fn format_mode_line_recursive_in_state(
                         depth + 1,
                         risky,
                     );
-                    nested.apply_propertize_properties(cdr.cons_cdr(), pctx.target);
+                    nested.apply_propertize_properties(cdr.cons_cdr(), &pctx.target);
                     result.append_rendered(&nested);
                     return needs_eval;
                 }
@@ -4671,7 +4883,7 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
     processes: &crate::emacs_core::process::ProcessManager,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     format: &Value,
     result: &mut ModeLineRendered,
     depth: usize,
@@ -4783,7 +4995,7 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
                         eval_form,
                         roots,
                     )?;
-                    nested.apply_propertize_properties(cdr.cons_cdr(), pctx.target);
+                    nested.apply_propertize_properties(cdr.cons_cdr(), &pctx.target);
                     result.append_rendered(&nested);
                 }
                 return Ok(());
@@ -4884,10 +5096,11 @@ fn expand_mode_line_percent_in_state(
     buffers: &crate::buffer::BufferManager,
     processes: &crate::emacs_core::process::ProcessManager,
     command_loop_depth: usize,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     value: &Value,
     result: &mut ModeLineRendered,
     point_access: &mut mode_line_point::Access<'_>,
+    limit: impl ModeLineNativeFieldLimit,
 ) {
     let fmt_storage = if let Some(string) = value.as_lisp_string() {
         crate::emacs_core::emacs_char::to_utf8_lossy(string.as_bytes())
@@ -4950,12 +5163,10 @@ fn expand_mode_line_percent_in_state(
         let percent_char_pos = index;
         index += 1;
 
-        let mut field_width = 0_i64;
-        while index < chars.len() && chars[index].is_ascii_digit() {
-            let digit = chars[index] as u8;
-            field_width = field_width * 10 + i64::from(digit - b'0');
-            index += 1;
-        }
+        let (native_width, digits) = ModeLineNativeFieldWidth::parse_ascii_prefix(&chars[index..]);
+        index += digits.get();
+        let decoded_width = limit.cap(native_width);
+        let field_width = i64::from(limit.store_width(decoded_width));
 
         let props_at_percent = if value.is_string() {
             with_mode_line_string_properties(*value, |table| {
@@ -5101,9 +5312,24 @@ fn expand_mode_line_percent_in_state(
                 // on `result`. Drop the closure here by calling
                 // `append_mode_line_rendered_segment` directly with
                 // the pre-computed dash string.
-                let dash_string: String = match pctx.target {
-                    ModeLineTarget::String => "--".to_string(),
+                let dash_string: String = match &pctx.target {
+                    ModeLineTarget::String(_) | ModeLineTarget::NoProperties => "--".to_string(),
+                    ModeLineTarget::Title { frame_columns } => {
+                        // GNU frame.h FRAME_MESSAGE_BUF_SIZE and xdisp.c
+                        // decode_mode_spec: ASCII bytes are also characters.
+                        const DASH_LITERAL_LENGTH: CharLen = CharLen::new(140);
+                        let length = if decoded_width.is_empty()
+                            || decoded_width
+                                .exceeds_char_len(CharLen::new(DASH_LITERAL_LENGTH.get() + 1))
+                        {
+                            frame_columns.get().saturating_mul(4).saturating_sub(1)
+                        } else {
+                            DASH_LITERAL_LENGTH.get()
+                        };
+                        "-".repeat(length)
+                    }
                     ModeLineTarget::Display { columns } => {
+                        let columns = columns.get();
                         let current = result.char_len();
                         if columns > current {
                             "-".repeat(columns - current)
@@ -5144,33 +5370,60 @@ fn expand_mode_line_percent_in_state(
                 index += 1;
             }
             Some('l') => {
-                append_mode_line_percent_string_spec(
-                    result,
-                    &point_field(mode_line_point::Field::Line).to_string(),
-                    &props_at_percent,
-                    field_width,
-                );
+                if matches!(pctx.target, ModeLineTarget::Title { .. }) {
+                    append_mode_line_percent_string_spec(
+                        result,
+                        "",
+                        &props_at_percent,
+                        field_width,
+                    );
+                } else {
+                    append_mode_line_percent_string_spec(
+                        result,
+                        &point_field(mode_line_point::Field::Line).to_string(),
+                        &props_at_percent,
+                        field_width,
+                    );
+                }
                 index += 1;
             }
             Some('c') => {
-                note_column_spec_consumed();
-                append_mode_line_percent_string_spec(
-                    result,
-                    &point_field(mode_line_point::Field::Column).to_string(),
-                    &props_at_percent,
-                    field_width,
-                );
+                if matches!(pctx.target, ModeLineTarget::Title { .. }) {
+                    append_mode_line_percent_string_spec(
+                        result,
+                        "",
+                        &props_at_percent,
+                        field_width,
+                    );
+                } else {
+                    note_column_spec_consumed();
+                    append_mode_line_percent_string_spec(
+                        result,
+                        &point_field(mode_line_point::Field::Column).to_string(),
+                        &props_at_percent,
+                        field_width,
+                    );
+                }
                 index += 1;
             }
             Some('C') => {
-                // GNU: 1-indexed column number at point.
-                note_column_spec_consumed();
-                append_mode_line_percent_string_spec(
-                    result,
-                    &(point_field(mode_line_point::Field::Column) + 1).to_string(),
-                    &props_at_percent,
-                    field_width,
-                );
+                if matches!(pctx.target, ModeLineTarget::Title { .. }) {
+                    append_mode_line_percent_string_spec(
+                        result,
+                        "",
+                        &props_at_percent,
+                        field_width,
+                    );
+                } else {
+                    // GNU: 1-indexed column number at point.
+                    note_column_spec_consumed();
+                    append_mode_line_percent_string_spec(
+                        result,
+                        &(point_field(mode_line_point::Field::Column) + 1).to_string(),
+                        &props_at_percent,
+                        field_width,
+                    );
+                }
                 index += 1;
             }
             Some('m') => {
@@ -10460,6 +10713,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/mode_line_gc_roots_test.rs"]
 mod mode_line_gc_roots;
+
+#[cfg(test)]
+#[path = "tests/mode_line_element_attribution_test.rs"]
+mod mode_line_element_attribution_tests;
 
 #[cfg(test)]
 #[path = "tests/mode_line_multibyte_identity_test.rs"]

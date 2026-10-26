@@ -1575,7 +1575,7 @@ fn test_format_mode_line_tty_big_z_uses_live_coding_manager_state_and_eol_indica
 }
 
 #[test]
-fn test_format_mode_line_propertize_display_min_width_matches_gnu_spacing() {
+fn test_format_mode_line_string_keeps_min_width_property_without_display_padding() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     let display = Value::list(vec![
@@ -1589,8 +1589,27 @@ fn test_format_mode_line_propertize_display_min_width_matches_gnu_spacing() {
         display,
     ]);
 
+    eval.set_variable("cont30-min-width-format", format);
+    // GNU31.1 CONT30 final-r1: STRING preserves this display property;
+    // only the display iterator realizes its width. NOPROP drops it.
     let rendered = builtin_format_mode_line_ctx(&mut eval, vec![format]).expect("mode-line");
-    assert_eq!(rendered, Value::string("All   "));
+    eval.set_variable("cont30-min-width-string", rendered);
+    assert!(
+        eval.eval_str(
+            r#"(equal-including-properties cont30-min-width-string
+        '#("All" 0 3 (display (min-width (6.0)) mode-line-elt-no 2)))"#
+        )
+        .unwrap()
+        .is_t()
+    );
+    let plain = builtin_format_mode_line_ctx(&mut eval, vec![format, Value::fixnum(0)])
+        .expect("NOPROP mode-line");
+    eval.set_variable("cont30-min-width-string", plain);
+    assert!(
+        eval.eval_str(r#"(equal-including-properties cont30-min-width-string "All")"#)
+            .unwrap()
+            .is_t()
+    );
 }
 
 #[test]

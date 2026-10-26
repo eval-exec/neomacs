@@ -9010,6 +9010,26 @@ fn vm_format_mode_line_noninteractive_matches_gnu_batch_noop() {
 }
 
 #[test]
+fn vm_format_mode_line_default_string_preserves_gnu_element_properties() {
+    crate::test_utils::init_test_tracing();
+    // Exact default-STRING result from GNU 31.1 CONT30 gnu-oracle-r3,
+    // case "literal". Keep this VM-dispatch check property-bearing.
+    assert_eq!(
+        vm_eval_interactive_str(
+            r#"(equal-including-properties
+                 (format-mode-line "LITERAL")
+                 '#("LITERAL" 0 7 (mode-line-elt-no 1)))"#
+        ),
+        "OK t"
+    );
+}
+
+// The decoding fixtures below select GNU's integer FACE=0/NOPROP target
+// when their contract is formatted text. Default STRING now correctly carries
+// element properties; the strict test above and the native attribution/oracle
+// families cover those without stripping any property from an output. Tests
+// whose contract concerns text properties retain their original FACE target.
+#[test]
 fn vm_format_mode_line_uses_shared_state_and_falls_back_for_eval_forms() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
@@ -9021,8 +9041,8 @@ fn vm_format_mode_line_uses_shared_state_and_falls_back_for_eval_forms() {
                  (erase-buffer)
                  (insert "abc")
                  (setq mode-name "Neo")
-                 (list (format-mode-line '("%b " mode-name))
-                       (format-mode-line '(:eval mode-name))))"#
+                 (list (format-mode-line '("%b " mode-name) 0)
+                       (format-mode-line '(:eval mode-name) 0)))"#
         ),
         r#"OK ("vm-fmt-mode-line Neo" "Neo")"#
     );
@@ -9038,13 +9058,13 @@ fn vm_format_mode_line_symbol_conditional_uses_only_selected_branch() {
                   (format-mode-line
                    '(mode-line-flag
                      "then"
-                     (:eval (error "boom"))))
+                     (:eval (error "boom"))) 0)
                   (progn
                     (setq mode-line-flag nil)
                     (format-mode-line
                      '(mode-line-flag
                        (:eval (error "boom"))
-                       "else")))))"#
+                       "else") 0))))"#
         ),
         r#"OK ("then" "else")"#
     );
@@ -9060,7 +9080,7 @@ fn vm_format_mode_line_string_valued_symbols_render_literally() {
                  (set-window-buffer w b)
                  (set-buffer b)
                  (setq mode-name "%b")
-                 (format-mode-line '("%b " mode-name)))"#
+                 (format-mode-line '("%b " mode-name) 0))"#
         ),
         r#"OK "vm-fmt-mode-line-literal %b""#
     );
@@ -9075,7 +9095,7 @@ fn vm_format_mode_line_fixnum_elements_pad_and_truncate_tail() {
                       (b (get-buffer-create "xy")))
                  (set-window-buffer w b)
                  (set-buffer b)
-                 (format-mode-line '((5 "%b") "!" (-1 "%b"))))"#
+                 (format-mode-line '((5 "%b") "!" (-1 "%b")) 0))"#
         ),
         r#"OK "xy   !x""#
     );
@@ -9090,7 +9110,7 @@ fn vm_format_mode_line_percent_specs_keep_gnu_field_width_and_dash_semantics() {
                       (b (get-buffer-create "xy")))
                  (set-window-buffer w b)
                  (set-buffer b)
-                 (format-mode-line "%5b|%-|%2*"))"#
+                 (format-mode-line "%5b|%-|%2*" 0))"#
         ),
         r#"OK "xy   |--|- ""#
     );
@@ -9104,8 +9124,8 @@ fn vm_format_mode_line_respects_risky_local_variable_for_eval_forms() {
             r#"(let ((unsafe-mode-line '(:eval (error "boom")))
                       (trusted-mode-line '(:eval "ok")))
                  (put 'trusted-mode-line 'risky-local-variable t)
-                 (list (format-mode-line 'unsafe-mode-line)
-                       (format-mode-line 'trusted-mode-line)))"#
+                 (list (format-mode-line 'unsafe-mode-line 0)
+                       (format-mode-line 'trusted-mode-line 0)))"#
         ),
         r#"OK ("" "ok")"#
     );
@@ -9161,11 +9181,11 @@ fn vm_format_mode_line_status_specs_match_gnu_buffer_state() {
                  (erase-buffer)
                  (insert "abc")
                  (setq buffer-read-only t)
-                 (let ((status (format-mode-line "%*|%+|%&")))
+                 (let ((status (format-mode-line "%*|%+|%&" 0)))
                    (setq buffer-read-only nil)
                    (set-buffer-modified-p nil)
                    (narrow-to-region 2 3)
-                   (list status (format-mode-line "%n"))))"#
+                   (list status (format-mode-line "%n" 0))))"#
         ),
         r#"OK ("%|*|*" " Narrow")"#
     );
@@ -9214,13 +9234,13 @@ fn vm_format_mode_line_fixnum_padding_does_not_inherit_inner_properties() {
 fn vm_format_mode_line_recursive_depth_specs_match_gnu() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
-        vm_eval_interactive_with_init_str(r#"(format-mode-line "%[|%]")"#, |eval| {
+        vm_eval_interactive_with_init_str(r#"(format-mode-line "%[|%]" 0)"#, |eval| {
             eval.command_loop.recursive_depth = 4;
         }),
         r#"OK "[[[|]]]""#
     );
     assert_eq!(
-        vm_eval_interactive_with_init_str(r#"(format-mode-line "%[|%]")"#, |eval| {
+        vm_eval_interactive_with_init_str(r#"(format-mode-line "%[|%]" 0)"#, |eval| {
             eval.command_loop.recursive_depth = 7;
         }),
         r#"OK "[[[... | ...]]]""#
@@ -9238,9 +9258,9 @@ fn vm_format_mode_line_size_and_process_specs_match_gnu() {
                  (set-buffer b)
                  (erase-buffer)
                  (insert (make-string 1536 ?x))
-                 (list (format-mode-line "%i|%I|%s")
+                 (list (format-mode-line "%i|%I|%s" 0)
                        (progn
-                         (format-mode-line "%i|%I|%s"))))"#,
+                         (format-mode-line "%i|%I|%s" 0))))"#,
             |eval| {
                 let buffer_id = eval.buffers.create_buffer("vm-mode-line-metadata");
                 eval.processes.create_process(
@@ -9262,7 +9282,7 @@ fn vm_format_mode_line_size_and_process_specs_match_gnu() {
                  (set-buffer b)
                  (erase-buffer)
                  (insert (make-string 1536 ?x))
-                 (format-mode-line "%i|%I|%s"))"#
+                 (format-mode-line "%i|%I|%s" 0))"#
         ),
         r#"OK "1536|1.5k|no process""#
     );
@@ -9280,7 +9300,7 @@ fn vm_format_mode_line_column_and_mode_specs_match_gnu() {
                  (erase-buffer)
                  (insert "abcdef")
                  (goto-char 4)
-                 (format-mode-line "%c|%C|%m"))"#
+                 (format-mode-line "%c|%C|%m" 0))"#
         ),
         r#"OK "3|4|Fundamental""#
     );
@@ -9297,7 +9317,7 @@ fn vm_format_mode_line_coding_and_remote_specs_match_gnu() {
                  (set-buffer b)
                  (erase-buffer)
                  (set (make-local-variable 'buffer-file-coding-system) 'utf-8-unix)
-                 (format-mode-line "%z|%Z|%@"))"#
+                 (format-mode-line "%z|%Z|%@" 0))"#
         ),
         // kbd/term prefix is "=–": the bare VM harness runs no
         // set-locale-environment, so the per-terminal codings keep their
@@ -9322,7 +9342,7 @@ fn vm_format_mode_line_position_o_and_q_specs() {
                  (erase-buffer)
                  (insert (make-string 100 ?x))
                  (set-window-start w (point-min) t)
-                 (format-mode-line "%o|%q" nil w))"#
+                 (format-mode-line "%o|%q" 0 w))"#
         ),
         // window_start=begv, window_end=zv → full buffer visible → All
         r#"OK "All|All   ""#

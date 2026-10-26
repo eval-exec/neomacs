@@ -1,6 +1,6 @@
 use super::super::{
-    ModeLineRendered, format_mode_line_recursive, format_mode_line_recursive_in_state,
-    format_mode_line_recursive_in_state_with_eval_rooted, mode_line_gc,
+    ModeLineRendered, format_mode_line_for_target, format_mode_line_recursive_in_state,
+    format_mode_line_recursive_in_state_with_eval_rooted, mode_line_gc, mode_line_string::Risk,
     mode_line_symbol_value_in_state,
 };
 use super::*;
@@ -29,7 +29,7 @@ fn context() -> Context {
 
 fn render(
     ctx: &mut Context,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     format: Value,
     walker: Walker,
 ) -> String {
@@ -45,15 +45,23 @@ fn render(
 
 fn render_into(
     ctx: &mut Context,
-    pctx: &ModeLinePercentContext,
+    pctx: &ModeLinePercentContext<'_>,
     format: Value,
     walker: Walker,
     rendered: &mut ModeLineRendered,
 ) {
     match walker {
         Walker::Context => {
-            format_mode_line_recursive(ctx, pctx, &format, rendered, 0, false, None)
-                .expect("context walk");
+            format_mode_line_for_target(
+                ctx,
+                pctx,
+                &format,
+                rendered,
+                0.into(),
+                Risk::Trusted,
+                None,
+            )
+            .expect("context walk");
         }
         Walker::State => {
             assert!(!format_mode_line_recursive_in_state(

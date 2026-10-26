@@ -139,6 +139,7 @@ impl PointContext {
 
     /// Only %l calls this. A native expansion cannot run Lisp; the live window
     /// borrow ends before the recursive walker can evaluate another form.
+    #[inline(always)]
     pub(super) fn line_and_column(
         &self,
         buffer: &Buffer,
