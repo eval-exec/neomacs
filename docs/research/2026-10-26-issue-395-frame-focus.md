@@ -284,3 +284,18 @@ attempt then failed in `ring` while the cross C compiler encountered Linux
 headers. These are cross-toolchain limitations, not a passed Windows build or
 runtime test. Actual native Windows CI remains the required evidence for that
 platform.
+
+## Clean-checkout workflow prerequisite
+
+The first native CI run passed Windows driver compilation, native resource
+adapters and fractional input tests. Its Linux startup regressions failed
+before reaching their assertions. A detached clean checkout, using the same
+compiled test binary with nextest workspace remapping, reproduced a bootstrap
+failure while loading `international/characters.el`: generated
+`international/charscript.el` and `international/emoji-zwj.el` were absent.
+The native workflow now builds the matching executable and generates its
+runtime before running the startup-dependent public Lisp tests.
+Installing only the generated Lisp artifacts into that detached checkout,
+without changing the compiled test binary or adding bytecode/images, made
+the promoted-parent regression and both input-to-edit regressions pass: three
+tests, zero failures, with a new isolated bootstrap cache.
