@@ -7,8 +7,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn compat_accept_process_output_drains_exited_process_io_matches_gnu_emacs() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""OK (exit ((filter \"payload\") (sentinel \"finished\\n\")))""#]];
+    let expect = expect_test::expect![[r#""OK (exit \"payload\" t (\"finished\\n\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r#"
 (let ((events nil)
@@ -24,13 +23,25 @@ fn compat_accept_process_output_drains_exited_process_io_matches_gnu_emacs() {
                          (push (list 'filter string) events))
                :sentinel (lambda (_proc string)
                            (push (list 'sentinel string) events))))
-        (let ((deadline (+ (float-time) 2.0)))
-          (while (and (< (float-time) deadline)
-                      (or (not (assq 'filter events))
-                          (not (assq 'sentinel events))))
+        ;; A fixed accept deadline races the child's exit.  Wait for the
+        ;; process to exit and drain its queued output.  The filter's chunk
+        ;; count is wakeup-dependent even for one small write, so assert the
+        ;; concatenated payload; the sentinel is guaranteed to run exactly
+        ;; once per status change, so its event stays exact.
+        (let ((deadline (+ (float-time) 30)))
+          (while (and (process-live-p p) (< (float-time) deadline))
             (accept-process-output p 0.05)))
-        (list (process-status p)
-              (nreverse events)))
+        (while (accept-process-output p 0))
+        (let (filter-text sentinels)
+          (dolist (event events)
+            (cond ((eq (car event) 'filter)
+                   (setq filter-text (concat filter-text (cadr event))))
+                  ((eq (car event) 'sentinel)
+                   (push (cadr event) sentinels))))
+          (list (process-status p)
+                filter-text
+                (and (assq 'filter events) t)
+                (nreverse sentinels))))
     (when p
       (ignore-errors (delete-process p)))))
 "#,

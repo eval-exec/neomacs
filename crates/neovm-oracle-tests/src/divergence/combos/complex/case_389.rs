@@ -9,7 +9,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 #[test]
 fn div_cx389_process_filter_chunked_capture() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (1 18 \"line1\\nline2\\nline3\")""#]];
+    let expect = expect_test::expect![[r#""OK (t 18 \"line1\\nline2\\nline3\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((collected nil)
@@ -18,14 +18,22 @@ fn div_cx389_process_filter_chunked_capture() {
                         :command '("sh" "-c" "for i in 1 2 3; do printf 'line%d\\n' $i; done")
                         :buffer buf
                         :filter (lambda (proc data) (push data collected)))))
-  (accept-process-output p 2)
-  (sit-for 0.05)
-  (let ((all (apply #'concat (nreverse collected))))
+  ;; make-process inherits `process-connection-type' (a PTY here), so the
+  ;; shell's per-line writes can arrive in any number of filter calls; that
+  ;; split is a wakeup race in both editors.  Wait for the child to exit and
+  ;; drain, then assert the aggregate output, never the chunk count.
+  (let ((deadline (+ (float-time) 30)))
+    (while (and (process-live-p p) (< (float-time) deadline))
+      (accept-process-output p 0.05)))
+  (while (accept-process-output p 0))
+  (let ((all-data (apply #'concat (nreverse collected))))
     (kill-buffer buf)
-    (list (length collected) (length all) (string-trim all))))
+    (list (and collected t)
+          (length all-data)
+          (string-trim all-data))))
 "##,
         expect,
-    )
+    );
 }
 
 #[test]
