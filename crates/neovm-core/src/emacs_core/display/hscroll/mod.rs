@@ -216,7 +216,17 @@ pub(crate) fn compute_auto_hscroll(input: &AutoHscrollInput) -> Option<i64> {
 // ---------------------------------------------------------------------------
 
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::intern::EpochCachedSymbol;
 use crate::window::{FrameId, Window, WindowId};
+
+// Fixed GNU DEFVAR_LISP spellings read on every redisplay; `hscroll_window_tree`
+// previously re-interned each name at its probe.
+static HSCROLL_MARGIN: EpochCachedSymbol = EpochCachedSymbol::new("hscroll-margin");
+static HSCROLL_STEP: EpochCachedSymbol = EpochCachedSymbol::new("hscroll-step");
+static AUTO_HSCROLL_MODE: EpochCachedSymbol = EpochCachedSymbol::new("auto-hscroll-mode");
+static TRUNCATE_LINES: EpochCachedSymbol = EpochCachedSymbol::new("truncate-lines");
+static TRUNCATE_PARTIAL_WIDTH_WINDOWS: EpochCachedSymbol =
+    EpochCachedSymbol::new("truncate-partial-width-windows");
 
 /// One leaf window's snapshot, gathered while the frame is borrowed immutably,
 /// so the column computation (which needs `&mut Context`) and the write-back
@@ -276,11 +286,11 @@ enum AutoHscrollMode {
 fn auto_hscroll_mode(ctx: &Context, buffer_id: crate::buffer::BufferId) -> AutoHscrollMode {
     let symbol_mode = ctx.symbol_mode();
     let buf = ctx.buffers.get(buffer_id);
-    let value = crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value(
+    let value = crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
         ctx.variables(),
         &[],
         buf,
-        "auto-hscroll-mode",
+        &AUTO_HSCROLL_MODE,
     )
     .unwrap_or(Value::T);
     if value.is_nil() {
@@ -300,17 +310,17 @@ fn line_is_truncated(ctx: &Context, frame: &crate::window::Frame, window: &Windo
         return false;
     };
     let buf = ctx.buffers.get(buffer_id);
-    let read = |name: &str| {
-        crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value(
+    let read = |symbol: &EpochCachedSymbol| {
+        crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
             ctx.variables(),
             &[],
             buf,
-            name,
+            symbol,
         )
     };
 
     // truncate-lines non-nil -> always truncate.
-    if read("truncate-lines").is_some_and(|v| !v.is_nil()) {
+    if read(&TRUNCATE_LINES).is_some_and(|v| !v.is_nil()) {
         return true;
     }
     // A horizontally scrolled window is always in truncate mode (GNU
@@ -333,7 +343,7 @@ fn line_is_truncated(ctx: &Context, frame: &crate::window::Frame, window: &Windo
     if total_cols >= frame_cols {
         return false;
     }
-    match read("truncate-partial-width-windows") {
+    match read(&TRUNCATE_PARTIAL_WIDTH_WINDOWS) {
         Some(value) if value.is_nil() => false,
         Some(value) if value.is_fixnum() => total_cols < value.as_fixnum().unwrap(),
         Some(_) => true,
@@ -351,7 +361,7 @@ fn leaf_hscroll(window: &Window) -> i64 {
 /// GNU `clip_to_bounds(0, hscroll_margin, 1000000)` of the `hscroll-margin`
 /// variable, in columns.
 fn hscroll_margin_cols(ctx: &Context) -> i64 {
-    ctx.variable_value_by_name("hscroll-margin")
+    ctx.variable_value(HSCROLL_MARGIN.get())
         .and_then(|v| v.as_int())
         .unwrap_or(5)
         .clamp(0, 1_000_000)
@@ -487,7 +497,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
                     && mode == AutoHscrollMode::CurrentLine,
                 line_truncated,
                 point_at_eol,
-                step: HscrollStep::decode(ctx.variable_value_by_name("hscroll-step").as_ref()),
+                step: HscrollStep::decode(ctx.variable_value(HSCROLL_STEP.get()).as_ref()),
             });
         }
     }

@@ -761,8 +761,14 @@ pub(crate) fn effective_text_quoting_style(
 /// `Context` whose dynamic bindings must be respected.
 pub(crate) fn context_text_quoting_style(eval: &Context, args: Vec<Value>) -> EvalResult {
     expect_args("text-quoting-style", &args, 0)?;
+    // GNU's fixed `Qtext_quoting_style`; the function is called for every
+    // message that quotes text and previously interned the spelling per call.
+    static TEXT_QUOTING_STYLE: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("text-quoting-style");
     let lookup = |name: &str| eval.eval_symbol_by_id(intern(name)).unwrap_or(Value::NIL);
-    let var = lookup("text-quoting-style");
+    let var = eval
+        .eval_symbol_by_id(TEXT_QUOTING_STYLE.get())
+        .unwrap_or(Value::NIL);
     let flag = lookup("internal--text-quoting-flag");
     let table = lookup("standard-display-table");
     let style = resolve_text_quoting_style(

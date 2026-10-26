@@ -1806,8 +1806,14 @@ pub(crate) fn is_global_obarray_proxy(eval: &super::eval::Context, value: &Value
 }
 
 fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
-    eval.variable_value_by_name("obarray").unwrap_or_else(|| {
-        eval.variable_value_by_name("neovm--obarray-object")
+    // GNU's `Vobarray`; a Lisp `intern` call without an explicit obarray read
+    // it by name. The internal fallback name belongs to this port.
+    static OBARRAY: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("obarray");
+    static NEOVM_OBARRAY_OBJECT: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("neovm--obarray-object");
+    eval.variable_value(OBARRAY.get()).unwrap_or_else(|| {
+        eval.variable_value(NEOVM_OBARRAY_OBJECT.get())
             .unwrap_or(Value::NIL)
     })
 }
@@ -4484,8 +4490,14 @@ fn interactive_form_from_bytecode_value(function: Value) -> Option<Value> {
     if probe.slot_count <= 5 {
         return None;
     }
+    // GNU's `Qinteractive`; this form is reconstructed per command lookup.
+    static INTERACTIVE_FORM_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("interactive");
     let spec_val = stored_interactive_spec_value(probe.interactive.unwrap_or(Value::NIL));
-    Some(Value::list(vec![Value::symbol("interactive"), spec_val]))
+    Some(Value::list(vec![
+        Value::symbol(&INTERACTIVE_FORM_SYMBOL),
+        spec_val,
+    ]))
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

@@ -56,10 +56,23 @@ impl EpochCachedSymbol {
         let mut registry = global_symbol_registry().write();
         let epoch = symbol_registry_epoch_value();
         let mut resolved = self.resolved.write();
-        if let Some(cached) = *resolved
-            && cached.epoch == epoch
-        {
-            return cached.symbol;
+        if let Some(cached) = *resolved {
+            if cached.epoch == epoch {
+                return cached.symbol;
+            }
+            // The epoch also advances for fresh registrations, which preserve
+            // every existing canonical mapping (unintern clears the slot's
+            // canonical flag and dump restore reuses a live canonical mapping
+            // for a name). Revalidate the cached identity under this same
+            // registry guard instead of repeating the intern lookup; a cached
+            // ID that is no longer canonical falls through to the lookup.
+            if registry.is_canonical_id(cached.symbol) {
+                *resolved = Some(ResolvedSymbol {
+                    epoch,
+                    symbol: cached.symbol,
+                });
+                return cached.symbol;
+            }
         }
         let symbol = registry.intern(self.name);
         *resolved = Some(ResolvedSymbol { epoch, symbol });

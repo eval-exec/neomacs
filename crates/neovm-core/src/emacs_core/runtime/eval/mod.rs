@@ -31,8 +31,8 @@ pub use super::display_host::{
 use super::error::*;
 use super::interactive::InteractiveRegistry;
 use super::intern::{
-    SymId, format_symbol_name_for_diagnostic, intern, intern_uninterned, is_canonical_id,
-    is_keyword_id, resolve_sym, symbol_name_id,
+    EpochCachedSymbol, SymId, format_symbol_name_for_diagnostic, intern, intern_uninterned,
+    is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
 };
 use super::keymap::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
 use super::kmacro::KmacroManager;
@@ -2979,6 +2979,18 @@ pub(crate) struct DaemonState {
     pub(crate) notify: Option<DaemonNotifier>,
 }
 
+// GNU DEFVAR_LISP spellings probed by the input and echo-area paths on every
+// command. Their by-name reads re-interned each spelling per probe; the
+// handles resolve once per registry epoch and cache no value.
+static UNREAD_COMMAND_EVENTS: EpochCachedSymbol = EpochCachedSymbol::new("unread-command-events");
+static UNREAD_POST_INPUT_METHOD_EVENTS: EpochCachedSymbol =
+    EpochCachedSymbol::new("unread-post-input-method-events");
+static UNREAD_INPUT_METHOD_EVENTS: EpochCachedSymbol =
+    EpochCachedSymbol::new("unread-input-method-events");
+static INHIBIT_MESSAGE: EpochCachedSymbol = EpochCachedSymbol::new("inhibit-message");
+static INHIBIT_EOL_CONVERSION: EpochCachedSymbol = EpochCachedSymbol::new("inhibit-eol-conversion");
+static CLEAR_MESSAGE_FUNCTION: EpochCachedSymbol = EpochCachedSymbol::new("clear-message-function");
+
 /// The evaluator state owned by the mutator thread that constructs it.
 ///
 /// Host hooks, Rc leases and active TLS registry views remain on that thread.
@@ -4747,7 +4759,7 @@ impl Context {
     pub(crate) fn take_unread_command_event(
         &mut self,
     ) -> Option<crate::keyboard::UnreadCommandEvent> {
-        let current = match self.eval_symbol("unread-command-events") {
+        let current = match self.eval_symbol_by_id(UNREAD_COMMAND_EVENTS.get()) {
             Ok(value) => value,
             Err(_) => Value::NIL,
         };
@@ -4755,7 +4767,7 @@ impl Context {
             ValueKind::Cons => {
                 let head = current.cons_car();
                 let tail = current.cons_cdr();
-                self.assign("unread-command-events", tail);
+                self.assign_by_id(UNREAD_COMMAND_EVENTS.get(), tail);
                 Some(crate::keyboard::UnreadCommandEvent::decode(head))
             }
             _ => None,
@@ -4763,7 +4775,7 @@ impl Context {
     }
 
     pub(crate) fn peek_unread_command_event(&self) -> Option<Value> {
-        let current = match self.eval_symbol("unread-command-events") {
+        let current = match self.eval_symbol_by_id(UNREAD_COMMAND_EVENTS.get()) {
             Ok(value) => value,
             Err(_) => Value::NIL,
         };
@@ -4781,15 +4793,15 @@ impl Context {
     /// macro must wait for ordinary command events and both input-method queues
     /// that were populated while consuming that macro.
     pub(crate) fn has_pending_requeued_events(&self) -> bool {
-        self.eval_symbol("unread-command-events")
+        self.eval_symbol_by_id(UNREAD_COMMAND_EVENTS.get())
             .is_ok_and(|value| value.is_cons())
             || [
-                "unread-post-input-method-events",
-                "unread-input-method-events",
+                &UNREAD_POST_INPUT_METHOD_EVENTS,
+                &UNREAD_INPUT_METHOD_EVENTS,
             ]
             .into_iter()
             .any(|symbol| {
-                self.eval_symbol(symbol)
+                self.eval_symbol_by_id(symbol.get())
                     .is_ok_and(|value| value.is_truthy())
             })
     }
@@ -4797,12 +4809,12 @@ impl Context {
     /// Prepend an event to the `unread-command-events` list so that the next
     /// `read_char` / `pop_unread_command_event` will consume it first.
     pub(crate) fn push_unread_command_event(&mut self, event: Value) {
-        let current = match self.eval_symbol("unread-command-events") {
+        let current = match self.eval_symbol_by_id(UNREAD_COMMAND_EVENTS.get()) {
             Ok(value) => value,
             Err(_) => Value::NIL,
         };
         let new_list = Value::cons(event, current);
-        self.assign("unread-command-events", new_list);
+        self.assign_by_id(UNREAD_COMMAND_EVENTS.get(), new_list);
     }
 
     /// Queue a low-level special event on the keyboard event path.
@@ -5065,6 +5077,17 @@ impl Context {
             return Some(self.buffers.buffer_defaults[info.offset.index()]);
         }
         self.variable_value_by_name(name)
+    }
+
+    /// [`Self::buffer_default_value`] for a fixed GNU spelling.
+    ///
+    /// Identical two-level lookup, with the variable name resolved once per
+    /// registry epoch instead of at every layout probe.
+    pub fn buffer_default_value_fixed(&self, symbol: &EpochCachedSymbol) -> Option<Value> {
+        if let Some(info) = crate::buffer::buffer::lookup_buffer_slot(symbol.name()) {
+            return Some(self.buffers.buffer_defaults[info.offset.index()]);
+        }
+        self.variable_value(symbol.get())
     }
 
     /// Seed the 24 GNU standard built-in fringe bitmaps into the registry and
@@ -5563,7 +5586,7 @@ impl Context {
     ) -> EchoMessageClearResult {
         self.set_message_buf_print(false);
         if self
-            .visible_variable_value_or_nil("inhibit-message")
+            .visible_variable_value_or_nil_by_id(INHIBIT_MESSAGE.get())
             .is_truthy()
         {
             return EchoMessageClearResult::PreserveEchoArea;
@@ -5573,7 +5596,8 @@ impl Context {
         let mut called_clear_function = false;
         let mut clear_result = EchoMessageClearResult::ClearEchoArea;
 
-        let clear_message_function = self.visible_variable_value_or_nil("clear-message-function");
+        let clear_message_function =
+            self.visible_variable_value_or_nil_by_id(CLEAR_MESSAGE_FUNCTION.get());
         if !clear_message_function.is_nil()
             && self.gc_inhibit_depth == 0
             && self.function_value_is_callable(&clear_message_function)
@@ -5742,13 +5766,19 @@ impl Context {
             .kboard
             .set_internal_last_event_frame(frame_id);
 
+        // GNU's `Qlast_event_frame` / `Qswitch_frame`; every keyboard event
+        // observed updates the former and previously re-interned it.
+        static LAST_EVENT_FRAME: crate::emacs_core::intern::EpochCachedSymbol =
+            crate::emacs_core::intern::EpochCachedSymbol::new("last-event-frame");
+        static SWITCH_FRAME: crate::emacs_core::intern::EpochCachedSymbol =
+            crate::emacs_core::intern::EpochCachedSymbol::new("switch-frame");
         let frame_value = Value::make_frame(frame_id.0);
-        self.store_variable_by_name("last-event-frame", frame_value);
+        self.store_variable(LAST_EVENT_FRAME.get(), frame_value);
         if switching || self.command_loop.keyboard.has_unread_selection_event() {
             self.command_loop
                 .keyboard
                 .set_unread_selection_event(Value::list(vec![
-                    Value::symbol("switch-frame"),
+                    Value::symbol(&SWITCH_FRAME),
                     frame_value,
                 ]));
         }
@@ -7460,7 +7490,7 @@ impl Context {
     /// measurement that pins the difference.
     pub(crate) fn eol_conversion(&self) -> crate::emacs_core::coding::EolConversion {
         crate::emacs_core::coding::EolConversion::from_lisp(
-            self.visible_runtime_variable_value_by_id(intern("inhibit-eol-conversion"))
+            self.visible_runtime_variable_value_by_id(INHIBIT_EOL_CONVERSION.get())
                 .ok()
                 .flatten()
                 .unwrap_or(Value::NIL),
@@ -7769,7 +7799,7 @@ mod apply;
 pub(crate) mod assoc_predicate;
 mod sort_predicate;
 
-mod command_loop;
+pub(crate) mod command_loop;
 
 pub(crate) mod redisplay_hooks;
 #[cfg(any(test, feature = "redisplay-test-policy"))]

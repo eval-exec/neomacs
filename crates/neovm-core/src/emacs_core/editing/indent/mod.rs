@@ -1515,6 +1515,31 @@ pub(crate) fn dynamic_buffer_or_global_symbol_value(
     vars.value_by_name(name)
 }
 
+/// [`dynamic_buffer_or_global_symbol_value`] for a fixed GNU spelling.
+///
+/// Same per-buffer-slot / buffer-local / global precedence, entirely by
+/// identity: the name is resolved once per registry epoch and the slot and
+/// buffer-local maps are keyed by the same identity.
+pub(crate) fn dynamic_buffer_or_global_symbol_value_fixed(
+    vars: VariableView<'_>,
+    _dynamic: &[OrderedRuntimeBindingMap],
+    buf: Option<&Buffer>,
+    symbol: &crate::emacs_core::intern::EpochCachedSymbol,
+) -> Option<Value> {
+    let id = symbol.get();
+    if let Some(buf) = buf
+        && let Some(info) = crate::buffer::buffer::lookup_buffer_slot_by_sym_id(id)
+    {
+        return Some(buf.slots[info.offset.index()]);
+    }
+    if let Some(buf) = buf
+        && let Some(value) = buf.get_buffer_local_by_sym_id(id)
+    {
+        return Some(value);
+    }
+    vars.value(id)
+}
+
 /// A GNU tab stop width: only 1..=1000 are valid; other Lisp values mean eight.
 /// This immutable value is local to one scan and carries no mutator state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

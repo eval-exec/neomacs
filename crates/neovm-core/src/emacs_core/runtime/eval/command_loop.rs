@@ -29,7 +29,7 @@ impl GcTraceKind {
 /// epoch. A use after arbitrary Lisp
 /// must call `id` again: callbacks may unintern a symbol or replace the registry.
 #[derive(Clone, Copy, Debug, strum::EnumIter)]
-enum CommandLoopSymbol {
+pub(crate) enum CommandLoopSymbol {
     PrefixArg,
     LastPrefixArg,
     CurrentPrefixArg,
@@ -50,11 +50,15 @@ enum CommandLoopSymbol {
     AutoSaveInterval,
     Undefined,
     CommandExecute,
+    InhibitRedisplay,
+    PreRedisplayFunction,
+    RedisplaySkipInitialFrame,
+    ResizeMiniFrames,
 }
 
 impl CommandLoopSymbol {
     #[inline]
-    fn id(self) -> SymId {
+    pub(crate) fn id(self) -> SymId {
         use crate::emacs_core::intern::EpochCachedSymbol;
 
         match self {
@@ -140,6 +144,83 @@ impl CommandLoopSymbol {
             }
             Self::CommandExecute => {
                 static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("command-execute");
+                SYMBOL.get()
+            }
+            Self::InhibitRedisplay => {
+                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("inhibit-redisplay");
+                SYMBOL.get()
+            }
+            Self::PreRedisplayFunction => {
+                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("pre-redisplay-function");
+                SYMBOL.get()
+            }
+            Self::RedisplaySkipInitialFrame => {
+                static SYMBOL: EpochCachedSymbol =
+                    EpochCachedSymbol::new("redisplay-skip-initial-frame");
+                SYMBOL.get()
+            }
+            Self::ResizeMiniFrames => {
+                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("resize-mini-frames");
+                SYMBOL.get()
+            }
+        }
+    }
+}
+
+/// Fixed tags and variables the command loop reads on every command. GNU holds
+// them as staticpro'd or DEFVAR_LISP statics (`Qtop_level`, `Qexit`,
+// `Qidentity`, `Qonly`, `Vtransient_mark_mode`, `Vinput_pending_p_filter_events`).
+static TOP_LEVEL_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("top-level");
+static EXIT_TAG: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("exit");
+static IDENTITY_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("identity");
+static ONLY_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("only");
+static TRANSIENT_MARK_MODE: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("transient-mark-mode");
+static INPUT_PENDING_FILTER_EVENTS: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("input-pending-p-filter-events");
+static DEBUG_ON_EVENT: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("debug-on-event");
+static UNDO_AUTO_UNDOABLY_CHANGED_BUFFERS: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("undo-auto--undoably-changed-buffers");
+static DO_AUTO_SAVE: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("do-auto-save");
+static NEOVM_STARTUP_LAST_PHASE: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("neomacs--startup-last-phase");
+static NEOVM_STARTUP_LAST_CALL: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("neomacs--startup-last-call");
+
+// Hooks the command loop runs itself, pre-resolved once per registry epoch.
+///
+/// GNU names them with DEFSYM statics (`Qpre_command_hook`,
+/// `Qpost_command_hook`, `Qdelayed_warnings_hook`); the loop previously
+/// re-interned each spelling on every command.
+#[derive(Clone, Copy, Debug)]
+enum CommandLoopHook {
+    PreCommand,
+    PostCommand,
+    DelayedWarnings,
+}
+
+impl CommandLoopHook {
+    #[inline]
+    fn id(self) -> SymId {
+        use crate::emacs_core::intern::EpochCachedSymbol;
+
+        match self {
+            Self::PreCommand => {
+                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("pre-command-hook");
+                SYMBOL.get()
+            }
+            Self::PostCommand => {
+                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("post-command-hook");
+                SYMBOL.get()
+            }
+            Self::DelayedWarnings => {
+                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("delayed-warnings-hook");
                 SYMBOL.get()
             }
         }
@@ -308,10 +389,14 @@ impl Context {
         // caller's dynamic environment, as GNU macros.c does.
         let specpdl_count = self.specpdl.len();
         let result = (|| -> EvalResult {
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-redisplay"), Value::NIL)?;
             self.try_specbind_or_unwind_to(
                 specpdl_count,
-                intern("undo-auto--undoably-changed-buffers"),
+                CommandLoopSymbol::InhibitRedisplay.id(),
+                Value::NIL,
+            )?;
+            self.try_specbind_or_unwind_to(
+                specpdl_count,
+                UNDO_AUTO_UNDOABLY_CHANGED_BUFFERS.get(),
                 Value::NIL,
             )?;
 
@@ -323,7 +408,7 @@ impl Context {
                 self.recursive_command_loop_depth() > 0 || self.minibuffers.depth() > 0;
             if catches_exit {
                 self.push_condition_frame(ConditionFrame::Catch {
-                    tag: Value::symbol("exit"),
+                    tag: Value::symbol(&EXIT_TAG),
                     resume: ResumeTarget::CommandLoopExit,
                 });
             }
@@ -340,7 +425,7 @@ impl Context {
                 Err(ref flow)
                     if let Some(thrown) = flow.as_throw()
                         && catches_exit
-                        && thrown.matches_tag(Value::symbol("exit")) =>
+                        && thrown.matches_tag(Value::symbol(&EXIT_TAG)) =>
                 {
                     let value = thrown.value;
                     match self.classify_command_loop_exit(value)? {
@@ -389,7 +474,7 @@ impl Context {
         loop {
             if outermost_command_loop {
                 // Catch 'top-level throws (from (top-level) function).
-                let top_level_tag = Value::symbol("top-level");
+                let top_level_tag = Value::symbol(&TOP_LEVEL_SYMBOL);
                 self.push_condition_frame(ConditionFrame::Catch {
                     tag: top_level_tag,
                     resume: ResumeTarget::CommandLoopTopLevel,
@@ -415,7 +500,7 @@ impl Context {
                     Ok(_) => self.command_loop_2(),
                     Err(ref flow)
                         if let Some(thrown) = flow.as_throw()
-                            && thrown.matches_tag(Value::symbol("top-level")) =>
+                            && thrown.matches_tag(Value::symbol(&TOP_LEVEL_SYMBOL)) =>
                     {
                         // top-level throw inside top_level_1 — fall through
                         // to command_loop_2 just like GNU's two-catch flow.
@@ -436,7 +521,7 @@ impl Context {
                 Err(ref flow)
                     if let Some(thrown) = flow.as_throw()
                         && outermost_command_loop
-                        && thrown.matches_tag(Value::symbol("top-level")) =>
+                        && thrown.matches_tag(Value::symbol(&TOP_LEVEL_SYMBOL)) =>
                 {
                     tracing::debug!("command_loop_inner: top-level throw, restarting loop");
                     continue;
@@ -470,7 +555,7 @@ impl Context {
 
     pub(super) fn command_loop_top_level_1(&mut self) -> EvalResult {
         let top_level = self
-            .variable_value_by_name("top-level")
+            .variable_value(TOP_LEVEL_SYMBOL.get())
             .unwrap_or(Value::NIL);
 
         tracing::debug!("command_loop_top_level_1: top-level={}", top_level);
@@ -522,11 +607,11 @@ impl Context {
                 self.report_command_error(data, "")?;
                 if cfg!(test) {
                     let last_phase = self
-                        .variable_value_by_name("neomacs--startup-last-phase")
+                        .variable_value(NEOVM_STARTUP_LAST_PHASE.get())
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     let last_call = self
-                        .variable_value_by_name("neomacs--startup-last-call")
+                        .variable_value(NEOVM_STARTUP_LAST_CALL.get())
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     eprintln!(
@@ -990,7 +1075,7 @@ impl Context {
             // hook function is removed instead of re-firing on every
             // command. Finding 7 — GNU `keyboard.c:1510`
             // (`safe_run_hooks_maybe_narrowed (Qpre_command_hook, ...)`).
-            self.safe_run_hook_if_bound("pre-command-hook")?;
+            self.safe_run_hook_if_bound(CommandLoopHook::PreCommand.id())?;
 
             // GNU `keyboard.c:1530-1534` adds undo boundaries here, after
             // `pre-command-hook` and before command execution, so the
@@ -1052,7 +1137,7 @@ impl Context {
             // Run post-command-hook via safe-run-hooks (Finding 7).
             // GNU `command_loop_1` calls `safe_run_hooks (Qpost_command_hook)`
             // at keyboard.c:1563.
-            self.safe_run_hook_if_bound("post-command-hook")?;
+            self.safe_run_hook_if_bound(CommandLoopHook::PostCommand.id())?;
             input_measurement.complete(|frame| self.input_latency_viewport(frame));
 
             // GNU `command_loop_1` (src/keyboard.c:1342-1345): "If displaying a
@@ -1210,14 +1295,14 @@ impl Context {
             .unwrap_or(Value::NIL)
             .is_nil()
         {
-            self.safe_run_hook_if_bound("post-command-hook")?;
+            self.safe_run_hook_if_bound(CommandLoopHook::PostCommand.id())?;
 
             if self
                 .eval_symbol_by_id(CommandLoopSymbol::DelayedWarningsList.id())
                 .unwrap_or(Value::NIL)
                 .is_truthy()
             {
-                self.safe_run_hook_if_bound("delayed-warnings-hook")?;
+                self.safe_run_hook_if_bound(CommandLoopHook::DelayedWarnings.id())?;
             }
         }
 
@@ -1287,7 +1372,7 @@ impl Context {
         } else {
             Value::NIL
         };
-        if let Err(flow) = self.apply(Value::symbol("do-auto-save"), vec![no_message, Value::NIL]) {
+        if let Err(flow) = self.apply(Value::symbol(&DO_AUTO_SAVE), vec![no_message, Value::NIL]) {
             let rendered = super::super::error::format_flow_with_eval(self, &flow);
             tracing::warn!("auto-save from {trigger} failed: {rendered}");
         }
@@ -1346,7 +1431,7 @@ impl Context {
     /// `safe_run_hooks (Qhook_name)` at
     /// `src/keyboard.c:1361,1485` and `src/eval.c:2779-2830`.
     /// Keyboard audit Finding 7.
-    pub(crate) fn safe_run_hook_if_bound(&mut self, hook_name: &str) -> EvalResult {
+    pub(crate) fn safe_run_hook_if_bound(&mut self, hook_sym: SymId) -> EvalResult {
         // GNU `keyboard.c:1970-1978` (`safe_run_hooks`):
         //
         //   void safe_run_hooks (Lisp_Object hook) {
@@ -1368,7 +1453,6 @@ impl Context {
         // function, and swallows Signal errors. This never goes
         // through Lisp — matching GNU's keyboard.c which calls the
         // C function, not the Lisp wrapper.
-        let hook_sym = super::super::intern::intern(hook_name);
         // `safe_run_hook_funcall` only swallows ordinary `error`
         // signals.  Nonlocal exits like `throw`/`quit` still escape
         // the command loop, and `read-char-from-minibuffer` relies on
@@ -1487,10 +1571,10 @@ impl Context {
         let transient_mark_mode = self
             .eval_symbol("transient-mark-mode")
             .unwrap_or(Value::NIL);
-        if transient_mark_mode == Value::symbol("identity") {
+        if transient_mark_mode == Value::symbol(&IDENTITY_SYMBOL) {
             self.assign("transient-mark-mode", Value::NIL);
-        } else if transient_mark_mode == Value::symbol("only") {
-            self.assign("transient-mark-mode", Value::symbol("identity"));
+        } else if transient_mark_mode == Value::symbol(&ONLY_SYMBOL) {
+            self.assign_by_id(TRANSIENT_MARK_MODE.get(), Value::symbol(&IDENTITY_SYMBOL));
         }
 
         if !self
@@ -1597,7 +1681,7 @@ impl Context {
             .selected_frame()
             .is_some_and(|frame| frame.initial)
             && self
-                .variable_value_by_name("redisplay-skip-initial-frame")
+                .variable_value(CommandLoopSymbol::RedisplaySkipInitialFrame.id())
                 .is_some_and(|value| value.is_truthy()))
     }
 
@@ -1887,7 +1971,7 @@ impl Context {
         // (window.c:4116) specbinds this to t so any nested redisplay
         // triggered by a window-change hook is a no-op. Without this check
         // a hook that indirectly calls `redisplay` infinitely recurses.
-        let inhibit_redisplay = self.variable_value_by_name("inhibit-redisplay");
+        let inhibit_redisplay = self.variable_value(CommandLoopSymbol::InhibitRedisplay.id());
         if inhibit_redisplay.as_ref().is_some_and(|v| v.is_truthy())
             && (!force
                 || crate::emacs_core::xdisp::mode_line_flow_enabled()
@@ -2061,7 +2145,8 @@ impl Context {
     /// hook is demoted (GNU calls via `dsafe_calln`, and the lisp driver wraps
     /// each hook in `with-demoted-errors`).
     pub(super) fn run_pre_redisplay_function(&mut self, windows: Value) {
-        let Some(function) = self.variable_value_by_name("pre-redisplay-function") else {
+        let Some(function) = self.variable_value(CommandLoopSymbol::PreRedisplayFunction.id())
+        else {
             return;
         };
         if function.is_nil() {
@@ -2070,7 +2155,7 @@ impl Context {
         let specpdl_count = self.specpdl.len();
         if let Err(flow) = self.try_specbind_or_unwind_to(
             specpdl_count,
-            crate::emacs_core::intern::intern("inhibit-redisplay"),
+            CommandLoopSymbol::InhibitRedisplay.id(),
             Value::T,
         ) {
             tracing::debug!("pre-redisplay binding signalled (ignored): {flow:?}");
@@ -2088,7 +2173,7 @@ impl Context {
 
     pub(super) fn resize_minibuffer_only_frames(&mut self) {
         if !self
-            .variable_value_by_name("resize-mini-frames")
+            .variable_value(CommandLoopSymbol::ResizeMiniFrames.id())
             .is_some_and(|value| value.is_truthy())
         {
             return;
@@ -2106,7 +2191,10 @@ impl Context {
             })
             .collect();
         for frame in frames {
-            let _ = self.safe_funcall(Value::symbol("window--resize-mini-frame"), vec![frame]);
+            // GNU's fixed `Qwindow_resize_mini_frame` command symbol.
+            static WINDOW_RESIZE_MINI_FRAME: EpochCachedSymbol =
+                EpochCachedSymbol::new("window--resize-mini-frame");
+            let _ = self.safe_funcall(Value::symbol(&WINDOW_RESIZE_MINI_FRAME), vec![frame]);
         }
     }
 
@@ -3460,7 +3548,7 @@ impl Context {
     /// on the printed name and a non-symbol really does select no arm.
     pub(crate) fn debug_on_event_signal_name(&self) -> Option<String> {
         let symbol_mode = self.symbol_mode();
-        let value = self.variable_value_by_name("debug-on-event")?;
+        let value = self.variable_value(DEBUG_ON_EVENT.get())?;
         let name = value.as_symbol_lisp_string(symbol_mode)?;
         Some(crate::emacs_core::emacs_char::to_utf8_lossy(
             name.as_bytes(),
@@ -3565,7 +3653,7 @@ impl Context {
 
     pub(super) fn input_pending_filter(&self) -> crate::keyboard::InputPendingFilter {
         let configured = self
-            .variable_value_by_name("input-pending-p-filter-events")
+            .variable_value(INPUT_PENDING_FILTER_EVENTS.get())
             .unwrap_or(Value::T)
             .is_truthy();
         crate::keyboard::InputPendingFilter::from_filter_events_variable(configured)
@@ -3579,16 +3667,23 @@ impl Context {
     /// buffer has localised it (dframe, dictionary and gud all do), so the read
     /// names the buffer. Ledger 196.
     pub(crate) fn track_mouse_enabled(&self) -> bool {
+        // GNU DEFVAR_LISP `track-mouse`. Every pending-input query reads it;
+        // the by-name spelling re-interned it at each probe.
+        static TRACK_MOUSE: EpochCachedSymbol = EpochCachedSymbol::new("track-mouse");
         self.variables()
-            .value_in_buffer_by_name(self.buffers.current_buffer(), "track-mouse")
+            .value_in_buffer(self.buffers.current_buffer(), TRACK_MOUSE.get())
             .unwrap_or(Value::NIL)
             .is_truthy()
     }
 
     pub(super) fn should_ignore_while_no_input_symbol(&self, ignore_symbol: &str) -> bool {
+        // GNU DEFVAR_LISP `while-no-input-ignore-events`, read per queried
+        // event; see `track_mouse_enabled` for the fixed-spelling rationale.
+        static WHILE_NO_INPUT_IGNORE_EVENTS: EpochCachedSymbol =
+            EpochCachedSymbol::new("while-no-input-ignore-events");
         let symbol_mode = self.symbol_mode();
         let ignore_list = self
-            .variable_value_by_name("while-no-input-ignore-events")
+            .variable_value(WHILE_NO_INPUT_IGNORE_EVENTS.get())
             .unwrap_or(Value::NIL);
         super::super::value::list_to_vec(&ignore_list)
             .into_iter()

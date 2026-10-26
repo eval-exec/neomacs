@@ -155,7 +155,7 @@ impl VisibleFontificationCoverage {
         admission: InspectionAdmission,
     ) -> Self {
         let accessible_end = buffer.layout_point_max_char_pos();
-        let fontified = Value::symbol("fontified");
+        let fontified = Value::symbol(&crate::fixed_symbols::FONTIFIED_PROPERTY);
         let mut plan = VisibleFontificationPlan { spans: Vec::new() };
 
         // Preserve the original prologue and its one captured accessible bound.

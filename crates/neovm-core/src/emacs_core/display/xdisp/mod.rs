@@ -84,6 +84,11 @@ use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 use strum::{EnumString, IntoStaticStr};
 
+// GNU's `Qfontification_functions`: the redisplay fontification demand probes
+// this hook on every pass and previously re-interned the spelling per probe.
+static FONTIFICATION_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("fontification-functions");
+
 impl super::eval::Context {
     /// Choose a redisplay start by moving backward from point in display rows.
     ///
@@ -8997,7 +9002,7 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
     pos: i64,
     observer: &mut O,
 ) {
-    let hook_sym = intern("fontification-functions");
+    let hook_sym = FONTIFICATION_FUNCTIONS.get();
     let functions = hook_runtime::collect_hook_functions_in_state(ctx, hook_sym, hook_value, true);
     if functions.is_empty() {
         return;
@@ -9218,7 +9223,7 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
             return Ok(RedisplayFontificationOutcome::Unchanged);
         }
 
-        let hook_sym = intern("fontification-functions");
+        let hook_sym = FONTIFICATION_FUNCTIONS.get();
         let hook_value = hook_runtime::hook_value_by_id(ctx, hook_sym).unwrap_or(Value::NIL);
         if hook_value.is_nil() {
             observer.unknown();

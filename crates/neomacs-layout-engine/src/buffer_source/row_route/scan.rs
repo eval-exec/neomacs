@@ -803,7 +803,7 @@ impl<B: LayoutBufferView + ?Sized> DisplayReplacementExtentLookup
     fn extent_display_prop_at(&self, at: CharPos0) -> Option<Value> {
         self.buffer.layout_text_prop_at_emacs_byte_pos(
             self.buffer.layout_char_pos_to_emacs_byte_pos(at),
-            Value::symbol("display"),
+            Value::symbol(&crate::fixed_symbols::DISPLAY),
         )
     }
 
@@ -836,7 +836,10 @@ pub(super) fn routed_row_replacement_scan<B: LayoutBufferView>(
     };
 
     let display_prop_at = |byte: usize| {
-        buffer.layout_text_prop_at_emacs_byte_pos(EmacsBytePos::new(byte), Value::symbol("display"))
+        buffer.layout_text_prop_at_emacs_byte_pos(
+            EmacsBytePos::new(byte),
+            Value::symbol(&crate::fixed_symbols::DISPLAY),
+        )
     };
     let char_offset_at = |byte: usize| -> Result<usize, RouteRefusal> {
         buffer
@@ -1012,7 +1015,10 @@ pub(super) fn routed_composition_prop_replaces<B: LayoutBufferView>(
     probe: EmacsBytePos,
 ) -> bool {
     buffer
-        .layout_text_prop_at_emacs_byte_pos(probe, Value::symbol("composition"))
+        .layout_text_prop_at_emacs_byte_pos(
+            probe,
+            Value::symbol(&crate::fixed_symbols::COMPOSITION),
+        )
         .is_some_and(|prop| composition_display_text_for_property(prop).is_some())
 }
 

@@ -674,8 +674,14 @@ impl<'a> BufferLinePrefixRenderRequest<'a> {
         }
 
         let text_props = RustTextPropAccess::new(buffer);
-        let line_property = text_props.get_property(anchor_charpos, Value::symbol("line-prefix"));
-        let wrap_property = text_props.get_property(anchor_charpos, Value::symbol("wrap-prefix"));
+        let line_property = text_props.get_property(
+            anchor_charpos,
+            Value::symbol(&crate::fixed_symbols::LINE_PREFIX),
+        );
+        let wrap_property = text_props.get_property(
+            anchor_charpos,
+            Value::symbol(&crate::fixed_symbols::WRAP_PREFIX),
+        );
         // GNU get_line_prefix_it_property checks the current string first,
         // then the underlying buffer, falling back only for nil. Classify
         // AFTER this selection: an invalid non-nil property must not reveal

@@ -7169,6 +7169,11 @@ fn inherit_buffer_default_eol(
     }
 }
 
+// GNU DEFVAR `Vbuffer_file_coding_system`: every write-region coding decision
+// reads it; the spelling is fixed and is resolved once per registry epoch.
+static BUFFER_FILE_CODING_SYSTEM: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("buffer-file-coding-system");
+
 fn select_write_region_coding_system(
     eval: &mut super::eval::Context,
     buffer_id: crate::buffer::BufferId,
@@ -7223,7 +7228,7 @@ fn select_write_region_coding_system(
     let slot = match eval
         .buffers
         .get(buffer_id)
-        .is_some_and(|buf| buf.has_buffer_local_by_sym_id(intern("buffer-file-coding-system")))
+        .is_some_and(|buf| buf.has_buffer_local_by_sym_id(BUFFER_FILE_CODING_SYSTEM.get()))
     {
         true => BufferCodingSlot::Local(slot_value),
         false => BufferCodingSlot::Inherited(slot_value),
@@ -7237,7 +7242,7 @@ fn select_write_region_coding_system(
         false => BufferMultibyte::Unibyte,
     };
     let buffer_default = eval
-        .buffer_default_value("buffer-file-coding-system")
+        .buffer_default_value_fixed(&BUFFER_FILE_CODING_SYSTEM)
         .and_then(|value| coding_system_value_to_name(&value))
         .map(|name| CodingValue::Coding(intern(&name)))
         .unwrap_or(CodingValue::Unset);
@@ -7777,7 +7782,11 @@ pub(crate) fn builtin_do_auto_save(
     // buffer, so edits made by the hook belong to this auto-save pass.  Use
     // the same safe named-hook boundary as the command loop: one broken hook
     // is reported and removed without suppressing the remaining functions.
-    eval.safe_run_hook_if_bound("auto-save-hook")?;
+    // `auto-save-hook` is a fixed GNU DEFSYM; this save path runs per
+    // auto-save and previously re-interned the spelling.
+    static AUTO_SAVE_HOOK: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("auto-save-hook");
+    eval.safe_run_hook_if_bound(AUTO_SAVE_HOOK.get())?;
 
     let auto_save_visited = eval
         .variable_value_by_name("auto-save-visited-file-name")

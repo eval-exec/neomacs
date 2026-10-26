@@ -195,7 +195,8 @@ pub(super) struct MouseFaceRuns<'a, B: LayoutBufferView + ?Sized> {
 
 impl<'a, B: LayoutBufferView + ?Sized> MouseFaceRuns<'a, B> {
     pub(super) fn new(buffer: &'a B, bounds: EmacsByteRange, window_id: Option<u64>) -> Self {
-        let property = LayoutCharPropertyLookup::new(buffer, Value::symbol("mouse-face"));
+        let property =
+            LayoutCharPropertyLookup::new(buffer, Value::symbol(&crate::fixed_symbols::MOUSE_FACE));
         Self {
             buffer,
             display_bounds: bounds,

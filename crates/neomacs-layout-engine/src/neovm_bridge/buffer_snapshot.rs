@@ -223,7 +223,7 @@ fn active_composition_table(
     {
         return None;
     }
-    vars.value_by_name("composition-function-table")
+    vars.value(crate::fixed_symbols::COMPOSITION_FUNCTION_TABLE.get())
 }
 
 fn capture_layout_category_symbol_plists(
@@ -239,7 +239,7 @@ fn capture_layout_category_symbol_plists(
         }
     }
 
-    let category_property = Value::symbol("category");
+    let category_property = Value::symbol(&crate::fixed_symbols::CATEGORY);
     let mut plists = FxHashMap::default();
     let end = buffer.total_char_end_pos();
     let mut pos = CharPos0::ZERO;

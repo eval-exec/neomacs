@@ -674,10 +674,16 @@ pub(crate) fn evaluate_window_display_when_forms_at_end(
     target: crate::display_property::DisplayPropertyTarget,
     end_boundary: DisplayWhenEndBoundary,
 ) -> DisplayWhenConditions {
-    let default_prefixes: Vec<Value> = ["line-prefix", "wrap-prefix"]
-        .iter()
-        .filter_map(|name| evaluator.buffer_default_value(name))
-        .collect();
+    // GNU's `Vline_prefix` / `Vwrap_prefix` DEFVARs, read through the same
+    // buffer-defaults precedence as the generic helper but without resolving
+    // the two fixed spellings by name on every layout pass.
+    let default_prefixes: Vec<Value> = [
+        &crate::fixed_symbols::LINE_PREFIX,
+        &crate::fixed_symbols::WRAP_PREFIX,
+    ]
+    .into_iter()
+    .filter_map(|symbol| evaluator.buffer_default_value_fixed(symbol))
+    .collect();
     let run_sites = match evaluator.buffer_manager().get(buf_id) {
         Some(buffer) => collect_when_form_run_sites(
             buffer,
@@ -844,7 +850,9 @@ fn collect_when_form_run_sites(
         // evaluated here.
         if start < end && start < to && end > from {
             let at = start.max(from);
-            if let Some(value) = overlays.overlay_get_named(overlay, Value::symbol("display")) {
+            if let Some(value) =
+                overlays.overlay_get_named(overlay, Value::symbol(&crate::fixed_symbols::DISPLAY))
+            {
                 collect_when_forms(
                     value,
                     buffer_object,
@@ -936,7 +944,7 @@ fn collect_prefix_string_when_forms(
     let Some(props) = get_string_text_properties_table_for_value(string) else {
         return;
     };
-    let display = Value::symbol("display");
+    let display = Value::symbol(&crate::fixed_symbols::DISPLAY);
     let length = lisp_string.schars();
     let mut run: Option<(Value, usize)> = None;
     for index in 0..=length {

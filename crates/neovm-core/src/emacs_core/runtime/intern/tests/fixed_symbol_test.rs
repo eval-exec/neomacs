@@ -36,6 +36,17 @@ fn warm_fixed_symbol_neither_interns_nor_takes_the_registry_lock() {
 }
 
 #[test]
+fn fixed_symbol_revalidation_on_unrelated_epoch_advance_does_not_intern() {
+    let fixed = EpochCachedSymbol::new("ttykey-k13-reval-probe");
+    let id = fixed.get();
+    let unrelated = intern("ttykey-k13-reval-unrelated-removal");
+    assert!(unintern_canonical_id(unrelated));
+    reset_intern_calls();
+    assert_eq!(fixed.get(), id);
+    assert_eq!(intern_calls(), 0, "revalidated id must not re-intern");
+}
+
+#[test]
 fn fixed_symbol_revalidates_after_unintern_and_reintern() {
     let fixed = EpochCachedSymbol::new("ttykey-fixed-unintern-reintern");
     let old = fixed.get();
@@ -62,7 +73,13 @@ fn fixed_symbol_revalidates_after_dump_restore() {
     let previous = symbol_registry_epoch_value();
     restore_runtime_interner(&names, &[0], Some(&[true])).expect("valid repeated restore");
     assert!(symbol_registry_epoch_value() > previous);
+    reset_intern_calls();
     assert_eq!(fixed.get(), replacement);
+    assert_eq!(
+        intern_calls(),
+        0,
+        "preserved canonical mapping must revalidate without interning"
+    );
 }
 
 #[test]

@@ -117,8 +117,15 @@ fn message_dolog(
     msg: &crate::heap_types::LispString,
     termination: MessageLogTermination,
 ) {
+    // GNU reads the DEFVAR_LISP `message-log-max` and `messages-buffer-name`;
+    // `message` runs on ordinary command output, so the by-name spellings
+    // re-interned both at every message.
+    static MESSAGE_LOG_MAX: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("message-log-max");
+    static MESSAGES_BUFFER_NAME: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("messages-buffer-name");
     // GNU: check message-log-max; if nil, don't log
-    let log_max = ctx.visible_variable_value_or_nil("message-log-max");
+    let log_max = ctx.visible_variable_value_or_nil_by_id(MESSAGE_LOG_MAX.get());
     if log_max.is_nil() {
         return;
     }
@@ -137,7 +144,7 @@ fn message_dolog(
     // GNU xdisp.c defaults `messages-buffer-name` to "*Messages*" and lets
     // Lisp rebind it to redirect message logging.
     let messages_name = ctx
-        .visible_variable_value_or_nil("messages-buffer-name")
+        .visible_variable_value_or_nil_by_id(MESSAGES_BUFFER_NAME.get())
         .as_str_owned()
         .unwrap_or_else(|| "*Messages*".to_string());
     let buf_id = if let Some(id) = ctx.buffers.find_buffer_by_name(&messages_name) {

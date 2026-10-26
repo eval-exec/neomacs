@@ -347,8 +347,10 @@ fn resize_mini_windows_mode_for_buffer(
     let value = evaluator
         .buffer_manager()
         .get(buffer_id)
-        .and_then(|buffer| buffer.buffer_local_value("resize-mini-windows"))
-        .or_else(|| evaluator.variable_value_by_name("resize-mini-windows"));
+        .and_then(|buffer| {
+            buffer.buffer_local_value_id(crate::fixed_symbols::RESIZE_MINI_WINDOWS.get())
+        })
+        .or_else(|| evaluator.variable_value(crate::fixed_symbols::RESIZE_MINI_WINDOWS.get()));
     ResizeMiniWindowsMode::from_lisp_value(value.as_ref())
 }
 
@@ -360,10 +362,14 @@ fn uses_adhoc_minibuffer_resize_scroll(
         .buffer_manager()
         .get(buffer_id)
         .and_then(|buffer| {
-            buffer.buffer_local_value("redisplay-adhoc-scroll-in-resize-mini-windows")
+            buffer.buffer_local_value_id(
+                crate::fixed_symbols::REDISPLAY_ADHOC_SCROLL_IN_RESIZE_MINI_WINDOWS.get(),
+            )
         })
         .or_else(|| {
-            evaluator.variable_value_by_name("redisplay-adhoc-scroll-in-resize-mini-windows")
+            evaluator.variable_value(
+                crate::fixed_symbols::REDISPLAY_ADHOC_SCROLL_IN_RESIZE_MINI_WINDOWS.get(),
+            )
         })
         .is_none_or(|value| !value.is_nil())
 }
@@ -593,7 +599,7 @@ fn window_source_has_fontification_callbacks(
         .buffer_manager()
         .get(neovm_core::buffer::BufferId(buffer_id))
         .and_then(|buffer| buffer.buffer_local_value("fontification-functions"))
-        .or_else(|| evaluator.variable_value_by_name("fontification-functions"))
+        .or_else(|| evaluator.variable_value(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.get()))
         .is_some_and(|value| !value.is_nil())
 }
 
@@ -757,14 +763,14 @@ fn max_mini_window_lines_for_window(
         .buffer_manager()
         .get(buf_id)
         .and_then(|buffer| buffer.buffer_local_value("max-mini-window-height"))
-        .or_else(|| evaluator.variable_value_by_name("max-mini-window-height"))
+        .or_else(|| evaluator.variable_value(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.get()))
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }
 
 fn tab_bar_button_relief_geometry(evaluator: &neovm_core::emacs_core::Context) -> (f32, f32, f32) {
     let margin = evaluator
-        .variable_value_by_name("tab-bar-button-margin")
+        .variable_value(crate::fixed_symbols::TAB_BAR_BUTTON_MARGIN.get())
         .unwrap_or_else(|| Value::fixnum(1));
     let (horizontal_margin, vertical_margin) = if let Some(value) = margin.as_int() {
         let value = value.max(0) as f32;
@@ -778,7 +784,7 @@ fn tab_bar_button_relief_geometry(evaluator: &neovm_core::emacs_core::Context) -
         (1.0, 1.0)
     };
     let configured_thickness = evaluator
-        .variable_value_by_name("tab-bar-button-relief")
+        .variable_value(crate::fixed_symbols::TAB_BAR_BUTTON_RELIEF.get())
         .and_then(Value::as_int)
         .unwrap_or(1);
     let thickness = if configured_thickness < 0 {
@@ -1828,9 +1834,10 @@ impl LayoutEngine {
             font_metrics.set_device_scale(device_scale);
             let font_catalog_changed = font_metrics.synchronize_font_catalog().changed();
             let use_primary_font = evaluator
-                .variable_value_by_name("use-default-font-for-symbols")
+                .variable_value(crate::fixed_symbols::USE_DEFAULT_FONT_FOR_SYMBOLS.get())
                 .is_none_or(|value| !value.is_nil());
-            let char_script_table = evaluator.variable_value_by_name("char-script-table");
+            let char_script_table =
+                evaluator.variable_value(crate::fixed_symbols::CHAR_SCRIPT_TABLE.get());
             let symbol_policy_changed = font_metrics
                 .synchronize_symbol_font_policy(use_primary_font, char_script_table)
                 .changed();
@@ -2399,7 +2406,7 @@ impl LayoutEngine {
                         let mut alpha = frame.frame_alpha;
                         let limit = neovm_core::window::frame_alpha::lower_limit(
                             evaluator
-                                .variable_value_by_name("frame-alpha-lower-limit")
+                                .variable_value(crate::fixed_symbols::FRAME_ALPHA_LOWER_LIMIT.get())
                                 .unwrap_or(Value::fixnum(20)),
                         );
                         for value in &mut alpha {
@@ -3706,7 +3713,7 @@ impl LayoutEngine {
                 }
             };
         frame_display_state.scroll_input_policy.x11_delta_factor = evaluator
-            .variable_value_by_name("x-scroll-event-delta-factor")
+            .variable_value(crate::fixed_symbols::X_SCROLL_EVENT_DELTA_FACTOR.get())
             .and_then(|value| value.as_number_f64())
             .filter(|factor| factor.is_finite())
             .unwrap_or(1.0);
@@ -4333,7 +4340,9 @@ impl LayoutEngine {
             .buffer_manager()
             .get(request.buffer)
             .and_then(|buffer| buffer.buffer_local_value("max-mini-window-height"))
-            .or_else(|| evaluator.variable_value_by_name("max-mini-window-height"))
+            .or_else(|| {
+                evaluator.variable_value(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.get())
+            })
             .unwrap_or_else(|| Value::make_float(0.25));
         let max_lines = max_mini_window_lines_from_value(raw_maximum, frame_rows);
         self.mini_preparation_height = None;

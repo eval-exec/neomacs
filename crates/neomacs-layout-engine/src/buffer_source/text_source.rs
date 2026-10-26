@@ -302,15 +302,21 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             text_slice_queries: Cell::new(0),
             #[cfg(test)]
             byte_position_queries: Cell::new(0),
-            face_property: LayoutCharPropertyLookup::new(buffer, Value::symbol("face")),
-            display_property: LayoutCharPropertyLookup::new(buffer, Value::symbol("display")),
+            face_property: LayoutCharPropertyLookup::new(
+                buffer,
+                Value::symbol(&crate::fixed_symbols::FACE),
+            ),
+            display_property: LayoutCharPropertyLookup::new(
+                buffer,
+                Value::symbol(&crate::fixed_symbols::DISPLAY),
+            ),
             line_height_property: LayoutCharPropertyLookup::new(
                 buffer,
-                Value::symbol("line-height"),
+                Value::symbol(&crate::fixed_symbols::LINE_HEIGHT),
             ),
             line_spacing_property: LayoutCharPropertyLookup::new(
                 buffer,
-                Value::symbol("line-spacing"),
+                Value::symbol(&crate::fixed_symbols::LINE_SPACING),
             ),
         }
     }
@@ -663,7 +669,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     fn composition_prop_at(&self, char_pos: CharPos0) -> Option<Value> {
         self.buffer.layout_text_prop_at_emacs_byte_pos(
             self.byte_pos(char_pos),
-            Value::symbol("composition"),
+            Value::symbol(&crate::fixed_symbols::COMPOSITION),
         )
     }
 

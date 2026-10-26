@@ -508,11 +508,11 @@ impl PlainEncoder {
             return Ok(());
         }
         let keys = MemoKeyScope::for_string(string);
-        let display = keys.capture(Value::symbol("display"));
+        let display = keys.capture(Value::symbol(&crate::fixed_symbols::DISPLAY));
         let name_only = [
-            keys.capture(Value::symbol("help-echo")),
-            keys.capture(Value::symbol("local-map")),
-            keys.capture(Value::symbol("keymap")),
+            keys.capture(Value::symbol(&crate::fixed_symbols::HELP_ECHO_PROPERTY)),
+            keys.capture(Value::symbol(&crate::fixed_symbols::LOCAL_MAP_PROPERTY)),
+            keys.capture(Value::symbol(&crate::fixed_symbols::KEYMAP_PROPERTY)),
         ];
         let runs = intervals.object_interval_plist_runs_for_char_len(
             neovm_core::buffer::CharLen::new(string.schars()),

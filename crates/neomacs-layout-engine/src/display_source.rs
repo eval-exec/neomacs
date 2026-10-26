@@ -43,13 +43,11 @@ use neovm_core::face::LispFaceId;
 
 // Each key is resolved lazily at its original query boundary. Cells contain
 // only epoch-validated native identities and are shared safely across mutators.
-static DISPLAY_PROPERTY: EpochCachedSymbol = EpochCachedSymbol::new("display");
-static COMPOSITION_PROPERTY: EpochCachedSymbol = EpochCachedSymbol::new("composition");
-static FACE_PROPERTY: EpochCachedSymbol = EpochCachedSymbol::new("face");
-static FONT_LOCK_FACE_PROPERTY: EpochCachedSymbol = EpochCachedSymbol::new("font-lock-face");
-static MOUSE_FACE_PROPERTY: EpochCachedSymbol = EpochCachedSymbol::new("mouse-face");
-static LINE_HEIGHT_PROPERTY: EpochCachedSymbol = EpochCachedSymbol::new("line-height");
-static LINE_SPACING_PROPERTY: EpochCachedSymbol = EpochCachedSymbol::new("line-spacing");
+use crate::fixed_symbols::{
+    COMPOSITION as COMPOSITION_PROPERTY, DISPLAY as DISPLAY_PROPERTY, FACE as FACE_PROPERTY,
+    FONT_LOCK_FACE as FONT_LOCK_FACE_PROPERTY, LINE_HEIGHT as LINE_HEIGHT_PROPERTY,
+    LINE_SPACING as LINE_SPACING_PROPERTY, MOUSE_FACE as MOUSE_FACE_PROPERTY,
+};
 
 pub(crate) struct DisplaySourceContext<'a> {
     target: crate::display_property::DisplayPropertyTarget,
@@ -2835,8 +2833,10 @@ impl LispStringSourceCursor {
             return LispStringPrefixProperties::default();
         };
         LispStringPrefixProperties {
-            line: props.get_property_at_char_pos(index, Value::symbol("line-prefix")),
-            wrap: props.get_property_at_char_pos(index, Value::symbol("wrap-prefix")),
+            line: props
+                .get_property_at_char_pos(index, Value::symbol(&crate::fixed_symbols::LINE_PREFIX)),
+            wrap: props
+                .get_property_at_char_pos(index, Value::symbol(&crate::fixed_symbols::WRAP_PREFIX)),
         }
     }
 

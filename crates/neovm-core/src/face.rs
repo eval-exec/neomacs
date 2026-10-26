@@ -2328,6 +2328,17 @@ impl FaceTable {
         self.faces.map.get(&face_symbol_value(name))
     }
 
+    /// [`Self::get`] for a fixed GNU face spelling.
+    ///
+    /// The per-redisplay chrome and frame parameter paths looked faces up by
+    /// printed name and re-interned the spelling at each layout pass.
+    pub fn get_fixed(
+        &self,
+        symbol: &crate::emacs_core::intern::EpochCachedSymbol,
+    ) -> Option<&Face> {
+        self.faces.map.get(&Value::symbol(symbol))
+    }
+
     /// Resolve a face name, merging inherited faces.
     /// Returns a fully-specified face with all inherited attributes filled in.
     pub fn resolve(&self, name: &str) -> Face {
@@ -2348,7 +2359,12 @@ impl FaceTable {
     /// `Face` itself; this returns the realized pixels only.
     #[must_use]
     pub fn default_face_colors(&self) -> (u32, u32) {
-        let default = self.resolve("default");
+        // GNU reads `Vdefault_face`'s realized face; `default` is a DEFSYM
+        // static. This helper runs on every layout pass, and the by-name
+        // spelling re-interned the fixed name at each call.
+        static DEFAULT_FACE: crate::emacs_core::intern::EpochCachedSymbol =
+            crate::emacs_core::intern::EpochCachedSymbol::new("default");
+        let default = self.resolve_fixed_symbol(&DEFAULT_FACE);
         (
             default.foreground.map_or(0x000000, Color::to_pixel),
             default.background.map_or(0x00FF_FFFF, Color::to_pixel),

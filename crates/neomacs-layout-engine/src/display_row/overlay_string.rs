@@ -1022,9 +1022,10 @@ fn capture_overlay_string_cursor(
     let Some(props) = text_props else {
         return;
     };
-    let Some(cursor_prop) =
-        props.get_property_at_char_pos(CharPos0::new(char_idx), Value::symbol("cursor"))
-    else {
+    let Some(cursor_prop) = props.get_property_at_char_pos(
+        CharPos0::new(char_idx),
+        Value::symbol(&crate::fixed_symbols::CURSOR_PROPERTY),
+    ) else {
         return;
     };
     let info = CapturedCursorInfo::from_visual_state(

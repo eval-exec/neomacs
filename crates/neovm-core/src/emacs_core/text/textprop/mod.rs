@@ -10,6 +10,10 @@ use crate::emacs_core::error::{expect_max_args, expect_min_args};
 use crate::emacs_core::symbol::CanonicalAccess;
 // storage imports removed — now using emacs_char directly
 use super::symbol::Obarray;
+
+// GNU's fixed `Qfontified`: every fontification scan probes this property.
+static FONTIFIED_PROPERTY: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("fontified");
 use super::value::*;
 use crate::buffer::text_props::{PropertyPlistApplication, TextPropertyTable};
 use crate::buffer::{
@@ -3230,7 +3234,7 @@ pub(crate) fn fontified_property_at_position_in_state(
         position.as_i64(),
         Value::fixnum(position.as_i64()),
     )?;
-    let fontified = Value::symbol("fontified");
+    let fontified = Value::symbol(&FONTIFIED_PROPERTY);
     if !buffer.overlays().is_empty() {
         let byte_pos = buffer.char_pos_to_emacs_byte_pos_clamped_no_alloc(char_pos);
         if let Some((value, _)) = buffer_overlay_property_at_byte_pos(
@@ -3304,7 +3308,7 @@ pub(crate) fn first_unfontified_position_in_state(
     {
         return FontificationScanAdmission::UseGeneric;
     }
-    let fontified = Value::symbol("fontified");
+    let fontified = Value::symbol(&FONTIFIED_PROPERTY);
     let resolver = CharPropertyResolver::snapshot(vars, buffers, fontified);
     if !resolver.supports_presence_coalescing()
         || buffer.text_props_property_name_presence(Value::from_sym_id(category_sym_id()))
@@ -3352,7 +3356,7 @@ pub(crate) fn next_fontified_property_boundary_in_state(
     {
         return Ok(FontificationBoundaryAdmission::UseGeneric);
     }
-    let fontified = Value::symbol("fontified");
+    let fontified = Value::symbol(&FONTIFIED_PROPERTY);
     let resolver = CharPropertyResolver::snapshot(vars, buffers, fontified);
     if resolver.supports_presence_coalescing()
         && buffer.text_props_property_name_presence(Value::from_sym_id(category_sym_id()))

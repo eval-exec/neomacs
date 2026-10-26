@@ -250,17 +250,36 @@ impl Context {
         }
         let count = self.specpdl.len();
         let result = (|| {
+            // GNU evaluates a display `when` form under these fixed
+            // bindings (`Qinhibit_redisplay`, `Qinhibit_quit`,
+            // `Qinhibit_debugger`, and the form's OBJECT/POSITION/
+            // BUFFER_POSITION arguments); every evaluated site previously
+            // re-interned all seven spellings.
+            static INHIBIT_REDISPLAY: crate::emacs_core::intern::EpochCachedSymbol =
+                crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-redisplay");
+            static INHIBIT_QUIT: crate::emacs_core::intern::EpochCachedSymbol =
+                crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-quit");
+            static INHIBIT_DEBUGGER: crate::emacs_core::intern::EpochCachedSymbol =
+                crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-debugger");
+            static OBJECT: crate::emacs_core::intern::EpochCachedSymbol =
+                crate::emacs_core::intern::EpochCachedSymbol::new("object");
+            static POSITION: crate::emacs_core::intern::EpochCachedSymbol =
+                crate::emacs_core::intern::EpochCachedSymbol::new("position");
+            static BUFFER_POSITION: crate::emacs_core::intern::EpochCachedSymbol =
+                crate::emacs_core::intern::EpochCachedSymbol::new("buffer-position");
+            static EVAL_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
+                crate::emacs_core::intern::EpochCachedSymbol::new("eval");
             for (symbol, value) in [
-                (intern("inhibit-redisplay"), Value::T),
-                (intern("inhibit-quit"), Value::T),
-                (intern("inhibit-debugger"), Value::T),
-                (intern("object"), object),
-                (intern("position"), Value::fixnum(position)),
-                (intern("buffer-position"), Value::fixnum(buffer_position)),
+                (INHIBIT_REDISPLAY.get(), Value::T),
+                (INHIBIT_QUIT.get(), Value::T),
+                (INHIBIT_DEBUGGER.get(), Value::T),
+                (OBJECT.get(), object),
+                (POSITION.get(), Value::fixnum(position)),
+                (BUFFER_POSITION.get(), Value::fixnum(buffer_position)),
             ] {
                 self.try_specbind_or_unwind_to(count, symbol, value)?;
             }
-            self.funcall_general(Value::symbol("eval"), vec![form, Value::T])
+            self.funcall_general(Value::symbol(&EVAL_SYMBOL), vec![form, Value::T])
         })();
         match self.unbind_to_with_result(count, result).kinded() {
             Ok(value) => Ok(!value.is_nil()),

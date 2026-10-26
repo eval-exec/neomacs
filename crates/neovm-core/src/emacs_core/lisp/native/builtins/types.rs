@@ -1,6 +1,13 @@
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range};
+use crate::emacs_core::intern::{EpochCachedSymbol, NIL_SYM_ID, T_SYM_ID};
 use crate::emacs_core::value::{ValueKind, VecLikeType};
+
+// Fixed spellings compared by the function probes, interned once per registry
+// epoch. GNU holds these as the DEFSYM `Qlambda` and `Qmacro`; each probe
+// compared against a freshly constructed symbol.
+static LAMBDA_SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("lambda");
+static MACRO_SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("macro");
 
 pub(crate) fn builtin_null_1(_eval: &mut super::eval::Context, arg: Value) -> EvalResult {
     Ok(Value::bool_val(arg.is_nil()))
@@ -125,7 +132,7 @@ pub(super) fn is_lambda_form_list(value: &Value, symbols_with_pos_enabled: bool)
             let pair_car = value.cons_car();
             crate::emacs_core::value::eq_value_swp(
                 &pair_car,
-                &Value::symbol("lambda"),
+                &Value::symbol(&LAMBDA_SYMBOL),
                 symbols_with_pos_enabled,
             )
         }
@@ -139,7 +146,7 @@ fn is_macro_marker_list(value: &Value, symbols_with_pos_enabled: bool) -> bool {
             let pair_car = value.cons_car();
             crate::emacs_core::value::eq_value_swp(
                 &pair_car,
-                &Value::symbol("macro"),
+                &Value::symbol(&MACRO_SYMBOL),
                 symbols_with_pos_enabled,
             )
         }
@@ -173,8 +180,8 @@ pub(crate) fn value_is_function(eval: &super::eval::Context, arg: Value) -> bool
     }
     let object = eval.unwrap_symbol(arg);
     if let Some(symbol) = match object.kind() {
-        ValueKind::Nil => Some(intern("nil")),
-        ValueKind::T => Some(intern("t")),
+        ValueKind::Nil => Some(NIL_SYM_ID),
+        ValueKind::T => Some(T_SYM_ID),
         ValueKind::Symbol(id) => Some(id),
         _ => None,
     } {

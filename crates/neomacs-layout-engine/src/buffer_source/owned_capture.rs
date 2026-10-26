@@ -105,12 +105,19 @@ pub(crate) fn capture_source_fragment<B: LayoutBufferView>(
         Ok(()) => end_byte,
     };
     let end = buffer.layout_emacs_byte_pos_to_char_pos(end_byte);
-    let display_lookup = LayoutCharPropertyLookup::new(buffer, Value::symbol("display"));
-    let height_lookup = LayoutCharPropertyLookup::new(buffer, Value::symbol("line-height"));
-    let spacing_lookup = LayoutCharPropertyLookup::new(buffer, Value::symbol("line-spacing"));
-    let invisible_lookup = LayoutCharPropertyLookup::new(buffer, Value::symbol("invisible"));
+    let display_lookup =
+        LayoutCharPropertyLookup::new(buffer, Value::symbol(&crate::fixed_symbols::DISPLAY));
+    let height_lookup =
+        LayoutCharPropertyLookup::new(buffer, Value::symbol(&crate::fixed_symbols::LINE_HEIGHT));
+    let spacing_lookup =
+        LayoutCharPropertyLookup::new(buffer, Value::symbol(&crate::fixed_symbols::LINE_SPACING));
+    let invisible_lookup =
+        LayoutCharPropertyLookup::new(buffer, Value::symbol(&crate::fixed_symbols::INVISIBLE));
     let mut has_invisible = false;
-    let window_lookup = LayoutCharPropertyLookup::new(buffer, Value::symbol("window"));
+    let window_lookup = LayoutCharPropertyLookup::new(
+        buffer,
+        Value::symbol(&crate::fixed_symbols::WINDOW_PROPERTY),
+    );
     let mut has_scoped_overlay = false;
     let lookups = ["composition", "line-prefix", "wrap-prefix"]
         .map(|name| LayoutCharPropertyLookup::new(buffer, Value::symbol(name)));

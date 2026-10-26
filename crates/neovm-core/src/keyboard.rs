@@ -12,7 +12,7 @@
 
 use crate::buffer::{CharLen, CharPos0, CharRange};
 use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::intern::{intern, resolve_sym};
+use crate::emacs_core::intern::{EpochCachedSymbol, intern, resolve_sym};
 use crate::emacs_core::keyboard::pure::KEY_CHAR_META;
 use crate::emacs_core::keymap::KeymapMarker;
 use crate::emacs_core::wait::CommandInputWaitOutcome;
@@ -2281,6 +2281,38 @@ fn num_nonmacro_input_events_symbol() -> crate::emacs_core::intern::SymId {
     *SYMBOL.get_or_init(|| intern("num-nonmacro-input-events"))
 }
 
+// Fixed keyboard spellings resolved once per registry epoch. GNU holds these
+// as the DEFSYM `Qundefined` and the DEFVAR_LISP queue variables; the read-char
+// path compared the printed spelling of `undefined` and re-interned both
+// queue names on every input-method probe.
+static UNDEFINED_SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("undefined");
+static SPECIAL_EVENT_MAP: EpochCachedSymbol = EpochCachedSymbol::new("special-event-map");
+static LAST_INPUT_EVENT: EpochCachedSymbol = EpochCachedSymbol::new("last-input-event");
+static COMMAND_EXECUTE: EpochCachedSymbol = EpochCachedSymbol::new("command-execute");
+static INTERNAL_TIMER_START_IDLE: EpochCachedSymbol =
+    EpochCachedSymbol::new("internal-timer-start-idle");
+static HELP_CHAR: EpochCachedSymbol = EpochCachedSymbol::new("help-char");
+static HELP_EVENT_LIST: EpochCachedSymbol = EpochCachedSymbol::new("help-event-list");
+static ECHO_KEYSTROKES: EpochCachedSymbol = EpochCachedSymbol::new("echo-keystrokes");
+static ECHO_KEYSTROKES_HELP: EpochCachedSymbol = EpochCachedSymbol::new("echo-keystrokes-help");
+static EXECUTING_KBD_MACRO: EpochCachedSymbol = EpochCachedSymbol::new("executing-kbd-macro");
+static INPUT_METHOD_FUNCTION: EpochCachedSymbol = EpochCachedSymbol::new("input-method-function");
+static KEY_TRANSLATION_MAP: EpochCachedSymbol = EpochCachedSymbol::new("key-translation-map");
+static KEYBOARD_TRANSLATE_TABLE: EpochCachedSymbol =
+    EpochCachedSymbol::new("keyboard-translate-table");
+static LAST_NONMENU_EVENT: EpochCachedSymbol = EpochCachedSymbol::new("last-nonmenu-event");
+static THIS_COMMAND_KEYS_SHIFT_TRANSLATED: EpochCachedSymbol =
+    EpochCachedSymbol::new("this-command-keys-shift-translated");
+static TRANSLATE_UPPER_CASE_KEY_BINDINGS: EpochCachedSymbol =
+    EpochCachedSymbol::new("translate-upper-case-key-bindings");
+static PREFIX_HELP_COMMAND: EpochCachedSymbol = EpochCachedSymbol::new("prefix-help-command");
+static LAST_KBD_MACRO: EpochCachedSymbol = EpochCachedSymbol::new("last-kbd-macro");
+static AUTO_SAVE_TIMEOUT: EpochCachedSymbol = EpochCachedSymbol::new("auto-save-timeout");
+static UNREAD_POST_INPUT_METHOD_EVENTS: EpochCachedSymbol =
+    EpochCachedSymbol::new("unread-post-input-method-events");
+static UNREAD_INPUT_METHOD_EVENTS: EpochCachedSymbol =
+    EpochCachedSymbol::new("unread-input-method-events");
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputEventHistoryDisposition {
     Record,
@@ -3434,7 +3466,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     pub(crate) fn special_event_binding(&self, event: &Value) -> Option<Value> {
-        let special_event_map = self.variable_value_by_name("special-event-map")?;
+        let special_event_map = self.variable_value(SPECIAL_EVENT_MAP.get())?;
         // GNU `read_char` calls `access_keymap` on the event head, so a
         // full lispy event like `(focus-in FRAME)` must match a keymap entry
         // stored under just `focus-in`.
@@ -3467,10 +3499,10 @@ impl crate::emacs_core::eval::Context {
             return Ok(false);
         }
 
-        self.assign("last-input-event", event);
+        self.assign_by_id(LAST_INPUT_EVENT.get(), event);
         let keys = Value::vector(vec![event]);
         self.apply(
-            Value::symbol("command-execute"),
+            Value::symbol(&COMMAND_EXECUTE),
             vec![binding, Value::NIL, keys, Value::T],
         )?;
         Ok(true)
@@ -3595,7 +3627,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     fn translate_upper_case_key_bindings_enabled(&self) -> bool {
-        self.eval_symbol("translate-upper-case-key-bindings")
+        self.eval_symbol_by_id(TRANSLATE_UPPER_CASE_KEY_BINDINGS.get())
             .is_ok_and(|value| !value.is_nil())
     }
 
@@ -3604,7 +3636,7 @@ impl crate::emacs_core::eval::Context {
     /// wrong type. Mirrors GNU `keyboard.c` consumers which call
     /// `FIXNUMP` / `FLOATP` before using the value.
     fn lisp_echo_keystrokes_seconds(&self) -> Option<f64> {
-        let value = self.eval_symbol("echo-keystrokes").ok()?;
+        let value = self.eval_symbol_by_id(ECHO_KEYSTROKES.get()).ok()?;
         if value.is_nil() {
             return None;
         }
@@ -3623,7 +3655,7 @@ impl crate::emacs_core::eval::Context {
     fn keyboard_input_is_interactive(&self) -> bool {
         !self.noninteractive()
             && self
-                .eval_symbol("executing-kbd-macro")
+                .eval_symbol_by_id(EXECUTING_KBD_MACRO.get())
                 .is_ok_and(|value| value.is_nil())
     }
 
@@ -3635,13 +3667,17 @@ impl crate::emacs_core::eval::Context {
     /// incoming event is a "help event" for the purposes of
     /// dispatching `prefix-help-command`.
     fn event_matches_help_char(&self, event: &Value) -> bool {
-        let help_char = self.eval_symbol("help-char").unwrap_or(Value::NIL);
+        let help_char = self
+            .eval_symbol_by_id(HELP_CHAR.get())
+            .unwrap_or(Value::NIL);
         if !help_char.is_nil()
             && self.symbol_mode().unwrap(*event) == self.symbol_mode().unwrap(help_char)
         {
             return true;
         }
-        let help_event_list = self.eval_symbol("help-event-list").unwrap_or(Value::NIL);
+        let help_event_list = self
+            .eval_symbol_by_id(HELP_EVENT_LIST.get())
+            .unwrap_or(Value::NIL);
         if help_event_list.is_nil() {
             return false;
         }
@@ -3697,7 +3733,7 @@ impl crate::emacs_core::eval::Context {
             // keystroke-help hint when `echo-keystrokes-help' is enabled.
             message = message.concat(&LispString::from_utf8("-"));
             if self
-                .eval_symbol("echo-keystrokes-help")
+                .eval_symbol_by_id(ECHO_KEYSTROKES_HELP.get())
                 .unwrap_or(Value::NIL)
                 .is_truthy()
             {
@@ -3726,7 +3762,9 @@ impl crate::emacs_core::eval::Context {
     /// `help--append-keystrokes-help` yet. Full runtimes always take the Lisp
     /// path above, which owns active-map filtering and text properties.
     fn first_key_echo_help_description(&self) -> Option<String> {
-        let help_char = self.eval_symbol("help-char").unwrap_or(Value::NIL);
+        let help_char = self
+            .eval_symbol_by_id(HELP_CHAR.get())
+            .unwrap_or(Value::NIL);
         let mut events = self.eval_symbol("help-event-list").unwrap_or(Value::NIL);
         while events.is_cons() {
             let mut event = events.cons_car();
@@ -3843,10 +3881,10 @@ impl crate::emacs_core::eval::Context {
         }
 
         let current = self
-            .eval_symbol("unread-post-input-method-events")
+            .eval_symbol_by_id(UNREAD_POST_INPUT_METHOD_EVENTS.get())
             .unwrap_or(Value::NIL);
         let new_list = crate::emacs_core::builtins::builtin_nconc(vec![events, current])?;
-        self.assign("unread-post-input-method-events", new_list);
+        self.assign_by_id(UNREAD_POST_INPUT_METHOD_EVENTS.get(), new_list);
         Ok(())
     }
 
@@ -3878,7 +3916,7 @@ impl crate::emacs_core::eval::Context {
         }
 
         let im_fn = self
-            .eval_symbol("input-method-function")
+            .eval_symbol_by_id(INPUT_METHOD_FUNCTION.get())
             .unwrap_or(Value::NIL);
         if im_fn.is_nil() {
             return Ok(InputMethodEvent::NotApplied);
@@ -4717,7 +4755,7 @@ impl crate::emacs_core::eval::Context {
         if !continue_echo {
             self.clear_read_command_keys();
         }
-        self.assign("last-nonmenu-event", Value::NIL);
+        self.assign_by_id(LAST_NONMENU_EVENT.get(), Value::NIL);
     }
 
     /// Returns the key events and the command pair GNU's `done` label
@@ -4756,7 +4794,7 @@ impl crate::emacs_core::eval::Context {
             };
         }
 
-        self.assign("this-command-keys-shift-translated", Value::NIL);
+        self.assign_by_id(THIS_COMMAND_KEYS_SHIFT_TRANSLATED.get(), Value::NIL);
         let mut shift_translation: Option<KeySequenceShiftTranslation> = None;
         let mut delayed_selection_event: Option<Value> = None;
         let mut saved_current_buffer: Option<crate::buffer::BufferId> = None;
@@ -4872,7 +4910,7 @@ impl crate::emacs_core::eval::Context {
                     InputHistoryRecording::AfterInputMethod => self.record_input_event(emacs_event),
                     InputHistoryRecording::BeforeInputMethod
                     | InputHistoryRecording::AlreadyRecorded => {
-                        self.assign("last-input-event", emacs_event);
+                        self.assign_by_id(LAST_INPUT_EVENT.get(), emacs_event);
                     }
                 }
 
@@ -4946,10 +4984,10 @@ impl crate::emacs_core::eval::Context {
                 || self
                     .symbol_mode()
                     .unwrap(pre_function_key_resolution.lookup)
-                    == Value::symbol("undefined")
+                    == Value::symbol(&UNDEFINED_SYMBOL)
                 || pre_function_key_binding.is_nil()
                 || self.symbol_mode().unwrap(pre_function_key_binding)
-                    == Value::symbol("undefined");
+                    == Value::symbol(&UNDEFINED_SYMBOL);
             let pre_function_key_is_prefix = resolve_prefix_keymap_binding_in_obarray(
                 &self.obarray,
                 &pre_function_key_resolution.lookup,
@@ -4985,7 +5023,7 @@ impl crate::emacs_core::eval::Context {
             }
 
             let key_translation = match self.apply_translation_map_to_events(
-                self.eval_symbol("key-translation-map")
+                self.eval_symbol_by_id(KEY_TRANSLATION_MAP.get())
                     .unwrap_or(Value::NIL),
                 translated_events,
                 options.prompt,
@@ -5071,9 +5109,9 @@ impl crate::emacs_core::eval::Context {
             };
             let mut binding = ReadCommandBinding::from_resolution(resolved);
             let mut lookup_is_undefined = resolved.lookup.is_nil()
-                || self.symbol_mode().unwrap(resolved.lookup) == Value::symbol("undefined");
+                || self.symbol_mode().unwrap(resolved.lookup) == Value::symbol(&UNDEFINED_SYMBOL);
             let mut binding_is_undefined = binding.executed().is_nil()
-                || self.symbol_mode().unwrap(binding.executed()) == Value::symbol("undefined");
+                || self.symbol_mode().unwrap(binding.executed()) == Value::symbol(&UNDEFINED_SYMBOL);
             let mut sequence_is_undefined = lookup_is_undefined || binding_is_undefined;
             tracing::debug!(
                 "read_key_sequence: binding={}",
@@ -5111,10 +5149,10 @@ impl crate::emacs_core::eval::Context {
                             binding = ReadCommandBinding::from_resolution(resolved);
                             lookup_is_undefined = resolved.lookup.is_nil()
                                 || self.symbol_mode().unwrap(resolved.lookup)
-                                    == Value::symbol("undefined");
+                                    == Value::symbol(&UNDEFINED_SYMBOL);
                             binding_is_undefined = binding.executed().is_nil()
                                 || self.symbol_mode().unwrap(binding.executed())
-                                    == Value::symbol("undefined");
+                                    == Value::symbol(&UNDEFINED_SYMBOL);
                             sequence_is_undefined = lookup_is_undefined || binding_is_undefined;
                         }
                         UndefinedMouseSequenceFallback::Drop { retained_events } => {
@@ -5166,7 +5204,7 @@ impl crate::emacs_core::eval::Context {
                         // The `done` label remaps this command like any other
                         // read_key_sequence_cmd (keyboard.c:11863-11868).
                         let help_command = self
-                            .eval_symbol("prefix-help-command")
+                            .eval_symbol_by_id(PREFIX_HELP_COMMAND.get())
                             .unwrap_or(Value::NIL);
                         let help_remap =
                             crate::emacs_core::keymap::command_remapping_in_active_maps(
@@ -5281,14 +5319,15 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
-    fn pop_lisp_event_queue_unrecorded(&mut self, symbol: &str) -> Option<Value> {
-        let current = self.eval_symbol(symbol).unwrap_or(Value::NIL);
+    fn pop_lisp_event_queue_unrecorded(&mut self, symbol: &EpochCachedSymbol) -> Option<Value> {
+        let symbol = symbol.get();
+        let current = self.eval_symbol_by_id(symbol).unwrap_or(Value::NIL);
         if !current.is_cons() {
             return None;
         }
 
         let mut head = current.cons_car();
-        self.assign(symbol, current.cons_cdr());
+        self.assign_by_id(symbol, current.cons_cdr());
 
         // GNU read_char undoes the x-popup-menu one-element event wrapping
         // when reading the input-method queues.
@@ -5302,11 +5341,11 @@ impl crate::emacs_core::eval::Context {
     }
 
     fn pop_unread_post_input_method_event_unrecorded(&mut self) -> Option<Value> {
-        self.pop_lisp_event_queue_unrecorded("unread-post-input-method-events")
+        self.pop_lisp_event_queue_unrecorded(&UNREAD_POST_INPUT_METHOD_EVENTS)
     }
 
     fn pop_unread_input_method_event_unrecorded(&mut self) -> Option<Value> {
-        self.pop_lisp_event_queue_unrecorded("unread-input-method-events")
+        self.pop_lisp_event_queue_unrecorded(&UNREAD_INPUT_METHOD_EVENTS)
     }
 
     fn pop_queued_read_char_event(
@@ -5393,7 +5432,7 @@ impl crate::emacs_core::eval::Context {
             return event;
         }
         let table = self
-            .eval_symbol("keyboard-translate-table")
+            .eval_symbol_by_id(KEYBOARD_TRANSLATE_TABLE.get())
             .unwrap_or(Value::NIL);
         let indexable = match table.kind() {
             // A char-table is indexed by any character; GNU's guard is
@@ -6243,7 +6282,7 @@ impl crate::emacs_core::eval::Context {
         }
 
         let timeout = self
-            .eval_symbol("auto-save-timeout")
+            .eval_symbol_by_id(AUTO_SAVE_TIMEOUT.get())
             .ok()
             .and_then(|value| value.as_fixnum())
             .filter(|timeout| *timeout > 0)? as u64;
@@ -6944,10 +6983,11 @@ impl crate::emacs_core::eval::Context {
                         lookup_position,
                     )?;
                     let lookup_is_undefined = resolved.lookup.is_nil()
-                        || self.symbol_mode().unwrap(resolved.lookup) == Value::symbol("undefined");
+                        || self.symbol_mode().unwrap(resolved.lookup)
+                            == Value::symbol(&UNDEFINED_SYMBOL);
                     let binding_is_undefined = resolved.binding.is_nil()
                         || self.symbol_mode().unwrap(resolved.binding)
-                            == Value::symbol("undefined");
+                            == Value::symbol(&UNDEFINED_SYMBOL);
                     if !(lookup_is_undefined || binding_is_undefined) {
                         return Ok(Some(UndefinedMouseSequenceFallback::Rewrite {
                             events: rewritten_events,
@@ -7716,8 +7756,8 @@ impl crate::emacs_core::eval::Context {
         self.command_loop.idle_start_time = Some(now);
         self.command_loop.last_idle_start_time = Some(now);
 
-        if self.obarray.fboundp("internal-timer-start-idle")
-            && let Err(err) = self.apply(Value::symbol("internal-timer-start-idle"), vec![])
+        if self.obarray.fboundp_id(INTERNAL_TIMER_START_IDLE.get())
+            && let Err(err) = self.apply(Value::symbol(&INTERNAL_TIMER_START_IDLE), vec![])
         {
             tracing::warn!("internal-timer-start-idle failed: {:?}", err);
         }
@@ -7741,7 +7781,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     pub(crate) fn record_input_event(&mut self, event: Value) {
-        self.assign("last-input-event", event);
+        self.assign_by_id(LAST_INPUT_EVENT.get(), event);
         self.record_input_event_history(event);
     }
 
@@ -7786,7 +7826,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     pub(crate) fn record_nonmenu_input_event(&mut self, event: Value) {
-        self.assign("last-nonmenu-event", event);
+        self.assign_by_id(LAST_NONMENU_EVENT.get(), event);
     }
 
     pub(crate) fn recent_input_events(&self) -> &[Value] {
@@ -7841,7 +7881,7 @@ impl crate::emacs_core::eval::Context {
         // (running a macro must not reset it to nil).
         if let Some(events) = self.command_loop.last_kbd_macro() {
             let last_kbd_macro = Value::vector(events.to_vec());
-            self.assign("last-kbd-macro", last_kbd_macro);
+            self.assign_by_id(LAST_KBD_MACRO.get(), last_kbd_macro);
         }
         let executing_kbd_macro = self
             .command_loop
@@ -7851,7 +7891,7 @@ impl crate::emacs_core::eval::Context {
             .as_ref()
             .map(|events| Value::vector(events.clone()))
             .unwrap_or(Value::NIL);
-        self.assign("executing-kbd-macro", executing_kbd_macro);
+        self.assign_by_id(EXECUTING_KBD_MACRO.get(), executing_kbd_macro);
         self.assign(
             "executing-kbd-macro-index",
             Value::fixnum(self.command_loop.keyboard.kboard.kbd_macro_index as i64),

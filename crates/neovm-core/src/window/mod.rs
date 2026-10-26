@@ -5078,6 +5078,17 @@ impl Frame {
         self.parameters.get(&Value::symbol(key)).copied()
     }
 
+    /// [`Self::parameter`] for a fixed GNU spelling.
+    ///
+    /// Same parameter-map key and the same constructor accounting; the
+    /// spelling resolves once per registry epoch instead of at each read.
+    pub fn parameter_symbol(
+        &self,
+        key: &crate::emacs_core::intern::EpochCachedSymbol,
+    ) -> Option<Value> {
+        self.parameters.get(&Value::symbol(key)).copied()
+    }
+
     pub fn set_display_identity(&mut self, identity: FrameDisplayIdentity) {
         if let Some(display) = identity.native_display() {
             self.set_parameter(Value::symbol("display"), Value::string(display));

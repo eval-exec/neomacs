@@ -477,7 +477,8 @@ pub(crate) fn routed_segment_item_face_diverges_with_realizer<B: LayoutBufferVie
 ) -> bool {
     let bytepos = buffer.layout_char_pos_to_emacs_byte_pos(pos);
     let text_face =
-        LayoutCharPropertyLookup::new(buffer, Value::symbol("face")).text_value_at(buffer, bytepos);
+        LayoutCharPropertyLookup::new(buffer, Value::symbol(&crate::fixed_symbols::FACE))
+            .text_value_at(buffer, bytepos);
     // Overlay faces merge AFTER the text face, ascending priority, via the
     // SAME shared collector the run resolution uses
     // (`BufferTextSourceCursor::face_at` -> `overlay_faces_at`).

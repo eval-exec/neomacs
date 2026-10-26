@@ -231,10 +231,16 @@ pub(crate) fn builtin_undo_boundary(ctx: &mut super::eval::Context, args: &[Valu
 /// Delegating also picks up alias resolution, the constant check and variable
 /// watchers, all of which GNU gets for free from the same call.
 pub(crate) fn set_last_boundary_cause_explicit(ctx: &mut super::eval::Context) -> Result<(), Flow> {
+    // GNU's `Fset (Qundo_auto__last_boundary_cause, Qexplicit)` with both
+    // names fixed; each recorded command boundary previously interned both.
+    static UNDO_AUTO_LAST_BOUNDARY_CAUSE: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("undo-auto--last-boundary-cause");
+    static EXPLICIT: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("explicit");
     super::builtins::symbols::builtin_set_2(
         ctx,
-        Value::symbol("undo-auto--last-boundary-cause"),
-        Value::symbol("explicit"),
+        Value::symbol(&UNDO_AUTO_LAST_BOUNDARY_CAUSE),
+        Value::symbol(&EXPLICIT),
     )?;
     Ok(())
 }

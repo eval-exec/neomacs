@@ -910,13 +910,15 @@ impl crate::emacs_core::eval::Context {
         &self,
         buffer_id: BufferId,
     ) -> Option<super::WindowBufferLayoutInputState> {
+        // GNU reads the DEFSYM `Qfontification_functions`; this projection
+        // runs for every layout attempt and previously re-interned the
+        // spelling at each call.
+        static FONTIFICATION_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
+            crate::emacs_core::intern::EpochCachedSymbol::new("fontification-functions");
         self.capture_buffer_layout_inputs(buffer_id, |buffer| {
             super::FontificationHookIdentity(
-                self.variable_value_in_buffer_inline(
-                    Some(buffer),
-                    crate::emacs_core::intern::intern("fontification-functions"),
-                )
-                .map(super::WindowLayoutValueIdentity::of),
+                self.variable_value_in_buffer_inline(Some(buffer), FONTIFICATION_FUNCTIONS.get())
+                    .map(super::WindowLayoutValueIdentity::of),
             )
         })
     }

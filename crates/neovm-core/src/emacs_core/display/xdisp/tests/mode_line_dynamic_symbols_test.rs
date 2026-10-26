@@ -289,6 +289,29 @@ fn mode_line_dynamic_symbols_intern_once_then_warm_all_walkers() {
     }
 }
 
+/// The formatter reads a symbol-valued format element by identity, as GNU's
+/// `display_mode_element` does (`XSYMBOL (elt)`); a canonical symbol must not
+/// need a by-name resolution at any of the three walkers.
+#[test]
+fn canonical_format_symbols_render_without_interning() {
+    let mut ctx = context();
+    let name = "ttykey-k13-canonical-format-symbol";
+    ctx.set_variable(name, Value::string("X"));
+    let symbol = Value::from_sym_id(intern(name));
+    let format = Value::list(vec![Value::string(""), symbol]);
+    for walker in [Walker::Context, Walker::State, Walker::StateWithEval] {
+        let pctx = ModeLinePercentContext::default();
+        reset_intern_calls();
+        let output = render(&mut ctx, &pctx, format, walker);
+        assert_eq!(output, "X");
+        let calls = intern_call_names();
+        assert!(
+            !calls.iter().any(|called| called == name),
+            "canonical format symbol interned on a cold pass: {calls:?}"
+        );
+    }
+}
+
 #[test]
 fn mode_line_dynamic_symbols_new_pass_resolves_again() {
     let first = ModeLinePercentContext::default();

@@ -7,6 +7,26 @@ use crate::buffer::LispCharPos1;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
 use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use crate::emacs_core::hook_runtime;
+
+// Fixed GNU hook spellings run on every window/redisplay change. The by-name
+// resolver interned each spelling at every probe; the handles resolve once
+// per registry epoch and the alias walk below is unchanged.
+static WINDOW_BUFFER_CHANGE_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("window-buffer-change-functions");
+static WINDOW_SIZE_CHANGE_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("window-size-change-functions");
+static WINDOW_SELECTION_CHANGE_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("window-selection-change-functions");
+static WINDOW_STATE_CHANGE_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("window-state-change-functions");
+static WINDOW_STATE_CHANGE_HOOK: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("window-state-change-hook");
+static WINDOW_CONFIGURATION_CHANGE_HOOK: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("window-configuration-change-hook");
+static WINDOW_SCROLL_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("window-scroll-functions");
+static INHIBIT_REDISPLAY: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-redisplay");
 use crate::gc_trace::GcTrace;
 
 // ===========================================================================
@@ -326,11 +346,7 @@ pub(crate) fn run_redisplay_window_change_hooks(eval: &mut super::eval::Context)
     // would otherwise re-enter here and infinitely recurse. The specpdl
     // entry is popped when we return, restoring the previous value.
     let specpdl_count = eval.specpdl.len();
-    eval.try_specbind_or_unwind_to(
-        specpdl_count,
-        crate::emacs_core::intern::intern("inhibit-redisplay"),
-        Value::T,
-    )?;
+    eval.try_specbind_or_unwind_to(specpdl_count, INHIBIT_REDISPLAY.get(), Value::T)?;
 
     let result = run_redisplay_window_change_hooks_inner(eval);
 
@@ -412,15 +428,15 @@ fn run_redisplay_window_change_hooks_inner(eval: &mut super::eval::Context) -> E
     }
 
     let window_buffer_change_functions =
-        hook_runtime::hook_symbol_by_name(eval, "window-buffer-change-functions");
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_BUFFER_CHANGE_FUNCTIONS.get());
     let window_size_change_functions =
-        hook_runtime::hook_symbol_by_name(eval, "window-size-change-functions");
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_SIZE_CHANGE_FUNCTIONS.get());
     let window_selection_change_functions =
-        hook_runtime::hook_symbol_by_name(eval, "window-selection-change-functions");
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_SELECTION_CHANGE_FUNCTIONS.get());
     let window_state_change_functions =
-        hook_runtime::hook_symbol_by_name(eval, "window-state-change-functions");
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_STATE_CHANGE_FUNCTIONS.get());
     let window_state_change_hook =
-        hook_runtime::hook_symbol_by_name(eval, "window-state-change-hook");
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_STATE_CHANGE_HOOK.get());
 
     let mut run_window_state_change_hook = false;
     for plan in &plans {
@@ -1969,7 +1985,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
         return Ok(Value::NIL);
     };
 
-    let hook_sym = hook_runtime::hook_symbol_by_name(eval, "window-configuration-change-hook");
+    let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_CONFIGURATION_CHANGE_HOOK.get());
     let global_hook_value = eval
         .variables()
         .default_value(hook_sym)
@@ -2057,7 +2073,7 @@ pub(crate) fn builtin_run_window_scroll_functions(
         )
     })?;
     let window_start = super::window_cmds::builtin_window_start(eval, &[window_arg])?;
-    let hook_sym = hook_runtime::hook_symbol_by_name(eval, "window-scroll-functions");
+    let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_SCROLL_FUNCTIONS.get());
     let saved_buffer_id = eval.buffers.current_buffer_id();
     if let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, window_id) {
         // GNU `set_window_buffer` temporarily enters the displayed buffer

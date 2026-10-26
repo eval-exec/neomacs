@@ -21,26 +21,17 @@ fn same_buffer_attempt_captures_fontifier_identity_once() {
     eval.window_layout_attempt_freshness(frame, window, live)
         .unwrap();
     crate::emacs_core::intern::reset_intern_calls();
-    let namespace_before = crate::emacs_core::intern::symbol_registry_epoch_value();
     let captured = eval
         .window_layout_attempt_freshness(frame, window, live)
         .unwrap();
-    let namespace_after = crate::emacs_core::intern::symbol_registry_epoch_value();
     let names = crate::emacs_core::intern::intern_call_names();
     let reads = names
         .iter()
         .filter(|name| name.as_str() == "fontification-functions")
         .count();
-    if namespace_before == namespace_after {
-        assert_eq!(reads, 1, "stable namespace must retain the one-read budget");
-    } else {
-        // Another test can legitimately unintern a process-global name. Its
-        // publication may be outside this request's guarded interval.
-        assert!(
-            (1..=2).contains(&reads),
-            "unexpected capture count: {reads}"
-        );
-    }
+    // The capture projects the hook's effective value through its
+    // pre-resolved identity, so the budget is no by-name resolution at all.
+    assert_eq!(reads, 0, "capture resolved the hook by name");
     assert_eq!(captured.live_buffer, captured.source_buffer);
     assert_eq!(
         captured.live_buffer,
@@ -141,12 +132,15 @@ fn distinct_buffer_attempt_keeps_two_independent_projections() {
         .window_layout_attempt_freshness(frame, window, source)
         .unwrap();
     let names = crate::emacs_core::intern::intern_call_names();
+    // Each buffer's effective hook is projected by its pre-resolved identity;
+    // the two captures below still retain distinct values.
     assert_eq!(
         names
             .iter()
             .filter(|name| name.as_str() == "fontification-functions")
             .count(),
-        2
+        0,
+        "per-buffer captures resolved the hook by name"
     );
     assert_eq!(captured.live_buffer.id, live);
     assert_eq!(captured.source_buffer.id, source);
@@ -266,7 +260,8 @@ fn same_buffer_namespace_change_child() {
             .iter()
             .filter(|name| name.as_str() == "fontification-functions")
             .count(),
-        2
+        0,
+        "both captures read the hook by its pre-resolved identity"
     );
     assert_eq!(before.live_buffer, original_inputs);
     assert_eq!(before.source_buffer.fontification_functions.0, None);

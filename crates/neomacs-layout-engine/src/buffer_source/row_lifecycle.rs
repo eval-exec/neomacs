@@ -668,7 +668,7 @@ fn hscroll_display_spec_columns<B: LayoutBufferView + ?Sized>(
     byte_pos: usize,
     consumed_columns: i32,
 ) -> Option<i32> {
-    let spec = LayoutCharPropertyLookup::new(buffer, Value::symbol("display"))
+    let spec = LayoutCharPropertyLookup::new(buffer, Value::symbol(&crate::fixed_symbols::DISPLAY))
         .text_value_at(buffer, EmacsBytePos::new(byte_pos))?;
     let items = list_to_vec(&spec)?;
     let bare_columns = |prop: &Value| -> Option<i32> {

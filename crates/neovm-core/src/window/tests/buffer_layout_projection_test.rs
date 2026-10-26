@@ -30,8 +30,8 @@ fn redisplay_projection_skips_fontifier_identity_read() {
             .iter()
             .filter(|name| name.as_str() == "fontification-functions")
             .count(),
-        1,
-        "full freshness retains its effective hook lookup"
+        0,
+        "full freshness reads the effective hook by its pre-resolved identity"
     );
     assert_eq!(light.id, full.id);
     assert_eq!(light.prefixes, full.prefixes);

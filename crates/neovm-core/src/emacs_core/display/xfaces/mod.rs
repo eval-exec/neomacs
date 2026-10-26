@@ -1370,7 +1370,12 @@ fn face_alias_target(
     if face.symbol().is_nil() {
         return None;
     }
-    let target = eval.obarray().get_property(face.name(), "face-alias")?;
+    // GNU reads the face symbol's own plist for `Qface_alias` (xfaces.c
+    // resolve_face_name); resolving the designator's identity shares one
+    // spelling set instead of re-interning both names per lookup.
+    static FACE_ALIAS: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("face-alias");
+    let target = eval.obarray().get_property_id(face.0, FACE_ALIAS.get())?;
     if target.is_nil() {
         return None;
     }

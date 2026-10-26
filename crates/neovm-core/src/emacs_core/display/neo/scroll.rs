@@ -2,11 +2,87 @@
 //! Read-only: keymap filters, autoloads and arbitrary Lisp are never executed
 //! to speculate about an input. Unknown bindings retain ordinary delivery.
 
+use crate::emacs_core::intern::{EpochCachedSymbol, SymId};
 use crate::emacs_core::keymap::{
     command_remapping_lookup_in_keymaps, current_active_maps_for_position_read_only,
     list_keymap_lookup_one_unresolved, lookup_key_in_obarray,
 };
 use crate::emacs_core::{Context, Value};
+
+/// A fixed spelling consumed by the raw-input scroll predictor.
+///
+/// GNU reads these as DEFVAR/DEFUN statics (`Vpixel_scroll_precision_mode`,
+/// `Qpre_command_hook`, ...). The predictor runs on every input event, and each
+/// probe previously built a symbol from the printed name, re-interning it.
+/// Each handle resolves once per registry epoch; no variable or function value
+/// is cached, and every read keeps its original buffer/owner boundary.
+struct ScrollSymbol {
+    name: &'static str,
+    handle: EpochCachedSymbol,
+}
+
+impl ScrollSymbol {
+    const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            handle: EpochCachedSymbol::new(name),
+        }
+    }
+
+    #[inline]
+    fn id(&self) -> SymId {
+        self.handle.get()
+    }
+
+    /// The symbol Value this probe used to construct, with the same
+    /// constructor accounting.
+    #[inline]
+    fn value(&self) -> Value {
+        Value::symbol(&self.handle)
+    }
+}
+
+const NEOMACS_COMPOSITOR_SCROLLING: ScrollSymbol =
+    ScrollSymbol::new("neomacs-compositor-scrolling");
+const PIXEL_SCROLL_PRECISION_MODE: ScrollSymbol = ScrollSymbol::new("pixel-scroll-precision-mode");
+const PRE_COMMAND_HOOK: ScrollSymbol = ScrollSymbol::new("pre-command-hook");
+const ELDOC_LAST_MESSAGE: ScrollSymbol = ScrollSymbol::new("eldoc-last-message");
+const NEOMACS_SCROLL_DEFINITION: ScrollSymbol = ScrollSymbol::new("neomacs--scroll-definition");
+const WINDOW_SCROLL_FUNCTIONS: ScrollSymbol = ScrollSymbol::new("window-scroll-functions");
+const ISEARCH_MODE: ScrollSymbol = ScrollSymbol::new("isearch-mode");
+const PREFIX_ARG: ScrollSymbol = ScrollSymbol::new("prefix-arg");
+const CURRENT_PREFIX_ARG: ScrollSymbol = ScrollSymbol::new("current-prefix-arg");
+const OVERRIDING_LOCAL_MAP: ScrollSymbol = ScrollSymbol::new("overriding-local-map");
+const OVERRIDING_TERMINAL_LOCAL_MAP: ScrollSymbol =
+    ScrollSymbol::new("overriding-terminal-local-map");
+const PIXEL_SCROLL_PRECISION_LARGE_SCROLL_HEIGHT: ScrollSymbol =
+    ScrollSymbol::new("pixel-scroll-precision-large-scroll-height");
+const PIXEL_SCROLL_PRECISION_USE_MOMENTUM: ScrollSymbol =
+    ScrollSymbol::new("pixel-scroll-precision-use-momentum");
+const PIXEL_SCROLL_PRECISION: ScrollSymbol = ScrollSymbol::new("pixel-scroll-precision");
+const PIXEL_SCROLL_PRECISION_SCROLL_DOWN: ScrollSymbol =
+    ScrollSymbol::new("pixel-scroll-precision-scroll-down");
+const PIXEL_SCROLL_PRECISION_SCROLL_DOWN_PAGE: ScrollSymbol =
+    ScrollSymbol::new("pixel-scroll-precision-scroll-down-page");
+const PIXEL_SCROLL_PRECISION_SCROLL_UP: ScrollSymbol =
+    ScrollSymbol::new("pixel-scroll-precision-scroll-up");
+const PIXEL_SCROLL_PRECISION_SCROLL_UP_PAGE: ScrollSymbol =
+    ScrollSymbol::new("pixel-scroll-precision-scroll-up-page");
+const PIXEL_SCROLL_PRECISION_INTERPOLATE: ScrollSymbol =
+    ScrollSymbol::new("pixel-scroll-precision-interpolate");
+const SET_WINDOW_START: ScrollSymbol = ScrollSymbol::new("set-window-start");
+const SET_WINDOW_VSCROLL: ScrollSymbol = ScrollSymbol::new("set-window-vscroll");
+const WINDOW_TEXT_PIXEL_SIZE: ScrollSymbol = ScrollSymbol::new("window-text-pixel-size");
+const POSN_AT_X_Y: ScrollSymbol = ScrollSymbol::new("posn-at-x-y");
+const POSN_AT_POINT: ScrollSymbol = ScrollSymbol::new("posn-at-point");
+const POS_VISIBLE_IN_WINDOW_P: ScrollSymbol = ScrollSymbol::new("pos-visible-in-window-p");
+const VERTICAL_MOTION: ScrollSymbol = ScrollSymbol::new("vertical-motion");
+const KEY_TRANSLATION_MAP: ScrollSymbol = ScrollSymbol::new("key-translation-map");
+const INPUT_DECODE_MAP: ScrollSymbol = ScrollSymbol::new("input-decode-map");
+const LOCAL_FUNCTION_KEY_MAP: ScrollSymbol = ScrollSymbol::new("local-function-key-map");
+const SPECIAL_EVENT_MAP: ScrollSymbol = ScrollSymbol::new("special-event-map");
+const WHEEL_UP: ScrollSymbol = ScrollSymbol::new("wheel-up");
+const WHEEL_DOWN: ScrollSymbol = ScrollSymbol::new("wheel-down");
 
 impl Context {
     pub(crate) fn publish_committed_scroll_preview(
@@ -28,7 +104,11 @@ impl Context {
         self.scroll_preview_fn = Some(observer);
     }
 
-    fn scroll_variable(&self, window: crate::window::WindowId, name: &str) -> Option<Value> {
+    fn scroll_variable(
+        &self,
+        window: crate::window::WindowId,
+        variable: &ScrollSymbol,
+    ) -> Option<Value> {
         let symbol_mode = self.symbol_mode();
         let frame = self.frame_manager().selected_frame()?;
         let buffer = frame
@@ -37,7 +117,7 @@ impl Context {
             .and_then(|id| self.buffer_manager().get(id))?;
         let symbol = crate::emacs_core::builtins::symbols::resolve_variable_alias_id_in_obarray(
             self.obarray(),
-            Value::symbol(name).as_symbol_id(symbol_mode)?,
+            variable.value().as_symbol_id(symbol_mode)?,
         )
         .ok()?;
         let value = self
@@ -50,7 +130,7 @@ impl Context {
     }
 
     pub fn compositor_scrolling_enabled(&self, window: crate::window::WindowId) -> bool {
-        self.scroll_variable(window, "neomacs-compositor-scrolling")
+        self.scroll_variable(window, &NEOMACS_COMPOSITOR_SCROLLING)
             .is_some_and(|value| !value.is_nil())
     }
 
@@ -68,13 +148,13 @@ impl Context {
         }
         // Timer redisplay may run with another current buffer. Policy belongs
         // to the displayed buffer and must not use that callback's locals.
-        let variable = |name: &str| self.scroll_variable(window, name);
-        if variable("neomacs-compositor-scrolling").is_none_or(|value| value.is_nil())
-            || variable("pixel-scroll-precision-mode").is_none_or(|value| value.is_nil())
+        let variable = |symbol: &ScrollSymbol| self.scroll_variable(window, symbol);
+        if variable(&NEOMACS_COMPOSITOR_SCROLLING).is_none_or(|value| value.is_nil())
+            || variable(&PIXEL_SCROLL_PRECISION_MODE).is_none_or(|value| value.is_nil())
         {
             return false;
         }
-        let mut hooks = variable("pre-command-hook");
+        let mut hooks = variable(&PRE_COMMAND_HOOK);
         let mut global = false;
         // A local hook's `t` includes the global hook. Only the verified ElDoc
         // no-op and standard non-scrolling hooks are predictable. Bound the
@@ -93,11 +173,7 @@ impl Context {
                 global = true;
                 hooks = Some(
                     self.variables()
-                        .default_value(
-                            Value::symbol("pre-command-hook")
-                                .as_symbol_id(symbol_mode)
-                                .unwrap(),
-                        )
+                        .default_value(PRE_COMMAND_HOOK.value().as_symbol_id(symbol_mode).unwrap())
                         .unwrap_or(Value::NIL),
                 );
                 continue;
@@ -114,7 +190,7 @@ impl Context {
                 return false;
             }
             if name == "eldoc-pre-command-refresh-echo-area"
-                && variable("eldoc-last-message").is_none_or(|value| !value.is_nil())
+                && variable(&ELDOC_LAST_MESSAGE).is_none_or(|value| !value.is_nil())
             {
                 return false;
             }
@@ -132,58 +208,58 @@ impl Context {
         if hooks.is_none_or(|hooks| !hooks.is_nil()) {
             return false;
         }
-        for name in [
-            "window-scroll-functions",
-            "isearch-mode",
-            "prefix-arg",
-            "current-prefix-arg",
-            "overriding-local-map",
-            "overriding-terminal-local-map",
-            "pixel-scroll-precision-large-scroll-height",
-            "pixel-scroll-precision-use-momentum",
+        for symbol in [
+            &WINDOW_SCROLL_FUNCTIONS,
+            &ISEARCH_MODE,
+            &PREFIX_ARG,
+            &CURRENT_PREFIX_ARG,
+            &OVERRIDING_LOCAL_MAP,
+            &OVERRIDING_TERMINAL_LOCAL_MAP,
+            &PIXEL_SCROLL_PRECISION_LARGE_SCROLL_HEIGHT,
+            &PIXEL_SCROLL_PRECISION_USE_MOMENTUM,
         ] {
-            if variable(name).is_none_or(|value| !value.is_nil()) {
-                tracing::debug!(target: "neovm_core::scroll_prediction", variable = name, value = ?variable(name), "prediction requires evaluator dispatch");
+            if variable(symbol).is_none_or(|value| !value.is_nil()) {
+                tracing::debug!(target: "neovm_core::scroll_prediction", variable = symbol.name, value = ?variable(symbol), "prediction requires evaluator dispatch");
                 return false;
             }
         }
-        for name in [
-            "pixel-scroll-precision",
-            "pixel-scroll-precision-scroll-down",
-            "pixel-scroll-precision-scroll-down-page",
-            "pixel-scroll-precision-scroll-up",
-            "pixel-scroll-precision-scroll-up-page",
-            "pixel-scroll-precision-interpolate",
+        for symbol in [
+            &PIXEL_SCROLL_PRECISION,
+            &PIXEL_SCROLL_PRECISION_SCROLL_DOWN,
+            &PIXEL_SCROLL_PRECISION_SCROLL_DOWN_PAGE,
+            &PIXEL_SCROLL_PRECISION_SCROLL_UP,
+            &PIXEL_SCROLL_PRECISION_SCROLL_UP_PAGE,
+            &PIXEL_SCROLL_PRECISION_INTERPOLATE,
         ] {
-            let Some(definition) = self.obarray().symbol_function(name) else {
+            let Some(definition) = self.obarray().symbol_function_id(symbol.id()) else {
                 return false;
             };
             if definition.is_nil()
                 || self
                     .obarray()
-                    .get_property(name, "neomacs--scroll-definition")
+                    .get_property_id(symbol.id(), NEOMACS_SCROLL_DEFINITION.id())
                     != Some(definition)
             {
-                tracing::debug!(target: "neovm_core::scroll_prediction", function = name, "scroll definition changed or is unverified");
+                tracing::debug!(target: "neovm_core::scroll_prediction", function = symbol.name, "scroll definition changed or is unverified");
                 return false;
             }
         }
-        for name in [
-            "set-window-start",
-            "set-window-vscroll",
-            "window-text-pixel-size",
-            "posn-at-x-y",
-            "posn-at-point",
-            "pos-visible-in-window-p",
-            "vertical-motion",
+        for symbol in [
+            &SET_WINDOW_START,
+            &SET_WINDOW_VSCROLL,
+            &WINDOW_TEXT_PIXEL_SIZE,
+            &POSN_AT_X_Y,
+            &POSN_AT_POINT,
+            &POS_VISIBLE_IN_WINDOW_P,
+            &VERTICAL_MOTION,
         ] {
             if self
                 .obarray()
-                .symbol_function(name)
+                .symbol_function_id(symbol.id())
                 .and_then(|value| value.as_subr_id())
-                != Value::symbol(name).as_symbol_id(symbol_mode)
+                != symbol.value().as_symbol_id(symbol_mode)
             {
-                tracing::debug!(target: "neovm_core::scroll_prediction", function = name, "scroll primitive is customized");
+                tracing::debug!(target: "neovm_core::scroll_prediction", function = symbol.name, "scroll primitive is customized");
                 return false;
             }
         }
@@ -194,7 +270,7 @@ impl Context {
         ) else {
             return false;
         };
-        let command = Value::symbol("pixel-scroll-precision");
+        let command = PIXEL_SCROLL_PRECISION.value();
         if command_remapping_lookup_in_keymaps(
             &maps,
             command.as_symbol_id(symbol_mode).unwrap(),
@@ -204,15 +280,15 @@ impl Context {
         {
             return false;
         }
-        ["wheel-up", "wheel-down"].iter().all(|name| {
-            let event = Value::symbol(name);
-            for name in [
-                "key-translation-map",
-                "input-decode-map",
-                "local-function-key-map",
-                "special-event-map",
+        [&WHEEL_UP, &WHEEL_DOWN].iter().all(|symbol| {
+            let event = symbol.value();
+            for map_symbol in [
+                &KEY_TRANSLATION_MAP,
+                &INPUT_DECODE_MAP,
+                &LOCAL_FUNCTION_KEY_MAP,
+                &SPECIAL_EVENT_MAP,
             ] {
-                let Some(map) = variable(name) else {
+                let Some(map) = variable(map_symbol) else {
                     return false;
                 };
                 if !map.is_nil()

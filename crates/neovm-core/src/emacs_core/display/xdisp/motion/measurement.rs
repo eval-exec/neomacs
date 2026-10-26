@@ -21,7 +21,16 @@ fn source_line_start(buffer: &Buffer, pos: EmacsBytePos) -> EmacsBytePos {
     // measure forward; never start a fresh interpretation in its middle.
     // Conservatively include all overlay carriers: over-measuring is safe,
     // choosing a boundary based on a lower-priority carrier is not.
-    let properties = [Value::symbol("display"), Value::symbol("invisible")];
+    // Fixed GNU text-property DEFSYMs; this measurement runs for every
+    // queried motion stop and previously re-interned both spellings.
+    static DISPLAY_PROPERTY: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("display");
+    static INVISIBLE_PROPERTY: crate::emacs_core::intern::EpochCachedSymbol =
+        crate::emacs_core::intern::EpochCachedSymbol::new("invisible");
+    let properties = [
+        Value::symbol(&DISPLAY_PROPERTY),
+        Value::symbol(&INVISIBLE_PROPERTY),
+    ];
     while start > region.start() {
         let newline = start.saturating_sub_len(EmacsByteLen::new(1));
         let mut owner_start = start;

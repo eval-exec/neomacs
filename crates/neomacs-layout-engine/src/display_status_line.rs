@@ -2580,7 +2580,7 @@ pub(crate) fn build_tab_bar_display(
 
 pub(crate) fn max_mini_window_lines(evaluator: &Context, frame_rows: f32) -> f32 {
     let raw = evaluator
-        .variable_value_by_name("max-mini-window-height")
+        .variable_value(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.get())
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }
@@ -2591,7 +2591,7 @@ pub(crate) fn max_mini_window_lines_for_buffer<B: LayoutBufferView>(
     frame_rows: f32,
 ) -> f32 {
     let raw = buffer_local_value(buffer, LayoutVar::MaxMiniWindowHeight)
-        .or_else(|| evaluator.variable_value_by_name("max-mini-window-height"))
+        .or_else(|| evaluator.variable_value(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.get()))
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
 }

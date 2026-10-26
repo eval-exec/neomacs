@@ -4,6 +4,10 @@
 
 use super::*;
 
+// GNU's `Qinhibit_redisplay`; echo-message suppression probes it per update.
+static INHIBIT_REDISPLAY: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-redisplay");
+
 impl Context {
     /// GNU message3_frame_nolog -> echo_area_display(true). A height change
     /// requires a complete immediate redisplay and re-arms the frame afterward
@@ -15,7 +19,7 @@ impl Context {
             || self.noninteractive()
             || self.gnu_redisplay_hooks.active.is_active()
             || self
-                .special_variable_value_by_id(intern("inhibit-redisplay"))
+                .special_variable_value_by_id(INHIBIT_REDISPLAY.get())
                 .is_some_and(|value| value.is_truthy())
             || self.redisplay_fn.is_none()
         {

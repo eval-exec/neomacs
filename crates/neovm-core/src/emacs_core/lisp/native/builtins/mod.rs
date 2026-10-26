@@ -969,14 +969,26 @@ fn rename_buffer_interactive_spec() -> Value {
     ])
 }
 
+// Fixed interactive-spec spelling set for `self-insert-command`. The registry
+// rebuilds this form per invocation; each entry previously re-interned its
+// spelling. GNU's cmds.c defsubr carries the same fixed spec.
+static SELF_INSERT_SPEC_LIST: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("list");
+static PREFIX_NUMERIC_VALUE: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("prefix-numeric-value");
+static CURRENT_PREFIX_ARG: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("current-prefix-arg");
+static LAST_COMMAND_EVENT_SPEC: crate::emacs_core::intern::EpochCachedSymbol =
+    crate::emacs_core::intern::EpochCachedSymbol::new("last-command-event");
+
 fn self_insert_command_interactive_spec() -> Value {
     Value::list(vec![
-        Value::symbol("list"),
+        Value::symbol(&SELF_INSERT_SPEC_LIST),
         Value::list(vec![
-            Value::symbol("prefix-numeric-value"),
-            Value::symbol("current-prefix-arg"),
+            Value::symbol(&PREFIX_NUMERIC_VALUE),
+            Value::symbol(&CURRENT_PREFIX_ARG),
         ]),
-        Value::symbol("last-command-event"),
+        Value::symbol(&LAST_COMMAND_EVENT_SPEC),
     ])
 }
 
