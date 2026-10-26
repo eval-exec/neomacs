@@ -48,6 +48,7 @@ enum NativeState {
 fn retry_exec<T>(op: impl FnMut() -> Result<T, ExecError>) -> Result<T, ExecError> {
     contention::retry(Deadline::contention(), op, |error| match error {
         ExecError::Registration(error) => contention::registration(error),
+        ExecError::Intern(error) => contention::initial_intern(error),
         ExecError::Rendezvous(_)
         | ExecError::ForeignCons
         | ExecError::Type

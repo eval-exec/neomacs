@@ -1,5 +1,7 @@
 //! Shared elapsed-time bound for fixture protocol contention.
-use super::super::{RegistrationError, RendezvousError};
+use super::super::{
+    FunctionError, GlobalError, InitialInternError, RegistrationError, RendezvousError,
+};
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
@@ -12,6 +14,22 @@ pub(in super::super) struct Deadline(Instant);
 impl Deadline {
     pub(in super::super) fn contention() -> Self {
         Self(Instant::now() + SPIN_WAIT)
+    }
+
+    /// Check the same absolute deadline across caller-visible retry steps.
+    /// Expiry returns the caller's typed Busy refusal without spending a
+    /// program step or discarding an ownership-returning failure.
+    pub(in super::super) fn check<E>(&self, expired: E) -> Result<(), E> {
+        if Instant::now() >= self.0 {
+            Err(expired)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Deterministic deadline boundary for fixtures; never sleep for SPIN_WAIT.
+    pub(in super::super) fn expired_for_test() -> Self {
+        Self(Instant::now())
     }
 }
 
@@ -38,6 +56,33 @@ pub(in super::super) fn registration(error: &RegistrationError) -> Retry {
         | RegistrationError::Publication
         | RegistrationError::PendingRoots
         | RegistrationError::PendingYoung => Retry::Refuse,
+    }
+}
+
+pub(in super::super) fn initial_intern(error: &InitialInternError) -> Retry {
+    match error {
+        InitialInternError::Authority(error) => registration(error),
+        InitialInternError::ExpectedString
+        | InitialInternError::ExpectedPlainSymbol
+        | InitialInternError::UnsupportedName => Retry::Refuse,
+    }
+}
+
+pub(in super::super) fn global(error: &GlobalError) -> Retry {
+    match error {
+        GlobalError::Authority(error) => registration(error),
+        GlobalError::VoidVariable => Retry::Refuse,
+    }
+}
+
+pub(in super::super) fn function(error: &FunctionError) -> Retry {
+    match error {
+        FunctionError::Authority(error) => registration(error),
+        FunctionError::VoidFunction
+        | FunctionError::UnsupportedDefinition
+        | FunctionError::EpochExhausted
+        | FunctionError::ActiveActivation
+        | FunctionError::InactiveActivation => Retry::Refuse,
     }
 }
 
@@ -85,7 +130,7 @@ pub(in super::super) fn retry_owned<C, T, E>(
             Ok(value) => return Ok(value),
             Err(failure) => failure,
         };
-        if Instant::now() >= deadline.0 {
+        if deadline.check(()).is_err() {
             return Err(failure);
         }
         match recover(failure) {
@@ -204,7 +249,7 @@ mod tests {
     #[test]
     fn fixture_retry_owned_expiry_preserves_busy_capability() {
         let result: Result<(), Failure> = retry_owned(
-            Deadline(Instant::now()),
+            Deadline::expired_for_test(),
             Box::new(23),
             |capability| {
                 Err(Failure {
