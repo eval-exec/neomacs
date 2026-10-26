@@ -135,7 +135,7 @@ fn combo_process_filter_marker_overlay_textprop() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[
-        r#""OK (((\"1\\n2\\n3\\n\" 6 6 t)) (#(\"START-END\\nProcess seq-pf finished\\n\" 0 5 (part start) 6 9 (part end)) 6 6 t all start))""#
+        r#""OK (\"1\\n2\\n3\\n\" ((6 6 t)) t (#(\"START-END\\nProcess seq-pf finished\\n\" 0 5 (part start) 6 9 (part end)) 6 6 t all start))""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
@@ -158,16 +158,27 @@ fn combo_process_filter_marker_overlay_textprop() {
                           (marker-position m2)
                           (and (overlay-start ov) t))
                     filter-outputs)))
-          (while (accept-process-output proc 0.5))
-          (sit-for 0.2)
-          (let ((final (list (buffer-string)
-                             (marker-position m1)
-                             (marker-position m2)
-                             (and (overlay-start ov) t)
-                             (overlay-get ov 'scope)
-                             (get-text-property 1 'part))))
+          ;; `start-process' uses a PTY, so `seq' is line-buffered and each
+          ;; line may arrive in its own filter call; the split is a wakeup
+          ;; race in both editors.  Wait for the child to exit and drain, then
+          ;; assert the aggregate output and the per-call facts, never the
+          ;; chunking.
+          (let ((deadline (+ (float-time) 30)))
+            (while (and (process-live-p proc) (< (float-time) deadline))
+              (accept-process-output proc 0.05)))
+          (while (accept-process-output proc 0))
+          (let* ((calls (nreverse filter-outputs))
+                 (final (list (buffer-string)
+                              (marker-position m1)
+                              (marker-position m2)
+                              (and (overlay-start ov) t)
+                              (overlay-get ov 'scope)
+                              (get-text-property 1 'part))))
             (kill-buffer buf)
-            (list (nreverse filter-outputs) final))))))) "#,
+            (list (apply #'concat (mapcar #'car calls))
+                  (delete-dups (mapcar #'cdr calls))
+                  (and calls t)
+                  final))))))) "#,
         expect,
     );
 }
