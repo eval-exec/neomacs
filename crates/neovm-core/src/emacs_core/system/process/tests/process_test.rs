@@ -16868,24 +16868,42 @@ fn nested_tls_waits_preserve_suspension_and_deliver_queued_data() {
             :sentinel (let ((captured (copy-sequence "rooted sentinel")))
                         (lambda (_process message)
                           (when (string-prefix-p "open" message) (setq outcome captured))))))
-    (run-with-timer
-     0.025 nil
-     (lambda ()
-       ;; Only the callback captured by deferred-connect completion now owns
-       ;; its lexical string. GC must not lose it while TLS is waiting.
-       (set-process-sentinel client nil)
-       (garbage-collect)
-       (process-send-string client "queued encrypted data\n")
-       (let* ((before (current-cpu-time))
-              (ticks (car before)) (hz (cdr before)))
-         (run-with-timer 0.005 nil (lambda () (set-process-filter client t) (set-process-filter client nil) (sleep-for 0.005) (setq nested t)))
-         (sleep-for 0.4)
-         (setq slept-efficiently (< (- (car (current-cpu-time)) ticks) (* hz 0.2))))))
+    (let ((phase-deadline (+ (float-time) 30))
+          (phase nil))
+      (setq phase
+            (lambda ()
+              ;; The deferred-connect completion captures the process sentinel
+              ;; before driving the TLS handshake.  Clearing it while the
+              ;; process still reports `connect' makes that completion run a
+              ;; nil sentinel, so the open event is lost and the watchdog
+              ;; below fires.  Wait for the completion to be serviced instead
+              ;; of assuming it lands inside a fixed 25 ms window.
+              (cond
+               ((eq (process-status client) 'connect)
+                (when (< (float-time) phase-deadline)
+                  (run-with-timer 0.005 nil phase)))
+               ((process-live-p client)
+                ;; Only the callback captured by deferred-connect completion
+                ;; now owns its lexical string. GC must not lose it while TLS
+                ;; is waiting.
+                (set-process-sentinel client nil)
+                (garbage-collect)
+                (process-send-string client "queued encrypted data\n")
+                (let* ((before (current-cpu-time))
+                       (ticks (car before)) (hz (cdr before)))
+                  (run-with-timer 0.005 nil (lambda () (set-process-filter client t) (set-process-filter client nil) (sleep-for 0.005) (setq nested t)))
+                  (sleep-for 0.4)
+                  (setq slept-efficiently (< (- (car (current-cpu-time)) ticks) (* hz 0.2))))))))
+      ;; Start immediately: the callback waits for the deferred-connect
+      ;; completion to capture the sentinel, so no fixed window is assumed.
+      (run-with-timer 0 nil phase))
     (unwind-protect
         (progn
-          (with-timeout (2 (error "TLS completion watchdog"))
+          ;; These watchdogs guard against a genuine hang; progress comes from
+          ;; the completion conditions the loops wait on.
+          (with-timeout (30 (error "TLS completion watchdog"))
             (while (not outcome) (accept-process-output nil 0.05)))
-          (with-timeout (2 (error "queued TLS echo watchdog"))
+          (with-timeout (30 (error "queued TLS echo watchdog"))
             (while (with-current-buffer (process-buffer client)
                      (not (string-prefix-p "queued encrypted data\n" (buffer-string))))
               (accept-process-output client 0.05)))
