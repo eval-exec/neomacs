@@ -1421,11 +1421,20 @@ pub(crate) struct WindowOutputEmitter {
     frame_id: neovm_core::window::FrameId,
     window_id: neovm_core::window::WindowId,
     geometry: WindowRowGeometry,
+    eob_overlay_motion: neovm_core::window::EobOverlayMotionCoverage,
     current_automatic_mini_row_end: AutomaticMiniRowEnd,
     previous_automatic_mini_row_end: AutomaticMiniRowEnd,
     logical_cursor: Option<WindowCursorPos>,
     phys_cursor: Option<WindowCursorSnapshot>,
     chrome_strings: WindowChromeStringState,
+}
+
+/// One exclusive observation of every ordered string at an EOB anchor.
+/// Construction stays with the emitter and completion consumes the token.
+pub(crate) struct EobOverlayMotionStart {
+    window: neovm_core::window::WindowId,
+    anchor: LispCharPos1,
+    first_row: usize,
 }
 
 impl DisplayProgressSink for WindowOutputEmitter {
@@ -1528,6 +1537,7 @@ impl WindowOutputEmitter {
             frame_id,
             window_id,
             geometry: WindowRowGeometry::new(text_row_base, text_x, window_top),
+            eob_overlay_motion: neovm_core::window::EobOverlayMotionCoverage::NotObserved,
             current_automatic_mini_row_end: AutomaticMiniRowEnd::Ordinary,
             previous_automatic_mini_row_end: AutomaticMiniRowEnd::Ordinary,
             logical_cursor: None,
@@ -1727,6 +1737,47 @@ impl WindowOutputEmitter {
         kind: crate::display_origin::OverlayStringKind,
     ) {
         self.geometry.note_overlay_string_row_end(buffer_pos, kind)
+    }
+
+    pub(crate) fn mark_eob_overlay_motion_incomplete(&mut self, anchor: LispCharPos1) {
+        self.eob_overlay_motion =
+            neovm_core::window::EobOverlayMotionCoverage::Incomplete { anchor };
+    }
+
+    pub(crate) fn begin_eob_overlay_motion(
+        &mut self,
+        anchor: LispCharPos1,
+        first_row: usize,
+    ) -> EobOverlayMotionStart {
+        self.mark_eob_overlay_motion_incomplete(anchor);
+        EobOverlayMotionStart {
+            window: self.window_id,
+            anchor,
+            first_row,
+        }
+    }
+
+    pub(crate) fn complete_eob_overlay_motion(
+        &mut self,
+        start: EobOverlayMotionStart,
+        completion_row: usize,
+    ) {
+        use neovm_core::window::{CompletedEobOverlayMotionExtent, EobOverlayMotionCoverage};
+        if start.window != self.window_id
+            || self.eob_overlay_motion
+                != (EobOverlayMotionCoverage::Incomplete {
+                    anchor: start.anchor,
+                })
+        {
+            return;
+        }
+        if let Some(extent) = CompletedEobOverlayMotionExtent::from_physical_rows(
+            start.anchor,
+            start.first_row,
+            completion_row,
+        ) {
+            self.eob_overlay_motion = EobOverlayMotionCoverage::Complete(extent);
+        }
     }
 
     pub(crate) fn note_row_walk_start(&mut self, buffer_pos: LispCharPos1) {
@@ -2045,6 +2096,7 @@ impl WindowOutputEmitter {
         let window_id = self.window_id;
         let logical_cursor = self.logical_cursor.take();
         let phys_cursor = self.phys_cursor.take();
+        let mut eob_overlay_motion = self.eob_overlay_motion;
         let prepared_rows = self
             .geometry
             .finish((regions.text_body.y - regions.outer.y).round() as i64);
@@ -2059,6 +2111,21 @@ impl WindowOutputEmitter {
             .get(frame_id)
             .and_then(|frame| frame.find_window(window_id))
             .and_then(|window| window.buffer_id());
+        // Cursor/scroll replay can retain a source-anchored overlay row without
+        // replaying its stream-completion proof. Preserve that uncertainty:
+        // the EOB anchor is measured, but its entire virtual tail is not.
+        if eob_overlay_motion == neovm_core::window::EobOverlayMotionCoverage::NotObserved
+            && let Some(anchor) = buffer_id
+                .and_then(|buffer| evaluator.buffer_manager().get(buffer))
+                .map(|buffer| buffer.accessible_char_region().end_lisp())
+            && prepared_rows
+                .rows
+                .iter()
+                .any(|row| row.end_source.is_overlay_string() && row.end_buffer_pos == Some(anchor))
+        {
+            eob_overlay_motion =
+                neovm_core::window::EobOverlayMotionCoverage::Incomplete { anchor };
+        }
         let buffer_modiff = buffer_id
             .and_then(|buffer_id| evaluator.buffer_manager().get(buffer_id))
             .map(|buffer| buffer.modified_tick());
@@ -2089,6 +2156,7 @@ impl WindowOutputEmitter {
             points: prepared_rows.points,
             point_rows: prepared_rows.point_rows,
             rows: prepared_rows.rows,
+            eob_overlay_motion,
             buffer_modiff,
             layout_freshness,
             window_end_record: None,
@@ -2111,3 +2179,7 @@ mod tests;
 #[cfg(test)]
 #[path = "window_output/tests/chrome_strings_test.rs"]
 mod chrome_strings_tests;
+
+#[cfg(test)]
+#[path = "window_output/tests/eob_overlay_motion_test.rs"]
+mod eob_overlay_motion_tests;

@@ -225,10 +225,6 @@ impl<'a> OverlayStringRenderRowContext<'a> {
         self.append_surface.content_x()
     }
 
-    pub(crate) fn right_edge(self) -> f32 {
-        self.append_surface.right_edge()
-    }
-
     pub(crate) fn geometry_defaults(
         self,
         measurement_mode: DisplayRowMeasurementMode,
@@ -271,6 +267,13 @@ pub(crate) struct OverlayStringRenderState<
     pub(crate) row_y_positions: &'a mut DisplayRowYPositions,
     pub(crate) face_ids: &'a mut FrameFaceAttempt,
     continuation: OverlayStringRowContinuation<'a>,
+    source_completion: OverlaySourceCompletion,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OverlaySourceCompletion {
+    Incomplete,
+    Complete,
 }
 
 #[derive(Clone, Copy)]
@@ -316,6 +319,7 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> OverlayStringRenderState<'a, FS>
             row_y_positions,
             face_ids,
             continuation: OverlayStringRowContinuation::Isolated,
+            source_completion: OverlaySourceCompletion::Incomplete,
         }
     }
 
@@ -502,6 +506,7 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
             return DisplayRowTransitionContinuation::Continue;
         }
         let row_context = self.row_context();
+        let mut completion = OverlaySourceCompletion::Complete;
         for (index, overlay_string) in strings.iter().copied().enumerate() {
             let kind = if overlay_string.after_string_p {
                 OverlayStringKind::After
@@ -518,10 +523,14 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
                 row_context,
             )
             .render(buffer, positions.point(), state);
+            if state.source_completion == OverlaySourceCompletion::Incomplete {
+                completion = OverlaySourceCompletion::Incomplete;
+            }
             if continuation.should_break() {
                 return continuation;
             }
         }
+        state.source_completion = completion;
         DisplayRowTransitionContinuation::Continue
     }
 
@@ -536,7 +545,7 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
         buffer: &B,
         positions: OverlayStringRenderPositions,
         anchor_face_boxed: bool,
-        source_render: TextRowSourceRenderState<'_, FS>,
+        mut source_render: TextRowSourceRenderState<'_, FS>,
         progress: DisplaySourceVisualRowProgress<'_>,
         geometry: &mut DisplayRowGeometryState,
         row_flags: &mut DisplayRowFlags,
@@ -553,14 +562,13 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
         }
         let strings = RustTextPropAccess::new_for_window(buffer, self.window_id)
             .overlay_strings_at(positions.attachment().get() as i64);
-        self.render_produced_strings_at_text_row(
-            buffer,
-            positions,
-            &strings,
-            // Entry inherits the final buffer iterator face; leaving the
-            // pushed string reaches end-of-source, which has no following
-            // boxed glyph.
-            DisplayStringBoxBoundaries::known(anchor_face_boxed, false),
+        if strings.is_empty() {
+            return DisplayRowTransitionContinuation::Continue;
+        }
+        let start = source_render
+            .output_emitter()
+            .begin_eob_overlay_motion(positions.attachment().to_lisp(), geometry.row());
+        let mut state = OverlayStringRenderState::from_source_render(
             source_render,
             progress,
             geometry,
@@ -569,10 +577,33 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
             row_source_start,
             row_y_positions,
             face_ids,
+        )
+        .with_buffer_source_continuation_row_prelude(
+            self.continuation_row_prelude,
             carryover,
             face_scan,
             active_face,
-        )
+        );
+        let continuation = self.render_produced_strings(
+            buffer,
+            positions,
+            &strings,
+            // Entry inherits the final buffer iterator face; leaving the
+            // pushed string reaches end-of-source, which has no following
+            // boxed glyph.
+            DisplayStringBoxBoundaries::known(anchor_face_boxed, false),
+            &mut state,
+        );
+        if continuation == DisplayRowTransitionContinuation::Continue
+            && state.source_completion == OverlaySourceCompletion::Complete
+        {
+            let completion_row = state.geometry.row();
+            state
+                .source_render
+                .output_emitter()
+                .complete_eob_overlay_motion(start, completion_row);
+        }
+        continuation
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -769,9 +800,11 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
     row_context: OverlayStringRenderRowContext<'_>,
     state: &mut OverlayStringRenderState<'_, FS>,
 ) -> DisplayRowTransitionContinuation {
+    state.source_completion = OverlaySourceCompletion::Incomplete;
     let anchor_charpos = source_request.anchor_i64();
     let text_value = source_request.value();
     if text_value.as_lisp_string().is_none() {
+        state.source_completion = OverlaySourceCompletion::Complete;
         return DisplayRowTransitionContinuation::Continue;
     }
     let text_props = get_string_text_properties_table_for_value(text_value);
@@ -781,7 +814,6 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
         source_request.origin(),
         state.face_ids,
     );
-    let max_x = row_context.right_edge();
     let row_limit = row_context.row_limit();
     let row_break_context = OverlayStringRowBreakRenderContext::new(anchor_charpos, row_context);
     let append_request = source_request.append_request(state.progress.row_position());
@@ -802,20 +834,21 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
     );
     let Some(mut source_context) = LispStringSourceRowAppendSession::new(row_session_request)
     else {
+        state.source_completion = OverlaySourceCompletion::Complete;
         return DisplayRowTransitionContinuation::Continue;
     };
 
     while state.geometry.is_within_row_limit(row_limit) {
-        if state.progress.x().get() >= max_x && !row_context.append_surface.line_wrap().wraps() {
-            break;
-        }
-
+        // Even at the right edge the pushed source must advance. Its next
+        // element may be a newline; clipped text uses the bounded discard
+        // path below, which can also prove that the stream is exhausted.
         let Some(outcome) = source_context.render_to_text_row_and_emit(
             &mut state.source_render,
             state.face_ids,
             state.geometry,
             state.progress.row_position(),
         ) else {
+            state.source_completion = OverlaySourceCompletion::Complete;
             break;
         };
         let stop = outcome.stop();
@@ -860,7 +893,10 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
             continue;
         }
         match stop {
-            DisplayRowRenderStop::SourceExhausted => break,
+            DisplayRowRenderStop::SourceExhausted => {
+                state.source_completion = OverlaySourceCompletion::Complete;
+                break;
+            }
             DisplayRowRenderStop::Clipped => {
                 if !row_context.append_surface.line_wrap().wraps() {
                     // Numeric automatic-mini observation only: do not alter
@@ -924,6 +960,7 @@ fn render_overlay_string<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
                     }
                     continue;
                 }
+                state.source_completion = OverlaySourceCompletion::Complete;
                 break;
             }
             DisplayRowRenderStop::RowBreak(_) => unreachable!("row break handled above"),

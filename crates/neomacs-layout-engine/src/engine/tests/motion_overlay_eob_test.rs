@@ -151,7 +151,7 @@ fn two_line_fixture(
     (eval, frame, window, start)
 }
 
-fn assert_two_line_motion(eval: &mut Context, start: i64, case: &str) {
+fn assert_two_line_motion(eval: &mut Context, start: i64, following_rows: i64, case: &str) {
     let calls = install_motion_query(eval);
     let last_start = start + 4;
     let end = start + 7;
@@ -161,10 +161,14 @@ fn assert_two_line_motion(eval: &mut Context, start: i64, case: &str) {
                 (if origin == start { 0 } else { -1 }, start)
             } else if lines == 0 {
                 (0, if origin == start { start } else { last_start })
+            } else if origin == start && lines == 1 {
+                (1, last_start)
             } else if origin == start {
-                (1, if lines == 1 { last_start } else { end })
-            } else {
+                (1 + following_rows, end)
+            } else if origin == end {
                 (0, end)
+            } else {
+                (following_rows, end)
             };
             let previous_calls = calls.load(Ordering::Relaxed);
             let result = eval
@@ -242,14 +246,18 @@ fn multiline_eob_overlay_rows_preserve_repeated_anchors_and_a_sourceless_tail() 
 }
 
 #[test]
-fn multiline_eob_overlay_motion_counts_only_accessible_source_rows() {
+fn multiline_eob_overlay_motion_preserves_physical_distance_and_source_landings() {
     for (property, _) in OVERLAY_KINDS {
-        for tail in ["\nX", "\nX\nY", "\nX\n"] {
+        // Initialized GNU's display iterator returns the physical distance
+        // through the tail when motion starts before EOB, unlike a cold batch
+        // process with `noninteractive` merely rebound to nil.
+        for (tail, following_rows) in [("\nX", 1), ("\nX\nY", 2), ("\nX\n", 2)] {
             for narrowed in [false, true] {
                 let (mut eval, _, _, start) = two_line_fixture(property, tail, narrowed, 400);
                 assert_two_line_motion(
                     &mut eval,
                     start,
+                    following_rows,
                     &format!("{property}, tail={tail:?}, narrowed={narrowed}"),
                 );
             }
@@ -258,7 +266,7 @@ fn multiline_eob_overlay_motion_counts_only_accessible_source_rows() {
 }
 
 #[test]
-fn overlong_eob_overlay_rows_keep_their_provenance_and_do_not_add_motion_steps() {
+fn overlong_eob_overlay_rows_preserve_provenance_and_physical_motion_distance() {
     let tail = format!("\n{}\nY", "X".repeat(80));
     for (property, end_source) in OVERLAY_KINDS {
         for truncate in [false, true] {
@@ -304,7 +312,103 @@ fn overlong_eob_overlay_rows_keep_their_provenance_and_do_not_add_motion_steps()
             assert_eq!(last.end_buffer_pos, None, "{case}");
             assert_eq!(last.end_source, DisplayRowEndSource::Buffer, "{case}");
             assert!(last.end_x > last.start_x, "{case}: Y is rendered");
-            assert_two_line_motion(&mut eval, start, &case);
+            // This fontless row producer test checks transport against its
+            // independently published geometry. Live TUI/GUI comparisons
+            // establish the actual GNU distance with initialized displays.
+            let following_rows = last.row - rows[1].row;
+            assert_two_line_motion(&mut eval, start, following_rows, &case);
         }
     }
+}
+
+#[test]
+fn positive_motion_through_a_large_eob_overlay_expands_measured_coverage() {
+    let tail = "\nX".repeat(70);
+    for (property, _) in OVERLAY_KINDS {
+        let (mut eval, _, _) = overlay_eob_fixture("abc", property, &tail, None, 400);
+        let calls = install_motion_query(&mut eval);
+        let result = eval
+            .eval_str(
+                "(let ((noninteractive nil)) (goto-char 1) (list (vertical-motion 1) (point)))",
+            )
+            .expect("the complete tail is measured beyond the initial row budget");
+        assert_eq!(print_value(&result), "(70 4)", "{property}");
+        assert!(
+            calls.load(Ordering::Relaxed) > 1,
+            "{property}: partial coverage must grow"
+        );
+    }
+}
+
+#[test]
+fn truncated_source_at_the_right_edge_still_completes_its_eob_overlay() {
+    use neovm_core::window::EobOverlayMotionCoverage;
+
+    for (property, length) in OVERLAY_KINDS
+        .into_iter()
+        .flat_map(|(property, _)| (0..=20).chain([100]).map(move |length| (property, length)))
+    {
+        let (mut eval, frame, window) =
+            overlay_eob_fixture(&"a".repeat(length), property, "\nX", None, 80);
+        eval.eval_str("(setq truncate-lines t)").unwrap();
+        let mut engine = WindowLayoutQueryEngine::new_without_font_metrics();
+        let query = engine
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Rows {
+                    start: LispCharPos1::ONE,
+                    count: NonZeroUsize::new(64).unwrap(),
+                },
+            )
+            .unwrap();
+        let snapshot = query.geometry().unwrap();
+        assert!(
+            matches!(
+                snapshot.eob_overlay_motion,
+                EobOverlayMotionCoverage::Complete(_)
+            ),
+            "{property}, length={length}: finite truncated strings must be consumed: {:?}",
+            snapshot.eob_overlay_motion
+        );
+    }
+}
+
+#[test]
+fn eob_overlay_completion_waits_for_every_ordered_string() {
+    use neovm_core::window::EobOverlayMotionCoverage;
+
+    let (mut eval, frame, window) =
+        overlay_eob_fixture("abc", "after-string", &"\nX".repeat(70), None, 400);
+    eval.eval_str(
+        "(let ((overlay (make-overlay (point-max) (point-max))))
+           (overlay-put overlay 'before-string \"\\nA\"))",
+    )
+    .unwrap();
+    let mut engine = WindowLayoutQueryEngine::new_without_font_metrics();
+    let partial = engine
+        .query_window_layout(
+            &mut eval,
+            frame,
+            window,
+            WindowLayoutQueryScope::Rows {
+                start: LispCharPos1::ONE,
+                count: NonZeroUsize::new(4).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        partial.geometry().unwrap().eob_overlay_motion,
+        EobOverlayMotionCoverage::Incomplete {
+            anchor: LispCharPos1::new(4)
+        },
+        "consuming one string cannot certify the whole EOB stream"
+    );
+    let calls = install_motion_query(&mut eval);
+    let result = eval
+        .eval_str("(let ((noninteractive nil)) (goto-char 1) (list (vertical-motion 1) (point)))")
+        .unwrap();
+    assert_eq!(print_value(&result), "(71 4)");
+    assert!(calls.load(Ordering::Relaxed) > 1);
 }

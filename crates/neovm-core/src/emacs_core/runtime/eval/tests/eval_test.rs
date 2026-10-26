@@ -4596,6 +4596,7 @@ fn read_char_mouse_press_uses_clicked_window_geometry() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
+            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
             points: vec![crate::window::DisplayPointSnapshot {
                 role: crate::window::DisplayPointRole::Glyph,
@@ -4726,6 +4727,7 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
+            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
             points: vec![crate::window::DisplayPointSnapshot {
                 role: crate::window::DisplayPointRole::Glyph,
@@ -4841,6 +4843,7 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
+            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
             points: vec![crate::window::DisplayPointSnapshot {
                 role: crate::window::DisplayPointRole::Glyph,
@@ -5440,6 +5443,7 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
+            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
             points: vec![crate::window::DisplayPointSnapshot {
                 role: crate::window::DisplayPointRole::Glyph,
@@ -5552,6 +5556,7 @@ fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
+            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
             points: Vec::new(),
             rows: Vec::new(),

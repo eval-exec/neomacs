@@ -52,6 +52,9 @@ mod display_window_geometry;
 #[path = "dual_width_fixed_pitch.rs"]
 mod dual_width_fixed_pitch;
 
+#[path = "eob_overlay_motion.rs"]
+mod eob_overlay_motion;
+
 #[path = "fill_column_stipple.rs"]
 mod fill_column_stipple;
 
