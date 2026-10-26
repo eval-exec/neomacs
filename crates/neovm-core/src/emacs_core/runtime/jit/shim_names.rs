@@ -134,6 +134,76 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     "neovm_jit_fboundp_spec",
 ];
 
+// The AOT selections below are indices into the one name list above, so a
+// list edit that moves a name would silently select the wrong shim (the
+// emit-time import audit notices only a leaf that imports it). These const
+// checks make every selection a compile-time fact: `cargo check` fails
+// unless each selected index still names its shim and the frozen ABI26
+// prefix still ends at its boundary name. They are const-evaluated and emit
+// nothing: the literals, the selected set and the ABI tag are unchanged.
+#[allow(dead_code)] // this file is also included by build scripts
+const fn aot_shim_name_is(index: usize, name: &str) -> bool {
+    if index >= NEOVM_JIT_SHIM_NAMES.len() {
+        return false;
+    }
+    let candidate = NEOVM_JIT_SHIM_NAMES[index].as_bytes();
+    let wanted = name.as_bytes();
+    if candidate.len() != wanted.len() {
+        return false;
+    }
+    let mut at = 0;
+    while at < candidate.len() {
+        if candidate[at] != wanted[at] {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
+
+#[allow(dead_code)] // this file is also included by build scripts
+const _: () = {
+    // ABI26's frozen prefix ends where the appended names begin.
+    assert!(NEOVM_JIT_AOT_ABI_SHIM_COUNT <= NEOVM_JIT_SHIM_NAMES.len());
+    assert!(aot_shim_name_is(
+        NEOVM_JIT_AOT_ABI_SHIM_COUNT - 1,
+        "neovm_jit_direct_framed"
+    ));
+    assert!(aot_shim_name_is(
+        NEOVM_JIT_AOT_ABI_SHIM_COUNT,
+        "neovm_jit_t2_record_array_use"
+    ));
+    // Every ABI31 collection import keeps its name.
+    assert!(aot_shim_name_is(
+        NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES[0],
+        "neovm_jit_string_collection_write"
+    ));
+    assert!(aot_shim_name_is(
+        NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES[1],
+        "neovm_jit_aset_collection"
+    ));
+    assert!(aot_shim_name_is(
+        NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES[2],
+        "neovm_jit_varset_collection"
+    ));
+    assert!(aot_shim_name_is(
+        NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES[3],
+        "neovm_jit_varbind_collection"
+    ));
+    assert!(aot_shim_name_is(
+        NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES[4],
+        "neovm_jit_unbind_collection"
+    ));
+    assert!(aot_shim_name_is(
+        NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES[5],
+        "neovm_jit_setcar_collection"
+    ));
+    assert!(aot_shim_name_is(
+        NEOVM_JIT_AOT_COLLECTION_SHIM_INDICES[6],
+        "neovm_jit_setcdr_collection"
+    ));
+};
+
 // Keep ABI26's original AOT prefix unchanged. ABI31 adds only the collection
 // imports selected below; the Opt array/sqrt and observation-refinement names
 // stay JIT-only and an AOT import of one still fails closed.
