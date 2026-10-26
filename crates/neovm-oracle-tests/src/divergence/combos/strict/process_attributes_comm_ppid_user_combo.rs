@@ -41,7 +41,7 @@ fn div_v8_process_list_filter_live_query() {
                            :buffer buf
                            :sentinel (lambda (&rest _) nil))))
   (set-process-query-on-exit-flag proc nil)
-  (accept-process-output proc 1)
+  (neovm--oracle-settle-process proc 600)
   (let ((i 0))
     (while (and (< i 20) (memq proc (process-list)))
       (accept-process-output proc 0.05)
@@ -67,8 +67,8 @@ fn div_v8_process_status_type_mark_tty() {
                            :connection-type 'pipe
                            :sentinel (lambda (&rest _) nil))))
   (set-process-query-on-exit-flag proc nil)
-  (accept-process-output proc 1)
-  (accept-process-output proc 1)
+  (neovm--oracle-settle-process proc 600)
+  (neovm--oracle-settle-process proc 600)
   (let ((result (list (process-type proc)
                       (eq (process-mark proc) (process-mark proc))
                       (markerp (process-mark proc))

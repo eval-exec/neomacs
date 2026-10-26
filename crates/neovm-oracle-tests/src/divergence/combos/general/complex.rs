@@ -83,7 +83,7 @@ fn div_cx_process_filter_multibyte() {
   (let ((proc (make-process :name "neo-pc" :command '("echo" "café世界")
                             :connection-type 'pipe :buffer nil
                             :filter (lambda (p s) (push s received)))))
-    (accept-process-output proc 2))
+    (neovm--oracle-settle-process proc 600))
   (apply #'concat (nreverse received)))
 "##,
         expect,

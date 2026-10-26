@@ -149,7 +149,7 @@ fn div_j0_process_name_pid_list() {
 (let ((proc (make-process :name "probe-proc-np"
                           :command (list shell-file-name shell-command-switch "true"))))
   (set-process-query-on-exit-flag proc nil)
-  (accept-process-output proc 1)
+  (neovm--oracle-settle-process proc 600)
   (list (process-name proc)
         (integerp (process-id proc))
         (> (length (process-list)) 0)

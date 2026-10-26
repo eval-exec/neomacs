@@ -42,7 +42,7 @@ fn div_u1_pty_vs_pipe_output() {
                             :buffer (generate-new-buffer " *probe-pipe-buf*")
                             :sentinel (lambda (&rest _) nil))))
     (set-process-query-on-exit-flag pipe nil)
-    (accept-process-output pipe 1)
+    (neovm--oracle-settle-process pipe 600)
     (setq pipe-out (with-current-buffer (process-buffer pipe) (buffer-string)))
     (kill-buffer (process-buffer pipe)))
   (let ((pty (make-process :name "probe-pty-out"
@@ -51,7 +51,7 @@ fn div_u1_pty_vs_pipe_output() {
                            :buffer (generate-new-buffer " *probe-pty-buf*")
                            :sentinel (lambda (&rest _) nil))))
     (set-process-query-on-exit-flag pty nil)
-    (accept-process-output pty 1)
+    (neovm--oracle-settle-process pty 600)
     (setq pty-out (with-current-buffer (process-buffer pty) (buffer-string)))
     (kill-buffer (process-buffer pty)))
   (list pipe-out

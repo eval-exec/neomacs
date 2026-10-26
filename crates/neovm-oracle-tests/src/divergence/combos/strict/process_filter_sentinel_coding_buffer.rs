@@ -23,8 +23,8 @@ fn div_v8_combo_process_filter_coding_buffer_local() {
   (let ((coding-before (eq (car (process-coding-system proc)) 'utf-8)))
     (with-current-buffer buf
       (setq-local probe-combo-proc-var 'buf-local))
-    (accept-process-output proc 1)
-    (accept-process-output proc 1)
+    (neovm--oracle-settle-process proc 600)
+    (neovm--oracle-settle-process proc 600)
     (list (processp proc)
           (> (length acc) 0)
           coding-before

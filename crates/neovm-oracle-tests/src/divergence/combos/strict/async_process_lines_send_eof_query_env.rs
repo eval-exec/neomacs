@@ -91,7 +91,7 @@ fn div_j2_process_environment_option() {
                             :environment '("PROBE_ENV_VAR=testvalue")
                             :sentinel #'ignore)))
     (set-process-query-on-exit-flag proc nil)
-    (accept-process-output proc 1))
+    (neovm--oracle-settle-process proc 600))
   (with-current-buffer buf (buffer-string)))
 "##,
         expect,

@@ -20,7 +20,7 @@ fn div_j1_process_filter_set_get() {
                           :command (list shell-file-name shell-command-switch "echo hi")
                           :filter f)))
   (set-process-query-on-exit-flag proc nil)
-  (accept-process-output proc 1)
+  (neovm--oracle-settle-process proc 600)
   (list (eq (process-filter proc) f)
         (functionp (process-filter proc))
         called))
@@ -43,7 +43,7 @@ fn div_j1_process_sentinel_set_get() {
                           :command (list shell-file-name shell-command-switch "true"))))
   (set-process-sentinel proc sent)
   (set-process-query-on-exit-flag proc nil)
-  (accept-process-output proc 1)
+  (neovm--oracle-settle-process proc 600)
   (list (eq (process-sentinel proc) sent)
         (functionp (process-sentinel proc))))
 "##,

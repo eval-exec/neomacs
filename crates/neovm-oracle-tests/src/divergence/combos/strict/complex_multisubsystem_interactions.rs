@@ -125,7 +125,7 @@ fn div_p9_process_buffer_undo_fontification_combo() {
                                   :buffer buf
                                   :sentinel (lambda (&rest _) nil))))
           (set-process-query-on-exit-flag proc nil)
-          (accept-process-output proc 1))
+          (neovm--oracle-settle-process proc 600))
         (undo-boundary)
         (list (buffer-string)
               (buffer-modified-p)

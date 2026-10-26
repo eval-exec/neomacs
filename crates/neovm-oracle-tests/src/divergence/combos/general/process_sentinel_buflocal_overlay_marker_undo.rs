@@ -42,7 +42,7 @@ fn combo_process_sentinel_buffer_state_after_finish() {
                           (and (overlay-start ov) t)
                           (overlay-get ov 'zone)
                           (get-text-property 1 'sect)))))
-          (accept-process-output proc 1)
+          (neovm--oracle-settle-process proc 600)
           (sit-for 0.5)
           (kill-buffer buf)
           sentinel-result))))) "#,
@@ -163,7 +163,7 @@ fn combo_process_insert_with_narrow_undo_textprop() {
         (narrow-to-region 6 15)
         (goto-char (point-min))
         (let ((proc (start-process "echo-narrow" buf "echo" "INSERTED")))
-          (accept-process-output proc 1)
+          (neovm--oracle-settle-process proc 600)
           (sit-for 0.3))
         (widen)
         (let ((after-insert (list (buffer-string)

@@ -29,7 +29,7 @@ fn combo_start_process_insert_marker_overlay_undo() {
         (overlay-put ov 'scope 'all)
         (undo-boundary)
         (let ((proc (start-process "echo-sp" buf "echo" "INSERTED")))
-          (accept-process-output proc 1)
+          (neovm--oracle-settle-process proc 600)
           (sit-for 0.3))
         (let ((after (list (buffer-string)
                            (marker-position m1)
@@ -203,7 +203,7 @@ fn combo_process_buffer_local_marker_overlay_undo() {
         (overlay-put ov 'scope 'all)
         (undo-boundary)
         (let ((proc (start-process "echo-pbl" buf "echo" "INSERTED")))
-          (accept-process-output proc 1)
+          (neovm--oracle-settle-process proc 600)
           (sit-for 0.3))
         (let ((after (list (buffer-string)
                            proc-local

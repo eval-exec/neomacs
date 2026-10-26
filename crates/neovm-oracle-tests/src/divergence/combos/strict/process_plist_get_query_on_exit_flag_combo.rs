@@ -43,7 +43,7 @@ fn div_v8_process_attributes_status_type_tty() {
                            :connection-type 'pipe
                            :sentinel (lambda (&rest _) nil))))
   (set-process-query-on-exit-flag proc nil)
-  (accept-process-output proc 1)
+  (neovm--oracle-settle-process proc 600)
   (let ((status (process-status proc))
         (plist (process-list)))
     (list (processp proc)
@@ -70,8 +70,8 @@ fn div_v8_process_kill_then_check_buffer_output() {
                            :buffer buf
                            :sentinel (lambda (&rest _) nil))))
   (set-process-query-on-exit-flag proc nil)
-  (accept-process-output proc 1)
-  (accept-process-output proc 1)
+  (neovm--oracle-settle-process proc 600)
+  (neovm--oracle-settle-process proc 600)
   (let ((output (with-current-buffer buf (buffer-string))))
     (delete-process proc)
     (list (> (length output) 0)
