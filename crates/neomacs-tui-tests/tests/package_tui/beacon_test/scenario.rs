@@ -28,8 +28,21 @@ pub(super) fn run_body(
         mismatches,
     );
 
+    let manual_styles = std::cell::RefCell::new(Vec::new());
     both(pair, "manual blink", |session| {
-        invoke(session, "beacon359-tui-manual", "B359-MANUAL")
+        invoke(session, "beacon359-tui-manual", "B359-MANUAL");
+        // Capture the truecolor span while this editor's own blink is still
+        // active.  The paired driver invokes one editor completely before the
+        // other, so a capture after both invocations can miss the transient
+        // blink of the editor that ran first.
+        let style = wait_for_background(session, "manual alpha", 7, 7, true)
+            .expect("manual blink must paint its truecolor span");
+        manual_styles
+            .borrow_mut()
+            .push((session.name.clone(), style));
+        // The manual overlay stays up until the next blink (beacon-blink-delay
+        // is 30 s here), so it must not be waited away; the EOL stage's blink
+        // vanishes it.
     })?;
     record_pair(
         pair,
@@ -38,12 +51,18 @@ pub(super) fn run_body(
         expect!["B359-MANUAL p=8 l=1 s=1 b=source o=7 t=t w=t n=1"],
         mismatches,
     );
-    record_style(
-        pair,
+    let manual_styles = manual_styles.into_inner();
+    let captured_style = |name: &str| {
+        manual_styles
+            .iter()
+            .find(|(editor, _)| editor == name)
+            .map(|(_, style)| style.clone())
+            .unwrap_or_else(|| panic!("{name} manual style was not captured"))
+    };
+    record_captured_style(
         "manual",
-        "manual alpha",
-        7,
-        7,
+        captured_style("GNU"),
+        captured_style("NEO"),
         expect![[r#"
             [0;48;2;0;255;255ma[0;48;2;28;252;252ml[0;48;2;57;249;249mp[0;48;2;86;246;246mh[0;48;2;114;242;242ma[0;48;2;143;239;239m [0;48;2;172;236;236mb[0m
         "#]],
