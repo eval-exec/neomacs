@@ -19,6 +19,7 @@ use super::{
     SliceRoot, TableMut, TableRef,
 };
 
+mod combined;
 mod functions;
 mod globals;
 mod intern;
