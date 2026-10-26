@@ -58,47 +58,16 @@ fn p3sym_real_backing_handoff_and_keeper_mint() {
     });
 }
 
+mod readers;
+
 #[test]
 fn p3sym_two_readers_overlap_and_writer_refuses() {
-    Context::with_test_symbol_era(|era, id| {
-        let handle = era.admit_plain_symbol(id).unwrap();
-        let heap = era.heap_identity();
-        let permits = [era.register(1, 8).unwrap(), era.register(2, 8).unwrap()];
-        let barrier = std::sync::Barrier::new(2);
-        std::thread::scope(|scope| {
-            for (n, permit) in permits.into_iter().enumerate() {
-                let barrier = &barrier;
-                scope.spawn(move || {
-                    let mut owner = super::super::tests::activate_retry(permit, heap, n as u64 + 1);
-                    {
-                        let mut access = owner.run_access().unwrap();
-                        let reader = access.symbol_ref(&handle).unwrap();
-                        barrier.wait();
-                        // Assertion-only actual payload read under both live
-                        // reader leases; no bits leave to an executor op.
-                        assert_eq!(
-                            unsafe { reader.run.owner.registry.symbols.backing.probe(id) },
-                            Value::fixnum(73).bits()
-                        );
-                        assert_eq!(
-                            reader
-                                .run
-                                .owner
-                                .registry
-                                .symbols
-                                .word
-                                .load(Ordering::Acquire),
-                            2
-                        );
-                        assert!(!word::writer_enter(&reader.run.owner.registry.symbols.word));
-                        barrier.wait();
-                    }
-                    super::super::tests::finish_retry(owner, NonZeroU64::MIN);
-                });
-            }
-        });
-        finish(era);
-    });
+    readers::check(readers::Scenario::BothReaders);
+}
+
+#[test]
+fn p3sym_reader_refusal_releases_peer_and_finishes_era() {
+    readers::check(readers::Scenario::RefuseSecond);
 }
 
 #[test]
