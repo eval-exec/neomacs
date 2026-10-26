@@ -7,10 +7,15 @@ use std::{path::PathBuf, time::Duration};
 #[test]
 fn space_fill_column_indicator_paints_one_stipple_column() {
     let backend = match std::env::var("NEOMACS_GUI_TEST_BACKEND").as_deref() {
+        Ok("x11") => GuiBackend::LinuxX11,
         Ok("wayland") => GuiBackend::LinuxWayland,
         Ok("macos") => GuiBackend::Macos,
         Ok("windows") => GuiBackend::Windows,
-        _ => GuiBackend::LinuxX11,
+        _ => cfg_select! {
+            target_os = "macos" => { GuiBackend::Macos }
+            windows => { GuiBackend::Windows }
+            _ => { GuiBackend::LinuxX11 }
+        },
     };
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join("tmp/issue600/gui-stipple");

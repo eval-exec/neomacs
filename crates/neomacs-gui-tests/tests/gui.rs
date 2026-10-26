@@ -52,6 +52,9 @@ mod display_window_geometry;
 #[path = "dual_width_fixed_pitch.rs"]
 mod dual_width_fixed_pitch;
 
+#[path = "fill_column_stipple.rs"]
+mod fill_column_stipple;
+
 #[path = "font_coverage.rs"]
 mod font_coverage;
 
@@ -177,6 +180,3 @@ mod x11_presentation;
 
 #[path = "xpm_named_colors.rs"]
 mod xpm_named_colors;
-
-#[path = "fill_column_stipple.rs"]
-mod fill_column_stipple;
