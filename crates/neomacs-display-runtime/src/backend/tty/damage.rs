@@ -924,9 +924,16 @@ impl TtyRif {
                     // `rasterize_glyph_row` writes nothing for it.
                     continue;
                 }
-                let placement =
-                    WindowRowPlacement::new(state, entry, glyph_row.role, row_idx, 0, 0);
-                let Some(grid_row) = visible_cell(placement.grid_row, height) else {
+                let anchor = WindowRowAnchor::new(
+                    state,
+                    entry,
+                    glyph_row.role,
+                    WindowMatrixRowIndex(row_idx),
+                    TerminalGridRow(0),
+                );
+                let placement = WindowRowPlacement::new(anchor, TerminalGridColumn(0));
+                let Some(grid_row) = placement.grid_row.visible_index(TerminalGridHeight(height))
+                else {
                     continue;
                 };
                 let row = match self.damage.row_identity {
@@ -936,7 +943,7 @@ impl TtyRif {
                 rows[grid_row].push(PainterKey::WindowRow {
                     window: entry.window_id,
                     row,
-                    col: placement.row_col,
+                    col: placement.row_col.get(),
                     area: placement.area_layout,
                 });
                 retained.push(glyph_row.clone());
@@ -1026,21 +1033,31 @@ impl TtyRif {
         // Band rows are volatile, hence always touched.
         self.rasterize_frame_chrome_bands(state, 0, 0);
         let char_w = state.char_width.max(1.0);
-        let height = self.desired.height;
+        let height = TerminalGridHeight(self.desired.height);
         for entry in &state.window_matrices {
             for (row_idx, glyph_row) in entry.matrix.rows.iter().enumerate() {
-                let placement =
-                    WindowRowPlacement::new(state, entry, glyph_row.role, row_idx, 0, 0);
-                if !visible_cell(placement.grid_row, height).is_some_and(|row| touched[row]) {
+                let anchor = WindowRowAnchor::new(
+                    state,
+                    entry,
+                    glyph_row.role,
+                    WindowMatrixRowIndex(row_idx),
+                    TerminalGridRow(0),
+                );
+                if !anchor
+                    .grid_row
+                    .visible_index(height)
+                    .is_some_and(|row| touched[row])
+                {
                     continue;
                 }
+                let placement = WindowRowPlacement::new(anchor, TerminalGridColumn(0));
                 self.rasterize_glyph_row(
                     state,
                     TtyGlyphRowOwner::Window(entry.window_id),
                     0,
                     0,
-                    placement.row_col,
-                    placement.grid_row,
+                    placement.row_col.get(),
+                    placement.grid_row.get(),
                     glyph_row,
                     placement.area_layout,
                     char_w,

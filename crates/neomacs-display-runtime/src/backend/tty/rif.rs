@@ -1215,19 +1215,21 @@ impl TtyRif {
                         self.scroll_seed = Some(delta);
                     }
                 }
+                let anchor = WindowRowAnchor::new(
+                    state,
+                    entry,
+                    glyph_row.role,
+                    WindowMatrixRowIndex(row_idx),
+                    TerminalGridRow(origin_row),
+                );
                 let WindowRowPlacement {
                     row_bounds,
                     area_layout,
                     row_col,
                     grid_row,
-                } = WindowRowPlacement::new(
-                    state,
-                    entry,
-                    glyph_row.role,
-                    row_idx,
-                    origin_col,
-                    origin_row,
-                );
+                } = WindowRowPlacement::new(anchor, TerminalGridColumn(origin_col));
+                let row_col = row_col.get();
+                let grid_row = grid_row.get();
                 // Damage-aware carry (GNU dispnew: update_window never touches
                 // rows the desired matrix left disabled). A row the layout
                 // engine reused VERBATIM rasterizes to exactly what the
@@ -2824,54 +2826,123 @@ impl TtyRif {
     }
 }
 
-/// Where one window-matrix row lands on the terminal grid.
+/// An index obtained while enumerating one window's matrix rows.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+struct WindowMatrixRowIndex(usize);
+
+/// A signed terminal row coordinate, before clipping to the visible grid.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+struct TerminalGridRow(i64);
+
+impl TerminalGridRow {
+    #[inline]
+    const fn get(self) -> i64 {
+        self.0
+    }
+
+    #[inline]
+    fn visible_index(self, height: TerminalGridHeight) -> Option<usize> {
+        visible_cell(self.0, height.0)
+    }
+}
+
+/// A signed terminal column coordinate, including a child frame's origin.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+struct TerminalGridColumn(i64);
+
+impl TerminalGridColumn {
+    #[inline]
+    const fn get(self) -> i64 {
+        self.0
+    }
+}
+
+/// The number of rows in the terminal grid, distinct from a matrix index.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+struct TerminalGridHeight(usize);
+
+const _: () = {
+    assert!(std::mem::size_of::<TerminalGridRow>() == std::mem::size_of::<i64>());
+    assert!(std::mem::size_of::<TerminalGridColumn>() == std::mem::size_of::<i64>());
+    assert!(std::mem::size_of::<TerminalGridHeight>() == std::mem::size_of::<usize>());
+    assert!(std::mem::size_of::<WindowMatrixRowIndex>() == std::mem::size_of::<usize>());
+};
+
+/// Vertical placement borrowed from one immutable frame and window entry.
 ///
-/// One computation shared by the rasterizer and by the painter keys of
-/// `damage.rs`: a key built from a different placement than the one painted
-/// would let the damage path skip a row it should have repainted.
+/// The rasterizer and painter keys use this single projection. Keeping the
+/// source borrows and role with its result prevents horizontal placement from
+/// accidentally using a different source. Nothing is retained between frames.
+#[derive(Clone, Copy, Debug)]
+struct WindowRowAnchor<'frame> {
+    state: &'frame FrameDisplayState,
+    entry: &'frame WindowMatrixEntry,
+    role: GlyphRowRole,
+    row_bounds: Rect,
+    grid_row: TerminalGridRow,
+}
+
+impl<'frame> WindowRowAnchor<'frame> {
+    #[inline]
+    fn new(
+        state: &'frame FrameDisplayState,
+        entry: &'frame WindowMatrixEntry,
+        role: GlyphRowRole,
+        row: WindowMatrixRowIndex,
+        origin: TerminalGridRow,
+    ) -> Self {
+        let char_h = state.char_height.max(1.0);
+        let row_bounds = entry.row_pixel_bounds(role);
+        let row_base = origin.get() + (row_bounds.y / char_h).round().max(0.0) as i64;
+        // VPOS is a matrix index on a terminal. GUI pixel_y/height_px must
+        // neither stretch nor skip terminal rows.
+        let grid_row = TerminalGridRow(row_base.saturating_add(usize_to_i64_saturating(row.0)));
+        Self {
+            state,
+            entry,
+            role,
+            row_bounds,
+            grid_row,
+        }
+    }
+}
+
+/// Full placement, needed only when a row will be painted or keyed.
 #[derive(Clone, Copy, Debug)]
 struct WindowRowPlacement {
     row_bounds: Rect,
     area_layout: GlyphRowAreaLayout,
     /// The screen column the row's glyphs start from.
-    row_col: i64,
+    row_col: TerminalGridColumn,
     /// The terminal row the row is written to.
-    grid_row: i64,
+    grid_row: TerminalGridRow,
 }
 
 impl WindowRowPlacement {
     #[inline]
-    fn new(
-        state: &FrameDisplayState,
-        entry: &WindowMatrixEntry,
-        role: GlyphRowRole,
-        row_idx: usize,
-        origin_col: i64,
-        origin_row: i64,
-    ) -> Self {
-        let char_w = state.char_width.max(1.0);
-        let char_h = state.char_height.max(1.0);
+    fn new(anchor: WindowRowAnchor<'_>, origin_col: TerminalGridColumn) -> Self {
+        let char_w = anchor.state.char_width.max(1.0);
         // Mirror FrameDisplayState::materialize(): buffer text rows are
         // laid out relative to the GNU TEXT_AREA, while mode-line,
         // header-line, tab-line, and minibuffer chrome remain
         // window-wide.  This is the TTY side of GNU's glyph matrix
         // margin reservation in dispnew.c: text-area glyph pointers are
         // offset past left margin columns, chrome rows are not.
-        let row_bounds = entry.row_pixel_bounds(role);
-        let area_layout = state.glyph_row_area_layout(entry, role);
-        let row_col = origin_col + (row_bounds.x / char_w).round().max(0.0) as i64;
-        let row_base = origin_row + (row_bounds.y / char_h).round().max(0.0) as i64;
-        // GNU keeps two coordinate domains in each glyph row:
-        // VPOS/HPOS are grid coordinates, while Y/X are pixel
-        // coordinates for GUI redisplay.  TTY output is written by
-        // matrix row index, so pixel_y/height_px must not stretch or
-        // skip terminal rows.
-        let grid_row = row_base.saturating_add(usize_to_i64_saturating(row_idx));
+        let area_layout = anchor
+            .state
+            .glyph_row_area_layout(anchor.entry, anchor.role);
+        let row_col = TerminalGridColumn(
+            origin_col.get() + (anchor.row_bounds.x / char_w).round().max(0.0) as i64,
+        );
         Self {
-            row_bounds,
+            row_bounds: anchor.row_bounds,
             area_layout,
             row_col,
-            grid_row,
+            grid_row: anchor.grid_row,
         }
     }
 }
@@ -3868,3 +3939,7 @@ fn glyph_row_debug_text(row: &GlyphRow) -> String {
 #[cfg(test)]
 #[path = "rif/tests/packed_raster_test.rs"]
 mod packed_raster_tests;
+
+#[cfg(test)]
+#[path = "rif/tests/window_row_anchor_test.rs"]
+mod window_row_anchor_tests;
