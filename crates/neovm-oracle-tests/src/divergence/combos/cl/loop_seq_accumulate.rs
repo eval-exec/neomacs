@@ -101,7 +101,6 @@ fn divergence_cl_loop_with_vectors_and_strings() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_loop_for_in_package() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -118,7 +117,7 @@ fn divergence_cl_loop_for_in_package() {
     (list (length syms)
           (>= (length syms) 1)
           (member 'car syms)
-          (every (lambda (s) (fboundp s)) syms)))) #"#,
+          (every (lambda (s) (fboundp s)) syms)))) "#,
         expect,
     );
 }
@@ -224,12 +223,11 @@ fn divergence_cl_loop_with_conditionals() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_seq_intersection_difference() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 14 31)""##]];
+    let expect = expect_test::expect![[r#""OK ((4 5) t (1 2 3) t (6 7 8) t (1 2 3 4 5 6 7 8) t (40 50) t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((a '(1 2 3 4 5))
@@ -244,7 +242,7 @@ fn divergence_seq_intersection_difference() {
           (= (length (seq-union a b)) 8)
           (seq-keep (lambda (x) (when (> x 3) (* x 10))) a)
           (equal (seq-keep (lambda (x) (when (> x 3) (* x 10))) a)
-                 '(40 50))))) #"#,
+                 '(40 50))))) "#,
         expect,
     );
 }

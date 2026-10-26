@@ -3,7 +3,6 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_with_defstruct_slot() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -33,17 +32,16 @@ fn divergence_eieio_with_defstruct_slot() {
           (test-ds-slot-xxx-name (car (slot-value o 'data)))
           (string= (test-ds-slot-xxx-name (car (slot-value o 'data))) "a")
           (test-ds-slot-xxx-value (cadr (slot-value o 'data)))
-          (= (test-ds-slot-xxx-value (cadr (slot-value o 'data))) 20)))) #"#,
+          (= (test-ds-slot-xxx-value (cadr (slot-value o 'data))) 20)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_equal_nested_objects() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 15 52)""##]];
+    let expect = expect_test::expect![[r#""OK (nil t t t 42 t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-eq-nested-xxx ()
@@ -59,12 +57,11 @@ fn divergence_eieio_equal_nested_objects() {
           (test-eq-nested-xxx-p parent)
           (slot-value (slot-value parent 'child) 'val)
           (= (slot-value (slot-value parent 'child) 'val) 42)
-          (eq (slot-value parent 'child) leaf1)))) #"#,
+          (eq (slot-value parent 'child) leaf1)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_print_read_object() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -84,12 +81,11 @@ fn divergence_eieio_print_read_object() {
             (test-pr-obj-xxx-a obj)
             (= (test-pr-obj-xxx-a obj) 42)
             (test-pr-obj-xxx-b obj)
-            (equal (test-pr-obj-xxx-b obj) '(x y z)))))) #"#,
+            (equal (test-pr-obj-xxx-b obj) '(x y z)))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_defstruct_in_eieio_method_dispatch() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -115,17 +111,16 @@ fn divergence_defstruct_in_eieio_method_dispatch() {
           (length (slot-value c 'items))
           (= (length (slot-value c 'items)) 3)
           (test-dm-item-xxx-name (car (slot-value c 'items)))
-          (string= (test-dm-item-xxx-name (car (slot-value c 'items))) "c")))) #"#,
+          (string= (test-dm-item-xxx-name (car (slot-value c 'items))) "c")))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_with_closure_factory() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 17 38)""##]];
+    let expect = expect_test::expect![[r#""OK (10 t 11 t 12 13 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-cf-xxx ()
@@ -143,7 +138,7 @@ fn divergence_eieio_with_closure_factory() {
           (= (funcall reader) 11)
           (funcall incrementer)
           (funcall incrementer)
-          (= (funcall reader) 13)))) #"#,
+          (= (funcall reader) 13)))) "#,
         expect,
     );
 }
@@ -173,12 +168,11 @@ fn divergence_eieio_cl_print_object() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_class_hierarchy_predicates() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 17 77)""##]];
+    let expect = expect_test::expect![[r#""OK (t nil nil t t nil t t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-ch-root-xxx () ((id :initarg :id)))
@@ -196,12 +190,11 @@ fn divergence_eieio_class_hierarchy_predicates() {
           (null (test-ch-leaf-xxx-p root))
           (null (test-ch-leaf-xxx-p mid))
           (test-ch-leaf-xxx-p leaf)
-          (child-of-class-p (eieio-object-class leaf) 'test-ch-root-xxx)))) #"#,
+          (child-of-class-p (eieio-object-class leaf) 'test-ch-root-xxx)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_defstruct_print_read_roundtrip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -220,17 +213,16 @@ fn deficiency_defstruct_print_read_roundtrip() {
             (test-prr-xxx-x obj)
             (= (test-prr-xxx-x obj) 42)
             (test-prr-xxx-y obj)
-            (= (test-prr-xxx-y obj) 99))))) #"#,
+            (= (test-prr-xxx-y obj) 99))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_object_with_hash_key() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 16 39)""##]];
+    let expect = expect_test::expect![[r#""OK (100 t 200 t 2 t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-hk-xxx ()
@@ -247,19 +239,16 @@ fn divergence_eieio_object_with_hash_key() {
           (hash-table-count ht)
           (= (hash-table-count ht) 2)
           (eieio-object-p o1)
-          (eq (gethash o1 ht) 100)))) #"#,
+          (eq (gethash o1 ht) 100)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_slot_type_checking() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[
-        r#""ERR (invalid-slot-type test-tc-xxx num number \"not-a-number\")""#
-    ]];
+    let expect = expect_test::expect![[r#""ERR (invalid-slot-type test-tc-xxx num number \"not-a-number\")""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-tc-xxx ()
@@ -274,7 +263,7 @@ fn divergence_eieio_slot_type_checking() {
               (progn (oset o num "not-a-number") 'no-error)
             (wrong-type-argument 'type-error))
           (slot-value o 'num)
-          (numberp (slot-value o 'num))))) #"#,
+          (numberp (slot-value o 'num))))) "#,
         expect,
     );
 }

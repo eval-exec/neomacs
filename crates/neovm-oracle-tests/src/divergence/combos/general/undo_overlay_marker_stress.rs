@@ -312,12 +312,11 @@ fn divergence_undo_overlay_creation() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_kill_ring_save_restore() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 22 55)""##]];
+    let expect = expect_test::expect![[r#""OK (#(\"KEEP-E-KEEOVE-KEEP\" 0 4 (zone keep) 6 9 (zone keep) 11 15 (zone keep)) #(\"P-REM\" 0 5 (zone remove)) #(\"KEEP-REMOVE-KEEP-REMOVE-KEEP\" 0 4 (zone keep) 5 10 (zone remove) 11 14 (zone keep) 15 20 (zone remove) 21 25 (zone keep)) t keep t remove t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "KEEP-REMOVE-KEEP-REMOVE-KEEP")
@@ -340,7 +339,7 @@ fn divergence_undo_kill_ring_save_restore() {
           (get-text-property 1 'zone)
           (eq (get-text-property 1 'zone) 'keep)
           (get-text-property 6 'zone)
-          (eq (get-text-property 6 'zone) 'remove)))) #"#,
+          (eq (get-text-property 6 'zone) 'remove)))) "#,
         expect,
     );
 }

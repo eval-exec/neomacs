@@ -53,12 +53,11 @@ fn divergence_mega_combo_edit_undo_overlays_markers_textprops() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_mega_combo_eieio_closure_eval_advice_marker() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 36 73)""##]];
+    let expect = expect_test::expect![[r#""OK ((modified (advised modified) created (advised created)) \"test\" 9 11 t t ((advised created)) (created (advised created)) 9 t t t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-mega-obj-xxx ()
@@ -95,17 +94,16 @@ fn divergence_mega_combo_eieio_closure_eval_advice_marker() {
               (advice-remove 'test-mega-log-xxx
                               (lambda (obj event)
                                 (push (list 'advised event)
-                                      (slot-value obj 'history))))))))) #"#,
+                                      (slot-value obj 'history))))))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_mega_combo_buffer_narrow_overlay_undo_regex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 40 38)""##]];
+    let expect = expect_test::expect![[r#""OK (#(\" SECTION2-YYYY SECTION3-C\" 0 10 (group b) 14 25 (group c)) 2 3 #(\"SECTION1-AAAA SECTION2-BBBB SECTION3-CCCC SECTION4-DDDD\" 0 12 (group a) 13 23 (group b) 23 25 (group b) 26 27 (group c) 27 38 (group c) 39 51 (group d)) t 1 13 14 24 1 t a t b t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "SECTION1-AAAA SECTION2-BBBB SECTION3-CCCC SECTION4-DDDD")
@@ -146,17 +144,16 @@ fn divergence_mega_combo_buffer_narrow_overlay_undo_regex() {
             (eq (get-text-property 1 'group) 'a)
             (get-text-property 14 'group)
             (eq (get-text-property 14 'group) 'b)
-            (= (buffer-size) 52))))) #"#,
+            (= (buffer-size) 52))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_mega_combo_keymap_closure_eieio_error() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 28 55)""##]];
+    let expect = expect_test::expect![[r#""OK ((closure ((v . 11)) nil (setq v (+ v 1))) t (closure ((v . 11)) nil v) t 11 12 12 t 11 11 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-mkce-xxx ()
@@ -185,7 +182,7 @@ fn divergence_mega_combo_keymap_closure_eieio_error() {
             (= (funcall (lookup-key map "g")) 12)
             (funcall (lookup-key map "d"))
             (funcall (lookup-key map "g"))
-            (= (funcall (lookup-key map "g")) 11))))) #"#,
+            (= (funcall (lookup-key map "g")) 11))))) "#,
         expect,
     );
 }

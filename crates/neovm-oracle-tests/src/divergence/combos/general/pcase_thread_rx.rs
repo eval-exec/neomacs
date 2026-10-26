@@ -59,7 +59,6 @@ fn divergence_pcase_guard_and_pattern() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_thread_first_last() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -87,17 +86,16 @@ fn divergence_thread_first_last() {
         (string= (thread-first "hello world"
                                (string-upcase)
                                (string-reverse))
-                 "DLROW OLLEH"))) #"#,
+                 "DLROW OLLEH"))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_pcase_with_app_pattern() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 15 48)""##]];
+    let expect = expect_test::expect![[r#""OK ((num-first 10) t (str-first \"hello\") t (list-first (a b)) t empty t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((process (lambda (data)
@@ -113,12 +111,11 @@ fn divergence_pcase_with_app_pattern() {
           (funcall process '((a b) c))
           (equal (funcall process '((a b) c)) '(list-first (a b)))
           (funcall process nil)
-          (eq (funcall process nil) 'empty)))) #"#,
+          (eq (funcall process nil) 'empty)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_typep_with_various_types() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -137,7 +134,7 @@ fn divergence_cl_typep_with_various_types() {
         (cl-typep (make-hash-table) 'hash-table)
         (not (cl-typep 42 'string))
         (cl-typep '(1 2 3) 'list)
-        (cl-typep (make-vector 5 0) 'vector))) #"#,
+        (cl-typep (make-vector 5 0) 'vector))) "#,
         expect,
     );
 }
@@ -162,7 +159,6 @@ fn divergence_pcase_lexical_binding() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_thread_with_hash_table() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -184,17 +180,16 @@ fn divergence_thread_with_hash_table() {
           (gethash 'c ht)
           (= (gethash 'c ht) 3)
           (hash-table-keys ht)
-          (= (length (hash-table-keys ht)) 3)))) #"#,
+          (= (length (hash-table-keys ht)) 3)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_pcase_recursive_pattern() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 18 51)""##]];
+    let expect = expect_test::expect![[r#""OK (0 t 1 t 3 nil 5 nil 5 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defun test-depth-xxx (tree)
@@ -213,12 +208,11 @@ fn divergence_pcase_recursive_pattern() {
         (test-depth-xxx '(a (b c) d))
         (= (test-depth-xxx '(a (b c) d)) 3)
         (test-depth-xxx '((a (b)) (c d)))
-        (= (test-depth-xxx '((a (b)) (c d))) 3))) #"#,
+        (= (test-depth-xxx '((a (b)) (c d))) 3))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_destructuring_bind() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -233,17 +227,16 @@ fn divergence_cl_destructuring_bind() {
           (= b 2)
           (= c 3)
           (equal rest '(4 5 6))
-          (= (length rest) 3)))) #"#,
+          (= (length rest) 3)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn rx_pattern_matching() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 14 35)""##]];
+    let expect = expect_test::expect![[r#""OK (3 t (\"foo123\" \"bar456\" \"baz789\") nil \"foo123bar456baz789\" nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "foo123bar456baz789")
@@ -258,7 +251,7 @@ fn rx_pattern_matching() {
           (nreverse matches)
           (equal (nreverse matches) '("foo123" "bar456" "baz789"))
           (buffer-string)
-          (= (buffer-size) 15)))) #"#,
+          (= (buffer-size) 15)))) "#,
         expect,
     );
 }

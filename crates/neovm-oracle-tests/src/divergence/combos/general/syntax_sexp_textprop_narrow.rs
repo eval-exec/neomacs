@@ -27,12 +27,11 @@ fn divergence_forward_sexp_across_syntax_property() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_scan_lists_with_textprop_syntax() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 9 35)""##]];
+    let expect = expect_test::expect![[r#""OK (16 nil nil \"(a (b (c) d) e)\" t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "(a (b (c) d) e)")
@@ -42,7 +41,7 @@ fn divergence_scan_lists_with_textprop_syntax() {
     (list p1 p2
           (= p1 17)
           (buffer-string)
-          (= (buffer-size) 15)))) #"#,
+          (= (buffer-size) 15)))) "#,
         expect,
     );
 }
@@ -124,12 +123,11 @@ fn divergence_kill_sexp_with_undo_markers() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_transpose_sexps_with_overlays() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 15 35)""##]];
+    let expect = expect_test::expect![[r#""OK (#(\"(aaa ccc bbb ddd)\" 1 4 (group aaa) 9 12 (group bbb)) 6 9 bbb aaa t nil nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "(aaa bbb ccc ddd)")
@@ -145,7 +143,7 @@ fn divergence_transpose_sexps_with_overlays() {
           (get-text-property 2 'group)
           (eq (get-text-property 2 'group) 'aaa)
           (get-text-property 6 'group)
-          (= (buffer-size) 19)))) #"#,
+          (= (buffer-size) 19)))) "#,
         expect,
     );
 }
@@ -178,12 +176,11 @@ fn divergence_mark_sexp_narrow_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_parse_partial_sexp_depth() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 10 35)""##]];
+    let expect = expect_test::expect![[r#""OK (2 3 1 t t nil t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "(a (b (c (d) e) f) g)")
@@ -194,17 +191,16 @@ fn divergence_parse_partial_sexp_depth() {
           (>= (nth 0 p1) 0)
           (>= (nth 0 p2) (nth 0 p1))
           (>= (nth 0 p3) (nth 0 p2))
-          (= (buffer-size) 21)))) #"#,
+          (= (buffer-size) 21)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_syntax_property_string_fence() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 12 33)""##]];
+    let expect = expect_test::expect![[r#""OK (20 25 t t \"before\\\"quoted text\\\"after\")""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "before\"quoted text\"after")
@@ -217,17 +213,16 @@ fn divergence_syntax_property_string_fence() {
       (list p1 p2
             (= p1 20)
             (= p2 25)
-            (buffer-string))))) #"#,
+            (buffer-string))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_insert_parentheses_balancing() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 14 51)""##]];
+    let expect = expect_test::expect![[r#""OK (\"alpha () beta gamma\" \"(alpha () beta) gamma\" nil 40 t 97 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "alpha beta gamma")
@@ -242,7 +237,7 @@ fn divergence_insert_parentheses_balancing() {
           (char-after 1)
           (= (char-after 1) 40)
           (char-after (1- (point-max)))
-          (= (char-after (1- (point-max))) 41)))) #"#,
+          (= (char-after (1- (point-max))) 41)))) "#,
         expect,
     );
 }

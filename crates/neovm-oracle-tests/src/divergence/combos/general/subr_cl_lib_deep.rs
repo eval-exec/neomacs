@@ -3,7 +3,6 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_flet_labels() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -19,12 +18,11 @@ fn divergence_cl_flet_labels() {
           (test-fact-xxx 5)
           (= (test-fact-xxx 5) 120)
           (test-fact-xxx 10)
-          (= (test-fact-xxx 10) 3628800)))) #"#,
+          (= (test-fact-xxx 10) 3628800)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_flet_temporary_override() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -41,12 +39,11 @@ fn divergence_cl_flet_temporary_override() {
              (test-fo-xxx 5))
            50)
         (test-fo-xxx 5)
-        (= (test-fo-xxx 5) 10))) #"#,
+        (= (test-fo-xxx 5) 10))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_macrolet_expansion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -58,12 +55,11 @@ fn divergence_cl_macrolet_expansion() {
                   (list 'let (list (list a b) (list b a))
                         (list 'list a b))))
     (let ((x 1) (y 2))
-      (test-swap-xxx x y)))) #"#,
+      (test-swap-xxx x y)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_symbol_macrolet() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -77,12 +73,11 @@ fn divergence_cl_symbol_macrolet() {
           (+ test-pi-xxx 1)
           (= (+ test-pi-xxx 1) 31416)
           (* test-pi-xxx 2)
-          (= (* test-pi-xxx 2) 62830)))) #"#,
+          (= (* test-pi-xxx 2) 62830)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_the_and_check() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -97,12 +92,11 @@ fn divergence_cl_the_and_check() {
         (cl-the cons '(1 2))
         (equal (cl-the cons '(1 2)) '(1 2))
         (cl-the number 3.14)
-        (= (cl-the number 3.14) 3.14))) #"#,
+        (= (cl-the number 3.14) 3.14))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_eval_when() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -117,12 +111,11 @@ fn divergence_cl_eval_when() {
         (eq test-ew-xxx 'run-time)
         (eval-when (eval) (+ 1 2))
         (= (eval-when (eval) (+ 1 2)) 3)
-        (eval-when (compile) 'skipped))) #"#,
+        (eval-when (compile) 'skipped))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_locally_declarations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -138,17 +131,16 @@ fn divergence_cl_locally_declarations() {
           (* 10 10)
           (= (* 10 10) 100)
           (list 1 2 3)
-          (equal (list 1 2 3) '(1 2 3))))) #"#,
+          (equal (list 1 2 3) '(1 2 3))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_assoc_rassoc_extended() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 13 35)""##]];
+    let expect = expect_test::expect![[r#""OK ((\"a\" . 1) t (a . 4) t (\"b\" . 2) t (b . 5) t 5 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((alist '(("a" . 1) ("b" . 2) ("c" . 3)
@@ -162,12 +154,11 @@ fn divergence_cl_assoc_rassoc_extended() {
           (rassoc 5 alist)
           (equal (rassoc 5 alist) '(b . 5))
           (length alist)
-          (= (length alist) 5)))) #"#,
+          (= (length alist) 5)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_subseq_substitute() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -184,12 +175,11 @@ fn divergence_cl_subseq_substitute() {
         (cl-substitute 99 3 '(1 2 3 4 3 5) :count 1)
         (equal (cl-substitute 99 3 '(1 2 3 4 3 5) :count 1) '(1 2 99 4 3 5))
         (cl-remove 3 '(1 2 3 4 3 5))
-        (equal (cl-remove 3 '(1 2 3 4 3 5)) '(1 2 4 5)))) #"#,
+        (equal (cl-remove 3 '(1 2 3 4 3 5)) '(1 2 4 5)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_merge_sort_stable() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -208,7 +198,7 @@ fn divergence_cl_merge_sort_stable() {
                           (lambda (x y) (< (cdr x) (cdr y))))
           (= (length (cl-stable-sort (copy-list '((a . 1) (b . 1) (c . 2)))
                                      (lambda (x y) (< (cdr x) (cdr y)))))
-             3)))) #"#,
+             3)))) "#,
         expect,
     );
 }

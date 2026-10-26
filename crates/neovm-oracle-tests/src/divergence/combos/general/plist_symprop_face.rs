@@ -32,12 +32,11 @@ fn divergence_plist_put_get_remove_cycle() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_symbol_plist_operations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 15 41)""##]];
+    let expect = expect_test::expect![[r#""OK (val1 t 42 t (a b c) t nil t (prop1 val1 prop2 42 prop3 (a b c)) t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((sym (make-symbol "test-sym-pl-xxx")))
@@ -53,7 +52,7 @@ fn divergence_symbol_plist_operations() {
           (get sym 'nonexistent)
           (null (get sym 'nonexistent))
           (symbol-plist sym)
-          (listp (symbol-plist sym))))) #"#,
+          (listp (symbol-plist sym))))) "#,
         expect,
     );
 }
@@ -81,12 +80,11 @@ fn divergence_face_attribute_operations() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_plist_member_vs_get() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 12 48)""##]];
+    let expect = expect_test::expect![[r#""OK (1 t nil t 3 t (:b nil :c 3) nil t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((pl '(:a 1 :b nil :c 3)))
@@ -99,17 +97,16 @@ fn divergence_plist_member_vs_get() {
           (plist-member pl :b)
           (plist-member pl :d)
           (null (plist-member pl :d))
-          (not (null (plist-member pl :b)))))) #"#,
+          (not (null (plist-member pl :b)))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_symbol_function_plist_interplay() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 14 68)""##]];
+    let expect = expect_test::expect![[r#""OK (t t \"test function\" t (lambda (x) t) t 6 t nil nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defun test-sfpi-xxx (x) (+ x 1))
@@ -124,17 +121,16 @@ fn divergence_symbol_function_plist_interplay() {
         (funcall 'test-sfpi-xxx 5)
         (= (funcall 'test-sfpi-xxx 5) 6)
         (documentation 'test-sfpi-xxx)
-        (string= (documentation 'test-sfpi-xxx) "test function"))) #"#,
+        (string= (documentation 'test-sfpi-xxx) "test function"))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_face_remap_alist() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 11 56)""##]];
+    let expect = expect_test::expect![[r#""OK ([face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] nil t bold t italic t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (list (facep 'default)
@@ -146,17 +142,16 @@ fn divergence_face_remap_alist() {
         (face-attribute 'bold :weight)
         (eq (face-attribute 'bold :weight) 'bold)
         (face-attribute 'italic :slant)
-        (eq (face-attribute 'italic :slant) 'italic))) #"#,
+        (eq (face-attribute 'italic :slant) 'italic))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_set_plist_with_hash() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 21 52)""##]];
+    let expect = expect_test::expect![[r#""OK (t 1 t (x y z) t 42 t 3 3 t 3 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((sym (intern "test-sph-xxx"))
@@ -178,12 +173,11 @@ fn divergence_set_plist_with_hash() {
             (hash-table-count stored-ht)
             (= (hash-table-count stored-ht) 3)
             (gethash 'c (get sym 'hash))
-            (= (gethash 'c (get sym 'hash)) 3))))) #"#,
+            (= (gethash 'c (get sym 'hash)) 3))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_plist_to_alist_conversion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -200,17 +194,16 @@ fn divergence_plist_to_alist_conversion() {
             (assoc :age al)
             (= (cdr (assoc :age al)) 30)
             (assoc :roles al)
-            (equal (cdr (assoc :roles al)) '(admin editor)))))) #"#,
+            (equal (cdr (assoc :roles al)) '(admin editor)))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_face_all_attributes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 11 35)""##]];
+    let expect = expect_test::expect![[r#""OK (t t t [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defface test-comp-xxx '((t :foreground "blue" :background "yellow" :underline t))
@@ -222,7 +215,7 @@ fn divergence_face_all_attributes() {
           (equal (nth 1 attrs) "yellow")
           (equal (nth 2 attrs) t)
           (facep 'test-comp-xxx)
-          (= (length attrs) 3)))) #"#,
+          (= (length attrs) 3)))) "#,
         expect,
     );
 }

@@ -3,12 +3,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_char_width_various_chars() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 13 43)""##]];
+    let expect = expect_test::expect![[r#""OK (1 t 1 t 8 t 0 nil 5 t 6 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (list (char-width ?A)
@@ -22,12 +21,11 @@ fn divergence_char_width_various_chars() {
         (string-width "hello")
         (= (string-width "hello") 5)
         (string-width "abc\ndef")
-        (= (string-width "abc\ndef") 6))) #"#,
+        (= (string-width "abc\ndef") 6))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_truncate_string_to_width() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -42,17 +40,16 @@ fn divergence_truncate_string_to_width() {
         (truncate-string-to-width "hi" 5)
         (string= (truncate-string-to-width "hi" 5) "hi   ")
         (truncate-string-to-width "hello" 3 t)
-        (string= (truncate-string-to-width "hello" 3 t) "hel"))) #"#,
+        (string= (truncate-string-to-width "hello" 3 t) "hel"))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_string_pad_alignment() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 9 48)""##]];
+    let expect = expect_test::expect![[r#""OK (\"left      \" t \"     right\" t \"42   \" t \"00042\" t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (list (format "%-10s" "left")
@@ -62,7 +59,7 @@ fn divergence_string_pad_alignment() {
         (format "%-5d" 42)
         (string= (format "%-5d" 42) "42   ")
         (format "%05d" 42)
-        (string= (format "%05d" 42) "00042"))) #"#,
+        (string= (format "%05d" 42) "00042"))) "#,
         expect,
     );
 }
@@ -92,12 +89,11 @@ fn divergence_buffer_display_width() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_string_make_multibyte_unibyte() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 14 35)""##]];
+    let expect = expect_test::expect![[r#""OK (nil t nil 5 t 5 t 4 t 4 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((ascii "hello")
@@ -112,12 +108,11 @@ fn divergence_string_make_multibyte_unibyte() {
           (string-bytes multi)
           (>= (string-bytes multi) 2)
           (length multi)
-          (= (length multi) 2)))) #"#,
+          (= (length multi) 2)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_string_composition_check() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -129,17 +124,16 @@ fn divergence_string_composition_check() {
         (null (compose-region-p 1 1))
         (stringp (buffer-string))
         (buffer-string)
-        (= (buffer-size) 0))) #"#,
+        (= (buffer-size) 0))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_char_charset() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 10 46)""##]];
+    let expect = expect_test::expect![[r#""OK (t t t 65 t 65 t 233 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (list (charsetp 'ascii)
@@ -150,12 +144,11 @@ fn divergence_char_charset() {
         (decode-char 'unicode 65)
         (= (decode-char 'unicode 65) 65)
         (decode-char 'unicode 233)
-        (= (decode-char 'unicode 233) 233))) #"#,
+        (= (decode-char 'unicode 233) 233))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_fill_region_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -171,17 +164,16 @@ fn divergence_fill_region_basic() {
           (every (lambda (l) (<= (length l) 35)) lines)
           (buffer-string)
           (> (buffer-size) 50)
-          (= (length lines) (length lines))))) #"#,
+          (= (length lines) (length lines))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_indent_rigidly_negative() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 12 49)""##]];
+    let expect = expect_test::expect![[r#""OK (\"  line1\\n  line2\\n  line3\\n\" 0 t \"line1\\nline2\\nline3\\n\" 0 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "    line1\n    line2\n    line3\n")
@@ -194,17 +186,16 @@ fn divergence_indent_rigidly_negative() {
             (= (string-match "  line1" s1) 0)
             s2
             (string-match "line1" s2)
-            (= (string-match "line1" s2) 0))))) #"#,
+            (= (string-match "line1" s2) 0))))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_current_column_with_tabs() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 15 41)""##]];
+    let expect = expect_test::expect![[r#""OK (5 5 13 nil t t \"hello\tworld\" t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "hello\tworld")
@@ -220,7 +211,7 @@ fn divergence_current_column_with_tabs() {
               (= col2 5)
               (> col3 col1)
               (buffer-string)
-              (= (buffer-size) 11)))))) #"#,
+              (= (buffer-size) 11)))))) "#,
         expect,
     );
 }

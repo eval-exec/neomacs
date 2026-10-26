@@ -3,7 +3,6 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_record_type_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -23,7 +22,7 @@ fn divergence_cl_record_type_basic() {
           (setf (test-rec-xxx-a r) 99)
           (= (test-rec-xxx-a r) 99)
           (test-rec-xxx-b r)
-          (= (test-rec-xxx-b r) 2)))) #"#,
+          (= (test-rec-xxx-b r) 2)))) "#,
         expect,
     );
 }
@@ -52,7 +51,6 @@ fn divergence_eval_defun_with_closure_capture() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_macro_expansion_nested_eval() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -71,17 +69,16 @@ fn divergence_macro_expansion_nested_eval() {
         (equal (macroexpand '(test-nme-xxx + 10 20))
                '(+ (list 10 20)))
         (eval (macroexpand '(test-nme-xxx + 10 20)))
-        (= (eval (macroexpand '(test-nme-xxx + 10 20))) 30))) #"#,
+        (= (eval (macroexpand '(test-nme-xxx + 10 20))) 30))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_lambda_in_eval_with_dynvar() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 14 39)""##]];
+    let expect = expect_test::expect![[r#""OK (outer t inner nil outer t outer t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-led-xxx 'outer)
@@ -96,17 +93,16 @@ fn divergence_lambda_in_eval_with_dynvar() {
           (funcall fn)
           (eq (funcall fn) 'outer)
           test-led-xxx
-          (eq test-led-xxx 'outer)))) #"#,
+          (eq test-led-xxx 'outer)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_closure_let_binding_evaluation_order() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 13 50)""##]];
+    let expect = expect_test::expect![[r#""OK ((1 2 3 4 5) nil nil t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-lbe-log-xxx nil)
@@ -120,12 +116,11 @@ fn divergence_closure_let_binding_evaluation_order() {
           (equal (nreverse test-lbe-log-xxx) '(1 2 3 4 5))
           (= (length test-lbe-log-xxx) 5)
           (= (car test-lbe-log-xxx) 5)
-          (= (car (last test-lbe-log-xxx)) 1)))) #"#,
+          (= (car (last test-lbe-log-xxx)) 1)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_record_vector_accessor_compatibility() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -143,17 +138,16 @@ fn divergence_record_vector_accessor_compatibility() {
           (test-rva-xxx-x r) (= (test-rva-xxx-x r) 10)
           (aset r 1 99)
           (aref r 1) (= (aref r 1) 99)
-          (test-rva-xxx-y r) (= (test-rva-xxx-y r) 99)))) #"#,
+          (test-rva-xxx-y r) (= (test-rva-xxx-y r) 99)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_defalias_and_funcall() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 12 42)""##]];
+    let expect = expect_test::expect![[r#""OK (6 t 11 t nil t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defun test-da-original-xxx (x) (+ x 1))
@@ -166,17 +160,16 @@ fn divergence_defalias_and_funcall() {
             (symbol-function 'test-da-original-xxx))
         (fboundp 'test-da-alias-xxx)
         (fboundp 'test-da-original-xxx)
-        (functionp 'test-da-alias-xxx))) #"#,
+        (functionp 'test-da-alias-xxx))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_advised_closure_in_eval() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 15 39)""##]];
+    let expect = expect_test::expect![[r#""OK (110 t 120 t 140 t nil 10 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defun test-acie-xxx (x) (* x 2))
@@ -192,12 +185,11 @@ fn divergence_advised_closure_in_eval() {
           (advice-remove 'test-acie-xxx
                           (lambda (r) (+ r 100)))
           (test-acie-xxx 5)
-          (= (test-acie-xxx 5) 10)))) #"#,
+          (= (test-acie-xxx 5) 10)))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_defvar_vs_defconst_eval() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -216,17 +208,16 @@ fn divergence_defvar_vs_defconst_eval() {
         (not (constantp 'test-dvc-var-xxx))
         (constantp 'test-dvc-const-xxx)
         (special-variable-p 'test-dvc-var-xxx)
-        (special-variable-p 'test-dvc-const-xxx))) #"#,
+        (special-variable-p 'test-dvc-const-xxx))) "#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_function_interactive_spec() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 8 45)""##]];
+    let expect = expect_test::expect![[r#""OK (t t (interactive \"nA: \\nnB: \") t 7 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defun test-fis-xxx (a b) (interactive "nA: \nnB: ") (+ a b))
@@ -235,7 +226,7 @@ fn divergence_function_interactive_spec() {
         (interactive-form 'test-fis-xxx)
         (equal (interactive-form 'test-fis-xxx) '(interactive "nA: \nnB: "))
         (funcall 'test-fis-xxx 3 4)
-        (= (funcall 'test-fis-xxx 3 4) 7))) #"#,
+        (= (funcall 'test-fis-xxx 3 4) 7))) "#,
         expect,
     );
 }
