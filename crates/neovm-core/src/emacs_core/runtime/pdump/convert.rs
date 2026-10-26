@@ -5292,6 +5292,8 @@ pub(crate) fn load_obarray(
     // can only catch a dumper bug and a duplicate cannot corrupt memory --
     // from_dump just overwrites the slot. Debug builds (where every
     // round-trip test runs) keep the check; release trusts the dump.
+    // (Member and function-unbound entries that name a missing slot are
+    // checked by from_dump in every profile: it returns the typed error.)
     // Measured ~4M Ir across the dedup sets on a 17.6K-symbol load.
     #[cfg(debug_assertions)]
     let mut seen_symbol_ids = FxHashSet::default();
@@ -5442,12 +5444,6 @@ pub(crate) fn load_obarray(
                     sym_id.0
                 )));
             }
-            if !seen_symbol_ids.contains(&sym_id) {
-                return Err(DumpError::DeserializationError(format!(
-                    "pdump obarray is inconsistent: {label} entry references missing symbol slot {}",
-                    sym_id.0
-                )));
-            }
             loaded.push(sym_id);
         }
         Ok(loaded)
@@ -5461,7 +5457,7 @@ pub(crate) fn load_obarray(
         global_members,
         function_unbound,
         dob.function_epoch,
-    );
+    )?;
 
     // Second pass: reconstruct BLVs for LOCALIZED symbols.
     //

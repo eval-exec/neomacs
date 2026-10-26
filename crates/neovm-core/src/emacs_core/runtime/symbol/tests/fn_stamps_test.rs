@@ -415,7 +415,8 @@ fn from_dump_raises_the_floor_to_the_restored_clock() {
     crate::test_utils::init_test_tracing();
     let _on = StampsOn::new();
     let id = intern("neovm--fs-dumped");
-    let ob = Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 1234);
+    let ob =
+        Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 1234).expect("empty dump restores");
     assert_eq!(ob.function_epoch(), 1234);
     assert!(!ob.fn_unchanged_since(id, 1233));
     assert!(ob.fn_unchanged_since(id, 1234));

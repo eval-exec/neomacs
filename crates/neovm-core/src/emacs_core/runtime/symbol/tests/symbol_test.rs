@@ -114,7 +114,8 @@ fn every_obarray_has_its_own_generation() {
     assert_ne!(a.generation(), b.generation());
     assert_ne!(a.generation(), c.generation());
     assert_ne!(b.generation(), c.generation());
-    let dumped = Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 0);
+    let dumped =
+        Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 0).expect("empty dump restores");
     assert!(![a.generation(), b.generation(), c.generation()].contains(&dumped.generation()));
 }
 

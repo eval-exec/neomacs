@@ -50,7 +50,8 @@ fn canonical_pair_tracks_function_writes_and_restored_clocks() {
         clone.dispatch_cells.function_epoch(),
         obarray.function_epoch()
     );
-    let restored = Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 777);
+    let restored =
+        Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 777).expect("empty dump restores");
     assert_eq!(restored.dispatch_cells.function_epoch(), 777);
     assert!(restored.dispatch_cells.debug_on_next_call_armed_fast());
 }
@@ -69,7 +70,10 @@ fn canonical_pair_pointer_from_allocation_root_survives_cold_replacement() {
     assert_eq!(unsafe { cells.as_ref() }.function_epoch(), 7);
     // SAFETY: cold full replacement retains the allocation and field address;
     // no generated symbol pointer or manager reference remains active.
-    unsafe { *manager = Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 13) };
+    unsafe {
+        *manager = Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 13)
+            .expect("empty dump restores");
+    }
     // SAFETY: storage is live; the replacement write phase has completed.
     let pair = unsafe { cells.as_ref() };
     assert_eq!(pair.function_epoch(), 13);

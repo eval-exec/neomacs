@@ -2013,7 +2013,9 @@ fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
     }
 }
 
-// Same as above: the guard it exercises is `#[cfg(debug_assertions)]`-only.
+// The rejection now comes from `Obarray::from_dump` in every profile; this
+// snapshot-level test stays debug-gated like the duplicate-slot test above,
+// and `decode_hardening_test` covers both restore loops in every profile.
 #[cfg(debug_assertions)]
 #[test]
 fn test_restore_snapshot_rejects_global_member_without_symbol_entry() {
@@ -2027,7 +2029,7 @@ fn test_restore_snapshot_rejects_global_member_without_symbol_entry() {
     match result {
         Err(DumpError::DeserializationError(message)) => {
             assert!(
-                message.contains("global_members entry references missing symbol slot"),
+                message.contains("global member references missing symbol slot"),
                 "unexpected error: {message}"
             );
         }

@@ -372,6 +372,50 @@ fn pdump_obarray_row_head_has_portable_little_endian_bytes() {
     assert!(decoded.declared_special().unwrap());
 }
 
+/// A member entry that names a slot with no symbol row must surface as the
+/// typed dump error in every profile: release builds run no membership
+/// pre-pass, so the restore loop itself has to report it (not panic).
+#[test]
+fn pdump_rejects_global_member_without_a_symbol_row() {
+    use super::super::DumpError;
+    let _symbols = SymbolRemap::new("pdump-missing-global-member");
+    let heap = empty_heap();
+    let mut decoder = convert::LoadDecoder::new(&heap);
+    let mut dob = residual_obarray(symbol_data());
+    dob.symbols.clear();
+    dob.global_members = vec![DUMP_SYMBOL];
+    let error = convert::load_obarray(&mut decoder, &dob).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            DumpError::DeserializationError(message)
+                if message.contains("global member references missing symbol slot")
+        ),
+        "{error:?}"
+    );
+}
+
+/// Same for the function-unbound list, whose restore loop is separate.
+#[test]
+fn pdump_rejects_function_unbound_without_a_symbol_row() {
+    use super::super::DumpError;
+    let _symbols = SymbolRemap::new("pdump-missing-function-unbound");
+    let heap = empty_heap();
+    let mut decoder = convert::LoadDecoder::new(&heap);
+    let mut dob = residual_obarray(symbol_data());
+    dob.symbols.clear();
+    dob.function_unbound = vec![DUMP_SYMBOL];
+    let error = convert::load_obarray(&mut decoder, &dob).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            DumpError::DeserializationError(message)
+                if message.contains("function-unbound entry references missing symbol slot")
+        ),
+        "{error:?}"
+    );
+}
+
 #[test]
 fn pdump_rejects_truncated_fixed_symbol_row() {
     let _symbols = SymbolRemap::new("pdump-truncated-fixed-symbol-row");

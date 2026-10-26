@@ -69,6 +69,7 @@ use super::intern::{
 use super::value::{Value, ValueKind, VecLikeType};
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::forward::FwdDescriptor;
+use crate::emacs_core::pdump::DumpError;
 use crate::gc_trace::GcTrace;
 use crate::heap_types::LispString;
 use crate::tagged::header::AtomicTaggedValue;
@@ -5007,12 +5008,16 @@ impl Obarray {
     }
 
     /// Reconstruct an Obarray from pdump data.
+    ///
+    /// A global-member or function-unbound entry whose slot has no symbol row
+    /// is a corrupt dump: return the typed [`DumpError`] instead of panicking
+    /// (release builds run no member pre-validation).
     pub(crate) fn from_dump(
         symbols: Vec<(SymId, LispSymbol)>,
         global_members: Vec<SymId>,
         function_unbound: Vec<SymId>,
         function_epoch: u64,
-    ) -> Self {
+    ) -> Result<Self, DumpError> {
         let max_slot = symbols
             .iter()
             .map(|(id, _)| Self::slot_index(*id))
@@ -5049,18 +5054,24 @@ impl Obarray {
             ob.symbols.ensure(Self::slot_index(id)).publish_fill(sym);
         }
         for id in global_members {
-            let sym = ob
-                .slot_mut(id)
-                .expect("pdump global member must reference a loaded symbol");
+            let sym = ob.slot_mut(id).ok_or_else(|| {
+                DumpError::DeserializationError(format!(
+                    "pdump obarray is inconsistent: global member references missing symbol slot {}",
+                    id.0
+                ))
+            })?;
             if !sym.interned_global {
                 sym.interned_global = true;
                 ob.global_member_count += 1;
             }
         }
         for id in function_unbound {
-            let sym = ob
-                .slot_mut(id)
-                .expect("pdump function-unbound entry must reference a loaded symbol");
+            let sym = ob.slot_mut(id).ok_or_else(|| {
+                DumpError::DeserializationError(format!(
+                    "pdump obarray is inconsistent: function-unbound entry references missing symbol slot {}",
+                    id.0
+                ))
+            })?;
             sym.function_unbound = true;
             // The flag/cell invariant (`LispSymbol::function_unbound`): a dump
             // may mark only a symbol whose restored cell is NIL.
@@ -5072,7 +5083,7 @@ impl Obarray {
         // The cells were written without stamps: nothing validated before
         // the restored clock may be proven current through them.
         ob.symbols.raise_fn_floor(function_epoch);
-        ob
+        Ok(ob)
     }
 }
 
