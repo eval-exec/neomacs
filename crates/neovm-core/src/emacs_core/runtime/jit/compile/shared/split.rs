@@ -239,11 +239,12 @@ impl SharedJit {
 /// (`build`) against the module of the compile's allocator, package the
 /// function it hands over, and compile the package in line.
 pub(super) fn define_split(
-    jit: &mut Option<SharedJit>,
+    jit: &mut Option<Box<SharedJit>>,
     build: impl FnOnce(&mut JitSink<'_>) -> Result<FuncId, CompileError>,
 ) -> Result<JitDefined, CompileError> {
     let setup_phase = enter_phase(CompilePhase::Setup);
-    let jit = jit.get_or_insert_with(SharedJit::fresh);
+    let jit = jit.get_or_insert_with(|| Box::new(SharedJit::fresh()));
+    let jit = &mut **jit;
     let choice = active_regalloc_choice();
     jit.ensure_module(choice, super::super::jit_tier2().on)?;
     drop(setup_phase);
@@ -415,13 +416,14 @@ impl SharedJit {
 
 /// Selected twin of the original frontend packaging path.
 pub(super) fn define_split_selected(
-    jit: &mut Option<SharedJit>,
+    jit: &mut Option<Box<SharedJit>>,
     array_profile: bool,
     sink_versions: bool,
     build: impl FnOnce(&mut JitSink<'_>) -> Result<FuncId, CompileError>,
 ) -> Result<JitDefined, CompileError> {
     let setup_phase = enter_phase(CompilePhase::Setup);
-    let jit = jit.get_or_insert_with(SharedJit::fresh);
+    let jit = jit.get_or_insert_with(|| Box::new(SharedJit::fresh()));
+    let jit = &mut **jit;
     let choice = active_regalloc_choice();
     jit.ensure_module_selected(
         choice,

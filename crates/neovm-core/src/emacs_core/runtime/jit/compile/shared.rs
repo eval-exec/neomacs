@@ -115,6 +115,17 @@ struct SharedModule {
     leaves: u32,
 }
 
+/// The TLS-resident handle of this thread's persistent backend.
+///
+/// [`SharedJit`] owns tables sized by the number of shims (each module's
+/// [`ShimIds`]), so keeping it inline in the thread-local made every new shim
+/// grow every thread's static TLS block and move the `%fs` offset of every
+/// later thread-local. The backend lives on the heap; TLS keeps only this
+/// fixed-size handle, and the assert pins that shape: an edit that inlines
+/// the backend (or otherwise grows the cell) fails to build.
+type SharedJitCell = RefCell<Option<Box<SharedJit>>>;
+static_assertions::assert_eq_size!(SharedJitCell, [u8; 16]);
+
 /// The persistent backend of one thread.
 struct SharedJit {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -128,7 +139,7 @@ struct SharedJit {
 }
 
 thread_local! {
-    static SHARED_JIT: RefCell<Option<SharedJit>> = const { RefCell::new(None) };
+    static SHARED_JIT: SharedJitCell = const { RefCell::new(None) };
     static STATS: Cell<CodeMemoryStats> = const {
         Cell::new(CodeMemoryStats {
             shared_leaves: 0,
@@ -220,7 +231,9 @@ pub(crate) fn reset_backend_for_test(region_bytes: Option<usize>) {
         *guard = None;
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         if let Some(bytes) = region_bytes {
-            *guard = Some(SharedJit::new(CodeArena::with_region_bytes(bytes)));
+            *guard = Some(Box::new(SharedJit::new(CodeArena::with_region_bytes(
+                bytes,
+            ))));
         }
         #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
         let _ = region_bytes;
@@ -434,11 +447,12 @@ impl SharedJit {
 }
 
 fn define_shared(
-    jit: &mut Option<SharedJit>,
+    jit: &mut Option<Box<SharedJit>>,
     build: impl FnOnce(&mut JitSink<'_>) -> Result<FuncId, CompileError>,
 ) -> Result<JitDefined, CompileError> {
     let setup_phase = enter_phase(CompilePhase::Setup);
-    let jit = jit.get_or_insert_with(SharedJit::fresh);
+    let jit = jit.get_or_insert_with(|| Box::new(SharedJit::fresh()));
+    let jit = &mut **jit;
     let choice = active_regalloc_choice();
     jit.ensure_module(choice, super::jit_tier2().on)?;
     drop(setup_phase);
@@ -760,13 +774,14 @@ impl SharedJit {
 }
 
 fn define_shared_selected(
-    jit: &mut Option<SharedJit>,
+    jit: &mut Option<Box<SharedJit>>,
     array_profile: bool,
     sink_versions: bool,
     build: impl FnOnce(&mut JitSink<'_>) -> Result<FuncId, CompileError>,
 ) -> Result<JitDefined, CompileError> {
     let setup_phase = enter_phase(CompilePhase::Setup);
-    let jit = jit.get_or_insert_with(SharedJit::fresh);
+    let jit = jit.get_or_insert_with(|| Box::new(SharedJit::fresh()));
+    let jit = &mut **jit;
     let choice = active_regalloc_choice();
     jit.ensure_module_selected(choice, super::jit_tier2().on, array_profile, sink_versions)?;
     drop(setup_phase);
