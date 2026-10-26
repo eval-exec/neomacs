@@ -24813,10 +24813,13 @@ fn drain_probe_median(samples: &mut [u64]) -> u64 {
 /// live graph every cycle after the STW bootstrap.
 #[allow(dead_code)]
 fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
-    crate::test_utils::init_test_tracing();
-    // Print the per-cycle `concurrent_termination ... kinds[...]` trace lines
-    // alongside the in-test capture (ground truth under --no-capture).
+    // Enable the stderr layer before its one-time initialization. Print the
+    // legacy `concurrent_termination ... kinds[...]` message alongside the
+    // structured fields and in-test capture (ground truth under --no-capture).
+    // SAFETY: this ignored nextest profiling aid runs alone in its process;
+    // set the diagnostic switch before initializing logging/runtime threads.
     unsafe { std::env::set_var("NEOVM_GC_TRACE", "1") };
+    crate::test_utils::init_test_tracing();
     if !pdump {
         unsafe { std::env::set_var("NEOVM_DISABLE_PDUMP", "1") };
     }

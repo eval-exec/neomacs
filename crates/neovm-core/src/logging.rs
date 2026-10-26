@@ -295,6 +295,12 @@ fn init_inner(target: LogTarget) -> Option<tracing_appender::non_blocking::Worke
         let layer = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
             .with_ansi(false)
+            // Preserve the legacy message at column zero for pause parsers;
+            // structured event fields follow it. This event-only layer has
+            // no span prefixes, timestamps, levels or target labels.
+            .without_time()
+            .with_level(false)
+            .with_target(false)
             .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
                 metadata.is_event()
                     && metadata.target() == "neovm::gc"

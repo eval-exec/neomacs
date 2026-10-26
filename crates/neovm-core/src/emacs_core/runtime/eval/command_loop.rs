@@ -6,6 +6,25 @@
 use super::*;
 use crate::tagged::gc::MarkPhase;
 
+/// Labels for the structured GC diagnostics; text compatibility stays in the
+/// event message for existing pause-analysis tools.
+#[derive(Clone, Copy)]
+enum GcTraceKind {
+    SynchronousRecoveryPending,
+    ConcurrentStart,
+    ConcurrentTermination,
+}
+
+impl GcTraceKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::SynchronousRecoveryPending => "synchronous_recovery_pending",
+            Self::ConcurrentStart => "concurrent_start",
+            Self::ConcurrentTermination => "concurrent_termination",
+        }
+    }
+}
+
 /// Fixed command-loop identities. Each spelling is resolved once per registry
 /// epoch. A use after arbitrary Lisp
 /// must call `id` again: callbacks may unintern a symbol or replace the registry.
@@ -2553,6 +2572,8 @@ impl Context {
                                     // excludes heap/obarray/TLS writers and callbacks. The
                                     // complete owner census reseeds every external root before
                                     // the unlaunched cycle drains marking and sweep.
+                                    let recovery_cycle =
+                                        (*heap_ptr).gc_collections().saturating_add(1);
                                     let drain = (*heap_ptr).drain_to_quiescent(|heap| {
                                         self.seed_registered_mutator_roots_world_stopped(heap);
                                     });
@@ -2561,12 +2582,13 @@ impl Context {
                                         Err(error) => {
                                             // Preserve incomplete storage and work for explicit
                                             // retry; do not start or account another collection.
-                                            if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1")
-                                            {
-                                                eprintln!(
-                                                    "NEOVM_GC synchronous recovery pending: {error}"
-                                                );
-                                            }
+                                            tracing::debug!(
+                                                target: "neovm::gc",
+                                                kind = GcTraceKind::SynchronousRecoveryPending.as_str(),
+                                                cycle = recovery_cycle,
+                                                error = %error,
+                                                "NEOVM_GC synchronous recovery pending: {error}"
+                                            );
                                             return;
                                         }
                                     }
@@ -2834,6 +2856,7 @@ impl Context {
         let specpdl_depth = self.specpdl.len();
         // SAFETY: the capture loan ended at launch; this current owner's
         // original heap designator is again valid for exclusive statistics.
+        let cycle = self.tagged_heap.gc_collections().saturating_add(1);
         let hs = unsafe { (*heap_ptr).handshake_stats_mut() };
         hs.last_start_obsnap_us = obsnap_us;
         hs.last_start_roots = roots_breakdown;
@@ -2852,8 +2875,32 @@ impl Context {
             .find(|(name, _, _)| *name == "marker_heads")
             .map(|&(_, _, count)| count)
             .unwrap_or(0);
-        if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
-            eprintln!(
+        if tracing::event_enabled!(target: "neovm::gc", tracing::Level::DEBUG, kind, cycle) {
+            let groups = hs.last_start_roots.format_nonzero();
+            let probes = hs.format_probes();
+            tracing::debug!(
+                target: "neovm::gc",
+                kind = GcTraceKind::ConcurrentStart.as_str(),
+                cycle,
+                total_us,
+                pace_bytes,
+                pace_threshold = pace_thr,
+                pace_lead,
+                clear_us = hs.last_start_clear_us,
+                clear_cons_us = hs.last_start_clear_cons_us,
+                clear_noncons_us = hs.last_start_clear_noncons_us,
+                clear_mapped_us = hs.last_start_clear_mapped_us,
+                runtime_us = hs.last_start_runtime_us,
+                runtime_roots = hs.last_start_runtime_roots,
+                remembered_us = hs.last_start_remembered_us,
+                remembered_roots = hs.last_start_remembered_roots,
+                obsnap_us,
+                roots_us = hs.last_start_roots.total_us,
+                conssnap_us = hs.last_start_conssnap_us,
+                vecsnap_us = hs.last_start_vecsnap_us,
+                jobasm_us = hs.last_start_jobasm_us,
+                groups = %groups,
+                probes = %probes,
                 "NEOVM_GC concurrent_start {total_us}us \
                  pace[bytes={pace_bytes} thr={pace_thr} lead={pace_lead}] \
                  [clear={}us[cons={} noncons={} \
@@ -2872,8 +2919,8 @@ impl Context {
                 hs.last_start_conssnap_us,
                 hs.last_start_vecsnap_us,
                 hs.last_start_jobasm_us,
-                hs.last_start_roots.format_nonzero(),
-                hs.format_probes(),
+                groups,
+                probes,
             );
         }
         Ok(())
@@ -2975,17 +3022,52 @@ impl Context {
             .find(|(name, _, _)| *name == "marker_heads")
             .map(|&(_, _, count)| count)
             .unwrap_or(0);
-        if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+        if tracing::event_enabled!(target: "neovm::gc", tracing::Level::DEBUG, kind, cycle) {
+            let cycle = self.tagged_heap.gc_collections().saturating_add(1);
             let stats = self.tagged_heap.sweep_stats();
             let (leaf_claimed, hash_claimed) = self.tagged_heap.last_concurrent_claim_counts();
             let hs = self.tagged_heap.handshake_stats();
-            eprintln!(
+            let total_us = term_t0.elapsed().as_micros();
+            let groups = hs.last_term_ctxroots.format_nonzero();
+            let probes = hs.format_probes();
+            tracing::debug!(
+                target: "neovm::gc",
+                kind = GcTraceKind::ConcurrentTermination.as_str(),
+                cycle,
+                total_us,
+                roots_us,
+                drain_us,
+                fold_us = stats.last_termination_fold_us,
+                deferred = stats.last_termination_deferred,
+                satb = stats.last_termination_satb,
+                partial_words = stats.last_termination_partial_words,
+                str_claimed = stats.last_concurrent_str_claimed,
+                f_claimed = stats.last_concurrent_float_claimed,
+                sub_dropped = stats.last_concurrent_subr_dropped,
+                v_claimed = stats.last_concurrent_vec_claimed,
+                bc_claimed = stats.last_concurrent_bc_claimed,
+                leaf_claimed,
+                ht_claimed = hash_claimed,
+                kinds = %stats.last_termination_kinds,
+                join_us = hs.last_term_join_us,
+                runtime_us = hs.last_term_runtime_us,
+                runtime_roots = hs.last_term_runtime_roots,
+                remembered_us = hs.last_term_remembered_us,
+                remembered_roots = hs.last_term_remembered_roots,
+                ctxroots_us = hs.last_term_ctxroots.total_us,
+                newsyms_us,
+                newsyms_roots,
+                finalizer_us = hs.last_term_finalizer_us,
+                weak_us = hs.last_term_weak_us,
+                unchain_us = hs.last_term_unchain_us,
+                groups = %groups,
+                probes = %probes,
                 "NEOVM_GC concurrent_termination {}us [roots={roots_us}us drain={drain_us}us \
                  fold={}us deferred={} satb={} partial_words={} str_claimed={} f_claimed={} sub_dropped={} \
                  v_claimed={} bc_claimed={} leaf_claimed={} ht_claimed={} kinds[{}] join={}us \
                  runtime={}us({}) remembered={}us({}) ctxroots={}us newsyms={newsyms_us}us({}) \
                  finalizer={}us weak={}us unchain={}us groups[{}] probes[{}]]",
-                term_t0.elapsed().as_micros(),
+                total_us,
                 stats.last_termination_fold_us,
                 stats.last_termination_deferred,
                 stats.last_termination_satb,
@@ -3008,8 +3090,8 @@ impl Context {
                 hs.last_term_finalizer_us,
                 hs.last_term_weak_us,
                 hs.last_term_unchain_us,
-                hs.last_term_ctxroots.format_nonzero(),
-                hs.format_probes(),
+                groups,
+                probes,
             );
         }
     }
