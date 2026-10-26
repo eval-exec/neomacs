@@ -98,6 +98,7 @@ case "$profile" in
             xvfb
             xauth
             x11-utils
+            x11-xkb-utils
             xdotool
             wmctrl
             kwin-x11
@@ -110,7 +111,7 @@ case "$profile" in
             grim
             "${font_packages[@]}"
         )
-        required_commands=(gpg rg Xvfb xauth xdpyinfo xprop xwininfo xdotool wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim)
+        required_commands=(gpg rg Xvfb xauth xdpyinfo xprop xwininfo xkbcomp xdotool wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim)
         requires_libfaketime=true
         install_nerd_fonts=true
         ;;

@@ -35,6 +35,7 @@ pkgs.mkShell {
     pkgs.rr
     # Owned compositor, keyboard input, and screenshots for native GUI regressions.
     pkgs.wtype
+    pkgs.xkbcomp
     pkgs.grim
     pkgs.sway
   ];

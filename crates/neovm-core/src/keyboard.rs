@@ -7993,3 +7993,7 @@ fn key_sequence_translation_events(translation: Value, mode: SymbolMode) -> Opti
 #[cfg(test)]
 #[path = "keyboard/tests/keyboard_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "keyboard/tests/extended_keysyms_test.rs"]
+mod extended_keysyms_tests;
