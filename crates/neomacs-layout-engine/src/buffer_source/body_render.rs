@@ -60,6 +60,7 @@ pub(crate) enum BufferSourceBodyRenderOutcome {
     Complete(BufferSourcePostLoopRenderOutcome),
     SyncHorizonExhausted,
     QueryHorizonExhausted,
+    SyncStateInvalid,
 }
 
 pub(crate) struct BufferSourceWalkSetupRequest<'a> {
@@ -549,12 +550,21 @@ impl BufferSourceWalkSetup {
             buffer,
         );
 
-        if loop_outcome == crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::SyncHorizonExhausted {
-            return BufferSourceBodyRenderOutcome::SyncHorizonExhausted;
-        }
-
-        if loop_outcome == crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::QueryHorizonExhausted {
-            return BufferSourceBodyRenderOutcome::QueryHorizonExhausted;
+        use crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome;
+        match loop_outcome {
+            BufferSourceVisibleLoopOutcome::SyncHorizonExhausted => {
+                return BufferSourceBodyRenderOutcome::SyncHorizonExhausted;
+            }
+            BufferSourceVisibleLoopOutcome::QueryHorizonExhausted => {
+                return BufferSourceBodyRenderOutcome::QueryHorizonExhausted;
+            }
+            BufferSourceVisibleLoopOutcome::SyncStateInvalid => {
+                return BufferSourceBodyRenderOutcome::SyncStateInvalid;
+            }
+            BufferSourceVisibleLoopOutcome::Complete
+            | BufferSourceVisibleLoopOutcome::MiniSourcePositionReached
+            | BufferSourceVisibleLoopOutcome::QueryTargetReached
+            | BufferSourceVisibleLoopOutcome::EarlyBoundaryReached => {}
         }
 
         BufferSourceBodyRenderOutcome::Complete(self.render_tail_and_decide_retry(
@@ -582,6 +592,7 @@ impl BufferSourceWalkSetup {
     >(
         &mut self,
         begin_request: TextWindowBeginRequest,
+        sync: Option<crate::incremental_layout::edit_sync::PreparedEditSuffix>,
         output: &mut BufferSourceOutputState<'_>,
         font_metrics: &mut Option<FontMetricsService>,
         face_resolver: &FS,
@@ -600,6 +611,9 @@ impl BufferSourceWalkSetup {
         buf_access: &RustBufferAccess<'buf, B>,
     ) -> (WindowOutputEmitter, BufferSourceBodyRenderOutcome) {
         let mut output_emitter = output.begin_text_window_output(begin_request);
+        if let Some(preparation) = sync {
+            output_emitter.arm_edit_sync(preparation);
+        }
         output_emitter.set_query_target(params.query_target);
         output_emitter.set_collect_query_restarts(
             params.measurement_pixels.is_some(),

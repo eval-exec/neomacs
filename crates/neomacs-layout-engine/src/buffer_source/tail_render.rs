@@ -352,13 +352,21 @@ pub(crate) fn render_buffer_source_tail_and_decide_retry<
 where
     'surface: 'request,
 {
+    use crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome;
     use crate::window_output::MiniPrecedingZvByte;
-    if source_stop
-        == crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::QueryTargetReached
-    {
-        // GNU move_it_to stops at the stable target iterator. Complete the
-        // observed row's metrics, without EOB anchors or after-strings at the
-        // unconsumed position. The final row remains a certified prefix.
+    let finalize_prefix = match source_stop {
+        BufferSourceVisibleLoopOutcome::QueryTargetReached
+        | BufferSourceVisibleLoopOutcome::EarlyBoundaryReached => true,
+        BufferSourceVisibleLoopOutcome::Complete
+        | BufferSourceVisibleLoopOutcome::MiniSourcePositionReached
+        | BufferSourceVisibleLoopOutcome::SyncHorizonExhausted
+        | BufferSourceVisibleLoopOutcome::QueryHorizonExhausted
+        | BufferSourceVisibleLoopOutcome::SyncStateInvalid => false,
+    };
+    if finalize_prefix {
+        // Query completion and a selected edit frontier both stop before
+        // unconsumed source. Publish the captured cursor and canonically
+        // discard an empty begun row, without EOB anchors or after-strings.
         let finalized = tail_context
             .tail_finalize_request(text, charpos, false, MiniPrecedingZvByte::Unknown)
             .finalize_and_apply(TextWindowTailFinalizeState::new(
@@ -392,9 +400,15 @@ where
     let tail_progress = loop_context
         .end_of_buffer_tail_request(byte_idx, charpos, overlay_context, active_face_state)
         .with_overlay_policy(match source_stop {
-            crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::MiniSourcePositionReached =>
+            BufferSourceVisibleLoopOutcome::MiniSourcePositionReached =>
                 crate::buffer_source::row_lifecycle::BufferSourceEobOverlayPolicy::SourcePositionReached,
-            _ => crate::buffer_source::row_lifecycle::BufferSourceEobOverlayPolicy::Render,
+            BufferSourceVisibleLoopOutcome::Complete
+            | BufferSourceVisibleLoopOutcome::QueryTargetReached
+            | BufferSourceVisibleLoopOutcome::EarlyBoundaryReached
+            | BufferSourceVisibleLoopOutcome::SyncHorizonExhausted
+            | BufferSourceVisibleLoopOutcome::QueryHorizonExhausted
+            | BufferSourceVisibleLoopOutcome::SyncStateInvalid =>
+                crate::buffer_source::row_lifecycle::BufferSourceEobOverlayPolicy::Render,
         })
         .render_and_apply(
             buffer,

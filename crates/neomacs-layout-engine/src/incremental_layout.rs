@@ -644,7 +644,7 @@ impl RetainedTextWindowCursor {
 /// body rows shifted to their new positions, plus the span of newly-exposed rows
 /// that still must be laid out. Built when the window scrolled by whole rows with
 /// no text/appearance change.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ScrollReplay {
     /// Uniform vertical shift applied to every reused row's `pixel_y` (negative =
     /// scrolled up / content moved up). The removed top rows' total height.
@@ -706,7 +706,7 @@ pub struct ScrollReplay {
     /// synchronize with (GNU `try_window_id`). The walk runs unbounded and
     /// stops where the next row would begin at the plan's `stop_charpos`;
     /// only then are these rows installed, moved by what the walk produced.
-    pub(crate) sync: Option<edit_sync::EditSyncPlan>,
+    pub(crate) sync: Option<edit_sync::PreparedEditSuffix>,
     /// An edit replay (window-start kept), as opposed to a scroll.
     pub(crate) edit: bool,
     /// Sealed frame-face generation that owns every ID in `reused_rows`.
@@ -1577,7 +1577,7 @@ impl RetainedWindowMatrix {
                 chrome: None,
                 chrome_memo: None,
                 one_line_contract: None,
-                sync: Some(plan),
+                sync: Some(plan.into()),
                 edit: false,
                 face_generation: self.face_generation,
             });
@@ -1927,7 +1927,13 @@ impl RetainedWindowMatrix {
         // gate: it defaults to TRUE at every `LayoutEngine` construction site,
         // so below-reuse is the production path. Tests flip it off to isolate
         // above-only reuse.
-        if sync && let Some(plan) = edit_sync::plan_positions(self, &body, first_dirty, damage) {
+        if sync
+            && let Some(plan) = edit_sync::RetainedEditBody::new(
+                &body,
+                edit_sync::EditSyncBodyRowIndex::new(first_dirty),
+            )
+            .and_then(|body| edit_sync::prepare_positions(self, body, damage))
+        {
             #[cfg(test)]
             lazy_proof_test_support::note_sync_admission();
             return Some(ScrollReplay {
@@ -1949,7 +1955,7 @@ impl RetainedWindowMatrix {
                 chrome: None,
                 chrome_memo: None,
                 one_line_contract: None,
-                sync: Some(plan),
+                sync: Some(plan.into()),
                 edit: true,
                 face_generation: self.face_generation,
             });

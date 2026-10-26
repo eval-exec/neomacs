@@ -393,7 +393,7 @@ fn both_phase_a_face_collectors_admit_deferred_candidates_without_materializing(
         chrome: None,
         chrome_memo: None,
         one_line_contract: None,
-        sync: Some(plan(&source, 4, DeferShiftMode::On)),
+        sync: Some(plan(&source, 4, DeferShiftMode::On).into()),
         edit: true,
         face_generation: FrameFaceGeneration::default(),
     };
@@ -403,7 +403,10 @@ fn both_phase_a_face_collectors_admit_deferred_candidates_without_materializing(
     replay.extend_retained_face_ids(&mut ids);
     assert_eq!(ids.into_iter().collect::<Vec<_>>(), expected);
     let sync = replay.sync.as_ref().unwrap();
-    assert!(matches!(&sync.rows.stage, CandidateStage::Deferred { .. }));
+    assert!(matches!(
+        &sync.union_for_test().rows.stage,
+        CandidateStage::Deferred { .. }
+    ));
     assert!(std::ptr::eq(
         sync.face_rows().next().unwrap(),
         source[0].1.as_ref()
@@ -593,4 +596,291 @@ fn backward_scroll_stays_ready_with_original_zero_delta_cursor_semantics() {
     assert_eq!(format!("{rows:?}"), format!("{original_zero:?}"));
     assert!(!std::ptr::eq(rows[0].1.as_ref(), body[0].1.as_ref()));
     assert!(std::ptr::eq(rows[1].1.as_ref(), body[1].1.as_ref()));
+}
+
+/// Native retained rows with independent buffer provenance and complete
+/// snapshot streams. No live producer authorization is constructed here.
+fn prepared_suffix_fixture() -> RetainedWindowMatrix {
+    let mut matrix = fixture_matrix(0, 6);
+    for (index, row) in matrix.matrix.rows.iter_mut().take(6).enumerate() {
+        let row = MatrixRow::make_mut(row);
+        let mut glyph = Glyph::char('a', FaceId::new(index as u32 + 1), row.start_charpos);
+        glyph.pixel_width = 8.0;
+        row.glyphs[GlyphArea::Text.index()].push(glyph);
+    }
+    let source: Vec<_> = matrix
+        .matrix
+        .rows
+        .iter()
+        .take(6)
+        .cloned()
+        .enumerate()
+        .collect();
+    let snapshots = plan(&source, 0, DeferShiftMode::Off);
+    let snapshot = std::sync::Arc::make_mut(&mut matrix.display_snapshot);
+    snapshot.rows = snapshots.row_snapshots;
+    snapshot.points = snapshots.points;
+    snapshot.point_rows = snapshots.point_rows;
+    matrix
+}
+
+#[test]
+fn prepared_edit_suffix_keeps_one_union_for_both_frontiers_and_face_admission() {
+    use crate::incremental_layout::edit_sync::{
+        EditSyncBodyRowIndex, RestartInterest, RetainedEditBody, prepare_positions,
+    };
+    let matrix = prepared_suffix_fixture();
+    let body: Vec<_> = matrix.matrix.rows.iter().enumerate().take(6).collect();
+    let preparation = prepare_positions(
+        &matrix,
+        RetainedEditBody::new(&body, EditSyncBodyRowIndex::new(1)).unwrap(),
+        EditReplayPositions::new(15, 21, 1),
+    )
+    .unwrap();
+    let union = preparation.union_for_test();
+    assert_eq!(union.first_unchanged_index, 2);
+    assert_eq!(
+        union
+            .rows
+            .placement_rows()
+            .iter()
+            .map(|(index, _)| *index)
+            .collect::<Vec<_>>(),
+        vec![2, 3, 4, 5]
+    );
+    assert_eq!(preparation.conservative_stop().stop_charpos, 31);
+    assert_eq!(
+        preparation.restart_interest(crate::types::LayoutCharPos0::new(21)),
+        RestartInterest::Candidate
+    );
+    assert_eq!(
+        preparation.restart_interest(crate::types::LayoutCharPos0::new(31)),
+        RestartInterest::NotApplicable
+    );
+    assert_eq!(
+        referenced_face_ids(preparation.face_rows()),
+        vec![
+            FaceId::new(3),
+            FaceId::new(4),
+            FaceId::new(5),
+            FaceId::new(6)
+        ]
+    );
+    assert_eq!(
+        union
+            .row_snapshots
+            .iter()
+            .map(|row| row.row)
+            .collect::<Vec<_>>(),
+        vec![2, 3, 4, 5]
+    );
+    assert_eq!(
+        union
+            .points
+            .iter()
+            .map(|point| point.row)
+            .collect::<Vec<_>>(),
+        vec![2, 3, 4, 5]
+    );
+    assert_eq!(
+        union
+            .point_rows
+            .as_ref()
+            .unwrap()
+            .rows
+            .iter()
+            .map(|row| row.row())
+            .collect::<Vec<_>>(),
+        vec![2, 3, 4, 5]
+    );
+}
+
+#[test]
+fn prepared_edit_suffix_conservative_selection_keeps_canonical_rows_and_projections() {
+    use crate::incremental_layout::edit_sync::{
+        EditSyncBodyRowIndex, RetainedEditBody, plan_positions, prepare_positions,
+    };
+    for delta in [-1, 0, 1] {
+        let matrix = prepared_suffix_fixture();
+        let body: Vec<_> = matrix.matrix.rows.iter().enumerate().take(6).collect();
+        let positions = EditReplayPositions::new(15, 20 + delta, delta);
+        let canonical = plan_positions(&matrix, &body, 1, positions).unwrap();
+        let preparation = prepare_positions(
+            &matrix,
+            RetainedEditBody::new(&body, EditSyncBodyRowIndex::new(1)).unwrap(),
+            positions,
+        )
+        .unwrap();
+        assert_eq!(preparation.union_for_test().rows.placement_rows().len(), 4);
+        let stop = preparation.conservative_stop();
+        let reached = stop
+            .reached_at(
+                crate::types::LayoutCharPos0::new(stop.stop_charpos as i64),
+                48.0,
+                3,
+            )
+            .unwrap();
+        let selected = preparation.select_conservative(reached);
+        assert_eq!(
+            selected.source_position(),
+            crate::types::LayoutCharPos0::new(30 + delta)
+        );
+        let installed = selected.install_edit(
+            super::super::EditSyncWindowY::new(100.0).unwrap(),
+            super::super::EditSyncRowLimit::new(7),
+        );
+        let expected = canonical.install_edit(reached, 100.0, 7);
+        assert_installed_equal(&installed, &expected);
+        assert_eq!(
+            installed
+                .rows
+                .iter()
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+        assert_eq!(installed.row_snapshots.len(), 3);
+        assert_eq!(installed.points.len(), 3);
+        assert_eq!(installed.point_rows.as_ref().unwrap().rows.len(), 3);
+    }
+}
+
+#[test]
+fn prepared_edit_suffix_discards_unselected_row_before_positioning() {
+    use crate::incremental_layout::edit_sync::prepared_suffix::{PreparedEditSuffix, SuffixOrigin};
+    let mut source = vec![(5, source_row(false)), (6, source_row(false))];
+    MatrixRow::make_mut(&mut source[1].1).start_charpos = 110;
+    MatrixRow::make_mut(&mut source[1].1).end_charpos = 116;
+    MatrixRow::make_mut(&mut source[1].1).pixel_y = 60.0;
+    let original = source[0].1.as_ref() as *const GlyphRow;
+    let conservative = SuffixOrigin::from_row(
+        crate::incremental_layout::edit_sync::EditSyncRowIndex::new(6),
+        &source[1].1,
+        EditReplayPositions::new(90, 94, 4),
+    )
+    .unwrap();
+    let preparation = PreparedEditSuffix::with_independent_frontier(
+        plan(&source, 4, DeferShiftMode::On),
+        conservative,
+    );
+    assert!(matches!(
+        &preparation.union_for_test().rows.stage,
+        CandidateStage::Deferred { .. }
+    ));
+    let selected = preparation.select_conservative(EditSyncReached {
+        display_row_index: 6,
+        y: 60.0,
+    });
+    assert_eq!(
+        MatrixRow::make_mut(&mut source[0].1) as *mut GlyphRow as *const GlyphRow,
+        original,
+        "the unselected prefix Arc must be released before any suffix installation"
+    );
+    let installed = selected.install_edit(
+        super::super::EditSyncWindowY::new(100.0).unwrap(),
+        super::super::EditSyncRowLimit::new(8),
+    );
+    assert_eq!(installed.rows.len(), 1);
+    assert_eq!(installed.rows[0].0, 6);
+    assert_eq!(installed.rows[0].1.start_charpos, 114);
+}
+
+#[test]
+fn prepared_edit_suffix_from_conservative_plan_preserves_scroll_installation() {
+    use crate::incremental_layout::edit_sync::{PreparedEditSuffix, RestartInterest};
+    let source = vec![(5, source_row(true))];
+    let reached = EditSyncReached {
+        display_row_index: 6,
+        y: 60.0,
+    };
+    let preparation = PreparedEditSuffix::from(plan(&source, 4, DeferShiftMode::On));
+    assert_eq!(
+        preparation.restart_interest(crate::types::LayoutCharPos0::new(104)),
+        RestartInterest::NotApplicable
+    );
+    let selected = preparation.select_conservative(reached);
+    let installed = selected.install_scroll(
+        super::super::EditSyncWindowY::new(100.0).unwrap(),
+        super::super::EditSyncRowLimit::new(8),
+    );
+    let expected = plan(&source, 4, DeferShiftMode::On).install(reached, 100.0, 8);
+    assert_installed_equal(&installed, &expected);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PreparedSuffixRefusalCase {
+    Boxed,
+    Continuation,
+    StringSource,
+    EndOfBuffer,
+    Geometry,
+}
+
+#[test]
+fn prepared_edit_suffix_typed_refusals_retain_only_the_conservative_suffix() {
+    use crate::incremental_layout::edit_sync::prepared_suffix::IndependentFrontierRefusal;
+    use crate::incremental_layout::edit_sync::{
+        EditSyncBodyRowIndex, RestartInterest, RetainedEditBody, prepare_positions,
+    };
+    for case in [
+        PreparedSuffixRefusalCase::Boxed,
+        PreparedSuffixRefusalCase::Continuation,
+        PreparedSuffixRefusalCase::StringSource,
+        PreparedSuffixRefusalCase::EndOfBuffer,
+        PreparedSuffixRefusalCase::Geometry,
+    ] {
+        let mut matrix = prepared_suffix_fixture();
+        let expected = match case {
+            PreparedSuffixRefusalCase::Boxed => {
+                MatrixRow::make_mut(&mut matrix.matrix.rows[1]).glyphs[GlyphArea::Text.index()]
+                    [0]
+                .box_vertical_edges = neomacs_display_protocol::face::BoxVerticalEdges::Both;
+                IndependentFrontierRefusal::BoxDependency
+            }
+            PreparedSuffixRefusalCase::Continuation => {
+                MatrixRow::make_mut(&mut matrix.matrix.rows[1]).continued = true;
+                IndependentFrontierRefusal::SourceTopology
+            }
+            PreparedSuffixRefusalCase::StringSource => {
+                MatrixRow::make_mut(&mut matrix.matrix.rows[2])
+                    .push_string_source(GlyphStringSource::replacement(
+                        GlyphStringId::new(9),
+                        GlyphStringBufferRange::new(20, 29),
+                    ))
+                    .unwrap();
+                IndependentFrontierRefusal::SourceProvenance
+            }
+            PreparedSuffixRefusalCase::EndOfBuffer => {
+                MatrixRow::make_mut(&mut matrix.matrix.rows[2]).ends_at_zv = true;
+                IndependentFrontierRefusal::EndOfBuffer
+            }
+            PreparedSuffixRefusalCase::Geometry => {
+                MatrixRow::make_mut(&mut matrix.matrix.rows[2]).pixel_y = f32::NAN;
+                IndependentFrontierRefusal::InvalidGeometry
+            }
+        };
+        let body: Vec<_> = matrix.matrix.rows.iter().enumerate().take(6).collect();
+        let retained = RetainedEditBody::new(&body, EditSyncBodyRowIndex::new(1)).unwrap();
+        let positions = EditReplayPositions::new(15, 21, 1);
+        assert!(
+            matches!(super::super::independent_frontier(&retained, EditSyncBodyRowIndex::new(3), positions), Err(reason) if reason == expected),
+            "{case:?}"
+        );
+        let preparation = prepare_positions(&matrix, retained, positions).unwrap();
+        assert_eq!(
+            preparation.union_for_test().first_unchanged_index,
+            3,
+            "{case:?}"
+        );
+        assert_eq!(
+            preparation.union_for_test().rows.placement_rows().len(),
+            3,
+            "{case:?}"
+        );
+        assert_eq!(
+            preparation.restart_interest(crate::types::LayoutCharPos0::new(21)),
+            RestartInterest::NotApplicable,
+            "{case:?}"
+        );
+    }
 }

@@ -6,7 +6,9 @@
 //! tests can also mirror output-cursor moves into a live window.
 
 pub(crate) mod prepared_body;
+mod restart_sync;
 mod row_geometry;
+pub(crate) use restart_sync::{RestartSyncDecision, RestartSyncState, SyncStateError};
 mod snapshot_rows;
 use row_geometry::WindowRowGeometry;
 
@@ -1404,6 +1406,7 @@ impl MiniPrecedingZvByte {
 }
 
 pub(crate) struct WindowOutputEmitter {
+    sync_attempt: restart_sync::SyncAttempt,
     query_target: Option<LayoutCharPos0>,
     // A stable buffer glyph completed a position query inside this row.
     // This is a prefix observation, never proof of a complete final row.
@@ -1516,6 +1519,7 @@ impl WindowOutputEmitter {
         publish_live: bool,
     ) -> Self {
         Self {
+            sync_attempt: restart_sync::SyncAttempt::Inactive,
             publish_live,
             query_target: None,
             query_target_reached: false,

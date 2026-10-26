@@ -59,6 +59,10 @@ use neomacs_display_protocol::types::Color;
 use neovm_core::buffer::{EmacsBytePos, LispCharPos1};
 use neovm_core::emacs_core::value::{Value, list_to_vec};
 
+mod source_line_restart;
+use source_line_restart::CanonicalSourceLineRestart;
+pub(crate) use source_line_restart::SourceLineRestart;
+
 /// Typed numeric tail admission for one exclusive source walk. It carries
 /// no Lisp references or shared mutable state between mutator threads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2130,26 +2134,57 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                 row_carryover.line_numbers,
             )
             .apply_to_progress(&mut progress);
-        // Certify the next source line only in an explicit pixel measurement.
-        // The ordinary transition above resets tabs, wrap/hscroll progress and
-        // trailing whitespace. The producer must additionally have no pushed
-        // replacement source or consumed insertion at the new anchor. Prefix,
-        // gutter and cross-row box state need a separate restart proof.
-        if source_render.output_emitter().collects_query_restarts()
-            && self.display_string_line_break.is_none()
-            && context.text.get(self.source_char.start_byte_idx()) == Some(&b'\n')
-            && progress.charpos() == self.source_char.start_charpos() + 1
-            && context.selective_display == 0
-            && !context.has_prefix
-            && !row_carryover.line_numbers.is_enabled()
-            && !row_build.box_face.is_active()
-            && self.line_height == crate::display_item::DisplayLineHeightPolicy::Default
-            && self.line_spacing == crate::display_item::DisplayLineSpacingPolicy::Inherit
-            && source_walk.can_restart_after_buffer_newline(progress.charpos())
+        // Preserve query-only short-circuiting. A normal walk asks for this
+        // proof only at a prepared earlier frontier, before any next-row work.
+        use crate::incremental_layout::edit_sync::{
+            EditSyncRowIndex, EditSyncWindowY, RestartInterest,
+        };
+        use crate::window_output::RestartSyncDecision;
+        let next = LayoutCharPos0::new(progress.charpos());
+        let query_restarts = source_render.output_emitter().collects_query_restarts();
+        let edit_restart = source_render.output_emitter().restart_sync_interest(next);
+        let candidate = match edit_restart {
+            RestartInterest::NotApplicable => false,
+            RestartInterest::Candidate => true,
+        };
+        if (query_restarts || candidate)
+            && let Ok(proof) = CanonicalSourceLineRestart::certify(
+                &self,
+                source_walk,
+                next,
+                row_carryover.line_numbers,
+                row_build.box_face,
+            )
         {
-            source_render
-                .output_emitter()
-                .note_query_restart(layout_i64_char_pos_to_lisp_char_pos(progress.charpos()));
+            if query_restarts {
+                source_render.output_emitter().note_query_restart(
+                    layout_i64_char_pos_to_lisp_char_pos(proof.source_position().get()),
+                );
+            }
+            if candidate {
+                let stopped = source_render.output_render().with_output_target_parts(
+                    |mut output, emitter, _| {
+                        let Some(window_y) = EditSyncWindowY::new(
+                            row_build.row_geometry.y()
+                                - output.builder().current_window_pixel_bounds().y,
+                        ) else {
+                            return RestartSyncDecision::Continue;
+                        };
+                        let restart = SourceLineRestart::new(
+                            proof,
+                            EditSyncRowIndex::new(emitter.current_display_text_row_index()),
+                            window_y,
+                        );
+                        emitter.try_restart_sync(restart, output)
+                    },
+                );
+                match stopped {
+                    RestartSyncDecision::Continue => {}
+                    RestartSyncDecision::Stopped => {
+                        return DisplayRowTransitionContinuation::Exhausted;
+                    }
+                }
+            }
         }
         DisplayRowTransitionContinuation::Continue
     }

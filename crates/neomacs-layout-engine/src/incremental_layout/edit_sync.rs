@@ -46,10 +46,17 @@
 
 mod candidate_rows;
 mod dense_index;
+mod prepared_suffix;
+pub(crate) use prepared_suffix::{
+    EditSyncBodyRowIndex, EditSyncRowIndex, EditSyncRowLimit, EditSyncWindowY, PreparedEditSuffix,
+    RestartFrontierRefusal, RestartInterest, RestartSelection, RetainedEditBody, SelectedEditSync,
+};
 
 use candidate_rows::CandidateRows;
 
-use super::{EditDamage, EditReplayPositions, RetainedWindowMatrix};
+#[cfg(test)]
+use super::EditDamage;
+use super::{EditReplayPositions, RetainedWindowMatrix};
 use crate::types::LayoutCharPos0;
 use neomacs_display_protocol::glyph_matrix::{
     GlyphPointerOccurrenceIdentity, GlyphPointerSourceKind, GlyphRow, MatrixRow,
@@ -797,6 +804,7 @@ pub(crate) fn sync_allowed(
 /// `body` is the retained body rows in matrix order; rows `[..first_dirty]`
 /// are reused verbatim by the caller.
 #[inline]
+#[cfg(test)]
 pub(crate) fn plan(
     prev: &RetainedWindowMatrix,
     body: &[(usize, &MatrixRow)],
@@ -808,12 +816,25 @@ pub(crate) fn plan(
 
 /// Position-only synchronization. All borrowed rows belong to the caller's
 /// immutable retained matrix; no source proof or mutator state is consumed.
+#[cfg(test)]
 pub(crate) fn plan_positions(
     prev: &RetainedWindowMatrix,
     body: &[(usize, &MatrixRow)],
     first_dirty: usize,
     damage: EditReplayPositions,
 ) -> Option<EditSyncPlan> {
+    let body = RetainedEditBody::new(body, EditSyncBodyRowIndex::new(first_dirty))?;
+    let first = conservative_frontier(prev, &body, damage)?;
+    materialize_suffix(prev, RetainedSuffixRows(&body.rows[first.get()..]), damage)
+}
+
+fn conservative_frontier(
+    prev: &RetainedWindowMatrix,
+    retained: &RetainedEditBody<'_, '_>,
+    damage: EditReplayPositions,
+) -> Option<EditSyncBodyRowIndex> {
+    let body = retained.rows;
+    let first_dirty = retained.first_dirty.get();
     let delta = damage.delta();
     let dirty_start = damage.start();
     // GNU handles upward row shifts with a second walk at the window bottom
@@ -844,7 +865,7 @@ pub(crate) fn plan_positions(
     }
     // `last_unchanged_pos_old` in 0-based terms: the first old position whose
     // character AND predecessor are both outside the change.
-    let min_start = damage.end_old() + 1;
+    let min_start = damage.end_old().checked_add(1)?;
     // GNU searches back from the last text row for the smallest row starting
     // at or after that position (xdisp.c:22364-22376). Row starts increase
     // down the window, so the first such row going forward is the same row.
@@ -860,7 +881,125 @@ pub(crate) fn plan_positions(
     if first_unchanged >= body.len() {
         return None;
     }
-    let candidates = &body[first_unchanged..];
+    Some(EditSyncBodyRowIndex::new(first_unchanged))
+}
+
+/// Prepare the union once; only the source walk can admit its earlier frontier.
+/// The conservative planner's predecessor protection remains authoritative.
+pub(crate) fn prepare_positions(
+    prev: &RetainedWindowMatrix,
+    body: RetainedEditBody<'_, '_>,
+    damage: EditReplayPositions,
+) -> Option<PreparedEditSuffix> {
+    let conservative = conservative_frontier(prev, &body, damage)?;
+    match independent_frontier(&body, conservative, damage) {
+        Ok(candidate) => {
+            let union = materialize_suffix(
+                prev,
+                RetainedSuffixRows(&body.rows[candidate.first.get()..]),
+                damage,
+            )?;
+            Some(PreparedEditSuffix::with_independent_frontier(
+                union,
+                candidate.conservative,
+            ))
+        }
+        Err(
+            prepared_suffix::IndependentFrontierRefusal::NoPredecessor
+            | prepared_suffix::IndependentFrontierRefusal::OutsideDamageBoundary
+            | prepared_suffix::IndependentFrontierRefusal::SourceTopology
+            | prepared_suffix::IndependentFrontierRefusal::BoxDependency
+            | prepared_suffix::IndependentFrontierRefusal::SourceProvenance
+            | prepared_suffix::IndependentFrontierRefusal::EndOfBuffer
+            | prepared_suffix::IndependentFrontierRefusal::InvalidGeometry,
+        ) => materialize_suffix(
+            prev,
+            RetainedSuffixRows(&body.rows[conservative.get()..]),
+            damage,
+        )
+        .map(PreparedEditSuffix::from),
+    }
+}
+
+/// Old source rows alone never authorize stopping. These gates only decide
+/// which additional row may be admitted by a live independent-newline proof.
+#[derive(Debug)]
+struct IndependentFrontierCandidate {
+    first: EditSyncBodyRowIndex,
+    conservative: prepared_suffix::SuffixOrigin,
+}
+
+fn independent_frontier(
+    body: &RetainedEditBody<'_, '_>,
+    conservative: EditSyncBodyRowIndex,
+    damage: EditReplayPositions,
+) -> Result<IndependentFrontierCandidate, prepared_suffix::IndependentFrontierRefusal> {
+    use prepared_suffix::IndependentFrontierRefusal as Refusal;
+    let early = conservative
+        .get()
+        .checked_sub(1)
+        .ok_or(Refusal::NoPredecessor)?;
+    if early <= body.first_dirty.get() {
+        return Err(Refusal::NoPredecessor);
+    }
+    let previous = body.rows[early - 1].1;
+    let row = body.rows[early].1;
+    let next = body.rows[conservative.get()].1;
+    if i64::try_from(row.start_charpos).ok() != Some(damage.end_old()) {
+        return Err(Refusal::OutsideDamageBoundary);
+    }
+    if row.ends_at_zv || !row.displays_text {
+        return Err(Refusal::EndOfBuffer);
+    }
+    if previous.continued
+        || row.continued
+        || row.truncated_left
+        || row.reversed_p
+        || previous.end_charpos.checked_add(1) != Some(row.start_charpos)
+        || row.end_charpos.checked_add(1) != Some(next.start_charpos)
+    {
+        return Err(Refusal::SourceTopology);
+    }
+    if row_has_boxed_glyph(previous) || row_has_boxed_glyph(row) {
+        return Err(Refusal::BoxDependency);
+    }
+    if !previous.string_sources().is_empty()
+        || !row.string_sources().is_empty()
+        || !previous.pointer_appearances().is_empty()
+        || !row.pointer_appearances().is_empty()
+    {
+        return Err(Refusal::SourceProvenance);
+    }
+    prepared_suffix::SuffixOrigin::from_row(EditSyncRowIndex::new(body.rows[early].0), row, damage)
+        .ok_or(Refusal::InvalidGeometry)?;
+    let conservative = prepared_suffix::SuffixOrigin::from_row(
+        EditSyncRowIndex::new(body.rows[conservative.get()].0),
+        next,
+        damage,
+    )
+    .ok_or(Refusal::InvalidGeometry)?;
+    Ok(IndependentFrontierCandidate {
+        first: EditSyncBodyRowIndex::new(early),
+        conservative,
+    })
+}
+
+#[derive(Debug)]
+struct RetainedSuffixRows<'slice, 'row>(&'slice [(usize, &'row MatrixRow)]);
+impl<'slice, 'row> AsRef<[(usize, &'row MatrixRow)]> for RetainedSuffixRows<'slice, 'row> {
+    fn as_ref(&self) -> &[(usize, &'row MatrixRow)] {
+        self.0
+    }
+}
+
+fn materialize_suffix(
+    prev: &RetainedWindowMatrix,
+    candidates: RetainedSuffixRows<'_, '_>,
+    damage: EditReplayPositions,
+) -> Option<EditSyncPlan> {
+    let candidates = candidates.as_ref();
+    let delta = damage.delta();
+    let dirty_start = damage.start();
     // Pointer identities shift with the text only when they lie wholly after
     // the edit, and the shift is add-only: a delete needs pointer-free rows.
     if !candidates

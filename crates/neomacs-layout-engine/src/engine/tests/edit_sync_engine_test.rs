@@ -81,6 +81,12 @@ fn tabbed_source(lines: usize) -> String {
         .collect()
 }
 
+#[derive(Clone, Copy)]
+enum CursorComparison {
+    WindowTrace,
+    Complete,
+}
+
 struct SyncFrame {
     eval: Context,
     frame_id: neovm_core::window::FrameId,
@@ -125,6 +131,14 @@ impl SyncFrame {
     /// Apply `form`, lay out incrementally, and assert the result equals a
     /// fresh full layout of the same state. Returns the incremental stats.
     fn step(&mut self, form: &str) -> LayoutStats {
+        self.step_with_cursor(form, CursorComparison::WindowTrace)
+    }
+
+    fn step_complete(&mut self, form: &str) -> LayoutStats {
+        self.step_with_cursor(form, CursorComparison::Complete)
+    }
+
+    fn step_with_cursor(&mut self, form: &str, cursor: CursorComparison) -> LayoutStats {
         self.eval.eval_str(form).unwrap_or_else(|error| {
             panic!("{form}: {error:?}");
         });
@@ -133,6 +147,13 @@ impl SyncFrame {
         let incremental = selected_window_layout_trace(&self.eval, &self.engine, self.frame_id);
         let incremental_indices = enabled_row_indices(&self.eval, &self.engine, self.frame_id);
         let incremental_end = selected_window_end(&self.eval, self.frame_id);
+        let incremental_state = self
+            .engine
+            .last_frame_display_state
+            .as_ref()
+            .expect("incremental state");
+        let incremental_cursor = incremental_state.phys_cursor.clone();
+        let incremental_cursor_effects = incremental_state.cursor_effects_by_window.clone();
         let mut fresh = LayoutEngine::new();
         fresh.layout_frame_rust(&mut self.eval, self.frame_id);
         let reference = selected_window_layout_trace(&self.eval, &fresh, self.frame_id);
@@ -156,6 +177,23 @@ impl SyncFrame {
             incremental, reference,
             "{form}: the incremental frame differs from a full layout ({stats:?})"
         );
+        let full = fresh
+            .last_frame_display_state
+            .as_ref()
+            .expect("full reference state");
+        match cursor {
+            CursorComparison::WindowTrace => {}
+            CursorComparison::Complete => {
+                assert_eq!(
+                    incremental_cursor, full.phys_cursor,
+                    "{form}: complete frame cursor"
+                );
+                assert_eq!(
+                    incremental_cursor_effects, full.cursor_effects_by_window,
+                    "{form}: complete frame cursor effects"
+                );
+            }
+        }
         stats
     }
 }
@@ -774,3 +812,144 @@ mod source_budget_consumers;
 #[cfg(test)]
 #[path = "edit_sync_source_budget_replay_retry_test.rs"]
 mod source_budget_replay_retry;
+
+#[test]
+fn early_sync_jit_line_damage_reuses_successor_after_insert_and_reset() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    let text = "(message \"line\")\n".repeat(80);
+    let mut frame = SyncFrame::new(&text, end_of_line(&text, 15));
+    // Normal jit-lock invalidation covers [bol, next bol). The old
+    // predecessor-protecting stop produces the unchanged successor too;
+    // only the live canonical buffer-newline restart can omit that row.
+    for form in [
+        "(progn (insert \"x\") (put-text-property (line-beginning-position) (line-beginning-position 2) 'fontified nil))",
+        "(progn (delete-region (1- (point)) (point)) (put-text-property (line-beginning-position) (line-beginning-position 2) 'fontified nil))",
+        "(progn (insert \"x\") (put-text-property (line-beginning-position) (line-beginning-position 2) 'fontified nil))",
+    ] {
+        let stats = frame.step_complete(form);
+        assert_eq!(stats.edit_windows, 1, "{form}: {stats:?}");
+        assert_eq!(
+            frame.main_relaid(),
+            1,
+            "the live restart must skip the independent successor: {form}: {stats:?}"
+        );
+        assert!(
+            stats.reused_rows + stats.reused_shifted_rows > 0,
+            "{form}: {stats:?}"
+        );
+    }
+}
+
+#[test]
+fn early_sync_prefix_refusal_keeps_complete_frames_after_edit_reset_and_split() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    let text = "(message \"prefix\")\n".repeat(80);
+    let mut frame = SyncFrame::new(&text, end_of_line(&text, 15));
+    frame.step_complete("(setq line-prefix \"P> \" wrap-prefix \"W> \")");
+    for form in [
+        "(progn (insert \"x\") (put-text-property (line-beginning-position) (line-beginning-position 2) 'fontified nil))",
+        "(progn (delete-region (1- (point)) (point)) (put-text-property (line-beginning-position) (line-beginning-position 2) 'fontified nil))",
+    ] {
+        // Re-arm the property transition for each edit, as jit-lock does
+        // after fontifying. Re-setting an already-nil property on deletion
+        // does not extend the damage to the successor boundary.
+        frame.step_complete("(put-text-property (line-beginning-position) (line-beginning-position 2) 'fontified t)");
+        frame.step_complete(form);
+        assert!(
+            frame.main_relaid() >= 2,
+            "prefix dependencies must retain the conservative successor: {form}"
+        );
+    }
+    for form in ["(insert \"\\n\")", "(delete-region (1- (point)) (point))"] {
+        frame.step_complete(form);
+    }
+}
+
+#[test]
+fn early_sync_multiline_split_join_unicode_and_eob_keep_canonical_outputs() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    let text = "(message \"line\")\n".repeat(80);
+    let mut frame = SyncFrame::new(&text, end_of_line(&text, 15));
+    for form in [
+        "(insert \"\\n\")",
+        "(delete-region (1- (point)) (point))",
+        "(insert \"界é\")",
+        "(delete-region (- (point) 2) (point))",
+        "(goto-char (point-max))",
+        "(insert \"x\")",
+        "(insert \"\\n\")",
+        "(delete-region (- (point) 2) (point))",
+    ] {
+        frame.step_complete(form);
+    }
+}
+
+#[test]
+fn early_sync_fontifier_changing_successor_face_restarts_with_expanded_damage() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    #[derive(Clone, Copy, Debug)]
+    enum PropertyHooks {
+        Enabled,
+        Inhibited,
+    }
+    for hooks in [PropertyHooks::Enabled, PropertyHooks::Inhibited] {
+        let text = "(message \"line\")\n".repeat(80);
+        let mut frame = SyncFrame::new(&text, end_of_line(&text, 15));
+        // Seed a retained, fully fontified successor before installing the
+        // callback. Its first glyph must acquire a new face only while the
+        // edited predecessor is being fontified during redisplay.
+        frame.step_complete(
+            "(progn (put-text-property (point-min) (point-max) 'fontified t) \
+                (setq early-sync-fontify-calls 0 early-sync-fontify-target nil))",
+        );
+        let inhibit = match hooks {
+            PropertyHooks::Enabled => "nil",
+            PropertyHooks::Inhibited => "t",
+        };
+        frame
+            .eval
+            .eval_str(&format!(
+                "(setq fontification-functions \
+                    (list (lambda (_position) \
+                        (setq early-sync-fontify-calls \
+                              (1+ early-sync-fontify-calls)) \
+                        (let ((inhibit-modification-hooks {inhibit}) \
+                              (was-modified (buffer-modified-p))) \
+                            (unwind-protect \
+                                (progn \
+                                    (put-text-property early-sync-fontify-target \
+                                        (1+ early-sync-fontify-target) 'face 'bold) \
+                                    (put-text-property (point-min) (point-max) \
+                                        'fontified t)) \
+                                (restore-buffer-modified-p was-modified))))))"
+            ))
+            .expect("install successor-face fontifier");
+        let stats = frame.step_complete(
+            "(progn (insert \"x\") \
+                (setq early-sync-fontify-target (line-beginning-position 2)) \
+                (put-text-property (line-beginning-position) \
+                    early-sync-fontify-target 'fontified nil))",
+        );
+        assert_eq!(
+            frame
+                .eval
+                .eval_str("early-sync-fontify-calls")
+                .expect("fontifier callback count"),
+            Value::fixnum(1),
+            "the completed callback must not repeat on retry/reference: {hooks:?}"
+        );
+        assert_eq!(
+            frame
+                .eval
+                .eval_str("(get-text-property early-sync-fontify-target 'face)")
+                .expect("successor face after fontification"),
+            Value::symbol("bold"),
+            "the fontifier must actually change the successor input: {hooks:?}"
+        );
+        assert!(
+            frame.main_relaid() >= 2,
+            "expanded property damage must regenerate the changed successor \
+             instead of reusing its old face: {hooks:?}: {stats:?}"
+        );
+    }
+}

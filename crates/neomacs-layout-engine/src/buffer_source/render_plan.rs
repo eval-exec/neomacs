@@ -1099,16 +1099,16 @@ impl BufferSourceOutputSetup {
             let visible_bottom = geometry.visibility_bottom_y - params.bounds.y;
             // P3.5 G2: arm the walk to stop where it synchronizes with the
             // rows below the edit (GNU try_window_id's stop_pos).
-            if let Some(plan) = scroll.sync.as_ref() {
-                output
-                    .output_target()
-                    .builder()
-                    .begin_edit_sync(plan.stop());
+            let preparation = scroll.sync.take();
+            let conservative_stop = preparation.as_ref().map(|plan| plan.conservative_stop());
+            if let Some(stop) = conservative_stop {
+                output.output_target().builder().begin_edit_sync(stop);
             }
             // Phase A already admitted the frame-wide retained face namespace
             // before this partial walk can mint IDs.
             let (mut output_emitter, post_loop) = walk_setup.begin_render_body_and_tail(
                 self.begin_request,
+                preparation,
                 &mut output,
                 font_metrics,
                 face_resolver,
@@ -1133,9 +1133,26 @@ impl BufferSourceOutputSetup {
                     return BufferSourceRenderAttemptOutcome::QuerySourceHorizonExhausted;
                 }
 
+                crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::SyncStateInvalid => {
+                    output.output_target().builder().finish_edit_sync();
+                    output.restore_retry_checkpoint(retry_checkpoint);
+                    return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                }
                 crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::Complete(outcome) => outcome,
                 crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::SyncHorizonExhausted => {
                     output.output_target().builder().finish_edit_sync();
+                    scroll.sync = match output_emitter.take_edit_sync_for_retry() {
+                        Ok(preparation) => preparation,
+                        Err(
+                            crate::window_output::SyncStateError::AlreadyArmed
+                            | crate::window_output::SyncStateError::SelectedBeforeRetry
+                            | crate::window_output::SyncStateError::UnownedBuilderReach
+                            | crate::window_output::SyncStateError::ConflictingReach,
+                        ) => {
+                            output.restore_retry_checkpoint(retry_checkpoint);
+                            return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                        }
+                    };
                     output.restore_retry_checkpoint(retry_checkpoint);
                     // The body failed before sync installation consumed its
                     // rows. Preserve the exact admitted replay for an uncapped
@@ -1151,12 +1168,27 @@ impl BufferSourceOutputSetup {
             // The rows below the edit move by what the walk produced; a walk
             // that never synchronized ran to the window bottom instead and
             // produced those rows itself.
-            let edit_sync_reached = output.builder().finish_edit_sync();
+            let selected_sync =
+                match output_emitter.finish_edit_sync(output.builder().finish_edit_sync()) {
+                    Ok(selected) => selected,
+                    Err(
+                        crate::window_output::SyncStateError::AlreadyArmed
+                        | crate::window_output::SyncStateError::SelectedBeforeRetry
+                        | crate::window_output::SyncStateError::UnownedBuilderReach
+                        | crate::window_output::SyncStateError::ConflictingReach,
+                    ) => {
+                        crate::window_output::restore_text_window_retry_checkpoint(
+                            output.reborrow(),
+                            retry_checkpoint,
+                        );
+                        return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                    }
+                };
             // A backward scroll that never met its old first row (the start
             // moved back by more than the window, or into a line the rows do
             // not align with) walked the whole window without the viewport
             // checks a full layout makes: lay it out properly instead.
-            if !scroll.edit && scroll.sync.is_some() && edit_sync_reached.is_none() {
+            if !scroll.edit && conservative_stop.is_some() && selected_sync.is_none() {
                 crate::window_output::restore_text_window_retry_checkpoint(
                     output.reborrow(),
                     retry_checkpoint,
@@ -1167,14 +1199,24 @@ impl BufferSourceOutputSetup {
             // Where the walked rows end when the walk synchronized: the first
             // synchronized row starts here.
             let mut synced_stop = None;
-            if let Some(plan) = scroll.sync.take()
-                && let Some(reached) = edit_sync_reached
-            {
-                synced_stop = Some(plan.stop_charpos as i64);
+            if let Some(selected) = selected_sync {
+                synced_stop = Some(selected.source_position().get());
+                let Some(bottom) =
+                    crate::incremental_layout::edit_sync::EditSyncWindowY::new(visible_bottom)
+                else {
+                    crate::window_output::restore_text_window_retry_checkpoint(
+                        output.reborrow(),
+                        retry_checkpoint,
+                    );
+                    return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                };
+                let row_limit = crate::incremental_layout::edit_sync::EditSyncRowLimit::new(
+                    geometry.mode_line_display_row,
+                );
                 let placed = if scroll.edit {
-                    plan.install_edit(reached, visible_bottom, geometry.mode_line_display_row)
+                    selected.install_edit(bottom, row_limit)
                 } else {
-                    plan.install(reached, visible_bottom, geometry.mode_line_display_row)
+                    selected.install_scroll(bottom, row_limit)
                 };
                 edit_sync_shift = placed.shift_ledger();
                 scroll.reused_rows.extend(placed.rows);
@@ -1543,6 +1585,7 @@ impl BufferSourceOutputSetup {
 
         let (output_emitter, post_loop) = walk_setup.begin_render_body_and_tail(
             self.begin_request,
+            None,
             &mut output,
             font_metrics,
             face_resolver,
@@ -1562,6 +1605,11 @@ impl BufferSourceOutputSetup {
         );
 
         let post_loop = match post_loop {
+            crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::SyncStateInvalid => {
+                output.output_target().builder().finish_edit_sync();
+                output.restore_retry_checkpoint(retry_checkpoint);
+                return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+            }
                 crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::QueryHorizonExhausted => {
                     output.output_target().builder().finish_edit_sync();
                     output.restore_retry_checkpoint(retry_checkpoint);

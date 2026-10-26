@@ -552,7 +552,9 @@ where
                 && let Some(plan) = &scroll.sync
                 && crate::buffer_source::window_source::sync_source_budget_enabled()
             {
-                request.with_sync_stop(crate::types::LayoutCharPos0::new(plan.stop_charpos as i64))
+                request.with_sync_stop(crate::types::LayoutCharPos0::new(
+                    plan.conservative_source_position().get(),
+                ))
             } else {
                 request
             }

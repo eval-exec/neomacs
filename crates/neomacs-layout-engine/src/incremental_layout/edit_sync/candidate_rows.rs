@@ -110,6 +110,19 @@ impl CandidateRows {
         self.placement_rows().iter().map(|(_, row)| row.as_ref())
     }
 
+    /// Select one admitted suffix before any deferred source positioning.
+    pub(super) fn select_suffix(&mut self, first: super::prepared_suffix::EditSyncRowIndex) {
+        let rows = match &mut self.stage {
+            CandidateStage::Ready(rows) | CandidateStage::Deferred { rows, .. } => rows,
+        };
+        rows.retain(|(index, _)| {
+            matches!(
+                super::prepared_suffix::EditSyncRowIndex::new(*index).membership(first),
+                super::prepared_suffix::SuffixMembership::Keep,
+            )
+        });
+    }
+
     /// The sole gateway to rows in new buffer coordinates. Ready transfers
     /// its original vector and Arc handles unchanged, including Still reuse.
     pub(super) fn into_positioned(self) -> Vec<(usize, MatrixRow)> {
