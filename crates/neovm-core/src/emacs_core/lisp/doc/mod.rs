@@ -245,10 +245,7 @@ fn documentation_plan(
 ) -> Result<(DocumentationPlan, Option<String>), Flow> {
     expect_min_max_args("documentation", args, 1, 2)?;
     let obarray = eval.obarray();
-    let lisp_directory = eval.variable_value_by_name("lisp-directory").and_then(|v| {
-        v.as_lisp_string()
-            .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
-    });
+    let lisp_directory = lisp_directory_string(eval.variable_value_by_name("lisp-directory"));
 
     // GNU doc.c:Fdocumentation calls Fget on the original symbol before
     // looking at the function cell.  Keep that exact object identity so
@@ -476,7 +473,7 @@ fn documentation_plan_from_property_value(
     Ok(DocumentationPlan::Eval(value))
 }
 
-fn compiled_doc_ref(value: &Value) -> Option<(String, i64)> {
+fn compiled_doc_ref(value: &Value) -> Option<(String, DocBytePosition)> {
     if !value.is_cons() {
         return None;
     };
@@ -486,8 +483,19 @@ fn compiled_doc_ref(value: &Value) -> Option<(String, i64)> {
         pair_car
             .as_lisp_string()
             .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))?,
-        pair_cdr.as_int()?,
+        DocBytePosition::from_fixnum(pair_cdr.as_int()?),
     ))
+}
+
+/// The host path GNU's `lisp-directory` variable names, from its Lisp value.
+/// `get_doc_string` reads the variable with `Fsymbol_value (Qlisp_directory)`;
+/// an unbound or non-string value names no directory.
+pub(crate) fn lisp_directory_string(value: Option<Value>) -> Option<String> {
+    value.and_then(|value| {
+        value
+            .as_lisp_string()
+            .map(|directory| crate::emacs_core::emacs_char::to_utf8_lossy(directory.as_bytes()))
+    })
 }
 
 fn resolve_compiled_doc_path(lisp_directory: Option<&str>, file: &str) -> PathBuf {
@@ -526,70 +534,164 @@ fn compiled_doc_prefix_is_valid(prefix: &[u8]) -> bool {
     prefix.len() >= test && prefix[prefix.len() - test] == b'#'
 }
 
-fn decode_compiled_doc_bytes(bytes: &[u8]) -> EvalResult {
+/// An absolute byte position in a compiled file, as GNU's `#$` references and
+/// its `saved_strings` blocks record it.
+///
+/// GNU takes the absolute value of legacy negative positions (a user
+/// variable's docstring used to be emitted as a negative offset,
+/// `src/doc.c:128-131`, `src/lread.c:3506-3509`); `unsigned_abs` makes that
+/// conversion total for every fixnum, including `i64::MIN`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) struct DocBytePosition(u64);
+
+impl DocBytePosition {
+    /// GNU's `eabs (XFIXNUM (position))`: negative legacy positions name the
+    /// same record with the opposite sign.
+    pub(crate) fn from_fixnum(position: i64) -> Self {
+        Self(position.unsigned_abs())
+    }
+
+    /// The absolute position of a byte in the file being read.
+    pub(crate) fn from_file_offset(offset: usize) -> Self {
+        Self(offset as u64)
+    }
+
+    pub(crate) fn get(self) -> u64 {
+        self.0
+    }
+
+    pub(crate) fn checked_advance(self, bytes: usize) -> Option<Self> {
+        self.0.checked_add(u64::try_from(bytes).ok()?).map(Self)
+    }
+}
+
+/// Which of GNU's two documentation unquoting rules applies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DocUnquoteRules {
+    /// `get_doc_string` (`src/doc.c:266-291`): any other byte after ^A is
+    /// invalid data and signals.
+    StrictFile,
+    /// `get_lazy_string`'s saved-block arm (`src/lread.c:3520-3545`): any
+    /// other byte after ^A is kept as itself.
+    SavedBlock,
+}
+
+/// Why a documentation record could not be unquoted. Every variant is a typed
+/// answer; none is a panic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DocUnquoteError {
+    /// `^A` at the end of the supplied bytes.
+    DanglingEscape,
+    /// [`DocUnquoteRules::StrictFile`] found `^A` followed by a byte that is
+    /// not `^A`, `0` or `_`.
+    InvalidEscape(u8),
+    /// No `^_` terminator before the end of the supplied bytes.
+    MissingTerminator,
+}
+
+/// The one ^A unquoting definition for documentation records.
+///
+/// `bytes` must start at the record body and include its `^_` terminator.
+/// GNU's two readers differ only in what an unknown escape means, which is
+/// [`DocUnquoteRules`]. The result is raw bytes: the reader's lazy conversion
+/// makes a unibyte string of them, the documentation path decodes them as the
+/// file's Emacs-multibyte text.
+pub(crate) fn unquote_doc_bytes(
+    bytes: &[u8],
+    rules: DocUnquoteRules,
+) -> Result<Vec<u8>, DocUnquoteError> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut pos = 0_usize;
-    while pos < bytes.len() {
-        if bytes[pos] != 0x01 {
-            out.push(bytes[pos]);
-            pos += 1;
+    loop {
+        let Some(&byte) = bytes.get(pos) else {
+            return Err(DocUnquoteError::MissingTerminator);
+        };
+        pos += 1;
+        if byte == 0x1f {
+            return Ok(out);
+        }
+        if byte != 0x01 {
+            out.push(byte);
             continue;
         }
-
-        pos += 1;
         let Some(&escaped) = bytes.get(pos) else {
-            return Err(signal(
-                "error",
-                vec![Value::string(
-                    "Invalid data in documentation file -- dangling ^A escape",
-                )],
-            ));
+            return Err(DocUnquoteError::DanglingEscape);
         };
+        pos += 1;
         match escaped {
             0x01 => out.push(0x01),
             b'0' => out.push(0x00),
             b'_' => out.push(0x1f),
-            other => {
-                return Err(signal(
-                    "error",
-                    vec![Value::string(format!(
-                        "Invalid data in documentation file -- ^A followed by code {:03o}",
-                        other
-                    ))],
-                ));
-            }
+            other => match rules {
+                DocUnquoteRules::StrictFile => {
+                    return Err(DocUnquoteError::InvalidEscape(other));
+                }
+                DocUnquoteRules::SavedBlock => out.push(other),
+            },
         }
-        pos += 1;
     }
-
-    Ok(Value::string(super::load::decode_emacs_utf8(&out)))
 }
 
-/// What `get_doc_string` produced (`src/doc.c:105-306`).
+/// The signal GNU emits for a malformed documentation record.
+pub(crate) fn doc_unquote_error_flow(error: DocUnquoteError) -> Flow {
+    let message = match error {
+        DocUnquoteError::DanglingEscape => {
+            "Invalid data in documentation file -- dangling ^A escape".to_string()
+        }
+        DocUnquoteError::InvalidEscape(byte) => format!(
+            "Invalid data in documentation file -- ^A followed by code {:03o}",
+            byte
+        ),
+        DocUnquoteError::MissingTerminator => {
+            "Invalid data in documentation file -- missing ^_ terminator".to_string()
+        }
+    };
+    signal("error", vec![Value::string(message)])
+}
+
+/// Unquote a saved `#@` block body (GNU `get_lazy_string`'s saved-string arm,
+/// `src/lread.c:3506-3545`).
+///
+/// The block is immutable here, so a second lookup of the same record is
+/// stable; GNU unquotes the saved buffer in place, so a second lookup of the
+/// same block sees already-converted bytes (real compiler output has one
+/// reference per block).
+pub(crate) fn unquote_saved_doc_block(body: &[u8]) -> Result<Vec<u8>, DocUnquoteError> {
+    unquote_doc_bytes(body, DocUnquoteRules::SavedBlock)
+}
+
+/// What `get_doc_string` produced (`src/doc.c:105-306`), before the caller
+/// chooses the string encoding.
 ///
 /// `Unresolved` is its `return Qnil`, and it has exactly two causes: the record
 /// has no terminating `^_`, or the bytes before the position are not a record
 /// header (`src/doc.c:254-260`).  A file that cannot be opened is NOT one of
 /// them -- GNU answers the sentence `Cannot open doc string file "..."` there,
 /// which is a value and stops the retry.
-enum DocStringRead {
-    Resolved(Value),
+enum DocRecord {
+    /// The record body from the requested position through its `^_`
+    /// terminator.
+    Resolved(Vec<u8>),
     Unresolved,
+    CannotOpen,
 }
 
-fn load_compiled_doc_string(
+/// Read the record body at `position` (GNU `get_doc_string`'s file work).
+///
+/// The body is returned un-unquoted and including its terminator so both
+/// readers share one [`unquote_doc_bytes`] definition and choose their own
+/// string encoding.
+fn read_doc_record(
     lisp_directory: Option<&str>,
     file: &str,
-    position: i64,
-) -> Result<DocStringRead, Flow> {
-    let position = position.unsigned_abs();
+    position: DocBytePosition,
+) -> Result<DocRecord, Flow> {
+    let position = position.get();
     let resolved = resolve_compiled_doc_path(lisp_directory, file);
     let mut handle = match File::open(&resolved) {
         Ok(file_handle) => file_handle,
         Err(err) if matches!(err.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
-            return Ok(DocStringRead::Resolved(Value::string(format!(
-                "Cannot open doc string file \"{file}\"\n"
-            ))));
+            return Ok(DocRecord::CannotOpen);
         }
         Err(err) => {
             return Err(signal(
@@ -638,14 +740,81 @@ fn load_compiled_doc_string(
     };
 
     let Some(end_index) = end_index else {
-        return Ok(DocStringRead::Unresolved);
+        return Ok(DocRecord::Unresolved);
     };
 
     if offset == 0 || buffer.len() < offset || !compiled_doc_prefix_is_valid(&buffer[..offset]) {
-        return Ok(DocStringRead::Unresolved);
+        return Ok(DocRecord::Unresolved);
     }
 
-    decode_compiled_doc_bytes(&buffer[offset..end_index]).map(DocStringRead::Resolved)
+    Ok(DocRecord::Resolved(buffer[offset..=end_index].to_vec()))
+}
+
+/// What `get_doc_string` produced for the documentation accessor
+/// (`src/doc.c`), already unquoted and decoded as Emacs-multibyte text.
+///
+/// `Unresolved` is GNU's `return Qnil` and makes the documentation code retry
+/// after a reread (see [`DocumentationOutcome::Unresolved`]).
+enum DocStringRead {
+    Resolved(Value),
+    Unresolved,
+}
+
+fn load_compiled_doc_string(
+    lisp_directory: Option<&str>,
+    file: &str,
+    position: DocBytePosition,
+) -> Result<DocStringRead, Flow> {
+    match read_doc_record(lisp_directory, file, position)? {
+        DocRecord::Resolved(bytes) => {
+            let unquoted = unquote_doc_bytes(&bytes, DocUnquoteRules::StrictFile)
+                .map_err(doc_unquote_error_flow)?;
+            Ok(DocStringRead::Resolved(Value::string(
+                super::load::decode_emacs_utf8(&unquoted),
+            )))
+        }
+        DocRecord::Unresolved => Ok(DocStringRead::Unresolved),
+        DocRecord::CannotOpen => Ok(DocStringRead::Resolved(Value::string(
+            cannot_open_doc_string(file),
+        ))),
+    }
+}
+
+/// GNU's `Cannot open doc string file "FILE"` value (`src/doc.c:155-160`).
+fn cannot_open_doc_string(file: &str) -> String {
+    format!("Cannot open doc string file \"{file}\"\n")
+}
+
+/// What the reader-side lazy conversion returns when no saved `#@` block holds
+/// the record and GNU falls back to `get_doc_string (val, 1)`.
+///
+/// That fallback is unibyte (`src/lread.c:3500-3506`): the same lazy mechanism
+/// may carry bytecode rather than documentation text.
+pub(crate) enum LazyDocRead {
+    Resolved(crate::heap_types::LispString),
+    Unresolved,
+    CannotOpen(crate::heap_types::LispString),
+}
+
+/// GNU `get_lazy_string`'s file arm: `get_doc_string (val, 1)`.
+pub(crate) fn load_lazy_doc_string(
+    lisp_directory: Option<&str>,
+    file: &str,
+    position: DocBytePosition,
+) -> Result<LazyDocRead, Flow> {
+    match read_doc_record(lisp_directory, file, position)? {
+        DocRecord::Resolved(bytes) => {
+            let unquoted = unquote_doc_bytes(&bytes, DocUnquoteRules::StrictFile)
+                .map_err(doc_unquote_error_flow)?;
+            Ok(LazyDocRead::Resolved(
+                crate::heap_types::LispString::from_unibyte(unquoted),
+            ))
+        }
+        DocRecord::Unresolved => Ok(LazyDocRead::Unresolved),
+        DocRecord::CannotOpen => Ok(LazyDocRead::CannotOpen(
+            crate::heap_types::LispString::from_unibyte(cannot_open_doc_string(file).into_bytes()),
+        )),
+    }
 }
 
 fn startup_doc_quote_style_display(doc: &str) -> String {
@@ -769,10 +938,7 @@ fn documentation_property_plan(
 ) -> Result<DocumentationPlan, Flow> {
     expect_min_max_args("documentation-property", args, 2, 3)?;
     let obarray = eval.obarray();
-    let lisp_directory = eval.variable_value_by_name("lisp-directory").and_then(|v| {
-        v.as_lisp_string()
-            .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
-    });
+    let lisp_directory = lisp_directory_string(eval.variable_value_by_name("lisp-directory"));
 
     let prop = args[1];
     let (symbol_id, mut property_value) =
@@ -974,3 +1140,7 @@ pub(crate) fn builtin_snarf_documentation(
 #[cfg(test)]
 #[path = "tests/doc_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/lazy_doc_test.rs"]
+mod lazy_doc_tests;

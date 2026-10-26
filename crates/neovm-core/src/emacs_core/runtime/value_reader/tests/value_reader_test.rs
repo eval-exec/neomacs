@@ -950,6 +950,8 @@ fn read_window_elc_does_not_leak_docstring_fragments() {
         let res = read_one_from_encoded_file_bytes(
             content,
             pos,
+            crate::emacs_core::doc::DocBytePosition::from_file_offset(0),
+            &mut crate::emacs_core::value_reader::SavedDocBlocks::new(),
             VariableView::canonical(
                 CanonicalAccess::TEST,
                 &crate::emacs_core::symbol::Obarray::new(),

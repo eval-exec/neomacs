@@ -7069,7 +7069,7 @@ fn bootstrap_runtime_cl_transform_lambda_cl_quote_key_defaults_matches_gnu() {
     );
 }
 
-fn eval_rendered(eval: &mut Context, form: &str) -> String {
+pub(super) fn eval_rendered(eval: &mut Context, form: &str) -> String {
     match eval.eval_str(form) {
         Ok(value) => format!(
             "OK {}",
@@ -11572,6 +11572,8 @@ fn elc_loading_defines_defcustom_variables() {
     let (form0, _next_pos) = crate::emacs_core::value_reader::read_one_from_encoded_file_bytes(
         &raw_bytes[content_start..],
         0,
+        crate::emacs_core::doc::DocBytePosition::from_file_offset(content_start),
+        &mut crate::emacs_core::value_reader::SavedDocBlocks::new(),
         VariableView::canonical(CanonicalAccess::TEST, &test_ob()),
         None,
     )

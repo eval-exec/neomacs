@@ -152,13 +152,15 @@ pub fn read_one_with_source_multibyte(
 ///
 /// This is intentionally separate from the unibyte string API above.  GNU
 /// decodes file input but preserves each byte of unibyte Lisp objects.
-pub(crate) fn read_one_from_encoded_file_bytes(
-    input: &[u8],
+pub(crate) fn read_one_from_encoded_file_bytes<'a>(
+    input: &'a [u8],
     start: usize,
-    vars: crate::emacs_core::eval::VariableView<'_>,
+    origin: crate::emacs_core::doc::DocBytePosition,
+    saved_doc_blocks: &'a mut SavedDocBlocks,
+    vars: crate::emacs_core::eval::VariableView<'a>,
     shorthands: Option<&ReadSymbolShorthands>,
 ) -> Result<Option<(Value, usize)>, ReadError> {
-    let mut reader = Reader::new_file_bytes(input, vars);
+    let mut reader = Reader::new_file_bytes(input, origin, saved_doc_blocks, vars);
     reader.shorthands = shorthands.into();
     reader.advance_raw_to(EmacsBytePos::new(start));
     if !reader.skip_ws_and_comments() {
@@ -216,6 +218,11 @@ pub fn read_one_with_locate_syms_with_symbols(
 mod callable;
 
 pub(crate) use callable::read_from_callable;
+
+mod lazy_doc;
+
+pub(crate) use lazy_doc::SavedDocBlocks;
+use lazy_doc::{LazyDocPolicy, LazyDocRef, LiveLoadFileName};
 
 /// Read a single form directly from a buffer byte range.
 ///
@@ -1051,6 +1058,15 @@ struct Reader<'a> {
     /// The variables the reader sees, for resolving `#$` to the current value of
     /// `load-file-name` (matching GNU's `Vload_file_name`).
     environment: ReaderEnvironment<'a>,
+    /// GNU `load-force-doc-strings`, memoized for a byte-backed source on first
+    /// consultation; a callable source is consulted live at each completion.
+    lazy_doc_policy: Cell<LazyDocPolicy>,
+    /// The absolute file position of `source[0]` for a compiled-file byte
+    /// slice; `None` for every other source.
+    file_origin: Option<crate::emacs_core::doc::DocBytePosition>,
+    /// GNU's saved `#@` blocks, owned by the compiled-file read loop and
+    /// shared by every top-level form it reads.
+    saved_doc_blocks: Option<&'a mut SavedDocBlocks>,
     /// Active `read-symbol-shorthands`, if any.  GNU's reader rewrites symbol
     /// names before interning when this dynamic variable is non-nil.
     shorthands: ReaderShorthands<'a>,
@@ -1251,6 +1267,9 @@ impl<'a> Reader<'a> {
             symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(0),
             environment: ReaderEnvironment::Variables(vars),
+            lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
+            file_origin: None,
+            saved_doc_blocks: None,
             shorthands: ReaderShorthands::Unbound,
             step_cache: Cell::new(None),
             dot_syntax: Cell::new(None),
@@ -1261,7 +1280,12 @@ impl<'a> Reader<'a> {
     /// does.  Each byte is its own character, which is exactly what the
     /// Latin-1 envelope used to deliver, so every token, string and escape
     /// path sees the identical code sequence.
-    fn new_file_bytes(input: &'a [u8], vars: crate::emacs_core::eval::VariableView<'a>) -> Self {
+    fn new_file_bytes(
+        input: &'a [u8],
+        origin: crate::emacs_core::doc::DocBytePosition,
+        saved_doc_blocks: &'a mut SavedDocBlocks,
+        vars: crate::emacs_core::eval::VariableView<'a>,
+    ) -> Self {
         Self {
             source: ReaderSource::FileBytes(input),
             source_semantics: ReaderSourceSemantics::EncodedFileBytes,
@@ -1276,6 +1300,9 @@ impl<'a> Reader<'a> {
             symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(0),
             environment: ReaderEnvironment::Variables(vars),
+            lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
+            file_origin: Some(origin),
+            saved_doc_blocks: Some(saved_doc_blocks),
             shorthands: ReaderShorthands::Unbound,
             step_cache: Cell::new(None),
             dot_syntax: Cell::new(None),
@@ -1326,6 +1353,9 @@ impl<'a> Reader<'a> {
             symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(start),
             environment: ReaderEnvironment::Variables(vars),
+            lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
+            file_origin: None,
+            saved_doc_blocks: None,
             shorthands: ReaderShorthands::Unbound,
             step_cache: Cell::new(None),
             dot_syntax: Cell::new(None),
@@ -1367,6 +1397,9 @@ impl<'a> Reader<'a> {
                 }
             },
             environment: ReaderEnvironment::Variables(vars),
+            lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
+            file_origin: None,
+            saved_doc_blocks: None,
             shorthands: ReaderShorthands::Unbound,
             step_cache: Cell::new(None),
             dot_syntax: Cell::new(None),
@@ -1658,7 +1691,24 @@ impl<'a> Reader<'a> {
                                 acc = Value::cons(item, acc);
                                 push_scratch_gc_root(acc);
                             }
-                            return Ok(acc);
+                            // GNU `lread.c:4294-4301`: a completed dotted list
+                            // whose car is the exact live `load-file-name`
+                            // object and whose cdr is a fixnum is a lazy doc
+                            // reference when `load-force-doc-strings` is
+                            // non-nil. The admission is typed (identity, never
+                            // string equality) and applies to the whole
+                            // object's car/cdr, so `(x #$ . N)` is ordinary
+                            // data. `acc` is rooted above; the converted string
+                            // is rooted here for the enclosing read.
+                            let completed = acc;
+                            if let Some(reference) =
+                                LazyDocRef::admit(completed, self.lazy_doc_policy())
+                            {
+                                let converted = self.lazy_doc_string(reference)?;
+                                push_scratch_gc_root(converted);
+                                return Ok(converted);
+                            }
+                            return Ok(completed);
                         }
                         _ => {
                             return Err(self.error_after_current("expected )"));
@@ -2275,7 +2325,9 @@ impl<'a> Reader<'a> {
                         }
                         target
                             .set_properties(chunk[0], chunk[1], chunk[2])
-                            .map_err(|flow| self.property_signal_error(flow))?;
+                            .map_err(|flow| {
+                                self.flow_signal_error(flow, "Invalid text property argument")
+                            })?;
                     }
                     Ok(string)
                 })();
@@ -2529,7 +2581,14 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn property_signal_error(&self, flow: crate::emacs_core::error::Flow) -> ReadError {
+    /// A Lisp `Flow` from a reader-side native call as a typed read error.
+    /// `fallback_message` names the operation when the flow carries no signal
+    /// datum (a throw into the reader cannot happen on these paths).
+    fn flow_signal_error(
+        &self,
+        flow: crate::emacs_core::error::Flow,
+        fallback_message: &str,
+    ) -> ReadError {
         use crate::emacs_core::error::FlowRef;
         match flow.kind() {
             FlowRef::Signal(signal) => {
@@ -2538,7 +2597,7 @@ impl<'a> Reader<'a> {
                     .data
                     .first()
                     .and_then(|value| value.as_str_owned())
-                    .unwrap_or_else(|| "Invalid text property argument".to_string());
+                    .unwrap_or_else(|| fallback_message.to_string());
                 self.signal_error(
                     crate::emacs_core::error::UserCondition::from(symbol),
                     signal.data.clone(),
@@ -2546,7 +2605,90 @@ impl<'a> Reader<'a> {
                 )
             }
             FlowRef::Throw(_) | FlowRef::ThreadBlocked(_) | FlowRef::Shutdown(_) => {
-                self.ordinary_error("Invalid text property control flow")
+                self.ordinary_error(fallback_message)
+            }
+        }
+    }
+
+    /// GNU `load_force_doc_strings` and the live `load-file-name` object at a
+    /// dotted-list completion. A byte-backed source cannot run Lisp during the
+    /// read, so its answer is memoized on first use (a read with no dotted list
+    /// pays nothing); a callable source can change either binding at every
+    /// character, so it is consulted live.
+    fn lazy_doc_policy(&self) -> LazyDocPolicy {
+        // The live `load-file-name` lookup is made only when the flag is on,
+        // so an ordinary read (and every normal `.elc` load) pays one symbol
+        // lookup at most.
+        fn observe(
+            forced: Option<Value>,
+            load_file_name: impl FnOnce() -> Option<Value>,
+        ) -> LazyDocPolicy {
+            if !forced.as_ref().is_some_and(|value| value.is_truthy()) {
+                return LazyDocPolicy::Disabled;
+            }
+            LazyDocPolicy::Forced {
+                witness: LiveLoadFileName::observe(load_file_name()),
+            }
+        }
+        match self.environment {
+            ReaderEnvironment::Variables(vars) => {
+                let cached = self.lazy_doc_policy.get();
+                if !matches!(cached, LazyDocPolicy::Unknown) {
+                    return cached;
+                }
+                let policy = observe(vars.value_by_name("load-force-doc-strings"), || {
+                    vars.value_by_name("load-file-name")
+                });
+                self.lazy_doc_policy.set(policy);
+                policy
+            }
+            ReaderEnvironment::Callable(source) => {
+                observe(source.variable("load-force-doc-strings"), || {
+                    source.variable("load-file-name")
+                })
+            }
+        }
+    }
+
+    /// GNU `get_lazy_string` (`src/lread.c:3495-3550`): the saved `#@` block
+    /// first, else `get_doc_string (val, 1)`. The result is unibyte; GNU's
+    /// non-string-file and unresolved-record answers are nil, a missing file is
+    /// its `Cannot open doc string file` sentence, and malformed data signals.
+    fn lazy_doc_string(&self, reference: LazyDocRef) -> Result<Value, ReadError> {
+        let position = reference.position();
+        if let Some(saved) = self.saved_doc_blocks.as_deref()
+            && let Some(unquoted) = saved.unquoted(position)
+        {
+            let bytes = unquoted.map_err(|error| {
+                self.flow_signal_error(
+                    crate::emacs_core::doc::doc_unquote_error_flow(error),
+                    "Invalid data in documentation file",
+                )
+            })?;
+            return Ok(Value::heap_string(
+                crate::heap_types::LispString::from_unibyte(bytes),
+            ));
+        }
+
+        let file_value = reference.file_value();
+        let Some(file) = file_value.as_lisp_string() else {
+            // GNU `get_doc_string`: `!STRINGP (file)` answers Qnil.
+            return Ok(Value::NIL);
+        };
+        let file = crate::emacs_core::emacs_char::to_utf8_lossy(file.as_bytes());
+        let lisp_directory =
+            crate::emacs_core::doc::lisp_directory_string(self.environment.value("lisp-directory"));
+        match crate::emacs_core::doc::load_lazy_doc_string(
+            lisp_directory.as_deref(),
+            &file,
+            position,
+        )
+        .map_err(|flow| self.flow_signal_error(flow, "Read error in documentation file"))?
+        {
+            crate::emacs_core::doc::LazyDocRead::Resolved(string) => Ok(Value::heap_string(string)),
+            crate::emacs_core::doc::LazyDocRead::Unresolved => Ok(Value::NIL),
+            crate::emacs_core::doc::LazyDocRead::CannotOpen(string) => {
+                Ok(Value::heap_string(string))
             }
         }
     }
@@ -2579,6 +2721,13 @@ impl<'a> Reader<'a> {
             }
         }
 
+        // GNU `skip_lazy_string` records this block when
+        // `load-force-doc-strings` is non-nil and the source is a file
+        // (`src/lread.c:3445-3485`). The recorded position is absolute in the
+        // file, so a pair read from a later top-level form can still resolve
+        // it; the reader's own position is relative to its byte slice.
+        let forced = self.lazy_doc_policy().is_forced();
+        let block_start = self.pos;
         match self.source {
             ReaderSource::Runtime(_) | ReaderSource::FileBytes(_) => {
                 self.skip_exact_source_bytes(len)?
@@ -2586,6 +2735,23 @@ impl<'a> Reader<'a> {
             ReaderSource::LispString(_) | ReaderSource::Buffer(_) | ReaderSource::Callable(_) => {
                 self.skip_dynamic_doc_string_in_non_file_source();
             }
+        }
+        let mut block_error = None;
+        if forced
+            && let (Some(origin), Some(saved)) =
+                (self.file_origin, self.saved_doc_blocks.as_deref_mut())
+            && let ReaderSource::FileBytes(bytes) = self.source
+        {
+            match bytes.get(block_start..self.pos) {
+                Some(block) => match origin.checked_advance(block_start) {
+                    Some(position) => saved.record(position, block),
+                    None => block_error = Some("#@ position overflow"),
+                },
+                None => block_error = Some("#@ block out of range"),
+            }
+        }
+        if let Some(message) = block_error {
+            return Err(self.error(message));
         }
         self.read_form()
     }
@@ -4229,6 +4395,10 @@ fn maybe_recombine_latin1_emacs(data: Vec<u8>) -> crate::heap_types::LispString 
 #[cfg(test)]
 #[path = "tests/value_reader_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/lazy_doc_test.rs"]
+mod lazy_doc_tests;
 
 #[cfg(test)]
 #[path = "tests/declared_shorthand_counts.rs"]

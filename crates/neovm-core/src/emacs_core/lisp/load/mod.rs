@@ -1836,11 +1836,16 @@ where
 /// parse-all-first, no compilation cache, no macro expansion cache.
 ///
 /// This matches the structure of `readevalloop` in GNU Emacs `lread.c`.
+///
+/// `content_start` is the absolute file position of `content[0]`: the `.elc`
+/// loader skips the `;ELC` header before handing the bytes here, but GNU's
+/// `#@` saved-block positions and `#$` offsets are absolute file positions.
 fn streaming_readevalloop(
     eval: &mut super::eval::Context,
     path: &Path,
     hist_file_name: &LispString,
     content: &[u8],
+    content_start: usize,
     source: super::reader::ReadSourceObject,
     shorthands: Option<&ReadSymbolShorthands>,
     macroexpand_fn: Option<Value>,
@@ -1854,6 +1859,11 @@ fn streaming_readevalloop(
 
     let mut pos = 0;
     let mut form_idx = 0;
+    // GNU's `saved_strings`: the last two `#@` blocks skipped while
+    // `load-force-doc-strings` was non-nil. It outlives each `Reader` because
+    // the streaming loop reads one top-level form per reader instance, and a
+    // block may be skipped in one form and referenced from the next.
+    let mut saved_doc_blocks = crate::emacs_core::value_reader::SavedDocBlocks::new();
 
     loop {
         debug_assert_eq!(
@@ -1864,6 +1874,8 @@ fn streaming_readevalloop(
         let read_result = super::value_reader::read_one_from_encoded_file_bytes(
             content,
             pos,
+            crate::emacs_core::doc::DocBytePosition::from_file_offset(content_start),
+            &mut saved_doc_blocks,
             eval.variables(),
             shorthands,
         )
@@ -2835,7 +2847,16 @@ fn load_file_body(
             // `load-true-file-name` this context just bound.
             let source =
                 super::reader::ReadSourceObject::LoadFile(Value::heap_string(found.clone()));
-            streaming_readevalloop(eval, path, &hist_file_name, content, source, None, None)
+            streaming_readevalloop(
+                eval,
+                path,
+                &hist_file_name,
+                content,
+                content_start,
+                source,
+                None,
+                None,
+            )
         })
     } else {
         // GNU `Fload` (`src/lread.c`) lets the coding system swallow a leading
@@ -6862,6 +6883,9 @@ pub(crate) fn expand_tilde(path: &str) -> String {
 #[cfg(test)]
 #[path = "tests/eager_failure_test.rs"]
 mod eager_failure_tests;
+#[cfg(test)]
+#[path = "tests/lazy_doc_test.rs"]
+mod lazy_doc_tests;
 #[cfg(test)]
 #[path = "tests/load_test.rs"]
 mod tests;
