@@ -10,6 +10,28 @@ pub(in crate::tagged::gc::mutator_registration) struct PreparedNameFunction {
     pub(super) key: SymbolHandle,
 }
 
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+impl PreparedNameFunction {
+    pub(in crate::tagged::gc::mutator_registration) fn validate_keeper(
+        &self,
+        keeper: &KeeperSymbols<'_>,
+    ) -> Result<(), RegistrationError> {
+        self.keeper_lambda(keeper).map(|_| ())
+    }
+
+    pub(in crate::tagged::gc::mutator_registration) fn keeper_lambda(
+        &self,
+        keeper: &KeeperSymbols<'_>,
+    ) -> Result<SymId, RegistrationError> {
+        keeper.backing(&self.key)?;
+        keeper
+            .registry
+            .symbols
+            .functions
+            .lambda_for_keeper(self.key.symbol, keeper)
+    }
+}
+
 impl ParallelHeapEra<'_> {
     pub(in crate::tagged::gc::mutator_registration) fn prepare_name_function_symbol(
         &self,

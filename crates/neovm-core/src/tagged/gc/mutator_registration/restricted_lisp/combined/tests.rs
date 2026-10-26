@@ -340,7 +340,14 @@ fn p3sym_c6_typed_tape_refuses_every_excluded_operation() {
         ExcludedOperation::Jit,
         ExcludedOperation::Callback,
         ExcludedOperation::LegacyContext,
-        ExcludedOperation::SharedGraphMutation,
+        ExcludedOperation::Cons,
+        ExcludedOperation::Car,
+        ExcludedOperation::Cdr,
+        ExcludedOperation::SetCar,
+        ExcludedOperation::SetCdr,
+        ExcludedOperation::StringMutation,
+        ExcludedOperation::PropertyMutation,
+        ExcludedOperation::TableMutation,
     ] {
         let result = CombinedTape::admit(
             vec![

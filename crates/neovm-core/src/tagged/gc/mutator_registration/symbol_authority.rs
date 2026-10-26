@@ -1,4 +1,6 @@
 //! Sealed symbol authority; running values move only between owner root homes.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+pub(super) mod combined_inputs;
 mod globals;
 mod intern;
 mod roots;

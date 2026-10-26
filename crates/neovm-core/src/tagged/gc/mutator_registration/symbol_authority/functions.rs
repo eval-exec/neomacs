@@ -27,6 +27,18 @@ impl From<RegistrationError> for FunctionError {
     }
 }
 
+/// The stopped mixed-input checker shares the exact running parser. The
+/// copied child stays inside symbol authority and never becomes an executor
+/// operand or an owning root in an admission receipt.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+pub(super) fn frozen_constant(
+    value: Value,
+    lambda: SymId,
+    subset: ReturnSubset,
+) -> Result<Value, FunctionError> {
+    constant::decode(value, lambda, subset)
+}
+
 // Test-only labels for the remaining preparation bodies; no runtime opcode.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

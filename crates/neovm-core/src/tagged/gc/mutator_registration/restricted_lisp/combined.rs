@@ -53,7 +53,14 @@ enum ExcludedOperation {
     Jit,
     Callback,
     LegacyContext,
-    SharedGraphMutation,
+    Cons,
+    Car,
+    Cdr,
+    SetCar,
+    SetCdr,
+    StringMutation,
+    PropertyMutation,
+    TableMutation,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CombinedInstruction {

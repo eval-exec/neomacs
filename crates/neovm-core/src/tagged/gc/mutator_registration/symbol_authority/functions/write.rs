@@ -19,6 +19,29 @@ pub(in crate::tagged::gc::mutator_registration) struct FunctionState {
 // words and symbol identities cross threads, never a Value or manager view.
 unsafe impl Sync for FunctionState {}
 impl FunctionState {
+    /// Read prepared scalar metadata using the actual matching stopped
+    /// receiver, without the serial interner's legacy TLS lookup caches.
+    #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+    pub(super) fn lambda_for_keeper(
+        &self,
+        id: SymId,
+        keeper: &KeeperSymbols<'_>,
+    ) -> Result<SymId, RegistrationError> {
+        if !std::ptr::eq(self, &keeper.registry.symbols.functions) {
+            return Err(RegistrationError::StaleRegistration);
+        }
+        keeper.registry.symbols.ready()?;
+        // SAFETY: this exact function state belongs to the retained keeper;
+        // its exclusive AllStopped loan and zero word exclude any record
+        // preparation, writer or running reader throughout this short copy.
+        let records = unsafe { &*self.records.get() };
+        records
+            .iter()
+            .find(|record| record.symbol == id)
+            .map(|record| record.lambda)
+            .ok_or(RegistrationError::Publication)
+    }
+
     /// # Safety
     /// The matching live symbol reader holds the era's word. No writer or
     /// keeper can change the prepared record vector during this short loan.
