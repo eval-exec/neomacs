@@ -20,6 +20,13 @@ impl TerminalSize {
     pub(crate) const fn new(rows: u16, columns: u16) -> Self {
         Self { rows, columns }
     }
+
+    pub(crate) const fn rows(self) -> u16 {
+        self.rows
+    }
+    pub(crate) const fn columns(self) -> u16 {
+        self.columns
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,13 +50,42 @@ impl CastHeader {
     }
 }
 
+/// Process status at the asciicast boundary; arbitrary mode integers cannot
+/// enter recording finalization. The raw integer exists only in wire encoding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub(crate) struct RecordingExitStatus(i32);
+
+impl RecordingExitStatus {
+    #[cfg(test)]
+    pub(crate) const SUCCESS: Self = Self(0);
+    pub(crate) const FAILURE: Self = Self(1);
+    const fn as_i32(self) -> i32 {
+        self.0
+    }
+}
+
+impl From<std::process::ExitStatus> for RecordingExitStatus {
+    fn from(status: std::process::ExitStatus) -> Self {
+        use std::os::unix::process::ExitStatusExt;
+        Self(
+            status
+                .code()
+                .or_else(|| status.signal().map(|signal| 128 + signal))
+                .unwrap_or(1),
+        )
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<RecordingExitStatus>() == std::mem::size_of::<i32>());
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CastEvent {
     Output(String),
     Input(String),
     Resize(TerminalSize),
     Marker(String),
-    Exit(i32),
+    Exit(RecordingExitStatus),
 }
 
 /// Pacing applied around each key send of a recorded run, in milliseconds,
@@ -57,11 +93,9 @@ pub(crate) enum CastEvent {
 /// hundreds of keys in a few seconds otherwise produces a cast nobody can
 /// follow.
 ///
-/// One send is `sleep, key, sleep`, so a single-session scenario costs
-/// `2 * delay` per key and a paired one `4 * delay`: the paired drivers send
-/// to both editors from one thread, so each `send_both` key pays the leading
-/// and trailing wait of two sessions. At this default that is 4 s and 8 s a
-/// key -- about 150 or 75 keys to reach the 600 s nextest slow-timeout.
+/// One ordered send is followed by this playback delay. Paired drivers pay
+/// one delay per editor. The delay proves neither redisplay nor startup
+/// completion; CI disables it and retains its existing readiness policy.
 pub(crate) const DEFAULT_RECORDING_DELAY: Duration = Duration::from_millis(2000);
 
 /// Whether TUI sessions emit replayable terminal recordings.
@@ -298,7 +332,7 @@ impl<W: Write> AsciicastV3Writer<W> {
             CastEvent::Input(data) => ("i", data),
             CastEvent::Resize(size) => ("r", format!("{}x{}", size.columns, size.rows)),
             CastEvent::Marker(label) => ("m", label),
-            CastEvent::Exit(status) => ("x", status.to_string()),
+            CastEvent::Exit(status) => ("x", status.as_i32().to_string()),
         };
         let event = json!([interval.as_secs_f64(), code, data]);
         serde_json::to_writer(&mut self.output, &event).map_err(io::Error::other)?;
@@ -360,6 +394,13 @@ impl Utf8Stream {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecordingLifecycle {
+    Open,
+    Finished,
+    Failed,
+}
+
 pub(crate) struct ActiveRecording {
     writer: AsciicastV3Writer<BufWriter<File>>,
     path: PathBuf,
@@ -368,7 +409,8 @@ pub(crate) struct ActiveRecording {
     dirty: bool,
     output: Utf8Stream,
     input: Utf8Stream,
-    finished: bool,
+    raw_input: BufWriter<File>,
+    lifecycle: RecordingLifecycle,
 }
 
 impl ActiveRecording {
@@ -385,6 +427,10 @@ impl ActiveRecording {
         // sessions fit in this buffer and reach the filesystem in one write
         // when the session finishes; unusually large casts stream in bounded
         // chunks instead of growing memory without limit.
+        // Every committed prefix also has a lossless length-delimited record.
+        // A failed write may end halfway through UTF-8, which asciicast's text
+        // input events cannot represent without replacement characters.
+        let raw_input = BufWriter::new(File::create(path.with_extension("input"))?);
         let file = BufWriter::with_capacity(CAST_BUFFER_CAPACITY, File::create(&path)?);
         let mut writer =
             AsciicastV3Writer::new(file, CastHeader::new(size, terminal_type, identity.title()))?;
@@ -401,14 +447,36 @@ impl ActiveRecording {
             dirty: false,
             output: Utf8Stream::default(),
             input: Utf8Stream::default(),
-            finished: false,
+            raw_input,
+            lifecycle: RecordingLifecycle::Open,
         })
     }
 
+    fn ensure_open(&self) -> io::Result<()> {
+        match self.lifecycle {
+            RecordingLifecycle::Open => {}
+            RecordingLifecycle::Finished | RecordingLifecycle::Failed => {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "TUI recording is closed or failed",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn write_at(&mut self, observed_at: Instant, event: CastEvent) -> io::Result<()> {
-        let interval = observed_at.saturating_duration_since(self.last_event);
+        self.ensure_open()?;
+        let interval = observed_at
+            .checked_duration_since(self.last_event)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "out-of-order TUI recording observation",
+                )
+            })?;
         self.writer.write_event(interval, event)?;
-        self.last_event = self.last_event.max(observed_at);
+        self.last_event = observed_at;
         self.dirty = true;
         Ok(())
     }
@@ -432,6 +500,7 @@ impl ActiveRecording {
     }
 
     fn output_at(&mut self, observed_at: Instant, bytes: &[u8]) -> io::Result<()> {
+        self.ensure_open()?;
         let decoded = self.output.decode(bytes);
         if !decoded.is_empty() {
             self.write_at(observed_at, CastEvent::Output(decoded))?;
@@ -439,17 +508,26 @@ impl ActiveRecording {
         Ok(())
     }
 
-    fn input(&mut self, bytes: &[u8]) -> io::Result<()> {
+    fn input_at(&mut self, observed_at: Instant, bytes: &[u8]) -> io::Result<()> {
+        self.ensure_open()?;
+        let length = u64::try_from(bytes.len()).map_err(io::Error::other)?;
+        self.raw_input.write_all(&length.to_le_bytes())?;
+        self.raw_input.write_all(bytes)?;
+        self.raw_input.flush()?;
         let decoded = self.input.decode(bytes);
         if !decoded.is_empty() {
-            self.write(CastEvent::Input(decoded))?;
+            self.write_at(observed_at, CastEvent::Input(decoded))?;
         }
         Ok(())
     }
 
-    fn finish(&mut self, status: i32) -> io::Result<()> {
-        if self.finished {
-            return Ok(());
+    fn finish(&mut self, status: RecordingExitStatus) -> io::Result<()> {
+        match self.lifecycle {
+            RecordingLifecycle::Finished => return Ok(()),
+            RecordingLifecycle::Failed => {
+                return Err(io::Error::other("TUI recording failed before completion"));
+            }
+            RecordingLifecycle::Open => {}
         }
         let output_tail = self.output.finish();
         if !output_tail.is_empty() {
@@ -461,7 +539,8 @@ impl ActiveRecording {
         }
         self.write(CastEvent::Exit(status))?;
         self.flush()?;
-        self.finished = true;
+        self.raw_input.flush()?;
+        self.lifecycle = RecordingLifecycle::Finished;
         Ok(())
     }
 }
@@ -478,48 +557,29 @@ impl SessionRecording {
         identity: RecordingIdentity,
         terminal_type: &str,
         size: TerminalSize,
-    ) -> Self {
+    ) -> io::Result<Self> {
         match policy {
-            RecordingPolicy::Off => Self::Off,
+            RecordingPolicy::Off => Ok(Self::Off),
             RecordingPolicy::On => {
                 let path = identity.artifact_path(root);
-                match ActiveRecording::start(path.clone(), &identity, terminal_type, size) {
-                    Ok(recording) => Self::On(recording),
-                    Err(error) => {
-                        eprintln!(
-                            "TUI recording disabled after failing to create {}: {error}",
-                            path.display()
-                        );
-                        Self::Off
-                    }
-                }
+                ActiveRecording::start(path, &identity, terminal_type, size).map(Self::On)
             }
-        }
-    }
-
-    fn active_mut(&mut self) -> Option<&mut ActiveRecording> {
-        match self {
-            Self::Off => None,
-            Self::On(recording) => Some(recording),
         }
     }
 
     fn apply(
         &mut self,
-        operation: &'static str,
         action: impl FnOnce(&mut ActiveRecording) -> io::Result<()>,
-    ) {
-        let failure = self.active_mut().and_then(|recording| {
-            action(recording)
-                .err()
-                .map(|error| (recording.path.clone(), error))
-        });
-        if let Some((path, error)) = failure {
-            eprintln!(
-                "TUI recording disabled after failing to {operation} {}: {error}",
-                path.display()
-            );
-            *self = Self::Off;
+    ) -> io::Result<()> {
+        match self {
+            Self::Off => Ok(()),
+            Self::On(recording) => match action(recording) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    recording.lifecycle = RecordingLifecycle::Failed;
+                    Err(error)
+                }
+            },
         }
     }
 
@@ -530,39 +590,45 @@ impl SessionRecording {
         }
     }
 
-    pub(crate) fn output_at(&mut self, observed_at: Instant, bytes: &[u8]) {
-        self.apply("write PTY output to", |recording| {
-            recording.output_at(observed_at, bytes)
-        });
+    pub(crate) fn output_at(&mut self, observed_at: Instant, bytes: &[u8]) -> io::Result<()> {
+        self.apply(|recording| recording.output_at(observed_at, bytes))
+    }
+
+    pub(crate) fn input_at(&mut self, observed_at: Instant, bytes: &[u8]) -> io::Result<()> {
+        self.apply(|recording| recording.input_at(observed_at, bytes))
+    }
+
+    pub(crate) fn resize_at(&mut self, observed_at: Instant, size: TerminalSize) -> io::Result<()> {
+        self.apply(|recording| recording.write_at(observed_at, CastEvent::Resize(size)))
+    }
+
+    pub(crate) fn marker_at(&mut self, observed_at: Instant, label: &str) -> io::Result<()> {
+        self.apply(|recording| recording.write_at(observed_at, CastEvent::Marker(label.to_owned())))
+    }
+
+    pub(crate) fn flush_if_due(&mut self) -> io::Result<()> {
+        self.apply(ActiveRecording::flush_if_due)
+    }
+
+    pub(crate) fn finish(&mut self, status: RecordingExitStatus) -> io::Result<()> {
+        self.apply(|recording| recording.finish(status))
     }
 
     #[cfg(test)]
-    pub(crate) fn output(&mut self, bytes: &[u8]) {
-        self.output_at(Instant::now(), bytes);
+    pub(crate) fn output(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.output_at(Instant::now(), bytes)
     }
-
-    pub(crate) fn input(&mut self, bytes: &[u8]) {
-        self.apply("write PTY input to", |recording| recording.input(bytes));
+    #[cfg(test)]
+    pub(crate) fn input(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.input_at(Instant::now(), bytes)
     }
-
-    pub(crate) fn resize(&mut self, size: TerminalSize) {
-        self.apply("write a resize event to", |recording| {
-            recording.write(CastEvent::Resize(size))
-        });
+    #[cfg(test)]
+    pub(crate) fn resize(&mut self, size: TerminalSize) -> io::Result<()> {
+        self.resize_at(Instant::now(), size)
     }
-
-    pub(crate) fn marker(&mut self, label: &str) {
-        self.apply("write a marker to", |recording| {
-            recording.write(CastEvent::Marker(label.to_owned()))
-        });
-    }
-
-    pub(crate) fn flush_if_due(&mut self) {
-        self.apply("flush", ActiveRecording::flush_if_due);
-    }
-
-    pub(crate) fn finish(&mut self, status: i32) {
-        self.apply("finish", |recording| recording.finish(status));
+    #[cfg(test)]
+    pub(crate) fn marker(&mut self, label: &str) -> io::Result<()> {
+        self.marker_at(Instant::now(), label)
     }
 }
 

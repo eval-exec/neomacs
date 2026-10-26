@@ -439,7 +439,9 @@ fn editor_launch(
     display_env: &SymmetricDisplayEnvironment,
     gnu: bool,
 ) -> TuiLaunch {
-    let mut launch = TuiLaunch::new(runtime.executable.as_os_str()).args(["-nw", "-Q"]);
+    let mut launch = TuiLaunch::new(runtime.executable.as_os_str())
+        .with_uncertified_startup()
+        .args(["-nw", "-Q"]);
     if gnu {
         launch = launch.arg("-no-comp-spawn").arg(QUIET_NATIVE_COMP_EVAL);
     }

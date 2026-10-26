@@ -6,8 +6,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{
-    AsciicastV3Writer, CastEvent, CastHeader, RecordingConfig, RecordingIdentity, RecordingPolicy,
-    SessionRecording, TerminalSize, TuiRecordingScope,
+    AsciicastV3Writer, CastEvent, CastHeader, RecordingConfig, RecordingExitStatus,
+    RecordingIdentity, RecordingPolicy, SessionRecording, TerminalSize, TuiRecordingScope,
 };
 
 #[test]
@@ -47,7 +47,10 @@ fn asciicast_v3_serializes_the_complete_typed_terminal_event_stream() {
         )
         .expect("write marker event");
     writer
-        .write_event(Duration::from_millis(1), CastEvent::Exit(0))
+        .write_event(
+            Duration::from_millis(1),
+            CastEvent::Exit(RecordingExitStatus::SUCCESS),
+        )
         .expect("write exit event");
 
     let output = String::from_utf8(writer.into_inner()).expect("cast is UTF-8");
@@ -83,7 +86,8 @@ fn recording_on_writes_a_replayable_cast_at_the_named_artifact_path() {
             .session("GNU"),
         "screen-256color",
         TerminalSize::new(24, 80),
-    );
+    )
+    .expect("create test recording");
     let path = recording
         .path()
         .expect("enabled recording has a path")
@@ -96,18 +100,26 @@ fn recording_on_writes_a_replayable_cast_at_the_named_artifact_path() {
     if let SessionRecording::On(active) = &mut recording {
         active.last_flush -= Duration::from_secs(2);
     }
-    recording.output(&[0xe7]);
-    recording.output(&[0x95, 0x8c, b'!']);
-    recording.flush_if_due();
+    recording.output(&[0xe7]).expect("write test recording");
+    recording
+        .output(&[0x95, 0x8c, b'!'])
+        .expect("write test recording");
+    recording.flush_if_due().expect("write test recording");
     assert!(
         fs::read_to_string(&path)
             .expect("periodic output checkpoint")
             .contains("界!")
     );
-    recording.input(b"\x1b[A");
-    recording.resize(TerminalSize::new(50, 160));
-    recording.marker("screen settled");
-    recording.finish(0);
+    recording.input(b"\x1b[A").expect("write test recording");
+    recording
+        .resize(TerminalSize::new(50, 160))
+        .expect("write test recording");
+    recording
+        .marker("screen settled")
+        .expect("write test recording");
+    recording
+        .finish(RecordingExitStatus::SUCCESS)
+        .expect("write test recording");
 
     assert_eq!(
         path,
@@ -151,10 +163,13 @@ fn recording_off_creates_no_artifact_and_environment_values_are_closed() {
         RecordingIdentity::new("neomacs-tui-tests", "editing", "NEO"),
         "screen-256color",
         TerminalSize::new(24, 80),
-    );
+    )
+    .expect("create test recording");
 
-    recording.output(b"ignored");
-    recording.finish(0);
+    recording.output(b"ignored").expect("write test recording");
+    recording
+        .finish(RecordingExitStatus::SUCCESS)
+        .expect("write test recording");
 
     assert_eq!(recording.path(), None);
     assert!(
@@ -257,18 +272,109 @@ fn unparseable_recording_delay_fails_with_a_clear_message() {
 }
 
 #[test]
-fn recording_creation_failure_degrades_to_off() {
+fn recording_creation_failure_is_not_a_successful_off_recording() {
     let root_file = tempfile::NamedTempFile::new().expect("create non-directory root");
-    let mut recording = SessionRecording::start(
+    let recording = SessionRecording::start(
         RecordingPolicy::On,
         root_file.path(),
         RecordingIdentity::new("neomacs-tui-tests", "creation failure", "NEO"),
         "screen-256color",
         TerminalSize::new(24, 80),
     );
+    assert!(
+        recording.is_err(),
+        "recording failure must fail evidence capture"
+    );
+}
 
-    recording.output(b"the parity path still runs");
-    recording.finish(0);
+#[test]
+fn recording_rejects_time_reversal_without_saturating_its_interval() {
+    let root = tempfile::tempdir().expect("recording root");
+    let mut recording = SessionRecording::start(
+        RecordingPolicy::On,
+        root.path(),
+        RecordingIdentity::new("neomacs-tui-tests", "time reversal", "NEO"),
+        "screen-256color",
+        TerminalSize::new(24, 80),
+    )
+    .expect("create recording");
+    let now = std::time::Instant::now();
+    recording
+        .output_at(now, b"earlier")
+        .expect("ordered output");
+    recording
+        .input_at(now, b"key")
+        .expect("same timestamp is ordered by owner sequence");
+    let failure = recording.output_at(now - Duration::from_millis(1), b"late observation");
+    assert_eq!(
+        failure.expect_err("reverse time refused").kind(),
+        std::io::ErrorKind::InvalidData
+    );
+    assert!(
+        recording.finish(RecordingExitStatus::SUCCESS).is_err(),
+        "recording failure stays sticky"
+    );
+    if let SessionRecording::On(active) = &mut recording {
+        active
+            .writer
+            .flush()
+            .expect("flush failed capture for diagnostic");
+    }
+    let cast = fs::read_to_string(recording.path().expect("cast path")).expect("read cast");
+    assert!(!cast.contains("late observation"));
+}
 
-    assert_eq!(recording.path(), None);
+#[test]
+fn committed_partial_utf8_has_a_lossless_input_prefix_record() {
+    let root = tempfile::tempdir().expect("recording root");
+    let mut recording = SessionRecording::start(
+        RecordingPolicy::On,
+        root.path(),
+        RecordingIdentity::new("neomacs-tui-tests", "partial utf8", "NEO"),
+        "screen-256color",
+        TerminalSize::new(24, 80),
+    )
+    .expect("create recording");
+    let prefix = [0xe7, 0x95];
+    recording.input(&prefix).expect("record committed prefix");
+    let bytes = fs::read(recording.path().unwrap().with_extension("input")).unwrap();
+    assert_eq!(&bytes[..8], &2_u64.to_le_bytes());
+    assert_eq!(&bytes[8..], &prefix);
+    recording
+        .finish(RecordingExitStatus::FAILURE)
+        .expect("finish failed input diagnostic");
+    assert!(
+        recording.output(b"after exit").is_err(),
+        "never append after x"
+    );
+}
+
+#[test]
+fn recorder_flush_failure_stays_failed_and_keeps_the_exact_committed_prefix() {
+    let root = tempfile::tempdir().expect("recording root");
+    let mut recording = SessionRecording::start(
+        RecordingPolicy::On,
+        root.path(),
+        RecordingIdentity::new("neomacs-tui-tests", "flush failure", "NEO"),
+        "screen-256color",
+        TerminalSize::new(24, 80),
+    )
+    .expect("create recording");
+    let path = recording.path().unwrap().to_path_buf();
+    if let SessionRecording::On(active) = &mut recording {
+        let failing = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .expect("failing writer");
+        active.writer.output = std::io::BufWriter::new(failing);
+        active.last_flush -= Duration::from_secs(2);
+    }
+    recording
+        .input(&[b'x', 0xe7, 0x95])
+        .expect("preserve committed incomplete UTF-8");
+    assert!(recording.flush_if_due().is_err());
+    assert!(recording.finish(RecordingExitStatus::SUCCESS).is_err());
+    let raw = fs::read(path.with_extension("input")).expect("lossless committed prefix");
+    assert_eq!(&raw[..8], &3_u64.to_le_bytes());
+    assert_eq!(&raw[8..], &[b'x', 0xe7, 0x95]);
 }

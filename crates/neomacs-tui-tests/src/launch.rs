@@ -1,3 +1,4 @@
+use crate::startup::StartupObservation;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,7 @@ pub struct TuiLaunch {
     pub(crate) env: Vec<(OsString, OsString)>,
     pub(crate) env_remove: Vec<OsString>,
     pub(crate) current_dir: Option<PathBuf>,
+    pub(crate) startup: StartupObservation,
 }
 
 impl TuiLaunch {
@@ -23,7 +25,14 @@ impl TuiLaunch {
             env: Vec::new(),
             env_remove: Vec::new(),
             current_dir: None,
+            startup: StartupObservation::Unobserved,
         }
+    }
+
+    /// Preserve legacy editor readiness without claiming native completion.
+    pub fn with_uncertified_startup(mut self) -> Self {
+        self.startup = StartupObservation::NotCertified;
+        self
     }
 
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {

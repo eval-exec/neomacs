@@ -12,38 +12,16 @@
 //!   Call [`TuiSession::send`] to type keys and [`TuiSession::read`] to
 //!   advance the parser. [`TuiSession::screen`] returns the current
 //!   virtual screen. With `NEOMACS_TUI_RECORD=on`, each session also writes an
-//!   asciicast v3 recording under `target/tui-recordings`, and brackets every
-//!   key it sends with `NEOMACS_TUI_RECORD_DELAY_MS` -- `sleep, key, sleep` --
-//!   so the cast is watchable instead of a blur. The default is 2000 ms, `0`
-//!   turns pacing off, and the variable is only read while recording, so a
-//!   normal run sleeps nowhere. The leading wait is why the first key lands on
-//!   a screen the editor has finished painting rather than mid-redraw, and the
-//!   trailing one holds the response to the last key; between two consecutive
-//!   sends in one session the pacing alone is twice the delay.
+//!   asciicast v3 recording under `target/tui-recordings`. The PTY transport
+//!   assigns one FIFO order to output, committed input prefixes, resize and
+//!   marker events. Parser and recorder consume that same order. Known editor
+//!   startup remains explicitly NotCertified, with the legacy readiness policy;
+//!   an ordered transport fence does not certify native startup completion.
 //!
-//!   Pacing is charged per `send`, and a paced run is not free. The paired
-//!   drivers work both editors from one thread, so a single `send_both` key
-//!   costs four delays -- 8 s at the default -- and a scenario of a few dozen
-//!   keys spends minutes on the clock, long enough to trip
-//!   `.config/nextest.toml`'s 600 s slow-timeout. (Roughly 75 paired keys, or
-//!   150 single-session keys, is that ceiling.) A paced test that runs past it
-//!   was killed, not hung; lower `NEOMACS_TUI_RECORD_DELAY_MS` whenever the
-//!   pacing is not the thing being inspected.
-//!
-//!   A *paced* recorded run is also a different execution, not an observation
-//!   of the graded one: inserting seconds between keys changes what the editor
-//!   does -- idle timers fire, the echo area clears, which-key pops up, async
-//!   completion lands mid-command -- so a paced run may pass or fail
-//!   differently from the same scenario without recording. It is a local
-//!   diagnostic for a human, and a green paced run is not evidence that the
-//!   graded run is green.
-//!
-//!   CI therefore records with `NEOMACS_TUI_RECORD_DELAY_MS=0`: the casts are
-//!   still uploaded for triage, but the shard runs the same unpaced schedule
-//!   as a non-recording run. Raising the delay in CI is not an option -- it
-//!   turns transient screen states (Beacon's blinks, process-output drains)
-//!   into timing races the paired driver cannot win, and ~75 paired keys of
-//!   pacing alone exhausts nextest's 600 s watchdog.
+//!   `NEOMACS_TUI_RECORD_DELAY_MS` remains a human playback aid applied only
+//!   after recorded writes (default2000ms,0disables). It is never a readiness
+//!   witness. CI records with0so tests retain their unpaced schedule; paced
+//!   diagnostics can trigger idle timers and are not graded evidence.
 //!
 //! - [`emacs_key`] translates Emacs key descriptions (`"C-x"`, `"M-x"`,
 //!   `"RET"`) into the raw bytes a terminal would send.
@@ -57,20 +35,26 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::Write;
+use std::io;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
 pub mod launch;
+mod observation;
 mod pty_output;
 mod recording;
+pub mod startup;
 
 pub use launch::TuiLaunch;
-use pty_output::{PtyOutputEvent, PtyOutputPump};
+pub use observation::{FencedTerminal, TuiObservationError};
+use pty_output::{ObservationCursor, PtyOutputEvent, PtyOutputKind, PtyOutputPump};
 pub use recording::TuiRecordingScope;
-use recording::{RecordingConfig, RecordingIdentity, SessionRecording, TerminalSize};
+use recording::{
+    RecordingConfig, RecordingExitStatus, RecordingIdentity, SessionRecording, TerminalSize,
+};
+use startup::{SessionName, StartupObservation};
 
 // ── Session ──────────────────────────────────────────────────────────
 
@@ -186,19 +170,6 @@ fn set_pty_erase_char(pts: &pty_process::blocking::Pts, erase: PtyEraseChar) {
             0,
             "tcsetattr on the test pty"
         );
-    }
-}
-
-fn wait_for_pty_writable(pty: &pty_process::blocking::Pty, timeout: Duration) {
-    let timeout_ms = timeout.as_millis().min(50) as i32;
-    let fd = std::os::fd::AsRawFd::as_raw_fd(pty);
-    unsafe {
-        let mut pfd = libc::pollfd {
-            fd,
-            events: libc::POLLOUT,
-            revents: 0,
-        };
-        let _ = libc::poll(&mut pfd, 1, timeout_ms);
     }
 }
 
@@ -343,12 +314,10 @@ impl SessionDirectory {
 
 /// A TUI editor session running inside an isolated PTY.
 pub struct TuiSession {
-    pty: pty_process::blocking::Pty,
     output_pump: PtyOutputPump,
     _child: std::process::Child,
-    parser: vt100::Parser,
-    recent_output: Vec<u8>,
-    recording: SessionRecording,
+    terminal: SessionTerminal,
+    startup: StartupObservation,
     // Pacing around every recorded key send: zero unless this session
     // records, so `send` sleeps nowhere on a graded run. Only
     // `RecordingConfig` can produce a non-zero value.
@@ -358,7 +327,7 @@ pub struct TuiSession {
     // 1,000 babel-stable names there and cleans it from kill-emacs-hook. A
     // shared pool makes parallel/repeated tests contend on that finite space.
     _tmp: SessionDirectory,
-    pub name: String,
+    pub name: SessionName,
 }
 
 impl TuiSession {
@@ -460,6 +429,7 @@ impl TuiSession {
         recording_root: &Path,
         recording_identity: RecordingIdentity,
     ) -> Self {
+        let startup = launch.startup;
         let (pty, pts) = pty_process::blocking::open().expect("open pty");
         pty.resize(pty_process::Size::new(terminal.rows, terminal.columns))
             .expect("resize pty");
@@ -471,7 +441,8 @@ impl TuiSession {
             recording_identity,
             &terminal.terminal_type,
             TerminalSize::new(terminal.rows, terminal.columns),
-        );
+        )
+        .expect("create TUI recording");
 
         let supplied_home = launch.environment_value("HOME").map(PathBuf::from);
         let supplied_tmp = launch.environment_value("TMPDIR").map(PathBuf::from);
@@ -488,6 +459,7 @@ impl TuiSession {
             env: environment,
             env_remove: removed_environment,
             current_dir,
+            startup: _,
         } = launch;
         let mut command = pty_process::blocking::Command::new(program);
         for arg in args {
@@ -541,22 +513,32 @@ impl TuiSession {
         // Start draining before the child can emit its first byte. GNU makes
         // the shared slave description nonblocking while checking input, so
         // even startup output can otherwise overrun the PTY queue.
-        let output_pump = PtyOutputPump::start(&pty, name).expect("start PTY output pump");
-        let child = command.spawn(pts).expect("spawn");
+        let mut output_pump = PtyOutputPump::start(pty, name).expect("start PTY output pump");
+        let child = match command.spawn(pts) {
+            Ok(child) => child,
+            Err(error) => {
+                let joined = output_pump.finish();
+                panic!("spawn TUI editor failed: {error}; transport cleanup: {joined:?}");
+            }
+        };
 
         let parser = vt100::Parser::new(terminal.rows, terminal.columns, 0);
 
         TuiSession {
-            pty,
             output_pump,
             _child: child,
-            parser,
-            recent_output: Vec::new(),
-            recording: session_recording,
+            terminal: SessionTerminal {
+                parser,
+                recent_output: Vec::new(),
+                recording: session_recording,
+                observations: ObservationCursor::default(),
+                transport_state: ObservedTransportState::Open,
+            },
+            startup,
             recording_delay: recording.delay(),
             home,
             _tmp: tmp,
-            name: name.to_string(),
+            name: SessionName::new(name, startup),
         }
     }
 
@@ -596,6 +578,7 @@ impl TuiSession {
         // Rgb(238,121,159)). GitHub runners export no COLORTERM, so pin the
         // terminal both editors see, the same way package_scenario does.
         let launch = TuiLaunch::new("emacs")
+            .with_uncertified_startup()
             .args([
                 "-nw",
                 "-Q",
@@ -627,6 +610,7 @@ impl TuiSession {
             bin.display()
         );
         let launch = TuiLaunch::new(bin.as_os_str())
+            .with_uncertified_startup()
             .args(["-nw", "-Q", QUIET_MX_SUGGESTION_EVAL])
             .env("COLORTERM", "truecolor")
             .args(extra_args.split_whitespace());
@@ -655,7 +639,10 @@ impl TuiSession {
         let max_deadline = Instant::now() + max_timeout;
         let mut last_activity: Option<Instant> = None;
         loop {
-            self.recording.flush_if_due();
+            self.terminal
+                .recording
+                .flush_if_due()
+                .expect("flush TUI recording");
 
             // Drain everything the independent reader has already observed
             // before deciding that the child is idle.
@@ -670,7 +657,12 @@ impl TuiSession {
                         PtyReadProgress::Finished => return,
                     },
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.terminal
+                            .require_owner_closed()
+                            .expect("PTY owner disconnected without closure");
+                        return;
+                    }
                 }
             }
 
@@ -695,92 +687,44 @@ impl TuiSession {
                     PtyReadProgress::Finished => return,
                 },
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    self.terminal
+                        .require_owner_closed()
+                        .expect("PTY owner disconnected without closure");
+                    return;
+                }
             }
         }
     }
 
     fn apply_output_event(&mut self, event: PtyOutputEvent) -> PtyReadProgress {
-        match event {
-            PtyOutputEvent::Data { observed_at, bytes } => {
-                self.recording.output_at(observed_at, &bytes);
-                self.recent_output.extend_from_slice(&bytes);
-                if self.recent_output.len() > 262_144 {
-                    let drain = self.recent_output.len() - 262_144;
-                    self.recent_output.drain(..drain);
-                }
-                self.parser.process(&bytes);
-                PtyReadProgress::Activity(observed_at)
-            }
-            PtyOutputEvent::Closed => PtyReadProgress::Finished,
-            PtyOutputEvent::Failed(error) => {
-                eprintln!("{} PTY output reader stopped: {error}", self.name);
-                PtyReadProgress::Finished
-            }
-        }
+        self.terminal
+            .apply_observation(&event)
+            .unwrap_or_else(|error| panic!("{} ordered PTY observation failed: {error}", self.name))
     }
 
-    fn drain_pending_output(&mut self) {
-        loop {
-            match self.output_pump.try_recv() {
-                Ok(event) => {
-                    if matches!(self.apply_output_event(event), PtyReadProgress::Finished) {
-                        return;
-                    }
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty)
-                | Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
-            }
-        }
+    /// Startup remains uncertified independently of an ordered PTY fence.
+    pub fn startup_observation(&self) -> StartupObservation {
+        self.startup
     }
 
-    /// Send raw bytes to the PTY.
+    /// Send raw bytes through the sole PTY owner.
     ///
-    /// Every key the harness types funnels through here: [`Self::send_key`],
-    /// [`Self::send_keys`], [`Self::paste`] and the paired drivers are all
-    /// this method. While a session records, it brackets the write with
-    /// `NEOMACS_TUI_RECORD_DELAY_MS`, so the recorded run is watchable rather
-    /// than a blur.
+    /// Earlier output is applied to the parser and recording before each
+    /// committed write prefix. Recording pacing is diagnostic presentation
+    /// only, after the write; it is never a readiness certificate.
     pub fn send(&mut self, data: &[u8]) {
-        // Before: the key lands on a screen the editor has finished painting,
-        // not in the middle of the previous key's redraw.
-        self.pace_recording();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut written = 0;
-
-        while written < data.len() {
-            match self.pty.write(&data[written..]) {
-                Ok(0) => panic!(
-                    "{} PTY write returned 0 after {written}/{} bytes",
-                    self.name,
-                    data.len()
-                ),
-                Ok(n) => written += n,
-                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        panic!(
-                            "{} PTY write timed out after {written}/{} bytes",
-                            self.name,
-                            data.len()
-                        );
-                    }
-                    wait_for_pty_writable(
-                        &self.pty,
-                        deadline.saturating_duration_since(Instant::now()),
-                    );
-                }
-                Err(e) => panic!(
-                    "{} PTY write failed after {written}/{} bytes: {e}",
-                    self.name,
-                    data.len()
-                ),
-            }
-        }
-        self.recording.input(data);
-        // After: the editor's response to this key is drawn -- and recorded at
-        // its own observation time -- before the next key arrives, and the
-        // final key of a scenario leaves the last screen on display.
+        let terminal = &mut self.terminal;
+        let result = self.output_pump.input(data).and_then(|ticket| {
+            ticket.finish(|event| terminal.apply_observation(event).map(|_| ()))
+        });
+        let receipt =
+            result.unwrap_or_else(|error| panic!("{} PTY input failed: {error}", self.name));
+        assert_eq!(
+            receipt.committed().as_usize(),
+            data.len(),
+            "PTY success must cover the exact requested input"
+        );
         self.pace_recording();
     }
 
@@ -860,19 +804,21 @@ impl TuiSession {
 
         let deadline = Instant::now() + max_timeout;
         loop {
-            if let Some(status) = self._child.try_wait().expect("wait on TUI process") {
-                self.read(READ_SLICE);
-                self.recording.finish(exit_status_code(status));
+            if self
+                ._child
+                .try_wait()
+                .expect("wait on TUI process")
+                .is_some()
+            {
+                self.finish()
+                    .expect("finish exited TUI process and transport");
                 return TuiProcessOutcome::Exited;
             }
 
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                let _ = self._child.kill();
-                let status = self._child.wait().ok();
-                self.read(READ_SLICE);
-                self.recording
-                    .finish(status.map(exit_status_code).unwrap_or(1));
+                self.finish()
+                    .expect("terminate, reap and finish timed-out TUI process");
                 return TuiProcessOutcome::TimedOut;
             }
 
@@ -880,18 +826,55 @@ impl TuiSession {
         }
     }
 
-    /// Resize the underlying PTY and the virtual terminal parser.
-    pub fn resize(&mut self, rows: u16, cols: u16) {
-        self.pty
-            .resize(pty_process::Size::new(rows, cols))
-            .expect("resize pty");
-        self.parser.screen_mut().set_size(rows, cols);
-        self.recording.resize(TerminalSize::new(rows, cols));
+    /// Terminate/reap the child, join its sole transport owner and close its
+    /// cast. Call explicitly when completion itself is part of the proof.
+    pub fn finish(&mut self) -> io::Result<()> {
+        let child = finish_child(&mut self._child);
+        let joined = self.output_pump.finish().map_err(io::Error::other);
+        let drained = self.drain_output_for_finish();
+        let status_code = match (&child, &joined, &drained) {
+            (Ok(status), Ok(()), Ok(())) => exit_status_code(*status),
+            (Ok(_), Ok(()), Err(_)) | (Ok(_), Err(_), _) | (Err(_), _, _) => {
+                RecordingExitStatus::FAILURE
+            }
+        };
+        let recorded = self.terminal.recording.finish(status_code);
+        child?;
+        joined?;
+        drained?;
+        recorded
     }
 
-    /// Add a named navigation point to the terminal recording.
+    fn drain_output_for_finish(&mut self) -> io::Result<()> {
+        loop {
+            match self.output_pump.try_recv() {
+                Ok(event) => {
+                    self.terminal.apply_observation(&event)?;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty)
+                | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return self.terminal.require_owner_closed();
+                }
+            }
+        }
+    }
+
+    /// Resize the underlying PTY and the virtual terminal parser.
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        let terminal = &mut self.terminal;
+        self.output_pump
+            .resize(TerminalSize::new(rows, cols))
+            .and_then(|ticket| ticket.finish(|event| terminal.apply_observation(event).map(|_| ())))
+            .unwrap_or_else(|error| panic!("{} PTY resize failed: {error}", self.name));
+    }
+
+    /// Add a named navigation point in the transport's FIFO order.
     pub fn mark_recording(&mut self, label: &str) {
-        self.recording.marker(label);
+        let terminal = &mut self.terminal;
+        self.output_pump
+            .mark(label)
+            .and_then(|ticket| ticket.finish(|event| terminal.apply_observation(event).map(|_| ())))
+            .unwrap_or_else(|error| panic!("{} PTY marker failed: {error}", self.name));
     }
 
     /// Send an Emacs key description (e.g. `"C-x"`, `"M-x"`, `"RET"`).
@@ -909,7 +892,7 @@ impl TuiSession {
 
     /// Get the current virtual terminal screen.
     pub fn screen(&self) -> &vt100::Screen {
-        self.parser.screen()
+        self.terminal.parser.screen()
     }
 
     /// Get the current virtual terminal dimensions as `(rows, cols)`.
@@ -931,17 +914,17 @@ impl TuiSession {
 
     /// Clear the accumulated raw PTY output captured by [`Self::read`].
     pub fn clear_recent_output(&mut self) {
-        self.recent_output.clear();
+        self.terminal.recent_output.clear();
     }
 
     /// Borrow the recent raw PTY output captured by [`Self::read`].
     pub fn recent_output(&self) -> &[u8] {
-        &self.recent_output
+        &self.terminal.recent_output
     }
 
     /// Return the asciicast artifact path when recording is enabled.
     pub fn recording_path(&self) -> Option<&Path> {
-        self.recording.path()
+        self.terminal.recording.path()
     }
 
     /// Return the isolated HOME directory used for this session.
@@ -999,28 +982,114 @@ fn neomacs_binary_path_from_override(
     workspace.join("target").join("release").join("neomacs")
 }
 
-fn exit_status_code(status: ExitStatus) -> i32 {
-    use std::os::unix::process::ExitStatusExt;
+fn exit_status_code(status: ExitStatus) -> RecordingExitStatus {
+    status.into()
+}
 
-    status
-        .code()
-        .or_else(|| status.signal().map(|signal| 128 + signal))
-        .unwrap_or(1)
+fn finish_child(child: &mut std::process::Child) -> io::Result<ExitStatus> {
+    match child.try_wait() {
+        Ok(Some(status)) => Ok(status),
+        observed => {
+            // Attempt both operations even when observation or kill failed.
+            // A racing exit can make kill fail while wait still reaps it.
+            let killed = child.kill();
+            let waited = child.wait();
+            if let Err(error) = observed {
+                return Err(error);
+            }
+            match waited {
+                Ok(status) => Ok(status),
+                Err(error) => {
+                    killed?;
+                    Err(error)
+                }
+            }
+        }
+    }
 }
 
 impl Drop for TuiSession {
     fn drop(&mut self) {
-        let status = match self._child.try_wait() {
-            Ok(Some(status)) => Some(status),
-            _ => {
-                let _ = self._child.kill();
-                self._child.wait().ok()
+        // Legacy session owners still rely on child cleanup here. Positive
+        // proof owners call finish explicitly; Drop never panics on a second
+        // failure while unwinding. The transport's own Drop only signals.
+        if let Err(error) = self.finish() {
+            tracing::error!(%error, session = %self.name, "TUI session cleanup failed");
+        }
+    }
+}
+
+/// Parser and recorder consume exactly the transport owner's observation
+/// sequence. Kept separate so a consumed ticket can borrow its pump while the
+/// same thread applies events here; this state never writes to the PTY.
+struct SessionTerminal {
+    parser: vt100::Parser,
+    recent_output: Vec<u8>,
+    recording: SessionRecording,
+    observations: ObservationCursor,
+    transport_state: ObservedTransportState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObservedTransportState {
+    Open,
+    OutputClosed,
+    OwnerClosed,
+}
+
+impl SessionTerminal {
+    fn require_owner_closed(&self) -> io::Result<()> {
+        match self.transport_state {
+            ObservedTransportState::OwnerClosed => Ok(()),
+            ObservedTransportState::Open | ObservedTransportState::OutputClosed => {
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "PTY owner vanished before its final observation",
+                ))
             }
-        };
-        self.output_pump.shutdown();
-        self.drain_pending_output();
-        self.recording
-            .finish(status.map(exit_status_code).unwrap_or(1));
+        }
+    }
+
+    fn apply_observation(&mut self, event: &PtyOutputEvent) -> io::Result<PtyReadProgress> {
+        self.observations
+            .accept(event.sequence())
+            .map_err(io::Error::other)?;
+        let observed_at = event.observed_at();
+        match event.kind() {
+            PtyOutputKind::Data(bytes) => {
+                self.recording.output_at(observed_at, bytes)?;
+                self.recent_output.extend_from_slice(bytes);
+                if self.recent_output.len() > 262_144 {
+                    let drain = self.recent_output.len() - 262_144;
+                    self.recent_output.drain(..drain);
+                }
+                self.parser.process(bytes);
+            }
+            PtyOutputKind::InputCommitted { request: _, bytes } => {
+                self.recording.input_at(observed_at, bytes)?;
+            }
+            PtyOutputKind::Resized(size) => {
+                self.parser
+                    .screen_mut()
+                    .set_size(size.rows(), size.columns());
+                self.recording.resize_at(observed_at, *size)?;
+            }
+            PtyOutputKind::Marked(label) => self.recording.marker_at(observed_at, label)?,
+            PtyOutputKind::Completed {
+                request: _,
+                result: _,
+            } => {}
+            PtyOutputKind::OutputClosed => {
+                self.transport_state = ObservedTransportState::OutputClosed;
+                return Ok(PtyReadProgress::Finished);
+            }
+            PtyOutputKind::Closed => {
+                self.transport_state = ObservedTransportState::OwnerClosed;
+                return Ok(PtyReadProgress::Finished);
+            }
+            PtyOutputKind::Failed(error) => return Err(io::Error::other(error.to_string())),
+        }
+        Ok(PtyReadProgress::Activity(observed_at))
     }
 }
 

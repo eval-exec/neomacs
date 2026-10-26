@@ -216,7 +216,7 @@ fn tui_session_recording_is_disabled_by_default() {
 }
 
 #[test]
-fn tui_session_paces_a_recorded_key_on_both_sides_and_a_graded_one_never() {
+fn tui_session_paces_only_after_a_recorded_write_and_a_graded_one_never() {
     const DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
     let artifacts = tempfile::tempdir().expect("create recording root");
@@ -234,9 +234,9 @@ fn tui_session_paces_a_recorded_key_on_both_sides_and_a_graded_one_never() {
     let paced_elapsed = started.elapsed();
     drop(paced);
     assert!(
-        paced_elapsed >= DELAY * 2,
-        "a recorded key waits before and after: expect at least {:?}, sent in {:?}",
-        DELAY * 2,
+        paced_elapsed >= DELAY,
+        "a recorded key pauses after its ordered write: expect at least {:?}, sent in {:?}",
+        DELAY,
         paced_elapsed
     );
 
@@ -387,4 +387,39 @@ fn vt100_parser_does_not_render_decscusr_cursor_shape_as_text() {
         }
         panic!("unexpected row {trimmed:?} for bytes [{bytes}]");
     }
+}
+
+#[test]
+fn explicit_completion_drains_tail_and_records_one_final_exit() {
+    let artifacts = tempfile::tempdir().expect("recording root");
+    let mut session = TuiSession::spawn_launch_for_recording_test(
+        TuiLaunch::new("sh").args(["-c", r"printf '\033[1;1HFINAL-TAIL'"]),
+        "TAIL",
+        TuiTerminalConfig::new("screen-256color", 24, 80),
+        RecordingConfig::new(RecordingPolicy::On, Duration::ZERO),
+        artifacts.path(),
+        RecordingIdentity::new("neomacs-tui-tests", "final tail", "TAIL"),
+    );
+    assert_eq!(
+        session.run_to_completion(Duration::from_secs(3)),
+        TuiProcessOutcome::Exited
+    );
+    assert!(session.row_text(0).contains("FINAL-TAIL"));
+    let path = session.recording_path().unwrap().to_path_buf();
+    let before = std::fs::read(&path).unwrap();
+    session.finish().expect("idempotent explicit completion");
+    drop(session);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "no events after completion"
+    );
+    let events = String::from_utf8(before)
+        .unwrap()
+        .lines()
+        .skip(1)
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(events.iter().filter(|event| event[1] == "x").count(), 1);
+    assert_eq!(events.last().unwrap()[1], "x");
 }

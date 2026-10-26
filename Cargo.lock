@@ -4200,7 +4200,10 @@ dependencies = [
  "neomacs-melpa-test-support",
  "pty-process",
  "serde_json",
+ "static_assertions",
  "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
  "vt100",
 ]
 
