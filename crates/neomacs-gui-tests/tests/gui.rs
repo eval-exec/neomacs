@@ -148,6 +148,9 @@ mod stalled_tls;
 #[path = "startup_failure.rs"]
 mod startup_failure;
 
+#[path = "startup_user_settings.rs"]
+mod startup_user_settings;
+
 #[path = "svg_animation.rs"]
 mod svg_animation;
 
@@ -174,3 +177,6 @@ mod x11_presentation;
 
 #[path = "xpm_named_colors.rs"]
 mod xpm_named_colors;
+
+#[path = "fill_column_stipple.rs"]
+mod fill_column_stipple;
