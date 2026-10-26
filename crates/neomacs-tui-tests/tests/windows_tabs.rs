@@ -987,7 +987,7 @@ fn global_tab_line_from_init_survives_startup_and_visiting_a_new_buffer() {
                 "--no-site-file",
                 "--no-site-lisp",
                 "--no-splash",
-                "--no-comp-spawn",
+                "-no-comp-spawn",
             ])
             .env("HOME", home.path())
             .env("XDG_CONFIG_HOME", home.path().join(".config"))

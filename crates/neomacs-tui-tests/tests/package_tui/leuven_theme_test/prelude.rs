@@ -213,7 +213,7 @@ pub(super) const LEUVEN_TUI_PRELUDE: &str = r####"
                         (list 'nil-after-reload nil-after-reload)
                         (list 'default defaults)
                         (list 'final-numeric
-                              (neomacs-leuven-tui-direct-heights)))))))))
+                              (neomacs-leuven-tui-direct-heights))))))))
     (when (custom-theme-enabled-p 'leuven-dark)
       (disable-theme 'leuven-dark))
     (enable-theme 'leuven)

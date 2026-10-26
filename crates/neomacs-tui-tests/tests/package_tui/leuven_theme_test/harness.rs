@@ -46,7 +46,9 @@ pub(super) fn invoke(session: &mut TuiSession, command: &str, ready: &str) {
     session.send_keys("RET");
     wait_for(
         session,
-        Duration::from_secs(12),
+        // The first real theme command cold-loads Org and reapplies its faces.
+        // GNU can spend more than 12 CPU seconds there on the bounded CI load.
+        Duration::from_secs(30),
         &format!("{command} readiness marker {ready:?}"),
         |grid| grid.iter().any(|row| row.contains(ready)),
     );
