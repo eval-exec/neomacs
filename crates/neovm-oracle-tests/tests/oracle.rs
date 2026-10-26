@@ -67,6 +67,9 @@ mod oracle_font_coverage;
 #[path = "oracle_frame_bar_parameters.rs"]
 mod oracle_frame_bar_parameters;
 
+#[path = "oracle_frame_focus.rs"]
+mod oracle_frame_focus;
+
 #[path = "oracle_gdl.rs"]
 mod oracle_gdl;
 

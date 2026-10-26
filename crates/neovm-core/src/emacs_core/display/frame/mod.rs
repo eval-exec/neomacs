@@ -5,9 +5,14 @@
 //! GNU implements in frame.c. The Frame/FrameManager data structures
 //! live in crate::window; window.c builtins stay in super::window_cmds.
 
+mod cycling;
 pub(crate) mod position;
 mod selection;
+pub(crate) use cycling::{builtin_next_frame, builtin_previous_frame};
 pub(crate) use selection::{builtin_handle_switch_frame, builtin_select_frame};
+#[cfg(test)]
+#[path = "tests/cycling_test.rs"]
+mod cycling_test;
 #[cfg(test)]
 #[path = "tests/selection_test.rs"]
 mod selection_test;

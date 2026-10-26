@@ -246,3 +246,6 @@ fn xdotool(env: &[(String, String)], args: &[&str]) -> Result<String, String> {
 
 #[path = "native_frame_focus/ime.rs"]
 mod ime;
+
+#[path = "native_frame_focus/wayland.rs"]
+mod wayland;

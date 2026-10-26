@@ -7997,3 +7997,7 @@ mod tests;
 #[cfg(test)]
 #[path = "keyboard/tests/extended_keysyms_test.rs"]
 mod extended_keysyms_tests;
+
+#[cfg(test)]
+#[path = "keyboard/tests/frame_focus_input_test.rs"]
+mod frame_focus_input_tests;

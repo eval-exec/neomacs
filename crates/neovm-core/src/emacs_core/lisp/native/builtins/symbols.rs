@@ -8,6 +8,7 @@ use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 use crate::emacs_core::fontset;
+pub(crate) use crate::emacs_core::frame::{builtin_next_frame, builtin_previous_frame};
 use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, intern, is_canonical_id};
 use crate::emacs_core::minibuffer;
 use crate::emacs_core::symbol::CanonicalAccess;
@@ -2354,39 +2355,6 @@ pub(crate) fn builtin_make_temp_file_internal(
 pub(crate) fn builtin_minibuffer_innermost_command_loop_p(args: Vec<Value>) -> EvalResult {
     expect_args_range("minibuffer-innermost-command-loop-p", &args, 0, 1)?;
     Ok(Value::NIL)
-}
-
-pub(crate) fn builtin_next_frame(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    expect_args_range("next-frame", &args, 0, 2)?;
-    if let Some(frame) = args.first()
-        && !frame.is_nil()
-    {
-        let _ = super::window_cmds::resolve_frame_id_in_state(
-            &mut eval.frames,
-            &mut eval.buffers,
-            Some(frame),
-            crate::emacs_core::window_cmds::FrameDomain::Live,
-        )?;
-    }
-    crate::emacs_core::frame::builtin_selected_frame(eval, Vec::new())
-}
-
-pub(crate) fn builtin_previous_frame(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("previous-frame", &args, 0, 2)?;
-    if let Some(frame) = args.first()
-        && !frame.is_nil()
-    {
-        let _ = super::window_cmds::resolve_frame_id_in_state(
-            &mut eval.frames,
-            &mut eval.buffers,
-            Some(frame),
-            crate::emacs_core::window_cmds::FrameDomain::Live,
-        )?;
-    }
-    crate::emacs_core::frame::builtin_selected_frame(eval, Vec::new())
 }
 
 pub(crate) fn builtin_raise_frame(args: Vec<Value>) -> EvalResult {
