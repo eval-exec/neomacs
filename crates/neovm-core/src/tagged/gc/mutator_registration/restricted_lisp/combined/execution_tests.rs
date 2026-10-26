@@ -1,5 +1,8 @@
 //! Actual single-owner mixed tapes. Source holders remain live in this item;
 //! no cross-owner, sole-root, sweep or minor receipt is inferred from them.
+//! The collection child supplies independent cross-owner full-GC receipts.
+mod collection;
+
 use super::executor::{Error, Frame, ProgramIndex, ReadyStep, Session};
 use super::*;
 use crate::tagged::gc::mutator_registration::symbol_authority::combined_inputs::{
