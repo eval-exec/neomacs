@@ -1010,7 +1010,9 @@ impl<FS: crate::neovm_bridge::FaceServices> LineEndFaceResolver
     }
 
     fn trailing_whitespace_face_id(&mut self) -> FaceId {
-        let face = self.render.resolve_named_face("trailing-whitespace");
+        let face = self
+            .render
+            .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::TrailingWhitespace);
         self.install_named_face(&face)
     }
 
@@ -1018,7 +1020,9 @@ impl<FS: crate::neovm_bridge::FaceServices> LineEndFaceResolver
         // GNU: it->face_id = merge_faces (w, Qfill_column_indicator, 0,
         // saved_face_id). With an active `:extend` face the indicator keeps
         // that fill's background so the highlight is continuous.
-        let mut face = self.render.resolve_named_face("fill-column-indicator");
+        let mut face = self
+            .render
+            .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::FillColumnIndicator);
         if let Some(extend_bg) = extend_bg {
             face.bg = protocol_color_to_pixel(extend_bg);
             face.use_default_background = false;
@@ -1377,6 +1381,15 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
         face
     }
 
+    pub(crate) fn resolve_fixed_face(
+        &mut self,
+        handle: neovm_core::emacs_core::intern::WellKnown,
+    ) -> ResolvedFace {
+        let mut face = self.faces.resolve_fixed_face(handle);
+        self.realize_face_for_display(&mut face);
+        face
+    }
+
     /// Merge a named face over a base resolved face, GNU
     /// `merge_faces(w, <named-face>, 0, base_face_id)`: start from `base`'s full
     /// attribute set, overlay only the attributes the named face specifies
@@ -1587,7 +1600,8 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
 
         // GNU initializes marginal display strings from the named `margin`
         // face, then lets the string's own face properties refine it.
-        let margin_face = self.resolve_named_face("margin");
+        let margin_face =
+            self.resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Margin);
         let margin_face_id = self.intern_and_install_face(face_ids, &margin_face);
 
         let columns = capacity.columns();

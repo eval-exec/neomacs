@@ -4648,6 +4648,37 @@ enum BufferBasicFaceLookup {
     WindowNamedOverFrameDefault(BasicFaceId),
 }
 
+/// The DEFSYM spelling of each GNU basic face. `BasicFaceId::name` is a
+/// fixed C-static name, so callers of the remapping interpreter resolve it
+/// through the table instead of re-interning the spelling per row.
+pub(crate) const fn basic_face_symbol(
+    face: neomacs_display_protocol::face::BasicFaceId,
+) -> WellKnown {
+    use neomacs_display_protocol::face::BasicFaceId;
+    match face {
+        BasicFaceId::Default => WellKnown::Default,
+        BasicFaceId::ModeLineActive => WellKnown::ModeLineActive,
+        BasicFaceId::ModeLineInactive => WellKnown::ModeLineInactive,
+        BasicFaceId::ToolBar => WellKnown::ToolBar,
+        BasicFaceId::Fringe => WellKnown::Fringe,
+        BasicFaceId::HeaderLineActive => WellKnown::HeaderLineActive,
+        BasicFaceId::HeaderLineInactive => WellKnown::HeaderLineInactive,
+        BasicFaceId::ScrollBar => WellKnown::ScrollBar,
+        BasicFaceId::Border => WellKnown::Border,
+        BasicFaceId::Cursor => WellKnown::Cursor,
+        BasicFaceId::Mouse => WellKnown::Mouse,
+        BasicFaceId::Menu => WellKnown::Menu,
+        BasicFaceId::VerticalBorder => WellKnown::VerticalBorder,
+        BasicFaceId::WindowDivider => WellKnown::WindowDivider,
+        BasicFaceId::WindowDividerFirstPixel => WellKnown::WindowDividerFirstPixel,
+        BasicFaceId::WindowDividerLastPixel => WellKnown::WindowDividerLastPixel,
+        BasicFaceId::InternalBorder => WellKnown::InternalBorder,
+        BasicFaceId::ChildFrameBorder => WellKnown::ChildFrameBorder,
+        BasicFaceId::TabBar => WellKnown::TabBar,
+        BasicFaceId::TabLine => WellKnown::TabLine,
+    }
+}
+
 impl FaceResolver {
     fn resolve_face_height(&self, height: &FaceHeight, inherited_size: f32) -> f32 {
         let candidate = match height {
@@ -5149,6 +5180,31 @@ impl FaceResolver {
     /// Basic faces (see [`BasicFaceId`]) get their fixed enum value.
     /// Other faces get a dynamically allocated ID ≥
     /// [`BasicFaceId::SENTINEL`] (20).
+    /// Resolve a fixed DEFSYM face without a by-name lookup.
+    ///
+    /// Same basic-face fast path, same `FaceTable` key and the same realized
+    /// face as [`Self::resolve_named_face`]; only the lookup key comes from
+    /// the static identity instead of re-interning the printed spelling.
+    pub(crate) fn resolve_fixed_face(&self, handle: WellKnown) -> ResolvedFace {
+        use neomacs_display_protocol::face::BasicFaceId;
+        let name = handle.name();
+        if let Some(role) = BasicFace::from_name(name)
+            && let Some(faces) = &self.realized_basic_faces
+            && let Some(face) = &faces[role]
+        {
+            return face.clone();
+        }
+        let face = self.face_table.resolve_fixed_symbol(&handle);
+        let mut resolved = self.realize_face(&face);
+        resolved.lisp_name = Some(name.to_string());
+        if let Some(basic) = BasicFaceId::from_name(name) {
+            resolved.face_id = basic.into();
+        } else {
+            resolved.face_id = BasicFaceId::SENTINEL;
+        }
+        resolved
+    }
+
     pub fn resolve_named_face(&self, name: &str) -> ResolvedFace {
         use neomacs_display_protocol::face::BasicFaceId;
         if let Some(role) = BasicFace::from_name(name)
@@ -5920,7 +5976,7 @@ impl FaceResolver {
     ) -> ResolvedFace {
         match self.buffer_basic_face_lookup(remapping, face_id) {
             BufferBasicFaceLookup::Canonical(face_id) => {
-                let mut resolved = self.resolve_named_face(face_id.name());
+                let mut resolved = self.resolve_fixed_face(basic_face_symbol(face_id));
                 resolved.face_id = u32::from(face_id);
                 resolved
             }
@@ -6193,6 +6249,33 @@ impl FaceResolver {
         resolved.canonical_tty_role = None;
         resolved.tty_space_identity = TtySpaceIdentity::Unknown;
         resolved.lisp_name = Some(std::sync::Arc::from(name));
+        resolved
+    }
+
+    /// Resolve a fixed DEFSYM face in a captured displayed-window face
+    /// environment: the same remapping interpreter and basic fastpath as
+    /// [`Self::resolve_remapped_named_face`], with the identity supplied by
+    /// the caller instead of re-interned from the spelling.
+    pub(crate) fn resolve_remapped_fixed_face(
+        &self,
+        remapping: BufferFaceRemapping,
+        handle: WellKnown,
+    ) -> ResolvedFace {
+        let name = handle.name();
+        if let Some(face_id) = BasicFaceId::from_name(name) {
+            return self.resolve_remapped_basic_face(remapping, face_id);
+        }
+        if remapping.alist().is_none_or(Value::is_nil) {
+            return self.resolve_fixed_face(handle);
+        }
+        let base = (*self.default_face).clone();
+        let mut resolved = self
+            .resolve_remapped_face_value_over(remapping, &base, &Value::symbol(handle))
+            .unwrap_or(base);
+        resolved.face_id = BasicFaceId::SENTINEL;
+        resolved.canonical_tty_role = None;
+        resolved.tty_space_identity = TtySpaceIdentity::Unknown;
+        resolved.lisp_name = Some(name.to_string());
         resolved
     }
 
@@ -6495,7 +6578,9 @@ impl FaceResolver {
                 let buffer = buffer.expect("buffer-remapped basic face policy requires a buffer");
                 self.resolve_remapped_basic_face(BufferFaceRemapping::capture(buffer), face_id)
             }
-            BaseFacePolicy::FrameBasicFace(face_id) => self.resolve_named_face(face_id.name()),
+            BaseFacePolicy::FrameBasicFace(face_id) => {
+                self.resolve_fixed_face(basic_face_symbol(face_id))
+            }
         }
     }
 
@@ -6518,7 +6603,9 @@ impl FaceResolver {
         origin: &DisplayOrigin,
     ) -> ResolvedFace {
         match origin.default_base_face_policy() {
-            BaseFacePolicy::FrameBasicFace(face_id) => self.resolve_named_face(face_id.name()),
+            BaseFacePolicy::FrameBasicFace(face_id) => {
+                self.resolve_fixed_face(basic_face_symbol(face_id))
+            }
             BaseFacePolicy::BufferRemappedBasicFace(_) => {
                 panic!("display origin {origin:?} requires a buffer for basic-face remapping")
             }

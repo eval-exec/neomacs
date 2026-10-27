@@ -26,6 +26,7 @@ use neovm_core::buffer::{BufferId, CharLen, CharPos0, EmacsBytePos, EmacsByteRan
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::composite::composition_display_text_for_property;
 use neovm_core::emacs_core::emacs_char::EmacsChar;
+use neovm_core::emacs_core::intern::WellKnown;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BufferTextDisplayReplacementMode {
@@ -396,11 +397,13 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             return false;
         }
         let properties = RustTextPropAccess::new_for_optional_window(self.buffer, self.window_id);
-        ["line-prefix", "wrap-prefix"].iter().all(|name| {
-            properties
-                .get_property(char_pos.get() as i64, Value::symbol(name))
-                .is_none_or(|value| value.is_nil())
-        })
+        [WellKnown::LinePrefix, WellKnown::WrapPrefix]
+            .iter()
+            .all(|symbol| {
+                properties
+                    .get_property(char_pos.get() as i64, Value::symbol(symbol))
+                    .is_none_or(|value| value.is_nil())
+            })
     }
 
     /// A produced run must never CROSS an overlay-string anchor: anchors are

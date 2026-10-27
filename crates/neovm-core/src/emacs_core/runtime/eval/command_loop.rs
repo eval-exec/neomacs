@@ -1348,7 +1348,7 @@ impl Context {
     pub(crate) fn run_command_loop_auto_save(&mut self, trigger: &'static str) {
         self.command_loop.last_auto_save_input_events = self.num_nonmacro_input_events();
         let no_message = if self
-            .eval_symbol("auto-save-no-message")
+            .eval_symbol_by_id(crate::emacs_core::intern::WellKnown::AutoSaveNoMessage.id())
             .unwrap_or(Value::NIL)
             .is_truthy()
         {
@@ -1545,7 +1545,7 @@ impl Context {
 
     pub(super) fn update_active_region_selection_after_command(&mut self) -> EvalResult {
         if self
-            .eval_symbol("mark-active")
+            .eval_symbol_by_id(crate::emacs_core::intern::WellKnown::MarkActive.id())
             .unwrap_or(Value::NIL)
             .is_nil()
         {
@@ -1553,7 +1553,7 @@ impl Context {
         }
 
         let transient_mark_mode = self
-            .eval_symbol("transient-mark-mode")
+            .eval_symbol_by_id(crate::emacs_core::intern::WellKnown::TransientMarkMode.id())
             .unwrap_or(Value::NIL);
         if transient_mark_mode == Value::symbol(&IDENTITY_SYMBOL) {
             self.assign("transient-mark-mode", Value::NIL);
@@ -1583,7 +1583,7 @@ impl Context {
         }
 
         if self
-            .eval_symbol("select-active-regions")
+            .eval_symbol_by_id(crate::emacs_core::intern::WellKnown::SelectActiveRegions.id())
             .unwrap_or(Value::NIL)
             .is_nil()
         {
@@ -1603,7 +1603,9 @@ impl Context {
             .eval_symbol_by_id(CommandLoopSymbol::ThisCommand.id())
             .unwrap_or(Value::NIL);
         let inhibited_commands = self
-            .eval_symbol("selection-inhibit-update-commands")
+            .eval_symbol_by_id(
+                crate::emacs_core::intern::WellKnown::SelectionInhibitUpdateCommands.id(),
+            )
             .unwrap_or(Value::NIL);
         if self
             .apply(
@@ -1617,7 +1619,7 @@ impl Context {
         }
 
         let region_extract = self
-            .eval_symbol("region-extract-function")
+            .eval_symbol_by_id(crate::emacs_core::intern::WellKnown::RegionExtractFunction.id())
             .unwrap_or(Value::symbol("buffer-substring"));
         let text = self.apply(region_extract, vec![Value::NIL])?;
         let text_len = match self.apply(Value::symbol("length"), vec![text])?.kind() {

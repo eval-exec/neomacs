@@ -40,7 +40,7 @@ use super::undo;
 use super::visited_file_modtime::BaseVisitedFileModtime;
 use super::visited_file_modtime::{FirstChangeModtime, VisitedFileModtime, VisitedFileModtimeSlot};
 use crate::emacs_core::eval::world::WorldLease;
-use crate::emacs_core::intern::{SymId, intern};
+use crate::emacs_core::intern::{SymId, WellKnown, intern};
 use crate::emacs_core::symbol::SetInternalAlist;
 use crate::emacs_core::value::{RuntimeBindingValue, Value, ValueKind, eq_value};
 use crate::gc_trace::GcTrace;
@@ -8208,10 +8208,10 @@ impl BufferManager {
             let buf = self.storage_mut().buffers.get_mut(&id)?;
             match value.kind() {
                 ValueKind::T => {
-                    buf.set_buffer_local(BUFFER_UNDO_LIST_NAME, Value::T);
+                    buf.set_buffer_local_by_sym_id(WellKnown::BufferUndoList.id(), Value::T);
                 }
                 ValueKind::Nil => {
-                    buf.set_buffer_local(BUFFER_UNDO_LIST_NAME, Value::NIL);
+                    buf.set_buffer_local_by_sym_id(WellKnown::BufferUndoList.id(), Value::NIL);
                     buf.undo_state.set_recorded_first_change(false);
                 }
                 _other => {

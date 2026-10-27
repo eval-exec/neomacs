@@ -16,7 +16,9 @@ const HOOK: &str = "window-configuration-change-hook";
 
 fn dump_legacy(path: &Path, setup: impl FnOnce(&mut Context)) {
     let _policy = RedisplayHookPolicyGuard::legacy();
-    let mut eval = Context::new();
+    // An image dumped before Neo seeded GNU's initial DEFSYM membership: the
+    // symbol slot is genuinely absent, not an empty member.
+    let mut eval = Context::new_legacy_image_without_defsym_membership();
     setup(&mut eval);
     dump_to_file(&eval, path).expect("write legacy-policy portable image");
     // Drop the original Context before load installs the restored active heap.
@@ -29,11 +31,23 @@ fn file_restore_initializes_only_missing_gnu_configuration_hook() {
     let path = dir.path().join("missing-configuration-hook.pdump");
     let symbol = intern(HOOK);
     dump_legacy(&path, |eval| {
+        // This fixture is constructed on the legacy-image surface, before
+        // the port seeded GNU's initial DEFSYM membership: the symbol slot is
+        // genuinely absent, not an empty member or an unbound cell.
         assert!(
             eval.obarray().get_by_id(symbol).is_none(),
-            "legacy fixture must omit the symbol slot, rather than install an intentional unbound cell"
+            "legacy fixture must omit the symbol slot"
         );
-        assert_eq!(data::default_value_by_id(eval, symbol), None);
+        assert_eq!(
+            eval.obarray().forward_type(symbol),
+            None,
+            "legacy fixture must not install a C-owned forwarder"
+        );
+        assert_eq!(
+            data::default_value_by_id(eval, symbol),
+            None,
+            "legacy fixture omits the GNU-owned default cell"
+        );
     });
     {
         let _policy = RedisplayHookPolicyGuard::legacy();
@@ -148,7 +162,8 @@ fn file_restore_preserves_an_explicit_unbound_configuration_hook_cell() {
         // A plain unbound slot is saved Lisp state, not proof that the core
         // declaration was omitted. In particular, an undeclared legacy cell
         // can be explicitly made unbound and has no separate provenance bit.
-        eval.obarray_mut().get_or_intern(HOOK);
+        eval.obarray_mut()
+            .set_symbol_value_id(symbol, Value::UNBOUND);
         assert_eq!(
             eval.obarray()
                 .get_by_id(symbol)

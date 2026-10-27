@@ -53,6 +53,14 @@ macro_rules! well_known_table {
             pub const fn name(self) -> &'static str {
                 NAMES[self as usize]
             }
+
+            /// Whether `id` is one of the constructor-seeded table
+            /// identities. GNU's initial obarray always contains every
+            /// DEFSYM, so source-surface cleanup must never unintern one.
+            #[inline]
+            pub const fn is_table_id(id: SymId) -> bool {
+                id.0 >= FIRST_ID && id.0 - FIRST_ID < Self::COUNT as u32
+            }
         }
 
         const _: () = {
@@ -374,11 +382,72 @@ well_known_table! {
     WindowStateChangeHook = "window-state-change-hook",
     WindowSystem = "window-system",
     WindowTextPixelSize = "window-text-pixel-size",
+    WordWrap = "word-wrap",
     WrapPrefix = "wrap-prefix",
     XCursorForePixel = "x-cursor-fore-pixel",
+    XResourceClass = "x-resource-class",
+    XResourceName = "x-resource-name",
     XScrollEventDeltaFactor = "x-scroll-event-delta-factor",
     XStretchCursor = "x-stretch-cursor",
     ZGroup = "z-group",
+
+    // Turn-15: fixed spellings still reached by name on the keystroke rows
+    // (typed conversions in the same commit). Appended so earlier ids stay
+    // put; the compile-time checks still reject duplicates/keywords/seeds.
+    AfterString = "after-string",
+    AutoFillChars = "auto-fill-chars",
+    AutoSaveNoMessage = "auto-save-no-message",
+    BeforeString = "before-string",
+    Border = "border",
+    BufferInvisibilitySpec = "buffer-invisibility-spec",
+    BufferReadOnly = "buffer-read-only",
+    BufferUndoList = "buffer-undo-list",
+    CloseTab = "close-tab",
+    Concat = "concat",
+    CopySequence = "copy-sequence",
+    Curve = "curve",
+    Columns = "columns",
+    DisplayLineNumbers = "display-line-numbers",
+    EolMnemonicDos = "eol-mnemonic-dos",
+    Error = "error",
+    EolMnemonicMac = "eol-mnemonic-mac",
+    EolMnemonicUndecided = "eol-mnemonic-undecided",
+    EolMnemonicUnix = "eol-mnemonic-unix",
+    FormatMessage = "format-message",
+    GetTextProperty = "get-text-property",
+    GotoChar = "goto-char",
+    Grave = "grave",
+    HandleShiftSelection = "handle-shift-selection",
+    HeaderLineActive = "header-line-active",
+    HeaderLineFormat = "header-line-format",
+    HeaderLineInactive = "header-line-inactive",
+    HeaderLineIndentWidth = "header-line-indent-width",
+    InhibitReadOnly = "inhibit-read-only",
+    InitialWindowSystem = "initial-window-system",
+    InhibitXResources = "inhibit-x-resources",
+    InsertAndInherit = "insert-and-inherit",
+    InternalAutoFill = "internal-auto-fill",
+    InternalBorder = "internal-border",
+    Margin = "margin",
+    MarkActive = "mark-active",
+    MenuItem = "menu-item",
+    ModeLineActive = "mode-line-active",
+    ModeLineFormat = "mode-line-format",
+    ModeLineInactive = "mode-line-inactive",
+    Mouse = "mouse",
+    PostSelfInsertHook = "post-self-insert-hook",
+    Propertize = "propertize",
+    Quote = "quote",
+    RegionExtractFunction = "region-extract-function",
+    RunHooks = "run-hooks",
+    ScrollBar = "scroll-bar",
+    SelectActiveRegions = "select-active-regions",
+    SelectionInhibitUpdateCommands = "selection-inhibit-update-commands",
+    Straight = "straight",
+    TabBarMakeKeymap1 = "tab-bar-make-keymap-1",
+    TabLineFormat = "tab-line-format",
+    UndoAutoThisCommandAmalgamating = "undo-auto--this-command-amalgamating",
+    VisibleCursor = "visible-cursor",
 }
 
 #[cfg(test)]

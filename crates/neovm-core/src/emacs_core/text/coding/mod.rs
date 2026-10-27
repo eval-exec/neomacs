@@ -506,8 +506,16 @@ impl TextQuotingStyle {
         self.into()
     }
 
+    const fn well_known(self) -> WellKnown {
+        match self {
+            Self::Grave => WellKnown::Grave,
+            Self::Straight => WellKnown::Straight,
+            Self::Curve => WellKnown::Curve,
+        }
+    }
+
     pub(crate) fn to_symbol(self) -> Value {
-        Value::symbol(self.symbol_name())
+        Value::symbol(self.well_known())
     }
 }
 

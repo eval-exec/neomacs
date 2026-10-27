@@ -156,11 +156,11 @@ impl Context {
         let Some(id) = self.buffers.current_buffer_id() else {
             return Ok(());
         };
-        let inv = Value::symbol("invisible");
+        let inv = Value::symbol(crate::emacs_core::intern::WellKnown::Invisible);
         let spec = self
-            .eval_symbol_by_id(intern("buffer-invisibility-spec"))
+            .eval_symbol_by_id(crate::emacs_core::intern::WellKnown::BufferInvisibilitySpec.id())
             .unwrap_or(Value::NIL);
-        let display_sym = Value::symbol("display");
+        let display_sym = Value::symbol(crate::emacs_core::intern::WellKnown::Display);
         // GNU's `FRAME_WINDOW_P (selected_frame)`: image/xwidget `display`
         // specs replace text (and so make it intangible) only on a GUI frame.
         let frame_window_p = self

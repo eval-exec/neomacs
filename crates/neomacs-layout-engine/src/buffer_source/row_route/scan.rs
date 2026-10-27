@@ -7,6 +7,7 @@
 //! the planner, which knows the fit.
 
 use super::*;
+use neovm_core::emacs_core::intern::WellKnown;
 
 /// How a routed row char advances the pen. Only chars this classification
 /// accepts may appear in a routed row.
@@ -405,7 +406,8 @@ pub(super) const ROUTE_SAFE_OVERLAY_PROPS: [&str; 5] = [
 
 /// The overlay properties that anchor a Lisp-string INSERTION at an overlay
 /// endpoint (before-string at its start, after-string at its end).
-pub(super) const OVERLAY_STRING_PROPS: [&str; 2] = ["before-string", "after-string"];
+pub(super) const OVERLAY_STRING_PROPS: [WellKnown; 2] =
+    [WellKnown::BeforeString, WellKnown::AfterString];
 
 /// The overlay facts of a candidate row: whether any overlay intersects it
 /// and the overlay start/end CHAR boundaries strictly inside the line.
@@ -998,7 +1000,8 @@ pub(super) fn routed_row_replacement_scan<B: LayoutBufferView>(
 /// [`routed_row_replacement_scan`] owns every display-prop decision (routable
 /// string replacements become plan spans; everything else records a
 /// positioned hazard the classifier applies against the routed coverage).
-pub(super) const ROUTE_HAZARD_TEXT_PROPS: [&str; 2] = ["mouse-face", "line-height"];
+pub(super) const ROUTE_HAZARD_TEXT_PROPS: [WellKnown; 2] =
+    [WellKnown::MouseFace, WellKnown::LineHeight];
 
 /// Whether a static `composition` text property at `probe` would REPLACE its
 /// covered chars in the pipeline. This is the same predicate the pipeline's

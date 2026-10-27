@@ -20744,7 +20744,7 @@ fn layout_frame_rust_formats_mode_line_from_current_redisplay_geometry() {
     };
     let expected_mode_line = eval_status_line_format(
         &mut eval,
-        "mode-line-format",
+        crate::display_row::WindowChromeKind::ModeLine,
         selected_window.0 as i64,
         buf_id.0,
         80,

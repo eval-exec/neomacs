@@ -1543,7 +1543,7 @@ impl BufferSourceOutputSetup {
                 {
                     let resolved = FrameFaces::new(face_resolver)
                         .for_window(buffer)
-                        .resolve_named_face("fringe");
+                        .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
                     let face_id = crate::display_row::face_state::stable_face_id_for_resolved(
                         render_services.face_ids(),
                         &resolved,
@@ -1890,7 +1890,8 @@ impl BufferSourceOutputSetup {
             params,
             geometry.display_text_row_base,
             {
-                let resolved = window_faces.resolve_named_face("fringe");
+                let resolved = window_faces
+                    .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
                 let face_id = crate::display_row::face_state::stable_face_id_for_resolved(
                     render_services.face_ids(),
                     &resolved,

@@ -20,7 +20,11 @@ pub(crate) fn restore_gnu_configuration_hook_default(obarray: &mut Obarray) {
     if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
         return;
     }
-    let id = crate::emacs_core::intern::intern("window-configuration-change-hook");
+    let id = crate::emacs_core::intern::WellKnown::WindowConfigurationChangeHook.id();
+    // A legacy image dumped before the port seeded GNU's initial DEFSYM
+    // membership lacks the symbol slot entirely; any present slot (a plain
+    // value including an intentional legacy `makunbound`, a forwarder, or a
+    // localized cell) is Lisp-owned image state and must survive.
     if obarray.get_by_id(id).is_some() {
         return;
     }

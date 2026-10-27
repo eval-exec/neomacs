@@ -1900,6 +1900,19 @@ impl Obarray {
         ob
     }
 
+    /// Give this obarray GNU's initial DEFSYM membership: `init_obarray`
+    /// interns every well-known spelling at startup, so `intern-soft` and
+    /// `mapatoms` see them before Lisp names them (GNU 31.1 oracle:
+    /// tmp/jitcall15/gnu-obarray-probe.el). The predicate re-checks
+    /// canonicality, so a table spelling uninterned before this obarray was
+    /// created is not resurrected. Callers that model a pre-GNU image (the
+    /// legacy dump fixture) deliberately skip it.
+    pub(crate) fn seed_well_known_members(&mut self) {
+        for symbol in crate::emacs_core::intern::WellKnown::VARIANTS {
+            self.ensure_global_member_if_canonical(symbol.id());
+        }
+    }
+
     /// Intern a symbol: look up by name, creating if absent.
     /// Returns the symbol name (which is the key for identity).
     pub fn intern(&mut self, name: &str) -> String {

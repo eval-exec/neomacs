@@ -1255,7 +1255,8 @@ impl LayoutEngine {
         // Resolve once per capture; the read certificate protects this policy
         // across idle steps, and the reserved face namespace survives them.
         if capture.programs.is_empty() {
-            let fringe_face = resolver.resolve_named_face("fringe");
+            let fringe_face =
+                resolver.resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
             let fringe_id = stable_face_id_for_resolved(&mut capture.attempt, &fringe_face);
             let arena = self
                 .frame_face_arenas

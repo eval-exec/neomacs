@@ -762,7 +762,9 @@ fn max_mini_window_lines_for_window(
     let raw = evaluator
         .buffer_manager()
         .get(buf_id)
-        .and_then(|buffer| buffer.buffer_local_value("max-mini-window-height"))
+        .and_then(|buffer| {
+            buffer.buffer_local_value_id(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id())
+        })
         .or_else(|| evaluator.variable_value(crate::fixed_symbols::MAX_MINI_WINDOW_HEIGHT.id()))
         .unwrap_or_else(|| Value::make_float(0.25));
     max_mini_window_lines_from_value(raw, frame_rows)
@@ -2375,7 +2377,8 @@ impl LayoutEngine {
                 rustc_hash::FxHashMap::default();
             let mut observed_window_navigation_intents = Vec::new();
             let default_resolved = face_resolver.default_face();
-            let child_frame_border = face_resolver.resolve_named_face("child-frame-border");
+            let child_frame_border = face_resolver
+                .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::ChildFrameBorder);
 
             // Set up frame dimensions in the builder
             let frame_identity = if let Some(frame) = evaluator.frame_manager().get(frame_id) {
@@ -3612,7 +3615,8 @@ impl LayoutEngine {
             };
             if frame_params.compact_bar_height > 0.0 {
                 let menu_face = face_resolver.resolve_named_face_without_inverse_video("menu");
-                let tool_face = face_resolver.resolve_named_face("tool-bar");
+                let tool_face = face_resolver
+                    .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::ToolBar);
                 let mut metrics = match self.font_metrics.as_mut() {
                     Some(service) => crate::gui_chrome::MenuHeadingMetrics::Pixels {
                         service,
@@ -3640,7 +3644,8 @@ impl LayoutEngine {
             } else {
                 if frame_params.menu_bar_height > 0.0 {
                     let face = face_resolver.resolve_named_face_without_inverse_video("menu");
-                    let terminal_face = face_resolver.resolve_named_face("menu");
+                    let terminal_face = face_resolver
+                        .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Menu);
                     // GNU's non-toolkit `display_menu_bar` uses a SCHARS + 1
                     // field. Preserve that terminal cell policy. GUI headings
                     // follow GTK's font-measured labels instead; an ASCII cell
@@ -3684,7 +3689,8 @@ impl LayoutEngine {
                         ));
                 }
                 if frame_params.tool_bar_height > 0.0 {
-                    let face = face_resolver.resolve_named_face("tool-bar");
+                    let face = face_resolver
+                        .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::ToolBar);
                     let content = layout_gui_tool_bar_content(
                         tool_items,
                         frame_params.width,

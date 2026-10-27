@@ -238,7 +238,8 @@ impl<'a> EndOfBufferRowsFillRequest<'a> {
         let fringe_info = fringe_bitmap_index.map(|bitmap_index| {
             // Resolve the `fringe` face once and register it so the renderer can
             // resolve fg/bg for the bitmap quads.
-            let resolved = faces.resolve_named_face("fringe");
+            let resolved =
+                faces.resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
             let face_id =
                 crate::display_row::face_state::stable_face_id_for_resolved(face_ids, &resolved);
             {

@@ -2382,7 +2382,7 @@ pub(crate) fn builtin_redisplay(
 ) -> EvalResult {
     expect_args_range("redisplay", &args, 0, 1)?;
     if eval
-        .eval_symbol("executing-kbd-macro")
+        .eval_symbol_by_id(crate::emacs_core::intern::WellKnown::ExecutingKbdMacro.id())
         .is_ok_and(|value| !value.is_nil())
     {
         return Ok(Value::NIL);

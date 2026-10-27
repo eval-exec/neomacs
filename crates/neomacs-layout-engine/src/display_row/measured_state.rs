@@ -2,6 +2,7 @@ use crate::display_row::finalizer::RowTrailingFaceFill;
 use crate::display_row::render_state::{DisplayRowOutputProgress, RenderedDisplayRow};
 use neomacs_display_protocol::glyph_matrix::GlyphRow;
 use neomacs_display_protocol::types::{FaceId, Rect};
+use neovm_core::emacs_core::intern::WellKnown;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 // The shared `Line` suffix is domain-meaningful (tab/header/mode LINES); renaming
@@ -11,6 +12,17 @@ pub(crate) enum WindowChromeKind {
     TabLine,
     HeaderLine,
     ModeLine,
+}
+
+impl WindowChromeKind {
+    /// The fixed GNU chrome format variable this kind is rendered from.
+    pub(crate) const fn format_var(self) -> WellKnown {
+        match self {
+            Self::TabLine => WellKnown::TabLineFormat,
+            Self::HeaderLine => WellKnown::HeaderLineFormat,
+            Self::ModeLine => WellKnown::ModeLineFormat,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

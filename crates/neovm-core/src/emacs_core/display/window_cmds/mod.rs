@@ -1574,20 +1574,24 @@ pub(crate) fn window_line_wrap(
         return LineWrap::WindowWrap;
     };
     let current_buffer = eval.buffers.get(current_buffer_id);
-    let read = |name: &str| {
-        crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value(
+    let read = |symbol: crate::emacs_core::intern::WellKnown| {
+        crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
             eval.variables(),
             &[],
             current_buffer,
-            name,
+            &symbol,
         )
     };
     // GNU's wrapping method when the window does not truncate.  The buffer
     // asks for word wrapping; the engine decides whether that request can be
     // honoured at all.
-    let wrapped = engine.continuation_wrap(read("word-wrap").is_some_and(|value| !value.is_nil()));
+    let wrapped = engine.continuation_wrap(
+        read(crate::emacs_core::intern::WellKnown::WordWrap).is_some_and(|value| !value.is_nil()),
+    );
 
-    if read("truncate-lines").is_some_and(|value| !value.is_nil()) {
+    if read(crate::emacs_core::intern::WellKnown::TruncateLines)
+        .is_some_and(|value| !value.is_nil())
+    {
         return LineWrap::Truncate;
     }
     let hscroll_nonzero = eval
@@ -1623,11 +1627,11 @@ pub(crate) fn window_line_wrap(
     // Re-read through the buffer: `eval.buffers` was borrowed mutably above.
     let current_buffer = eval.buffers.get(current_buffer_id);
     let partial_width_truncates =
-        match crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value(
+        match crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
             eval.variables(),
             &[],
             current_buffer,
-            "truncate-partial-width-windows",
+            &crate::emacs_core::intern::WellKnown::TruncatePartialWidthWindows,
         ) {
             Some(value) if value.is_nil() => false,
             Some(value) if value.is_fixnum() => window_cols < value.as_fixnum().unwrap(),

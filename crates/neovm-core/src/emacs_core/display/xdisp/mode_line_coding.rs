@@ -6,6 +6,7 @@
 
 use super::{ModeLineNativeFieldWidth, ModeLineRendered, Value, VariableView};
 use crate::emacs_core::coding::CodingSystemManager;
+use crate::emacs_core::intern::WellKnown;
 
 /// Immutable original-frame class; selecting another frame in :eval cannot
 /// change whether this formatter's frame has a terminal-coding prefix.
@@ -226,15 +227,15 @@ fn coding_system_eol_indicator_value(
     cs_name: crate::emacs_core::intern::SymId,
 ) -> Option<Value> {
     let cs_name = crate::emacs_core::intern::resolve_sym(cs_name);
-    let var_name = if cs_name.ends_with("-dos") {
-        "eol-mnemonic-dos"
+    let variable = if cs_name.ends_with("-dos") {
+        WellKnown::EolMnemonicDos
     } else if cs_name.ends_with("-mac") {
-        "eol-mnemonic-mac"
+        WellKnown::EolMnemonicMac
     } else if cs_name.ends_with("-unix") {
-        "eol-mnemonic-unix"
+        WellKnown::EolMnemonicUnix
     } else {
-        "eol-mnemonic-undecided"
+        WellKnown::EolMnemonicUndecided
     };
-    vars.value_by_name(var_name)
+    vars.value(variable.id())
         .filter(|value| value.is_string() || value.as_char().is_some())
 }

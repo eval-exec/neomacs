@@ -75,6 +75,16 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> WindowFaces<'a, FS> {
             .resolve_remapped_named_face(self.remapping, face_name)
     }
 
+    pub(crate) fn resolve_fixed_face(
+        self,
+        handle: neovm_core::emacs_core::intern::WellKnown,
+    ) -> ResolvedFace {
+        self.frame
+            .resolver
+            .resolver()
+            .resolve_remapped_fixed_face(self.remapping, handle)
+    }
+
     pub(crate) fn merge_named_face_over(
         self,
         base: &ResolvedFace,

@@ -3455,7 +3455,7 @@ pub(crate) fn line_number_display_width(
         return Ok(Value::fixnum(0));
     };
     let enabled = buffer
-        .buffer_local_value("display-line-numbers")
+        .buffer_local_value_id(crate::emacs_core::intern::WellKnown::DisplayLineNumbers.id())
         .is_some_and(|value| value.is_truthy());
     if !enabled {
         return Ok(Value::fixnum(0));
@@ -3473,7 +3473,7 @@ pub(crate) fn line_number_display_width(
     let displayed_columns = digit_width + 2;
 
     match args.first() {
-        Some(value) if value == &Value::symbol("columns") => {
+        Some(value) if value == &Value::symbol(crate::emacs_core::intern::WellKnown::Columns) => {
             Ok(Value::make_float(displayed_columns as f64))
         }
         Some(value) if value.is_truthy() => Ok(Value::fixnum(displayed_columns * char_width)),

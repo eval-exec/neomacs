@@ -98,3 +98,39 @@ fn unintern_keeps_the_well_known_identity_while_lisp_reinterns() {
     // fixed identity (the retired EpochCachedSymbol behaviour).
     assert_eq!(intern(symbol.name()), fresh);
 }
+
+/// GNU's `init_obarray` interns every DEFSYM at startup, so before Lisp names
+/// one, `(intern-soft "mode-line")` answers non-nil, `mapatoms` visits it, and
+/// an unknown name is the only nil answer (GNU 31.1 oracle:
+/// tmp/jitcall15/gnu-obarray-probe.el). The Context obarray seeds the same
+/// membership from the table constructor.
+#[test]
+fn initial_obarray_contains_every_table_symbol_like_gnu_defsym() {
+    let mut ctx = crate::emacs_core::Context::new();
+    for variant in WellKnown::VARIANTS.iter().copied() {
+        assert!(
+            ctx.obarray().is_global_member(variant.id()),
+            "{variant:?} must be an initial-obarray member"
+        );
+    }
+    // The two probed spellings are only string data in this form; mapatoms
+    // compares symbol-name and does not intern.
+    // Bare `Context::new` has the special forms and subrs this needs, but
+    // not the Lisp-defined `when`/`and`/`let` macros.
+    let result = ctx.eval_str(
+        r#"(list
+             (if (intern-soft "overlay-arrow-string") t nil)
+             (if (intern-soft "mode-line") t nil)
+             (intern-soft "definitely-never-defined-name")
+             (progn
+               (setq ttykey-jitcall15-mapatoms-seen nil)
+               (mapatoms (lambda (s)
+                           (if (equal (symbol-name s) "overlay-arrow-string")
+                               (setq ttykey-jitcall15-mapatoms-seen t))))
+               ttykey-jitcall15-mapatoms-seen))"#,
+    );
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&result),
+        "OK (t t nil t)"
+    );
+}

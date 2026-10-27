@@ -13,6 +13,32 @@ pub(super) enum ConstructionSurface {
     Full,
     #[cfg(test)]
     MinimalVm,
+    /// Full context without GNU's initial DEFSYM obarray membership: the
+    /// shape of an image dumped before the port seeded the table.
+    #[cfg(test)]
+    LegacyImageWithoutDefsyms,
+}
+
+impl ConstructionSurface {
+    /// Full bootstrap surfaces run the same final activation; only the
+    /// reduced VM harness skips it and finishes in its own constructor.
+    fn finishes_runtime_activation(self) -> bool {
+        match self {
+            Self::Full => true,
+            #[cfg(test)]
+            Self::LegacyImageWithoutDefsyms => true,
+            #[cfg(test)]
+            Self::MinimalVm => false,
+        }
+    }
+
+    fn seeds_well_known_members(self) -> bool {
+        match self {
+            Self::Full => true,
+            #[cfg(test)]
+            Self::MinimalVm | Self::LegacyImageWithoutDefsyms => false,
+        }
+    }
 }
 
 /// A Context's execution state that is not a World view: what a new owner
@@ -105,6 +131,17 @@ impl Context {
         if self.buffers.find_buffer_by_name("*Messages*").is_none() {
             self.buffers.create_buffer("*Messages*");
         }
+    }
+
+    /// A full bootstrap that deliberately predates GNU's initial DEFSYM
+    /// obarray membership. Used by the legacy dump fixture: the image must
+    /// lack the C-owned hook declaration rather than carry an empty member.
+    #[cfg(test)]
+    pub(crate) fn new_legacy_image_without_defsym_membership() -> Self {
+        let mut ctx = Self::new_inner(ConstructionSurface::LegacyImageWithoutDefsyms);
+        builtins::init_builtins(&mut ctx);
+        ctx.pre_register_standard_fringe_bitmaps();
+        ctx
     }
 
     #[cfg(test)]
@@ -2306,6 +2343,9 @@ impl Context {
         );
 
         let mut obarray = Obarray::new();
+        if surface.seeds_well_known_members() {
+            obarray.seed_well_known_members();
+        }
         // Builtin names are interned by SubrSpec registration during init_builtins(),
         // which runs after Context construction.
         let default_directory = std::env::current_dir()
@@ -2489,6 +2529,8 @@ impl Context {
         let obarray = match surface {
             ConstructionSurface::Full => obarray,
             #[cfg(test)]
+            ConstructionSurface::LegacyImageWithoutDefsyms => obarray,
+            #[cfg(test)]
             ConstructionSurface::MinimalVm => Obarray::new(),
         };
         let world = world::WorldStorageBuilder {
@@ -2526,20 +2568,16 @@ impl Context {
         };
         let mut ev = Self::assemble(world, seed);
         super::super::runtime_identity::install(&mut ev);
-        match surface {
-            ConstructionSurface::Full => {
-                ev.provide_value(
-                    Value::symbol("make-network-process"),
-                    Some(super::super::process::make_network_process_subfeatures()),
-                )
-                .expect("startup make-network-process provide should succeed");
-                ev.finish_runtime_activation(false);
-            }
-            // The minimal constructor performs its final activation after its
-            // remaining test-only private-state resets and subr registration.
-            #[cfg(test)]
-            ConstructionSurface::MinimalVm => {}
+        if surface.finishes_runtime_activation() {
+            ev.provide_value(
+                Value::symbol("make-network-process"),
+                Some(super::super::process::make_network_process_subfeatures()),
+            )
+            .expect("startup make-network-process provide should succeed");
+            ev.finish_runtime_activation(false);
         }
+        // The minimal constructor performs its final activation after its
+        // remaining test-only private-state resets and subr registration.
         ev
     }
 }

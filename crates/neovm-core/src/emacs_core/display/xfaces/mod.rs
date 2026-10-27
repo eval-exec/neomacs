@@ -1190,8 +1190,8 @@ fn mark_selected_created_lisp_face_id(id: SymId) {
     });
 }
 
-fn face_exists_for_domain(name: &str, defaults_frame: bool) -> bool {
-    face_exists_for_domain_id(face_symbol_id(name), name, defaults_frame)
+fn face_exists_for_domain(name: ResolvedFaceName, defaults_frame: bool) -> bool {
+    face_exists_for_domain_id(name.0, name.name(), defaults_frame)
 }
 
 /// [`face_exists_for_domain`] for callers that already hold the face's
@@ -1471,7 +1471,7 @@ fn resolve_face_name_for_domain(
 ) -> Result<String, Flow> {
     match resolve_face_designator(eval, *face, FaceAliasCyclePolicy::Signal)? {
         ResolvedFaceDesignator::String(name) => {
-            if face_exists_for_domain(name.name(), defaults_frame) {
+            if face_exists_for_domain(name, defaults_frame) {
                 Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("symbolp"), *face],
@@ -1484,7 +1484,7 @@ fn resolve_face_name_for_domain(
             }
         }
         ResolvedFaceDesignator::Symbol(name) => {
-            if face_exists_for_domain(name.name(), defaults_frame) {
+            if face_exists_for_domain(name, defaults_frame) {
                 Ok(name.name().to_owned())
             } else {
                 Err(invalid_face_error(*face))
@@ -1497,7 +1497,7 @@ fn resolve_face_name_for_domain(
 fn resolve_face_name_for_merge(eval: &super::eval::Context, face: &Value) -> Result<String, Flow> {
     match resolve_face_designator(eval, *face, FaceAliasCyclePolicy::Signal)? {
         ResolvedFaceDesignator::String(name) => {
-            if face_exists_for_domain(name.name(), true) {
+            if face_exists_for_domain(name, true) {
                 Ok(name.name().to_owned())
             } else {
                 Err(signal(
@@ -1507,7 +1507,7 @@ fn resolve_face_name_for_merge(eval: &super::eval::Context, face: &Value) -> Res
             }
         }
         ResolvedFaceDesignator::Symbol(name) => {
-            if face_exists_for_domain(name.name(), true) {
+            if face_exists_for_domain(name, true) {
                 Ok(name.name().to_owned())
             } else {
                 Err(invalid_face_error(*face))
@@ -2679,7 +2679,7 @@ fn resolve_known_face_name_for_compare(
 ) -> Result<String, Flow> {
     match resolve_face_designator(eval, *face, FaceAliasCyclePolicy::Signal)? {
         ResolvedFaceDesignator::Symbol(name) | ResolvedFaceDesignator::String(name) => {
-            if face_exists_for_domain(name.name(), defaults_frame) {
+            if face_exists_for_domain(name, defaults_frame) {
                 Ok(name.name().to_owned())
             } else {
                 Err(signal(
@@ -4689,7 +4689,7 @@ pub(crate) fn builtin_face_font(eval: &mut super::eval::Context, args: &[Value])
         // bootstrap built-in table.
         return match resolve_face_designator(eval, args[0], FaceAliasCyclePolicy::Signal)? {
             ResolvedFaceDesignator::Symbol(name) | ResolvedFaceDesignator::String(name) => {
-                if face_exists_for_domain(name.name(), false) {
+                if face_exists_for_domain(name, false) {
                     Ok(Value::NIL)
                 } else if name.symbol().is_nil() {
                     Err(signal("error", vec![Value::string("Invalid face")]))

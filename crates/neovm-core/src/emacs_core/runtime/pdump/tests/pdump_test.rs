@@ -2552,6 +2552,10 @@ fn pdump_round_trip_keeps_the_well_known_symbol_table_identity() {
         // mapping and the fixed id all agree after load.
         assert_eq!(resolve_sym(id), variant.name(), "{variant:?}");
         assert!(is_canonical_id(id), "{variant:?}");
+        assert!(
+            loaded.obarray().is_global_member(id),
+            "{variant:?} keeps GNU's initial-obarray membership across the dump"
+        );
         assert_eq!(lookup_interned(variant.name()), Some(id), "{variant:?}");
         assert_eq!(intern(variant.name()), id, "{variant:?}");
         assert_eq!(

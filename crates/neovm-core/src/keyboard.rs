@@ -4066,8 +4066,8 @@ impl crate::emacs_core::eval::Context {
             }
         }
 
-        self.assign(
-            "this-command-keys-shift-translated",
+        self.assign_by_id(
+            THIS_COMMAND_KEYS_SHIFT_TRANSLATED.id(),
             if shift_translated {
                 Value::T
             } else {
@@ -4705,7 +4705,7 @@ impl crate::emacs_core::eval::Context {
         // forever whenever a special event no read ever consumes was pending,
         // which is what stalled the helm batch sessions.
         let visible_macro_forces_end = self
-            .visible_variable_value_or_nil("executing-kbd-macro")
+            .visible_variable_value_or_nil_by_id(EXECUTING_KBD_MACRO.id())
             .is_t();
         let runtime_macro_at_end = matches!(
             self.command_loop.keyboard.kboard.executing_kbd_macro.as_ref(),

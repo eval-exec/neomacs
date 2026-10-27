@@ -2193,7 +2193,7 @@ pub fn format_mode_line_for_display_with_sources(
     let condition_stack_base = mode_line_flow_policy::enabled().then(|| {
         let base = eval.condition_stack_len();
         eval.push_condition_frame(super::eval::ConditionFrame::ConditionCase {
-            conditions: Value::symbol("error"),
+            conditions: Value::symbol(WellKnown::Error),
             resume: super::eval::ResumeTarget::InterpreterConditionCase {
                 handler_index: 0,
                 condition_stack_base: base,
@@ -7260,7 +7260,7 @@ pub(crate) fn line_number_gutter_cols(
     char_height: f32,
 ) -> i64 {
     let enabled = buffer
-        .buffer_local_value("display-line-numbers")
+        .buffer_local_value_id(WellKnown::DisplayLineNumbers.id())
         .is_some_and(|value| value.is_truthy());
     if !enabled {
         return 0;
@@ -9215,7 +9215,7 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
 
     let result = (|| -> Result<RedisplayFontificationOutcome, Flow> {
         if ctx
-            .eval_symbol("memory-full")
+            .eval_symbol_by_id(WellKnown::MemoryFull.id())
             .unwrap_or(Value::NIL)
             .is_truthy()
         {

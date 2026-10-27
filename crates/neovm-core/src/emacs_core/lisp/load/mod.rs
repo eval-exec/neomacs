@@ -5189,6 +5189,12 @@ fn normalize_bootstrap_runtime_surface(
         if is_gnu_preloaded_syntax_symbol(name) {
             continue;
         }
+        // GNU's initial obarray keeps every DEFSYM even when loadup's source
+        // surface for it is gone: C holds the symbol as a static, and
+        // `Funintern` never runs on it during dump construction.
+        if crate::emacs_core::intern::WellKnown::is_table_id(id) {
+            continue;
+        }
         if !symbol_has_runtime_surface_or_reference(eval, id, &referenced_symbol_names) {
             eval.obarray_mut().unintern_id(id);
         }
@@ -5426,6 +5432,12 @@ pub(crate) fn normalize_final_dump_runtime_surface(
             continue;
         };
         if is_gnu_preloaded_syntax_symbol(name) {
+            continue;
+        }
+        // GNU's initial obarray keeps every DEFSYM even when loadup's source
+        // surface for it is gone: C holds the symbol as a static, and
+        // `Funintern` never runs on it during dump construction.
+        if crate::emacs_core::intern::WellKnown::is_table_id(id) {
             continue;
         }
         if !symbol_has_runtime_surface_or_reference(eval, id, &referenced_symbol_names) {

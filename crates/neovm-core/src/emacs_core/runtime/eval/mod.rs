@@ -5554,9 +5554,11 @@ impl Context {
         {
             called_clear_function = true;
             let specpdl_count = self.specpdl.len();
-            if let Err(err) =
-                self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-quit"), Value::T)
-            {
+            if let Err(err) = self.try_specbind_or_unwind_to(
+                specpdl_count,
+                crate::emacs_core::intern::WellKnown::InhibitQuit.id(),
+                Value::T,
+            ) {
                 tracing::warn!(
                     "inhibit-quit watcher signaled while clearing echo message: {:?}",
                     err
@@ -7136,7 +7138,7 @@ impl Context {
     /// fully registered subr.
     pub fn dispatch_subr_value(&mut self, function: Value, args: Vec<Value>) -> Option<EvalResult> {
         let sym_id = function.as_subr_id()?;
-        let wrong_arity_callee = Value::symbol(resolve_sym(sym_id));
+        let wrong_arity_callee = Value::from_sym_id(sym_id);
         self.dispatch_subr_value_internal(function, &args, wrong_arity_callee)
     }
 
