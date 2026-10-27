@@ -3696,16 +3696,8 @@ impl<'a> Reader<'a> {
                 // GNU source_file_get (lread.c): decode before tokenization,
                 // including symbols and character literals. Keep positions in
                 // file bytes so #@ docstring skips remain byte-exact.
-                let bytes = &input[pos..self.limit];
-                let width = emacs_char::bytes_by_char_head(bytes[0]);
-                if bytes.len() >= width && bytes[1..width].iter().all(|b| b & 0xC0 == 0x80) {
-                    let (code, _) = emacs_char::string_char_unchecked(&bytes[..width]);
-                    Some((code.code(), pos + width))
-                } else {
-                    // A malformed/truncated sequence consumes only its lead
-                    // byte; subsequent bytes must still reach the parser.
-                    Some((emacs_char::byte8_to_char(bytes[0]), pos + 1))
-                }
+                emacs_char::decode_file_multibyte_char(&input[pos..self.limit])
+                    .map(|(character, consumed)| (character.code(), pos + consumed))
             }
             ReaderSource::Runtime(input) => {
                 crate::emacs_core::string_escape::storage_code_step(input, pos, true)
@@ -4412,3 +4404,7 @@ mod logical_source_cursor_tests;
 #[cfg(test)]
 #[path = "tests/original_string_unread.rs"]
 mod original_string_unread_tests;
+
+#[cfg(test)]
+#[path = "tests/file_byte_domain.rs"]
+mod file_byte_domain_tests;

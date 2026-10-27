@@ -68,3 +68,6 @@ fn multibyte_string_and_region_detection_preserve_raw_byte_interpretation() {
         expect_test::expect![[r#""OK (chinese-gbk-unix chinese-gbk-unix)""#]],
     );
 }
+
+#[path = "oracle_coding_detection/encoded_file.rs"]
+mod encoded_file;

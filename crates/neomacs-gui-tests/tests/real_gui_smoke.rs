@@ -759,3 +759,6 @@ fn real_gui_primary_selection_follows_deactivate_mark_after_prior_ownership() {
         "PRIMARY must be accepted on every display backend:\n{output:.4000}"
     );
 }
+
+#[path = "real_gui_smoke/encoded_file.rs"]
+mod encoded_file;

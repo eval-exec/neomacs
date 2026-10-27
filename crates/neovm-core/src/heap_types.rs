@@ -1464,48 +1464,9 @@ impl std::fmt::Debug for LispString {
     }
 }
 
-/// Decode a GNU-declared multibyte string character within initialized bytes.
-///
-/// GNU shorthand names retain supplied character counts and may contain raw
-/// noncanonical bytes. Trust the lead-byte arithmetic as GNU does, but model a
-/// short or exhausted tail with zeros instead of reading outside the payload.
-/// That tail is a bounded emulator policy, not portable GNU memory behavior.
-/// Invalid heads or out-of-range results use the existing raw-byte fallback.
-/// The borrowed bytes and stack padding are local to the calling mutator.
-/// Returns a validated [`emacs_char::EmacsChar`]: an out-of-domain decode can
-/// never leave this function.
-#[inline]
-pub(crate) fn decode_declared_multibyte_char(bytes: &[u8]) -> (emacs_char::EmacsChar, usize) {
-    let Some(&first) = bytes.first() else {
-        return (emacs_char::EmacsChar::from_code_unchecked(0), 1);
-    };
-    if first < 0x80 {
-        return (
-            emacs_char::EmacsChar::from_code_unchecked(u32::from(first)),
-            1,
-        );
-    }
-    // GNU assumes a legal head and in-range result. Its behavior outside
-    // those assumptions is undefined; use the existing raw-byte policy.
-    if !(0xc0..=0xf8).contains(&first) {
-        return (emacs_char::EmacsChar::from_byte8(first), 1);
-    }
-    // A complete short tail can be decoded directly. Only a truncated
-    // character needs the bounded zero-padding policy above.
-    let (code, len) = if bytes.len() >= emacs_char::MAX_MULTIBYTE_LENGTH
-        || bytes.len() >= emacs_char::bytes_by_char_head(first)
-    {
-        emacs_char::decode_multibyte_unchecked(bytes)
-    } else {
-        let mut tail = [0; emacs_char::MAX_MULTIBYTE_LENGTH];
-        tail[..bytes.len()].copy_from_slice(bytes);
-        emacs_char::decode_multibyte_unchecked(&tail)
-    };
-    match emacs_char::EmacsChar::from_code(code) {
-        Some(character) => (character, len),
-        None => (emacs_char::EmacsChar::from_byte8(first), 1),
-    }
-}
+// Preserve the existing heap accessor seam; raw decoding belongs to the
+// character module, which establishes the EmacsChar invariant.
+pub(crate) use crate::emacs_core::emacs_char::decode_declared_multibyte_char;
 
 impl PartialEq for LispString {
     fn eq(&self, other: &Self) -> bool {
