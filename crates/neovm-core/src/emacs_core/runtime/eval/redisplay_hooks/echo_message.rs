@@ -3,10 +3,10 @@
 //! this adds no mutable process-global or thread-local Lisp state.
 
 use super::*;
+use crate::emacs_core::intern::WellKnown;
 
 // GNU's `Qinhibit_redisplay`; echo-message suppression probes it per update.
-static INHIBIT_REDISPLAY: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-redisplay");
+static INHIBIT_REDISPLAY: WellKnown = WellKnown::InhibitRedisplay;
 
 impl Context {
     /// GNU message3_frame_nolog -> echo_area_display(true). A height change
@@ -19,7 +19,7 @@ impl Context {
             || self.noninteractive()
             || self.gnu_redisplay_hooks.active.is_active()
             || self
-                .special_variable_value_by_id(INHIBIT_REDISPLAY.get())
+                .special_variable_value_by_id(INHIBIT_REDISPLAY.id())
                 .is_some_and(|value| value.is_truthy())
             || self.redisplay_fn.is_none()
         {

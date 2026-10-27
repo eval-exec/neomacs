@@ -25,7 +25,7 @@ use neovm_core::window::{FrameId, WindowId};
 /// admission because custom marker variables need not bump display ticks.
 pub(super) fn inactive_overlay_arrows(evaluator: &neovm_core::emacs_core::Context) -> bool {
     let mut tail = evaluator
-        .variable_value(crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.get())
+        .variable_value(crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.id())
         .unwrap_or(Value::NIL);
     for _ in 0..32 {
         if !tail.is_cons() {

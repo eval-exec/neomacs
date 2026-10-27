@@ -223,7 +223,7 @@ fn active_composition_table(
     {
         return None;
     }
-    vars.value(crate::fixed_symbols::COMPOSITION_FUNCTION_TABLE.get())
+    vars.value(crate::fixed_symbols::COMPOSITION_FUNCTION_TABLE.id())
 }
 
 fn capture_layout_category_symbol_plists(

@@ -2554,23 +2554,22 @@ impl IntoSymbol for &str {
     }
 }
 
-// Fixed spellings keep the string constructor's nil/keyword tags and observable
-// symbol accounting, while validating the canonical ID at every call boundary.
-impl IntoSymbol for &super::intern::EpochCachedSymbol {
+// A fixed DEFSYM identity keeps the string constructor's observable symbol
+// accounting. The table's compile-time checks exclude nil, t and keyword
+// spellings, so the tag is always a plain canonical symbol; no runtime name
+// inspection is needed (or possible to get wrong).
+impl IntoSymbol for super::intern::WellKnown {
     #[inline]
     fn into_symbol(self) -> Value {
-        match self.name() {
-            "nil" => Value::NIL,
-            "t" => Value::T,
-            name => {
-                add_wrapping(MemoryUseCountSlot::Symbols, 1);
-                if name.starts_with(':') {
-                    TaggedValue::from_kw_id(self.get())
-                } else {
-                    TaggedValue::from_sym_id(self.get())
-                }
-            }
-        }
+        add_wrapping(MemoryUseCountSlot::Symbols, 1);
+        TaggedValue::from_sym_id(self.id())
+    }
+}
+
+impl IntoSymbol for &super::intern::WellKnown {
+    #[inline]
+    fn into_symbol(self) -> Value {
+        (*self).into_symbol()
     }
 }
 

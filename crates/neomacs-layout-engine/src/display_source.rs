@@ -37,12 +37,12 @@ use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::composite::composition_display_text_for_property;
 use neovm_core::emacs_core::composite::{AutomaticCompositionRules, AutomaticCompositionSpan};
 use neovm_core::emacs_core::emacs_char::EmacsChar;
-use neovm_core::emacs_core::intern::EpochCachedSymbol;
+use neovm_core::emacs_core::intern::WellKnown;
 use neovm_core::emacs_core::value::{get_string_text_properties_table_for_value, list_to_vec};
 use neovm_core::face::LispFaceId;
 
-// Each key is resolved lazily at its original query boundary. Cells contain
-// only epoch-validated native identities and are shared safely across mutators.
+// Each key is a fixed DEFSYM id resolved at its original query boundary. Cells
+// contain only immutable native identities and are shared across mutators.
 use crate::fixed_symbols::{
     COMPOSITION as COMPOSITION_PROPERTY, DISPLAY as DISPLAY_PROPERTY, FACE as FACE_PROPERTY,
     FONT_LOCK_FACE as FONT_LOCK_FACE_PROPERTY, LINE_HEIGHT as LINE_HEIGHT_PROPERTY,
@@ -3528,7 +3528,7 @@ impl LispStringSourceFrame {
             tty_glyphless_char_display.method_for(character),
         ) {
             if let DisplayItemKind::RowBreak(row_break) = &mut kind {
-                let property = |name: &EpochCachedSymbol| {
+                let property = |name: &WellKnown| {
                     self.props.as_ref().and_then(|props| {
                         props.get_property_at_char_pos(CharPos0::new(start), Value::symbol(name))
                     })

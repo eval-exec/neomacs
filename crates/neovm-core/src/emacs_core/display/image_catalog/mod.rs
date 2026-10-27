@@ -5,7 +5,7 @@
 //! from optional metadata.
 
 use crate::emacs_core::Value;
-use crate::emacs_core::intern::{EpochCachedSymbol, SymId};
+use crate::emacs_core::intern::{SymId, WellKnown};
 use crate::heap_types::{LispString, LispStringStorageKind};
 use crate::window::Frame;
 pub use neomacs_display_protocol::ImageAnimationPolicy;
@@ -35,12 +35,12 @@ impl ImageVariable {
     fn sym_id(self) -> SymId {
         match self {
             Self::ScalingFactor => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("image-scaling-factor");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::ImageScalingFactor;
+                SYMBOL.id()
             }
             Self::SizeLimit => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("max-image-size");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::MaxImageSize;
+                SYMBOL.id()
             }
         }
     }

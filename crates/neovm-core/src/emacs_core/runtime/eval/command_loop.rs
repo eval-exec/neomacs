@@ -25,9 +25,9 @@ impl GcTraceKind {
     }
 }
 
-/// Fixed command-loop identities. Each spelling is resolved once per registry
-/// epoch. A use after arbitrary Lisp
-/// must call `id` again: callbacks may unintern a symbol or replace the registry.
+/// Fixed command-loop identities: GNU DEFSYM statics with compile-time ids,
+/// no lock and no epoch. A caller may use `id` again after arbitrary Lisp;
+/// unintern or a dump restore cannot change the identity (GNU semantics).
 #[derive(Clone, Copy, Debug, strum::EnumIter)]
 pub(crate) enum CommandLoopSymbol {
     PrefixArg,
@@ -59,109 +59,104 @@ pub(crate) enum CommandLoopSymbol {
 impl CommandLoopSymbol {
     #[inline]
     pub(crate) fn id(self) -> SymId {
-        use crate::emacs_core::intern::EpochCachedSymbol;
+        use crate::emacs_core::intern::WellKnown;
 
         match self {
             Self::PrefixArg => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("prefix-arg");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::PrefixArg;
+                SYMBOL.id()
             }
             Self::LastPrefixArg => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("last-prefix-arg");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::LastPrefixArg;
+                SYMBOL.id()
             }
             Self::CurrentPrefixArg => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("current-prefix-arg");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::CurrentPrefixArg;
+                SYMBOL.id()
             }
             Self::ThisCommand => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("this-command");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::ThisCommand;
+                SYMBOL.id()
             }
             Self::RealThisCommand => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("real-this-command");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::RealThisCommand;
+                SYMBOL.id()
             }
             Self::ThisOriginalCommand => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("this-original-command");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::ThisOriginalCommand;
+                SYMBOL.id()
             }
             Self::LastCommandEvent => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("last-command-event");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::LastCommandEvent;
+                SYMBOL.id()
             }
             Self::DeactivateMark => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("deactivate-mark");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::DeactivateMark;
+                SYMBOL.id()
             }
             Self::DisablePointAdjustment => {
-                static SYMBOL: EpochCachedSymbol =
-                    EpochCachedSymbol::new("disable-point-adjustment");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::DisablePointAdjustment;
+                SYMBOL.id()
             }
             Self::GlobalDisablePointAdjustment => {
-                static SYMBOL: EpochCachedSymbol =
-                    EpochCachedSymbol::new("global-disable-point-adjustment");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::GlobalDisablePointAdjustment;
+                SYMBOL.id()
             }
             Self::LastCommand => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("last-command");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::LastCommand;
+                SYMBOL.id()
             }
             Self::RealLastCommand => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("real-last-command");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::RealLastCommand;
+                SYMBOL.id()
             }
             Self::LastRepeatableCommand => {
-                static SYMBOL: EpochCachedSymbol =
-                    EpochCachedSymbol::new("last-repeatable-command");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::LastRepeatableCommand;
+                SYMBOL.id()
             }
             Self::InhibitQuit => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("inhibit-quit");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::InhibitQuit;
+                SYMBOL.id()
             }
             Self::UndoAutoAddBoundary => {
-                static SYMBOL: EpochCachedSymbol =
-                    EpochCachedSymbol::new("undo-auto--add-boundary");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::UndoAutoAddBoundary;
+                SYMBOL.id()
             }
             Self::MemoryFull => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("memory-full");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::MemoryFull;
+                SYMBOL.id()
             }
             Self::DelayedWarningsList => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("delayed-warnings-list");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::DelayedWarningsList;
+                SYMBOL.id()
             }
             Self::AutoSaveInterval => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("auto-save-interval");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::AutoSaveInterval;
+                SYMBOL.id()
             }
             Self::Undefined => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("undefined");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::Undefined;
+                SYMBOL.id()
             }
             Self::CommandExecute => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("command-execute");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::CommandExecute;
+                SYMBOL.id()
             }
             Self::InhibitRedisplay => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("inhibit-redisplay");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::InhibitRedisplay;
+                SYMBOL.id()
             }
             Self::PreRedisplayFunction => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("pre-redisplay-function");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::PreRedisplayFunction;
+                SYMBOL.id()
             }
             Self::RedisplaySkipInitialFrame => {
-                static SYMBOL: EpochCachedSymbol =
-                    EpochCachedSymbol::new("redisplay-skip-initial-frame");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::RedisplaySkipInitialFrame;
+                SYMBOL.id()
             }
             Self::ResizeMiniFrames => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("resize-mini-frames");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::ResizeMiniFrames;
+                SYMBOL.id()
             }
         }
     }
@@ -170,30 +165,19 @@ impl CommandLoopSymbol {
 /// Fixed tags and variables the command loop reads on every command. GNU holds
 // them as staticpro'd or DEFVAR_LISP statics (`Qtop_level`, `Qexit`,
 // `Qidentity`, `Qonly`, `Vtransient_mark_mode`, `Vinput_pending_p_filter_events`).
-static TOP_LEVEL_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("top-level");
-static EXIT_TAG: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("exit");
-static IDENTITY_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("identity");
-static ONLY_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("only");
-static TRANSIENT_MARK_MODE: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("transient-mark-mode");
-static INPUT_PENDING_FILTER_EVENTS: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("input-pending-p-filter-events");
-static DEBUG_ON_EVENT: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("debug-on-event");
-static UNDO_AUTO_UNDOABLY_CHANGED_BUFFERS: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("undo-auto--undoably-changed-buffers");
-static DO_AUTO_SAVE: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("do-auto-save");
-static NEOVM_STARTUP_LAST_PHASE: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("neomacs--startup-last-phase");
-static NEOVM_STARTUP_LAST_CALL: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("neomacs--startup-last-call");
+static TOP_LEVEL_SYMBOL: WellKnown = WellKnown::TopLevel;
+static EXIT_TAG: WellKnown = WellKnown::Exit;
+static IDENTITY_SYMBOL: WellKnown = WellKnown::Identity;
+static ONLY_SYMBOL: WellKnown = WellKnown::Only;
+static TRANSIENT_MARK_MODE: WellKnown = WellKnown::TransientMarkMode;
+static INPUT_PENDING_FILTER_EVENTS: WellKnown = WellKnown::InputPendingPFilterEvents;
+static DEBUG_ON_EVENT: WellKnown = WellKnown::DebugOnEvent;
+static UNDO_AUTO_UNDOABLY_CHANGED_BUFFERS: WellKnown = WellKnown::UndoAutoUndoablyChangedBuffers;
+static DO_AUTO_SAVE: WellKnown = WellKnown::DoAutoSave;
+static NEOVM_STARTUP_LAST_PHASE: WellKnown = WellKnown::NeomacsStartupLastPhase;
+static NEOVM_STARTUP_LAST_CALL: WellKnown = WellKnown::NeomacsStartupLastCall;
 
-// Hooks the command loop runs itself, pre-resolved once per registry epoch.
+// Hooks the command loop runs itself, pre-resolved to fixed DEFSYM ids.
 ///
 /// GNU names them with DEFSYM statics (`Qpre_command_hook`,
 /// `Qpost_command_hook`, `Qdelayed_warnings_hook`); the loop previously
@@ -208,20 +192,20 @@ enum CommandLoopHook {
 impl CommandLoopHook {
     #[inline]
     fn id(self) -> SymId {
-        use crate::emacs_core::intern::EpochCachedSymbol;
+        use crate::emacs_core::intern::WellKnown;
 
         match self {
             Self::PreCommand => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("pre-command-hook");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::PreCommandHook;
+                SYMBOL.id()
             }
             Self::PostCommand => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("post-command-hook");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::PostCommandHook;
+                SYMBOL.id()
             }
             Self::DelayedWarnings => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("delayed-warnings-hook");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::DelayedWarningsHook;
+                SYMBOL.id()
             }
         }
     }
@@ -396,7 +380,7 @@ impl Context {
             )?;
             self.try_specbind_or_unwind_to(
                 specpdl_count,
-                UNDO_AUTO_UNDOABLY_CHANGED_BUFFERS.get(),
+                UNDO_AUTO_UNDOABLY_CHANGED_BUFFERS.id(),
                 Value::NIL,
             )?;
 
@@ -555,7 +539,7 @@ impl Context {
 
     pub(super) fn command_loop_top_level_1(&mut self) -> EvalResult {
         let top_level = self
-            .variable_value(TOP_LEVEL_SYMBOL.get())
+            .variable_value(TOP_LEVEL_SYMBOL.id())
             .unwrap_or(Value::NIL);
 
         tracing::debug!("command_loop_top_level_1: top-level={}", top_level);
@@ -607,11 +591,11 @@ impl Context {
                 self.report_command_error(data, "")?;
                 if cfg!(test) {
                     let last_phase = self
-                        .variable_value(NEOVM_STARTUP_LAST_PHASE.get())
+                        .variable_value(NEOVM_STARTUP_LAST_PHASE.id())
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     let last_call = self
-                        .variable_value(NEOVM_STARTUP_LAST_CALL.get())
+                        .variable_value(NEOVM_STARTUP_LAST_CALL.id())
                         .map(|value| crate::emacs_core::print_value_with_eval(self, &value))
                         .unwrap_or_else(|| "nil".to_string());
                     eprintln!(
@@ -1574,7 +1558,7 @@ impl Context {
         if transient_mark_mode == Value::symbol(&IDENTITY_SYMBOL) {
             self.assign("transient-mark-mode", Value::NIL);
         } else if transient_mark_mode == Value::symbol(&ONLY_SYMBOL) {
-            self.assign_by_id(TRANSIENT_MARK_MODE.get(), Value::symbol(&IDENTITY_SYMBOL));
+            self.assign_by_id(TRANSIENT_MARK_MODE.id(), Value::symbol(&IDENTITY_SYMBOL));
         }
 
         if !self
@@ -2192,8 +2176,7 @@ impl Context {
             .collect();
         for frame in frames {
             // GNU's fixed `Qwindow_resize_mini_frame` command symbol.
-            static WINDOW_RESIZE_MINI_FRAME: EpochCachedSymbol =
-                EpochCachedSymbol::new("window--resize-mini-frame");
+            static WINDOW_RESIZE_MINI_FRAME: WellKnown = WellKnown::WindowResizeMiniFrame;
             let _ = self.safe_funcall(Value::symbol(&WINDOW_RESIZE_MINI_FRAME), vec![frame]);
         }
     }
@@ -3548,7 +3531,7 @@ impl Context {
     /// on the printed name and a non-symbol really does select no arm.
     pub(crate) fn debug_on_event_signal_name(&self) -> Option<String> {
         let symbol_mode = self.symbol_mode();
-        let value = self.variable_value(DEBUG_ON_EVENT.get())?;
+        let value = self.variable_value(DEBUG_ON_EVENT.id())?;
         let name = value.as_symbol_lisp_string(symbol_mode)?;
         Some(crate::emacs_core::emacs_char::to_utf8_lossy(
             name.as_bytes(),
@@ -3653,7 +3636,7 @@ impl Context {
 
     pub(super) fn input_pending_filter(&self) -> crate::keyboard::InputPendingFilter {
         let configured = self
-            .variable_value(INPUT_PENDING_FILTER_EVENTS.get())
+            .variable_value(INPUT_PENDING_FILTER_EVENTS.id())
             .unwrap_or(Value::T)
             .is_truthy();
         crate::keyboard::InputPendingFilter::from_filter_events_variable(configured)
@@ -3669,9 +3652,9 @@ impl Context {
     pub(crate) fn track_mouse_enabled(&self) -> bool {
         // GNU DEFVAR_LISP `track-mouse`. Every pending-input query reads it;
         // the by-name spelling re-interned it at each probe.
-        static TRACK_MOUSE: EpochCachedSymbol = EpochCachedSymbol::new("track-mouse");
+        static TRACK_MOUSE: WellKnown = WellKnown::TrackMouse;
         self.variables()
-            .value_in_buffer(self.buffers.current_buffer(), TRACK_MOUSE.get())
+            .value_in_buffer(self.buffers.current_buffer(), TRACK_MOUSE.id())
             .unwrap_or(Value::NIL)
             .is_truthy()
     }
@@ -3679,11 +3662,10 @@ impl Context {
     pub(super) fn should_ignore_while_no_input_symbol(&self, ignore_symbol: &str) -> bool {
         // GNU DEFVAR_LISP `while-no-input-ignore-events`, read per queried
         // event; see `track_mouse_enabled` for the fixed-spelling rationale.
-        static WHILE_NO_INPUT_IGNORE_EVENTS: EpochCachedSymbol =
-            EpochCachedSymbol::new("while-no-input-ignore-events");
+        static WHILE_NO_INPUT_IGNORE_EVENTS: WellKnown = WellKnown::WhileNoInputIgnoreEvents;
         let symbol_mode = self.symbol_mode();
         let ignore_list = self
-            .variable_value(WHILE_NO_INPUT_IGNORE_EVENTS.get())
+            .variable_value(WHILE_NO_INPUT_IGNORE_EVENTS.id())
             .unwrap_or(Value::NIL);
         super::super::value::list_to_vec(&ignore_list)
             .into_iter()

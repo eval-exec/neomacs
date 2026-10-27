@@ -9,6 +9,7 @@ use crate::emacs_core::eval::{
 };
 use crate::emacs_core::fontset;
 pub(crate) use crate::emacs_core::frame::{builtin_next_frame, builtin_previous_frame};
+use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, intern, is_canonical_id};
 use crate::emacs_core::minibuffer;
 use crate::emacs_core::symbol::CanonicalAccess;
@@ -1808,12 +1809,10 @@ pub(crate) fn is_global_obarray_proxy(eval: &super::eval::Context, value: &Value
 fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
     // GNU's `Vobarray`; a Lisp `intern` call without an explicit obarray read
     // it by name. The internal fallback name belongs to this port.
-    static OBARRAY: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("obarray");
-    static NEOVM_OBARRAY_OBJECT: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("neovm--obarray-object");
-    eval.variable_value(OBARRAY.get()).unwrap_or_else(|| {
-        eval.variable_value(NEOVM_OBARRAY_OBJECT.get())
+    static OBARRAY: WellKnown = WellKnown::Obarray;
+    static NEOVM_OBARRAY_OBJECT: WellKnown = WellKnown::NeovmObarrayObject;
+    eval.variable_value(OBARRAY.id()).unwrap_or_else(|| {
+        eval.variable_value(NEOVM_OBARRAY_OBJECT.id())
             .unwrap_or(Value::NIL)
     })
 }
@@ -4491,8 +4490,7 @@ fn interactive_form_from_bytecode_value(function: Value) -> Option<Value> {
         return None;
     }
     // GNU's `Qinteractive`; this form is reconstructed per command lookup.
-    static INTERACTIVE_FORM_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("interactive");
+    static INTERACTIVE_FORM_SYMBOL: WellKnown = WellKnown::Interactive;
     let spec_val = stored_interactive_spec_value(probe.interactive.unwrap_or(Value::NIL));
     Some(Value::list(vec![
         Value::symbol(&INTERACTIVE_FORM_SYMBOL),

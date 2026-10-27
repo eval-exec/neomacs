@@ -25,6 +25,7 @@ use crate::emacs_core::emacs_char::EmacsChar;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::VariableStore;
+use crate::emacs_core::intern::WellKnown;
 use crate::heap_types::LispString;
 use crate::tagged::value::SymbolMode;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -763,11 +764,10 @@ pub(crate) fn context_text_quoting_style(eval: &Context, args: Vec<Value>) -> Ev
     expect_args("text-quoting-style", &args, 0)?;
     // GNU's fixed `Qtext_quoting_style`; the function is called for every
     // message that quotes text and previously interned the spelling per call.
-    static TEXT_QUOTING_STYLE: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("text-quoting-style");
+    static TEXT_QUOTING_STYLE: WellKnown = WellKnown::TextQuotingStyle;
     let lookup = |name: &str| eval.eval_symbol_by_id(intern(name)).unwrap_or(Value::NIL);
     let var = eval
-        .eval_symbol_by_id(TEXT_QUOTING_STYLE.get())
+        .eval_symbol_by_id(TEXT_QUOTING_STYLE.id())
         .unwrap_or(Value::NIL);
     let flag = lookup("internal--text-quoting-flag");
     let table = lookup("standard-display-table");

@@ -31,6 +31,7 @@ use super::intern::{intern, resolve_sym};
 use super::value::{
     OrderedRuntimeBindingMap, Value, ValueKind, VecLikeType, eq_value, list_to_vec,
 };
+use crate::emacs_core::intern::WellKnown;
 
 #[cfg(unix)]
 pub(crate) mod directory_stream;
@@ -7170,9 +7171,8 @@ fn inherit_buffer_default_eol(
 }
 
 // GNU DEFVAR `Vbuffer_file_coding_system`: every write-region coding decision
-// reads it; the spelling is fixed and is resolved once per registry epoch.
-static BUFFER_FILE_CODING_SYSTEM: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("buffer-file-coding-system");
+// reads it; the spelling is a fixed DEFSYM id, not a per-read intern.
+static BUFFER_FILE_CODING_SYSTEM: WellKnown = WellKnown::BufferFileCodingSystem;
 
 fn select_write_region_coding_system(
     eval: &mut super::eval::Context,
@@ -7228,7 +7228,7 @@ fn select_write_region_coding_system(
     let slot = match eval
         .buffers
         .get(buffer_id)
-        .is_some_and(|buf| buf.has_buffer_local_by_sym_id(BUFFER_FILE_CODING_SYSTEM.get()))
+        .is_some_and(|buf| buf.has_buffer_local_by_sym_id(BUFFER_FILE_CODING_SYSTEM.id()))
     {
         true => BufferCodingSlot::Local(slot_value),
         false => BufferCodingSlot::Inherited(slot_value),
@@ -7784,9 +7784,8 @@ pub(crate) fn builtin_do_auto_save(
     // is reported and removed without suppressing the remaining functions.
     // `auto-save-hook` is a fixed GNU DEFSYM; this save path runs per
     // auto-save and previously re-interned the spelling.
-    static AUTO_SAVE_HOOK: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("auto-save-hook");
-    eval.safe_run_hook_if_bound(AUTO_SAVE_HOOK.get())?;
+    static AUTO_SAVE_HOOK: WellKnown = WellKnown::AutoSaveHook;
+    eval.safe_run_hook_if_bound(AUTO_SAVE_HOOK.id())?;
 
     let auto_save_visited = eval
         .variable_value_by_name("auto-save-visited-file-name")

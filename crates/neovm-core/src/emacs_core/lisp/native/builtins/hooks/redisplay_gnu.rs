@@ -5,15 +5,13 @@
 use super::*;
 use crate::buffer::BufferId;
 use crate::emacs_core::eval::redisplay_hooks::HookWindowDimensions;
+use crate::emacs_core::intern::WellKnown;
 use crate::window::{FrameId, WindowId};
 
 // Fixed GNU hook spellings run on every redisplay; see `hooks.rs`.
-static WINDOW_SCROLL_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("window-scroll-functions");
-static WINDOW_STATE_CHANGE_HOOK: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("window-state-change-hook");
-static INHIBIT_REDISPLAY: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-redisplay");
+static WINDOW_SCROLL_FUNCTIONS: WellKnown = WellKnown::WindowScrollFunctions;
+static WINDOW_STATE_CHANGE_HOOK: WellKnown = WellKnown::WindowStateChangeHook;
+static INHIBIT_REDISPLAY: WellKnown = WellKnown::InhibitRedisplay;
 
 /// Owns one exclusive Context borrow through a window-change pass and its unwind.
 /// Saved binding and record state remain local to that Context; independent mutators
@@ -317,7 +315,7 @@ pub(super) fn run_eager_scroll(eval: &mut super::eval::Context, window: WindowId
     if let Some(buffer) = super::window_buffer_id_in_state(scope.eval, frame, window) {
         scope.eval.set_current_buffer_unrecorded(buffer)?;
     }
-    let symbol = hook_runtime::hook_symbol_by_id(scope.eval, WINDOW_SCROLL_FUNCTIONS.get());
+    let symbol = hook_runtime::hook_symbol_by_id(scope.eval, WINDOW_SCROLL_FUNCTIONS.id());
     let value = hook_runtime::hook_value_by_id(scope.eval, symbol).unwrap_or(Value::NIL);
     named_hook_value(
         scope.eval,
@@ -339,7 +337,7 @@ pub(super) fn run(eval: &mut super::eval::Context) -> EvalResult {
     };
     let result = (|| {
         pass.eval
-            .try_specbind_or_unwind_to(count, INHIBIT_REDISPLAY.get(), Value::T)?;
+            .try_specbind_or_unwind_to(count, INHIBIT_REDISPLAY.id(), Value::T)?;
         run_inner(&mut pass)
     })();
     finish_record(pass.eval, pass.record);
@@ -550,7 +548,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
         }
     }
     if run_state_hook {
-        let symbol = hook_runtime::hook_symbol_by_id(pass.eval, WINDOW_STATE_CHANGE_HOOK.get());
+        let symbol = hook_runtime::hook_symbol_by_id(pass.eval, WINDOW_STATE_CHANGE_HOOK.id());
         safe_named_hook(pass.eval, symbol, &[])?;
     }
     Ok(Value::NIL)
@@ -577,7 +575,7 @@ pub(super) fn run_committed_scroll(
     if let Some(buffer) = super::window_buffer_id_in_state(scope.eval, frame, window) {
         scope.eval.set_current_buffer_unrecorded(buffer)?;
     }
-    let symbol = hook_runtime::hook_symbol_by_id(scope.eval, WINDOW_SCROLL_FUNCTIONS.get());
+    let symbol = hook_runtime::hook_symbol_by_id(scope.eval, WINDOW_SCROLL_FUNCTIONS.id());
     safe_named_hook(scope.eval, symbol, &[window_arg, start])
 }
 

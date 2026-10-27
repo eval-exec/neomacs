@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::emacs_core::intern::WellKnown;
 
 // ===========================================================================
 // Misc
@@ -120,12 +121,10 @@ fn message_dolog(
     // GNU reads the DEFVAR_LISP `message-log-max` and `messages-buffer-name`;
     // `message` runs on ordinary command output, so the by-name spellings
     // re-interned both at every message.
-    static MESSAGE_LOG_MAX: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("message-log-max");
-    static MESSAGES_BUFFER_NAME: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("messages-buffer-name");
+    static MESSAGE_LOG_MAX: WellKnown = WellKnown::MessageLogMax;
+    static MESSAGES_BUFFER_NAME: WellKnown = WellKnown::MessagesBufferName;
     // GNU: check message-log-max; if nil, don't log
-    let log_max = ctx.visible_variable_value_or_nil_by_id(MESSAGE_LOG_MAX.get());
+    let log_max = ctx.visible_variable_value_or_nil_by_id(MESSAGE_LOG_MAX.id());
     if log_max.is_nil() {
         return;
     }
@@ -144,7 +143,7 @@ fn message_dolog(
     // GNU xdisp.c defaults `messages-buffer-name` to "*Messages*" and lets
     // Lisp rebind it to redirect message logging.
     let messages_name = ctx
-        .visible_variable_value_or_nil_by_id(MESSAGES_BUFFER_NAME.get())
+        .visible_variable_value_or_nil_by_id(MESSAGES_BUFFER_NAME.id())
         .as_str_owned()
         .unwrap_or_else(|| "*Messages*".to_string());
     let buf_id = if let Some(id) = ctx.buffers.find_buffer_by_name(&messages_name) {

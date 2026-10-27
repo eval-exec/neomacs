@@ -2,7 +2,7 @@
 //! Read-only: keymap filters, autoloads and arbitrary Lisp are never executed
 //! to speculate about an input. Unknown bindings retain ordinary delivery.
 
-use crate::emacs_core::intern::{EpochCachedSymbol, SymId};
+use crate::emacs_core::intern::{SymId, WellKnown};
 use crate::emacs_core::keymap::{
     command_remapping_lookup_in_keymaps, current_active_maps_for_position_read_only,
     list_keymap_lookup_one_unresolved, lookup_key_in_obarray,
@@ -12,77 +12,79 @@ use crate::emacs_core::{Context, Value};
 /// A fixed spelling consumed by the raw-input scroll predictor.
 ///
 /// GNU reads these as DEFVAR/DEFUN statics (`Vpixel_scroll_precision_mode`,
-/// `Qpre_command_hook`, ...). The predictor runs on every input event, and each
-/// probe previously built a symbol from the printed name, re-interning it.
-/// Each handle resolves once per registry epoch; no variable or function value
-/// is cached, and every read keeps its original buffer/owner boundary.
+/// `Qpre_command_hook`, ...). The predictor runs on every input event; each
+/// entry is a DEFSYM table identity (a compile-time id, no lookup or lock),
+/// no variable or function value is cached, and every read keeps its original
+/// buffer/owner boundary.
 struct ScrollSymbol {
     name: &'static str,
-    handle: EpochCachedSymbol,
+    symbol: WellKnown,
 }
 
 impl ScrollSymbol {
-    const fn new(name: &'static str) -> Self {
+    const fn new(symbol: WellKnown) -> Self {
         Self {
-            name,
-            handle: EpochCachedSymbol::new(name),
+            name: symbol.name(),
+            symbol,
         }
     }
 
     #[inline]
     fn id(&self) -> SymId {
-        self.handle.get()
+        self.symbol.id()
     }
 
     /// The symbol Value this probe used to construct, with the same
     /// constructor accounting.
     #[inline]
     fn value(&self) -> Value {
-        Value::symbol(&self.handle)
+        Value::symbol(self.symbol)
     }
 }
 
 const NEOMACS_COMPOSITOR_SCROLLING: ScrollSymbol =
-    ScrollSymbol::new("neomacs-compositor-scrolling");
-const PIXEL_SCROLL_PRECISION_MODE: ScrollSymbol = ScrollSymbol::new("pixel-scroll-precision-mode");
-const PRE_COMMAND_HOOK: ScrollSymbol = ScrollSymbol::new("pre-command-hook");
-const ELDOC_LAST_MESSAGE: ScrollSymbol = ScrollSymbol::new("eldoc-last-message");
-const NEOMACS_SCROLL_DEFINITION: ScrollSymbol = ScrollSymbol::new("neomacs--scroll-definition");
-const WINDOW_SCROLL_FUNCTIONS: ScrollSymbol = ScrollSymbol::new("window-scroll-functions");
-const ISEARCH_MODE: ScrollSymbol = ScrollSymbol::new("isearch-mode");
-const PREFIX_ARG: ScrollSymbol = ScrollSymbol::new("prefix-arg");
-const CURRENT_PREFIX_ARG: ScrollSymbol = ScrollSymbol::new("current-prefix-arg");
-const OVERRIDING_LOCAL_MAP: ScrollSymbol = ScrollSymbol::new("overriding-local-map");
+    ScrollSymbol::new(WellKnown::NeomacsCompositorScrolling);
+const PIXEL_SCROLL_PRECISION_MODE: ScrollSymbol =
+    ScrollSymbol::new(WellKnown::PixelScrollPrecisionMode);
+const PRE_COMMAND_HOOK: ScrollSymbol = ScrollSymbol::new(WellKnown::PreCommandHook);
+const ELDOC_LAST_MESSAGE: ScrollSymbol = ScrollSymbol::new(WellKnown::EldocLastMessage);
+const NEOMACS_SCROLL_DEFINITION: ScrollSymbol =
+    ScrollSymbol::new(WellKnown::NeomacsScrollDefinition);
+const WINDOW_SCROLL_FUNCTIONS: ScrollSymbol = ScrollSymbol::new(WellKnown::WindowScrollFunctions);
+const ISEARCH_MODE: ScrollSymbol = ScrollSymbol::new(WellKnown::IsearchMode);
+const PREFIX_ARG: ScrollSymbol = ScrollSymbol::new(WellKnown::PrefixArg);
+const CURRENT_PREFIX_ARG: ScrollSymbol = ScrollSymbol::new(WellKnown::CurrentPrefixArg);
+const OVERRIDING_LOCAL_MAP: ScrollSymbol = ScrollSymbol::new(WellKnown::OverridingLocalMap);
 const OVERRIDING_TERMINAL_LOCAL_MAP: ScrollSymbol =
-    ScrollSymbol::new("overriding-terminal-local-map");
+    ScrollSymbol::new(WellKnown::OverridingTerminalLocalMap);
 const PIXEL_SCROLL_PRECISION_LARGE_SCROLL_HEIGHT: ScrollSymbol =
-    ScrollSymbol::new("pixel-scroll-precision-large-scroll-height");
+    ScrollSymbol::new(WellKnown::PixelScrollPrecisionLargeScrollHeight);
 const PIXEL_SCROLL_PRECISION_USE_MOMENTUM: ScrollSymbol =
-    ScrollSymbol::new("pixel-scroll-precision-use-momentum");
-const PIXEL_SCROLL_PRECISION: ScrollSymbol = ScrollSymbol::new("pixel-scroll-precision");
+    ScrollSymbol::new(WellKnown::PixelScrollPrecisionUseMomentum);
+const PIXEL_SCROLL_PRECISION: ScrollSymbol = ScrollSymbol::new(WellKnown::PixelScrollPrecision);
 const PIXEL_SCROLL_PRECISION_SCROLL_DOWN: ScrollSymbol =
-    ScrollSymbol::new("pixel-scroll-precision-scroll-down");
+    ScrollSymbol::new(WellKnown::PixelScrollPrecisionScrollDown);
 const PIXEL_SCROLL_PRECISION_SCROLL_DOWN_PAGE: ScrollSymbol =
-    ScrollSymbol::new("pixel-scroll-precision-scroll-down-page");
+    ScrollSymbol::new(WellKnown::PixelScrollPrecisionScrollDownPage);
 const PIXEL_SCROLL_PRECISION_SCROLL_UP: ScrollSymbol =
-    ScrollSymbol::new("pixel-scroll-precision-scroll-up");
+    ScrollSymbol::new(WellKnown::PixelScrollPrecisionScrollUp);
 const PIXEL_SCROLL_PRECISION_SCROLL_UP_PAGE: ScrollSymbol =
-    ScrollSymbol::new("pixel-scroll-precision-scroll-up-page");
+    ScrollSymbol::new(WellKnown::PixelScrollPrecisionScrollUpPage);
 const PIXEL_SCROLL_PRECISION_INTERPOLATE: ScrollSymbol =
-    ScrollSymbol::new("pixel-scroll-precision-interpolate");
-const SET_WINDOW_START: ScrollSymbol = ScrollSymbol::new("set-window-start");
-const SET_WINDOW_VSCROLL: ScrollSymbol = ScrollSymbol::new("set-window-vscroll");
-const WINDOW_TEXT_PIXEL_SIZE: ScrollSymbol = ScrollSymbol::new("window-text-pixel-size");
-const POSN_AT_X_Y: ScrollSymbol = ScrollSymbol::new("posn-at-x-y");
-const POSN_AT_POINT: ScrollSymbol = ScrollSymbol::new("posn-at-point");
-const POS_VISIBLE_IN_WINDOW_P: ScrollSymbol = ScrollSymbol::new("pos-visible-in-window-p");
-const VERTICAL_MOTION: ScrollSymbol = ScrollSymbol::new("vertical-motion");
-const KEY_TRANSLATION_MAP: ScrollSymbol = ScrollSymbol::new("key-translation-map");
-const INPUT_DECODE_MAP: ScrollSymbol = ScrollSymbol::new("input-decode-map");
-const LOCAL_FUNCTION_KEY_MAP: ScrollSymbol = ScrollSymbol::new("local-function-key-map");
-const SPECIAL_EVENT_MAP: ScrollSymbol = ScrollSymbol::new("special-event-map");
-const WHEEL_UP: ScrollSymbol = ScrollSymbol::new("wheel-up");
-const WHEEL_DOWN: ScrollSymbol = ScrollSymbol::new("wheel-down");
+    ScrollSymbol::new(WellKnown::PixelScrollPrecisionInterpolate);
+const SET_WINDOW_START: ScrollSymbol = ScrollSymbol::new(WellKnown::SetWindowStart);
+const SET_WINDOW_VSCROLL: ScrollSymbol = ScrollSymbol::new(WellKnown::SetWindowVscroll);
+const WINDOW_TEXT_PIXEL_SIZE: ScrollSymbol = ScrollSymbol::new(WellKnown::WindowTextPixelSize);
+const POSN_AT_X_Y: ScrollSymbol = ScrollSymbol::new(WellKnown::PosnAtXY);
+const POSN_AT_POINT: ScrollSymbol = ScrollSymbol::new(WellKnown::PosnAtPoint);
+const POS_VISIBLE_IN_WINDOW_P: ScrollSymbol = ScrollSymbol::new(WellKnown::PosVisibleInWindowP);
+const VERTICAL_MOTION: ScrollSymbol = ScrollSymbol::new(WellKnown::VerticalMotion);
+const KEY_TRANSLATION_MAP: ScrollSymbol = ScrollSymbol::new(WellKnown::KeyTranslationMap);
+const INPUT_DECODE_MAP: ScrollSymbol = ScrollSymbol::new(WellKnown::InputDecodeMap);
+const LOCAL_FUNCTION_KEY_MAP: ScrollSymbol = ScrollSymbol::new(WellKnown::LocalFunctionKeyMap);
+const SPECIAL_EVENT_MAP: ScrollSymbol = ScrollSymbol::new(WellKnown::SpecialEventMap);
+const WHEEL_UP: ScrollSymbol = ScrollSymbol::new(WellKnown::WheelUp);
+const WHEEL_DOWN: ScrollSymbol = ScrollSymbol::new(WellKnown::WheelDown);
 
 impl Context {
     pub(crate) fn publish_committed_scroll_preview(

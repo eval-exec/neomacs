@@ -11,6 +11,7 @@ use super::intern::{SymId, intern, resolve_sym};
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::emacs_core::intern::WellKnown;
 use crate::tagged::SymbolMode;
 use crate::tagged::header::{SubrDispatchKind, SubrObj};
 
@@ -53,12 +54,9 @@ pub(crate) fn is_special_form(name: &str) -> bool {
 /// symbol `many`.
 // GNU's `Qmany` / `Qunevalled` / `Qmacro`: fixed spellings `subr-arity`
 // probes on every arity query.
-static MANY_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("many");
-static UNEVALLED_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("unevalled");
-static MACRO_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("macro");
+static MANY_SYMBOL: WellKnown = WellKnown::Many;
+static UNEVALLED_SYMBOL: WellKnown = WellKnown::Unevalled;
+static MACRO_SYMBOL: WellKnown = WellKnown::Macro;
 
 fn arity_cons(min: usize, max: Option<usize>) -> Value {
     let min_val = Value::fixnum(min as i64);
@@ -75,7 +73,7 @@ fn arity_unevalled(min: usize) -> Value {
 
 fn macro_wrapper_payload(function: Value, symbol_mode: SymbolMode) -> Option<Value> {
     if function.is_cons()
-        && function.cons_car().as_symbol_id(symbol_mode) == Some(MACRO_SYMBOL.get())
+        && function.cons_car().as_symbol_id(symbol_mode) == Some(MACRO_SYMBOL.id())
     {
         Some(function.cons_cdr())
     } else {

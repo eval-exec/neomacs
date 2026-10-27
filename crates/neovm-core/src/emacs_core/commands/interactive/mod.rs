@@ -40,6 +40,7 @@ use super::symbol::Obarray;
 use super::value::*;
 use crate::buffer::EmacsBytePos;
 use crate::emacs_core::SymId;
+use crate::emacs_core::intern::WellKnown;
 
 /// GNU's predeclared `Qinteractive_form` identity.
 ///
@@ -928,7 +929,7 @@ fn value_is_interactive_form(value: &Value, symbol_mode: SymbolMode) -> bool {
         ValueKind::Cons => {
             let pair_car = value.cons_car();
             let _pair_cdr = value.cons_cdr();
-            pair_car.as_symbol_id(symbol_mode) == Some(INTERACTIVE_SYMBOL.get())
+            pair_car.as_symbol_id(symbol_mode) == Some(INTERACTIVE_SYMBOL.id())
         }
         _ => false,
     }
@@ -1618,25 +1619,16 @@ fn dynamic_or_global_symbol_value_by_id(eval: &Context, id: SymId) -> Option<Val
 
 // Fixed GNU spellings the interactive self-insert path probes on every
 // command. Each previously went through a fresh `intern` at the call site;
-// the handles resolve once per registry epoch and cache no value.
-static LAST_COMMAND_EVENT: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("last-command-event");
-static ABBREV_MODE: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("abbrev-mode");
-static EXPAND_ABBREV: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("expand-abbrev");
-static NO_SELF_INSERT: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("no-self-insert");
-static OVERWRITE_MODE: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("overwrite-mode");
-static OVERWRITE_MODE_BINARY: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("overwrite-mode-binary");
-static UNDO_AUTO_AMALGAMATE: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("undo-auto-amalgamate");
-static BARF_IF_BUFFER_READ_ONLY: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("barf-if-buffer-read-only");
-static INTERACTIVE_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("interactive");
+// each handle is a compile-time id and caches no value.
+static LAST_COMMAND_EVENT: WellKnown = WellKnown::LastCommandEvent;
+static ABBREV_MODE: WellKnown = WellKnown::AbbrevMode;
+static EXPAND_ABBREV: WellKnown = WellKnown::ExpandAbbrev;
+static NO_SELF_INSERT: WellKnown = WellKnown::NoSelfInsert;
+static OVERWRITE_MODE: WellKnown = WellKnown::OverwriteMode;
+static OVERWRITE_MODE_BINARY: WellKnown = WellKnown::OverwriteModeBinary;
+static UNDO_AUTO_AMALGAMATE: WellKnown = WellKnown::UndoAutoAmalgamate;
+static BARF_IF_BUFFER_READ_ONLY: WellKnown = WellKnown::BarfIfBufferReadOnly;
+static INTERACTIVE_SYMBOL: WellKnown = WellKnown::Interactive;
 
 fn dynamic_or_global_symbol_value_in_state(
     vars: VariableView<'_>,
@@ -3155,8 +3147,7 @@ pub(crate) fn finish_call_interactively_in_eval(
         let funcall_args = invocation.into_funcall_args(call_args);
         // GNU's `Qfuncall_interactively`; every command invocation applied
         // this fixed symbol after re-interning its spelling.
-        static FUNCALL_INTERACTIVELY: crate::emacs_core::intern::EpochCachedSymbol =
-            crate::emacs_core::intern::EpochCachedSymbol::new("funcall-interactively");
+        static FUNCALL_INTERACTIVELY: WellKnown = WellKnown::FuncallInteractively;
         eval.apply(Value::symbol(&FUNCALL_INTERACTIVELY), funcall_args)
     })();
     eval.restore_specpdl_roots(roots);
@@ -3285,9 +3276,9 @@ pub(crate) fn builtin_self_insert_command(eval: &mut Context, args: Vec<Value>) 
     // GNU: if (NILP (c)) c = last_command_event; else last_command_event = c;
     let c_arg = args.get(1).copied().unwrap_or(Value::NIL);
     let c = if c_arg.is_nil() {
-        dynamic_or_global_symbol_value_by_id(eval, LAST_COMMAND_EVENT.get()).unwrap_or(Value::NIL)
+        dynamic_or_global_symbol_value_by_id(eval, LAST_COMMAND_EVENT.id()).unwrap_or(Value::NIL)
     } else {
-        eval.assign_by_id(LAST_COMMAND_EVENT.get(), c_arg);
+        eval.assign_by_id(LAST_COMMAND_EVENT.id(), c_arg);
         c_arg
     };
 
@@ -3468,7 +3459,7 @@ fn self_insert_expand_abbrev_at_word_boundary(
     eval: &mut Context,
     inserted: char,
 ) -> Result<SelfInsertAbbrevOutcome, Flow> {
-    if dynamic_or_global_symbol_value_by_id(eval, ABBREV_MODE.get())
+    if dynamic_or_global_symbol_value_by_id(eval, ABBREV_MODE.id())
         .is_none_or(|value| value.is_nil())
     {
         return Ok(SelfInsertAbbrevOutcome::default());
@@ -3506,7 +3497,7 @@ fn self_insert_expand_abbrev_at_word_boundary(
             .and_then(|hook| match symbol_mode.unwrap(hook).kind() {
                 ValueKind::Symbol(hook_symbol) => eval
                     .obarray()
-                    .get_property_id(hook_symbol, NO_SELF_INSERT.get()),
+                    .get_property_id(hook_symbol, NO_SELF_INSERT.id()),
                 _ => None,
             })
             .is_some_and(|property| property.is_truthy()),
@@ -3529,7 +3520,7 @@ fn self_insert_expand_abbrev_at_word_boundary(
 fn self_insert_overwrite_plan(eval: &mut Context, c: char, n: i64) -> Result<(usize, usize), Flow> {
     // overwrite = BVAR (current_buffer, overwrite_mode)
     let overwrite = eval
-        .eval_symbol_by_id(OVERWRITE_MODE.get())
+        .eval_symbol_by_id(OVERWRITE_MODE.id())
         .unwrap_or(Value::NIL);
     if overwrite.is_nil() {
         return Ok((0, 0));

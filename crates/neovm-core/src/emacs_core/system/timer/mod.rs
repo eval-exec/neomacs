@@ -25,6 +25,7 @@ use super::error::{EvalResult, Flow, signal};
 use super::eval::GnuTimerTimestamp;
 use super::intern::intern;
 use super::value::{Value, ValueKind, VecLikeType};
+use crate::emacs_core::intern::WellKnown;
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::rounding_modes::RoundingMode;
 
@@ -145,20 +146,18 @@ impl GnuTimerBatch {
 }
 
 // GNU DEFVAR_LISP timer queues, read every wait-loop iteration.
-static TIMER_LIST: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("timer-list");
-static TIMER_IDLE_LIST: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("timer-idle-list");
+static TIMER_LIST: WellKnown = WellKnown::TimerList;
+static TIMER_IDLE_LIST: WellKnown = WellKnown::TimerIdleList;
 
 impl super::eval::Context {
     fn capture_gnu_timer_batch(&self) -> GnuTimerBatch {
         let ordinary = self
-            .variable_value(TIMER_LIST.get())
+            .variable_value(TIMER_LIST.id())
             .and_then(|value| super::value::list_to_vec(&value))
             .unwrap_or_default();
 
         let idle = if self.current_idle_duration().is_some() {
-            self.variable_value(TIMER_IDLE_LIST.get())
+            self.variable_value(TIMER_IDLE_LIST.id())
                 .and_then(|value| super::value::list_to_vec(&value))
                 .unwrap_or_default()
         } else {
@@ -183,7 +182,7 @@ impl super::eval::Context {
         deadline: Option<GnuTimerTimestamp>,
     ) -> Option<Duration> {
         let timers = self
-            .variable_value(TIMER_LIST.get())
+            .variable_value(TIMER_LIST.id())
             .and_then(|value| super::value::list_to_vec(&value))
             .unwrap_or_default();
         let now = GnuTimerTimestamp::now();
@@ -198,7 +197,7 @@ impl super::eval::Context {
 
     pub(crate) fn next_idle_gnu_timer_timeout(&self) -> Option<Duration> {
         let idle_now = self.current_idle_timer_timestamp()?;
-        self.variable_value(TIMER_IDLE_LIST.get())
+        self.variable_value(TIMER_IDLE_LIST.id())
             .and_then(|value| super::value::list_to_vec(&value))
             .unwrap_or_default()
             .into_iter()

@@ -10,23 +10,21 @@ mod echo_message;
 
 use super::*;
 use crate::buffer::{BufferId, LispCharPos1};
-use crate::emacs_core::intern::EpochCachedSymbol;
+use crate::emacs_core::intern::WellKnown;
 use crate::window::{FrameId, PreparedMiniResizeOutcome, Window, WindowId};
 
-// Fixed redisplay spellings, resolved once per registry epoch. GNU holds
-// these as DEFSYM statics (`Qpre_redisplay_function`, `Qinhibit_redisplay`,
-// `Qinhibit_quit`, ...); the redisplay transaction runs on every command and
-// previously re-interned each spelling at its probe.
-static PRE_REDISPLAY_FUNCTION: EpochCachedSymbol = EpochCachedSymbol::new("pre-redisplay-function");
-static INHIBIT_REDISPLAY: EpochCachedSymbol = EpochCachedSymbol::new("inhibit-redisplay");
-static INHIBIT_QUIT: EpochCachedSymbol = EpochCachedSymbol::new("inhibit-quit");
-static RESIZE_MINI_FRAMES: EpochCachedSymbol = EpochCachedSymbol::new("resize-mini-frames");
-static REDISPLAY_ADHOC_SCROLL_IN_RESIZE_MINI_WINDOWS: EpochCachedSymbol =
-    EpochCachedSymbol::new("redisplay-adhoc-scroll-in-resize-mini-windows");
-static WINDOW_RESIZE_ROOT_VERTICALLY: EpochCachedSymbol =
-    EpochCachedSymbol::new("window--resize-root-window-vertically");
-static WINDOW_RESIZE_MINI_FRAME: EpochCachedSymbol =
-    EpochCachedSymbol::new("window--resize-mini-frame");
+// Fixed redisplay spellings with GNU DEFSYM ids. GNU holds these as statics
+// (`Qpre_redisplay_function`, `Qinhibit_redisplay`, `Qinhibit_quit`, ...); the
+// redisplay transaction runs on every command and previously re-interned each
+// spelling at its probe.
+static PRE_REDISPLAY_FUNCTION: WellKnown = WellKnown::PreRedisplayFunction;
+static INHIBIT_REDISPLAY: WellKnown = WellKnown::InhibitRedisplay;
+static INHIBIT_QUIT: WellKnown = WellKnown::InhibitQuit;
+static RESIZE_MINI_FRAMES: WellKnown = WellKnown::ResizeMiniFrames;
+static REDISPLAY_ADHOC_SCROLL_IN_RESIZE_MINI_WINDOWS: WellKnown =
+    WellKnown::RedisplayAdhocScrollInResizeMiniWindows;
+static WINDOW_RESIZE_ROOT_VERTICALLY: WellKnown = WellKnown::WindowResizeRootWindowVertically;
+static WINDOW_RESIZE_MINI_FRAME: WellKnown = WellKnown::WindowResizeMiniFrame;
 use neomacs_display_protocol::types::Px;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -451,7 +449,7 @@ impl Context {
     pub fn gnu_resize_prepared_mini_frame(&mut self, frame: FrameId) -> EvalResult {
         if !gnu_redisplay_hooks_enabled()
             || !self
-                .special_variable_value_by_id(RESIZE_MINI_FRAMES.get())
+                .special_variable_value_by_id(RESIZE_MINI_FRAMES.id())
                 .is_some_and(|value| value.is_truthy())
         {
             return Ok(Value::NIL);
@@ -475,13 +473,13 @@ impl Context {
         // GNU xdisp.c:13299 checks inhibit before the optional start reset,
         // even when resize-mini-frames itself is nil.
         if self
-            .special_variable_value_by_id(INHIBIT_REDISPLAY.get())
+            .special_variable_value_by_id(INHIBIT_REDISPLAY.id())
             .is_some_and(|value| value.is_truthy())
         {
             return Ok(Value::NIL);
         }
         if self
-            .special_variable_value_by_id(REDISPLAY_ADHOC_SCROLL_IN_RESIZE_MINI_WINDOWS.get())
+            .special_variable_value_by_id(REDISPLAY_ADHOC_SCROLL_IN_RESIZE_MINI_WINDOWS.id())
             .is_none_or(|value| value.is_truthy())
         {
             let begin = self
@@ -933,7 +931,7 @@ impl Context {
     }
 
     fn gnu_run_pre_redisplay(&mut self) -> EvalResult {
-        let Some(function) = self.special_variable_value_by_id(PRE_REDISPLAY_FUNCTION.get()) else {
+        let Some(function) = self.special_variable_value_by_id(PRE_REDISPLAY_FUNCTION.id()) else {
             return Ok(Value::NIL);
         };
         if !builtins::types::value_is_function(self, function) {
@@ -945,7 +943,7 @@ impl Context {
         self.push_specpdl_root(windows);
         let count = self.specpdl.len();
         let result = (|| {
-            self.try_specbind_or_unwind_to(count, INHIBIT_QUIT.get(), Value::T)?;
+            self.try_specbind_or_unwind_to(count, INHIBIT_QUIT.id(), Value::T)?;
             self.safe_funcall(function, vec![windows])
         })();
         let result = self.unbind_to_with_result(count, result);
@@ -963,7 +961,7 @@ impl Context {
         }
         if self.gnu_redisplay_hooks.active.is_active()
             || self
-                .special_variable_value_by_id(INHIBIT_REDISPLAY.get())
+                .special_variable_value_by_id(INHIBIT_REDISPLAY.id())
                 .is_some_and(|value| value.is_truthy())
             || self.redisplay_fn.is_none()
         {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::intern::{EpochCachedSymbol, intern_calls, reset_intern_calls};
+use crate::emacs_core::intern::{intern_calls, reset_intern_calls};
 use strum::IntoEnumIterator;
 
 fn context() -> Context {
@@ -132,16 +132,4 @@ fn fixed_command_identity_keeps_redefined_function_cell_live() {
         crate::emacs_core::print::print_value(&new),
         "(new ttykey-k4-live-command)"
     );
-}
-
-#[test]
-fn command_owned_epoch_cache_refreshes_only_unique_test_identity() {
-    // Never unintern a production command variable: other tests can use it.
-    static SYMBOL: EpochCachedSymbol =
-        EpochCachedSymbol::new("ttykey-k4-command-epoch-unique-symbol");
-    let old = SYMBOL.get();
-    assert!(crate::emacs_core::intern::unintern_canonical_id(old));
-    let new = SYMBOL.get();
-    assert_ne!(new, old);
-    assert_eq!(new, intern("ttykey-k4-command-epoch-unique-symbol"));
 }

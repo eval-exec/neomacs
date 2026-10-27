@@ -4,7 +4,7 @@
 //! is cached. Existing caller order and skipped branches remain authoritative.
 
 use super::{FaceTable, NeoFace};
-use neovm_core::emacs_core::intern::EpochCachedSymbol;
+use neovm_core::emacs_core::intern::WellKnown;
 
 #[derive(Clone, Copy, Debug, strum::IntoStaticStr, strum::VariantArray)]
 #[strum(serialize_all = "kebab-case")]
@@ -22,19 +22,17 @@ pub(super) enum FixedFace {
     GlyphlessChar,
 }
 
-static DEFAULT: EpochCachedSymbol = EpochCachedSymbol::new("default");
-static CURSOR: EpochCachedSymbol = EpochCachedSymbol::new("cursor");
-static VERTICAL_BORDER: EpochCachedSymbol = EpochCachedSymbol::new("vertical-border");
-static WINDOW_DIVIDER: EpochCachedSymbol = EpochCachedSymbol::new("window-divider");
-static WINDOW_DIVIDER_FIRST_PIXEL: EpochCachedSymbol =
-    EpochCachedSymbol::new("window-divider-first-pixel");
-static WINDOW_DIVIDER_LAST_PIXEL: EpochCachedSymbol =
-    EpochCachedSymbol::new("window-divider-last-pixel");
-static TRAILING_WHITESPACE: EpochCachedSymbol = EpochCachedSymbol::new("trailing-whitespace");
-static FILL_COLUMN_INDICATOR: EpochCachedSymbol = EpochCachedSymbol::new("fill-column-indicator");
-static ESCAPE_GLYPH: EpochCachedSymbol = EpochCachedSymbol::new("escape-glyph");
-static NOBREAK_SPACE: EpochCachedSymbol = EpochCachedSymbol::new("nobreak-space");
-static GLYPHLESS_CHAR: EpochCachedSymbol = EpochCachedSymbol::new("glyphless-char");
+static DEFAULT: WellKnown = WellKnown::Default;
+static CURSOR: WellKnown = WellKnown::Cursor;
+static VERTICAL_BORDER: WellKnown = WellKnown::VerticalBorder;
+static WINDOW_DIVIDER: WellKnown = WellKnown::WindowDivider;
+static WINDOW_DIVIDER_FIRST_PIXEL: WellKnown = WellKnown::WindowDividerFirstPixel;
+static WINDOW_DIVIDER_LAST_PIXEL: WellKnown = WellKnown::WindowDividerLastPixel;
+static TRAILING_WHITESPACE: WellKnown = WellKnown::TrailingWhitespace;
+static FILL_COLUMN_INDICATOR: WellKnown = WellKnown::FillColumnIndicator;
+static ESCAPE_GLYPH: WellKnown = WellKnown::EscapeGlyph;
+static NOBREAK_SPACE: WellKnown = WellKnown::NobreakSpace;
+static GLYPHLESS_CHAR: WellKnown = WellKnown::GlyphlessChar;
 
 impl FixedFace {
     #[cfg(test)]
@@ -42,7 +40,7 @@ impl FixedFace {
         self.into()
     }
 
-    fn handle(self) -> &'static EpochCachedSymbol {
+    fn handle(self) -> &'static WellKnown {
         match self {
             Self::Default => &DEFAULT,
             Self::Cursor => &CURSOR,

@@ -6,10 +6,9 @@
 //! same split here: typed known parameters for Rust internals, plus dynamic
 //! symbol keys for Lisp-visible unknown parameters.
 
-use crate::emacs_core::intern::{EpochCachedSymbol, SymId, resolve_sym};
+use crate::emacs_core::intern::{SymId, WellKnown, resolve_sym};
 use crate::emacs_core::value::Value;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use std::sync::LazyLock;
 use strum::{EnumCount, EnumString, IntoStaticStr, VariantArray};
 
 pub const GNU_FRAME_PARAM_COUNT: usize = 54;
@@ -234,9 +233,8 @@ pub const GNU_FRAME_PARAMS: [FrameParam; GNU_FRAME_PARAM_COUNT] = [
 ];
 
 // The GNU handler domain stays separate from native queries of parameters
-// which have no entry in frame_parms[]. Neither table hashes on a warm query.
-static FRAME_PARAMETER_SYMBOLS: LazyLock<[EpochCachedSymbol; FrameParam::COUNT]> =
-    LazyLock::new(|| GNU_FRAME_PARAMS.map(|param| EpochCachedSymbol::new(param.name())));
+// which have no entry in frame_parms[]. Both resolve to fixed DEFSYM table
+// identities; no registry lookup, lock or epoch read is involved.
 
 /// Fixed Core query keys outside GNU's indexed frame-parameter handler table.
 #[repr(u8)]
@@ -261,21 +259,39 @@ pub(crate) enum FrameQueryParam {
 }
 
 const _: [(); FrameQueryParam::COUNT] = [(); FrameQueryParam::VARIANTS.len()];
-static FRAME_QUERY_SYMBOLS: LazyLock<[EpochCachedSymbol; FrameQueryParam::COUNT]> =
-    LazyLock::new(|| {
-        std::array::from_fn(|index| EpochCachedSymbol::new(FrameQueryParam::VARIANTS[index].into()))
-    });
+
+impl FrameQueryParam {
+    /// The fixed DEFSYM identity this query key is spelled as.
+    pub(crate) const fn well_known(self) -> WellKnown {
+        use crate::emacs_core::intern::WellKnown;
+
+        match self {
+            FrameQueryParam::Width => WellKnown::Width,
+            FrameQueryParam::Height => WellKnown::Height,
+            FrameQueryParam::WindowSystem => WellKnown::WindowSystem,
+            FrameQueryParam::FontParameter => WellKnown::FontParameter,
+            FrameQueryParam::Fontsize => WellKnown::Fontsize,
+            FrameQueryParam::Tooltip => WellKnown::Tooltip,
+            FrameQueryParam::Display => WellKnown::Display,
+            FrameQueryParam::MinWidth => WellKnown::MinWidth,
+            FrameQueryParam::MinHeight => WellKnown::MinHeight,
+            FrameQueryParam::TextLines => WellKnown::NeovmFrameTextLines,
+            FrameQueryParam::TotalCols => WellKnown::NeovmFrameTotalCols,
+            FrameQueryParam::TotalLines => WellKnown::NeovmFrameTotalLines,
+        }
+    }
+}
 
 impl From<FrameQueryParam> for FrameParamKey {
     fn from(value: FrameQueryParam) -> Self {
-        Self::Unknown(FRAME_QUERY_SYMBOLS[usize::from(u8::from(value))].get())
+        Self::Unknown(value.well_known().id())
     }
 }
 
 impl FrameQueryParam {
     /// Interned symbol this query key names in the frame parameter map.
     pub(crate) fn symbol_id(self) -> SymId {
-        FRAME_QUERY_SYMBOLS[usize::from(u8::from(self))].get()
+        self.well_known().id()
     }
 
     /// Lisp-visible symbol value of this query key.
@@ -285,6 +301,68 @@ impl FrameQueryParam {
 }
 
 impl FrameParam {
+    /// The fixed DEFSYM identity GNU's `frame_parms[]` entry is spelled as.
+    const fn well_known(self) -> WellKnown {
+        use crate::emacs_core::intern::WellKnown;
+
+        match self {
+            FrameParam::AutoRaise => WellKnown::AutoRaise,
+            FrameParam::AutoLower => WellKnown::AutoLower,
+            FrameParam::BackgroundColor => WellKnown::BackgroundColor,
+            FrameParam::BorderColor => WellKnown::BorderColor,
+            FrameParam::BorderWidth => WellKnown::BorderWidth,
+            FrameParam::CursorColor => WellKnown::CursorColor,
+            FrameParam::CursorType => WellKnown::CursorType,
+            FrameParam::Font => WellKnown::Font,
+            FrameParam::ForegroundColor => WellKnown::ForegroundColor,
+            FrameParam::IconName => WellKnown::IconName,
+            FrameParam::IconType => WellKnown::IconType,
+            FrameParam::ChildFrameBorderWidth => WellKnown::ChildFrameBorderWidth,
+            FrameParam::InternalBorderWidth => WellKnown::InternalBorderWidth,
+            FrameParam::RightDividerWidth => WellKnown::RightDividerWidth,
+            FrameParam::BottomDividerWidth => WellKnown::BottomDividerWidth,
+            FrameParam::MenuBarLines => WellKnown::MenuBarLines,
+            FrameParam::MouseColor => WellKnown::MouseColor,
+            FrameParam::Name => WellKnown::Name,
+            FrameParam::ScrollBarWidth => WellKnown::ScrollBarWidth,
+            FrameParam::ScrollBarHeight => WellKnown::ScrollBarHeight,
+            FrameParam::Title => WellKnown::Title,
+            FrameParam::Unsplittable => WellKnown::Unsplittable,
+            FrameParam::VerticalScrollBars => WellKnown::VerticalScrollBars,
+            FrameParam::HorizontalScrollBars => WellKnown::HorizontalScrollBars,
+            FrameParam::Visibility => WellKnown::Visibility,
+            FrameParam::TabBarLines => WellKnown::TabBarLines,
+            FrameParam::ToolBarLines => WellKnown::ToolBarLines,
+            FrameParam::ScrollBarForeground => WellKnown::ScrollBarForeground,
+            FrameParam::ScrollBarBackground => WellKnown::ScrollBarBackground,
+            FrameParam::ScreenGamma => WellKnown::ScreenGamma,
+            FrameParam::LineSpacing => WellKnown::LineSpacing,
+            FrameParam::LeftFringe => WellKnown::LeftFringe,
+            FrameParam::RightFringe => WellKnown::RightFringe,
+            FrameParam::WaitForWm => WellKnown::WaitForWm,
+            FrameParam::Fullscreen => WellKnown::Fullscreen,
+            FrameParam::FontBackend => WellKnown::FontBackend,
+            FrameParam::Alpha => WellKnown::Alpha,
+            FrameParam::Sticky => WellKnown::Sticky,
+            FrameParam::ToolBarPosition => WellKnown::ToolBarPosition,
+            FrameParam::InhibitDoubleBuffering => WellKnown::InhibitDoubleBuffering,
+            FrameParam::Undecorated => WellKnown::Undecorated,
+            FrameParam::ParentFrame => WellKnown::ParentFrame,
+            FrameParam::SkipTaskbar => WellKnown::SkipTaskbar,
+            FrameParam::NoFocusOnMap => WellKnown::NoFocusOnMap,
+            FrameParam::NoAcceptFocus => WellKnown::NoAcceptFocus,
+            FrameParam::ZGroup => WellKnown::ZGroup,
+            FrameParam::OverrideRedirect => WellKnown::OverrideRedirect,
+            FrameParam::NoSpecialGlyphs => WellKnown::NoSpecialGlyphs,
+            FrameParam::AlphaBackground => WellKnown::AlphaBackground,
+            FrameParam::BordersRespectAlphaBackground => WellKnown::BordersRespectAlphaBackground,
+            FrameParam::UseFrameSynchronization => WellKnown::UseFrameSynchronization,
+            FrameParam::Shaded => WellKnown::Shaded,
+            FrameParam::NsAppearance => WellKnown::NsAppearance,
+            FrameParam::NsTransparentTitlebar => WellKnown::NsTransparentTitlebar,
+        }
+    }
+
     pub fn gnu_index(self) -> usize {
         usize::from(u8::from(self))
     }
@@ -299,7 +377,7 @@ impl FrameParam {
     }
 
     pub fn symbol(self) -> Value {
-        Value::from_sym_id(FRAME_PARAMETER_SYMBOLS[self.gnu_index()].get())
+        Value::from_sym_id(self.well_known().id())
     }
 
     pub fn from_name(name: &str) -> Option<Self> {

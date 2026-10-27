@@ -4,6 +4,7 @@ use super::{
     WindowDisplayState, WindowId, WindowLayoutInputState, WindowMargins,
 };
 use crate::buffer::{BufferId, LispCharPos1};
+use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::value::Value;
 use std::cell::Cell;
 
@@ -913,11 +914,10 @@ impl crate::emacs_core::eval::Context {
         // GNU reads the DEFSYM `Qfontification_functions`; this projection
         // runs for every layout attempt and previously re-interned the
         // spelling at each call.
-        static FONTIFICATION_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
-            crate::emacs_core::intern::EpochCachedSymbol::new("fontification-functions");
+        static FONTIFICATION_FUNCTIONS: WellKnown = WellKnown::FontificationFunctions;
         self.capture_buffer_layout_inputs(buffer_id, |buffer| {
             super::FontificationHookIdentity(
-                self.variable_value_in_buffer_inline(Some(buffer), FONTIFICATION_FUNCTIONS.get())
+                self.variable_value_in_buffer_inline(Some(buffer), FONTIFICATION_FUNCTIONS.id())
                     .map(super::WindowLayoutValueIdentity::of),
             )
         })

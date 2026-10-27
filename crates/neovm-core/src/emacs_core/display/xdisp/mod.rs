@@ -76,6 +76,7 @@ use crate::buffer::{
 };
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range};
+use crate::emacs_core::intern::WellKnown;
 use crate::window::{
     DisplayRowSnapshot, FrameId, FrameManager, Window, WindowChromeLine, WindowChromePresence,
     WindowDisplaySnapshot, WindowId,
@@ -86,8 +87,7 @@ use strum::{EnumString, IntoStaticStr};
 
 // GNU's `Qfontification_functions`: the redisplay fontification demand probes
 // this hook on every pass and previously re-interned the spelling per probe.
-static FONTIFICATION_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("fontification-functions");
+static FONTIFICATION_FUNCTIONS: WellKnown = WellKnown::FontificationFunctions;
 
 impl super::eval::Context {
     /// Choose a redisplay start by moving backward from point in display rows.
@@ -2609,9 +2609,9 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
     result
 }
 
-/// Fixed mode-line identities pre-resolve native spellings per registry epoch.
-/// The shared cache is safe for concurrent mutators; this enum holds no Lisp
-/// values or per-format mutable state. Resolve again after arbitrary Lisp.
+/// Fixed mode-line identities: GNU DEFSYM ids, constant and lock-free.
+/// The enum is safe to share across concurrent mutators; it holds no Lisp
+/// values or per-format mutable state, and the ids cannot change.
 #[derive(Clone, Copy, Debug, strum::EnumIter)]
 enum ModeLineSymbol {
     ModeName,
@@ -2625,32 +2625,32 @@ enum ModeLineSymbol {
 impl ModeLineSymbol {
     #[inline]
     fn id(self) -> crate::emacs_core::intern::SymId {
-        use crate::emacs_core::intern::EpochCachedSymbol;
+        use crate::emacs_core::intern::WellKnown;
 
         match self {
             Self::ModeName => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("mode-name");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::ModeName;
+                SYMBOL.id()
             }
             Self::DefaultDirectory => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("default-directory");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::DefaultDirectory;
+                SYMBOL.id()
             }
             Self::RiskyLocalVariable => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("risky-local-variable");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::RiskyLocalVariable;
+                SYMBOL.id()
             }
             Self::InhibitRedisplay => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("inhibit-redisplay");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::InhibitRedisplay;
+                SYMBOL.id()
             }
             Self::InhibitQuit => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("inhibit-quit");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::InhibitQuit;
+                SYMBOL.id()
             }
             Self::Eval => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("eval");
-                SYMBOL.get()
+                static SYMBOL: WellKnown = WellKnown::Eval;
+                SYMBOL.id()
             }
         }
     }
@@ -9002,7 +9002,7 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
     pos: i64,
     observer: &mut O,
 ) {
-    let hook_sym = FONTIFICATION_FUNCTIONS.get();
+    let hook_sym = FONTIFICATION_FUNCTIONS.id();
     let functions = hook_runtime::collect_hook_functions_in_state(ctx, hook_sym, hook_value, true);
     if functions.is_empty() {
         return;
@@ -9223,7 +9223,7 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
             return Ok(RedisplayFontificationOutcome::Unchanged);
         }
 
-        let hook_sym = FONTIFICATION_FUNCTIONS.get();
+        let hook_sym = FONTIFICATION_FUNCTIONS.id();
         let hook_value = hook_runtime::hook_value_by_id(ctx, hook_sym).unwrap_or(Value::NIL);
         if hook_value.is_nil() {
             observer.unknown();

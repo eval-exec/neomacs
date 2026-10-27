@@ -1,13 +1,13 @@
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range};
-use crate::emacs_core::intern::{EpochCachedSymbol, NIL_SYM_ID, T_SYM_ID};
+use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, WellKnown};
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 
 // Fixed spellings compared by the function probes, interned once per registry
 // epoch. GNU holds these as the DEFSYM `Qlambda` and `Qmacro`; each probe
 // compared against a freshly constructed symbol.
-static LAMBDA_SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("lambda");
-static MACRO_SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("macro");
+static LAMBDA_SYMBOL: WellKnown = WellKnown::Lambda;
+static MACRO_SYMBOL: WellKnown = WellKnown::Macro;
 
 pub(crate) fn builtin_null_1(_eval: &mut super::eval::Context, arg: Value) -> EvalResult {
     Ok(Value::bool_val(arg.is_nil()))

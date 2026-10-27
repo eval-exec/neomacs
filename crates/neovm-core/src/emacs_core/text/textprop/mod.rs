@@ -12,8 +12,7 @@ use crate::emacs_core::symbol::CanonicalAccess;
 use super::symbol::Obarray;
 
 // GNU's fixed `Qfontified`: every fontification scan probes this property.
-static FONTIFIED_PROPERTY: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("fontified");
+static FONTIFIED_PROPERTY: WellKnown = WellKnown::Fontified;
 use super::value::*;
 use crate::buffer::text_props::{PropertyPlistApplication, TextPropertyTable};
 use crate::buffer::{
@@ -21,6 +20,7 @@ use crate::buffer::{
     LispCharPos1,
 };
 use crate::emacs_core::SymId;
+use crate::emacs_core::intern::WellKnown;
 use crate::window::{FrameManager, WindowId};
 use strum::IntoStaticStr;
 

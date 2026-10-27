@@ -11,22 +11,15 @@ use crate::emacs_core::hook_runtime;
 // Fixed GNU hook spellings run on every window/redisplay change. The by-name
 // resolver interned each spelling at every probe; the handles resolve once
 // per registry epoch and the alias walk below is unchanged.
-static WINDOW_BUFFER_CHANGE_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("window-buffer-change-functions");
-static WINDOW_SIZE_CHANGE_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("window-size-change-functions");
-static WINDOW_SELECTION_CHANGE_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("window-selection-change-functions");
-static WINDOW_STATE_CHANGE_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("window-state-change-functions");
-static WINDOW_STATE_CHANGE_HOOK: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("window-state-change-hook");
-static WINDOW_CONFIGURATION_CHANGE_HOOK: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("window-configuration-change-hook");
-static WINDOW_SCROLL_FUNCTIONS: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("window-scroll-functions");
-static INHIBIT_REDISPLAY: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-redisplay");
+static WINDOW_BUFFER_CHANGE_FUNCTIONS: WellKnown = WellKnown::WindowBufferChangeFunctions;
+static WINDOW_SIZE_CHANGE_FUNCTIONS: WellKnown = WellKnown::WindowSizeChangeFunctions;
+static WINDOW_SELECTION_CHANGE_FUNCTIONS: WellKnown = WellKnown::WindowSelectionChangeFunctions;
+static WINDOW_STATE_CHANGE_FUNCTIONS: WellKnown = WellKnown::WindowStateChangeFunctions;
+static WINDOW_STATE_CHANGE_HOOK: WellKnown = WellKnown::WindowStateChangeHook;
+static WINDOW_CONFIGURATION_CHANGE_HOOK: WellKnown = WellKnown::WindowConfigurationChangeHook;
+static WINDOW_SCROLL_FUNCTIONS: WellKnown = WellKnown::WindowScrollFunctions;
+static INHIBIT_REDISPLAY: WellKnown = WellKnown::InhibitRedisplay;
+use crate::emacs_core::intern::WellKnown;
 use crate::gc_trace::GcTrace;
 
 // ===========================================================================
@@ -346,7 +339,7 @@ pub(crate) fn run_redisplay_window_change_hooks(eval: &mut super::eval::Context)
     // would otherwise re-enter here and infinitely recurse. The specpdl
     // entry is popped when we return, restoring the previous value.
     let specpdl_count = eval.specpdl.len();
-    eval.try_specbind_or_unwind_to(specpdl_count, INHIBIT_REDISPLAY.get(), Value::T)?;
+    eval.try_specbind_or_unwind_to(specpdl_count, INHIBIT_REDISPLAY.id(), Value::T)?;
 
     let result = run_redisplay_window_change_hooks_inner(eval);
 
@@ -428,15 +421,15 @@ fn run_redisplay_window_change_hooks_inner(eval: &mut super::eval::Context) -> E
     }
 
     let window_buffer_change_functions =
-        hook_runtime::hook_symbol_by_id(eval, WINDOW_BUFFER_CHANGE_FUNCTIONS.get());
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_BUFFER_CHANGE_FUNCTIONS.id());
     let window_size_change_functions =
-        hook_runtime::hook_symbol_by_id(eval, WINDOW_SIZE_CHANGE_FUNCTIONS.get());
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_SIZE_CHANGE_FUNCTIONS.id());
     let window_selection_change_functions =
-        hook_runtime::hook_symbol_by_id(eval, WINDOW_SELECTION_CHANGE_FUNCTIONS.get());
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_SELECTION_CHANGE_FUNCTIONS.id());
     let window_state_change_functions =
-        hook_runtime::hook_symbol_by_id(eval, WINDOW_STATE_CHANGE_FUNCTIONS.get());
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_STATE_CHANGE_FUNCTIONS.id());
     let window_state_change_hook =
-        hook_runtime::hook_symbol_by_id(eval, WINDOW_STATE_CHANGE_HOOK.get());
+        hook_runtime::hook_symbol_by_id(eval, WINDOW_STATE_CHANGE_HOOK.id());
 
     let mut run_window_state_change_hook = false;
     for plan in &plans {
@@ -1985,7 +1978,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
         return Ok(Value::NIL);
     };
 
-    let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_CONFIGURATION_CHANGE_HOOK.get());
+    let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_CONFIGURATION_CHANGE_HOOK.id());
     let global_hook_value = eval
         .variables()
         .default_value(hook_sym)
@@ -2073,7 +2066,7 @@ pub(crate) fn builtin_run_window_scroll_functions(
         )
     })?;
     let window_start = super::window_cmds::builtin_window_start(eval, &[window_arg])?;
-    let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_SCROLL_FUNCTIONS.get());
+    let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_SCROLL_FUNCTIONS.id());
     let saved_buffer_id = eval.buffers.current_buffer_id();
     if let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, window_id) {
         // GNU `set_window_buffer` temporarily enters the displayed buffer

@@ -108,7 +108,6 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
     if std::env::var_os(P3SYM_MODE_LINE_CHILD_ENV).is_none() {
         return;
     }
-    use crate::emacs_core::intern::EpochCachedSymbol;
     const NAME: &str = "p3sym-c5-held-pass";
     let oracle: Vec<_> = include_str!(
         "../../../../tagged/gc/mutator_registration/symbol_intern_pass_oracle.expected"
@@ -126,8 +125,11 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         let pctx = ModeLinePercentContext::default();
         let held = pctx.resolve_dynamic_symbol(NAME);
         let old_id = held.0;
-        let fixed = EpochCachedSymbol::new(NAME);
-        assert_eq!(fixed.get(), old_id);
+        assert_eq!(
+            crate::emacs_core::intern::lookup_interned(NAME),
+            Some(old_id),
+            "the registry keeps the canonical identity across fresh intern growth"
+        );
         let format = Value::from_sym_id(old_id); // Immediate scalar identity.
         let mut output = ModeLineRendered::default();
         render_into(&mut ctx, &pctx, format, walker, &mut output);
@@ -182,9 +184,9 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
             Some("A")
         );
         assert_eq!(
-            fixed.get(),
-            old_id,
-            "fixed resolver revalidates the same scalar identity"
+            crate::emacs_core::intern::lookup_interned(NAME),
+            Some(old_id),
+            "fresh intern growth leaves the canonical identity unchanged"
         );
         reset_intern_calls();
         let resolved = pctx.resolve_dynamic_symbol(NAME);

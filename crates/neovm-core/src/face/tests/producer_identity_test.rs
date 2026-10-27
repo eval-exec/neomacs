@@ -326,18 +326,13 @@ fn public_face_producer_resolver_matches_existing_name_entry() {
 
 #[test]
 fn fixed_face_resolver_preserves_name_tags_and_symbol_accounting() {
-    use crate::emacs_core::intern::EpochCachedSymbol;
+    use crate::emacs_core::intern::WellKnown;
     use crate::tagged::gc::MemoryUseCountSlot;
     let _context = crate::emacs_core::Context::new();
     let mut table = FaceTable::new();
-    for name in [
-        "cont9-fixed-account",
-        ":cont9-fixed-account-keyword",
-        "nil",
-        "t",
-    ] {
+    for handle in [WellKnown::Default, WellKnown::ModeLine, WellKnown::Fringe] {
+        let name = handle.name();
         table.define(name, foreground(name, Color::rgb(31, 42, 53)));
-        let handle = EpochCachedSymbol::new(name);
         let before = Value::memory_use_counts_snapshot();
         let expected = table.resolve(name);
         let after = Value::memory_use_counts_snapshot();
@@ -354,10 +349,12 @@ fn fixed_face_resolver_preserves_name_tags_and_symbol_accounting() {
                 .wrapping_sub(before[MemoryUseCountSlot::Symbols.index()]),
             expected_symbols,
         );
+        // The fixed table handle and the printed spelling are one identity.
         let ordinary = Value::symbol(name);
-        let fixed = Value::symbol(&handle);
-        assert_eq!(fixed.bits(), ordinary.bits());
-        assert_eq!(fixed.is_bare_keyword(), ordinary.is_bare_keyword());
+        for fixed in [Value::symbol(handle), Value::symbol(&handle)] {
+            assert_eq!(fixed.bits(), ordinary.bits());
+            assert_eq!(fixed.is_bare_keyword(), ordinary.is_bare_keyword());
+        }
     }
 }
 

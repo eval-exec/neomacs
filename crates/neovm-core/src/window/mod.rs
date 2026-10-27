@@ -5080,12 +5080,9 @@ impl Frame {
 
     /// [`Self::parameter`] for a fixed GNU spelling.
     ///
-    /// Same parameter-map key and the same constructor accounting; the
-    /// spelling resolves once per registry epoch instead of at each read.
-    pub fn parameter_symbol(
-        &self,
-        key: &crate::emacs_core::intern::EpochCachedSymbol,
-    ) -> Option<Value> {
+    /// Same parameter-map key and the same constructor accounting; the spelling
+    /// is a compile-time DEFSYM id instead of a per-read intern.
+    pub fn parameter_symbol(&self, key: &crate::emacs_core::intern::WellKnown) -> Option<Value> {
         self.parameters.get(&Value::symbol(key)).copied()
     }
 

@@ -614,6 +614,7 @@ use super::subr::{
     FixedMin1, FixedMin2, FixedMin3, FixedMin4, FixedMin5, FixedMin6, NativeFn, NoEvalPlaceholder,
     NoEvalPolicy, SubrArity, SubrSpec,
 };
+use crate::emacs_core::intern::WellKnown;
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn no_eval_policy_for(sym_id: SymId) -> NoEvalPolicy {
@@ -972,14 +973,10 @@ fn rename_buffer_interactive_spec() -> Value {
 // Fixed interactive-spec spelling set for `self-insert-command`. The registry
 // rebuilds this form per invocation; each entry previously re-interned its
 // spelling. GNU's cmds.c defsubr carries the same fixed spec.
-static SELF_INSERT_SPEC_LIST: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("list");
-static PREFIX_NUMERIC_VALUE: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("prefix-numeric-value");
-static CURRENT_PREFIX_ARG: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("current-prefix-arg");
-static LAST_COMMAND_EVENT_SPEC: crate::emacs_core::intern::EpochCachedSymbol =
-    crate::emacs_core::intern::EpochCachedSymbol::new("last-command-event");
+static SELF_INSERT_SPEC_LIST: WellKnown = WellKnown::List;
+static PREFIX_NUMERIC_VALUE: WellKnown = WellKnown::PrefixNumericValue;
+static CURRENT_PREFIX_ARG: WellKnown = WellKnown::CurrentPrefixArg;
+static LAST_COMMAND_EVENT_SPEC: WellKnown = WellKnown::LastCommandEvent;
 
 fn self_insert_command_interactive_spec() -> Value {
     Value::list(vec![

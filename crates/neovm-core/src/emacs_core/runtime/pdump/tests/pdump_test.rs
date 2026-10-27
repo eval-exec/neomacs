@@ -2520,3 +2520,53 @@ mod decode_hardening;
 
 #[path = "bytecode_function_params.rs"]
 mod bytecode_function_params;
+
+#[test]
+fn pdump_round_trip_keeps_the_well_known_symbol_table_identity() {
+    use crate::emacs_core::intern::{
+        FIRST_WELL_KNOWN_SYM_ID, WELL_KNOWN_NAMES, WellKnown, intern, is_canonical_id,
+        lookup_interned, resolve_sym,
+    };
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    // A value written through a fixed id before the dump must come back at
+    // the same identity, not re-resolved by name.
+    let probe = WellKnown::ModeLine;
+    eval.assign_by_id(probe.id(), Value::fixnum(7));
+    assert_eq!(
+        eval.obarray.symbol_value_id_copied(probe.id()),
+        Some(Value::fixnum(7))
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let dump_path = dir.path().join("well-known-table.pdump");
+    dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    let loaded = load_from_dump(&dump_path).expect("load should succeed");
+
+    assert_eq!(WELL_KNOWN_NAMES.len(), WellKnown::COUNT);
+    for (index, variant) in WellKnown::VARIANTS.iter().copied().enumerate() {
+        let id = variant.id();
+        assert_eq!(id.0, FIRST_WELL_KNOWN_SYM_ID + index as u32);
+        assert_eq!(variant.name(), WELL_KNOWN_NAMES[index]);
+        // The constructor seed prefix restored by position: name, canonical
+        // mapping and the fixed id all agree after load.
+        assert_eq!(resolve_sym(id), variant.name(), "{variant:?}");
+        assert!(is_canonical_id(id), "{variant:?}");
+        assert_eq!(lookup_interned(variant.name()), Some(id), "{variant:?}");
+        assert_eq!(intern(variant.name()), id, "{variant:?}");
+        assert_eq!(
+            Value::symbol(variant).bits(),
+            Value::symbol(variant.name()).bits(),
+            "{variant:?}"
+        );
+    }
+    assert_eq!(
+        loaded.obarray.symbol_value_id_copied(probe.id()),
+        Some(Value::fixnum(7)),
+        "the dumped value followed the fixed identity"
+    );
+    assert_eq!(
+        loaded.obarray.symbol_value_id_copied(intern(probe.name())),
+        Some(Value::fixnum(7))
+    );
+}

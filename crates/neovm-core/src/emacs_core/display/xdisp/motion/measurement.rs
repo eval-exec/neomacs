@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::buffer::{Buffer, EmacsByteLen, EmacsBytePos};
+use crate::emacs_core::intern::WellKnown;
 use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 use std::num::NonZeroUsize;
 
@@ -23,10 +24,8 @@ fn source_line_start(buffer: &Buffer, pos: EmacsBytePos) -> EmacsBytePos {
     // choosing a boundary based on a lower-priority carrier is not.
     // Fixed GNU text-property DEFSYMs; this measurement runs for every
     // queried motion stop and previously re-interned both spellings.
-    static DISPLAY_PROPERTY: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("display");
-    static INVISIBLE_PROPERTY: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("invisible");
+    static DISPLAY_PROPERTY: WellKnown = WellKnown::Display;
+    static INVISIBLE_PROPERTY: WellKnown = WellKnown::Invisible;
     let properties = [
         Value::symbol(&DISPLAY_PROPERTY),
         Value::symbol(&INVISIBLE_PROPERTY),

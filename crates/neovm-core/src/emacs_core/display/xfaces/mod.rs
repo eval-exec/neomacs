@@ -357,6 +357,7 @@ use super::font::{
 
 use super::intern::intern;
 use crate::emacs_core::SymId;
+use crate::emacs_core::intern::WellKnown;
 use crate::face::{
     BoxStyle, Face as RuntimeFace, FontSlant, FontWeight, FontWidth, LFACE_ATTRS, UnderlineStyle,
 };
@@ -1373,9 +1374,8 @@ fn face_alias_target(
     // GNU reads the face symbol's own plist for `Qface_alias` (xfaces.c
     // resolve_face_name); resolving the designator's identity shares one
     // spelling set instead of re-interning both names per lookup.
-    static FACE_ALIAS: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("face-alias");
-    let target = eval.obarray().get_property_id(face.0, FACE_ALIAS.get())?;
+    static FACE_ALIAS: WellKnown = WellKnown::FaceAlias;
+    let target = eval.obarray().get_property_id(face.0, FACE_ALIAS.id())?;
     if target.is_nil() {
         return None;
     }

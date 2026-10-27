@@ -15,7 +15,7 @@ use super::eval::Context;
 use crate::buffer::BufferId;
 use crate::emacs_core::display_spec::{DisplayPropertySpecs, display_spec_when_parts};
 use crate::emacs_core::error::{Flow, FlowKind, FlowResultExt as _};
-use crate::emacs_core::intern::intern;
+use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::value::Value;
 use crate::window::{Window, WindowId};
 use rustc_hash::FxHashMap;
@@ -255,27 +255,20 @@ impl Context {
             // `Qinhibit_debugger`, and the form's OBJECT/POSITION/
             // BUFFER_POSITION arguments); every evaluated site previously
             // re-interned all seven spellings.
-            static INHIBIT_REDISPLAY: crate::emacs_core::intern::EpochCachedSymbol =
-                crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-redisplay");
-            static INHIBIT_QUIT: crate::emacs_core::intern::EpochCachedSymbol =
-                crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-quit");
-            static INHIBIT_DEBUGGER: crate::emacs_core::intern::EpochCachedSymbol =
-                crate::emacs_core::intern::EpochCachedSymbol::new("inhibit-debugger");
-            static OBJECT: crate::emacs_core::intern::EpochCachedSymbol =
-                crate::emacs_core::intern::EpochCachedSymbol::new("object");
-            static POSITION: crate::emacs_core::intern::EpochCachedSymbol =
-                crate::emacs_core::intern::EpochCachedSymbol::new("position");
-            static BUFFER_POSITION: crate::emacs_core::intern::EpochCachedSymbol =
-                crate::emacs_core::intern::EpochCachedSymbol::new("buffer-position");
-            static EVAL_SYMBOL: crate::emacs_core::intern::EpochCachedSymbol =
-                crate::emacs_core::intern::EpochCachedSymbol::new("eval");
+            static INHIBIT_REDISPLAY: WellKnown = WellKnown::InhibitRedisplay;
+            static INHIBIT_QUIT: WellKnown = WellKnown::InhibitQuit;
+            static INHIBIT_DEBUGGER: WellKnown = WellKnown::InhibitDebugger;
+            static OBJECT: WellKnown = WellKnown::Object;
+            static POSITION: WellKnown = WellKnown::Position;
+            static BUFFER_POSITION: WellKnown = WellKnown::BufferPosition;
+            static EVAL_SYMBOL: WellKnown = WellKnown::Eval;
             for (symbol, value) in [
-                (INHIBIT_REDISPLAY.get(), Value::T),
-                (INHIBIT_QUIT.get(), Value::T),
-                (INHIBIT_DEBUGGER.get(), Value::T),
-                (OBJECT.get(), object),
-                (POSITION.get(), Value::fixnum(position)),
-                (BUFFER_POSITION.get(), Value::fixnum(buffer_position)),
+                (INHIBIT_REDISPLAY.id(), Value::T),
+                (INHIBIT_QUIT.id(), Value::T),
+                (INHIBIT_DEBUGGER.id(), Value::T),
+                (OBJECT.id(), object),
+                (POSITION.id(), Value::fixnum(position)),
+                (BUFFER_POSITION.id(), Value::fixnum(buffer_position)),
             ] {
                 self.try_specbind_or_unwind_to(count, symbol, value)?;
             }

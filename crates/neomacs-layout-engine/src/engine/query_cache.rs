@@ -275,8 +275,8 @@ impl QueryCache {
             // with a different fontification extent.
             if entry.scope != scope {
                 let source = evaluator.buffer_manager().get(buffer)?;
-                let fontification = source.buffer_local_value_id(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.get())
-                    .or_else(|| evaluator.variable_value(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.get()));
+                let fontification = source.buffer_local_value_id(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id())
+                    .or_else(|| evaluator.variable_value(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id()));
                 if fontification.is_some_and(|value| !value.is_nil()) {
                     return None;
                 }
@@ -320,8 +320,8 @@ impl QueryCache {
             }
             if matches!(scope, WindowLayoutQueryScope::Rows { .. } | WindowLayoutQueryScope::Pixels { .. }) {
                 let source = evaluator.buffer_manager().get(buffer)?;
-                let fontification = source.buffer_local_value_id(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.get())
-                    .or_else(|| evaluator.variable_value(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.get()));
+                let fontification = source.buffer_local_value_id(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id())
+                    .or_else(|| evaluator.variable_value(crate::fixed_symbols::FONTIFICATION_FUNCTIONS.id()));
                 if fontification.is_some_and(|value| !value.is_nil()) {
                     return None;
                 }

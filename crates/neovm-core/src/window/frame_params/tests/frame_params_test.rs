@@ -155,3 +155,39 @@ fn fixed_frame_queries_preserve_dynamic_parameter_results() {
         frame.parameter("cursor-color")
     );
 }
+
+#[test]
+fn fixed_parameter_handles_agree_with_their_printed_spellings() {
+    use crate::emacs_core::intern::{intern, is_canonical_id, resolve_sym};
+    for &param in &GNU_FRAME_PARAMS {
+        let handle = param.well_known();
+        let name = param.name();
+        assert_eq!(handle.name(), name, "{param:?}");
+        assert_eq!(resolve_sym(handle.id()), name, "{param:?}");
+        assert!(is_canonical_id(handle.id()), "{param:?}");
+        assert_eq!(intern(name), handle.id(), "{param:?}");
+        assert_eq!(
+            param.symbol().bits(),
+            Value::symbol(name).bits(),
+            "{param:?}"
+        );
+        assert_eq!(
+            FrameParamKey::from(param).symbol().bits(),
+            Value::symbol(name).bits(),
+            "{param:?}"
+        );
+    }
+    for &query in FrameQueryParam::VARIANTS {
+        let handle = query.well_known();
+        let name: &'static str = query.into();
+        assert_eq!(handle.name(), name, "{query:?}");
+        assert_eq!(resolve_sym(handle.id()), name, "{query:?}");
+        assert!(is_canonical_id(handle.id()), "{query:?}");
+        assert_eq!(intern(name), handle.id(), "{query:?}");
+        assert_eq!(
+            FrameParamKey::from(query).symbol().bits(),
+            Value::symbol(name).bits(),
+            "{query:?}"
+        );
+    }
+}

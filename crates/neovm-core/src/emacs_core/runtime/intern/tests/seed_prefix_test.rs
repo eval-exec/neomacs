@@ -1,8 +1,9 @@
 //! Seed-prefix position mapping in `restore_dump_symbol_table` (pdump v12).
 //!
 //! The dump table is the dumper's full interner in id order, so its leading
-//! slots are the constructor seeds (nil, t, and the NON-canonical `unbound`
-//! sentinel). Interning that sentinel by name cannot reproduce its id —
+//! slots are the constructor seeds (nil, t, the NON-canonical `unbound`
+//! sentinel, then the well-known symbol table in declaration order).
+//! Interning the sentinel by name cannot reproduce its id —
 //! uninterned symbols never unify by name — which shifted every later slot
 //! by one and forced the 127K-entry symbol fixup walk on every load. The
 //! position map restores identity on a fresh registry; these tests pin the
@@ -14,21 +15,21 @@ fn unibyte_name(bytes: &[u8]) -> crate::heap_types::LispString {
     crate::heap_types::LispString::from_unibyte(bytes.to_vec())
 }
 
-/// The shape a real dump table has: seed prefix in constructor order and
-/// canonicality, followed by ordinary canonical symbols and non-canonical
-/// (`make-symbol`-style) residents.
+/// The shape a real dump table has: the live constructor prefix in id order
+/// (nil, t, unbound, then every well-known symbol), followed by ordinary
+/// canonical symbols and non-canonical (`make-symbol`-style) residents.
 fn seed_prefixed_table() -> (Vec<crate::heap_types::LispString>, Vec<u32>, Vec<bool>) {
-    let names = vec![
-        unibyte_name(b"nil"),
-        unibyte_name(b"t"),
-        unibyte_name(b"unbound"),
-        unibyte_name(b"foo"),
-        unibyte_name(b"residual"),
-        unibyte_name(b"bar"),
-    ];
-    let symbol_names = vec![0, 1, 2, 3, 4, 5];
-    let canonical = vec![true, true, false, true, false, true];
-    (names, symbol_names, canonical)
+    let mut table = SymbolRegistry::new().dump_symbol_table();
+    for (name, canonical) in [
+        (&b"seedtest-foo"[..], true),
+        (&b"seedtest-residual"[..], false),
+        (&b"seedtest-bar"[..], true),
+    ] {
+        table.names.push(unibyte_name(name));
+        table.symbol_names.push((table.names.len() - 1) as u32);
+        table.canonical.push(canonical);
+    }
+    (table.names, table.symbol_names, table.canonical)
 }
 
 #[test]
@@ -40,15 +41,19 @@ fn fresh_registry_restore_of_a_seed_prefixed_table_is_identity() {
         .restore_dump_symbol_table(&names, &symbol_names, Some(&canonical))
         .expect("seed-prefixed table should restore");
     let ids: Vec<u32> = remap.symbols.iter().map(|id| id.0).collect();
+    let expected: Vec<u32> = (0..(SEED_SYMBOL_COUNT + 3) as u32).collect();
     assert_eq!(
-        ids,
-        vec![0, 1, 2, 3, 4, 5],
+        ids, expected,
         "a fresh registry must map a seed-prefixed dump table to the identity"
     );
     // The prefix mapped by position, not by allocation: the non-canonical
     // sentinel unified with the live seed instead of shifting the tail.
     assert!(!registry.is_canonical_id(remap.symbols[2]));
-    assert!(registry.is_canonical_id(remap.symbols[3]));
+    assert!(registry.is_canonical_id(remap.symbols[SEED_SYMBOL_COUNT]));
+    assert_eq!(
+        registry.lookup("seedtest-foo"),
+        Some(remap.symbols[SEED_SYMBOL_COUNT])
+    );
 }
 
 #[test]
@@ -63,16 +68,21 @@ fn pre_populated_registry_takes_the_fallback_and_stays_correct() {
     let remap = registry
         .restore_dump_symbol_table(&names, &symbol_names, Some(&canonical))
         .expect("fallback restore should succeed");
-    // Seeds still position-map (the intruder sits above the prefix)...
-    assert_eq!(remap.symbols[0].0, 0);
-    assert_eq!(remap.symbols[1].0, 1);
-    assert_eq!(remap.symbols[2].0, 2);
+    // The whole constructor prefix still position-maps (the intruder sits
+    // above it)...
+    for (slot, id) in remap.symbols.iter().take(SEED_SYMBOL_COUNT).enumerate() {
+        assert_eq!(id.0 as usize, slot);
+    }
     // ...but the tail is shifted past the intruder: NOT identity.
-    assert!(remap.symbols[3].0 > 3);
-    assert_ne!(remap.symbols[3], intruder);
-    assert_eq!(registry.lookup("foo"), Some(remap.symbols[3]));
-    assert!(!registry.is_canonical_id(remap.symbols[4]));
-    assert_eq!(registry.lookup("bar"), Some(remap.symbols[5]));
+    let foo = SEED_SYMBOL_COUNT;
+    assert!(remap.symbols[foo].0 as usize > foo);
+    assert_ne!(remap.symbols[foo], intruder);
+    assert_eq!(registry.lookup("seedtest-foo"), Some(remap.symbols[foo]));
+    assert!(!registry.is_canonical_id(remap.symbols[foo + 1]));
+    assert_eq!(
+        registry.lookup("seedtest-bar"),
+        Some(remap.symbols[foo + 2])
+    );
 }
 
 #[test]
@@ -122,12 +132,20 @@ fn hand_built_tables_without_the_seed_shape_still_restore() {
     crate::test_utils::init_test_tracing();
     // The lenient per-slot fallback: tables that do not start with the seed
     // prefix (the existing hand-built test shapes) restore exactly as before.
+    // `alpha` and `bar` are well-known spellings now (frame parameters), so
+    // the hand-built probe uses names outside the constructor prefix.
     let mut registry = SymbolRegistry::new();
-    let names = vec![unibyte_name(b"alpha"), unibyte_name(b"beta")];
+    let names = vec![
+        unibyte_name(b"seedtest-alpha"),
+        unibyte_name(b"seedtest-beta"),
+    ];
     let remap = registry
         .restore_dump_symbol_table(&names, &[0, 1], Some(&[true, true]))
         .expect("non-seed table should restore");
-    assert_eq!(registry.lookup("alpha"), Some(remap.symbols[0]));
-    assert_eq!(registry.lookup("beta"), Some(remap.symbols[1]));
-    assert!(remap.symbols[0].0 >= SEED_SYMBOL_COUNT as u32);
+    assert_eq!(registry.lookup("seedtest-alpha"), Some(remap.symbols[0]));
+    assert_eq!(registry.lookup("seedtest-beta"), Some(remap.symbols[1]));
+    assert!(
+        remap.symbols[0].0 >= SEED_SYMBOL_COUNT as u32,
+        "hand-built names must allocate above the constructor prefix"
+    );
 }

@@ -10,9 +10,9 @@
 //! more closely: a symbol is an object with a name, not just "slot N in the
 //! string interner".
 
-mod fixed_symbol;
 pub(crate) mod parallel;
-pub use fixed_symbol::EpochCachedSymbol;
+mod well_known;
+pub use well_known::{FIRST_ID as FIRST_WELL_KNOWN_SYM_ID, NAMES as WELL_KNOWN_NAMES, WellKnown};
 
 use hashbrown::HashMap;
 use parking_lot::RwLock;
@@ -223,9 +223,12 @@ pub struct NameId(pub(crate) u32);
 pub const NIL_SYM_ID: SymId = SymId(0);
 
 /// Number of symbols `SymbolRegistry::new` seeds before anything interns:
-/// nil, t, and the non-canonical `unbound` sentinel. The pdump restore maps
-/// this prefix by POSITION (see `restore_dump_symbol_table`).
-pub(crate) const SEED_SYMBOL_COUNT: usize = 3;
+/// nil, t, the non-canonical `unbound` sentinel, then every well-known DEFSYM
+/// spelling in [`WellKnown`] order. The pdump restore maps this whole prefix
+/// by POSITION (see `restore_dump_symbol_table`), so the table's identities
+/// are stable across dump/load.
+pub(crate) const SEED_SYMBOL_COUNT: usize = 3 + WellKnown::COUNT;
+const _: () = assert!(well_known::FIRST_ID as usize == 3);
 pub const T_SYM_ID: SymId = SymId(1);
 pub const UNBOUND_SYM_ID: SymId = SymId(2);
 
@@ -914,6 +917,21 @@ impl SymbolRegistry {
         let unbound_id = registry.alloc_symbol(unbound_name, false, NewSymbolName::AtomOnly);
         debug_assert_eq!(unbound_id, UNBOUND_SYM_ID);
 
+        // GNU's DEFSYM statics: seed every well-known spelling, in table
+        // order, before anything else can intern. The assigned id must equal
+        // the table's compile-time id; a mismatch would silently misread every
+        // C-side fixed symbol, so this is a release assert, not a debug assert.
+        for variant in WellKnown::VARIANTS {
+            let name = registry.names.intern(variant.name());
+            let id = registry.alloc_symbol(name, true, NewSymbolName::AtomOnly);
+            assert_eq!(
+                id,
+                variant.id(),
+                "well-known symbol seeding diverged for {}",
+                variant.name()
+            );
+        }
+
         registry
     }
 
@@ -1257,7 +1275,8 @@ impl SymbolRegistry {
         };
 
         // Seed-prefix position map. A fresh registry holds exactly the
-        // constructor's seeds (nil, t, unbound); the dump table is the full
+        // constructor's seeds (nil, t, unbound, then the well-known table);
+        // the dump table is the full
         // dumper interner in id order, so its leading slots are the SAME
         // seeds. Interning them by name cannot reproduce that: `unbound` is
         // deliberately NON-canonical (an uninterned sentinel), so name-intern

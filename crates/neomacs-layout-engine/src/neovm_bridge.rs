@@ -101,7 +101,7 @@ use crate::fixed_symbols::{
     PRIORITY as OVERLAY_PRIORITY_PROPERTY, SCROLL_MINIBUFFER_CONSERVATIVELY, X_CURSOR_FORE_PIXEL,
     X_STRETCH_CURSOR,
 };
-use neovm_core::emacs_core::intern::EpochCachedSymbol;
+use neovm_core::emacs_core::intern::WellKnown;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
@@ -549,7 +549,7 @@ fn effective_buffer_value(
 
 fn frame_fixed_parameter_int(
     frame: &Frame,
-    key: &neovm_core::emacs_core::intern::EpochCachedSymbol,
+    key: &neovm_core::emacs_core::intern::WellKnown,
     default: i64,
 ) -> i64 {
     frame
@@ -679,9 +679,8 @@ pub(crate) fn window_parameter_by_name(window: &Window, name: &str) -> Option<Va
         .map(|(_, value)| *value)
 }
 
-fn global_bool(vars: VariableView<'_>, symbol: &EpochCachedSymbol) -> bool {
-    vars.value(symbol.get())
-        .is_some_and(|value| !value.is_nil())
+fn global_bool(vars: VariableView<'_>, symbol: &WellKnown) -> bool {
+    vars.value(symbol.id()).is_some_and(|value| !value.is_nil())
 }
 
 fn effective_nobreak_char_display(buffer: &Buffer, vars: VariableView<'_>) -> NobreakDisplayMode {
@@ -1313,7 +1312,7 @@ fn frame_cursor_foreground_pixel(
 ) -> u32 {
     // GNU's Vx_cursor_fore_pixel is a color-name string when explicitly set;
     // otherwise x_set_cursor_color uses FRAME_BACKGROUND_PIXEL.
-    vars.value(X_CURSOR_FORE_PIXEL.get())
+    vars.value(X_CURSOR_FORE_PIXEL.id())
         .and_then(|value| parse_color_pixel(&value))
         .unwrap_or_else(|| frame_background_color_pixel(frame, face_table))
 }
@@ -1552,7 +1551,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         || (neovm_core::face::realization::enabled()
             && neovm_core::face::realization::frame_is_tty_target(frame)
             && vars
-                .value(MODE_LINE_IN_NON_SELECTED_WINDOWS.get())
+                .value(MODE_LINE_IN_NON_SELECTED_WINDOWS.id())
                 .is_some_and(Value::is_nil));
     // Only leaf windows can be laid out.
     let effective_window_system = frame.effective_window_system();
@@ -1700,7 +1699,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         effective_buffer_int(buffer, vars, LayoutVar::ScrollConservatively, 0);
     let scroll_step = effective_buffer_int(buffer, vars, LayoutVar::ScrollStep, 0);
     let scroll_minibuffer_conservatively = vars
-        .value(SCROLL_MINIBUFFER_CONSERVATIVELY.get())
+        .value(SCROLL_MINIBUFFER_CONSERVATIVELY.id())
         .is_none_or(|value| !value.is_nil());
     let scroll_margin = effective_buffer_int(buffer, vars, LayoutVar::ScrollMargin, 0);
 

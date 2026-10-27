@@ -13,6 +13,7 @@ use super::error::{EvalResult, Flow, signal};
 use super::value::*;
 use crate::buffer::buffer::UndoBoundaryOutcome;
 use crate::emacs_core::error::expect_args;
+use crate::emacs_core::intern::WellKnown;
 
 // ---------------------------------------------------------------------------
 // Bootstrap variables
@@ -233,10 +234,8 @@ pub(crate) fn builtin_undo_boundary(ctx: &mut super::eval::Context, args: &[Valu
 pub(crate) fn set_last_boundary_cause_explicit(ctx: &mut super::eval::Context) -> Result<(), Flow> {
     // GNU's `Fset (Qundo_auto__last_boundary_cause, Qexplicit)` with both
     // names fixed; each recorded command boundary previously interned both.
-    static UNDO_AUTO_LAST_BOUNDARY_CAUSE: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("undo-auto--last-boundary-cause");
-    static EXPLICIT: crate::emacs_core::intern::EpochCachedSymbol =
-        crate::emacs_core::intern::EpochCachedSymbol::new("explicit");
+    static UNDO_AUTO_LAST_BOUNDARY_CAUSE: WellKnown = WellKnown::UndoAutoLastBoundaryCause;
+    static EXPLICIT: WellKnown = WellKnown::Explicit;
     super::builtins::symbols::builtin_set_2(
         ctx,
         Value::symbol(&UNDO_AUTO_LAST_BOUNDARY_CAUSE),

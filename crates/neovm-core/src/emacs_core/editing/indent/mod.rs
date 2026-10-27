@@ -1518,15 +1518,15 @@ pub(crate) fn dynamic_buffer_or_global_symbol_value(
 /// [`dynamic_buffer_or_global_symbol_value`] for a fixed GNU spelling.
 ///
 /// Same per-buffer-slot / buffer-local / global precedence, entirely by
-/// identity: the name is resolved once per registry epoch and the slot and
-/// buffer-local maps are keyed by the same identity.
+/// identity: the handle is a compile-time id and the slot and buffer-local
+/// maps are keyed by the same identity.
 pub(crate) fn dynamic_buffer_or_global_symbol_value_fixed(
     vars: VariableView<'_>,
     _dynamic: &[OrderedRuntimeBindingMap],
     buf: Option<&Buffer>,
-    symbol: &crate::emacs_core::intern::EpochCachedSymbol,
+    symbol: &crate::emacs_core::intern::WellKnown,
 ) -> Option<Value> {
-    let id = symbol.get();
+    let id = symbol.id();
     if let Some(buf) = buf
         && let Some(info) = crate::buffer::buffer::lookup_buffer_slot_by_sym_id(id)
     {

@@ -130,7 +130,7 @@ pub(crate) fn draw_overlay_arrows<B: LayoutBufferView, FS: crate::neovm_bridge::
 /// as GNU's loop does.
 fn arrow_variables(evaluator: &Context) -> Vec<Value> {
     let Some(list) =
-        evaluator.variable_value(crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.get())
+        evaluator.variable_value(crate::fixed_symbols::OVERLAY_ARROW_VARIABLE_LIST.id())
     else {
         return Vec::new();
     };
@@ -160,7 +160,7 @@ fn arrow_marker_charpos(evaluator: &Context, var: Value, buffer_id: BufferId) ->
 /// `overlay-arrow-string`.
 fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
     let sym = var.as_bare_symbol_id()?;
-    let prop_key = crate::fixed_symbols::OVERLAY_ARROW_STRING.get();
+    let prop_key = crate::fixed_symbols::OVERLAY_ARROW_STRING.id();
     neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(sym);
     let mut plist = evaluator.obarray().symbol_plist_id(sym);
     while plist.is_cons() {
@@ -177,7 +177,7 @@ fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
         plist = rest.cons_cdr();
     }
     evaluator
-        .variable_value(crate::fixed_symbols::OVERLAY_ARROW_STRING.get())
+        .variable_value(crate::fixed_symbols::OVERLAY_ARROW_STRING.id())
         .and_then(|value| value.as_str_owned())
 }
 
@@ -193,7 +193,7 @@ fn resolve_fringe_bitmap_index<B: LayoutBufferView>(
     var: Value,
 ) -> Option<u16> {
     if let Some(sym) = var.as_bare_symbol_id() {
-        let bitmap_key = crate::fixed_symbols::OVERLAY_ARROW_BITMAP.get();
+        let bitmap_key = crate::fixed_symbols::OVERLAY_ARROW_BITMAP.id();
         neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(sym);
         let mut plist = evaluator.obarray().symbol_plist_id(sym);
         while plist.is_cons() {
@@ -212,7 +212,7 @@ fn resolve_fringe_bitmap_index<B: LayoutBufferView>(
         }
     }
 
-    let overlay_arrow_sym = Value::from_sym_id(crate::fixed_symbols::OVERLAY_ARROW.get());
+    let overlay_arrow_sym = Value::from_sym_id(crate::fixed_symbols::OVERLAY_ARROW.id());
     resolve_fringe_indicator_bitmap_index(
         buffer,
         evaluator,
