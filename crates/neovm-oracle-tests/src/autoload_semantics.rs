@@ -127,7 +127,6 @@ fn oracle_autoload_do_load_macro_only_ordering_without_file_load() {
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_autoload_do_load_macro_only_requires_literal_macro_symbol() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -142,10 +141,11 @@ fn oracle_autoload_do_load_macro_only_requires_literal_macro_symbol() {
      (error (list (car err) (cdr err))))
    (condition-case err
        (autoload-do-load function-autoload 42 17)
-     (error (list (car err) (cdr err)))))))
-"#;
+     (error (list (car err) (cdr err))))))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 43)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((wrong-type-argument (symbolp 42)) (wrong-type-argument (symbolp 42)) (wrong-type-argument (symbolp 42)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

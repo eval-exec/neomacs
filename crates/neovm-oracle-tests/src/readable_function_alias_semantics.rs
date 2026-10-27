@@ -3,7 +3,6 @@
 use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest_not_set};
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_gnu_subr_function_alias_p_and_readablep_contracts() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -41,13 +40,14 @@ fn oracle_prop_gnu_subr_function_alias_p_and_readablep_contracts() {
         '(neovm-function-alias-base
           neovm-function-alias-a
           neovm-function-alias-b
-          neovm-function-alias-subr)))"#;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 32 38)""#]];
+          neovm-function-alias-subr))"#;
+    let expect = expect_test::expect![[
+        r#""OK (neovm-function-alias-base neovm-function-alias-a neovm-function-alias-b neovm-function-alias-subr)""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_define_obsolete_function_alias_metadata_edges() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -90,9 +90,8 @@ fn oracle_prop_define_obsolete_function_alias_metadata_edges() {
            (error (list (car err) (cdr err)))))))
     (dolist (sym (list old new))
       (ignore-errors (fmakunbound sym))
-      (setplist sym nil))))
-"#;
+      (setplist sym nil)))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 36 27)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

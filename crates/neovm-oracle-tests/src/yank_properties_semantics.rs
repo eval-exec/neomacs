@@ -52,7 +52,6 @@ fn oracle_prop_gnu_remove_yank_excluded_properties_runs_handlers_then_removes() 
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_insert_buffer_substring_as_yank_processes_inserted_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -84,8 +83,7 @@ fn oracle_insert_buffer_substring_as_yank_processes_inserted_properties() {
                (get-text-property (1+ opoint) 'foo)
                (get-text-property (1+ opoint) 'bar)
                (get-text-property (- (point) 1) 'tail)))))))
-    (kill-buffer src)))
-"#;
+    (kill-buffer src))"#;
 
     let expect = expect_test::expect![[r#""ERR (void-variable calls)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);

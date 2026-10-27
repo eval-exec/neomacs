@@ -82,7 +82,6 @@ fn oracle_ntake_destructive_identity_and_large_n() {
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_ntake_negative_zero_and_error_payloads() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -104,9 +103,10 @@ fn oracle_ntake_negative_zero_and_error_payloads() {
      (error (list (car err) (cdr err))))
    (condition-case err
        (ntake 1 42)
-     (error (list (car err) (cdr err)))))))
-"#;
+     (error (list (car err) (cdr err))))))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 19 43)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (nil (a b c) nil (a b c) (wrong-type-argument (integerp x)) (a b) (wrong-type-argument (listp (a b . c))) (wrong-type-argument (listp 42)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

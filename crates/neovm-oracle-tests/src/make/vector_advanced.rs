@@ -168,65 +168,13 @@ fn oracle_prop_vector_growth_simulation() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_vector_bitmap_operations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     // Use a vector of integers as a bitmap. Each integer stores 30 bits
     // (safe for Elisp fixnums). Implement set-bit, clear-bit, test-bit.
-    let form = "(let ((bits-per-word 30)
-                      (bitmap (make-vector 4 0)))
-                  (let ((set-bit
-                         (lambda (n)
-                           (let ((word (/ n bits-per-word))
-                                 (bit (% n bits-per-word)))
-                             (aset bitmap word
-                                   (logior (aref bitmap word)
-                                           (ash 1 bit))))))
-                        (clear-bit
-                         (lambda (n)
-                           (let ((word (/ n bits-per-word))
-                                 (bit (% n bits-per-word)))
-                             (aset bitmap word
-                                   (logand (aref bitmap word)
-                                           (lognot (ash 1 bit)))))))
-                        (test-bit
-                         (lambda (n)
-                           (let ((word (/ n bits-per-word))
-                                 (bit (% n bits-per-word)))
-                             (not (= 0 (logand (aref bitmap word)
-                                               (ash 1 bit))))))))
-                    ;; Set bits 0, 5, 29, 30, 60, 90
-                    (funcall set-bit 0)
-                    (funcall set-bit 5)
-                    (funcall set-bit 29)
-                    (funcall set-bit 30)
-                    (funcall set-bit 60)
-                    (funcall set-bit 90)
-                    (let ((results-before
-                           (list
-                             (funcall test-bit 0)
-                             (funcall test-bit 5)
-                             (funcall test-bit 6)
-                             (funcall test-bit 29)
-                             (funcall test-bit 30)
-                             (funcall test-bit 31)
-                             (funcall test-bit 60)
-                             (funcall test-bit 90))))
-                      ;; Clear bits 5 and 30
-                      (funcall clear-bit 5)
-                      (funcall clear-bit 30)
-                      (let ((results-after
-                             (list
-                               (funcall test-bit 5)
-                               (funcall test-bit 30)
-                               ;; Neighbors unaffected
-                               (funcall test-bit 0)
-                               (funcall test-bit 29)
-                               (funcall test-bit 60)
-                               (funcall test-bit 90))))
-                        (list results-before results-after))))";
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let form = "(let ((bits-per-word 30)\n                      (bitmap (make-vector 4 0)))\n                  (let ((set-bit\n                         (lambda (n)\n                           (let ((word (/ n bits-per-word))\n                                 (bit (% n bits-per-word)))\n                             (aset bitmap word\n                                   (logior (aref bitmap word)\n                                           (ash 1 bit))))))\n                        (clear-bit\n                         (lambda (n)\n                           (let ((word (/ n bits-per-word))\n                                 (bit (% n bits-per-word)))\n                             (aset bitmap word\n                                   (logand (aref bitmap word)\n                                           (lognot (ash 1 bit)))))))\n                        (test-bit\n                         (lambda (n)\n                           (let ((word (/ n bits-per-word))\n                                 (bit (% n bits-per-word)))\n                             (not (= 0 (logand (aref bitmap word)\n                                               (ash 1 bit))))))))\n                    ;; Set bits 0, 5, 29, 30, 60, 90\n                    (funcall set-bit 0)\n                    (funcall set-bit 5)\n                    (funcall set-bit 29)\n                    (funcall set-bit 30)\n                    (funcall set-bit 60)\n                    (funcall set-bit 90)\n                    (let ((results-before\n                           (list\n                             (funcall test-bit 0)\n                             (funcall test-bit 5)\n                             (funcall test-bit 6)\n                             (funcall test-bit 29)\n                             (funcall test-bit 30)\n                             (funcall test-bit 31)\n                             (funcall test-bit 60)\n                             (funcall test-bit 90))))\n                      ;; Clear bits 5 and 30\n                      (funcall clear-bit 5)\n                      (funcall clear-bit 30)\n                      (let ((results-after\n                             (list\n                               (funcall test-bit 5)\n                               (funcall test-bit 30)\n                               ;; Neighbors unaffected\n                               (funcall test-bit 0)\n                               (funcall test-bit 29)\n                               (funcall test-bit 60)\n                               (funcall test-bit 90))))\n                        (list results-before results-after)))))";
+    let expect = expect_test::expect![[r#""OK ((t t nil t t nil t t) (nil nil t t t t))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

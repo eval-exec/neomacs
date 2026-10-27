@@ -425,7 +425,6 @@ fn oracle_prop_syntax_table_comprehensive_forward_comment() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_syntax_table_comprehensive_ranges_and_standard() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -453,8 +452,10 @@ fn oracle_prop_syntax_table_comprehensive_ranges_and_standard() {
                                 (let ((s3 (skip-syntax-forward "_")))
                                   (let ((p3 (point)))
                                     (list (nreverse results)
-                                          (list s1 p1 s2 p2 s3 p3))))))))))))"#;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 25 77)""#]];
+                                          (list s1 p1 s2 p2 s3 p3)))))))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK (((48 95) (53 95) (57 95) (97 46) (99 46) (102 46) (103 119) (122 119) (65 119) (90 119)) (3 4 3 7 3 10))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

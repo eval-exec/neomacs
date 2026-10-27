@@ -83,7 +83,6 @@ fn oracle_position_symbol_accepts_negative_fixnum_positions() {
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_symbol_with_pos_enabled_controls_symbolp_and_eq() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -99,15 +98,13 @@ fn oracle_symbol_with_pos_enabled_controls_symbolp_and_eq() {
      (list (symbolp sp-a)
            (eq sp-a 'neomacs--oracle-sympos-eq)
            (eq sp-a sp-b)
-           (eq (bare-symbol sp-a) (bare-symbol sp-b)))))))
-"#;
+           (eq (bare-symbol sp-a) (bare-symbol sp-b))))))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 58)""#]];
+    let expect = expect_test::expect![[r#""OK ((nil nil nil) (t t t t))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_read_symbols_with_positions_records_source_offsets() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -123,8 +120,7 @@ fn oracle_read_symbols_with_positions_records_source_offsets() {
      (symbol-with-pos-pos (car (nth 2 form)))
      (symbol-with-pos-p (cdr (nth 2 form)))
      (bare-symbol (cdr (nth 2 form)))
-     (symbol-with-pos-pos (cdr (nth 2 form)))))))
-"#;
+     (symbol-with-pos-pos (cdr (nth 2 form))))))"#;
 
     let expect = expect_test::expect![[
         r#""ERR (wrong-type-argument (symbolp symbol-with-pos-p) (gamma . delta))""#

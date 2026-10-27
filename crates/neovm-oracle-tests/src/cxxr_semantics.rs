@@ -3,7 +3,6 @@
 use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest_not_set};
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_gnu_subr_cxxr_nested_car_cdr_contracts() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -28,7 +27,7 @@ fn oracle_prop_gnu_subr_cxxr_nested_car_cdr_contracts() {
              (cddr '(a . b))
              (cadr '(a . b))
              (caar 42)
-             (caddr '(a . b))))))"#;
+             (caddr '(a . b)))))"#;
     let expect = expect_test::expect![[r#""ERR (void-variable x)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

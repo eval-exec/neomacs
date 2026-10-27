@@ -500,7 +500,6 @@ fn oracle_prop_text_prop_comp_set_text_properties_replace() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_text_prop_comp_buffer_vs_string_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -546,8 +545,10 @@ fn oracle_prop_text_prop_comp_buffer_vs_string_properties() {
                  sub-face sub-cat
                  (length buf-plist) (length sub-plist)
                  buf-face-after sub-face-after
-                 npc))))))))))"#;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 30)""#]];
+                 npc)))))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK (bold nil italic \"greeting\" nil sentence sentence bold sentence 4 4 underline bold (6 7 11))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

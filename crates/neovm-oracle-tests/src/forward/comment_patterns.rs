@@ -56,7 +56,6 @@ fn oracle_prop_forward_comment_patterns_positive_n() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_forward_comment_patterns_negative_n() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -92,8 +91,10 @@ fn oracle_prop_forward_comment_patterns_negative_n() {
                (list 'back-1 r1 p1)
                (list 'back-2 r2 p2)
                (list 'back-3 r3 p3)
-               (list 'back-100 r100 p100))))))))))"####;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 31 50)""#]];
+               (list 'back-100 r100 p100)))))))))"####;
+    let expect = expect_test::expect![[
+        r#""OK ((back-1 t 25) (back-2 t 17) (back-3 t 8) (back-100 nil 7))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
@@ -325,7 +326,6 @@ fn oracle_prop_forward_comment_patterns_code_comment_separation() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_forward_comment_patterns_mixed_styles() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -364,8 +364,10 @@ fn oracle_prop_forward_comment_patterns_mixed_styles() {
                (list 'block r2 p2)
                (list 'line-2 r3 p3)
                (list 'fail r4 p4)
-               (list 'all r-all p-all rest))))))))))"####;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 52)""#]];
+               (list 'all r-all p-all rest)))))))))"####;
+    let expect = expect_test::expect![[
+        r#""OK ((line-1 t 16) (block t 35) (line-2 t 51) (fail nil 51) (all nil 51 \"code here\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

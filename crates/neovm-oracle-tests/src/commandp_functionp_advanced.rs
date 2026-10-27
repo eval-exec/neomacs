@@ -11,7 +11,6 @@ use crate::common::{assert_ok_eq, assert_oracle_parity, eval_oracle_and_neovm};
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_commandp_functionp_predicate_matrix() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -43,14 +42,16 @@ fn oracle_prop_commandp_functionp_predicate_matrix() {
                      (list 'plus-subr
                            (functionp (symbol-function '+))
                            (commandp (symbol-function '+))
-                           (subrp (symbol-function '+')))
+                           (subrp (symbol-function '+)))
                      ;; non-function values
                      (list 'nil-val (functionp nil) (commandp nil))
                      (list 'number (functionp 42) (commandp 42))
                      (list 'string (functionp "hello") (commandp "hello"))
                      (list 'symbol-t (functionp t) (commandp t))
                      (list 'cons-cell (functionp '(1 2)) (commandp '(1 2)))))"#;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 28 55)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((plain-lambda t nil nil) (interactive-lambda t t nil) (interactive-with-spec t t nil) (car-subr t nil t) (plus-subr t nil t) (nil-val nil nil) (number nil nil) (string nil t) (symbol-t nil nil) (cons-cell nil nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

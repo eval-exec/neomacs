@@ -13,7 +13,6 @@ use crate::common::{assert_ok_eq, assert_oracle_parity, eval_oracle_and_neovm};
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_defmacro_comp_rest_vs_body() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -49,8 +48,10 @@ fn oracle_prop_defmacro_comp_rest_vs_body() {
                    (setq neovm--dcp-log (cons :deep neovm--dcp-log)))))
             (setq neovm--dcp-log (cons inner-result neovm--dcp-log))))
     (fmakunbound 'neovm--dcp-with-rest)
-    (fmakunbound 'neovm--dcp-with-body)))"#;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    (fmakunbound 'neovm--dcp-with-body))))"#;
+    let expect = expect_test::expect![[
+        r#""ERR (wrong-number-of-arguments (closure (t) (tag &body body) `(let ((neovm--dcp-log nil)) (setq neovm--dcp-log (cons ,tag neovm--dcp-log)) ,@body (nreverse neovm--dcp-log))) 4)""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

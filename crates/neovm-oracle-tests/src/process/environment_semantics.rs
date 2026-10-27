@@ -143,7 +143,6 @@ fn oracle_prop_substitute_env_in_file_name_uses_lisp_environment() {
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_with_environment_variables_scoping_edges() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -175,9 +174,10 @@ fn oracle_prop_with_environment_variables_scoping_edges() {
      (error (list (car err) (cdr err))))
    (condition-case err
        (with-environment-variables "not-a-list" :body)
-     (error (list (car err) (cdr err)))))))
-"#;
+     (error (list (car err) (cdr err))))))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 29 43)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"inner\" nil t \"created\" \"NEOMACS_ORACLE_WITH_ENV_C=created\") (\"outer\" \"outer-b\" nil) \"level2\" \"outer\" (error (\"Invalid VARIABLES: nil\")) (error (\"Invalid VARIABLES: not-a-list\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

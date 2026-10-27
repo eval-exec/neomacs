@@ -123,7 +123,6 @@ fn oracle_aref_type_index_and_bounds_errors() {
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_aset_vector_bool_and_record_edges() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -148,15 +147,15 @@ fn oracle_aset_vector_bool_and_record_edges() {
      (error (list (car err) (cdr err))))
    (condition-case err
        (aset '(a b) 0 'x)
-     (error (list (car err) (cdr err)))))))
-"#;
+     (error (list (car err) (cdr err))))))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 22 43)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (changed [a changed] nil 0 \"\" (nil t t nil) new #s(tag a new) (args-out-of-range ([a changed] -1)) (args-out-of-range (#&4\"\u{6}\" 4)) (wrong-type-argument (arrayp (a b))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_aset_string_ascii_and_multibyte_rules() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -180,10 +179,11 @@ fn oracle_aset_string_ascii_and_multibyte_rules() {
      (error (list (car err) (cdr err))))
    (condition-case err
        (aset ascii 0 'bad)
-     (error (list (car err) (cdr err)))))))
-"#;
+     (error (list (car err) (cdr err))))))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 21 43)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (90 \"aZc\" 90 \"�Zc\" (error (\"Attempt to store non-byte value into unibyte string\")) 233 (error (\"Attempt to replace non-ASCII char in multibyte string\")) (wrong-type-argument (characterp bad)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

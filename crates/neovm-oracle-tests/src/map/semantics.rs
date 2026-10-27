@@ -160,7 +160,6 @@ fn oracle_mapc_follows_callback_rewritten_cdr() {
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_mapconcat_separator_and_return_validation() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -175,10 +174,11 @@ fn oracle_mapconcat_separator_and_return_validation() {
    (error (list (car err) (cdr err))))
  (condition-case err
      (mapconcat (lambda (_x) 42) '(a) ",")
-   (error (list (car err) (cdr err))))))
-"#;
+   (error (list (car err) (cdr err)))))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 40)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"ac\" \"a|b|c\" \"1-2-3\" \"\" (wrong-type-argument (sequencep bad)) (wrong-type-argument (sequencep 42)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
@@ -211,7 +211,6 @@ fn oracle_mapconcat_follows_callback_rewritten_cdr() {
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_mapcan_destructive_nconc_semantics() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -230,10 +229,11 @@ fn oracle_mapcan_destructive_nconc_semantics() {
    input
    (condition-case err
        (mapcan (lambda (_x) 42) '(a b))
-     (error (list (car err) (cdr err)))))))
-"#;
+     (error (list (car err) (cdr err))))))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 16 43)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((a b c) t (b c) t t ((a b c) nil (b c) (c)) (wrong-type-argument (consp 42)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

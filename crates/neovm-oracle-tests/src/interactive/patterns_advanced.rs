@@ -194,7 +194,6 @@ fn oracle_prop_command_dispatch_system() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_keybinding_command_pipeline() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -237,8 +236,10 @@ fn oracle_prop_keybinding_command_pipeline() {
                   (keymapp my-map)))))
     (fmakunbound 'neovm--test-kb-upcase)
     (fmakunbound 'neovm--test-kb-reverse)
-    (fmakunbound 'neovm--test-kb-repeat))"#;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    (fmakunbound 'neovm--test-kb-repeat)))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((([117] neovm--test-kb-upcase \"HELLO\") ([114] neovm--test-kb-reverse \"fedcba\") ([112] neovm--test-kb-repeat \"hahaha\")) t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
@@ -320,7 +321,6 @@ fn oracle_prop_command_registration_introspection() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_mode_setup_pattern() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -362,7 +362,8 @@ fn oracle_prop_mode_setup_pattern() {
             (keymapp mode-map)
             (null (lookup-key mode-map [?z])))))
     (fmakunbound 'neovm--test-mode-action1)
-    (fmakunbound 'neovm--test-mode-action2))"#;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    (fmakunbound 'neovm--test-mode-action2)))"#;
+    let expect =
+        expect_test::expect![[r#""OK (t (hook1 hook2 hook3) action1-done (action2 99) t t)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

@@ -35,7 +35,6 @@ fn oracle_buffer_local_toplevel_value_read_set_and_missing_local_errors() {
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_buffer_local_toplevel_value_ignores_active_let_local_binding() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -86,9 +85,8 @@ fn oracle_buffer_local_toplevel_value_ignores_active_let_local_binding() {
       (when (buffer-live-p buf)
         (kill-buffer buf)))
     (when (boundp 'neomacs--oracle-bltv-let)
-      (makunbound 'neomacs--oracle-bltv-let))))
-"#;
+      (makunbound 'neomacs--oracle-bltv-let)))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 45 47)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

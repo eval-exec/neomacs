@@ -9,7 +9,6 @@ use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_file_link_creation_edges() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -69,9 +68,8 @@ fn oracle_file_link_creation_edges() {
          (condition-case err
              (make-symbolic-link 42 sym2)
            (error (list (car err) (cdr err)))))))
-    (ignore-errors (delete-directory dir t))))
-"#;
+    (ignore-errors (delete-directory dir t)))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 57 46)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

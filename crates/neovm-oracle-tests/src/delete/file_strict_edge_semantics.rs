@@ -9,7 +9,6 @@ use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_delete_file_wrapper_edges() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -58,9 +57,8 @@ fn oracle_delete_file_wrapper_edges() {
     (ignore-errors (delete-file link))
     (ignore-errors (delete-file file))
     (ignore-errors (delete-directory subdir))
-    (ignore-errors (delete-directory dir t))))
-"#;
+    (ignore-errors (delete-directory dir t)))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 46)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

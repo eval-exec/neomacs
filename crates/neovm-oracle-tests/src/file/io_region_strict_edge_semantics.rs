@@ -9,7 +9,6 @@ use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_write_region_insert_file_contents_and_append_edges() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -89,8 +88,7 @@ fn oracle_write_region_insert_file_contents_and_append_edges() {
            (condition-case err
                (append-to-file)
              (error (list (car err) (cdr err)))))))
-      (ignore-errors (delete-directory root t)))))
-"#;
+      (ignore-errors (delete-directory root t))))"#;
 
     let expect = expect_test::expect![[r#""ERR (void-function cl-labels)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);

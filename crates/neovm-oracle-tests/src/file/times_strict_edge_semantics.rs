@@ -9,7 +9,6 @@ use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_set_file_times_handler_and_timestamp_order() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -39,9 +38,8 @@ fn oracle_set_file_times_handler_and_timestamp_order() {
          (condition-case err
              (set-file-times "a" nil nil nil)
            (error (list (car err) (cdr err)))))))
-    (fmakunbound 'neomacs--oracle-times-handler)))
-"#;
+    (fmakunbound 'neomacs--oracle-times-handler))"#;
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 27 50)""#]];
+    let expect = expect_test::expect![[r#""OK neomacs--oracle-times-handler""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

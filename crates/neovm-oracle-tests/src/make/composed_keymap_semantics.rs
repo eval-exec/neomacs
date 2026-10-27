@@ -33,7 +33,6 @@ fn oracle_make_composed_keymap_lookup_order_and_nil_bindings() {
 }
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_make_composed_keymap_single_map_and_parent_shape() {
     let form = r#"
 (let ((map (make-sparse-keymap))
@@ -48,7 +47,7 @@ fn oracle_make_composed_keymap_single_map_and_parent_shape() {
      (car composed)
      (keymapp (cadr composed))
      (eq (caddr composed) 'keymap)
-     (equal (cdddr composed) (cdr parent))))))"#;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 46)""#]];
+     (equal (cdddr composed) (cdr parent)))))"#;
+    let expect = expect_test::expect![[r#""OK (map-x parent-y keymap t t t)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

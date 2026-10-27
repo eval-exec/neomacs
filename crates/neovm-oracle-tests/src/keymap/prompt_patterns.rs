@@ -339,7 +339,6 @@ fn oracle_prop_keymap_prefix_with_prompts_and_parents() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_keymap_parent_reassignment() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -377,7 +376,9 @@ fn oracle_prop_keymap_parent_reassignment() {
                                               (lookup-key child [?z])
                                               (lookup-key child [?w]))))
                             (list phase1 phase2 phase3 phase4
-                                  (keymap-parent child))))))"#;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+                                  (keymap-parent child)))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((nil child-cmd-w) (p1-cmd-x p1-cmd-y nil child-cmd-w) (p2-cmd-x nil p2-cmd-z child-cmd-w) (nil nil nil child-cmd-w) nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
