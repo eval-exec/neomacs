@@ -44,7 +44,9 @@ fn combo7_map_multi() {
 #[test]
 fn combo7_planning_full() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:planning ((\"S\" nil nil))) (:timestamps ((active 2026 20) (inactive 2026 10))) (:todo \"TODO\") (:sched \"<2026-01-15 Wed>\") (:dead nil) (:closed nil) (:after-sched \"<2026-01-16 Fri>\") (:after-dead \"<2026-01-21 Wed>\") (:content \"* TODO T\\nDEADLINE: <2026-01-21 Wed> SCHEDULED: <2026-01-16 Fri>\\nDEADLINE: <2026-01-20 Mon>\\nCLOSED: [2026-01-10 Fri]\\nBody\"))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:planning ((\"S\" nil nil))) (:timestamps ((active 2026 20) (inactive 2026 10))) (:todo \"TODO\") (:sched \"<2026-01-15 Wed>\") (:dead nil) (:closed nil) (:after-sched \"<2026-01-16 Fri>\") (:after-dead \"<2026-01-21 Wed>\") (:content \"* TODO T\\nDEADLINE: <2026-01-21 Wed> SCHEDULED: <2026-01-16 Fri>\\nDEADLINE: <2026-01-20 Mon>\\nCLOSED: [2026-01-10 Fri]\\nBody\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -86,7 +88,9 @@ fn combo7_planning_full() {
 #[test]
 fn combo7_blocks() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:types (src-block quote-block center-block export-block verse-block drawer)) (:src (\"(+ 1)\\n\")) (:quote (\"Q\")) (:export (\"HTML\")))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:types (src-block quote-block center-block export-block verse-block drawer)) (:src (\"(+ 1)\\n\")) (:quote (\"Q\")) (:export (\"HTML\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -118,7 +122,9 @@ fn combo7_blocks() {
 #[test]
 fn combo7_links() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:links ((\"http\" \"//a.com\" \"http://a.com\") (\"file\" \"b.el\" \"file:b.el\") (\"id\" \"xxx\" \"id:xxx\") (\"mailto\" \"d@e.com\" \"mailto:d@e.com\") (\"news\" \"comp\" \"news:comp\"))) (:count 5) (:types (\"http\" \"file\" \"id\" \"mailto\" \"news\")))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:links ((\"http\" \"//a.com\" \"http://a.com\") (\"file\" \"b.el\" \"file:b.el\") (\"id\" \"xxx\" \"id:xxx\") (\"mailto\" \"d@e.com\" \"mailto:d@e.com\") (\"news\" \"comp\" \"news:comp\"))) (:count 5) (:types (\"http\" \"file\" \"id\" \"mailto\" \"news\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -146,7 +152,9 @@ fn combo7_links() {
 #[test]
 fn combo7_keywords() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:keywords ((\"TITLE\" \"Test\") (\"AUTHOR\" \"Me\") (\"DATE\" \"2026-01-15\") (\"OPTIONS\" \"toc:nil\") (\"FILETAGS\" \":t1:t2:\") (\"STARTUP\" \"overview\") (\"CATEGORY\" \"c\") (\"LANGUAGE\" \"en\"))) (:collected ((\"TITLE\" \"Test\") (\"AUTHOR\" \"Me\") (\"DATE\" \"2026-01-15\") (\"OPTIONS\" \"toc:nil\") (\"FILETAGS\" \":t1:t2:\"))))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:keywords ((\"TITLE\" \"Test\") (\"AUTHOR\" \"Me\") (\"DATE\" \"2026-01-15\") (\"OPTIONS\" \"toc:nil\") (\"FILETAGS\" \":t1:t2:\") (\"STARTUP\" \"overview\") (\"CATEGORY\" \"c\") (\"LANGUAGE\" \"en\"))) (:collected ((\"TITLE\" \"Test\") (\"AUTHOR\" \"Me\") (\"DATE\" \"2026-01-15\") (\"OPTIONS\" \"toc:nil\") (\"FILETAGS\" \":t1:t2:\"))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -170,7 +178,9 @@ fn combo7_keywords() {
 #[test]
 fn combo7_entities() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:entities ((\"alpha\" \"α\" \"\\\\alpha\" \"&alpha;\") (\"beta\" \"β\" \"\\\\beta\" \"&beta;\") (\"gamma\" \"γ\" \"\\\\gamma\" \"&gamma;\") (\"Agrave\" \"À\" \"\\\\`{A}\" \"&Agrave;\") (\"copy\" \"©\" \"\\\\textcopyright{}\" \"&copy;\") (\"deg\" \"°\" \"\\\\textdegree{}\" \"&deg;\") (\"pm\" \"±\" \"\\\\textpm{}\" \"&plusmn;\") (\"times\" \"×\" \"\\\\texttimes{}\" \"&times;\"))) (:count 8))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:entities ((\"alpha\" \"α\" \"\\\\alpha\" \"&alpha;\") (\"beta\" \"β\" \"\\\\beta\" \"&beta;\") (\"gamma\" \"γ\" \"\\\\gamma\" \"&gamma;\") (\"Agrave\" \"À\" \"\\\\`{A}\" \"&Agrave;\") (\"copy\" \"©\" \"\\\\textcopyright{}\" \"&copy;\") (\"deg\" \"°\" \"\\\\textdegree{}\" \"&deg;\") (\"pm\" \"±\" \"\\\\textpm{}\" \"&plusmn;\") (\"times\" \"×\" \"\\\\texttimes{}\" \"&times;\"))) (:count 8))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -196,7 +206,9 @@ fn combo7_entities() {
 #[test]
 fn combo7_latex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:fragments (\"$x^2$\" \"$$y=mx+b$$\" \"\\\\(z\\\\)\" \"\\\\[w\\\\]\")) (:entities (\"alpha\")) (:frag-count 4) (:ent-count 1))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:fragments (\"$x^2$\" \"$$y=mx+b$$\" \"\\\\(z\\\\)\" \"\\\\[w\\\\]\")) (:entities (\"alpha\")) (:frag-count 4) (:ent-count 1))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -223,7 +235,9 @@ fn combo7_latex() {
 #[test]
 fn combo7_timestamps() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:timestamps ((active-range 2026 1 20 nil nil) (inactive 2026 1 30 nil nil) (active 2026 2 1 cumulate 1))) (:count 3) (:types (active-range inactive active)))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:timestamps ((active-range 2026 1 20 nil nil) (inactive 2026 1 30 nil nil) (active 2026 2 1 cumulate 1))) (:count 3) (:types (active-range inactive active)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -283,7 +297,9 @@ fn combo7_macros() {
 #[test]
 fn combo7_stats() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:init (\"[1/3]\")) (:after-update (\"[2/4]\")) (:content \"* T [2/4]\"))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:init (\"[1/3]\")) (:after-update (\"[2/4]\")) (:content \"* T [2/4]\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -341,7 +357,9 @@ fn combo7_clock() {
 #[test]
 fn combo7_footnotes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:refs (\"1\" \"2\" \"3\" \"1\")) (:defs ((\"1\" \"First def\") (\"2\" \"Second def\") (\"3\" \"Third def\"))) (:ref-count 4) (:def-count 3))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:refs (\"1\" \"2\" \"3\" \"1\")) (:defs ((\"1\" \"First def\") (\"2\" \"Second def\") (\"3\" \"Third def\"))) (:ref-count 4) (:def-count 3))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)

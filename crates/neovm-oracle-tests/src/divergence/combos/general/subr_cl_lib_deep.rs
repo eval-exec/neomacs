@@ -140,7 +140,8 @@ fn divergence_cl_locally_declarations() {
 fn divergence_cl_assoc_rassoc_extended() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK ((\"a\" . 1) t (a . 4) t (\"b\" . 2) t (b . 5) t 5 t)""#]];
+    let expect =
+        expect_test::expect![[r#""OK ((\"a\" . 1) t (a . 4) t (\"b\" . 2) t (b . 5) t 5 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((alist '(("a" . 1) ("b" . 2) ("c" . 3)

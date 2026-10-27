@@ -248,7 +248,9 @@ fn divergence_eieio_object_with_hash_key() {
 fn divergence_eieio_slot_type_checking() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-slot-type test-tc-xxx num number \"not-a-number\")""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (invalid-slot-type test-tc-xxx num number \"not-a-number\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-tc-xxx ()

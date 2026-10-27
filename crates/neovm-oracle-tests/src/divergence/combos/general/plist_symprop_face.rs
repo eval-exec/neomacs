@@ -36,7 +36,9 @@ fn divergence_plist_put_get_remove_cycle() {
 fn divergence_symbol_plist_operations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (val1 t 42 t (a b c) t nil t (prop1 val1 prop2 42 prop3 (a b c)) t)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (val1 t 42 t (a b c) t nil t (prop1 val1 prop2 42 prop3 (a b c)) t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((sym (make-symbol "test-sym-pl-xxx")))
@@ -106,7 +108,8 @@ fn divergence_plist_member_vs_get() {
 fn divergence_symbol_function_plist_interplay() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (t t \"test function\" t (lambda (x) t) t 6 t nil nil)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (t t \"test function\" t (lambda (x) t) t 6 t nil nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defun test-sfpi-xxx (x) (+ x 1))
@@ -130,7 +133,9 @@ fn divergence_symbol_function_plist_interplay() {
 fn divergence_face_remap_alist() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK ([face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] nil t bold t italic t)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ([face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] nil t bold t italic t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (list (facep 'default)
@@ -203,7 +208,9 @@ fn divergence_plist_to_alist_conversion() {
 fn divergence_face_all_attributes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (t t t [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] t)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (t t t [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defface test-comp-xxx '((t :foreground "blue" :background "yellow" :underline t))

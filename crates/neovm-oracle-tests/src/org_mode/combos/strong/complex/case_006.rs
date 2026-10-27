@@ -96,7 +96,9 @@ fn combo6_table_full() {
 #[test]
 fn combo6_list_full() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:init ((off nil \"A\") (off nil \"B\") (off nil \"C\") (off nil \"D\"))) (:after-check ((on \"A\") (on \"B\") (off \"C\") (off \"D\"))) (:after-indent ((nil on \"A\") (nil off \"B\\n  - [ ] C\") (nil off \"C\") (nil off \"D\"))) (:stats \"* T [1/3]\"))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:init ((off nil \"A\") (off nil \"B\") (off nil \"C\") (off nil \"D\"))) (:after-check ((on \"A\") (on \"B\") (off \"C\") (off \"D\"))) (:after-indent ((nil on \"A\") (nil off \"B\\n  - [ ] C\") (nil off \"C\") (nil off \"D\"))) (:stats \"* T [1/3]\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -145,7 +147,9 @@ fn combo6_list_full() {
 #[test]
 fn combo6_src_full() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""Evaluate this emacs-lisp code block on your system? (yes or no) OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""Evaluate this emacs-lisp code block on your system? (yes or no) OK nil""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -220,7 +224,9 @@ fn combo6_navigation() {
 #[test]
 fn combo6_visibility() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:overview \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:global1 \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:global2 \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:global3 \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:local-children \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:local-subtree \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:reveal \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\"))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:overview \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:global1 \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:global2 \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:global3 \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:local-children \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:local-subtree \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\") (:reveal \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\\n*** H3b\\nDeep\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -282,7 +288,9 @@ fn combo6_export_all() {
 #[test]
 fn combo6_map_all() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:element-count 0) (:element-types nil) (:object-count 0) (:object-types nil) (:headlines 3) (:paragraphs 3) (:items 2) (:tables 1) (:src-blocks 1))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:element-count 0) (:element-types nil) (:object-count 0) (:object-types nil) (:headlines 3) (:paragraphs 3) (:items 2) (:tables 1) (:src-blocks 1))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -351,7 +359,9 @@ fn combo6_clock_planning() {
 #[test]
 fn combo6_footnotes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:refs (\"1\" \"2\" \"3\" \"1\")) (:defs ((\"1\" \"First def\") (\"2\" \"Second def\") (\"3\" \"Third def\"))) (:ref-count 4) (:def-count 3))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:refs (\"1\" \"2\" \"3\" \"1\")) (:defs ((\"1\" \"First def\") (\"2\" \"Second def\") (\"3\" \"Third def\"))) (:ref-count 4) (:def-count 3))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)

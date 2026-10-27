@@ -49,7 +49,9 @@ fn divergence_truncate_string_to_width() {
 fn divergence_string_pad_alignment() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (\"left      \" t \"     right\" t \"42   \" t \"00042\" t)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"left      \" t \"     right\" t \"42   \" t \"00042\" t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (list (format "%-10s" "left")
@@ -173,7 +175,9 @@ fn divergence_fill_region_basic() {
 fn divergence_indent_rigidly_negative() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (\"  line1\\n  line2\\n  line3\\n\" 0 t \"line1\\nline2\\nline3\\n\" 0 t)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"  line1\\n  line2\\n  line3\\n\" 0 t \"line1\\nline2\\nline3\\n\" 0 t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "    line1\n    line2\n    line3\n")

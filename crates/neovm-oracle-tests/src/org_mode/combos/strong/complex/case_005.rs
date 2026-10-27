@@ -72,7 +72,9 @@ fn combo5_sort() {
 #[test]
 fn combo5_toggle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:init (\"H1\" \"H2\" \"H3\")) (:after-toggle ((headline \"H1\") (headline \"H3\"))) (:after-restore (\"H1\" \"H2\" \"H3\")) (:after-toggle2 ((headline \"H1\") (headline \"H2\"))))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:init (\"H1\" \"H2\" \"H3\")) (:after-toggle ((headline \"H1\") (headline \"H3\"))) (:after-restore (\"H1\" \"H2\" \"H3\")) (:after-toggle2 ((headline \"H1\") (headline \"H2\"))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -113,7 +115,9 @@ fn combo5_toggle() {
 #[test]
 fn combo5_move_subtree() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (user-error \"Cannot move past superior level or buffer limit\")""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (user-error \"Cannot move past superior level or buffer limit\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -149,7 +153,9 @@ fn combo5_move_subtree() {
 #[test]
 fn combo5_narrow_show() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:narrowed \"*** H3\\nBody\") (:context \"*** H3\\nBody\") (:widened \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\") (:overview \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\") (:reveal \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\"))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:narrowed \"*** H3\\nBody\") (:context \"*** H3\\nBody\") (:widened \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\") (:overview \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\") (:reveal \"* H1\\n** H2\\n*** H3\\nBody\\n* H1b\\n** H2b\\nSub\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -188,7 +194,8 @@ fn combo5_narrow_show() {
 #[test]
 fn combo5_list_struct() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (user-error \"Cannot indent the first item of a list\")""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (user-error \"Cannot indent the first item of a list\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -256,7 +263,9 @@ fn combo5_export_string() {
 #[test]
 fn combo5_map_pred() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:all (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:todo (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:done (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:first \"A\"))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:all (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:todo (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:done (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:first \"A\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)

@@ -11,7 +11,9 @@ use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest
 #[test]
 fn combo9_map_pred() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:all (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:todo (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:done (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:first \"A\"))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:all (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:todo (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:done (\"A\" \"B\" \"C\" \"D\" \"WAITING E\")) (:first \"A\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -135,7 +137,9 @@ fn combo9_cache() {
 #[test]
 fn combo9_indent() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:init \"* H1\\nBody\\n** H2\\nSub\\n*** H3\\nDeep\") (:indents nil) (:buffer-indents ((1 \"\") (2 #(\"  \" 0 2 (face org-indent))) (3 #(\"*\" 0 1 (face org-indent))) (4 #(\"    \" 0 4 (face org-indent))) (5 #(\"**\" 0 2 (face org-indent))) (6 #(\"      \" 0 6 (face org-indent))))))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:init \"* H1\\nBody\\n** H2\\nSub\\n*** H3\\nDeep\") (:indents nil) (:buffer-indents ((1 \"\") (2 #(\"  \" 0 2 (face org-indent))) (3 #(\"*\" 0 1 (face org-indent))) (4 #(\"    \" 0 4 (face org-indent))) (5 #(\"**\" 0 2 (face org-indent))) (6 #(\"      \" 0 6 (face org-indent))))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -173,7 +177,9 @@ fn combo9_indent() {
 #[test]
 fn combo9_lint() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:lint-count 1) (:content \"* H\\nSCHEDULED: <invalid>\\nBody [[broken]]\"))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:lint-count 1) (:content \"* H\\nSCHEDULED: <invalid>\\nBody [[broken]]\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -256,7 +262,9 @@ fn combo9_clone() {
 #[test]
 fn combo9_toggle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK ((:init (\"H1\" \"H2\" \"H3\")) (:after-toggle ((headline \"H1\") (headline \"H3\"))) (:after-restore (\"H1\" \"H2\" \"H3\")) (:after-toggle2 ((headline \"H1\") (headline \"H2\"))))""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:init (\"H1\" \"H2\" \"H3\")) (:after-toggle ((headline \"H1\") (headline \"H3\"))) (:after-restore (\"H1\" \"H2\" \"H3\")) (:after-toggle2 ((headline \"H1\") (headline \"H2\"))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -297,7 +305,9 @@ fn combo9_toggle() {
 #[test]
 fn combo9_move() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (user-error \"Cannot move past superior level or buffer limit\")""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (user-error \"Cannot move past superior level or buffer limit\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
