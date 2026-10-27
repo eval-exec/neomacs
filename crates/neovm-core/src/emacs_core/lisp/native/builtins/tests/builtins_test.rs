@@ -8500,9 +8500,15 @@ fn pure_dispatch_make_placeholder_cluster_matches_compat_contracts() {
         "make-closure with nil should signal error"
     );
 
-    let make_finalizer = dispatch_builtin_pure("make-finalizer", vec![Value::symbol("ignore")])
-        .expect("builtin make-finalizer should resolve")
-        .expect("builtin make-finalizer should evaluate");
+    // GNU `Fmake_finalizer' type-checks FUNCTIONP at creation.  Pure dispatch
+    // has no obarray, so a SYMBOL such as `ignore' is not a function here;
+    // pass a lambda form, which FUNCTIONP accepts without evaluator state.
+    let make_finalizer = dispatch_builtin_pure(
+        "make-finalizer",
+        vec![Value::list(vec![Value::symbol("lambda"), Value::NIL])],
+    )
+    .expect("builtin make-finalizer should resolve")
+    .expect("builtin make-finalizer should evaluate");
     assert_eq!(
         make_finalizer.veclike_type(),
         Some(crate::tagged::header::VecLikeType::Finalizer),

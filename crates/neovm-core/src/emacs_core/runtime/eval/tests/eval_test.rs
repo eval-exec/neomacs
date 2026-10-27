@@ -15235,11 +15235,14 @@ fn finalizer_type_of_and_prints_opaquely() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
 
-    let results = ev.eval_str_each("(type-of (make-finalizer #'ignore))");
+    // `Context::new()` is a bare evaluator with no dumped subrs, so `ignore'
+    // is not fbound here; GNU `Fmake_finalizer' checks FUNCTIONP at creation,
+    // and a lambda is a function in every context.
+    let results = ev.eval_str_each("(type-of (make-finalizer (lambda ())))");
     assert_eq!(format_eval_result(&results[0]), "OK finalizer");
-    let results = ev.eval_str_each("(cl-type-of (make-finalizer #'ignore))");
+    let results = ev.eval_str_each("(cl-type-of (make-finalizer (lambda ())))");
     assert_eq!(format_eval_result(&results[0]), "OK finalizer");
-    let results = ev.eval_str_each("(prin1-to-string (make-finalizer #'ignore))");
+    let results = ev.eval_str_each("(prin1-to-string (make-finalizer (lambda ())))");
     assert_eq!(format_eval_result(&results[0]), "OK \"#<finalizer>\"");
 }
 

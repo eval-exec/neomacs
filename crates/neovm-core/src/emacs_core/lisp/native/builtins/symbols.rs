@@ -6959,8 +6959,18 @@ pub(crate) fn builtin_make_finalizer(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("make-finalizer", &args, 1)?;
-    // GNU `Fmake_finalizer` accepts any object as FUNCTION; it is only
-    // funcall'd (errors ignored) once the finalizer becomes unreachable.
+    // GNU `Fmake_finalizer` (src/alloc.c) starts with
+    // CHECK_TYPE (FUNCTIONP (function), Qfunctionp, function): the argument is
+    // checked at CREATION, before the object is allocated.  The later call is
+    // `internal_condition_case_1 (call0, ...)`, so a non-function never
+    // reaches it.  FUNCTIONP is GNU's full predicate (symbols with function
+    // definitions, subrs, closures, raw-nil-type autoloads).
+    if !super::types::value_is_function(ctx, args[0]) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("functionp"), args[0]],
+        ));
+    }
     Ok(ctx.tagged_heap.alloc_finalizer(args[0]))
 }
 
