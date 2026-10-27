@@ -28698,7 +28698,9 @@ fn ft_probe_face_set_face_with_non_face_frame() {
 fn ft_trace_face_overlay_priority_float_vs_int() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (stored (1.5 1) dropped-float int-winner (:foreground \"green\") cleaned)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (stored (1.5 1) dropped-float int-winner (:foreground \"green\") cleaned)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -34531,7 +34533,9 @@ fn ft_advance_face_text_property_text_property_any_on_entire_buffer() {
 fn ft_sprint_face_overlay_face_high_numeric_vs_symbolic_prio() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (stored (100 high) dropped-symbol numeric-winner (:foreground \"red\") cleaned)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (stored (100 high) dropped-symbol numeric-winner (:foreground \"red\") cleaned)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
