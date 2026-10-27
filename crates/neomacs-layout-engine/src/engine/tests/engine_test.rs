@@ -30153,6 +30153,12 @@ fn build_tab_bar_display_roots_transient_string_across_gc() {
 
 #[test]
 fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+    use neovm_core::emacs_core::terminal::pure::{
+        TerminalRuntimeConfig, ensure_terminal_runtime_owner,
+    };
+    use neovm_core::window::FrameDisplayIdentity;
+
     let mut eval =
         create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
@@ -30171,9 +30177,39 @@ fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
         let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
         buf.insert("body line\n");
     }
-    let frame_id = eval
-        .frame_manager_mut()
-        .create_frame("layout-tab-bar", 1600, 160, buf_id);
+    // Tab auto-width chooses pixel limits for graphical frames and column
+    // limits for TTYs. Give this pixel-layout fixture its own graphical owner
+    // while preserving the bootstrap terminal and its selection history.
+    let gui_terminal = eval
+        .frame_manager()
+        .frame_list()
+        .into_iter()
+        .filter_map(|id| eval.frame_manager().get(id))
+        .map(|frame| frame.terminal_id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .expect("test graphical terminal id");
+    let identity = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::X11);
+    ensure_terminal_runtime_owner(
+        gui_terminal,
+        "layout-tab-bar-display",
+        TerminalRuntimeConfig::window_system(identity.clone()),
+    );
+    let frame_id = eval.frame_manager_mut().create_frame_on_terminal(
+        "layout-tab-bar",
+        gui_terminal,
+        1600,
+        160,
+        buf_id,
+    );
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.set_window_system(Some(Value::symbol(
+            neovm_core::emacs_core::display::gui_window_system_symbol(),
+        )));
+        frame.set_display_identity(FrameDisplayIdentity::Graphical(identity));
+    }
     eval.store_variable_by_name("layout-target-frame", Value::make_frame(frame_id.0));
     eval.eval_str(
         r#"
@@ -30198,6 +30234,12 @@ fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
         Value::NIL,
     ]))
     .expect("select target frame for tab-bar debug");
+    assert_eq!(
+        eval.eval_str("(list window-system (window-system))")
+            .expect("graphical tab-bar fixture"),
+        Value::list(vec![Value::symbol("neo"), Value::symbol("neo")]),
+        "tab auto-width must use graphical pixel limits",
+    );
     let keymap_debug =
         match eval.eval_form(Value::list(vec![Value::symbol("tab-bar-make-keymap-1")])) {
             Ok(value) => eval

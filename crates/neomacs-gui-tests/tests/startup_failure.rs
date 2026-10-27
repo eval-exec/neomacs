@@ -4,6 +4,54 @@ use neomacs_gui_tests::{
 use std::{fs, path::PathBuf, time::Duration};
 
 #[cfg(target_os = "linux")]
+fn find_lavapipe_manifest(explicit: Option<PathBuf>, roots: &[PathBuf]) -> Option<PathBuf> {
+    explicit.or_else(|| {
+        roots
+            .iter()
+            .flat_map(|root| {
+                // Mesa now ships the architecture-independent name; older
+                // distributions retain the architecture suffix.
+                ["lvp_icd.json", "lvp_icd.x86_64.json"].map(|name| root.join(name))
+            })
+            .find(|path| path.is_file())
+    })
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn lavapipe_manifest_discovery_uses_available_files_and_preserves_override() {
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let parent = neomacs_infra::workspace_root().join("tmp");
+    fs::create_dir_all(&parent).unwrap();
+    let fixture = Fixture(parent.join(format!("vulkan-manifest-discovery-{}", std::process::id())));
+    fs::create_dir(&fixture.0).unwrap();
+    let roots = [fixture.0.join("first"), fixture.0.join("second")];
+    for root in &roots {
+        fs::create_dir(root).unwrap();
+    }
+    assert_eq!(find_lavapipe_manifest(None, &roots), None);
+    let generic = roots[1].join("lvp_icd.json");
+    fs::write(&generic, "{}").unwrap();
+    // A directory cannot impersonate an installed ICD manifest.
+    let legacy = roots[0].join("lvp_icd.x86_64.json");
+    fs::create_dir(&legacy).unwrap();
+    assert_eq!(find_lavapipe_manifest(None, &roots), Some(generic));
+    fs::remove_dir(&legacy).unwrap();
+    fs::write(&legacy, "{}").unwrap();
+    assert_eq!(find_lavapipe_manifest(None, &roots), Some(legacy));
+    let explicit = fixture.0.join("operator-selected.json");
+    assert_eq!(
+        find_lavapipe_manifest(Some(explicit.clone()), &roots),
+        Some(explicit)
+    );
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 // Prerequisites: requires release binary/pdump, Vulkan loader, readable procfs wait channels, and Weston.
 fn display_loss_exits_while_gpu_driver_discovery_is_pending() {
@@ -106,18 +154,14 @@ fn check_pending_gpu(action: GpuStartupAction) {
         action,
         GpuStartupAction::ResizeAndComplete | GpuStartupAction::KeyboardAndComplete
     ) {
-        let driver = std::env::var_os("NEOMACS_GUI_VULKAN_ICD")
-            .map(PathBuf::from)
-            .or_else(|| {
-                [
-                    "/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json",
-                    "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json",
-                ]
-                .into_iter()
-                .map(PathBuf::from)
-                .find(|path| path.is_file())
-            })
-            .expect("set NEOMACS_GUI_VULKAN_ICD to a usable native driver manifest");
+        let driver = find_lavapipe_manifest(
+            std::env::var_os("NEOMACS_GUI_VULKAN_ICD").map(PathBuf::from),
+            &[
+                PathBuf::from("/run/opengl-driver/share/vulkan/icd.d"),
+                PathBuf::from("/usr/share/vulkan/icd.d"),
+            ],
+        )
+        .expect("set NEOMACS_GUI_VULKAN_ICD to a usable native driver manifest");
         command
             .env(
                 "VK_DRIVER_FILES",

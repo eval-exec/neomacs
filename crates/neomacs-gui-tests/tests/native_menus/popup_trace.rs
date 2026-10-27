@@ -10,8 +10,18 @@ struct SurfaceId(u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct CallbackId(u32);
 
+fn object_tail<'a>(text: &'a str, object: &str) -> Option<&'a str> {
+    let tail = text.strip_prefix(object)?;
+    tail.strip_prefix('#').or_else(|| tail.strip_prefix('@'))
+}
+
+fn object_id(text: &str, object: &str) -> Option<u32> {
+    object_tail(text, object)?.parse().ok()
+}
+
 fn object_request<'a>(line: &'a str, object: &str) -> Option<(u32, &'a str)> {
     let (_, tail) = line.split_once(object)?;
+    let tail = tail.strip_prefix('#').or_else(|| tail.strip_prefix('@'))?;
     let (id, request) = tail.split_once('.')?;
     Some((id.parse().ok()?, request))
 }
@@ -26,32 +36,32 @@ pub(super) fn primary_surface_presented(log: &str) -> bool {
     let mut committed_callbacks = HashSet::new();
 
     for line in log.lines() {
-        if let Some((_, args)) = line.split_once(".get_xdg_surface(new id xdg_surface#")
-            && let Some((role, surface)) = args.split_once(", wl_surface#")
-            && let (Ok(role), Some(surface)) = (
-                role.parse::<u32>(),
+        if let Some((_, args)) = line.split_once(".get_xdg_surface(new id ")
+            && let Some((role, surface)) = args.split_once(", ")
+            && let (Some(role), Some(surface)) = (
+                object_id(role, "xdg_surface"),
                 surface
                     .strip_suffix(')')
-                    .and_then(|id| id.parse::<u32>().ok()),
+                    .and_then(|surface| object_id(surface, "wl_surface")),
             )
         {
             roles.insert(role, SurfaceId(surface));
         }
-        if let Some((role, request)) = object_request(line, "xdg_surface#")
+        if let Some((role, request)) = object_request(line, "xdg_surface")
             && request.starts_with("get_toplevel(")
             && primary.is_none()
         {
             primary = roles.get(&role).copied();
         }
-        if let Some((surface, request)) = object_request(line, "wl_surface#")
+        if let Some((surface, request)) = object_request(line, "wl_surface")
             && Some(SurfaceId(surface)) == primary
         {
             if let Some(args) = request.strip_prefix("attach(") {
-                attached = Some(args.starts_with("wl_buffer#"));
+                attached = Some(object_tail(args, "wl_buffer").is_some());
             } else if let Some(id) = request
-                .strip_prefix("frame(new id wl_callback#")
-                .and_then(|id| id.strip_suffix(')'))
-                .and_then(|id| id.parse::<u32>().ok())
+                .strip_prefix("frame(new id ")
+                .and_then(|callback| callback.strip_suffix(')'))
+                .and_then(|callback| object_id(callback, "wl_callback"))
             {
                 pending_callbacks.push(CallbackId(id));
             } else if request == "commit()" {
@@ -72,7 +82,7 @@ pub(super) fn primary_surface_presented(log: &str) -> bool {
                 committed_callbacks.clear();
             }
         }
-        if let Some((callback, request)) = object_request(line, "wl_callback#")
+        if let Some((callback, request)) = object_request(line, "wl_callback")
             && request.starts_with("done(")
             && committed_callbacks.remove(&CallbackId(callback))
             && committed_buffer
@@ -129,4 +139,20 @@ fn primary_presentation_rejects_callbacks_before_content_and_after_unmapping() {
                [11] wl_callback#32.done(101)
 ";
     assert!(!primary_surface_presented(log));
+}
+
+#[test]
+fn primary_presentation_accepts_ubuntu_wayland_object_syntax() {
+    // Actual Ubuntu 24.04 libwayland 1.22 trace from the CI CJK menu case.
+    // Unlike newer libwayland's '#', this version separates object IDs by '@'.
+    let log = r#"[2191287.949] -> xdg_wm_base@12.get_xdg_surface(new id xdg_surface@21, wl_surface@20)
+[2191287.956] -> xdg_surface@21.get_toplevel(new id xdg_toplevel@22)
+[2191287.998] -> wl_surface@20.commit()
+[2193399.967] -> wl_surface@20.frame(new id wl_callback@46)
+[2193519.818] -> wl_surface@20.frame(new id wl_callback@49)
+[2193519.836] -> wl_surface@20.attach(wl_buffer@48, 0, 0)
+[2193541.624] -> wl_surface@20.commit()
+[2193985.403] wl_callback@49.done(224282)
+"#;
+    assert!(primary_surface_presented(log));
 }
