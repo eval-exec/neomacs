@@ -55,12 +55,13 @@ fn divergence_cl_loop_with_hash_destructuring() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_seq_into_different_types() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 64)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ([1 2 3 4 5] t (1 2 3 4 5) t \"\u{1}\u{2}\u{3}\u{4}\u{5}\" t 5 t (104 101 108 108 111) t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((lst '(1 2 3 4 5))
@@ -74,7 +75,7 @@ fn divergence_seq_into_different_types() {
           (length (seq-into lst 'vector))
           (= (length (seq-into lst 'vector)) 5)
           (seq-into "hello" 'list)
-          (equal (seq-into "hello" 'list) '(?h ?e ?l ?l ?o)))))) "#,
+          (equal (seq-into "hello" 'list) '(?h ?e ?l ?l ?o)))))"#,
         expect,
     );
 }
@@ -192,12 +193,11 @@ fn divergence_seq_window_slide() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_loop_with_conditionals() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 20 32)""##]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-loop)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((data (number-sequence 1 20)))
@@ -218,7 +218,7 @@ fn divergence_cl_loop_with_conditionals() {
                           else sum x into even-sum
                           end
                           finally return (list odd-sum even-sum))
-                 '(100 110)))) #"#,
+                 '(100 110)))) )"#,
         expect,
     );
 }
@@ -227,7 +227,9 @@ fn divergence_cl_loop_with_conditionals() {
 fn divergence_seq_intersection_difference() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK ((4 5) t (1 2 3) t (6 7 8) t (1 2 3 4 5 6 7 8) t (40 50) t)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((4 5) t (1 2 3) t (6 7 8) t (1 2 3 4 5 6 7 8) t (40 50) t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((a '(1 2 3 4 5))

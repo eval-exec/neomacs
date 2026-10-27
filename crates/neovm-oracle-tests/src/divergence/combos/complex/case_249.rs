@@ -79,11 +79,10 @@ fn div_cx249_window_resize_availability() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx249_set_window_buffer_preserving_point() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (3 5 3 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf-a (get-buffer-create " *neo-cx249-a*"))
@@ -100,7 +99,7 @@ fn div_cx249_set_window_buffer_preserving_point() {
         (kill-buffer buf-a)
         (kill-buffer buf-b)
         (list pt-a pt-b pt-a-again (eq pt-a pt-a-again)))))
-"##,
+)"##,
         expect,
     )
 }
@@ -124,11 +123,10 @@ fn div_cx249_window_point_vs_buffer_point() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx249_window_start_set_and_query() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (100 200 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx249-ws*")))
@@ -141,7 +139,7 @@ fn div_cx249_window_start_set_and_query() {
     (let ((s2 (window-start)))
       (kill-buffer buf)
       (list s1 s2 (> s2 s1))))
-"##,
+)"##,
         expect,
     )
 }
@@ -179,11 +177,10 @@ fn div_cx249_window_max_chars_per_line_query() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx249_window_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((win (selected-window)))
@@ -209,7 +206,7 @@ fn div_cx249_window_with_marker_overlay_undo_narrow_mega() {
         (list state (buffer-string) (marker-position m)
               (overlay-start ov) (overlay-end ov)
               (text-properties-at 1)))))
-"##,
+)"##,
         expect,
     )
 }

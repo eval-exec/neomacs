@@ -2,11 +2,10 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx492_display_buffer_fallback() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(let ((display-buffer-fallback-action
            '((display-buffer--maybe-same-window
@@ -15,7 +14,7 @@ fn div_cx492_display_buffer_fallback() {
               display-buffer--maybe-use-least-recent-window))))
   (let ((buf (get-buffer-create " *cx492-fb*")))
     (window-live-p (display-buffer buf)))
-"##,
+)"##,
         expect,
     );
 }

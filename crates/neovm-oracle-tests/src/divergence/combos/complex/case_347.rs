@@ -151,7 +151,6 @@ fn div_cx347_cl_position_find_count_member_if() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx347_cl_remove_substitute_adjoin_pushnew() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -164,8 +163,7 @@ fn div_cx347_cl_remove_substitute_adjoin_pushnew() {
       (cl-substitute 9 1 '(1 2 1 3 1 4))
       (cl-substitute 9 1 '(1 2 1 3 1 4) :count 2)
       (cl-adjoin '(3 . "c") '((1 . "a") (2 . "b")) :key #'car)
-      (cl-adjoin '(1 . "x") '((1 . "a") (2 . "b")) :key #'car)))
-"##,
+      (cl-adjoin '(1 . "x") '((1 . "a") (2 . "b")) :key #'car))"##,
         expect,
     )
 }

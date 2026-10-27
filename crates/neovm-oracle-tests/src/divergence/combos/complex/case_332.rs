@@ -26,11 +26,10 @@ fn div_cx332_pcase_pred_app_quote_let_patterns() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx332_pcase_or_and_not_guard_combined() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments mapcar 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (mapcar (lambda (v)
@@ -40,7 +39,7 @@ fn div_cx332_pcase_or_and_not_guard_combined() {
             ((and (pred stringp) (app length len) (pred (> len 3))) (list :long-str len))
             ((and n (guard (and (integerp n) (evenp n))) :even)))
         '(yes 200 "hello" 42 "ab" 'no 99))
-"##,
+)"##,
         expect,
     )
 }

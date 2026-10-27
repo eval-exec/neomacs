@@ -64,15 +64,14 @@ fn div_cx468_seq_drop_take() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx468_seq_chunk_split() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (((1 2) (3 4) (5)) (1 2 3))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'seq)
   (list (seq-split '(1 2 3 4 5) 2)
-        (seq-do (lambda (i) (* 2 i)) '(1 2 3)))"##,
+        (seq-do (lambda (i) (* 2 i)) '(1 2 3))))"##,
         expect,
     );
 }

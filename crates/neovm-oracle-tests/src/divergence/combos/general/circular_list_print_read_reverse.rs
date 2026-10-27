@@ -4,21 +4,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_print_circle_with_shared_tail() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"((a b . #1=(x y z)) (c d . #1#))\" t)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((shared '(x y z)))\n\
-         (let ((l1 (cons 'a (cons 'b shared)))\n\
-         (l2 (cons 'c (cons 'd shared))))\n\
-         (let ((printed (let ((print-circle t) (print-gensym t))\n\
-         (prin1-to-string (list l1 l2)))))\n\
-         (list printed\n\
-         (eq (nthcdr 2 l1) (nthcdr 2 l2))))))",
+        "(progn\n(let ((shared '(x y z)))\n(let ((l1 (cons 'a (cons 'b shared)))\n(l2 (cons 'c (cons 'd shared))))\n(let ((printed (let ((print-circle t) (print-gensym t))\n(prin1-to-string (list l1 l2)))))\n(list printed\n(eq (nthcdr 2 l1) (nthcdr 2 l2)))))))",
         expect,
     );
 }

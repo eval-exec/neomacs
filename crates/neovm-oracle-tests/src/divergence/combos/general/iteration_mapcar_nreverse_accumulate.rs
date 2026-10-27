@@ -27,20 +27,13 @@ fn deficiency_dolist_with_buffer_insert_and_collect() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_dotimes_with_vector_building() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (0 9 25 81 10 (0 1 4 9 16 25 36 49 64 81))""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((v (make-vector 10 nil)))\n\
-         (dotimes (i 10)\n\
-         (aset v i (* i i)))\n\
-         (list (aref v 0) (aref v 3) (aref v 5) (aref v 9)\n\
-         (length v)\n\
-         (append v nil)))",
+        "(progn\n(let ((v (make-vector 10 nil)))\n(dotimes (i 10)\n(aset v i (* i i)))\n(list (aref v 0) (aref v 3) (aref v 5) (aref v 9)\n(length v)\n(append v nil))))",
         expect,
     );
 }

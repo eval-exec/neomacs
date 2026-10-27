@@ -52,28 +52,13 @@ fn divergence_dynamic_rebinding_through_funcall_chain() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_deeply_nested_unwind_errors() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable log)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(let ((log nil))
-  (ignore-errors
-    (unwind-protect
-        (condition-case _
-            (unwind-protect
-                (condition-case _
-                    (error \"inner\")
-                  (error (push 'inner-handler log) (error \"re-raised\")))
-              (push 'middle-cleanup log))
-          (error
-           (push 'inner-handler log)))
-          (error
-           (push 'outer-caught log)))
-      (push 'outer-cleanup log)))
-  (nreverse log)) ",
+        "(let ((log nil))\n  (ignore-errors\n    (unwind-protect\n        (condition-case _\n            (unwind-protect\n                (condition-case _\n                    (error \"inner\")\n                  (error (push 'inner-handler log) (error \"re-raised\")))\n              (push 'middle-cleanup log))\n          (error\n           (push 'inner-handler log)))\n          (error\n           (push 'outer-caught log)))\n      (push 'outer-cleanup log)))\n  (nreverse log)",
         expect,
     );
 }

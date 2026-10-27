@@ -49,11 +49,11 @@ fn div_cx148_process_list_after_multiple_make() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx148_process_query_before_exit() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK ((run open listen connect stop) t (run exit signal))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((p (make-process :name "neo-cx148-query"
@@ -61,7 +61,7 @@ fn div_cx148_process_query_before_exit() {
   (list (process-live-p p)
         (eq (process-status p) 'run)
         (memq (process-status p) '(run exit signal)))
-"##,
+)"##,
         expect,
     );
 }

@@ -10,12 +10,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_sort_lines_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 26 34)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-sl")))
@@ -52,17 +51,16 @@ fn combo_sort_lines_marker_overlay_undo() {
                                 (get-text-property 20 'line)
                                 (get-text-property 26 'line))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_sort_lines_reverse_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 26 34)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-slr")))
@@ -99,17 +97,16 @@ fn combo_sort_lines_reverse_marker_overlay_undo() {
                                 (get-text-property 20 'line)
                                 (get-text-property 26 'line))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_sort_narrow_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 32 37)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-snar")))
@@ -151,17 +148,16 @@ fn combo_sort_narrow_marker_overlay_undo() {
                                 (get-text-property 26 'sect)
                                 (get-text-property 32 'sect))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_sort_buffer_local_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 20 25)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-sbl")))
@@ -199,17 +195,16 @@ fn combo_sort_buffer_local_marker_overlay_undo() {
                                 (get-text-property 13 'line)
                                 (get-text-property 20 'line))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_sort_fields_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-sf")))
@@ -243,7 +238,7 @@ fn combo_sort_fields_marker_overlay_undo() {
                                 (get-text-property 17 'entry)
                                 (get-text-property 25 'entry))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }

@@ -3,12 +3,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_macro_generates_condition_case() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 10 51)""#]];
+    let expect = expect_test::expect![[r#""OK (3 div-error t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defmacro test-safe-div-xxx (a b)
@@ -19,7 +18,7 @@ fn divergence_macro_generates_condition_case() {
   (list (test-safe-div-xxx 10 3)
         (test-safe-div-xxx 10 0)
         (= (test-safe-div-xxx 10 5) 2)
-        (eq (test-safe-div-xxx 10 0) 'div-error)))) "#,
+        (eq (test-safe-div-xxx 10 0) 'div-error)))"#,
         expect,
     );
 }

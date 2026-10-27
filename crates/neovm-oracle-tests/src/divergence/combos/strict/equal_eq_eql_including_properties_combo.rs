@@ -6,7 +6,6 @@
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_equal_structural_nested_types() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -18,12 +17,12 @@ fn div_v8_equal_structural_nested_types() {
       (equal "abc" "abc")
       (equal "abc" (copy-sequence "abc"))
       (equal '(1 (2 3) (4 (5))) '(1 (2 3) (4 (5))))
-      (equal #*0101 #*0101)
+      (equal (bool-vector t nil t nil) (bool-vector t nil t nil))
       (equal (bool-vector t nil t) (bool-vector t nil t))
       (equal (cons 1 2) (cons 1 2))
       (not (equal '(1 2) '(1 2 3))))
 "##;
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#*\" 9 15)""##]];
+    let expect = expect_test::expect![[r#""OK (t nil t t t t t t t t t)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

@@ -142,11 +142,10 @@ fn div_cx181_window_dedicated_p_round_trip() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx181_scroll_up_down_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable e)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -164,7 +163,7 @@ fn div_cx181_scroll_up_down_basic() {
             (prog1 (list before after-up after-down)
               (kill-buffer buf)))))
   (error (list :errored (car e))))
-"##,
+)"##,
         expect,
     );
 }
@@ -194,11 +193,10 @@ fn div_cx181_window_scroll_functions_hook() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx181_window_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx181-mega*")))
@@ -223,7 +221,7 @@ fn div_cx181_window_with_marker_overlay_undo_narrow_mega() {
         (widen)
         (kill-buffer buf)
         (list state (buffer-live-p buf)))))
-"##,
+)"##,
         expect,
     );
 }

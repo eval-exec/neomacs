@@ -4,7 +4,6 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_dynamic_let_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -33,12 +32,11 @@ fn combo_dynamic_let_marker_overlay_undo() {
                 (overlay-end ov)
                 (buffer-string)
                 (get-text-property 1 'seg))))))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_dynamic_let_narrow_marker() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -68,7 +66,7 @@ fn combo_dynamic_let_narrow_marker() {
                 (overlay-end ov)
                 (buffer-substring (point-min) (point-max))
                 (get-text-property (point-min) 'z))))))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))"#,
         expect,
     );
 }
@@ -142,7 +140,6 @@ fn combo_dynamic_let_multi_buffer() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_dynamic_let_overlay_narrow_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -173,7 +170,7 @@ fn combo_dynamic_let_overlay_narrow_undo() {
                 (overlay-end ov)
                 (buffer-substring (point-min) (point-max))
                 (get-text-property (point-min) 'z))))))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))"#,
         expect,
     );
 }

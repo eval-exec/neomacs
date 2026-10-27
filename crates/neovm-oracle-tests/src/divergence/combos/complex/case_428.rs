@@ -76,11 +76,10 @@ fn div_cx428_file_backup_remote() {
 }
 
 /// file-exists-p on symlink / file-symlink-p.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx428_file_symlink() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t nil \"/tmp\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((target (make-temp-file "neo-cx428-target-"))
@@ -91,7 +90,7 @@ fn div_cx428_file_symlink() {
       (list (file-exists-p "/tmp")
       (file-symlink-p "/tmp")
       (file-truename "/tmp"))
-"##,
+))"##,
         expect,
     );
 }

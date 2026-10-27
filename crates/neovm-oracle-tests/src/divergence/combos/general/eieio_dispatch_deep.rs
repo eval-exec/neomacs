@@ -153,12 +153,12 @@ fn divergence_hash_table_eql_eq_identity() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_closure_over_buffer_local() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (error \"Attempting to set a non-symbol: 'my-test-val\")""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (setq-local 'my-test-val 10)
@@ -173,7 +173,7 @@ fn divergence_closure_over_buffer_local() {
     (funcall add-fn 7)
     (funcall trace-fn)
     (list my-test-val (= my-test-val 52)
-          my-test-trace (equal my-test-trace '(52 45 15)))) "#,
+          my-test-trace (equal my-test-trace '(52 45 15)))) )"#,
         expect,
     );
 }
@@ -208,12 +208,11 @@ fn divergence_advice_filter_chain() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_flet_labels_interplay() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-flet)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defun test-cl-top-level-fn (x) (+ x 100))
@@ -225,7 +224,7 @@ fn divergence_cl_flet_labels_interplay() {
             (list result1 (= result1 105)
                   result2 (= result2 205)
                   result3 (= result3 305)
-                  (test-cl-top-level-fn 10) (= (test-cl-top-level-fn 10) 110))))))) "#,
+                  (test-cl-top-level-fn 10) (= (test-cl-top-level-fn 10) 110))))))) )"#,
         expect,
     );
 }

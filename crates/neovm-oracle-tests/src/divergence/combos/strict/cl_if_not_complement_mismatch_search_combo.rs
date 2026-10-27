@@ -5,7 +5,6 @@
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_cl_if_not_complement_predicates() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -15,9 +14,8 @@ fn div_v8_cl_if_not_complement_predicates() {
       (cl-remove-if-not #'numberp '(1 a 2 b 3))
       (cl-count-if-not #'numberp '(1 a 2 b 3 c))
       (cl-position-if-not #'numberp '(1 2 a 3 b))
-      (cl-find-if-not #'numberp '(1 2 a 3))))
-"##;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 7 45)""#]];
+      (cl-find-if-not #'numberp '(1 2 a 3)))"##;
+    let expect = expect_test::expect![[r#""OK ((1 X 2 X 3) (1 2 3) 3 2 a)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

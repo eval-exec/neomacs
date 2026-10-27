@@ -64,12 +64,11 @@ fn combo_eieio_two_buffers_shared_marker() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_two_buffers_overlay_edit() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable ov1-start)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass dual-buf-snap ()
@@ -117,17 +116,18 @@ fn combo_eieio_two_buffers_overlay_edit() {
             (result-str (format "%S" (list results ov1-start ov2-start))))
         (kill-buffer buf1)
         (kill-buffer buf2)
-        result-str)))"#,
+        result-str))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_cross_buffer_copy_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK \"((\\\"src\\\" bold nil) (\\\"dst-after-insert\\\" bold bold) (\\\"dst-after-delete\\\" nil nil))\"""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass copy-props-snap ()
@@ -165,17 +165,18 @@ fn combo_eieio_cross_buffer_copy_props() {
       (let ((result-str (format "%S" results)))
         (kill-buffer buf1)
         (kill-buffer buf2)
-        result-str)))"#,
+        result-str))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_cross_buffer_narrow_sequential() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK \"((\\\"buf1-narrow\\\" (6 15) 9) (\\\"buf1-wide\\\" (1 20) 19) (\\\"buf2-narrow\\\" (11 20) 9) (\\\"buf2-wide\\\" (1 20) 19))\"""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass seq-narrow-snap ()
@@ -229,17 +230,18 @@ fn combo_eieio_cross_buffer_narrow_sequential() {
       (let ((result-str (format "%S" results)))
         (kill-buffer buf1)
         (kill-buffer buf2)
-        result-str)))"#,
+        result-str))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_cross_buffer_undo_sequential() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK \"((\\\"buf1-edit\\\" 16 0) (\\\"buf2-edit\\\" 0 16) (\\\"buf1-undo\\\" 14 0) (\\\"buf2-undo\\\" 0 14))\"""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass cross-undo-snap ()
@@ -290,7 +292,7 @@ fn combo_eieio_cross_buffer_undo_sequential() {
       (let ((result-str (format "%S" results)))
         (kill-buffer buf1)
         (kill-buffer buf2)
-        result-str)))"#,
+        result-str))))"#,
         expect,
     );
 }

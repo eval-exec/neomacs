@@ -5,7 +5,6 @@
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v4_print_circle_number_table_combined() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -19,8 +18,10 @@ fn div_v4_print_circle_number_table_combined() {
         (let ((print-circle t) (print-number-table t)) (prin1-to-string mixed))
         (let ((print-number-table t) (prin1-to-string tree))
         (let ((print-circle t) (prin1-to-string tree))))
-"##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+))"##;
+    let expect = expect_test::expect![[
+        r#""OK (\"(#1=(42 \\\"shared\\\") #1#)\" \"(#1=(42 \\\"shared\\\") [n s] #1#)\" nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
@@ -83,7 +84,6 @@ fn div_v4_indent_relative_and_electric_indent() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v4_cl_typep_complex_specifiers() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -103,8 +103,8 @@ fn div_v4_cl_typep_complex_specifiers() {
           (cl-typep 150 '(integer 0 100)
           (cl-typep 42 '(member 1 2 42 3))
           (cl-typep 'x '(member a b c)))))
-"##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+)"##;
+    let expect = expect_test::expect![[r#""ERR (void-function cl-defstruct)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

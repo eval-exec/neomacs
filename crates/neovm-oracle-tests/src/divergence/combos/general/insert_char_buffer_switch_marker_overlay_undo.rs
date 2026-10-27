@@ -10,12 +10,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_insert_char_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-ic")))
@@ -49,17 +48,16 @@ fn combo_insert_char_marker_overlay_undo() {
                                 (get-text-property 6 'zone)
                                 (get-text-property 11 'zone))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_with_current_buffer_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf1 (generate-new-buffer " combo-wcb1"))
@@ -95,17 +93,16 @@ fn combo_with_current_buffer_marker_overlay_undo() {
                                 (get-text-property 11 'zone))))
             (kill-buffer buf1)
             (kill-buffer buf2)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_insert_char_narrow_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-icn")))
@@ -146,17 +143,16 @@ fn combo_insert_char_narrow_marker_overlay_undo() {
                                 (get-text-property 16 'sect)
                                 (get-text-property 21 'sect))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_insert_char_buffer_local_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-icbl")))
@@ -194,17 +190,16 @@ fn combo_insert_char_buffer_local_marker_overlay_undo() {
                                 (get-text-property 6 'zone)
                                 (get-text-property 11 'zone))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_set_buffer_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf1 (generate-new-buffer " combo-sb1"))
@@ -242,7 +237,7 @@ fn combo_set_buffer_marker_overlay_undo() {
                                 (get-text-property 11 'zone))))
             (kill-buffer buf1)
             (kill-buffer buf2)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }

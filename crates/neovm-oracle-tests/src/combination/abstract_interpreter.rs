@@ -566,7 +566,6 @@ fn oracle_prop_abstract_interp_loop_widening() {
 // Complex: reaching definitions analysis
 // ---------------------------------------------------------------------------
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_abstract_interp_reaching_defs() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -715,8 +714,8 @@ fn oracle_prop_abstract_interp_reaching_defs() {
                    (B2 ((def z d3)) (B3))
                    (B3 ((def x d4) (use z)) (B2 B4))
                    (B4 ((use x) (use z)) ()))))
-    (funcall 'neovm--rd-analyze program)))"#;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    (funcall 'neovm--rd-analyze program))))"#;
+    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments fset 3)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

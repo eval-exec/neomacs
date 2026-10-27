@@ -173,63 +173,24 @@ fn deficiency_replace_with_backreference_in_prop_zone() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_skip_chars_forward_backward_in_narrow_with_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"scn\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"abc123def456ghi\")\n\
-         (put-text-property 1 4 'class 'alpha)\n\
-         (put-text-property 4 7 'class 'digit)\n\
-         (put-text-property 7 10 'class 'alpha)\n\
-         (put-text-property 10 13 'class 'digit)\n\
-         (narrow-to-region 4 13)\n\
-         (goto-char (point-min))\n\
-         (skip-chars-forward \"0-9\")\n\
-         (let ((p1 (point)))\n\
-         (skip-chars-forward \"a-z\")\n\
-         (let ((p2 (point)))\n\
-         (skip-chars-backward \"0-9\")\n\
-         (let ((p3 (point)))\n\
-         (list p1 p2 p3\n\
-         (buffer-string)\n\
-         (get-text-property p1 'class)\n\
-         (get-text-property p2 'class)))))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"scn\")))\n(with-current-buffer buf\n(insert \"abc123def456ghi\")\n(put-text-property 1 4 'class 'alpha)\n(put-text-property 4 7 'class 'digit)\n(put-text-property 7 10 'class 'alpha)\n(put-text-property 10 13 'class 'digit)\n(narrow-to-region 4 13)\n(goto-char (point-min))\n(skip-chars-forward \"0-9\")\n(let ((p1 (point)))\n(skip-chars-forward \"a-z\")\n(let ((p2 (point)))\n(skip-chars-backward \"0-9\")\n(let ((p3 (point)))\n(list p1 p2 p3\n(buffer-string)\n(get-text-property p1 'class)\n(get-text-property p2 'class)))))))\n(kill-buffer buf))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_looking_at_and_match_data_in_narrowed() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"lan\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"(defun foo (x) (+ x 1))\")\n\
-         (put-text-property 1 7 'syntax 'keyword)\n\
-         (put-text-property 8 11 'syntax 'name)\n\
-         (narrow-to-region 8 21)\n\
-         (goto-char (point-min))\n\
-         (let ((r1 (looking-at \"[a-z]+\")))\n\
-         (let ((m1 (match-string 0)))\n\
-         (forward-char 4)\n\
-         (let ((r2 (looking-at \" +\")))\n\
-         (let ((m2 (match-string 0)))\n\
-         (forward-char 2)\n\
-         (let ((r3 (looking-at \"([^)]+)\")))\n\
-         (list r1 m1 r2 m2 r3 (match-string 0)\n\
-         (buffer-string)))))))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"lan\")))\n(with-current-buffer buf\n(insert \"(defun foo (x) (+ x 1))\")\n(put-text-property 1 7 'syntax 'keyword)\n(put-text-property 8 11 'syntax 'name)\n(narrow-to-region 8 21)\n(goto-char (point-min))\n(let ((r1 (looking-at \"[a-z]+\")))\n(let ((m1 (match-string 0)))\n(forward-char 4)\n(let ((r2 (looking-at \" +\")))\n(let ((m2 (match-string 0)))\n(forward-char 2)\n(let ((r3 (looking-at \"([^)]+)\")))\n(list r1 m1 r2 m2 r3 (match-string 0)\n(buffer-string)))))))))\n(kill-buffer buf))",
         expect,
     );
 }

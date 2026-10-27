@@ -4,12 +4,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_textprop_clone_buflocal_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable clone)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "tcb")))
@@ -46,17 +45,16 @@ fn combo_textprop_clone_buflocal_marker_overlay_undo() {
                   (get-text-property 6 'kind)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_textprop_clone_buflocal_narrow_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable clone)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "tcn")))
@@ -93,17 +91,16 @@ fn combo_textprop_clone_buflocal_narrow_undo() {
                   (get-text-property 6 'z)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_textprop_clone_buflocal_replace_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable clone)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "tcr")))
@@ -139,17 +136,16 @@ fn combo_textprop_clone_buflocal_replace_undo() {
                   (get-text-property 6 'kind)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_textprop_clone_buflocal_setf_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function \\(setf\\ char-after\\))""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "tcs")))
@@ -184,17 +180,16 @@ fn combo_textprop_clone_buflocal_setf_undo() {
                   (get-text-property 6 'z)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_textprop_clone_buflocal_multi_buffer_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable c1)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "tcm")))
@@ -242,7 +237,7 @@ fn combo_textprop_clone_buflocal_multi_buffer_undo() {
                 (with-current-buffer c2 (buffer-string)))))
       (kill-buffer c1)
       (kill-buffer c2)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }

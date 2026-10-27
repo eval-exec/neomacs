@@ -29,7 +29,6 @@ fn div_t1_ash_overflow_and_rounding_nil_divisor() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_t1_call_process_working_dir_infile() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -48,7 +47,7 @@ fn div_t1_call_process_working_dir_infile() {
               (setq result (list status (buffer-string) default-directory)))))
     (delete-directory dir t))
   result)
-"####,
+)"####,
     );
 }
 
@@ -97,7 +96,6 @@ fn div_t1_dynamic_lexical_binding_interaction() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_t1_cl_macrolet_recursive_and_environment() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -116,6 +114,6 @@ fn div_t1_cl_macrolet_recursive_and_environment() {
          (count-down 3))
       (macroexpand '(cl-macrolet ((double (x) `(* 2 ,x)))
                      (double 5))))
-"####,
+)"####,
     );
 }

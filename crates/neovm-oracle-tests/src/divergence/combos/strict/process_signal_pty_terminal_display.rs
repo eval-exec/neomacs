@@ -113,7 +113,6 @@ fn div_u1_display_vscroll_scroll_recenter_combo() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_u1_condition_case_nested_error_data() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -136,7 +135,7 @@ fn div_u1_condition_case_nested_error_data() {
       (apply 'signal '(void-function void-fn-xyz))
     (void-function (push (cdr err) log)))
   (nreverse log))
-"##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+)"##;
+    let expect = expect_test::expect![[r#""ERR (void-variable outer)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

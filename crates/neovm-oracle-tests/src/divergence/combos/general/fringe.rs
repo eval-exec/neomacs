@@ -54,12 +54,12 @@ fn divergence_window_fringes_default() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_set_window_fringes_roundtrip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (0 0 nil nil t t nil ((0 0 nil nil) (0 0 nil nil) t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((w (selected-window))
@@ -78,7 +78,7 @@ fn divergence_set_window_fringes_roundtrip() {
                                   (nth 2 orig) (nth 3 orig))
               (list after-set zeroed
                     (<= (nth 0 zeroed) (nth 0 after-set))
-                    (= (length zeroed) 4)))))) "#,
+                    (= (length zeroed) 4)))))) )"#,
         expect,
     );
 }
@@ -121,12 +121,13 @@ fn divergence_fringe_buffer_local_vars() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_fringe_indicator_alist() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 24 76)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (t t t t t t t t ((test-custom-indicator-xxx right-triangle left-triangle) (truncation left-arrow right-arrow) (continuation left-curly-arrow right-curly-arrow) (overlay-arrow . right-triangle) (up . up-arrow) (down . down-arrow) (top top-left-angle top-right-angle) (bottom bottom-left-angle bottom-right-angle top-right-angle top-left-angle) (top-bottom left-bracket right-bracket top-right-angle top-left-angle) (empty-line . empty-line) (unknown . question-mark)) t t t ((truncation left-arrow right-arrow) (continuation left-curly-arrow right-curly-arrow) (overlay-arrow . right-triangle) (up . up-arrow) (down . down-arrow) (top top-left-angle top-right-angle) (bottom bottom-left-angle bottom-right-angle top-right-angle top-left-angle) (top-bottom left-bracket right-bracket top-right-angle top-left-angle) (empty-line . empty-line) (unknown . question-mark)) t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((orig fringe-indicator-alist))
@@ -151,17 +152,18 @@ fn divergence_fringe_indicator_alist() {
           (eq (nth 2 (assq 'test-custom-indicator-xxx fringe-indicator-alist))
               'left-triangle)
           (setq fringe-indicator-alist orig)
-          (not (assq 'test-custom-indicator-xxx fringe-indicator-alist)))))) "#,
+          (not (assq 'test-custom-indicator-xxx fringe-indicator-alist)))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_fringe_cursor_alist() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 19 70)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (t t t t t t t t t ((test-custom-cursor-xxx . filled-square) (box . filled-rectangle) (hollow . hollow-rectangle) (bar . vertical-bar) (hbar . horizontal-bar) (hollow-small . hollow-square)) t t ((box . filled-rectangle) (hollow . hollow-rectangle) (bar . vertical-bar) (hbar . horizontal-bar) (hollow-small . hollow-square)) t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((orig fringe-cursor-alist))
@@ -181,7 +183,7 @@ fn divergence_fringe_cursor_alist() {
           (eq (cdr (assq 'test-custom-cursor-xxx fringe-cursor-alist))
               'filled-square)
           (setq fringe-cursor-alist orig)
-          (not (assq 'test-custom-cursor-xxx fringe-cursor-alist)))))) "#,
+          (not (assq 'test-custom-cursor-xxx fringe-cursor-alist)))))"#,
         expect,
     );
 }

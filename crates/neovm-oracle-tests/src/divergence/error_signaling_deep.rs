@@ -32,16 +32,16 @@ fn divergence_signal_with_list_data() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_signal_wrong_number_args() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\\\"\" 3 60)""##]];
+    let expect = expect_test::expect![[r#""OK (wrong-number-of-arguments car)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(condition-case err
   (car 1 2 3)
-  (wrong-number-of-arguments (list (car err) (cadr err))))#" ,
+  (wrong-number-of-arguments (list (car err) (cadr err))))"#,
+        expect,
     );
 }
 
@@ -49,7 +49,9 @@ fn divergence_signal_wrong_number_args() {
 fn divergence_signal_wrong_type() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    assert_oracle_parity(
+    let expect = expect_test::expect![[r#""OK (wrong-type-argument number-or-marker-p)""#]];
+
+    crate::common::assert_oracle_parity_expect(
         r#"(condition-case err
   (+ "string" 42)
   (wrong-type-argument (list (car err) (cadr err))))"#,

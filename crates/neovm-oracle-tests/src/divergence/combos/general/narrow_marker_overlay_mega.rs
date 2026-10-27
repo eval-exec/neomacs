@@ -403,12 +403,13 @@ fn divergence_overlay_before_after_string_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_multiple_replace_in_sequence_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 53 76)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"XX-BB-YY-DD-ZZ-FF-GG-HH\" 3 4 (id 2) 9 10 (id 4) 15 16 (id 6) 18 19 (id 7) 21 22 (id 8)) #(\"AA-BB-CC-DD-EE-FF-GG-HH\" 0 1 (id 1) 3 4 (id 2) 6 7 (id 3) 9 10 (id 4) 12 13 (id 5) 15 16 (id 6) 18 19 (id 7) 21 22 (id 8)) t 3 nil 4 t 9 nil 10 t 15 nil 16 t 19 t 22 t 1 t 2 t 3 t 4 t 5 t 6 t 7 t 8 t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "AA-BB-CC-DD-EE-FF-GG-HH")
@@ -462,7 +463,7 @@ fn divergence_multiple_replace_in_sequence_undo() {
             (get-text-property 13 'id) (= (get-text-property 13 'id) 5)
             (get-text-property 16 'id) (= (get-text-property 16 'id) 6)
             (get-text-property 19 'id) (= (get-text-property 19 'id) 7)
-            (get-text-property 22 'id) (= (get-text-property 22 'id) 8)))))) "#,
+            (get-text-property 22 'id) (= (get-text-property 22 'id) 8)))))"#,
         expect,
     );
 }

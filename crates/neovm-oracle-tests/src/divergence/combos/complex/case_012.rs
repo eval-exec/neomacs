@@ -72,11 +72,10 @@ fn div_cx12_char_table_parent_inherit_override() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx12_window_point_marker_restore() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (5 5 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx12-wp*")))
@@ -90,7 +89,7 @@ fn div_cx12_window_point_marker_restore() {
       (prog1 (list wp (window-point) (marker-position m))
         (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
         (kill-buffer buf))))
-"##,
+)"##,
         expect,
     );
 }

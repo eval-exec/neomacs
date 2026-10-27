@@ -93,52 +93,13 @@ fn combo_buflocal_narrow_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_buflocal_multi_clone_shared_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"blm\")))\n\
-         (with-current-buffer buf\n\
-         (setq-local flag 'base)\n\
-         (setq-local counter 10)\n\
-         (insert \"AAAA-BBBB-CCCC\")\n\
-         (put-text-property 1 5 'zone 'x)\n\
-         (put-text-property 6 10 'zone 'y)\n\
-         (put-text-property 11 15 'zone 'z)\n\
-         (let* ((ov (make-overlay 1 15))\n\
-         (_ (overlay-put ov 'face 'region))\n\
-         (m (make-marker))\n\
-         (_ (set-marker m 6))\n\
-         (c1 (clone-buffer \"blm-c1\"))\n\
-         (c2 (clone-buffer \"blm-c2\")))\n\
-         (with-current-buffer c1\n\
-         (setq-local flag 'clone1)\n\
-         (setq-local counter (+ counter 100))\n\
-         (undo-boundary)\n\
-         (goto-char 1)\n\
-         (insert \"PRE-\")\n\
-         (undo-boundary)\n\
-         (let ((f flag)\n\
-         (c counter)\n\
-         (s (buffer-string))\n\
-         (mp (marker-position m)))\n\
-         (primitive-undo 1 buffer-undo-list)\n\
-         (list f c s mp\n\
-         (buffer-string)\n\
-         (marker-position m))))\n\
-         (with-current-buffer c2\n\
-         (setq-local flag 'clone2)\n\
-         (setq-local counter (+ counter 200))\n\
-         (let ((f flag)\n\
-         (c counter))\n\
-         (list f c)))\n\
-         (kill-buffer c1)\n\
-         (kill-buffer c2)\n\
-         (kill-buffer buf))))",
+        "(progn\n(let ((buf (generate-new-buffer \"blm\")))\n(with-current-buffer buf\n(setq-local flag 'base)\n(setq-local counter 10)\n(insert \"AAAA-BBBB-CCCC\")\n(put-text-property 1 5 'zone 'x)\n(put-text-property 6 10 'zone 'y)\n(put-text-property 11 15 'zone 'z)\n(let* ((ov (make-overlay 1 15))\n(_ (overlay-put ov 'face 'region))\n(m (make-marker))\n(_ (set-marker m 6))\n(c1 (clone-buffer \"blm-c1\"))\n(c2 (clone-buffer \"blm-c2\")))\n(with-current-buffer c1\n(setq-local flag 'clone1)\n(setq-local counter (+ counter 100))\n(undo-boundary)\n(goto-char 1)\n(insert \"PRE-\")\n(undo-boundary)\n(let ((f flag)\n(c counter)\n(s (buffer-string))\n(mp (marker-position m)))\n(primitive-undo 1 buffer-undo-list)\n(list f c s mp\n(buffer-string)\n(marker-position m))))\n(with-current-buffer c2\n(setq-local flag 'clone2)\n(setq-local counter (+ counter 200))\n(let ((f flag)\n(c counter))\n(list f c)))\n(kill-buffer c1)\n(kill-buffer c2)\n(kill-buffer buf)))))",
         expect,
     );
 }

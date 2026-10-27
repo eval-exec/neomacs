@@ -321,7 +321,6 @@ fn combo_eieio_deep_condition_case_chain() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_deep_mixed_nesting() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -404,7 +403,7 @@ fn combo_eieio_deep_mixed_nesting() {
               (mx-ops ctx) (mx-depth-track ctx)
               (marker-position m)
               my-mx-log)))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))"#,
         expect,
     );
 }

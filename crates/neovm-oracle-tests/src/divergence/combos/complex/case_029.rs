@@ -264,11 +264,12 @@ fn div_cx29_buffer_hash_after_undo_match_original() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx29_prin1_of_string_with_text_properties_circle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" p (prin1-to-string (list s s s)) (back (car (read-from-string p))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((s (propertize "café" 'face 'bold 'mouse-face 'highlight))
@@ -279,7 +280,7 @@ fn div_cx29_prin1_of_string_with_text_properties_circle() {
         (eq (aref back 0) (aref back 1))
         (eq (aref back 0) (aref back 2))
         (text-properties-at 0 (aref back 0))))
-"##,
+)"##,
         expect,
     );
 }

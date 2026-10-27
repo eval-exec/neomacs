@@ -53,17 +53,17 @@ fn divergence_frame_title() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_frame_terminal() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\\\"\" 4 37)""##]];
+    let expect = expect_test::expect![[r#""OK (t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(let ((f (selected-frame)))
   (list (terminal-live-p (frame-terminal f))
         (fboundp 'terminal-list)
-        (fboundp 'frame-terminal)))#" ,
+        (fboundp 'frame-terminal)))"#,
+        expect,
     );
 }
 
@@ -71,7 +71,9 @@ fn divergence_frame_terminal() {
 fn divergence_frame_child_frames() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    assert_oracle_parity(
+    let expect = expect_test::expect![[r#""OK (t t t t t t t)""#]];
+
+    crate::common::assert_oracle_parity_expect(
         r#"(list
   (fboundp 'make-frame)
   (fboundp 'make-frame-invisible)
@@ -84,18 +86,18 @@ fn divergence_frame_child_frames() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_display_color_cells() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\\\"\" 5 39)""##]];
+    let expect = expect_test::expect![[r#""OK (t t t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(list
   (fboundp 'display-color-cells)
   (fboundp 'display-color-p)
   (fboundp 'display-grayscale-p)
-  (display-color-p (selected-frame)))#" ,
+  (display-color-p (selected-frame)))"#,
+        expect,
     );
 }
 
@@ -103,7 +105,9 @@ fn divergence_display_color_cells() {
 fn divergence_font_spec() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    assert_oracle_parity(
+    let expect = expect_test::expect![[r#""OK (t t t t t)""#]];
+
+    crate::common::assert_oracle_parity_expect(
         r#"(list
   (fboundp 'font-spec)
   (fboundp 'font-get)

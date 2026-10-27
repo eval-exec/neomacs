@@ -67,11 +67,10 @@ fn div_cx298_pos_visible_in_window_p_query() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx298_split_window_with_size_and_side() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 2 1 t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((n-before (length (window-list))))
@@ -82,7 +81,7 @@ fn div_cx298_split_window_with_size_and_side() {
         (list n-before n-after-split n-after-delete
               (>= n-after-split (1+ n-before))
               (= n-after-delete n-before)))))
-"##,
+)"##,
         expect,
     )
 }
@@ -104,11 +103,10 @@ fn div_cx298_window_vscroll_set_and_query() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx298_window_dedicated_p_round_trip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (nil t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((win (selected-window)))
@@ -118,7 +116,7 @@ fn div_cx298_window_dedicated_p_round_trip() {
       (set-window-dedicated-p win nil)
       (let ((after-clear (window-dedicated-p win)))
         (list before after-set after-clear))))
-"##,
+)"##,
         expect,
     )
 }

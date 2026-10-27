@@ -40,7 +40,6 @@ fn div_v8_cl_remove_count_from_end_key_test() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_cl_substitute_if_key_test_predicate() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -51,8 +50,7 @@ fn div_v8_cl_substitute_if_key_test_predicate() {
       (cl-remove-if #'cl-oddp '(1 2 3 4 5) :count 2)
       (cl-count-if #'numberp '(1 a 2 b 3) :start 2)
       (cl-position 3 '(1 2 3 4 3 2) :from-end t)
-      (cl-find 3 '(1 2 3 4) :start 3)))
-"##;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 8 39)""#]];
+      (cl-find 3 '(1 2 3 4) :start 3))"##;
+    let expect = expect_test::expect![[r#""OK ((1 0 2 0 3 0) (1 big 3 4) (2 4 5) 2 4 nil)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

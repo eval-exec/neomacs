@@ -5,7 +5,6 @@
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v5_advice_reapply_after_fset_redefinition() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -21,8 +20,8 @@ fn div_v5_advice_reapply_after_fset_redefinition() {
         (let ((r3 (probe-adv-rd 5)))
           (list r1 r2 r3 (nreverse log))))
     (fmakunbound 'probe-adv-rd)))
-"##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+)"##;
+    let expect = expect_test::expect![[r#""OK probe-adv-rd""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

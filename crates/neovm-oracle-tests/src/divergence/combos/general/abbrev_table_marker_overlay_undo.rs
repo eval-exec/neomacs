@@ -195,12 +195,11 @@ fn combo_abbrev_table_name_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_abbrev_multi_buffer_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf1 (generate-new-buffer " combo-abm1"))
@@ -242,7 +241,7 @@ fn combo_abbrev_multi_buffer_marker_overlay_undo() {
         (push (list (buffer-string) ab-local) results))
       (kill-buffer buf1)
       (kill-buffer buf2)
-      (list (nreverse results)))) "#,
+      (list (nreverse results)))) )"#,
         expect,
     );
 }

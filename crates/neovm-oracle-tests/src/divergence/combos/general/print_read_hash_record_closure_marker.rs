@@ -9,12 +9,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_print_read_hash_table_marker_overlay_roundtrip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (nil (1 2 3) ((1 2) (3 4)) t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((ht (make-hash-table :test 'equal))
@@ -38,7 +37,7 @@ fn combo_print_read_hash_table_marker_overlay_roundtrip() {
           (list ht-equal
                 (gethash "key1" read-back)
                 (gethash "nested" read-back)
-                (equal sym-props sym-read)))))) "#,
+                (equal sym-props sym-read)))))) )"#,
         expect,
     );
 }

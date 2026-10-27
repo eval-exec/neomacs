@@ -202,16 +202,17 @@ fn div_np_prin1_char_escapes() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_np_prin1_multibyte_escapes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"\\\"café\\\"\" \"\\\"caf\\\\x00e9\\\\x4e16\\\\x754c\\\"\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (list (let ((print-escape-nonascii t)) (prin1-to-string "café"))
       (let ((print-escape-multibyte t)) (prin1-to-string "café世界"))
-"##,
+)"##,
         expect,
     );
 }

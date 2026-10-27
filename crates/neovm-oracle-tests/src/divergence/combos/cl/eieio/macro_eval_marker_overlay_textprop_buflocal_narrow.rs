@@ -64,7 +64,6 @@ fn combo_eieio_eval_defclass_defmethod() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_defmacro_generates_class() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -130,7 +129,7 @@ fn combo_eieio_defmacro_generates_class() {
                   (marker-position m)
                   (buffer-string)
                   hits-obj misses-obj)))
-        (kill-buffer buf))))))"#,
+        (kill-buffer buf)))))"#,
         expect,
     );
 }

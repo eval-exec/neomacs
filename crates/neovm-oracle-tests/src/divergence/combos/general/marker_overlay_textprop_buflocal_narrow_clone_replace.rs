@@ -4,12 +4,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_marker_overlay_textprop_buflocal_narrow_clone_replace() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable clone)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "mor")))
@@ -50,17 +49,16 @@ fn combo_marker_overlay_textprop_buflocal_narrow_clone_replace() {
                   (get-text-property 6 'kind)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_marker_overlay_textprop_buflocal_narrow_clone_setf() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function \\(setf\\ char-after\\))""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "mos")))
@@ -102,17 +100,16 @@ fn combo_marker_overlay_textprop_buflocal_narrow_clone_setf() {
                   (get-text-property 6 'z)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_marker_overlay_textprop_buflocal_narrow_clone_multi_overlay() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function \\(setf\\ char-after\\))""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "moo")))
@@ -158,17 +155,16 @@ fn combo_marker_overlay_textprop_buflocal_narrow_clone_multi_overlay() {
                   (overlay-end ov2)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_marker_overlay_textprop_buflocal_narrow_clone_textprop_replace() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function \\(setf\\ char-after\\))""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "mot")))
@@ -212,17 +208,16 @@ fn combo_marker_overlay_textprop_buflocal_narrow_clone_textprop_replace() {
                   (get-text-property 6 'kind)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_marker_overlay_textprop_buflocal_narrow_clone_setf_replace() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function \\(setf\\ char-after\\))""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "mox")))
@@ -265,7 +260,7 @@ fn combo_marker_overlay_textprop_buflocal_narrow_clone_setf_replace() {
                   (get-text-property 6 'z)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }

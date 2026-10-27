@@ -304,11 +304,10 @@ fn div_cx28_map_concat_over_hash_values() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx28_overlay_evaporate_narrow_widen() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (5 10 3 8 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -320,7 +319,7 @@ fn div_cx28_overlay_evaporate_narrow_widen() {
     (list (overlay-start ov) (overlay-end ov)
           (point-min) (point-max)
           (get-char-property 4 'face)))
-"##,
+)"##,
         expect,
     );
 }

@@ -3,12 +3,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_advice_on_generic_method() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 27)""#]];
+    let expect = expect_test::expect![[r#""OK (150 50 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-adv-obj-xxx () ((v :initarg :v :initform 1)))
@@ -22,7 +21,7 @@ fn divergence_advice_on_generic_method() {
       (advice-remove 'test-adv-compute-xxx
                       (lambda (r) (+ r 100)))
       (list r1 (test-adv-compute-xxx o)
-            (= r1 150)))))) "#,
+            (= r1 150)))))"#,
         expect,
     );
 }

@@ -68,12 +68,12 @@ fn divergence_circular_print() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_charset_functions() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 16 56)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (t t t t t t t 65 t 65 t ascii t unicode-bmp nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (list (charsetp 'ascii)
@@ -90,7 +90,7 @@ fn divergence_charset_functions() {
         (char-charset ?A)
         (eq (char-charset ?A) 'ascii)
         (char-charset ?\x3B1)
-        (memq (char-charset ?\x3B1) '(unicode greek))))) "#,
+        (memq (char-charset ?\x3B1) '(unicode greek))))"#,
         expect,
     );
 }

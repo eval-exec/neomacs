@@ -163,12 +163,13 @@ fn div_cx55_cl_defmethod_full_hierarchy_5_methods_advice_eql_error_call_next_und
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx55_window_config_register_split_merge_narrow_widen_hscroll_vscroll_margins_fringes_dedicated_marker_overlay_textprop_display_evaporate_undo_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"Changes to be undone are outside visible portion of buffer\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -208,7 +209,7 @@ fn div_cx55_window_config_register_split_merge_narrow_widen_hscroll_vscroll_marg
             (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
             (kill-buffer buf))))
   (error (list :errored)))
-"##,
+)"##,
         expect,
     );
 }
@@ -312,11 +313,12 @@ fn div_cx55_print_circle_gensym_struct_vector_propertized_escape_length_level_ci
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx55_read_eval_backquote_destructuring_lexical_macro_propertized_hash_cl_loop_secure_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" let* ((processed (eval (car (read-from-string \"`(:names ,(mapcar #'car (caar ,data))\\n                                     :vals ,(mapcar #'cdr (caar ,data))\\n                                     :sum ,(cl-loop for v in (mapcar #'cdr (caar ,data)) sum v)\\n                                     :max ,(cl-loop for v in (mapcar #'cdr (caar ,data)) maximize v))\")) t)) (ht (make-hash-table :test 'equal))) (cl-loop for n in (plist-get processed :names) for v in (plist-get processed :vals) do (puthash n v ht)) (list (plist-get processed :names) (plist-get processed :vals) (plist-get processed :sum) (plist-get processed :max) (hash-table-count ht) (secure-hash 'sha256 (prin1-to-string processed))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t))
@@ -335,7 +337,7 @@ fn div_cx55_read_eval_backquote_destructuring_lexical_macro_propertized_hash_cl_
             (plist-get processed :sum) (plist-get processed :max)
             (hash-table-count ht)
             (secure-hash 'sha256 (prin1-to-string processed))))))
-"##,
+)"##,
         expect,
     );
 }

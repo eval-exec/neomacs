@@ -92,27 +92,13 @@ fn deficiency_struct_equal_vs_type_predicate() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_cl_defstruct_with_boa_constructor() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-function cl-defstruct)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (cl-defstruct (range (:constructor make-range (min max))\n\
-         (:type list))\n\
-         min max label)\n\
-         (let ((r1 (make-range 0 100))\n\
-         (r2 (make-range 50 150)))\n\
-         (setf (range-label r1) 'first)\n\
-         (setf (range-label r2) 'second)\n\
-         (let ((ht (make-hash-table :test 'equal)))\n\
-         (puthash r1 'a ht)\n\
-         (puthash r2 'b ht)\n\
-         (list (range-min r1) (range-max r1) (range-label r1)\n\
-         (range-min r2) (range-max r2) (range-label r2)\n\
-         (gethash r1 ht) (gethash r2 ht))))))",
+        "(progn\n(cl-defstruct (range (:constructor make-range (min max))\n(:type list))\nmin max label)\n(let ((r1 (make-range 0 100))\n(r2 (make-range 50 150)))\n(setf (range-label r1) 'first)\n(setf (range-label r2) 'second)\n(let ((ht (make-hash-table :test 'equal)))\n(puthash r1 'a ht)\n(puthash r2 'b ht)\n(list (range-min r1) (range-max r1) (range-label r1)\n(range-min r2) (range-max r2) (range-label r2)\n(gethash r1 ht) (gethash r2 ht)))))",
         expect,
     );
 }
@@ -192,29 +178,13 @@ fn deficiency_struct_in_cl_loop_collect_with_nested_access() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_struct_map_and_filter_via_cl_loop() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-defstruct)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (cl-defstruct (pair (:type list) (:constructor pair))\n\
-         key val)\n\
-         (let ((pairs (cl-loop for i from 1 to 10\n\
-         collect (pair :key i :val (* i i)))))\n\
-         (let ((evens (cl-loop for p in pairs\n\
-         when (cl-evenp (pair-key p))\n\
-         collect (pair-val p))))\n\
-         (let ((sum (cl-loop for v in evens sum v)))\n\
-         (let ((mapped (cl-loop for p in pairs\n\
-         collect (pair :key (pair-key p)\n\
-         :val (1+ (pair-val p))))))\n\
-         (list evens sum\n\
-         (pair-val (nth 0 mapped))\n\
-         (pair-val (nth 4 mapped))\n\
-         (pair-val (nth 9 mapped)))))))",
+        "(progn\n(cl-defstruct (pair (:type list) (:constructor pair))\nkey val)\n(let ((pairs (cl-loop for i from 1 to 10\ncollect (pair :key i :val (* i i)))))\n(let ((evens (cl-loop for p in pairs\nwhen (cl-evenp (pair-key p))\ncollect (pair-val p))))\n(let ((sum (cl-loop for v in evens sum v)))\n(let ((mapped (cl-loop for p in pairs\ncollect (pair :key (pair-key p)\n:val (1+ (pair-val p))))))\n(list evens sum\n(pair-val (nth 0 mapped))\n(pair-val (nth 4 mapped))\n(pair-val (nth 9 mapped))))))))",
         expect,
     );
 }

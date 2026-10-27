@@ -132,12 +132,11 @@ fn divergence_comment_functions() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_uncomment_region() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\\\"\" 7 51)""##]];
+    let expect = expect_test::expect![[r#""OK (\"hello world\" t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (setq comment-start ";; ")
@@ -145,7 +144,8 @@ fn divergence_uncomment_region() {
   (insert ";; hello world")
   (uncomment-region 1 15)
   (list (buffer-string)
-        (string= (buffer-string) "hello world")))#" ,
+        (string= (buffer-string) "hello world")))"#,
+        expect,
     );
 }
 
@@ -153,7 +153,9 @@ fn divergence_uncomment_region() {
 fn divergence_indent_functions() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    assert_oracle_parity(
+    let expect = expect_test::expect![[r#""OK (t t t t)""#]];
+
+    crate::common::assert_oracle_parity_expect(
         r#"(list
   (fboundp 'indent-for-tab-command)
   (fboundp 'indent-region)

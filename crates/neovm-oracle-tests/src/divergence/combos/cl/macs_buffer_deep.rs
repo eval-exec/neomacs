@@ -59,36 +59,13 @@ fn deficiency_cl_labels_recursive_buffer_ops() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_unwind_protect_buffer_cleanup_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"upb\"))\n\
-         (cleanup-log nil))\n\
-         (with-current-buffer buf\n\
-         (insert \"IMPORTANT DATA\")\n\
-         (put-text-property 1 14 'critical t)\n\
-         (undo-boundary)\n\
-         (unwind-protect\n\
-         (progn\n\
-         (goto-char 1)\n\
-         (insert \"PREFIX\")\n\
-         (put-text-property 1 6 'added 'prefix)\n\
-         (undo-boundary)\n\
-         (condition-case nil\n\
-         (error \"simulated error\")\n\
-         (error\n\
-         (push 'caught cleanup-log))))\n\
-         (push 'cleanup cleanup-log)\n\
-         (push (buffer-string) cleanup-log)))\n\
-         (list (nreverse cleanup-log)\n\
-         (with-current-buffer buf (get-text-property 1 'added))\n\
-         (with-current-buffer buf (get-text-property 7 'critical))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"upb\"))\n(cleanup-log nil))\n(with-current-buffer buf\n(insert \"IMPORTANT DATA\")\n(put-text-property 1 14 'critical t)\n(undo-boundary)\n(unwind-protect\n(progn\n(goto-char 1)\n(insert \"PREFIX\")\n(put-text-property 1 6 'added 'prefix)\n(undo-boundary)\n(condition-case nil\n(error \"simulated error\")\n(error\n(push 'caught cleanup-log))))\n(push 'cleanup cleanup-log)\n(push (buffer-string) cleanup-log)))\n(list (nreverse cleanup-log)\n(with-current-buffer buf (get-text-property 1 'added))\n(with-current-buffer buf (get-text-property 7 'critical))))\n(kill-buffer buf))",
         expect,
     );
 }
@@ -124,112 +101,35 @@ fn deficiency_cl_macrolet_buffer_transform() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_cl_typecase_with_objects() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-function cl-typecase)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((items (list 42 \"hello\" '(1 2 3) [a b c] 'symbol\n\
-         (make-hash-table) (make-marker) (make-overlay 1 1))))\n\
-         (let ((types (mapcar\n\
-         (lambda (x)\n\
-         (cl-typecase x\n\
-         (integer 'int)\n\
-         (string 'str)\n\
-         (cons 'list)\n\
-         (vector 'vec)\n\
-         (symbol 'sym)\n\
-         (hash-table 'hash)\n\
-         (marker 'mark)\n\
-         (overlay 'ov)\n\
-         (t 'other)))\n\
-         items)))\n\
-         (list types (= (length types) 8))))\n\
-         (let ((ov (car (last items))))\n\
-         (when (overlayp ov) (delete-overlay ov))))\n\
-         (delete-overlay (make-overlay 1 1)))",
+        "(progn\n(let ((items (list 42 \"hello\" '(1 2 3) [a b c] 'symbol\n(make-hash-table) (make-marker) (make-overlay 1 1))))\n(let ((types (mapcar\n(lambda (x)\n(cl-typecase x\n(integer 'int)\n(string 'str)\n(cons 'list)\n(vector 'vec)\n(symbol 'sym)\n(hash-table 'hash)\n(marker 'mark)\n(overlay 'ov)\n(t 'other)))\nitems)))\n(list types (= (length types) 8))))\n(let ((ov (car (last items))))\n(when (overlayp ov) (delete-overlay ov))))\n(delete-overlay (make-overlay 1 1))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_cl_opt_dynamic_extent_buf() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK process-with-locals""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (defun process-with-locals (buf data)\n\
-         (let ((result nil)\n\
-         (temp-hash (make-hash-table :test 'equal)))\n\
-         (with-current-buffer buf\n\
-         (dolist (item data)\n\
-         (cl-destructuring-bind (key val . props) item\n\
-         (let ((existing (gethash key temp-hash 0)))\n\
-         (puthash key (+ existing val) temp-hash)\n\
-         (insert (format \"%s=%d \" key (+ existing val)))\n\
-         (dolist (p props)\n\
-         (put-text-property\n\
-         (- (point) (length (format \"%s=%d \" key (+ existing val))))\n\
-         (point)\n\
-         (car p) (cdr p))))))\n\
-         (push (buffer-string) result)\n\
-         (push (hash-table-count temp-hash) result)\n\
-         (nreverse result)))\n\
-         (let ((buf (generate-new-buffer \"odb\")))\n\
-         (let ((r (process-with-locals buf\n\
-         '((\"a\" 1 color . red)\n\
-         (\"b\" 2 size . large)\n\
-         (\"a\" 3 color . blue)\n\
-         (\"c\" 5 size . small)\n\
-         (\"b\" 1 weight . heavy)))))\n\
-         (prog1\n\
-         (list r\n\
-         (gethash \"a\" (make-hash-table :test 'equal))\n\
-         (with-current-buffer buf (get-text-property 1 'color))\n\
-         (with-current-buffer buf (get-text-property 7 'color)))\n\
-         (kill-buffer buf)))))",
+        "(progn\n(defun process-with-locals (buf data)\n(let ((result nil)\n(temp-hash (make-hash-table :test 'equal)))\n(with-current-buffer buf\n(dolist (item data)\n(cl-destructuring-bind (key val . props) item\n(let ((existing (gethash key temp-hash 0)))\n(puthash key (+ existing val) temp-hash)\n(insert (format \"%s=%d \" key (+ existing val)))\n(dolist (p props)\n(put-text-property\n(- (point) (length (format \"%s=%d \" key (+ existing val))))\n(point)\n(car p) (cdr p))))))\n(push (buffer-string) result)\n(push (hash-table-count temp-hash) result)\n(nreverse result)))\n(let ((buf (generate-new-buffer \"odb\")))\n(let ((r (process-with-locals buf\n'((\"a\" 1 color . red)\n(\"b\" 2 size . large)\n(\"a\" 3 color . blue)\n(\"c\" 5 size . small)\n(\"b\" 1 weight . heavy)))))\n(prog1\n(list r\n(gethash \"a\" (make-hash-table :test 'equal))\n(with-current-buffer buf (get-text-property 1 'color))\n(with-current-buffer buf (get-text-property 7 'color)))\n(kill-buffer buf))))))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_condition_case_signal_undo_preserve() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"csu\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"LINE1 LINE2 LINE3\")\n\
-         (put-text-property 1 6 'num 1)\n\
-         (put-text-property 7 12 'num 2)\n\
-         (put-text-property 13 18 'num 3)\n\
-         (undo-boundary)\n\
-         (condition-case err\n\
-         (progn\n\
-         (goto-char 7)\n\
-         (delete-region 7 12)\n\
-         (put-text-property 7 7 'deleted t)\n\
-         (undo-boundary)\n\
-         (signal 'error '(\"forced error\")))\n\
-         (error\n\
-         (list 'caught (car (cdr err)))))\n\
-         (let ((s (buffer-string))\n\
-         (n7 (get-text-property 7 'num))\n\
-         (d7 (get-text-property 7 'deleted)))\n\
-         (primitive-undo 1 buffer-undo-list)\n\
-         (list s n7 d7\n\
-         (buffer-string)\n\
-         (get-text-property 7 'num)\n\
-         (get-text-property 7 'deleted)))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"csu\")))\n(with-current-buffer buf\n(insert \"LINE1 LINE2 LINE3\")\n(put-text-property 1 6 'num 1)\n(put-text-property 7 12 'num 2)\n(put-text-property 13 18 'num 3)\n(undo-boundary)\n(condition-case err\n(progn\n(goto-char 7)\n(delete-region 7 12)\n(put-text-property 7 7 'deleted t)\n(undo-boundary)\n(signal 'error '(\"forced error\")))\n(error\n(list 'caught (car (cdr err)))))\n(let ((s (buffer-string))\n(n7 (get-text-property 7 'num))\n(d7 (get-text-property 7 'deleted)))\n(primitive-undo 1 buffer-undo-list)\n(list s n7 d7\n(buffer-string)\n(get-text-property 7 'num)\n(get-text-property 7 'deleted)))))\n(kill-buffer buf))",
         expect,
     );
 }

@@ -5,11 +5,12 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx283_syntax_ppss_after_insert_delete() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((1 1 12 34 nil nil 0 nil 17 (1) nil) (1 1 15 nil nil nil 0 nil nil (1) nil) (1 1 12 34 nil nil 0 nil 17 (1) nil) t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -22,7 +23,7 @@ fn div_cx283_syntax_ppss_after_insert_delete() {
       (let ((after-delete (syntax-ppss 20)))
         (list before after-insert after-delete
               (equal before after-delete)))))
-"##,
+)"##,
         expect,
     )
 }

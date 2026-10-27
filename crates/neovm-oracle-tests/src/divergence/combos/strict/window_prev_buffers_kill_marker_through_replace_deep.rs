@@ -61,7 +61,6 @@ fn div_v8_marker_through_complex_replace() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_with_temp_message_message_log() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -73,8 +72,8 @@ fn div_v8_with_temp_message_message_log() {
   (with-temp-message "temp-probe-msg"
     (list (current-message)
           (with-current-buffer "*Messages*" (buffer-string))))
-"##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+)"##;
+    let expect = expect_test::expect![[r#""OK (nil \"temp-probe-msg\\n\")""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

@@ -191,12 +191,11 @@ fn combo_eieio_defmethod_multi_dispatch_overlay() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_defmethod_narrow_dispatch() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 23)""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass narrow-strategy ()
@@ -251,17 +250,16 @@ fn combo_eieio_defmethod_narrow_dispatch() {
                 (length results)
                 (marker-position m)
                 (overlay-start ov) (overlay-end ov)))))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_defmethod_undo_dispatch() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 23)""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass undo-strategy ()
@@ -316,7 +314,7 @@ fn combo_eieio_defmethod_undo_dispatch() {
               (length results)
               (marker-position m)
               (overlay-start ov) (overlay-end ov))))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))"#,
         expect,
     );
 }

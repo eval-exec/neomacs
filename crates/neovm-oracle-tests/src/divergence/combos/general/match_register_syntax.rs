@@ -52,12 +52,11 @@ fn divergence_nested_regex_match_data_save() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_syntax_table_modify_regex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"aaa_bbb\" \"aaa_bbb\" \"aaa\" t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "aaa_bbb ccc-ddd")
@@ -74,7 +73,7 @@ fn divergence_syntax_table_modify_regex() {
           (list w1 w2 w3
                 (string= w1 "aaa_bbb")
                 (string= w2 "aaa_bbb")
-                (string= w3 "aaa")))))) "#,
+                (string= w3 "aaa")))))) )"#,
         expect,
     );
 }

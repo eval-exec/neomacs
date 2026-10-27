@@ -5,11 +5,10 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx214_split_window_and_delete_round_trip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 2 1 t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((n-before (length (window-list))))
@@ -20,7 +19,7 @@ fn div_cx214_split_window_and_delete_round_trip() {
         (list n-before n-after-split n-after-delete
               (>= n-after-split (1+ n-before))
               (= n-after-delete n-before)))))
-"##,
+)"##,
         expect,
     );
 }

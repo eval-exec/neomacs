@@ -106,12 +106,11 @@ fn combo_skip_syntax_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_regexp_opt_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 36 51)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-ropt"))
@@ -153,7 +152,7 @@ fn combo_regexp_opt_marker_overlay_undo() {
                                 (get-text-property 36 'kind)
                                 (get-text-property 38 'kind))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }

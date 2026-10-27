@@ -3,12 +3,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_keymap_lookup_with_advice() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (test-kla-xxx t t \"original+advised\" t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defun test-kla-xxx () (interactive) "original")
@@ -22,17 +21,16 @@ fn divergence_keymap_lookup_with_advice() {
           (funcall (lookup-key map "x"))
           (string= (funcall (lookup-key map "x")) "original+advised")
           (advice-remove 'test-kla-xxx
-                          (lambda (r) (concat r "+advised"))))) "#,
+                          (lambda (r) (concat r "+advised"))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_command_error_recovery_keymap() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 21 75)""##]];
+    let expect = expect_test::expect![[r#""OK (\"caught: command error\" t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defun test-cer-xxx () (interactive) (error "command error"))
@@ -54,7 +52,7 @@ fn divergence_command_error_recovery_keymap() {
                           (lambda (fn &rest args)
                             (condition-case e
                                 (apply fn args)
-                              (error (format "caught: %s" (cadr e)))))))) #"#,
+                              (error (format "caught: %s" (cadr e)))))))) )"#,
         expect,
     );
 }

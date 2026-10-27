@@ -30,12 +30,13 @@ fn divergence_regex_backref_replace_preserve_overlay() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_nested_match_data_save_restore() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"alpha\" \"123\" \"beta\" \"alpha\" \"123\" t t nil t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "alpha123beta456gamma789delta000")
@@ -56,7 +57,7 @@ fn divergence_nested_match_data_save_restore() {
               (string= outer-g2 "123")
               (string= inner-g1 "gamma")
               (string= restored-g1 "alpha")
-              (string= restored-g2 "123"))))) "#,
+              (string= restored-g2 "123"))))) )"#,
         expect,
     );
 }
@@ -173,12 +174,13 @@ fn divergence_regex_empty_match_advance() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_match_data_after_failed_search() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (nil t (1 6 #<buffer *scratch*>) \"hello\" t (#<marker at 1 in *scratch*> #<marker at 6 in *scratch*>) nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "hello world")
@@ -192,7 +194,7 @@ fn divergence_match_data_after_failed_search() {
             md1 ms1
             (string= ms1 "hello")
             (match-data)
-            (equal (match-data) md1)))) "#,
+            (equal (match-data) md1)))) )"#,
         expect,
     );
 }

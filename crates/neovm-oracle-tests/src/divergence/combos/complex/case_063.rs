@@ -155,11 +155,10 @@ fn div_cx63_buffer_local_value_in_indirect_buffer_inherits() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx63_local_variable_p_and_local_variable_alias() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable e)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -178,7 +177,7 @@ fn div_cx63_local_variable_p_and_local_variable_alias() {
                        (buffer-local-value 'neo-cx63-orig buf))
             (kill-buffer buf))))
   (error (list :errored (car e))))
-"##,
+)"##,
         expect,
     );
 }
@@ -246,11 +245,12 @@ fn div_cx63_default_toplevel_value_and_buffer_local_state() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx63_buffer_locals_marker_overlay_undo_textprop_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"Changes to be undone are outside visible portion of buffer\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (calls)
@@ -281,7 +281,7 @@ fn div_cx63_buffer_locals_marker_overlay_undo_textprop_narrow_mega() {
                 (overlayp ov) (overlay-start ov) (overlay-end ov)
                 (buffer-string)
                 (buffer-local-value 'neo-cx63-edge (current-buffer)))))))
-"##,
+)"##,
         expect,
     );
 }

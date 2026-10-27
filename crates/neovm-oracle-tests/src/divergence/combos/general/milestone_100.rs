@@ -3,12 +3,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_full_text_editing_pipeline() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"The quick brown cat jumps over the sleepy dog\" 0 9 (category sentence-start)) 16 35 5 10 1 46 t sentence-start t 45)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-pipe-log-xxx nil)
@@ -41,17 +42,16 @@ fn divergence_full_text_editing_pipeline() {
             (> m-end-pos m-start-pos)
             (get-text-property 1 'category)
             (eq (get-text-property 1 'category) 'sentence-start)
-            (buffer-size)))) "#,
+            (buffer-size)))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_lifecycle_with_closures() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"test\" (created modified saved) nil 6 t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-life-xxx ()
@@ -80,7 +80,7 @@ fn divergence_eieio_lifecycle_with_closures() {
           (advice-remove 'test-life-record-xxx
                           (lambda (obj event)
                             (push (list 'before event)
-                                  (slot-value obj 'history)))))) "#,
+                                  (slot-value obj 'history)))))) )"#,
         expect,
     );
 }
@@ -307,12 +307,11 @@ fn divergence_multibyte_regex_replace_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_condition_case_with_overlays_narrow() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 25)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "START-ERROR-MARKER-END")
@@ -336,7 +335,7 @@ fn divergence_condition_case_with_overlays_narrow() {
                (overlay-get ov 'tag)
                (eq (overlay-get ov 'tag) 'protected)
                (marker-position m)
-               (get-text-property 1 'status)))))) "#,
+               (get-text-property 1 'status)))))) )"#,
         expect,
     );
 }

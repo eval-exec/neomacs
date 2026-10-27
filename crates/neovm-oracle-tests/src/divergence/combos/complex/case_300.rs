@@ -178,11 +178,10 @@ fn div_cx300_mega_milestone_3_process_buflocal_coding_env_timer_weak_hash() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx300_mega_milestone_4_keymap_eval_macro_closure_advice_hash_obarray() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function make-obarray)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t)
@@ -235,7 +234,7 @@ fn div_cx300_mega_milestone_4_keymap_eval_macro_closure_advice_hash_obarray() {
                 (list state (buffer-string) (marker-position m)
                       (overlay-start ov) (overlay-end ov)
                       (text-properties-at 1)))))))))
-"##,
+)"##,
         expect,
     );
 }

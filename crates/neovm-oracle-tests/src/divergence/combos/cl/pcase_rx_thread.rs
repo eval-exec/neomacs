@@ -23,7 +23,6 @@ fn divergence_cl_destructuring_bind() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_pcase_complex_patterns() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -62,12 +61,11 @@ fn divergence_pcase_complex_patterns() {
           ((app length 2) 'two-elements))
         (eq (pcase '(1 2)
               ((app length 2) 'two-elements))
-            'two-elements)))) "#,
+            'two-elements)))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_pcase_guard_and_let() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -108,7 +106,7 @@ fn divergence_pcase_guard_and_let() {
           (`(error ,msg) msg))
         (string= (pcase '(error "bad")
                    (`(error ,msg) msg))
-                 "bad")))) "#,
+                 "bad")))"#,
         expect,
     );
 }
@@ -163,7 +161,6 @@ fn divergence_rx_with_substitution() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_typep_and_check() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -190,7 +187,7 @@ fn divergence_cl_typep_and_check() {
         (eq (condition-case err
                (cl-check-type "not-int" integer)
              (wrong-type-argument (car err)))
-            'wrong-type-argument)))) "#,
+            'wrong-type-argument)))"#,
         expect,
     );
 }

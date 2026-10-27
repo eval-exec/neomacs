@@ -137,22 +137,13 @@ fn divergence_symbol_nil_t_boundary() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_regex_empty_match() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (invalid-regexp \"Unmatched ( or \\\\(\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn
-  (insert \"abc\")
-  (goto-char 1)
-  (let ((r1 (re-search-forward \"\\\\(\")))
-    (let ((r2 (re-search-forward \"\\\\)\" nil t)))
-      (list r1 r2
-            (match-beginning 0) (match-end 0)
-            (match-string 0)
-            (buffer-string)))) ",
+        "(progn\n  (insert \"abc\")\n  (goto-char 1)\n  (let ((r1 (re-search-forward \"\\\\(\")))\n    (let ((r2 (re-search-forward \"\\\\)\" nil t)))\n      (list r1 r2\n            (match-beginning 0) (match-end 0)\n            (match-string 0)\n            (buffer-string)))) )",
         expect,
     );
 }

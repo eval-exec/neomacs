@@ -5,11 +5,10 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx91_overlay_invisible_with_priority_and_window_filter() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"0123456789ABCDE\" \"0123456789ABCDE\" 15 16)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -25,7 +24,7 @@ fn div_cx91_overlay_invisible_with_priority_and_window_filter() {
           (v2 (buffer-substring-no-properties 1 16)))
       (remove-from-invisibility-spec 'hide-mid)
       (list v1 v2 (length v1) (length (buffer-string)))))
-"##,
+)"##,
         expect,
     );
 }

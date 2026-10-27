@@ -3,12 +3,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buffer_local_var_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 16 54)""##]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"Attempting to set a non-symbol: 'test-bl-chain-val\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-bl-chain-val 0)
@@ -25,7 +26,7 @@ fn divergence_buffer_local_var_chain() {
           (= test-bl-chain-val 404)
           test-bl-chain-history
           (= (length test-bl-chain-history) 2)
-          (equal test-bl-chain-history '(404 192)))) #"#,
+          (equal test-bl-chain-history '(404 192)))) )"#,
         expect,
     );
 }
@@ -173,12 +174,13 @@ fn divergence_closure_over_hash_with_edits() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_recursive_edit_sim() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 28 44)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"INNERLEVEL2-LEVEL\" 5 10 (depth 2) 12 17 (depth 3)) #(\"MODIFIED-INNERLEVEL2-LEVEL3-LEVEL4\" 14 19 (depth 2) 21 26 (depth 3) 28 33 (depth 4)) #(\"LEVEL1-LEVEL2-LEVEL3-LEVEL4\" 0 5 (depth 1) 7 12 (depth 2) 14 19 (depth 3) 21 26 (depth 4)) t t 1 t 2 t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "LEVEL1-LEVEL2-LEVEL3-LEVEL4")
@@ -207,7 +209,7 @@ fn divergence_recursive_edit_sim() {
               (= (marker-position m) 8)
               (get-text-property 1 'depth) (= (get-text-property 1 'depth) 1)
               (get-text-property 8 'depth) (= (get-text-property 8 'depth) 2)
-              (overlay-get ov 'nested))))))) "#,
+              (overlay-get ov 'nested))))))"#,
         expect,
     );
 }

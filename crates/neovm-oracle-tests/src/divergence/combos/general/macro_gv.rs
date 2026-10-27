@@ -26,7 +26,6 @@ fn deficiency_defmacro_backquote() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_defmacro_with_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -49,21 +48,20 @@ fn deficiency_defmacro_with_props() {
           (list s
                 (string= s "MODIFIED-ORIGINAL")
                 (= (buffer-size) 16))))))
-    (kill-buffer buf))) "#,
+    (kill-buffer buf))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_cl_defmacro_destructuring() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-defmacro)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (cl-defmacro test-cl-dstruct ((a b &optional c) &rest body)
-    "(list ,a ,b ,c (progn ,@body)))
+    "(list ,a ,b ,c (progn ,@body))")
   (list (test-cl-dstruct (1 2) "extra")
         (equal (test-cl-dstruct (1 2) "extra") '(1 2 nil "extra"))
         (test-cl-dstruct (10 20 30) "more" "stuff")
@@ -119,7 +117,6 @@ fn deficiency_gv_with_buffer() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_eval_and_inline() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -134,7 +131,7 @@ fn deficiency_eval_and_inline() {
     "(funcall (lambda (y) (+ y (test-inline-helper ,x))) 10)")
   (list (test-inline-macro 5) (= (test-inline-macro 5) 16)
         (test-inline-macro 10) (= (test-inline-macro 10) 21)
-        (test-inline-macro 0) (= (test-inline-macro 0) 11)))) "#,
+        (test-inline-macro 0) (= (test-inline-macro 0) 11)))"#,
         expect,
     );
 }

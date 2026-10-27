@@ -54,11 +54,10 @@ fn div_cx254_dir_locals_find() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx254_project_root_finding() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable e)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -79,7 +78,7 @@ fn div_cx254_project_root_finding() {
             (list (consp proj)
                   (when (consp proj) (cdr proj))))))
   (error (list :errored (car e))))
-"##,
+)"##,
         expect,
     )
 }

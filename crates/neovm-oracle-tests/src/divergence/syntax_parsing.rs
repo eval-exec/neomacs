@@ -708,11 +708,11 @@ fn div_sp_ignore_comments_forward_list_down_up_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_sp_ignore_comments_scan_lists_depth_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 11 48)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (20 1 (scan-error \"Unbalanced parentheses\" 4 22))""#]];
     // scan-lists with a nonzero depth takes different exits than scan-sexps.
     // This locks forward depth exit, backward depth exit, and the unbalanced
     // depth error payload in the presence of a skipped block comment.
@@ -728,8 +728,7 @@ fn div_sp_ignore_comments_scan_lists_depth_combo() {
         (condition-case err
             (scan-lists 4 1 2)
           (scan-error (cons 'scan-error (cdr err)))
-          (error (cons (car err) (cdr err)))))))
-"##,
+          (error (cons (car err) (cdr err))))))"##,
         expect,
     );
 }

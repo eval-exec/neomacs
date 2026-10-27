@@ -715,7 +715,6 @@ fn oracle_prop_hm_infer_expressions() {
 // Let-polymorphism: using the same function at multiple types
 // ---------------------------------------------------------------------------
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_hm_let_polymorphism() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -778,11 +777,11 @@ fn oracle_prop_hm_let_polymorphism() {
          ;; let id = \x -> x in (id true)  => bool
          (funcall 'neovm--hm-lp-typeof env
                   '(elet id (elam x (evar x))
-                         (eapp (evar id) (elit bool #t))))
+                         (eapp (evar id) (elit bool t))))
          ;; let const = \x -> \y -> x in (const 5 true)  => int
          (funcall 'neovm--hm-lp-typeof env
                   '(elet const (elam x (elam y (evar x)))
-                         (eapp (eapp (evar const) (elit int 5)) (elit bool #t))))
+                         (eapp (eapp (evar const) (elit int 5)) (elit bool t))))
          ;; Nested let: let f = \x -> add x 1 in let g = \y -> f (f y) in g 3
          (funcall 'neovm--hm-lp-typeof env
                   '(elet f (elam x (eapp (eapp (evar add) (evar x)) (elit int 1)))
@@ -791,11 +790,11 @@ fn oracle_prop_hm_let_polymorphism() {
          ;; Higher-order: let apply = \f -> \x -> f x in apply neg true
          (funcall 'neovm--hm-lp-typeof env
                   '(elet apply (elam f (elam x (eapp (evar f) (evar x))))
-                         (eapp (eapp (evar apply) (evar neg)) (elit bool #t))))
+                         (eapp (eapp (evar apply) (evar neg)) (elit bool t))))
          ;; Type error: let f = \x -> add x 1 in f true
          (car (funcall 'neovm--hm-lp-typeof env
                        '(elet f (elam x (eapp (eapp (evar add) (evar x)) (elit int 1)))
-                              (eapp (evar f) (elit bool #t)))))))
+                              (eapp (evar f) (elit bool t)))))))
     (fmakunbound 'neovm--hm-lp-fresh)
     (fmakunbound 'neovm--hm-lp-apply)
     (fmakunbound 'neovm--hm-lp-occurs)
@@ -809,7 +808,7 @@ fn oracle_prop_hm_let_polymorphism() {
     (fmakunbound 'neovm--hm-lp-typeof)
     (makunbound 'neovm--hm-lp-counter)))
 "#;
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#t\" 59 54)""##]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp \"mismatch\")""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

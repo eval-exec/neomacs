@@ -255,12 +255,13 @@ fn divergence_simulate_delete_to_kill_ring_yank() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_simulate_multi_step_refactor() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 27 88)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"(let ((new-var 1))\\n  (+ new-var 2))\" 0 3 (type special) 14 15 (type varname) 31 35 (type varref)) #(\"(let ((old-var 1))\\n  (+ old-var 2))\" 0 3 (type special) 9 14 (type varname) 14 15 (type varname) 24 27 (type func) 29 31 (type varref) 31 35 (type varref)) t 15 nil active t special t varname t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "(let ((old-var 1))\n  (+ old-var 2))")
@@ -288,7 +289,7 @@ fn divergence_simulate_multi_step_refactor() {
             (marker-position m) (= (marker-position m) 10)
             (overlay-get ov 'refactor) (eq (overlay-get ov 'refactor) 'active)
             (get-text-property 1 'type) (eq (get-text-property 1 'type) 'special)
-            (get-text-property 10 'type) (eq (get-text-property 10 'type) 'varname)))))) "#,
+            (get-text-property 10 'type) (eq (get-text-property 10 'type) 'varname)))))"#,
         expect,
     );
 }
@@ -369,7 +370,6 @@ fn divergence_simulate_duplicate_line() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_simulate_transpose_words() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -406,7 +406,7 @@ fn divergence_simulate_transpose_words() {
           (get-text-property 1 'pos) (= (get-text-property 1 'pos) 1)
           (get-text-property 7 'pos) (= (get-text-property 7 'pos) 2)
           (get-text-property 12 'pos) (= (get-text-property 12 'pos) 3)
-          (get-text-property 18 'pos) (= (get-text-property 18 'pos) 4))))) "#,
+          (get-text-property 18 'pos) (= (get-text-property 18 'pos) 4))))"#,
         expect,
     );
 }

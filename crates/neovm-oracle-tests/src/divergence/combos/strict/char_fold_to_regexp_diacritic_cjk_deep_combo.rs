@@ -42,7 +42,6 @@ fn div_v8_char_fold_search_match_diacritic_insensitive() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_char_fold_spare_include_exclude_table() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -51,8 +50,7 @@ fn div_v8_char_fold_spare_include_exclude_table() {
 (list (char-table-p char-fold-table)
       (char-fold-sparse)
       (consp (char-fold-sparse ?a char-fold-table))
-      (stringp (char-fold-to-regexp "test"))))
-"##;
+      (stringp (char-fold-to-regexp "test")))"##;
     let expect = expect_test::expect![[r#""ERR (void-function char-fold-sparse)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

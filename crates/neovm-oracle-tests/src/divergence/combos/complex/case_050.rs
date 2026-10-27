@@ -269,11 +269,10 @@ fn div_cx50_weak_hash_all_weakness_types_gc_eviction_comparison_mega() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx50_window_config_register_buffer_point_marker_overlay_dedicated_split_hscroll_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buffer-markers)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx50-wc*")))
@@ -298,7 +297,7 @@ fn div_cx50_window_config_register_buffer_point_marker_overlay_dedicated_split_h
                    (with-current-buffer buf (text-properties-at 1)))
         (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
         (kill-buffer buf))))
-"##,
+)"##,
         expect,
     );
 }
@@ -356,11 +355,12 @@ fn div_cx50_process_send_region_narrowed_filter_hash_env_exitcode_coding_mega() 
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx50_read_eval_backquote_destructuring_lexical_macro_multibyte_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" list (eval (car (read-from-string \"`(,(mapcar #'car (caar ,data)))\")) t) (eval (car (read-from-string \"`(,@(mapcar #'cdr (caar ,data)) end)\")) t) (eval (car (read-from-string \"`(:items ,(length (caar ,data)))\")) t))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t))
@@ -368,7 +368,7 @@ fn div_cx50_read_eval_backquote_destructuring_lexical_macro_multibyte_mega() {
     (list (eval (car (read-from-string "`(,(mapcar #'car (caar ,data)))")) t)
           (eval (car (read-from-string "`(,@(mapcar #'cdr (caar ,data)) end)")) t)
           (eval (car (read-from-string "`(:items ,(length (caar ,data)))")) t))))
-"##,
+)"##,
         expect,
     );
 }

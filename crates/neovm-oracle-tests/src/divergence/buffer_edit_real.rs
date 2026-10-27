@@ -105,24 +105,13 @@ fn divergence_overlay_layered_props() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 11 38)""#]];
+    let expect = expect_test::expect![[r#""OK (\"AAABBBCCC\" \"AAABBB\" \"AAABBB\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn
-  (insert \"AAA\")
-  (undo-boundary)
-  (insert \"BBB\")
-  (undo-boundary)
-  (insert \"CCC\")
-  (let ((s1 (buffer-string)))
-    (primitive-undo 1 buffer-undo-list)
-    (let ((s2 (buffer-string)))
-      (primitive-undo 1 buffer-undo-list)
-      (list s1 s2 (buffer-string)))))) ",
+        "(progn\n  (insert \"AAA\")\n  (undo-boundary)\n  (insert \"BBB\")\n  (undo-boundary)\n  (insert \"CCC\")\n  (let ((s1 (buffer-string)))\n    (primitive-undo 1 buffer-undo-list)\n    (let ((s2 (buffer-string)))\n      (primitive-undo 1 buffer-undo-list)\n      (list s1 s2 (buffer-string)))))",
         expect,
     );
 }
@@ -173,22 +162,13 @@ fn divergence_textprop_after_replace() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_case_change_operations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 9 38)""#]];
+    let expect = expect_test::expect![[r#""OK (\"HELL\" \"HELLo WORLD\" \"HELLo world\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn
-  (insert \"hello WORLD\")
-  (narrow-to-region 1 5)
-  (upcase-region (point-min) (point-max))
-  (let ((s1 (buffer-string)))
-    (widen)
-    (let ((s2 (buffer-string)))
-      (downcase-region 7 12)
-      (list s1 s2 (buffer-string)))))) ",
+        "(progn\n  (insert \"hello WORLD\")\n  (narrow-to-region 1 5)\n  (upcase-region (point-min) (point-max))\n  (let ((s1 (buffer-string)))\n    (widen)\n    (let ((s2 (buffer-string)))\n      (downcase-region 7 12)\n      (list s1 s2 (buffer-string)))))",
         expect,
     );
 }

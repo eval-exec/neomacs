@@ -3,12 +3,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_regexp_replace_propagated_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 32 40)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"fooNUMbarNUMbazNUMquxNUM\" 0 2 (kind word) 6 8 (kind word) 12 14 (kind word) 18 20 (kind word)) #(\"foo123bar456baz789qux000\" 0 2 (kind word) 3 5 (kind num) 6 8 (kind word) 9 11 (kind num) 12 14 (kind word) 15 17 (kind num) 18 20 (kind word) 21 23 (kind num)) t nil word t num t word t num t word t num t word t num t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "foo123bar456baz789qux000")
@@ -41,7 +42,7 @@ fn divergence_regexp_replace_propagated_props() {
             (get-text-property 16 'kind) (eq (get-text-property 16 'kind) 'num)
             (get-text-property 19 'kind) (eq (get-text-property 19 'kind) 'word)
             (get-text-property 22 'kind) (eq (get-text-property 22 'kind) 'num)
-            (overlay-get ov 'whole)))))) "#,
+            (overlay-get ov 'whole)))))"#,
         expect,
     );
 }
@@ -130,7 +131,6 @@ fn divergence_substring_props_with_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_insert_buffer_substring_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -159,7 +159,7 @@ fn divergence_insert_buffer_substring_undo() {
             (= (buffer-size) 24)
             (get-text-property 1 'origin) (eq (get-text-property 1 'origin) 'src)
             (get-text-property 8 'origin) (eq (get-text-property 8 'origin) 'src)
-            (overlay-get ov 'source)))))) "#,
+            (overlay-get ov 'source)))))"#,
         expect,
     );
 }
@@ -200,12 +200,13 @@ fn divergence_format_propertize_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_re_search_backward_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 40)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"AAA-BBB-YYY-DDD-XXX-FFF-GGG\" 0 2 (g 1) 4 6 (g 2) 12 14 (g 4) 20 22 (g 6) 24 26 (g 7)) #(\"AAA-BBB-CCC-DDD-EEE-FFF-GGG\" 0 2 (g 1) 4 6 (g 2) 8 10 (g 3) 12 14 (g 4) 16 18 (g 5) 20 22 (g 6) 24 26 (g 7)) t t 1 t 2 t 3 t 4 t 5 t 6 t 7 t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "AAA-BBB-CCC-DDD-EEE-FFF-GGG")
@@ -240,17 +241,18 @@ fn divergence_re_search_backward_undo() {
             (get-text-property 17 'g) (= (get-text-property 17 'g) 5)
             (get-text-property 21 'g) (= (get-text-property 21 'g) 6)
             (get-text-property 25 'g) (= (get-text-property 25 'g) 7)
-            (overlay-get ov 'chain)))))) "#,
+            (overlay-get ov 'chain)))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_word_bounds_replace_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 43)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"the slow red fox jumps over the energetic dog\" 0 3 (word-num 0) 13 16 (word-num 3) 17 22 (word-num 4) 23 27 (word-num 5) 28 31 (word-num 6) 42 45 (word-num 8)) #(\"the quick brown fox jumps over the lazy dog\" 0 3 (word-num 0) 4 9 (word-num 1) 10 15 (word-num 2) 16 19 (word-num 3) 20 25 (word-num 4) 26 30 (word-num 5) 31 34 (word-num 6) 35 39 (word-num 7) 40 43 (word-num 8)) t nil 0 t 1 t 2 t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "the quick brown fox jumps over the lazy dog")
@@ -285,7 +287,7 @@ fn divergence_word_bounds_replace_undo() {
             (get-text-property 1 'word-num) (= (get-text-property 1 'word-num) 0)
             (get-text-property 5 'word-num) (= (get-text-property 5 'word-num) 1)
             (get-text-property 11 'word-num) (= (get-text-property 11 'word-num) 2)
-            (overlay-get ov 'sentence)))))) "#,
+            (overlay-get ov 'sentence)))))"#,
         expect,
     );
 }

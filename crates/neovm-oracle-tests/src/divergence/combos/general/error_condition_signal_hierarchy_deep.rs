@@ -39,30 +39,13 @@ fn deficiency_nested_condition_case_inner_handler_first() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_error_with_buffer_cleanup() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (error \"Invalid error symbol\" test-error)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"ecb\"))\n\
-         (cleanup-log nil))\n\
-         (with-current-buffer buf\n\
-         (insert \"DATA\")\n\
-         (put-text-property 1 5 'src 'original))\n\
-         (condition-case err\n\
-         (with-current-buffer buf\n\
-         (goto-char 3)\n\
-         (insert \"XXX\")\n\
-         (signal 'test-error '(\"abort\")))\n\
-         (test-error\n\
-         (push (list (car err) (cadr err)\n\
-         (with-current-buffer buf (buffer-string)))\n\
-         cleanup-log)))\n\
-         cleanup-log)\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"ecb\"))\n(cleanup-log nil))\n(with-current-buffer buf\n(insert \"DATA\")\n(put-text-property 1 5 'src 'original))\n(condition-case err\n(with-current-buffer buf\n(goto-char 3)\n(insert \"XXX\")\n(signal 'test-error '(\"abort\")))\n(test-error\n(push (list (car err) (cadr err)\n(with-current-buffer buf (buffer-string)))\ncleanup-log)))\ncleanup-log)\n(kill-buffer buf))",
         expect,
     );
 }
@@ -85,18 +68,13 @@ fn deficiency_condition_case_no_match_propagates() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_signal_with_multiple_args() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (args-out-of-range (\"my-vector\" 5 10))""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (condition-case err\n\
-         (signal 'args-out-of-range '(\"my-vector\" 5 10))\n\
-         (args-out-of-range\n\
-         (list (car err) (cdr err))))",
+        "(progn\n(condition-case err\n(signal 'args-out-of-range '(\"my-vector\" 5 10))\n(args-out-of-range\n(list (car err) (cdr err)))))",
         expect,
     );
 }
@@ -139,18 +117,13 @@ fn deficiency_error_in_unwind_protect_still_runs_cleanup() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_error_message_formatting() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK \"Wrong number of arguments: my-fn, 3, 2\"""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (condition-case err\n\
-         (signal 'wrong-number-of-arguments '(my-fn 3 2))\n\
-         (wrong-number-of-arguments\n\
-         (error-message-string err)))",
+        "(progn\n(condition-case err\n(signal 'wrong-number-of-arguments '(my-fn 3 2))\n(wrong-number-of-arguments\n(error-message-string err))))",
         expect,
     );
 }

@@ -106,12 +106,11 @@ fn divergence_undo_with_advised_insert() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_with_advised_methods() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((result 10 before 5) t 10 t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-ewam-xxx ()
@@ -133,7 +132,7 @@ fn divergence_eieio_with_advised_methods() {
             (test-ewam-value obj)
             (= (test-ewam-value obj) 10)
             (let ((r2 (test-ewam-process-xxx obj)))
-              (equal r2 '(result 20 before 10)))))) "#,
+              (equal r2 '(result 20 before 10)))))) )"#,
         expect,
     );
 }

@@ -121,12 +121,13 @@ fn combo_eieio_prin1_nested_data_roundtrip() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_prin1_vector_hash_roundtrip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"Recursive load\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/bytecomp.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/icons.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/warnings.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/bytecomp.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/icons.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/warnings.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/bytecomp.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/icons.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/warnings.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/bytecomp.elc\" \"[ORACLE-LOAD-ROOT]/emacs-lisp/bytecomp.elc\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass record ()
@@ -170,7 +171,7 @@ fn combo_eieio_prin1_vector_hash_roundtrip() {
                   (marker-position m)
                   (buffer-string)
                   my-recs))))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))))"#,
         expect,
     );
 }

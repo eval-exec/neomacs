@@ -8,11 +8,10 @@ use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 /// org-export LaTeX: exporting to LaTeX format.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx435_org_export_latex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (0 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'ox-latex)
   (with-temp-buffer
@@ -20,17 +19,16 @@ fn div_cx435_org_export_latex() {
     (list (string-match "\\\\section" (let ((org-export-with-toc nil))
      (org-export-as 'latex nil nil t nil)))
       t))
-"##,
+)"##,
         expect,
     );
 }
 
 /// org-export HTML: exporting to HTML.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx435_org_export_html() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (46 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'ox-html)
   (with-temp-buffer
@@ -38,7 +36,7 @@ fn div_cx435_org_export_html() {
     (list (string-match "outline-2" (let ((org-export-with-toc nil))
       (org-export-as 'html nil nil t nil)))
       t))
-"##,
+)"##,
         expect,
     );
 }
@@ -74,11 +72,10 @@ fn div_cx435_org_datetree_ops() {
 }
 
 /// org-clocktable: clock table generation.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx435_org_clocktable_ops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-clock)
   (with-temp-buffer
@@ -86,17 +83,16 @@ fn div_cx435_org_clocktable_ops() {
     (insert "#+BEGIN: clocktable :maxlevel 2\n#+END:\n")
     (list (fboundp 'org-dblock-write:clocktable)
           (fboundp 'org-clock-report)))
-  "##,
+  )"##,
         expect,
     );
 }
 
 /// org-refile: refiling headings.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx435_org_refile_ops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org)
   (with-temp-buffer
@@ -104,7 +100,7 @@ fn div_cx435_org_refile_ops() {
     (insert "* Source\n* Target\n")
     (list (fboundp 'org-refile)
           (fboundp 'org-refile-cache-clear)))
-"##,
+)"##,
         expect,
     );
 }
@@ -127,11 +123,10 @@ fn div_cx435_org_toggle_ops() {
 }
 
 /// org-insert-link / org-store-link.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx435_org_store_insert_link() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org)
   (with-temp-buffer
@@ -139,17 +134,16 @@ fn div_cx435_org_store_insert_link() {
     (insert "[[https://orgmode.org]]\n")
     (goto-char 1)
     (org-insert-link nil "https://example.com" "Example"))
-  "##,
+  )"##,
         expect,
     );
 }
 
 /// org-mark-ring: mark ring operations.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx435_org_mark_ring() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org)
   (with-temp-buffer
@@ -159,7 +153,7 @@ fn div_cx435_org_mark_ring() {
     (org-mark-ring-push 5)
     (list (fboundp 'org-mark-ring-goto)
           (boundp 'org-mark-ring)))
-"##,
+)"##,
         expect,
     );
 }
@@ -179,11 +173,11 @@ fn div_cx435_org_speed_commands() {
 }
 
 /// org-find-entry-with-id: finding entry by ID.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx435_org_find_entry_with_id() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (error \"‘org-id-get’ expects a file-visiting buffer\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-id)
   (with-temp-buffer
@@ -193,7 +187,7 @@ fn div_cx435_org_find_entry_with_id() {
       (condition-case e
           (org-id-find id)
         (error (car e)))))
-"##,
+)"##,
         expect,
     );
 }
@@ -241,11 +235,10 @@ fn div_cx435_org_ctags_ops() {
 }
 
 /// org-indent: indentation mode.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx435_org_indent_ops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-indent)
   (with-temp-buffer
@@ -253,7 +246,7 @@ fn div_cx435_org_indent_ops() {
     (org-indent-mode 1)
     (list org-indent-mode
           (boundp 'org-indent-indentation-per-level)))
-"##,
+)"##,
         expect,
     );
 }

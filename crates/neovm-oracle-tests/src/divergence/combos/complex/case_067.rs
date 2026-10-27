@@ -164,11 +164,10 @@ fn div_cx67_bool_vector_bit_ops_and_length() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx67_sxhash_equal_p_equal_hash() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 46)""#]];
+    let expect = expect_test::expect![[r#""OK (t t t 0 0 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((s1 "hello")
@@ -182,8 +181,7 @@ fn div_cx67_sxhash_equal_p_equal_hash() {
         (= (sxhash-equal l1) (sxhash-equal l2))
         (sxhash-eq 'sym)
         (sxhash-eql 1.5)
-        (= (sxhash-eql 1) (sxhash-eql 1.0)))))
-"##,
+        (= (sxhash-eql 1) (sxhash-eql 1.0))))"##,
         expect,
     );
 }

@@ -50,7 +50,6 @@ fn div_v8_format_s_over_records_vectors_markers() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_concat_mixed_unibyte_multibyte_bytes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -65,8 +64,7 @@ fn div_v8_concat_mixed_unibyte_multibyte_bytes() {
       (length (unibyte-string 200))
       (concat "abc" (string ?日))
       (multibyte-string-p (concat "abc" (string ?日)))
-      (aref (unibyte-string 200) 0)))
-"##;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 37)""#]];
+      (aref (unibyte-string 200) 0))"##;
+    let expect = expect_test::expect![[r#""OK (nil t nil 3 6 1 2 1 \"abc日\" t 200)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

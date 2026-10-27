@@ -109,35 +109,35 @@ fn div_cx114_string_pad_with_spaces() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx114_string_replace_with_subgroups() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 6 84)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"abc # def # ghi #\" \"beta alpha\" \"a_b_c_d\" \"*lph*b*t\" \"ALPHA BETA\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (list (replace-regexp-in-string "[0-9]+" "#" "abc 123 def 456 ghi 789")
       (replace-regexp-in-string "\\(\\w+\\) \\(\\w+\\)" "\\2 \\1" "alpha beta")
       (replace-regexp-in-string " +" "_" "a  b   c    d")
       (replace-regexp-in-string "[aeiou]" "*" "alphabet" t)
-      (replace-regexp-in-string "\\b\\w+\\b" (lambda (m) (upcase m)) "alpha beta")))
-"##,
+      (replace-regexp-in-string "\\b\\w+\\b" (lambda (m) (upcase m)) "alpha beta"))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx114_subst_char_in_string_variants() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 5 51)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"bXnXnX\" \"BANANA\" \"snake_case_var\" \"with-spaces\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (list (subst-char-in-string ?a ?X "banana")
       (subst-char-in-string ?a ?X "BANANA")
       (subst-char-in-string ?- ?_ "snake-case-var")
-      (subst-char-in-string ?\s ?- "with spaces")))
-"##,
+      (subst-char-in-string ?\s ?- "with spaces"))"##,
         expect,
     );
 }

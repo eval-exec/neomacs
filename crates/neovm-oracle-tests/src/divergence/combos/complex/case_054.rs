@@ -3,11 +3,10 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx54_superword_subword_toggle_kill_undo_marker_overlay_textprop_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 3 42)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -30,7 +29,7 @@ fn div_cx54_superword_subword_toggle_kill_undo_marker_overlay_textprop_narrow_me
             (list sw-kill sub-kill (buffer-string) (marker-position m)
                   (overlay-start ov) (text-properties-at 1)))))
   (error (cons 'errored (car e))))
-"##,
+)"##,
         expect,
     );
 }
@@ -80,11 +79,12 @@ fn div_cx54_process_output_env_coding_exitcode_timer_narrow_overlay_textprop_und
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx54_json_xml_dom_serialize_parse_chain_with_hash_multibyte_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" list (length items) (cdr (assoc 'text (aref items 0))) (cdr (assoc 'text (aref items 1))) (mapcar #'dom-text (dom-by-tag xml-dom 'item)) (secure-hash 'sha256 json-str) (secure-hash 'md5 xml-str))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -105,7 +105,7 @@ fn div_cx54_json_xml_dom_serialize_parse_chain_with_hash_multibyte_mega() {
               (secure-hash 'sha256 json-str)
               (secure-hash 'md5 xml-str))))
   (error (cons 'errored (car e))))
-"##,
+)"##,
         expect,
     );
 }
@@ -146,12 +146,11 @@ fn div_cx54_cl_defmethod_full_hierarchy_eql_static_around_before_after_primary_a
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx54_window_config_register_split_merge_narrow_widen_marker_overlay_textprop_display_dedicated_hscroll_vscroll_margins_fringes_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buffer-markers)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -186,7 +185,7 @@ fn div_cx54_window_config_register_split_merge_narrow_widen_marker_overlay_textp
             (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
             (kill-buffer buf))))
   (error (list :errored)))
-"##,
+)"##,
         expect,
     );
 }
@@ -264,11 +263,12 @@ fn div_cx54_weak_hash_key_value_eviction_after_gc_multiple_types_marker_cons_vec
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx54_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_evaporate_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"Changes to be undone are outside visible portion of buffer\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((case-fold-search t))
@@ -292,16 +292,17 @@ fn div_cx54_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_e
         (list state (buffer-string) (marker-position m)
               (overlayp ov) (overlay-start ov)
               (text-properties-at 1) (current-column)))))
-"##,
+)"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx54_read_eval_backquote_destructuring_lexical_macro_propertized_hash_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" let* ((names (eval (car (read-from-string \"`(,@(mapcar #'car (caar ,data)))\")) t)) (vals (eval (car (read-from-string \"`(,@(mapcar #'cdr (caar ,data)))\")) t)) (ht (make-hash-table :test 'equal))) (cl-loop for n in names for v in vals do (puthash n v ht)) (list names vals (hash-table-count ht) (mapcar (lambda (n) (gethash n ht)) names) (secure-hash 'md5 (prin1-to-string ht))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t))
@@ -313,7 +314,7 @@ fn div_cx54_read_eval_backquote_destructuring_lexical_macro_propertized_hash_meg
       (list names vals (hash-table-count ht)
             (mapcar (lambda (n) (gethash n ht)) names)
             (secure-hash 'md5 (prin1-to-string ht))))))
-"##,
+)"##,
         expect,
     );
 }

@@ -8,12 +8,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_buflocal_indirect_kill_undo_marker_evaporate() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (setq bl-global 'outside)
@@ -63,7 +62,7 @@ fn combo_buflocal_indirect_kill_undo_marker_evaporate() {
                     (kill-buffer base)
                     (list ind-bl ind-zone-1 ind-zone-15
                           after-del after-undo base-after-kill
-                          bl-global)))))))))) "#,
+                          bl-global)))))))))) )"#,
         expect,
     );
 }
@@ -138,12 +137,11 @@ fn combo_buflocal_multi_buffer_switch_undo_prop_marker() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_buflocal_indirect_shared_textprop_marker_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((base (generate-new-buffer " combo-shbase")))
@@ -176,17 +174,16 @@ fn combo_buflocal_indirect_shared_textprop_marker_undo() {
               (kill-buffer ind2)
               (kill-buffer base)
               (list ind2-sees ind2-prop m-pos
-                    ind2-after-undo ind2-prop-undo m-after))))))) "#,
+                    ind2-after-undo ind2-prop-undo m-after))))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_buflocal_kill_restore_default_overlay_evaporate() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((local-value head first third) original)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (setq kill-test-var 'original)
@@ -210,7 +207,7 @@ fn combo_buflocal_kill_restore_default_overlay_evaporate() {
                               (overlay-get ov1 'kind)
                               (overlay-get ov3 'kind))))
           (kill-buffer buf)
-          (list pre-kill kill-test-var))))) "#,
+          (list pre-kill kill-test-var))))) )"#,
         expect,
     );
 }

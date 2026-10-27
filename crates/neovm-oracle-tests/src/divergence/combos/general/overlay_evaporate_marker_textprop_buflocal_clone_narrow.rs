@@ -4,12 +4,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_overlay_evaporate_marker_textprop_buflocal_clone_narrow_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable clone)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "oeb")))
@@ -47,7 +46,7 @@ fn combo_overlay_evaporate_marker_textprop_buflocal_clone_narrow_undo() {
                   (overlay-end ov)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }
@@ -159,12 +158,11 @@ fn combo_overlay_evaporate_setf_replace_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_overlay_evaporate_narrow_clone_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function \\(setf\\ char-after\\))""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "oen")))
@@ -205,7 +203,7 @@ fn combo_overlay_evaporate_narrow_clone_undo() {
                   (overlay-end ov)
                   (buffer-string)))))
       (kill-buffer clone)
-      (kill-buffer buf)))"#,
+      (kill-buffer buf))))"#,
         expect,
     );
 }

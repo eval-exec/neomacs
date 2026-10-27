@@ -167,22 +167,13 @@ fn deficiency_concat_with_mix_of_multibyte_unibyte() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_mapcar_over_string_with_aref_codepoints() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-loop)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((s \"A\\u00e9B\\u00e0C\\u00fc\"))\n\
-         (let ((codes (mapcar (lambda (i) (aref s i))\n\
-         (number-sequence 0 (1- (length s))))))\n\
-         (list codes\n\
-         (length codes)\n\
-         (cl-loop for c in codes\n\
-         when (> c 127)\n\
-         collect c))))",
+        "(progn\n(let ((s \"A\\u00e9B\\u00e0C\\u00fc\"))\n(let ((codes (mapcar (lambda (i) (aref s i))\n(number-sequence 0 (1- (length s))))))\n(list codes\n(length codes)\n(cl-loop for c in codes\nwhen (> c 127)\ncollect c)))))",
         expect,
     );
 }

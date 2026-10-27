@@ -23,7 +23,6 @@ fn div_v8_iso8601_parse_date_datetime() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_parse_time_string_variants() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -33,9 +32,10 @@ fn div_v8_parse_time_string_variants() {
       (parse-time-string "Mar 15 2025")
       (parse-time-string "2025-03-15")
       (parse-time-string "15:30")
-      (condition-case err (parse-time-string "not a date") (error 'caught))))
-"##;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 7 77)""#]];
+      (condition-case err (parse-time-string "not a date") (error 'caught)))"##;
+    let expect = expect_test::expect![[
+        r#""OK ((45 30 12 15 3 2025 nil -1 nil) (nil nil nil 15 3 2025 nil -1 nil) (nil nil nil 15 3 2025 nil -1 nil) (0 30 15 nil nil nil nil -1 nil) (nil nil nil nil nil nil nil -1 nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

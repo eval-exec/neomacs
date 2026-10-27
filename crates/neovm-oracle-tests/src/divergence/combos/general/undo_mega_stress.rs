@@ -169,12 +169,13 @@ fn divergence_undo_kill_yank_with_overlay_tracking() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_multiple_overlays_with_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 77)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"LINE1\\nLINE2\\nLINE3\\nLINE4\\nLINE5\" 0 4 (line 1) 6 10 (line 2) 12 16 (line 3) 18 22 (line 4) 24 28 (line 5)) t 1 t 2 t 3 t 4 t 5 t 1 t 2 t 3 t 4 t 5 t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "LINE1\nLINE2\nLINE3\nLINE4\nLINE5")
@@ -216,7 +217,7 @@ fn divergence_undo_multiple_overlays_with_props() {
           (get-text-property 7 'line) (= (get-text-property 7 'line) 2)
           (get-text-property 13 'line) (= (get-text-property 13 'line) 3)
           (get-text-property 19 'line) (= (get-text-property 19 'line) 4)
-          (get-text-property 25 'line) (= (get-text-property 25 'line) 5))))) "#,
+          (get-text-property 25 'line) (= (get-text-property 25 'line) 5))))"#,
         expect,
     );
 }
@@ -271,12 +272,13 @@ fn divergence_undo_with_overlay_evaporate() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_regex_replace_preserve_intervals() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 65)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"tok1-SEPARATOR-tok2-SEPARATOR-tok3-SEPARATOR-tok4-SEPARATOR-tok5\" 0 3 (tok 1) 4 5 (tok 2) 14 17 (tok 3) 18 20 (tok 4) 29 31 (tok 5) 32 35 (sep s1) 44 45 (sep s2) 46 49 (sep s3)) 1 nil #(\"tok1-sep-tok2-sep-tok3-sep-tok4-sep-tok5\" 0 3 (tok 1) 4 5 (tok 2) 5 7 (tok 2) 8 11 (tok 3) 12 14 (tok 4) 14 15 (tok 4) 16 17 (tok 5) 17 19 (tok 5) 20 23 (sep s1) 24 26 (sep s2) 26 27 (sep s2) 28 31 (sep s3) 32 35 (sep s4)) t 1 t 2 t 3 t 4 t 5 t s1 t s2 t 1 t 5 t 9 t 13 t 18 nil 21 t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "tok1-sep-tok2-sep-tok3-sep-tok4-sep-tok5")
@@ -318,7 +320,7 @@ fn divergence_undo_regex_replace_preserve_intervals() {
             (marker-position m3) (= (marker-position m3) 9)
             (marker-position m4) (= (marker-position m4) 13)
             (marker-position m5) (= (marker-position m5) 17)
-            (marker-position m6) (= (marker-position m6) 21)))))) "#,
+            (marker-position m6) (= (marker-position m6) 21)))))"#,
         expect,
     );
 }

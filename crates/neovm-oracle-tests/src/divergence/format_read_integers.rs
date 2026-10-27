@@ -3,14 +3,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_format_hex_octal_binary() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 6 20)""#]];
+    let expect = expect_test::expect![[r#""OK (\"ff\" \"FF\" \"10\" \"0xff\" \"010\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(list\n  (format \"%x\" 255)\n  (format \"%X\" 255)\n  (format \"%o\" 8)\n  (format \"%#x\" 255)\n  (format \"%#o\" 8)))",
+        "(list\n  (format \"%x\" 255)\n  (format \"%X\" 255)\n  (format \"%o\" 8)\n  (format \"%#x\" 255)\n  (format \"%#o\" 8))",
         expect,
     );
 }
@@ -100,17 +99,19 @@ fn divergence_print_symbol_with_special_chars() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_read_string_escape_sequences() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\\\"\" 4 43)""##]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"hello\\nworld\" . 14) (\"tab\there\" . 11) (\"back\\\\slash\" . 13))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(list
   (read-from-string "\"hello\\nworld\"")
   (read-from-string "\"tab\\there\"")
-  (read-from-string "\"back\\\\slash\""))#" ,
+  (read-from-string "\"back\\\\slash\""))"#,
+        expect,
     );
 }
 
@@ -118,7 +119,9 @@ fn divergence_read_string_escape_sequences() {
 fn divergence_print_cons_cell() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    assert_oracle_parity(
+    let expect = expect_test::expect![[r#""OK (\"(a . b)\" \"(a b c)\" \"(a b . c)\")""#]];
+
+    crate::common::assert_oracle_parity_expect(
         r#"(list
   (prin1-to-string '(a . b))
   (prin1-to-string '(a b c))

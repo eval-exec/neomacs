@@ -35,80 +35,35 @@ fn deficiency_overlay_priority_ordering() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_overlapping_overlays_with_different_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"ood\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"AAABBBCCCDDD\")\n\
-         (let ((ov1 (make-overlay 1 7))\n\
-         (ov2 (make-overlay 5 10))\n\
-         (ov3 (make-overlay 8 13)))\n\
-         (overlay-put ov1 'tag 'first)\n\
-         (overlay-put ov2 'tag 'second)\n\
-         (overlay-put ov3 'tag 'third)\n\
-         (list (length (overlays-at 3))\n\
-         (length (overlays-at 6))\n\
-         (length (overlays-at 9))\n\
-         (length (overlays-in 1 13))\n\
-         (mapcar (lambda (ov) (overlay-get ov 'tag))\n\
-         (overlays-in 5 7))))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"ood\")))\n(with-current-buffer buf\n(insert \"AAABBBCCCDDD\")\n(let ((ov1 (make-overlay 1 7))\n(ov2 (make-overlay 5 10))\n(ov3 (make-overlay 8 13)))\n(overlay-put ov1 'tag 'first)\n(overlay-put ov2 'tag 'second)\n(overlay-put ov3 'tag 'third)\n(list (length (overlays-at 3))\n(length (overlays-at 6))\n(length (overlays-at 9))\n(length (overlays-in 1 13))\n(mapcar (lambda (ov) (overlay-get ov 'tag))\n(overlays-in 5 7))))))\n(kill-buffer buf))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_overlay_evaporate_on_empty_range() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"oee\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"AAAXXXXBBB\")\n\
-         (let ((ov1 (make-overlay 4 8)))\n\
-         (overlay-put ov1 'evaporate t)\n\
-         (overlay-put ov1 'data 'middle)\n\
-         (let ((before (overlay-start ov1)))\n\
-         (delete-region 4 8)\n\
-         (list before\n\
-         (overlay-start ov1)\n\
-         (overlay-end ov1)\n\
-         (overlay-get ov1 'data)\n\
-         (buffer-string))))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"oee\")))\n(with-current-buffer buf\n(insert \"AAAXXXXBBB\")\n(let ((ov1 (make-overlay 4 8)))\n(overlay-put ov1 'evaporate t)\n(overlay-put ov1 'data 'middle)\n(let ((before (overlay-start ov1)))\n(delete-region 4 8)\n(list before\n(overlay-start ov1)\n(overlay-end ov1)\n(overlay-get ov1 'data)\n(buffer-string))))))\n(kill-buffer buf))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_overlay_evaporate_nil_survives_empty() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"oen\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"AAAXXXXBBB\")\n\
-         (let ((ov (make-overlay 4 8)))\n\
-         (overlay-put ov 'evaporate nil)\n\
-         (overlay-put ov 'data 'persist)\n\
-         (delete-region 4 8)\n\
-         (list (overlay-start ov)\n\
-         (overlay-end ov)\n\
-         (overlay-get ov 'data)\n\
-         (buffer-string)))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"oen\")))\n(with-current-buffer buf\n(insert \"AAAXXXXBBB\")\n(let ((ov (make-overlay 4 8)))\n(overlay-put ov 'evaporate nil)\n(overlay-put ov 'data 'persist)\n(delete-region 4 8)\n(list (overlay-start ov)\n(overlay-end ov)\n(overlay-get ov 'data)\n(buffer-string)))))\n(kill-buffer buf))",
         expect,
     );
 }
@@ -139,26 +94,13 @@ fn deficiency_overlay_move_with_insertion_type() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_overlay_after_replace_match() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"orm\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"alpha beta gamma delta\")\n\
-         (let ((ov (make-overlay 7 11)))\n\
-         (overlay-put ov 'word 'target)\n\
-         (goto-char 1)\n\
-         (re-search-forward \"beta\")\n\
-         (replace-match \"BETA\")\n\
-         (list (overlay-start ov) (overlay-end ov)\n\
-         (overlay-get ov 'word)\n\
-         (buffer-string)))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"orm\")))\n(with-current-buffer buf\n(insert \"alpha beta gamma delta\")\n(let ((ov (make-overlay 7 11)))\n(overlay-put ov 'word 'target)\n(goto-char 1)\n(re-search-forward \"beta\")\n(replace-match \"BETA\")\n(list (overlay-start ov) (overlay-end ov)\n(overlay-get ov 'word)\n(buffer-string)))))\n(kill-buffer buf))",
         expect,
     );
 }
@@ -211,25 +153,13 @@ fn deficiency_overlay_in_narrowed_buffer() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_overlay_after_buffer_substring() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"obs\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"AAABBBCCC\")\n\
-         (let ((ov (make-overlay 4 7)))\n\
-         (overlay-put ov 'tag 'mid)\n\
-         (let ((sub (buffer-substring 3 8))\n\
-         (sub-no-props (buffer-substring-no-properties 3 8)))\n\
-         (list sub sub-no-props\n\
-         (overlay-start ov) (overlay-end ov)\n\
-         (overlay-get ov 'tag))))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"obs\")))\n(with-current-buffer buf\n(insert \"AAABBBCCC\")\n(let ((ov (make-overlay 4 7)))\n(overlay-put ov 'tag 'mid)\n(let ((sub (buffer-substring 3 8))\n(sub-no-props (buffer-substring-no-properties 3 8)))\n(list sub sub-no-props\n(overlay-start ov) (overlay-end ov)\n(overlay-get ov 'tag))))))\n(kill-buffer buf))",
         expect,
     );
 }

@@ -61,22 +61,13 @@ fn divergence_funcall_with_lambda_closure() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_recursive_lambda() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable fib)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(let ((fib
-       (lambda (n self)
-         (if (< n 2) n
-           (+ (funcall self (- n 1) self)
-              (funcall self (- n 2) self)))))))
-  (list (funcall fib 0 fib)
-        (funcall fib 1 fib)
-        (funcall fib 5 fib)
-        (funcall fib 10 fib))) ",
+        "(let ((fib\n       (lambda (n self)\n         (if (< n 2) n\n           (+ (funcall self (- n 1) self)\n              (funcall self (- n 2) self)))))))\n  (list (funcall fib 0 fib)\n        (funcall fib 1 fib)\n        (funcall fib 5 fib)\n        (funcall fib 10 fib))",
         expect,
     );
 }

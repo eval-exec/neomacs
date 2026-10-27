@@ -52,12 +52,13 @@ fn divergence_undo_20_step_edit_session() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_insert_delete_alternating() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 28 39)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"BASE-BASE-BASE-INS3BASE-BASE\" 0 3 (slot 1) 5 8 (slot 2) 10 13 (slot 3) 19 22 (slot 4) 24 27 (slot 5)) #(\"BASE-BASE-BASE-BASE-BASE\" 0 3 (slot 1) 5 8 (slot 2) 10 13 (slot 3) 15 18 (slot 4) 20 23 (slot 5)) t t 1 t 2 t 3 t 4 t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "BASE-BASE-BASE-BASE-BASE")
@@ -86,17 +87,18 @@ fn divergence_undo_insert_delete_alternating() {
             (get-text-property 6 'slot) (= (get-text-property 6 'slot) 2)
             (get-text-property 11 'slot) (= (get-text-property 11 'slot) 3)
             (get-text-property 16 'slot) (= (get-text-property 16 'slot) 4)
-            (overlay-get ov 'base)))))) "#,
+            (overlay-get ov 'base)))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_with_10_overlays() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\" #(\"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\" 0 5 (block 1) 5 9 (block 1) 10 15 (block 2) 15 19 (block 2) 20 25 (block 3) 25 29 (block 3) 30 35 (block 4) 35 39 (block 4) 40 45 (block 5) 45 49 (block 5) 50 55 (block 6) 55 59 (block 6) 60 65 (block 7) 65 69 (block 7) 70 75 (block 8) 75 79 (block 8) 80 85 (block 9) 85 89 (block 9) 90 95 (block 10) 95 99 (block 10)) t t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert (make-string 100 ?T))
@@ -131,7 +133,7 @@ fn divergence_undo_with_10_overlays() {
             (setq all-ok nil)))
         (list s (buffer-string)
               (string= (buffer-string) (make-string 100 ?T))
-              all-ok (= (buffer-size) 100))))))) "#,
+              all-ok (= (buffer-size) 100))))))"#,
         expect,
     );
 }
@@ -215,12 +217,13 @@ fn divergence_undo_propertize_replace_cycle() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_narrow_replace_widen_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 26 39)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"XXB1-B2-YY-B4-B5\" 2 4 (cell 6) 5 7 (cell 7) 11 13 (cell 9) 14 16 (cell 10)) #(\"A1-A2-A3-A4-A5-B1-B2-B3-B4-B5-C1-C2-C3-C4-C5\" 0 2 (cell 1) 3 5 (cell 2) 6 8 (cell 3) 9 11 (cell 4) 12 14 (cell 5) 15 17 (cell 6) 18 20 (cell 7) 21 23 (cell 8) 24 26 (cell 9) 27 29 (cell 10) 30 32 (cell 11) 33 35 (cell 12) 36 38 (cell 13) 39 41 (cell 14) 42 44 (cell 15)) t 1 t 6 t 11 t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "A1-A2-A3-A4-A5-B1-B2-B3-B4-B5-C1-C2-C3-C4-C5")
@@ -247,7 +250,7 @@ fn divergence_undo_narrow_replace_widen_deep() {
             (get-text-property 1 'cell) (= (get-text-property 1 'cell) 1)
             (get-text-property 16 'cell) (= (get-text-property 16 'cell) 6)
             (get-text-property 31 'cell) (= (get-text-property 31 'cell) 11)
-            (overlay-get ov 'grid)))))) "#,
+            (overlay-get ov 'grid)))))"#,
         expect,
     );
 }

@@ -142,7 +142,6 @@ fn div_cx162_cl_macrolet_local_macro_definition() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx162_cl_symbol_macrolet_global_replacement() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -150,8 +149,7 @@ fn div_cx162_cl_symbol_macrolet_global_replacement() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (cl-symbol-macrolet ((x (list :expanded)))
-  (list x x x)))
-"##,
+  (list x x x))"##,
         expect,
     );
 }

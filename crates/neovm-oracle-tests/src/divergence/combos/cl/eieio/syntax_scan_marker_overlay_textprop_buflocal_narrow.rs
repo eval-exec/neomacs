@@ -4,12 +4,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_scan_lists_paren_balancing() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 62 25)""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass paren-pos ()
@@ -72,7 +71,7 @@ fn combo_eieio_scan_lists_paren_balancing() {
                   (marker-position m)
                   (buffer-string)
                   my-positions))))
-    (kill-buffer buf)))))"#,
+    (kill-buffer buf))))"#,
         expect,
     );
 }

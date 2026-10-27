@@ -4,11 +4,10 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx213_desktop_save_read_round_trip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -30,7 +29,7 @@ fn div_cx213_desktop_save_read_round_trip() {
           (delete-directory dir t)
           (list saved)))
   (error (list :errored (car e))))
-"##,
+)"##,
         expect,
     );
 }

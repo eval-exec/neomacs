@@ -501,7 +501,6 @@ fn oracle_prop_trie_adv_frequency_counter() {
 // Complex: trie compression (path compression for single-child chains)
 // ---------------------------------------------------------------------------
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_trie_adv_path_compression() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -635,7 +634,7 @@ fn oracle_prop_trie_adv_path_compression() {
     (fmakunbound 'neovm--tc-compress)
     (fmakunbound 'neovm--tc-node-count)
     (fmakunbound 'neovm--tc-raw-node-count)
-    (fmakunbound 'neovm--tc-labels)))"#;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    (fmakunbound 'neovm--tc-labels))))"#;
+    let expect = expect_test::expect![[r#""OK neovm--tc-labels""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

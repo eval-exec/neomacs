@@ -288,12 +288,13 @@ fn divergence_undo_with_textprop_intervention() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_multiple_undo_boundaries_interleaved() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"ORIAAGINALBB\" 0 3 (status dirty) 3 5 (status dirty) 5 9 (status dirty) 9 10 (status dirty) 10 11 (status dirty)) modified dirty #(\"ORIAAGINALBB\" 0 3 (status clean) 3 5 (status nil) 5 9 (status clean) 9 10 (status nil) 10 11 (status nil)) modified clean #(\"ORIAAGINALBB\" 0 3 (status clean) 3 5 (status nil) 5 9 (status clean) 9 10 (status nil) 10 11 (status nil)) modified clean 6)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "ORIGINAL")
@@ -320,7 +321,7 @@ fn divergence_multiple_undo_boundaries_interleaved() {
               (buffer-string)
               (overlay-get ov 'val)
               (get-text-property 1 'status)
-              (marker-position m))))) "#,
+              (marker-position m))))) )"#,
         expect,
     );
 }

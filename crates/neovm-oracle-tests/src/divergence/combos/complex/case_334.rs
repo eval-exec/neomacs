@@ -136,11 +136,10 @@ fn div_cx334_current_bidi_paragraph_direction_all_scripts() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx334_set_buffer_multibyte_toggle_data_loss() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (34 39 39 34)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx334-tog*")))
@@ -155,7 +154,7 @@ fn div_cx334_set_buffer_multibyte_toggle_data_loss() {
         (let ((len-back (buffer-size)))
         (prog1 (list len-mb bytes-mb len-uni len-back)
           (kill-buffer buf))))))
-"##,
+)"##,
         expect,
     )
 }

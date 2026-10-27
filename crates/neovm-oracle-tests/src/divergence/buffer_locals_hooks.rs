@@ -22,7 +22,6 @@ fn divergence_make_variable_buffer_local() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buffer_local_which_file() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -42,7 +41,7 @@ fn divergence_buffer_local_which_file() {
                                  (integerp (cadddr entry)))))
                     entry))
                 (buffer-local-variables))
-        (assq 'my-blf-test (buffer-local-variables))))"#,
+        (assq 'my-blf-test (buffer-local-variables)))"#,
         expect,
     );
 }

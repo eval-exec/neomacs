@@ -4,48 +4,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_clone_buffer_marker_overlay_textprop_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"cln\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"AAAA-BBBB-CCCC\")\n\
-         (put-text-property 1 5 'zone 'a)\n\
-         (put-text-property 6 10 'zone 'b)\n\
-         (put-text-property 11 15 'zone 'c)\n\
-         (let* ((ov (make-overlay 1 10))\n\
-         (_ (overlay-put ov 'face 'bold))\n\
-         (m1 (make-marker))\n\
-         (m2 (make-marker))\n\
-         (_ (set-marker m1 5))\n\
-         (_ (set-marker m2 10))\n\
-         (clone (clone-buffer \"cln-clone\")))\n\
-         (with-current-buffer clone\n\
-         (let* ((za (get-text-property 1 'zone))\n\
-         (zb (get-text-property 6 'zone))\n\
-         (z1 (marker-position m1))\n\
-         (z2 (marker-position m2))\n\
-         (o1 (overlay-start ov))\n\
-         (o2 (overlay-end ov))\n\
-         (bs (buffer-string)))\n\
-         (undo-boundary)\n\
-         (goto-char 1)\n\
-         (insert \"XXXX-\")\n\
-         (undo-boundary)\n\
-         (primitive-undo 1 buffer-undo-list)\n\
-         (list za zb z1 z2 o1 o2 bs\n\
-         (buffer-string)\n\
-         (marker-position m1)\n\
-         (marker-position m2)\n\
-         (overlay-start ov)\n\
-         (overlay-end ov))))\n\
-         (kill-buffer clone)\n\
-         (kill-buffer buf))))",
+        "(progn\n(let ((buf (generate-new-buffer \"cln\")))\n(with-current-buffer buf\n(insert \"AAAA-BBBB-CCCC\")\n(put-text-property 1 5 'zone 'a)\n(put-text-property 6 10 'zone 'b)\n(put-text-property 11 15 'zone 'c)\n(let* ((ov (make-overlay 1 10))\n(_ (overlay-put ov 'face 'bold))\n(m1 (make-marker))\n(m2 (make-marker))\n(_ (set-marker m1 5))\n(_ (set-marker m2 10))\n(clone (clone-buffer \"cln-clone\")))\n(with-current-buffer clone\n(let* ((za (get-text-property 1 'zone))\n(zb (get-text-property 6 'zone))\n(z1 (marker-position m1))\n(z2 (marker-position m2))\n(o1 (overlay-start ov))\n(o2 (overlay-end ov))\n(bs (buffer-string)))\n(undo-boundary)\n(goto-char 1)\n(insert \"XXXX-\")\n(undo-boundary)\n(primitive-undo 1 buffer-undo-list)\n(list za zb z1 z2 o1 o2 bs\n(buffer-string)\n(marker-position m1)\n(marker-position m2)\n(overlay-start ov)\n(overlay-end ov))))\n(kill-buffer clone)\n(kill-buffer buf)))))",
         expect,
     );
 }

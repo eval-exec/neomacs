@@ -40,7 +40,6 @@ fn div_v8_cl_progv_computed_symbols_nested() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_cl_progv_empty_mismatched_lengths() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -49,8 +48,7 @@ fn div_v8_cl_progv_empty_mismatched_lengths() {
 (defvar probe-pgv-y 'global)
 (list (cl-progv nil nil 'no-binding)
       (cl-progv '(probe-pgv-y) '(42) probe-pgv-y)
-      probe-pgv-y))
-"##;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 6 19)""#]];
+      probe-pgv-y)"##;
+    let expect = expect_test::expect![[r#""OK (no-binding 42 global)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

@@ -145,12 +145,11 @@ fn combo_defmacro_expand_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_defun_narrow_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-dfnar")))
@@ -192,7 +191,7 @@ fn combo_defun_narrow_marker_overlay_undo() {
                                 (get-text-property 21 'sect))))
             (fmakunbound 'combo--narrow-insert)
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }

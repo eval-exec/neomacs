@@ -24,7 +24,6 @@ fn div_v8_seq_concatenate_mapcat_multiple_types() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_seq_contains_set_equal_first_last() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -39,13 +38,11 @@ fn div_v8_seq_contains_set_equal_first_last() {
       (seq-first '(1 2 3))
       (seq-first [10 20 30])
       (seq-last '(1 2 3))
-      (seq-last "abc")))
-"##;
+      (seq-last "abc"))"##;
     let expect = expect_test::expect![[r#""ERR (void-function seq-last)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_seq_into_find_position_copy_count() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -59,8 +56,7 @@ fn div_v8_seq_into_find_position_copy_count() {
       (seq-position '(a b c d) 'c)
       (seq-count (lambda (x) (cl-evenp x)) '(1 2 3 4 5 6))
       (seq-copy '(1 2 3))
-      (eq (seq-copy '(1 2 3)) '(1 2 3))))
-"##;
+      (eq (seq-copy '(1 2 3)) '(1 2 3)))"##;
     let expect = expect_test::expect![[r#""ERR (void-function cl-evenp)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

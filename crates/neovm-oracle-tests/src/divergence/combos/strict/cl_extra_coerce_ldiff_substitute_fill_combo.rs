@@ -43,7 +43,6 @@ fn div_v8_cl_rempf_getf_substitute_fill() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_cl_pairlis_pairlis_adjoin_tree_equal_copy_tree() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -55,8 +54,7 @@ fn div_v8_cl_pairlis_pairlis_adjoin_tree_equal_copy_tree() {
       (cl-adjoin 2 '(1 2 3) :test #'=)
       (cl-tree-equal '(1 (2 3)) '(1 (2 3)))
       (cl-copy-tree '(1 (2 (3 4)) 5))
-      (cl-copy-list '(1 2 3))))
-"##;
+      (cl-copy-list '(1 2 3)))"##;
     let expect = expect_test::expect![[r#""ERR (void-function cl-copy-tree)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

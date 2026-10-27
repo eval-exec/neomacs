@@ -122,12 +122,11 @@ fn divergence_comment_kill_comment() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_indent_line_to() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 49)""#]];
+    let expect = expect_test::expect![[r#""OK (\"    hello\\n\tworld\\ntest\\n\" 0 nil 17)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "hello\nworld\ntest\n")
@@ -140,7 +139,7 @@ fn divergence_indent_line_to() {
   (list (buffer-string)
         (string-match "    hello" (buffer-string))
         (string-match "        world" (buffer-string))
-        (string-match "^test" (buffer-string))))) "#,
+        (string-match "^test" (buffer-string))))"#,
         expect,
     );
 }

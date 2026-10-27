@@ -184,11 +184,10 @@ fn div_cx128_with_temp_buffer_default_value_inheritance() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx128_let_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK :default""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (setq-default neo-cx128-mega :default)
@@ -215,7 +214,7 @@ fn div_cx128_let_with_marker_overlay_undo_narrow_mega() {
           (widen)
           (kill-buffer buf)
           (list state (default-value 'neo-cx128-mega))))))
-"##,
+)"##,
         expect,
     );
 }

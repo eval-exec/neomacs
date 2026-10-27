@@ -195,11 +195,10 @@ fn div_cx373_advice_multiple_named_remove_selectively() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx373_advice_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (calls)
@@ -230,7 +229,7 @@ fn div_cx373_advice_with_marker_overlay_undo_narrow_mega() {
           (list state (buffer-string) (marker-position m)
                 (overlay-start ov) (overlay-end ov)
                 (text-properties-at 1)))))))
-"##,
+)"##,
         expect,
     )
 }

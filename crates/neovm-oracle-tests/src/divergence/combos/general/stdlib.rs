@@ -81,27 +81,13 @@ fn divergence_rx_pcase_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_pcase_destructuring() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments (1 . 1) 2)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(list
-  (pcase '(1 2 3)
-    ((pred listp) (list 'list))
-    (_ 'other))
-  (pcase '(1 2 3)
-    ((\\`(,a ,b ,c) (list a b c)))
-  (pcase '(1 2 3)
-    ((\\`(,a . ,rest) (list a rest))))
-  (pcase 42
-    ((pred numberp) 'number)
-    ((pred stringp) 'string))
-  (pcase \"hello\"
-    ((pred numberp) 'number)
-    ((pred stringp) 'string))) ",
+        "(list\n  (pcase '(1 2 3)\n    ((pred listp) (list 'list))\n    (_ 'other))\n  (pcase '(1 2 3)\n    ((\\`(,a ,b ,c) (list a b c)))\n  (pcase '(1 2 3)\n    ((\\`(,a . ,rest) (list a rest))))\n  (pcase 42\n    ((pred numberp) 'number)\n    ((pred stringp) 'string))\n  (pcase \"hello\"\n    ((pred numberp) 'number)\n    ((pred stringp) 'string))) )",
         expect,
     );
 }

@@ -44,7 +44,6 @@ fn divergence_intern_soft_after_unintern_obarray_state() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_mapatoms_collect_and_compare() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -62,7 +61,7 @@ fn deficiency_mapatoms_collect_and_compare() {
     (list (length collected)
           (= (length collected) 3)
           (cl-every #'symbolp collected)
-          (member (intern "test-ma-2-xxx" obarray) collected))))) "#,
+          (member (intern "test-ma-2-xxx" obarray) collected))))"#,
         expect,
     );
 }

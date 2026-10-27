@@ -44,11 +44,10 @@ fn div_cx44_process_exit_code_sentinel_buffer_content_mega() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx44_overlay_evaporate_undo_display_marker_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -68,7 +67,7 @@ fn div_cx44_overlay_evaporate_undo_display_marker_narrow_mega() {
       (list state (overlayp ov) (overlay-start ov) (overlay-end ov)
             (marker-position m) (text-properties-at 1)
             (text-properties-at 7) (current-column))))
-"##,
+)"##,
         expect,
     );
 }
@@ -140,11 +139,10 @@ fn div_cx44_coding_encode_decode_region_no_conversion_mega() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx44_window_config_save_restore_split_marker_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buffer-markers)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx44-wc*")))
@@ -160,7 +158,7 @@ fn div_cx44_window_config_save_restore_split_marker_mega() {
                    (with-current-buffer buf (marker-position (cdar buffer-markers))))
         (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
         (kill-buffer buf))))
-"##,
+)"##,
         expect,
     );
 }

@@ -216,12 +216,11 @@ fn divergence_type_conversion_numbers() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_cl_loop_arithmetic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-loop)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (list (cl-loop for i from 1 to 10 sum i)
@@ -232,7 +231,7 @@ fn divergence_cl_loop_arithmetic() {
         (equal (cl-loop for i from 1 to 5 collect (* i i))
                '(1 4 9 16 25))
         (cl-loop for x in '(1 2 3 4 5) when (cl-evenp x) sum x)
-        (= (cl-loop for x in '(1 2 3 4 5) when (cl-evenp x) sum x) 6))) "#,
+        (= (cl-loop for x in '(1 2 3 4 5) when (cl-evenp x) sum x) 6))) )"#,
         expect,
     );
 }

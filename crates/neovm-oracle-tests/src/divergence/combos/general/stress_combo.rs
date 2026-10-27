@@ -24,12 +24,11 @@ fn divergence_stress_many_inserts_deletes() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_stress_nested_save_excursion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 10 17)""#]];
+    let expect = expect_test::expect![[r#""OK (11)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "ABCDEFGHIJ")
@@ -40,7 +39,7 @@ fn divergence_stress_nested_save_excursion() {
       (save-excursion
         (goto-char 3))))
     (list (point)))
-  (list (point)))"#,
+  (list (point))"#,
         expect,
     );
 }

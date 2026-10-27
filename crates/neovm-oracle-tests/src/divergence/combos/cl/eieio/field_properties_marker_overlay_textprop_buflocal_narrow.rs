@@ -68,7 +68,6 @@ fn combo_eieio_field_beginning_end_of_field() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_field_overlay_priority_clash() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -125,7 +124,7 @@ fn combo_eieio_field_overlay_priority_clash() {
               (marker-position m)
               (overlay-start ov1) (overlay-end ov1)
               (overlay-start ov2) (overlay-end ov2)))))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))"#,
         expect,
     );
 }

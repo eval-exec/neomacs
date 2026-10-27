@@ -258,12 +258,11 @@ fn divergence_eieio_slot_type_checking() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_eieio_with_closure_capture() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((a b c d e) t t (a b c d e) t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-ewcc-xxx ()
@@ -280,7 +279,7 @@ fn divergence_eieio_with_closure_capture() {
               (equal result '(a b c d e))
               (= (length result) 5)
               (test-ewcc-items store)
-              (eq (test-ewcc-items store) result))))) "#,
+              (eq (test-ewcc-items store) result))))) )"#,
         expect,
     );
 }

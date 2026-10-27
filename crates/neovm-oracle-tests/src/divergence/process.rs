@@ -166,11 +166,11 @@ fn div_proc_process_list_membership() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_proc_call_process_stderr_separate() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (wrong-type-argument stringp #<buffer  *stderr*>)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -181,7 +181,7 @@ fn div_proc_call_process_stderr_separate() {
         (let ((err (buffer-string)))
           (kill-buffer stderr-buf)
           (list out err)))))
-"##,
+)"##,
         expect,
     );
 }

@@ -538,7 +538,6 @@ fn oracle_prop_channel_pipeline() {
 // Multiplexer: select-like pattern, read from first available channel
 // ---------------------------------------------------------------------------
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_channel_multiplexer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -627,7 +626,9 @@ fn oracle_prop_channel_multiplexer() {
         ;; Sizes should all be 0
         (list (funcall (cdr (assq :size urgent)))
               (funcall (cdr (assq :size normal)))
-              (funcall (cdr (assq :size low)))))))"#;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+              (funcall (cdr (assq :size low))))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((0 . urgent-1) (1 . normal-1) ((1 . normal-2) (2 . low-1) (2 . low-2) (2 . low-3)) nil ((0 . u1) (0 . u2) (1 . n1) (2 . l1) (2 . l2) (2 . l3)) (0 0 0))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

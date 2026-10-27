@@ -158,27 +158,30 @@ fn div_cx481_eieio_slot_value() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx481_eieio_object_name() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect =
-        expect_test::expect![[r#""ERR (invalid-read-syntax \"Invalid byte-code object\" 6 7)""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
-        r##"(progn (require 'eieio)
+        r#"(progn (require 'eieio)
   (defclass neo-cx481-on () ())
   (let ((obj (make-instance 'neo-cx481-on)))
-    (stringp (object-name obj)))
+    (stringp (object-name obj))))"#,
+        expect,
+    );
+}
 
 #[test]
 fn div_cx481_eieio_object_class() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    assert_oracle_parity(
-        r##"(progn (require 'eieio)
+
+    let expect = expect_test::expect![[r#""OK (neo-cx481-oc neo-cx481-oc)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn (require 'eieio)
   (defclass neo-cx481-oc () ())
   (let ((obj (make-instance 'neo-cx481-oc)))
     (list (object-class obj) (object-class-fast obj))))
-"##,
+"#,
         expect,
     );
 }

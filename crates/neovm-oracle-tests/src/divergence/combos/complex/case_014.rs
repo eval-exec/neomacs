@@ -338,11 +338,10 @@ fn div_cx14_decode_coding_region_latin1_in_multibyte_buffer() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx14_overlay_buffer_after_kill() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 #<killed buffer> nil nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx14-ob*")))
@@ -354,7 +353,7 @@ fn div_cx14_overlay_buffer_after_kill() {
             (ov-buf (overlay-buffer ov)))
         (kill-buffer buf)
         (list ov-start ov-buf (overlay-buffer ov) (overlay-start ov)))))
-"##,
+)"##,
         expect,
     );
 }

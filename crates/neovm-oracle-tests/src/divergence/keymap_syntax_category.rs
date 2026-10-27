@@ -64,19 +64,18 @@ fn divergence_where_is() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_syntax_table_standard() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 6 23)""#]];
+    let expect = expect_test::expect![[r#""OK (t (2) (2) (0) (4 . 41))""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(let ((st (standard-syntax-table)))
   (list (char-table-p st)
         (aref st ?a)
         (aref st ?0)
         (aref st ? )
-        (aref st ?())))"#,
+        (aref st ?()))"#,
         expect,
     );
 }

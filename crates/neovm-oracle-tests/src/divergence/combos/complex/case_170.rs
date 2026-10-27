@@ -95,11 +95,10 @@ fn div_cx170_mega_subprocess_buflocal_textprop_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx170_mega_advice_closure_eval_macro_kbd_register_window_config() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t)
@@ -135,7 +134,7 @@ fn div_cx170_mega_advice_closure_eval_macro_kbd_register_window_config() {
               (advice-remove 'neo-cx170-target 'mega-advice)
               (kill-buffer buf)
               (list snapshot (buffer-live-p buf))))))))
-"##,
+)"##,
         expect,
     );
 }

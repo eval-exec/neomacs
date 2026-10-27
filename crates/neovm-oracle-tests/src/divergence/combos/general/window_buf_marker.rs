@@ -191,12 +191,11 @@ fn divergence_point_marker_excursion() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buffer_modified_tick() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t t t t t t t t t t val t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((tick1 (buffer-modified-tick))
@@ -218,7 +217,7 @@ fn divergence_buffer_modified_tick() {
               (= (buffer-size) 5)
               (string= (buffer-string) "hello")
               (get-text-property 1 'test)
-              (eq (get-text-property 1 'test) 'val))))) "#,
+              (eq (get-text-property 1 'test) 'val))))) )"#,
         expect,
     );
 }

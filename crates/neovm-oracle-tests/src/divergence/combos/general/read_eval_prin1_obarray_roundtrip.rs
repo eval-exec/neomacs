@@ -4,18 +4,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_prin1_to_string_read_roundtrip_cons() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"((a . 1) (b . 2) (c 3 4 5))\" t)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((data '((a . 1) (b . 2) (c . (3 4 5)))))\n\
-         (let ((printed (prin1-to-string data)))\n\
-         (let ((re-read (read-from-string printed)))\n\
-         (list printed (equal data (car re-read))))))",
+        "(progn\n(let ((data '((a . 1) (b . 2) (c . (3 4 5)))))\n(let ((printed (prin1-to-string data)))\n(let ((re-read (read-from-string printed)))\n(list printed (equal data (car re-read)))))))",
         expect,
     );
 }
@@ -73,21 +68,13 @@ fn deficiency_prin1_special_strings_with_quotes() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_intern_soft_after_prin1_symbol() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"my-test-symbol\" \"my-test-symbol\" t t)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((sym 'my-test-symbol))\n\
-         (let ((printed (prin1-to-string sym)))\n\
-         (let ((re-read (read printed)))\n\
-         (list printed\n\
-         (symbol-name re-read)\n\
-         (eq sym re-read)\n\
-         (eq sym (intern-soft printed))))))",
+        "(progn\n(let ((sym 'my-test-symbol))\n(let ((printed (prin1-to-string sym)))\n(let ((re-read (read printed)))\n(list printed\n(symbol-name re-read)\n(eq sym re-read)\n(eq sym (intern-soft printed)))))))",
         expect,
     );
 }
@@ -147,19 +134,13 @@ fn deficiency_read_with_intern_obarray() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_prin1_with_print_length_and_level() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-loop)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((deep '(a (b (c (d (e (f))))))))\n\
-         (let ((p1 (let ((print-level 3)) (prin1-to-string deep))))\n\
-         (let ((long (cl-loop for i from 1 to 20 collect i)))\n\
-         (let ((p2 (let ((print-length 5)) (prin1-to-string long))))\n\
-         (list p1 p2)))))",
+        "(progn\n(let ((deep '(a (b (c (d (e (f))))))))\n(let ((p1 (let ((print-level 3)) (prin1-to-string deep))))\n(let ((long (cl-loop for i from 1 to 20 collect i)))\n(let ((p2 (let ((print-length 5)) (prin1-to-string long))))\n(list p1 p2))))))",
         expect,
     );
 }

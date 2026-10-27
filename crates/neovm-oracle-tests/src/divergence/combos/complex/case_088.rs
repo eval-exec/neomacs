@@ -29,11 +29,10 @@ fn div_cx88_default_toplevel_value_with_buffer_local_override() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx88_kill_local_variable_in_indirect_buffer_does_not_affect_base() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable neo-cx88-ind)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((base (get-buffer-create " *neo-cx88-base*")))
@@ -51,7 +50,7 @@ fn div_cx88_kill_local_variable_in_indirect_buffer_does_not_affect_base() {
         (kill-buffer base)
         (list base-val-before ind-val-before
               base-val-after ind-val-after))))
-"##,
+)"##,
         expect,
     );
 }
@@ -75,11 +74,10 @@ fn div_cx88_buffer_local_value_with_non_local_returns_default() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx88_frame_parameter_round_trip_for_custom_keys() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (nil \"value-1\" \"value-2\" nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((frame (selected-frame)))
@@ -90,7 +88,7 @@ fn div_cx88_frame_parameter_round_trip_for_custom_keys() {
       (let ((v2 (frame-parameter frame 'neo-cx88-custom)))
         (modify-frame-parameters frame '((neo-cx88-custom)))  ; remove
         (list before v1 v2 (frame-parameter frame 'neo-cx88-custom)))))
-"##,
+)"##,
         expect,
     );
 }

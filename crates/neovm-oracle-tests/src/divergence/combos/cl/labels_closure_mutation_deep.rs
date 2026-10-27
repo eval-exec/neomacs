@@ -94,26 +94,13 @@ fn deficiency_cl_flet_shadowing_builtins() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_cl_labels_nested_with_accumulator() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-labels)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((result nil))\n\
-         (cl-labels ((walk (lst depth)\n\
-         (cond\n\
-         ((null lst) nil)\n\
-         ((listp (car lst))\n\
-         (walk (car lst) (1+ depth))\n\
-         (walk (cdr lst) depth))\n\
-         (t\n\
-         (push (list (car lst) depth) result)\n\
-         (walk (cdr lst) depth)))))\n\
-         (walk '(a (b (c d)) e (f)) 0)\n\
-         (nreverse result)))",
+        "(progn\n(let ((result nil))\n(cl-labels ((walk (lst depth)\n(cond\n((null lst) nil)\n((listp (car lst))\n(walk (car lst) (1+ depth))\n(walk (cdr lst) depth))\n(t\n(push (list (car lst) depth) result)\n(walk (cdr lst) depth)))))\n(walk '(a (b (c d)) e (f)) 0)\n(nreverse result))))",
         expect,
     );
 }

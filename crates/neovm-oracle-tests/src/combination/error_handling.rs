@@ -215,35 +215,14 @@ fn oracle_prop_error_recovery_retry_with_backoff() {
 // Dynamic binding + error handling interaction
 // ---------------------------------------------------------------------------
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_dynamic_binding_error_restores() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     // Verify that let-bound dynamic variables are properly restored
     // when unwinding through errors
-    let form = "(progn
-                  (defvar neovm--test-dynvar 'initial)
-                  (unwind-protect
-                      (progn
-                        ;; Verify initial binding
-                        (let ((before neovm--test-dynvar))
-                          ;; Shadow with let
-                          (let ((neovm--test-dynvar 'shadowed))
-                            (condition-case nil
-                                ;; Nest another let binding
-                                (let ((neovm--test-dynvar 'deep-shadow))
-                                  (let ((deep-val neovm--test-dynvar))
-                                    ;; Error unwinds through both lets
-                                    (signal 'error '(\"boom\"))))
-                              (error
-                               ;; After error: should see 'shadowed (inner let unwound)
-                               (let ((after-error neovm--test-dynvar))
-                                 ;; Return results
-                                 (list before 'deep-shadow after-error
-                                       neovm--test-dynvar))))))
-                    (makunbound 'neovm--test-dynvar)))";
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let form = "(progn\n                  (defvar neovm--test-dynvar 'initial)\n                  (unwind-protect\n                      (progn\n                        ;; Verify initial binding\n                        (let ((before neovm--test-dynvar))\n                          ;; Shadow with let\n                          (let ((neovm--test-dynvar 'shadowed))\n                            (condition-case nil\n                                ;; Nest another let binding\n                                (let ((neovm--test-dynvar 'deep-shadow))\n                                  (let ((deep-val neovm--test-dynvar))\n                                    ;; Error unwinds through both lets\n                                    (signal 'error '(\"boom\"))))\n                              (error\n                               ;; After error: should see 'shadowed (inner let unwound)\n                               (let ((after-error neovm--test-dynvar))\n                                 ;; Return results\n                                 (list before 'deep-shadow after-error\n                                       neovm--test-dynvar))))))\n                    (makunbound 'neovm--test-dynvar))))";
+    let expect = expect_test::expect![[r#""OK neovm--test-dynvar""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

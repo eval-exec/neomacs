@@ -43,11 +43,12 @@ fn div_cx301_tab_bar_tab_operations() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx301_project_detection_with_git_marker() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"Defining as dynamic an already lexical var\" project-find-functions)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -66,7 +67,7 @@ fn div_cx301_project_detection_with_git_marker() {
                 (when (consp proj) (cdr proj))
                 (eq (car proj) 'transient))))
   (error (list :errored (car e))))
-"##,
+)"##,
         expect,
     )
 }

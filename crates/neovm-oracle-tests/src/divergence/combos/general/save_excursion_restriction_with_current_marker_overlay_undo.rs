@@ -109,12 +109,11 @@ fn combo_save_restriction_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_with_current_buffer_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf1 (generate-new-buffer " combo-wcb1"))
@@ -164,17 +163,16 @@ fn combo_with_current_buffer_marker_overlay_undo() {
               results))
       (kill-buffer buf1)
       (kill-buffer buf2)
-      (list (nreverse results)))) "#,
+      (list (nreverse results)))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_save_excursion_narrow_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-sen")))
@@ -216,7 +214,7 @@ fn combo_save_excursion_narrow_marker_overlay_undo() {
                                 (get-text-property 16 'sect)
                                 (get-text-property 21 'sect))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }

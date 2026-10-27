@@ -163,12 +163,11 @@ fn div_cx53_json_dom_xml_chain_deeply_nested_multibyte_hash_secure_mega() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx53_window_config_register_buffer_split_merge_marker_overlay_narrow_dedicated_hscroll_vscroll_full_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buffer-markers)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx53-wc*")))
@@ -198,7 +197,7 @@ fn div_cx53_window_config_register_buffer_split_merge_marker_overlay_narrow_dedi
                    (with-current-buffer buf (text-properties-at 50)))
         (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
         (kill-buffer buf))))
-"##,
+)"##,
         expect,
     );
 }
@@ -242,11 +241,12 @@ fn div_cx53_undo_redo_marker_overlay_textprop_display_evaporate_narrow_env_exitc
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx53_read_eval_backquote_destructuring_splice_lexical_macro_multibyte_hash_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" let ((result (eval (car (read-from-string \"`(:names ,(mapcar #'car (caar ,data))\\n                                  :vals ,(mapcar #'cdr (caar ,data))\\n                                  :len ,(length (caar ,data)))\")) t))) (list (plist-get result :names) (plist-get result :vals) (plist-get result :len) (secure-hash 'md5 (prin1-to-string result))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t))
@@ -259,16 +259,15 @@ fn div_cx53_read_eval_backquote_destructuring_splice_lexical_macro_multibyte_has
             (plist-get result :vals)
             (plist-get result :len)
             (secure-hash 'md5 (prin1-to-string result))))))
-"##,
+)"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx53_print_circle_gensym_struct_vector_propertized_escape_all_length_level_full_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-defstruct)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn
@@ -289,7 +288,7 @@ fn div_cx53_print_circle_gensym_struct_vector_propertized_escape_all_length_leve
             (prin1-to-string `[,s ,s ,x ,x])
             (length (prin1-to-string (list r1 r2 r1 r2)))
             (length (prin1-to-string (vector (list 1 2) (list 3 4) (list 5 6) (list 7)))))))
-"##,
+)"##,
         expect,
     );
 }

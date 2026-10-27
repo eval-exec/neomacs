@@ -105,11 +105,10 @@ fn div_cx131_saveplace_save_location_format() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx131_desktop_save_buffer_format() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments (12 . 12) 6)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -123,7 +122,7 @@ fn div_cx131_desktop_save_buffer_format() {
                 (boundp 'desktop-buffer-mode-handlers)
                 (boundp 'desktop-minor-mode-table))))
   (error (list :errored (car e))))
-"##,
+)"##,
         expect,
     );
 }

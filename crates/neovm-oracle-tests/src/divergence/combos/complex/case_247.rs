@@ -5,11 +5,10 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx247_set_process_filter_round_trip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((p (make-process :name "neo-cx247-flt"
@@ -24,16 +23,15 @@ fn div_cx247_set_process_filter_round_trip() {
                      (null after-clear))
           (delete-process p)
           (kill-buffer (process-buffer p))))))
-"##,
+)"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx247_set_process_sentinel_round_trip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((p (make-process :name "neo-cx247-sent"
@@ -46,7 +44,7 @@ fn div_cx247_set_process_sentinel_round_trip() {
         (prog1 (list (eq got my-sentinel)
                      (null after-clear))
           (delete-process p)))))
-"##,
+)"##,
         expect,
     );
 }
@@ -112,11 +110,10 @@ fn div_cx247_process_type_and_connection_query() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx247_process_list_and_count() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (0 3 0 t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((before (length (process-list))))
@@ -129,7 +126,7 @@ fn div_cx247_process_list_and_count() {
         (list before after-add after-del
               (>= after-add (+ 3 before))
               (>= (1- after-add) after-del)))))
-"##,
+)"##,
         expect,
     );
 }

@@ -431,7 +431,6 @@ fn oracle_prop_splay_tree_delete() {
 // In-order traversal correctness after mixed operations
 // ---------------------------------------------------------------------------
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_splay_tree_inorder_after_mixed_ops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -537,8 +536,10 @@ fn oracle_prop_splay_tree_inorder_after_mixed_ops() {
                 (fmakunbound 'neovm--st-rotate-right) (fmakunbound 'neovm--st-rotate-left)
                 (fmakunbound 'neovm--st-splay) (fmakunbound 'neovm--st-insert)
                 (fmakunbound 'neovm--st-inorder) (fmakunbound 'neovm--st-max)
-                (fmakunbound 'neovm--st-delete))))))))))"#;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 102 56)""#]];
+                (fmakunbound 'neovm--st-delete)))))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((5 10 15 20 25 30) 10 (5 10 15 20 25 30) (5 10 20 30) (5 10 12 20 22 30))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

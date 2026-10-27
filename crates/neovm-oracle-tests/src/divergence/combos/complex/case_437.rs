@@ -66,29 +66,25 @@ fn div_cx437_org_eldoc_ops() {
 }
 
 /// org-compat: compatibility functions.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx437_org_compat_ops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 2 41)""#]];
+    let expect = expect_test::expect![[r#""OK (t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-compat)
-  (list (fboundp 'org-compatible-face))))
-"##,
+  (list (fboundp 'org-compatible-face)))"##,
         expect,
     );
 }
 
 /// org-attach-git: git attachment integration.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx437_org_attach_git_ops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 2 46)""#]];
+    let expect = expect_test::expect![[r#""OK (nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-attach-git)
-  (list (fboundp 'org-attach-git-annex-get))))
-"##,
+  (list (fboundp 'org-attach-git-annex-get)))"##,
         expect,
     );
 }
@@ -129,7 +125,6 @@ fn div_cx437_org_export_filter() {
 }
 
 /// org-element cache operations.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx437_org_element_cache() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -141,7 +136,7 @@ fn div_cx437_org_element_cache() {
     (insert "* H1\n** H2\n")
     (let ((cache (org-element-cache-reset)))
       (fboundp 'org-element-cache-active-p)))
-"##,
+)"##,
         expect,
     );
 }
@@ -164,11 +159,10 @@ fn div_cx437_org_todo_yesterday() {
 }
 
 /// org-agenda-skip: agenda skip conditions.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx437_org_agenda_skip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-agenda)
   (with-temp-buffer
@@ -176,7 +170,7 @@ fn div_cx437_org_agenda_skip() {
     (insert "* task\n")
     (list (fboundp 'org-agenda-skip-entry-if)
           (fboundp 'org-agenda-skip-subtree-if)))
-"##,
+)"##,
         expect,
     );
 }
@@ -196,11 +190,10 @@ fn div_cx437_org_timer_pause() {
 }
 
 /// org-clock-in/out deep.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx437_org_clock_in_out_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-clock)
   (with-temp-buffer
@@ -209,17 +202,16 @@ fn div_cx437_org_clock_in_out_deep() {
     (let ((org-clock-in-resume nil))
       (list (fboundp 'org-clock-in-last)
             (fboundp 'org-clock-cancel))))
-"##,
+)"##,
         expect,
     );
 }
 
 /// org-indent with inline tasks.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx437_org_indent_inlinetask() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (nil t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-indent) (require 'org-inlinetask)
   (with-temp-buffer
@@ -228,7 +220,7 @@ fn div_cx437_org_indent_inlinetask() {
       (insert "*************** task\n*************** END\n")
       (list (fboundp 'org-indent-add-editable-areas)
             (boundp 'org-indent-indentation-per-level))))
-"##,
+)"##,
         expect,
     );
 }

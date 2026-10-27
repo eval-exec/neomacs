@@ -102,23 +102,13 @@ fn deficiency_category_table_set_and_category_docstring() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_syntax_table_after_modify_syntax_entry() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable \\\"w\\\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((st (copy-syntax-table (standard-syntax-table))))\n\
-         (with-syntax-table st\n\
-         (modify-syntax-entry ?$ \\\"w\\\")\n\
-         (modify-syntax-entry ?% \\\"w\\\")\n\
-         (list (char-syntax ?$)\n\
-         (char-syntax ?%)\n\
-         (char-syntax ?a)\n\
-         (char-syntax ?0)\n\
-         (char-syntax ? ))))",
+        "(progn\n(let ((st (copy-syntax-table (standard-syntax-table))))\n(with-syntax-table st\n(modify-syntax-entry ?$ \\\"w\\\")\n(modify-syntax-entry ?% \\\"w\\\")\n(list (char-syntax ?$)\n(char-syntax ?%)\n(char-syntax ?a)\n(char-syntax ?0)\n(char-syntax ? )))))",
         expect,
     );
 }

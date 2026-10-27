@@ -3,12 +3,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_mega_combo_edit_undo_overlays_markers_textprops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 39 60)""##]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 57 63)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "fn foo(x) {\n  return x + 1;\n}\n\nfn bar(y) {\n  return y * 2;\n}\n")
@@ -48,7 +47,7 @@ fn divergence_mega_combo_edit_undo_overlays_markers_textprops() {
             (marker-position m-return1)
             (marker-position m-return2)
             (get-text-property 1 'syntax)
-            (eq (get-text-property 1 'syntax) 'keyword)))) #"#,
+            (eq (get-text-property 1 'syntax) 'keyword)))) )"#,
         expect,
     );
 }
@@ -57,7 +56,9 @@ fn divergence_mega_combo_edit_undo_overlays_markers_textprops() {
 fn divergence_mega_combo_eieio_closure_eval_advice_marker() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK ((modified (advised modified) created (advised created)) \"test\" 9 11 t t ((advised created)) (created (advised created)) 9 t t t nil)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((modified (advised modified) created (advised created)) \"test\" 9 11 t t ((advised created)) (created (advised created)) 9 t t t nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-mega-obj-xxx ()
@@ -103,7 +104,9 @@ fn divergence_mega_combo_eieio_closure_eval_advice_marker() {
 fn divergence_mega_combo_buffer_narrow_overlay_undo_regex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (#(\" SECTION2-YYYY SECTION3-C\" 0 10 (group b) 14 25 (group c)) 2 3 #(\"SECTION1-AAAA SECTION2-BBBB SECTION3-CCCC SECTION4-DDDD\" 0 12 (group a) 13 23 (group b) 23 25 (group b) 26 27 (group c) 27 38 (group c) 39 51 (group d)) t 1 13 14 24 1 t a t b t nil)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\" SECTION2-YYYY SECTION3-C\" 0 10 (group b) 14 25 (group c)) 2 3 #(\"SECTION1-AAAA SECTION2-BBBB SECTION3-CCCC SECTION4-DDDD\" 0 12 (group a) 13 23 (group b) 23 25 (group b) 26 27 (group c) 27 38 (group c) 39 51 (group d)) t 1 13 14 24 1 t a t b t nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "SECTION1-AAAA SECTION2-BBBB SECTION3-CCCC SECTION4-DDDD")
@@ -153,7 +156,9 @@ fn divergence_mega_combo_buffer_narrow_overlay_undo_regex() {
 fn divergence_mega_combo_keymap_closure_eieio_error() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK ((closure ((v . 11)) nil (setq v (+ v 1))) t (closure ((v . 11)) nil v) t 11 12 12 t 11 11 t)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((closure ((v . 11)) nil (setq v (+ v 1))) t (closure ((v . 11)) nil v) t 11 12 12 t 11 11 t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass test-mkce-xxx ()
@@ -187,12 +192,13 @@ fn divergence_mega_combo_keymap_closure_eieio_error() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_mega_combo_multibyte_overlay_undo_marker() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 30 56)""##]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"start-\\303\\251\\303\\240\\303\\251\\303\\240-\\303\\271-end\" 0 5 (part pre) 10 12 (part accent) 13 17 (part post)) 7 13 1 17 #(\"start-\\303\\251\\303\\240-\\303\\271-end\" 0 5 (part pre) 6 8 (part accent) 9 13 (part post)) 1 13 7 9 bold pre t accent t post t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "start-\xc3\xa9\xc3\xa0-\xc3\xb9-end")
@@ -223,7 +229,7 @@ fn divergence_mega_combo_multibyte_overlay_undo_marker() {
             (get-text-property 7 'part)
             (eq (get-text-property 7 'part) 'accent)
             (get-text-property 10 'part)
-            (eq (get-text-property 10 'part) 'post)))) #"#,
+            (eq (get-text-property 10 'part) 'post)))) )"#,
         expect,
     );
 }

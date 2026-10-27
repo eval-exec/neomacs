@@ -324,12 +324,13 @@ fn divergence_text_property_search_replace_cycle() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_revert_buffer_with_state() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r##""ERR (invalid-read-syntax \"#\" 20 42)""##]];
+    let expect = expect_test::expect![[
+        r#""OK ((#(\"ORIGINAL-CONTENT-HERE\" 0 7 (section header) 8 15 (section body) 16 21 (section footer)) loaded header 10) \"NEW-CONTENT\" t 12 1 nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "ORIGINAL-CONTENT-HERE")
@@ -350,7 +351,7 @@ fn divergence_revert_buffer_with_state() {
             (= (buffer-size) 11)
             (marker-position m)
             (overlay-start ov)
-            (null (overlay-start ov))))) #"#,
+            (null (overlay-start ov))))) )"#,
         expect,
     );
 }

@@ -81,12 +81,11 @@ fn divergence_save_selected_window_mutation() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_window_configuration_full_cycle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 15 45)""#]];
+    let expect = expect_test::expect![[r#""OK (t 2 3 t t t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(let ((wc1 (current-window-configuration)))
   (split-window nil nil 'right)
@@ -102,7 +101,7 @@ fn divergence_window_configuration_full_cycle() {
             (set-window-configuration wc2)
             (= (length (window-list)) n2)
             (set-window-configuration wc1)
-            (= (length (window-list)) 1)))))) "#,
+            (= (length (window-list)) 1)))))"#,
         expect,
     );
 }
@@ -153,19 +152,18 @@ fn divergence_buffer_in_two_windows_simultaneously() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_window_dedicated_p() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 6 39)""#]];
+    let expect = expect_test::expect![[r#""OK (t t t nil t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(let ((w (selected-window)))
   (list (not (window-dedicated-p w))
         (set-window-dedicated-p w t)
         (window-dedicated-p w)
         (set-window-dedicated-p w nil)
-        (not (window-dedicated-p w))))) "#,
+        (not (window-dedicated-p w))))"#,
         expect,
     );
 }
@@ -188,7 +186,6 @@ fn divergence_temp_buffer_display() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_window_margins_fringes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -204,7 +201,7 @@ fn divergence_window_margins_fringes() {
         (window-right-margin w)
         (window-left-fringe w)
         (window-right-fringe w)
-        (>= (+ (window-left-fringe w) (window-right-fringe w)) 0)))) "#,
+        (>= (+ (window-left-fringe w) (window-right-fringe w)) 0)))"#,
         expect,
     );
 }

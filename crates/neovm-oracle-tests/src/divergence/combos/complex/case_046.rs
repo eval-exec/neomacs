@@ -191,7 +191,6 @@ fn div_cx46_timer_run_cancel_process_exit_coding_env_mega() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx46_print_circle_gensym_quoted_struct_propertized_length_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -210,8 +209,7 @@ fn div_cx46_print_circle_gensym_quoted_struct_propertized_length_mega() {
       (list (prin1-to-string r)
             (prin1-to-string `(',gs ',gs))
             (prin1-to-string `[,s ,s ,circ ,circ]))
-            (length (prin1-to-string (list 1 2 3 4 5 6 7 8 9 10)))))))
-"##,
+            (length (prin1-to-string (list 1 2 3 4 5 6 7 8 9 10))))))"##,
         expect,
     );
 }
@@ -385,11 +383,12 @@ fn div_cx46_superword_backward_word_then_upcase() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx46_format_escape_all_multibyte_circle_gensym_propertized_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (32 44 0 0 \"(#(\\\"caf\\\\x00e9\\\\n\\\" 0 5 (face bold)) #(\\\"\\\\x4e16\\\\x754c\\\" 0 2 (mouse-face highlight)) #:g0 #1=[#1#] ...)\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((print-circle t) (print-gensym t) (print-quoted t)
@@ -405,7 +404,7 @@ fn div_cx46_format_escape_all_multibyte_circle_gensym_propertized_mega() {
           (string-match "#:" (prin1-to-string gs))
           (string-match "#[0-9]" (prin1-to-string circ))
           (prin1-to-string (list s1 s2 gs circ (vector 1 2 3 4 5 6 7)))))
-"##,
+)"##,
         expect,
     );
 }

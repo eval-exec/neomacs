@@ -43,19 +43,19 @@ fn div_n2_case_unicode_latin_greek() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_n2_case_cyrillic_and_sharp_s() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 6 28)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"женя\" \"ЖЕНЯ\" \"Женя Москва\" \"SSSTRASSE\" \"strasse\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (list (downcase "ЖЕНЯ")
       (upcase "женя")
       (capitalize "женя москва")
       (upcase "ßstraße")
-      (downcase "STRASSE")))
-"##,
+      (downcase "STRASSE"))"##,
         expect,
     );
 }
@@ -83,11 +83,10 @@ fn div_n2_case_region_and_buffer() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_n2_case_table_introspect() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 7 31)""#]];
+    let expect = expect_test::expect![[r#""OK (t t t t nil nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (list (char-equal ?a (downcase ?A))
@@ -95,8 +94,7 @@ fn div_n2_case_table_introspect() {
       (char-equal ?é (downcase ?É))
       (eq (upcase ?é) ?É)
       (upcase-word 0)
-      (capitalize-region 1 1)))
-"##,
+      (capitalize-region 1 1))"##,
         expect,
     );
 }

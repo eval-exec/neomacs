@@ -164,7 +164,6 @@ fn div_cx107_generator_with_closure_capture() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx107_iter_close_availability() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -182,13 +181,11 @@ fn div_cx107_iter_close_availability() {
         (iter-next iter)
         (iter-close iter)
         (iter-next iter)))
-  (error (list :errored (car e))))
-"##,
+  (error (list :errored (car e)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx107_generator_recurse_via_yield_from() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -209,8 +206,7 @@ fn div_cx107_generator_recurse_via_yield_from() {
                 (iter-next iter)
                 (iter-next iter)
                 (iter-next iter)))))
-  (error (list :errored (car e))))
-"##,
+  (error (list :errored (car e)))"##,
         expect,
     );
 }

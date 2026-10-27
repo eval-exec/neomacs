@@ -5,12 +5,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_compare_bufsubst_basic_with_objects() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 66 60)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"cmp-11-15\" -2) (\"cmp-1-10\" 0) (\"cmp-16-25\" 0) (\"cmp-26-35\" -2) (\"cmp-after-edit\" 8 18 18)) (8 -2 -2) 3 (\"ins-a@8\") 18 18)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass diff-state ()
@@ -77,7 +78,7 @@ fn combo_eieio_compare_bufsubst_basic_with_objects() {
       (setq results (reverse results))
       (list results
             (ds-mm ds) (ds-td ds) (ds-log ds)
-            (marker-position m-a) (marker-position m-b)))))))"#,
+            (marker-position m-a) (marker-position m-b)))))"#,
         expect,
     );
 }
@@ -237,7 +238,6 @@ fn combo_eieio_compare_bufsubst_multi_region_diff() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_compare_bufsubst_undo_restore() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -305,7 +305,7 @@ fn combo_eieio_compare_bufsubst_undo_restore() {
               (marker-position m)
               (overlay-start ov) (overlay-end ov)))))
     (kill-buffer buf-a)
-    (kill-buffer buf-b)))"#,
+    (kill-buffer buf-b))"#,
         expect,
     );
 }

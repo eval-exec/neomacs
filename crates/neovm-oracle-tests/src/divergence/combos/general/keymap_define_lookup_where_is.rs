@@ -51,24 +51,15 @@ fn deficiency_make_sparse_keymap_with_parent_inheritance() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_keymap_prefix_key_and_nested_lookup() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((keymap (98 . prefix-b) (97 . prefix-a)) prefix-a prefix-b t nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((map (make-sparse-keymap)))\n\
-         (let ((prefix-map (make-sparse-keymap)))\n\
-         (define-key prefix-map \"a\" 'prefix-a)\n\
-         (define-key prefix-map \"b\" 'prefix-b)\n\
-         (define-key map \"\\C-c\" prefix-map)\n\
-         (list (lookup-key map \"\\C-c\")\n\
-         (lookup-key map \"\\C-ca\")\n\
-         (lookup-key map \"\\C-cb\")\n\
-         (keymapp (lookup-key map \"\\C-c\"))\n\
-         (keymapp (lookup-key map \"\\C-ca\")))))",
+        "(progn\n(let ((map (make-sparse-keymap)))\n(let ((prefix-map (make-sparse-keymap)))\n(define-key prefix-map \"a\" 'prefix-a)\n(define-key prefix-map \"b\" 'prefix-b)\n(define-key map \"\\C-c\" prefix-map)\n(list (lookup-key map \"\\C-c\")\n(lookup-key map \"\\C-ca\")\n(lookup-key map \"\\C-cb\")\n(keymapp (lookup-key map \"\\C-c\"))\n(keymapp (lookup-key map \"\\C-ca\"))))))",
         expect,
     );
 }
@@ -96,18 +87,13 @@ fn deficiency_keymap_meta_and_function_key_bindings() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_define_key_with_remap_binding() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (my-insert nil)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((map (make-sparse-keymap)))\n\
-         (define-key map [remap self-insert-command] 'my-insert)\n\
-         (list (lookup-key map [remap self-insert-command])\n\
-         (lookup-key map \"a\")))",
+        "(progn\n(let ((map (make-sparse-keymap)))\n(define-key map [remap self-insert-command] 'my-insert)\n(list (lookup-key map [remap self-insert-command])\n(lookup-key map \"a\"))))",
         expect,
     );
 }

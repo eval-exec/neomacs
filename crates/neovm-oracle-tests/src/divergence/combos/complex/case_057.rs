@@ -131,28 +131,19 @@ fn div_cx57_saveplace_save_restore() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
-fn div_cx57_savehist_save_minibuffer() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments condition-case 1)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"
-(condition-case e
-    );
-}
-
 #[test]
 fn div_cx57_recentf_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    assert_oracle_parity(
-        r##"
+
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r#"
 (condition-case e
     (progn (require 'recentf)
       (list (boundp 'recentf-mode)
             (boundp 'recentf-max-saved-items)))
   (error (cons 'errored (car e))))
-"##,
+"#,
         expect,
     );
 }

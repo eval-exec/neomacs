@@ -34,60 +34,24 @@ fn deficiency_buffer_local_chain_across_switch() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_default_directory_buffer_ops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"ddb\")))\n\
-         (with-current-buffer buf\n\
-         (let ((dir (expand-file-name \"./\")))\n\
-         (insert (format \"dir: %s\\n\" dir))\n\
-         (put-text-property 1 6 'field 'label)\n\
-         (put-text-property 6 (point-max) 'field 'value)\n\
-         (list (buffer-string)\n\
-         (get-text-property 1 'field)\n\
-         (get-text-property 6 'field)\n\
-         (stringp dir)))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"ddb\")))\n(with-current-buffer buf\n(let ((dir (expand-file-name \"./\")))\n(insert (format \"dir: %s\\n\" dir))\n(put-text-property 1 6 'field 'label)\n(put-text-property 6 (point-max) 'field 'value)\n(list (buffer-string)\n(get-text-property 1 'field)\n(get-text-property 6 'field)\n(stringp dir)))))\n(kill-buffer buf))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_abbrev_expansion_undo_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"aeu\"))\n\
-         (table (make-abbrev-table)))\n\
-         (with-current-buffer buf\n\
-         (define-abbrev table \"fn\" \"function\" nil)\n\
-         (define-abbrev table \"var\" \"variable\" nil)\n\
-         (define-abbrev table \"expr\" \"expression\" nil)\n\
-         (setq local-abbrev-table table)\n\
-         (insert \"fn var expr\")\n\
-         (put-text-property 1 3 'abbrev 'fn)\n\
-         (put-text-property 4 7 'abbrev 'var)\n\
-         (put-text-property 8 12 'abbrev 'expr)\n\
-         (undo-boundary)\n\
-         (let ((s (buffer-string)))\n\
-         (goto-char 1)\n\
-         (abbrev-insert (abbrev-symbol \"fn\" table))\n\
-         (undo-boundary)\n\
-         (let ((s2 (buffer-string))\n\
-         (a1 (get-text-property 1 'abbrev)))\n\
-         (primitive-undo 1 buffer-undo-list)\n\
-         (list s s2 a1\n\
-         (buffer-string)\n\
-         (get-text-property 1 'abbrev))))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"aeu\"))\n(table (make-abbrev-table)))\n(with-current-buffer buf\n(define-abbrev table \"fn\" \"function\" nil)\n(define-abbrev table \"var\" \"variable\" nil)\n(define-abbrev table \"expr\" \"expression\" nil)\n(setq local-abbrev-table table)\n(insert \"fn var expr\")\n(put-text-property 1 3 'abbrev 'fn)\n(put-text-property 4 7 'abbrev 'var)\n(put-text-property 8 12 'abbrev 'expr)\n(undo-boundary)\n(let ((s (buffer-string)))\n(goto-char 1)\n(abbrev-insert (abbrev-symbol \"fn\" table))\n(undo-boundary)\n(let ((s2 (buffer-string))\n(a1 (get-text-property 1 'abbrev)))\n(primitive-undo 1 buffer-undo-list)\n(list s s2 a1\n(buffer-string)\n(get-text-property 1 'abbrev))))))\n(kill-buffer buf))",
         expect,
     );
 }
@@ -125,75 +89,24 @@ fn deficiency_fill_region_undo_with_props() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_justify_text_undo_props() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (args-out-of-range 32 49)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf (generate-new-buffer \"jtu\")))\n\
-         (with-current-buffer buf\n\
-         (insert \"Short line\\nAnother short line\\nThird short line\")\n\
-         (put-text-property 1 11 'line 1)\n\
-         (put-text-property 12 31 'line 2)\n\
-         (put-text-property 32 49 'line 3)\n\
-         (let ((fill-column 40))\n\
-         (undo-boundary)\n\
-         (goto-char 12)\n\
-         (insert \"          \")\n\
-         (undo-boundary)\n\
-         (let ((s (buffer-string))\n\
-         (l12 (get-text-property 12 'line)))\n\
-         (primitive-undo 1 buffer-undo-list)\n\
-         (list s l12\n\
-         (buffer-string)\n\
-         (get-text-property 1 'line)\n\
-         (get-text-property 12 'line)\n\
-         (get-text-property 32 'line))))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(let ((buf (generate-new-buffer \"jtu\")))\n(with-current-buffer buf\n(insert \"Short line\\nAnother short line\\nThird short line\")\n(put-text-property 1 11 'line 1)\n(put-text-property 12 31 'line 2)\n(put-text-property 32 49 'line 3)\n(let ((fill-column 40))\n(undo-boundary)\n(goto-char 12)\n(insert \"          \")\n(undo-boundary)\n(let ((s (buffer-string))\n(l12 (get-text-property 12 'line)))\n(primitive-undo 1 buffer-undo-list)\n(list s l12\n(buffer-string)\n(get-text-property 1 'line)\n(get-text-property 12 'line)\n(get-text-property 32 'line))))))\n(kill-buffer buf))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_multiple_buf_local_vars_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (defvar my-buf-mode 'normal)\n\
-         (defvar my-buf-depth 0)\n\
-         (defvar my-buf-tag nil)\n\
-         (let ((buf (generate-new-buffer \"mbl\")))\n\
-         (with-current-buffer buf\n\
-         (make-variable-buffer-local 'my-buf-mode)\n\
-         (make-variable-buffer-local 'my-buf-depth)\n\
-         (make-variable-buffer-local 'my-buf-tag)\n\
-         (setq my-buf-mode 'edit)\n\
-         (setq my-buf-depth 3)\n\
-         (setq my-buf-tag 'important)\n\
-         (insert (format \"mode=%S depth=%d tag=%S\" my-buf-mode my-buf-depth my-buf-tag))\n\
-         (put-text-property 1 10 'field 'mode)\n\
-         (put-text-property 10 20 'field 'depth)\n\
-         (put-text-property 20 30 'field 'tag)\n\
-         (undo-boundary)\n\
-         (setq my-buf-mode 'view)\n\
-         (setq my-buf-depth 5)\n\
-         (erase-buffer)\n\
-         (insert (format \"mode=%S depth=%d tag=%S\" my-buf-mode my-buf-depth my-buf-tag))\n\
-         (undo-boundary)\n\
-         (let ((s (buffer-string))\n\
-         (f1 (get-text-property 1 'field)))\n\
-         (primitive-undo 1 buffer-undo-list)\n\
-         (list s f1\n\
-         (buffer-string)\n\
-         (get-text-property 1 'field)\n\
-         (get-text-property 10 'field)))))\n\
-         (kill-buffer buf)))",
+        "(progn\n(defvar my-buf-mode 'normal)\n(defvar my-buf-depth 0)\n(defvar my-buf-tag nil)\n(let ((buf (generate-new-buffer \"mbl\")))\n(with-current-buffer buf\n(make-variable-buffer-local 'my-buf-mode)\n(make-variable-buffer-local 'my-buf-depth)\n(make-variable-buffer-local 'my-buf-tag)\n(setq my-buf-mode 'edit)\n(setq my-buf-depth 3)\n(setq my-buf-tag 'important)\n(insert (format \"mode=%S depth=%d tag=%S\" my-buf-mode my-buf-depth my-buf-tag))\n(put-text-property 1 10 'field 'mode)\n(put-text-property 10 20 'field 'depth)\n(put-text-property 20 30 'field 'tag)\n(undo-boundary)\n(setq my-buf-mode 'view)\n(setq my-buf-depth 5)\n(erase-buffer)\n(insert (format \"mode=%S depth=%d tag=%S\" my-buf-mode my-buf-depth my-buf-tag))\n(undo-boundary)\n(let ((s (buffer-string))\n(f1 (get-text-property 1 'field)))\n(primitive-undo 1 buffer-undo-list)\n(list s f1\n(buffer-string)\n(get-text-property 1 'field)\n(get-text-property 10 'field)))))\n(kill-buffer buf))",
         expect,
     );
 }
@@ -280,29 +193,13 @@ fn deficiency_get_buffer_create_props() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_buffer_swap_text_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments buffer-swap-text 2)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((buf1 (generate-new-buffer \"bs1\"))\n\
-         (buf2 (generate-new-buffer \"bs2\")))\n\
-         (with-current-buffer buf1\n\
-         (insert \"CONTENT-A\")\n\
-         (put-text-property 1 10 'source 'buf1))\n\
-         (with-current-buffer buf2\n\
-         (insert \"CONTENT-B\")\n\
-         (put-text-property 1 10 'source 'buf2))\n\
-         (buffer-swap-text buf1 buf2)\n\
-         (list (with-current-buffer buf1 (buffer-string))\n\
-         (with-current-buffer buf1 (get-text-property 1 'source))\n\
-         (with-current-buffer buf2 (buffer-string))\n\
-         (with-current-buffer buf2 (get-text-property 1 'source))))\n\
-         (kill-buffer buf1)\n\
-         (kill-buffer buf2)))",
+        "(progn\n(let ((buf1 (generate-new-buffer \"bs1\"))\n(buf2 (generate-new-buffer \"bs2\")))\n(with-current-buffer buf1\n(insert \"CONTENT-A\")\n(put-text-property 1 10 'source 'buf1))\n(with-current-buffer buf2\n(insert \"CONTENT-B\")\n(put-text-property 1 10 'source 'buf2))\n(buffer-swap-text buf1 buf2)\n(list (with-current-buffer buf1 (buffer-string))\n(with-current-buffer buf1 (get-text-property 1 'source))\n(with-current-buffer buf2 (buffer-string))\n(with-current-buffer buf2 (get-text-property 1 'source))))\n(kill-buffer buf1)\n(kill-buffer buf2))",
         expect,
     );
 }

@@ -295,7 +295,6 @@ fn oracle_prop_ds_adv_skip_list_like() {
 // LRU cache with hash table + doubly-linked list
 // ---------------------------------------------------------------------------
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_ds_adv_lru_cache_full() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -303,90 +302,8 @@ fn oracle_prop_ds_adv_lru_cache_full() {
     // Full LRU cache: O(1) get/put using a hash table for lookup
     // and a doubly-linked list (vector-based) for ordering.
     // Nodes: [prev, next, key, value]. Sentinel head=0, tail=1.
-    let form = "(let ((capacity 3)
-                      (table (make-hash-table :test 'equal))
-                      (nodes (make-vector 20 nil))
-                      (next-slot 2)
-                      (head 0)
-                      (tail 1))
-                  ;; Sentinel initialization
-                  (aset nodes head (vector -1 tail 'HEAD nil))
-                  (aset nodes tail (vector head -1 'TAIL nil))
-                  (let ((detach
-                         (lambda (idx)
-                           (let ((p (aref (aref nodes idx) 0))
-                                 (n (aref (aref nodes idx) 1)))
-                             (aset (aref nodes p) 1 n)
-                             (aset (aref nodes n) 0 p))))
-                        (attach-after-head
-                         (lambda (idx)
-                           (let ((first (aref (aref nodes head) 1)))
-                             (aset (aref nodes idx) 0 head)
-                             (aset (aref nodes idx) 1 first)
-                             (aset (aref nodes head) 1 idx)
-                             (aset (aref nodes first) 0 idx))))
-                        (last-before-tail
-                         (lambda ()
-                           (aref (aref nodes tail) 0))))
-                    (let ((lru-get
-                           (lambda (key)
-                             (let ((idx (gethash key table)))
-                               (if idx
-                                   (progn
-                                     ;; Move to front
-                                     (funcall detach idx)
-                                     (funcall attach-after-head idx)
-                                     (aref (aref nodes idx) 3))
-                                 nil))))
-                          (lru-put
-                           (lambda (key val)
-                             (let ((existing (gethash key table)))
-                               (if existing
-                                   ;; Update and move to front
-                                   (progn
-                                     (aset (aref nodes existing) 3 val)
-                                     (funcall detach existing)
-                                     (funcall attach-after-head existing))
-                                 ;; New entry
-                                 (let ((idx next-slot))
-                                   (aset nodes idx (vector -1 -1 key val))
-                                   (setq next-slot (1+ next-slot))
-                                   (puthash key idx table)
-                                   (funcall attach-after-head idx)
-                                   ;; Evict if over capacity
-                                   (when (> (hash-table-count table) capacity)
-                                     (let ((victim (funcall last-before-tail)))
-                                       (funcall detach victim)
-                                       (remhash (aref (aref nodes victim) 2) table))))))))
-                          (lru-keys
-                           (lambda ()
-                             (let ((result nil)
-                                   (cur (aref (aref nodes head) 1)))
-                               (while (/= cur tail)
-                                 (setq result (cons (aref (aref nodes cur) 2) result))
-                                 (setq cur (aref (aref nodes cur) 1)))
-                               (nreverse result)))))
-                      ;; Operations
-                      (funcall lru-put 'a 1)
-                      (funcall lru-put 'b 2)
-                      (funcall lru-put 'c 3)
-                      (let ((keys1 (funcall lru-keys)))
-                        ;; Access 'a' -> moves to front
-                        (let ((val-a (funcall lru-get 'a)))
-                          (let ((keys2 (funcall lru-keys)))
-                            ;; Add 'd' -> evicts 'b' (LRU)
-                            (funcall lru-put 'd 4)
-                            (let ((keys3 (funcall lru-keys)))
-                              ;; 'b' should be gone
-                              (let ((val-b (funcall lru-get 'b)))
-                                ;; Update 'c' value
-                                (funcall lru-put 'c 30)
-                                (let ((keys4 (funcall lru-keys))
-                                      (val-c (funcall lru-get 'c)))
-                                  (list keys1 val-a keys2 keys3 val-b
-                                        keys4 val-c
-                                        (hash-table-count table)))))))))))))";
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 83 75)""#]];
+    let form = "(let ((capacity 3)\n                      (table (make-hash-table :test 'equal))\n                      (nodes (make-vector 20 nil))\n                      (next-slot 2)\n                      (head 0)\n                      (tail 1))\n                  ;; Sentinel initialization\n                  (aset nodes head (vector -1 tail 'HEAD nil))\n                  (aset nodes tail (vector head -1 'TAIL nil))\n                  (let ((detach\n                         (lambda (idx)\n                           (let ((p (aref (aref nodes idx) 0))\n                                 (n (aref (aref nodes idx) 1)))\n                             (aset (aref nodes p) 1 n)\n                             (aset (aref nodes n) 0 p))))\n                        (attach-after-head\n                         (lambda (idx)\n                           (let ((first (aref (aref nodes head) 1)))\n                             (aset (aref nodes idx) 0 head)\n                             (aset (aref nodes idx) 1 first)\n                             (aset (aref nodes head) 1 idx)\n                             (aset (aref nodes first) 0 idx))))\n                        (last-before-tail\n                         (lambda ()\n                           (aref (aref nodes tail) 0))))\n                    (let ((lru-get\n                           (lambda (key)\n                             (let ((idx (gethash key table)))\n                               (if idx\n                                   (progn\n                                     ;; Move to front\n                                     (funcall detach idx)\n                                     (funcall attach-after-head idx)\n                                     (aref (aref nodes idx) 3))\n                                 nil))))\n                          (lru-put\n                           (lambda (key val)\n                             (let ((existing (gethash key table)))\n                               (if existing\n                                   ;; Update and move to front\n                                   (progn\n                                     (aset (aref nodes existing) 3 val)\n                                     (funcall detach existing)\n                                     (funcall attach-after-head existing))\n                                 ;; New entry\n                                 (let ((idx next-slot))\n                                   (aset nodes idx (vector -1 -1 key val))\n                                   (setq next-slot (1+ next-slot))\n                                   (puthash key idx table)\n                                   (funcall attach-after-head idx)\n                                   ;; Evict if over capacity\n                                   (when (> (hash-table-count table) capacity)\n                                     (let ((victim (funcall last-before-tail)))\n                                       (funcall detach victim)\n                                       (remhash (aref (aref nodes victim) 2) table))))))))\n                          (lru-keys\n                           (lambda ()\n                             (let ((result nil)\n                                   (cur (aref (aref nodes head) 1)))\n                               (while (/= cur tail)\n                                 (setq result (cons (aref (aref nodes cur) 2) result))\n                                 (setq cur (aref (aref nodes cur) 1)))\n                               (nreverse result)))))\n                      ;; Operations\n                      (funcall lru-put 'a 1)\n                      (funcall lru-put 'b 2)\n                      (funcall lru-put 'c 3)\n                      (let ((keys1 (funcall lru-keys)))\n                        ;; Access 'a' -> moves to front\n                        (let ((val-a (funcall lru-get 'a)))\n                          (let ((keys2 (funcall lru-keys)))\n                            ;; Add 'd' -> evicts 'b' (LRU)\n                            (funcall lru-put 'd 4)\n                            (let ((keys3 (funcall lru-keys)))\n                              ;; 'b' should be gone\n                              (let ((val-b (funcall lru-get 'b)))\n                                ;; Update 'c' value\n                                (funcall lru-put 'c 30)\n                                (let ((keys4 (funcall lru-keys))\n                                      (val-c (funcall lru-get 'c)))\n                                  (list keys1 val-a keys2 keys3 val-b\n                                        keys4 val-c\n                                        (hash-table-count table)))))))))))";
+    let expect = expect_test::expect![[r#""OK ((c b a) 1 (a c b) (d a c) nil (c d a) 30 3)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

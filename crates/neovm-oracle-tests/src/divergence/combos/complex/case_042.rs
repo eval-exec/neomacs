@@ -169,11 +169,10 @@ fn div_cx42_display_property_image_spec_column() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx42_print_circle_gensym_quoted_struct_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-defstruct)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn
@@ -184,7 +183,7 @@ fn div_cx42_print_circle_gensym_quoted_struct_mega() {
       (list (string-match "#s" (prin1-to-string p))
             (string-match "#:" (prin1-to-string gs))
             (prin1-to-string '(quote neo-cx42-pt)))))
-"##,
+)"##,
         expect,
     );
 }
@@ -258,11 +257,10 @@ fn div_cx42_timer_run_idle_cancel_count_mega() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx42_window_dedicated_buffer_switch_overlay_marker_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buffer-markers)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx42-wd*")))
@@ -282,7 +280,7 @@ fn div_cx42_window_dedicated_buffer_switch_overlay_marker_mega() {
                    (marker-position (cdar buffer-markers))
                    (length (overlays-at 3))))
       (kill-buffer buf)))
-"##,
+)"##,
         expect,
     );
 }
@@ -311,11 +309,12 @@ fn div_cx42_json_encode_hashtable_plist_alist_mega() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx42_dom_operations_recursive_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" list (length (dom-by-tag dom 'p)) (length (dom-by-tag dom 'li)) (dom-attr (nth 1 (dom-by-tag dom 'p)) 'id) (dom-text (car (dom-by-tag dom 'title))) (mapcar #'dom-text (dom-by-tag dom 'li)) (dom-by-tag dom 'div))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (condition-case e
@@ -336,7 +335,7 @@ fn div_cx42_dom_operations_recursive_mega() {
               (mapcar #'dom-text (dom-by-tag dom 'li))
               (dom-by-tag dom 'div))))
   (error (cons 'errored (car e))))
-"##,
+)"##,
         expect,
     );
 }

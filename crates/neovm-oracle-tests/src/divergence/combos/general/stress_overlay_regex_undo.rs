@@ -74,12 +74,13 @@ fn divergence_regex_replace_preserves_overlays() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_marker_ring_regex_jump() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (t ((\"LINE1\" 1) (\"LINE2\" 7) (\"LINE3\" 13) (\"LINE4\" 19) (\"LINE5\" 25)) \"LINE1\\nLINE2\\nLINE3\\nLINE4\\nLINE5\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "LINE1\nLINE2\nLINE3\nLINE4\nLINE5\n")
@@ -97,7 +98,7 @@ fn divergence_marker_ring_regex_jump() {
               matches))
       (list (= (length matches) 5)
             (nreverse matches)
-            (buffer-string)))) "#,
+            (buffer-string)))) )"#,
         expect,
     );
 }

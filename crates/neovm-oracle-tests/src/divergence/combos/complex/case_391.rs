@@ -64,11 +64,10 @@ fn div_cx391_unwind_protect_cleanup_with_error_in_cleanup() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx391_catch_throw_through_nested_unwind() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK :caught""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (trace)
@@ -83,7 +82,7 @@ fn div_cx391_catch_throw_through_nested_unwind() {
               (push :outer-never trace))
           (push :outer-unwind trace)))
     (nreverse trace))
-"##,
+)"##,
         expect,
     )
 }

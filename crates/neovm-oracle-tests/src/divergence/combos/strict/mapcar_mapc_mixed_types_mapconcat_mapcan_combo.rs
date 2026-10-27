@@ -40,7 +40,6 @@ fn div_v8_mapconcat_mapcan_multiple_sequences() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_seq_map_map_index_filter_string_vector() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -54,8 +53,7 @@ fn div_v8_seq_map_map_index_filter_string_vector() {
       (seq-map #'char-to-string "XYZ")
       (seq-elt [10 20 30] 1)
       (seq-into '(1 2 3) 'vector)
-      (seq-into [a b c] 'list)))
-"##;
+      (seq-into [a b c] 'list))"##;
     let expect = expect_test::expect![[r#""ERR (void-function cl-oddp)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

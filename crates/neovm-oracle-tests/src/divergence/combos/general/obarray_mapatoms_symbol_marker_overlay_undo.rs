@@ -68,12 +68,11 @@ fn combo_obarray_intern_mapatoms_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_obarray_unintern_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-oun"))
@@ -117,17 +116,16 @@ fn combo_obarray_unintern_marker_overlay_undo() {
                                 (get (intern-soft "keep-sym" my-obarray) 'data)
                                 (get (intern-soft "drop-sym" my-obarray) 'data))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_obarray_symbol_plist_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-osym"))
@@ -177,17 +175,16 @@ fn combo_obarray_symbol_plist_marker_overlay_undo() {
                                   (get-text-property 11 'grp)
                                   (get-text-property 16 'grp))))
               (kill-buffer buf)
-              (list after restored))))))) "#,
+              (list after restored))))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_obarray_narrow_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-onar"))
@@ -237,17 +234,16 @@ fn combo_obarray_narrow_marker_overlay_undo() {
                                 (get-text-property 16 'sect)
                                 (get-text-property 21 'sect))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_obarray_buffer_local_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-oblv"))
@@ -292,7 +288,7 @@ fn combo_obarray_buffer_local_marker_overlay_undo() {
                                   (get-text-property 6 'zone)
                                   (get-text-property 11 'zone))))
               (kill-buffer buf)
-              (list after restored))))))) "#,
+              (list after restored))))))) )"#,
         expect,
     );
 }

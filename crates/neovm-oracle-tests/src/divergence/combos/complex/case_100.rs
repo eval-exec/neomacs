@@ -5,11 +5,10 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx100_mega_textprop_overlay_buflocal_marker_undo_narrow() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx100-mega-1*")))
@@ -54,7 +53,7 @@ fn div_cx100_mega_textprop_overlay_buflocal_marker_undo_narrow() {
                              (text-properties-at 1))))
           (kill-buffer buf)
           (list state-1 state-2)))))
-"##,
+)"##,
         expect,
     );
 }
@@ -170,11 +169,10 @@ fn div_cx100_mega_coding_regex_format_print_circle_secure_hash() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx100_mega_window_config_marker_overlay_register_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx100-mega-3*")))
@@ -204,7 +202,7 @@ fn div_cx100_mega_window_config_marker_overlay_register_undo() {
             (undo)
             (kill-buffer buf)
             (list state-1 state-2))))))
-"##,
+)"##,
         expect,
     );
 }

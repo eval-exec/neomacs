@@ -4,12 +4,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_word_move_syntax_marker_overlay_narrow() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" narrow-to-region 1 20)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "wsm")))
@@ -36,7 +37,7 @@ fn combo_word_move_syntax_marker_overlay_narrow() {
                       (oe (overlay-end ov)))
                   (widen)
                   (list p1 p2 p3 mp1 os oe)))))))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))))"#,
         expect,
     );
 }

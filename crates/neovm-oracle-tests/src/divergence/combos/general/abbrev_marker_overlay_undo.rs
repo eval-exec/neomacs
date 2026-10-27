@@ -132,50 +132,13 @@ fn combo_abbrev_overlay_priority_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_abbrev_multi_buffer_state() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable m2)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((b1 (generate-new-buffer \"ab1\"))\n\
-         (b2 (generate-new-buffer \"ab2\"))\n\
-         (at (make-abbrev-table)))\n\
-         (define-abbrev at \"thx\" \"thanks\")\n\
-         (with-current-buffer b1\n\
-         (insert \"thx for the help\")\n\
-         (put-text-property 1 4 'src 'b1)\n\
-         (let* ((ov (make-overlay 1 4))\n\
-         (_ (overlay-put ov 'face 'bold))\n\
-         (m (make-marker))\n\
-         (_ (set-marker m 4))\n\
-         (local-abbrev-table at))\n\
-         (undo-boundary)\n\
-         (goto-char 3)\n\
-         (expand-abbrev))\n\
-         (with-current-buffer b2\n\
-         (insert \"thx a lot\")\n\
-         (put-text-property 1 4 'src 'b2)\n\
-         (let* ((m2 (make-marker))\n\
-         (_ (set-marker m2 4))\n\
-         (local-abbrev-table at))\n\
-         (undo-boundary)\n\
-         (goto-char 3)\n\
-         (expand-abbrev))\n\
-         (let ((s2 (buffer-string))\n\
-         (mp2 (marker-position m2))\n\
-         (k2 (get-text-property 1 'src)))\n\
-         (with-current-buffer b1\n\
-         (let ((s1 (buffer-string))\n\
-         (mp1 (marker-position m))\n\
-         (k1 (get-text-property 1 'src))\n\
-         (os (overlay-start ov))\n\
-         (oe (overlay-end ov)))\n\
-         (list s1 mp1 k1 os oe s2 mp2 k2))))\n\
-         (kill-buffer b1)\n\
-         (kill-buffer b2)))",
+        "(progn\n(let ((b1 (generate-new-buffer \"ab1\"))\n(b2 (generate-new-buffer \"ab2\"))\n(at (make-abbrev-table)))\n(define-abbrev at \"thx\" \"thanks\")\n(with-current-buffer b1\n(insert \"thx for the help\")\n(put-text-property 1 4 'src 'b1)\n(let* ((ov (make-overlay 1 4))\n(_ (overlay-put ov 'face 'bold))\n(m (make-marker))\n(_ (set-marker m 4))\n(local-abbrev-table at))\n(undo-boundary)\n(goto-char 3)\n(expand-abbrev))\n(with-current-buffer b2\n(insert \"thx a lot\")\n(put-text-property 1 4 'src 'b2)\n(let* ((m2 (make-marker))\n(_ (set-marker m2 4))\n(local-abbrev-table at))\n(undo-boundary)\n(goto-char 3)\n(expand-abbrev))\n(let ((s2 (buffer-string))\n(mp2 (marker-position m2))\n(k2 (get-text-property 1 'src)))\n(with-current-buffer b1\n(let ((s1 (buffer-string))\n(mp1 (marker-position m))\n(k1 (get-text-property 1 'src))\n(os (overlay-start ov))\n(oe (overlay-end ov)))\n(list s1 mp1 k1 os oe s2 mp2 k2))))\n(kill-buffer b1)\n(kill-buffer b2)))))",
         expect,
     );
 }

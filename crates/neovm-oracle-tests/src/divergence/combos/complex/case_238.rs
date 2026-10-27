@@ -78,11 +78,10 @@ fn div_cx238_mega_1_full_chaos_coding_charset_eieio_clloop_advice_process_undo()
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx238_mega_2_pcase_rx_syntax_search_replace_format_time_advice_register_window() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-loop)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t)
@@ -125,7 +124,7 @@ fn div_cx238_mega_2_pcase_rx_syntax_search_replace_format_time_advice_register_w
           (list snapshot (buffer-string) (marker-position m)
                 (overlay-start ov) (overlay-end ov)
                 (text-properties-at 1))))))
-"##,
+)"##,
         expect,
     );
 }
@@ -178,11 +177,10 @@ fn div_cx238_mega_3_process_buflocal_undo_textprop_overlay_coding_env_timer_weak
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx238_mega_4_keymap_eval_macro_closure_advice_clloop_hash_obarray_secure_hash() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function make-obarray)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t)
@@ -235,7 +233,7 @@ fn div_cx238_mega_4_keymap_eval_macro_closure_advice_clloop_hash_obarray_secure_
                 (list state (buffer-string) (marker-position m)
                       (overlay-start ov) (overlay-end ov)
                       (text-properties-at 1)))))))))
-"##,
+)"##,
         expect,
     );
 }

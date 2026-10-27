@@ -3,12 +3,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buflocal_narrow_eval_closure() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (42 42 42 42 42 42 nil t t nil t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-blne-xxx 0)
@@ -31,7 +30,7 @@ fn divergence_buflocal_narrow_eval_closure() {
               (= v3 42)
               (= v4 100)
               (= v5 42)
-              (= v6 42))))) "#,
+              (= v6 42))))) )"#,
         expect,
     );
 }
@@ -86,12 +85,11 @@ fn divergence_buflocal_kill_buffer_restore() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_closure_over_buflocal_with_marker() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((5 7) nil t 5 t 7 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-cbm-xxx 0)
@@ -112,17 +110,16 @@ fn divergence_closure_over_buflocal_with_marker() {
               test-cbm-xxx
               (= test-cbm-xxx 5)
               (marker-position m)
-              (> (marker-position m) 5))))) "#,
+              (> (marker-position m) 5))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_default_value_vs_buflocal() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((100 42 200) t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-dvb-xxx 42)
@@ -139,17 +136,17 @@ fn divergence_default_value_vs_buflocal() {
         (list result
               (= (car result) 100)
               (numberp default)
-              (= (nth 2 result) 200))))) "#,
+              (= (nth 2 result) 200))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_narrowed_eval_with_closures_nested() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK ((outer outer) outer (outer outer) outer nil t nil t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-nen-xxx 'outer)
@@ -167,17 +164,16 @@ fn divergence_narrowed_eval_with_closures_nested() {
               (eq (car result1) 'inner)
               (eq v1 'outer)
               (eq (car result2) 'inner)
-              (eq v2 'outer))))) "#,
+              (eq v2 'outer))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buflocal_with_set_default() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (10 20 999 t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-sd-xxx 0)
@@ -194,17 +190,16 @@ fn divergence_buflocal_with_set_default() {
       (list v1 v2 dv
             (= v1 10)
             (= v2 20)
-            (= dv 999)))) "#,
+            (= dv 999)))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_closure_capture_with_eval_redefinition() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 nil 999 999 nil 999 t 999 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-cer-xxx 1)
@@ -218,7 +213,7 @@ fn divergence_closure_capture_with_eval_redefinition() {
           test-cer-xxx
           (= test-cer-xxx 999)
           (eval 'test-cer-xxx)
-          (= (eval 'test-cer-xxx) 999))) "#,
+          (= (eval 'test-cer-xxx) 999))) )"#,
         expect,
     );
 }
@@ -254,12 +249,11 @@ fn divergence_buflocal_with_undo_insert() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_multiple_buflocal_vars_interaction() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (6 60 t t 1 2 3 t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-mbi-a-xxx 0)
@@ -286,7 +280,7 @@ fn divergence_multiple_buflocal_vars_interaction() {
             test-mbi-a-xxx test-mbi-b-xxx test-mbi-c-xxx
             (= test-mbi-a-xxx 1)
             (= test-mbi-b-xxx 2)
-            (= test-mbi-c-xxx 3)))) "#,
+            (= test-mbi-c-xxx 3)))) )"#,
         expect,
     );
 }

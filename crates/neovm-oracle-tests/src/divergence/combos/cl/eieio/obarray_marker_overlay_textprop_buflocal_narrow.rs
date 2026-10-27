@@ -147,7 +147,6 @@ fn combo_eieio_obarray_unintern_with_objects() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_obarray_mapatoms_collect() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -211,7 +210,7 @@ fn combo_eieio_obarray_mapatoms_collect() {
               (marker-position m)
               (overlay-start ov) (overlay-end ov)
               my-map-log)))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf))"#,
         expect,
     );
 }

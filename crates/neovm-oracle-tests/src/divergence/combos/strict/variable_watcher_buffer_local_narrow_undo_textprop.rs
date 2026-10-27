@@ -130,7 +130,6 @@ fn div_u4_save_excursion_restriction_with_insert_and_undo() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_u4_face_remapping_and_text_scale_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -150,7 +149,9 @@ fn div_u4_face_remapping_and_text_scale_combo() {
                     (list text-scale-mode-amount
                           (length face-remapping-alist)))))
     (kill-buffer b))))
-"##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+)"##;
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" append result (list text-scale-mode-amount (length face-remapping-alist)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

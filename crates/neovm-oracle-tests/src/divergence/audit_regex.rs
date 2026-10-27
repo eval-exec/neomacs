@@ -32,58 +32,50 @@ fn div_ar_shy_group_numbering() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_ar_shy_then_backref() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 3 28)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn (string-match "\(?:a\)\\(b\\)\1" "abb")
-       (match-beginning 1)))
-"##,
+       (match-beginning 1))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_ar_interval_operator() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 3 49)""#]];
+    let expect = expect_test::expect![[r#""OK (0 3)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn (string-match "a\\{2,3\\}" "aaaaa")
-       (list (match-beginning 0) (match-end 0))))
-"##,
+       (list (match-beginning 0) (match-end 0)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_ar_interval_brace_form() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 3 22)""#]];
+    let expect = expect_test::expect![[r#""OK 2""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn (string-match "a\\{2\\}" "aaaa")
-       (match-end 0)))
-"##,
+       (match-end 0))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_ar_non_greedy_plus() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 3 49)""#]];
+    let expect = expect_test::expect![[r#""OK (0 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn (string-match "a+?" "aaa")
-       (list (match-beginning 0) (match-end 0))))
-"##,
+       (list (match-beginning 0) (match-end 0)))"##,
         expect,
     );
 }
@@ -178,7 +170,6 @@ fn div_ar_replace_match_amp_and_n() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_ar_replace_match_upper_directive() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -186,8 +177,7 @@ fn div_ar_replace_match_upper_directive() {
         expect_test::expect![[r#""ERR (error \"Invalid use of ‘\\\\’ in replacement text\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(replace-regexp-in-string "\\(a\\)" "\\u\\1" "abc"))
-"##,
+(replace-regexp-in-string "\\(a\\)" "\\u\\1" "abc")"##,
         expect,
     );
 }

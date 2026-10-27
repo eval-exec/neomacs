@@ -3,12 +3,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_overlay_invisible_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 28 46)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"SHOWN-HIDDEN-VISIBLE-HIDDEN-VISIBLE\" 6 11 (vis hide) 13 19 (vis show) 21 26 (vis hide) 28 34 (vis show)) #(\"VISIBLE-HIDDEN-VISIBLE-HIDDEN-VISIBLE\" 0 6 (vis show) 8 13 (vis hide) 15 21 (vis show) 23 28 (vis hide) 30 36 (vis show)) t t show t hide t t t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "VISIBLE-HIDDEN-VISIBLE-HIDDEN-VISIBLE")
@@ -37,17 +38,18 @@ fn divergence_overlay_invisible_undo() {
               (get-text-property 9 'vis) (eq (get-text-property 9 'vis) 'hide)
               (overlay-get ov1 'invisible)
               (overlay-get ov2 'invisible)
-              (overlay-get ov-all 'wrap))))))) "#,
+              (overlay-get ov-all 'wrap))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_overlay_face_priority_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 89)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"AAAA-XXXBBBB-ZZZZ-DDDD-EEEE\" 0 3 (style plain) 8 11 (style plain) 18 21 (style plain) 23 26 (style plain)) #(\"AAAA-BBBB-CCCC-DDDD-EEEE\" 0 3 (style plain) 5 8 (style plain) 10 13 (style plain) 15 18 (style plain) 20 23 (style plain)) t t bold t italic t underline t bold-italic t highlight t plain t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "AAAA-BBBB-CCCC-DDDD-EEEE")
@@ -83,12 +85,11 @@ fn divergence_overlay_face_priority_undo() {
               (overlay-get ov3 'face) (eq (overlay-get ov3 'face) 'underline)
               (overlay-get ov4 'face) (eq (overlay-get ov4 'face) 'bold-italic)
               (overlay-get ov5 'face) (eq (overlay-get ov5 'face) 'highlight)
-              (get-text-property 1 'style) (eq (get-text-property 1 'style) 'plain))))))) "#,
+              (get-text-property 1 'style) (eq (get-text-property 1 'style) 'plain))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_overlay_evaporation_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -121,12 +122,11 @@ fn divergence_overlay_evaporation_undo() {
               (get-text-property 1 'zone) (eq (get-text-property 1 'zone) 'keep)
               (get-text-property 6 'zone) (eq (get-text-property 6 'zone) 'delete)
               (get-text-property 13 'zone) (eq (get-text-property 13 'zone) 'keep)
-              (overlay-get ov-keep 'grp) (eq (overlay-get ov-keep 'grp) 'keep))))))) "#,
+              (overlay-get ov-keep 'grp) (eq (overlay-get ov-keep 'grp) 'keep))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_overlay_modification_hooks() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -163,17 +163,18 @@ fn divergence_overlay_modification_hooks() {
               (= (marker-position m) 6)
               (get-text-property 1 'blk) (= (get-text-property 1 'blk) 1)
               (get-text-property 6 'blk) (= (get-text-property 6 'blk) 2)
-              (overlay-get ov 'modification-hooks))))))) "#,
+              (overlay-get ov 'modification-hooks))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_overlay_insert_behind_front() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 22 82)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"BBBBXXXAAAAA\" 7 11 (flat t)) #(\"AAAAAAAAA\" 0 4 (flat t) 4 8 (flat t)) t t t t boundary t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "AAAAAAAAA")
@@ -196,7 +197,7 @@ fn divergence_overlay_insert_behind_front() {
               (string= (buffer-string) "AAAAAAAAA")
               (= (marker-position m) 5)
               (get-text-property 1 'flat) (eq (get-text-property 1 'flat) t)
-              (overlay-get ov 'point) (eq (overlay-get ov 'point) 'boundary))))))) "#,
+              (overlay-get ov 'point) (eq (overlay-get ov 'point) 'boundary))))))"#,
         expect,
     );
 }
@@ -242,12 +243,13 @@ fn divergence_overlay_priority_stack_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_overlay_intangible_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 24 47)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"CHANGED-INTANGIBLE-AFTER\" 8 17 (part intangible) 19 23 (part after)) #(\"BEFORE-INTANGIBLE-AFTER\" 0 5 (part before) 7 16 (part intangible) 18 22 (part after)) t t before t intangible t t all)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "BEFORE-INTANGIBLE-AFTER")
@@ -272,7 +274,7 @@ fn divergence_overlay_intangible_undo() {
               (get-text-property 1 'part) (eq (get-text-property 1 'part) 'before)
               (get-text-property 8 'part) (eq (get-text-property 8 'part) 'intangible)
               (overlay-get ov 'intangible)
-              (overlay-get ov-all 'scope))))))) "#,
+              (overlay-get ov-all 'scope))))))"#,
         expect,
     );
 }

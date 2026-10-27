@@ -136,17 +136,13 @@ fn deficiency_seq_filter_remove_combined() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_sort_stability_with_equal_keys() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((b . 1) (d . 1) (a . 2) (c . 2) (e . 3))""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((items '((a . 2) (b . 1) (c . 2) (d . 1) (e . 3))))\n\
-         (sort (copy-sequence items)\n\
-         (lambda (a b) (< (cdr a) (cdr b)))))",
+        "(progn\n(let ((items '((a . 2) (b . 1) (c . 2) (d . 1) (e . 3))))\n(sort (copy-sequence items)\n(lambda (a b) (< (cdr a) (cdr b))))))",
         expect,
     );
 }

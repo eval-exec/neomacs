@@ -24,16 +24,17 @@ fn div_cx269_backquote_deeply_nested_splicing() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx269_defmacro_with_environment() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 54)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (wrong-number-of-arguments (closure (t) (form &environment env) (list 'quote (list :lexical (bound-and-true-p lexical-binding) :env-present (not (null env))))) 1)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (defmacro neo-cx269-env-macro (form &environment env)
   (list 'quote (list :lexical (bound-and-true-p lexical-binding)
-                     :env-present (not (null env))))))
+                     :env-present (not (null env)))))
 (let ((lexical-binding t))
   (list (neo-cx269-env-macro test)
         (let ((lexical-binding nil))

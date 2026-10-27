@@ -38,11 +38,10 @@ fn div_s3_overlay_priority_and_face_merge() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_s3_overlay_evaporate_with_textprops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (#(\"abdef\" 1 3 (face bold)) bold bold 0 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r####"
 (with-temp-buffer
@@ -58,7 +57,7 @@ fn div_s3_overlay_evaporate_with_textprops() {
           (get-text-property 3 'face)
           (length (overlays-in 1 5))
           (null (overlay-buffer o))))
-"####,
+)"####,
         expect,
     );
 }

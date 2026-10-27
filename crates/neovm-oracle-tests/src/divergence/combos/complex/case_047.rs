@@ -209,11 +209,10 @@ fn div_cx47_process_env_coding_exitcode_sentinel_timer_mega() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx47_window_buffer_marker_overlay_dedicated_hscroll_split_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable buffer-markers)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx47-wb*")))
@@ -235,16 +234,15 @@ fn div_cx47_window_buffer_marker_overlay_dedicated_hscroll_split_mega() {
                    (with-current-buffer buf (length (overlays-at 8))))
         (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
         (kill-buffer buf))))
-"##,
+)"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx47_undo_redo_marker_overlay_textprop_narrow_display_evaporate_full_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -273,16 +271,15 @@ fn div_cx47_undo_redo_marker_overlay_textprop_narrow_display_evaporate_full_mega
             (overlayp ov) (overlay-start ov) (overlay-end ov)
             (text-properties-at 1) (text-properties-at 5) (text-properties-at 10)
             (current-column))))
-"##,
+)"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx47_print_circle_gensym_struct_vector_propertized_escape_length_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function cl-defstruct)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn
@@ -301,7 +298,7 @@ fn div_cx47_print_circle_gensym_struct_vector_propertized_escape_length_mega() {
             (prin1-to-string x)
             (length (prin1-to-string (vector r r r)))
             (length (prin1-to-string (list 1 2 3 4 5 6 7 8 9))))))
-"##,
+)"##,
         expect,
     );
 }

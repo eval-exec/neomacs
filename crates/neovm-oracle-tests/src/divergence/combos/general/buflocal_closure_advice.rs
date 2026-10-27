@@ -103,12 +103,13 @@ fn divergence_keymap_closure_advice_interact() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buflocal_overlay_textprop_advice() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 26 35)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((active active) (done done) done t label t value t #(\"STATUS-HERE\" 0 6 (type label) 7 10 (type value)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (make-local-variable 'test-boat-state-xxx)
@@ -135,7 +136,7 @@ fn divergence_buflocal_overlay_textprop_advice() {
               (eq (get-text-property 1 'type) 'label)
               (get-text-property 8 'type)
               (eq (get-text-property 8 'type) 'value)
-              (buffer-string))))))) "#,
+              (buffer-string))))))"#,
         expect,
     );
 }
@@ -206,12 +207,13 @@ fn divergence_buflocal_regex_match_overlay() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_undo_buflocal_marker_complex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 39 57)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"ZZ-MIDD\" 2 7 (section mid)) 9 15 #(\"PREFIX-MIDDLE-SUFFIX\" 0 5 (section head) 6 11 (section mid) 12 18 (section tail)) t 1 t 7 t 13 t 19 t head t mid t middle t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (make-local-variable 'test-ubmc-data-xxx)
@@ -251,7 +253,7 @@ fn divergence_undo_buflocal_marker_complex() {
               (get-text-property 7 'section)
               (eq (get-text-property 7 'section) 'mid)
               (overlay-get ov 'region)
-              (eq (overlay-get ov 'region) 'middle))))))) "#,
+              (eq (overlay-get ov 'region) 'middle))))))"#,
         expect,
     );
 }
@@ -313,12 +315,13 @@ fn divergence_keymap_inheritance_advice() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buflocal_kill_buffer_preserve() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 28 57)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (t t t t #(\"CONTENT2\" 0 7 (src buf2)) buf2 t buf2-value)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf1 (generate-new-buffer " test-bkbp1-xxx"))
@@ -347,7 +350,7 @@ fn divergence_buflocal_kill_buffer_preserve() {
             (eq (with-current-buffer buf2
                   (get-text-property 1 'src))
                 'buf2)
-            (buffer-local-value 'test-bkbp-xxx buf2)))))) "#,
+            (buffer-local-value 'test-bkbp-xxx buf2)))))"#,
         expect,
     );
 }

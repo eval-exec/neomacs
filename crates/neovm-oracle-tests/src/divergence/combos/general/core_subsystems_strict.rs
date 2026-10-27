@@ -510,11 +510,12 @@ fn div_core_inhibit_modification_hooks_boundary_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_core_overlay_modification_hooks_order_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 23 59)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"aXYd\" ((front nil 2 2 nil) (front t 2 3 0) (behind nil 5 5 nil) (behind t 5 6 0) (mod nil 3 5 nil) (mod t 3 3 2)) (2 3))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((log nil))
@@ -538,8 +539,7 @@ fn div_core_overlay_modification_hooks_order_combo() {
       (delete-region 3 5)
       (list (buffer-string)
             (nreverse log)
-            (list (overlay-start ov) (overlay-end ov)))))))
-"##,
+            (list (overlay-start ov) (overlay-end ov))))))"##,
         expect,
     );
 }

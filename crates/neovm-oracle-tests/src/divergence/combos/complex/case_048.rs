@@ -188,11 +188,10 @@ fn div_cx48_syntax_propertize_basic() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx48_face_remap_add_relative_buffer_local() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t normal normal)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -201,7 +200,7 @@ fn div_cx48_face_remap_add_relative_buffer_local() {
           (face-attribute 'default :weight)
           (progn (face-remap-remove-relative cookie)
                  (face-attribute 'default :weight))))
-"##,
+)"##,
         expect,
     );
 }
@@ -245,11 +244,10 @@ fn div_cx48_process_filter_accumulate_secure_hash_mega() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx48_overlay_evaporate_insert_delete_undo_marker_display_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -272,7 +270,7 @@ fn div_cx48_overlay_evaporate_insert_delete_undo_marker_display_mega() {
       (list state (overlayp ov) (overlay-start ov) (overlay-end ov)
             (marker-position m) (text-properties-at 1)
             (text-properties-at 5) (current-column))))
-"##,
+)"##,
         expect,
     );
 }

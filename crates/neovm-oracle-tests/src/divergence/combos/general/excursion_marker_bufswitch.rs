@@ -69,12 +69,13 @@ fn divergence_buffer_switch_with_narrow_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_save_restriction_overlay_edit() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"XXAAAA-BBBB-CCCC-DDDD-EEEE-FFFF\" 6 10 (zone b)) (12 16) #(\"-BBBB-CCCC-DDDD\" 0 4 (zone b)) 12 16 middle b t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF")
@@ -94,17 +95,17 @@ fn divergence_save_restriction_overlay_edit() {
               (overlay-start ov) (overlay-end ov)
               (overlay-get ov 'tag)
               (get-text-property 7 'zone)
-              (eq (get-text-property 7 'zone) 'b))))) "#,
+              (eq (get-text-property 7 'zone) 'b))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_save_excursion_through_multiple_buffers() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (2 t 2 t \"ONE\" t \"TXWO\" t \"TYHREE\" nil t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf1 (current-buffer))
@@ -134,17 +135,18 @@ fn divergence_save_excursion_through_multiple_buffers() {
               (with-current-buffer buf3 (buffer-string))
               (string= (with-current-buffer buf3 (buffer-string)) "THREE")
               (kill-buffer buf2)
-              (kill-buffer buf3))))) "#,
+              (kill-buffer buf3))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_marker_across_buffer_kill_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (9 14 start 5 10 t t start t mid t #(\"MAIN-CONTENT\" 0 3 (part start) 4 7 (part mid)) t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "MAIN-CONTENT")
@@ -169,7 +171,7 @@ fn divergence_marker_across_buffer_kill_undo() {
             (get-text-property 5 'part)
             (eq (get-text-property 5 'part) 'mid)
             (buffer-string)
-            (string= (buffer-string) "MAIN-CONTENT")))) "#,
+            (string= (buffer-string) "MAIN-CONTENT")))) )"#,
         expect,
     );
 }
@@ -223,12 +225,11 @@ fn divergence_save_excursion_with_narrow_and_marker() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_overlay_in_killed_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 test t t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " test-oik-xxx")))
@@ -243,17 +244,16 @@ fn divergence_overlay_in_killed_buffer() {
                 (= start 1)
                 (eq data 'test)
                 (null (buffer-name buf))
-                (not (buffer-live-p buf))))))) "#,
+                (not (buffer-live-p buf))))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buffer_locals_with_temp_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (42 99 t t 99 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-blt-xxx 0)
@@ -267,17 +267,16 @@ fn divergence_buffer_locals_with_temp_buffer() {
               (= v1 42)
               (= v2 99)
               test-blt-xxx
-              (= test-blt-xxx 42))))) "#,
+              (= test-blt-xxx 42))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_switch_buffer_preserves_overlays() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1 t t buf1 t buf2 t first t second t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf1 (current-buffer))
@@ -304,7 +303,7 @@ fn divergence_switch_buffer_preserves_overlays() {
             (eq (with-current-buffer buf1 (get-text-property 1 'label)) 'first)
             (with-current-buffer buf2 (get-text-property 1 'label))
             (eq (with-current-buffer buf2 (get-text-property 1 'label)) 'second)
-            (kill-buffer buf2)))) "#,
+            (kill-buffer buf2)))) )"#,
         expect,
     );
 }

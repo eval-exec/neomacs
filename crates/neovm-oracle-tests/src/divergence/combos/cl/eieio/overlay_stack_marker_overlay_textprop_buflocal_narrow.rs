@@ -369,12 +369,13 @@ fn combo_eieio_overlay_stack_reorder_props() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_eieio_overlay_stack_nested_edit_undo_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" _ (overlay-put ov1 'modification-hooks (list (lambda (ov after-p beg end &optional _len) (when after-p (setq my-chain-log (cons (format \"ov1-hook:%d-%d\" beg end) my-chain-log)))))) (_ (overlay-put ov2 'face 'italic)) (_ (overlay-put ov2 'priority 2)) (_ (overlay-put ov2 'modification-hooks (list (lambda (ov after-p beg end &optional _len) (when after-p (setq my-chain-log (cons (format \"ov2-hook:%d-%d\" beg end) my-chain-log)))))) (m (set-marker (make-marker) 15)) (results nil)) (setq buffer-undo-list nil) (undo-boundary) (push (ov-chain-snap :step \"init\" :buf-len (point-max) :m-pos (marker-position m) :ov1 (list (overlay-start ov1) (overlay-end ov1)) :ov2 (list (overlay-start ov2) (overlay-end ov2))) snaps) (goto-char 8) (insert \"XXX\") (undo-boundary) (push (ov-chain-snap :step \"edit1\" :buf-len (point-max) :m-pos (marker-position m) :ov1 (list (overlay-start ov1) (overlay-end ov1)) :ov2 (list (overlay-start ov2) (overlay-end ov2))) snaps) (goto-char 20) (insert \"YYY\") (undo-boundary) (push (ov-chain-snap :step \"edit2\" :buf-len (point-max) :m-pos (marker-position m) :ov1 (list (overlay-start ov1) (overlay-end ov1)) :ov2 (list (overlay-start ov2) (overlay-end ov2))) snaps) (primitive-undo 1 buffer-undo-list) (push (ov-chain-snap :step \"undo-edit2\" :buf-len (point-max) :m-pos (marker-position m) :ov1 (list (overlay-start ov1) (overlay-end ov1)) :ov2 (list (overlay-start ov2) (overlay-end ov2))) snaps) (primitive-undo 1 buffer-undo-list) (push (ov-chain-snap :step \"undo-edit1\" :buf-len (point-max) :m-pos (marker-position m) :ov1 (list (overlay-start ov1) (overlay-end ov1)) :ov2 (list (overlay-start ov2) (overlay-end ov2))) snaps) (setq snaps (reverse snaps)) (setq results (mapcar (lambda (s) (list (ocs-step s) (ocs-bl s) (ocs-mp s) (ocs-ov1 s) (ocs-ov2 s))) snaps)) (goto-char (point-max)) (insert (format \" | results=%S m=%d chain=%S\" results (marker-position m) (reverse my-chain-log))) (set-marker m 3) (put-text-property (1- (point-max)) (point-max) 'ocs-log t) (list (buffer-string) (length snaps) (marker-position m) (overlay-start ov1) (overlay-end ov1) (overlay-start ov2) (overlay-end ov2) (length my-chain-log)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass ov-chain-snap ()
@@ -462,7 +463,7 @@ fn combo_eieio_overlay_stack_nested_edit_undo_chain() {
               (overlay-start ov1) (overlay-end ov1)
               (overlay-start ov2) (overlay-end ov2)
               (length my-chain-log))))
-    (kill-buffer buf)))"#,
+    (kill-buffer buf)))))"#,
         expect,
     );
 }

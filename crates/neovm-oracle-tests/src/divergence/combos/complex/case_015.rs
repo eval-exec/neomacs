@@ -81,11 +81,10 @@ fn div_cx15_hash_table_custom_test() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx15_set_transient_map_lookup() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (transient-action transient-action)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((m (make-sparse-keymap)))
@@ -96,7 +95,7 @@ fn div_cx15_set_transient_map_lookup() {
         (list (key-binding "a" t)
               (lookup-key m "a")))
     (error (cons 'errored (car e))))
-"##,
+)"##,
         expect,
     );
 }
@@ -125,11 +124,10 @@ fn div_cx15_process_buffer_sentinel_combined() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx15_cl_defmethod_after_hierarchy() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (:base (:base-primary :sub-after))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (progn
@@ -143,7 +141,7 @@ fn div_cx15_cl_defmethod_after_hierarchy() {
       (push :sub-after log))
     (let ((r (neo-cx15-fn (neo-cx15-sub))))
       (list r (nreverse log))))
-"##,
+)"##,
         expect,
     );
 }

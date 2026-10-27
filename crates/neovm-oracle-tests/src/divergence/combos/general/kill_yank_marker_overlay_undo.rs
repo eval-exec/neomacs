@@ -74,12 +74,11 @@ fn combo_kill_region_yank_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_copy_region_as_kill_yank_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-cray")))
@@ -119,7 +118,7 @@ fn combo_copy_region_as_kill_yank_marker_overlay_undo() {
                                 (get-text-property 11 'grp)
                                 (get-text-property 16 'grp))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
@@ -231,12 +230,11 @@ fn combo_kill_yank_buffer_local_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_kill_ring_save_yank_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-krs")))
@@ -279,7 +277,7 @@ fn combo_kill_ring_save_yank_marker_overlay_undo() {
                                 (get-text-property 16 'grp)
                                 (get-text-property 21 'grp))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }

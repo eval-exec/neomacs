@@ -46,12 +46,12 @@ fn divergence_scan_lists_with_textprop_syntax() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_narrowed_forward_sexp_with_overlays() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (7 20 \"(alpha (beta gamma) delta)\" 8 12 bold nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "(alpha (beta gamma) delta)")
@@ -68,7 +68,7 @@ fn divergence_narrowed_forward_sexp_with_overlays() {
               (buffer-string)
               (overlay-start ov) (overlay-end ov)
               (overlay-get ov 'face)
-              (= (buffer-size) 24))))) "#,
+              (= (buffer-size) 24))))) )"#,
         expect,
     );
 }
@@ -127,7 +127,9 @@ fn divergence_kill_sexp_with_undo_markers() {
 fn divergence_transpose_sexps_with_overlays() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (#(\"(aaa ccc bbb ddd)\" 1 4 (group aaa) 9 12 (group bbb)) 6 9 bbb aaa t nil nil)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"(aaa ccc bbb ddd)\" 1 4 (group aaa) 9 12 (group bbb)) 6 9 bbb aaa t nil nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "(aaa bbb ccc ddd)")
@@ -222,7 +224,9 @@ fn divergence_syntax_property_string_fence() {
 fn divergence_insert_parentheses_balancing() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (\"alpha () beta gamma\" \"(alpha () beta) gamma\" nil 40 t 97 nil)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"alpha () beta gamma\" \"(alpha () beta) gamma\" nil 40 t 97 nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (insert "alpha beta gamma")

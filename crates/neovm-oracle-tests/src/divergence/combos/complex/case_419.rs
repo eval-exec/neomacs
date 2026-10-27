@@ -81,7 +81,6 @@ fn div_cx419_display_line_numbers_mode() {
 }
 
 /// visual-line-mode: visual line wrapping.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx419_visual_line_mode() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -92,8 +91,7 @@ fn div_cx419_visual_line_mode() {
   (insert "aaa bbb ccc ddd eee fff ggg")
     (visual-line-mode 1)
     (list visual-line-mode
-          (visual-line-p))))
-"##,
+          (visual-line-p)))"##,
         expect,
     );
 }

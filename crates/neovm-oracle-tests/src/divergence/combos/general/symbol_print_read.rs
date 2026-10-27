@@ -79,12 +79,11 @@ fn deficiency_mapatoms_symbol_count() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_prin1_to_string_read_roundtrip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments equal 3)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let* ((data '(1 "hello" (a b c) [1 2 3] t nil (lambda (x) x)))
@@ -96,7 +95,7 @@ fn deficiency_prin1_to_string_read_roundtrip() {
           (length printed) (> (length printed) 10)
           (equal (read (prin1-to-string '(a . b))) '(a . b))
           (equal (read (prin1-to-string [1 2 3])) [1 2 3]
-          (equal (read (prin1-to-string "hello")) "hello")))) "#,
+          (equal (read (prin1-to-string "hello")) "hello")))) )"#,
         expect,
     );
 }

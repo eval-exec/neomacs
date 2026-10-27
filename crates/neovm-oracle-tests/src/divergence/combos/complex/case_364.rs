@@ -5,11 +5,12 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx364_fill_region_with_fill_column_variants() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK \"This is a long line of text\\nthat should be wrapped at the\\nfill column boundary for\\ntesting purposes.\"""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -17,7 +18,7 @@ fn div_cx364_fill_region_with_fill_column_variants() {
   (let ((fill-column 30))
     (fill-region (point-min) (point-max))
     (buffer-string))
-"##,
+)"##,
         expect,
     )
 }

@@ -52,12 +52,11 @@ fn divergence_apply_funcall_partial() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_closure_over_mutable_state() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (c t c t a t a nil t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((state '(nil)))
@@ -79,17 +78,16 @@ fn divergence_closure_over_mutable_state() {
             (eq (funcall peek-fn) 'a)
             (funcall pop-fn)
             (eq (funcall pop-fn) 'a)
-            (null (funcall peek-fn))))) "#,
+            (null (funcall peek-fn))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_nested_closure_capture() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (12 nil 17 nil 100 102 nil 107 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((outer 1))
@@ -107,7 +105,7 @@ fn divergence_nested_closure_capture() {
               (funcall f1)
               (= (funcall f1) 3)
               (funcall f2 5)
-              (= (funcall f2 5) 8))))) "#,
+              (= (funcall f2 5) 8))))) )"#,
         expect,
     );
 }
@@ -161,12 +159,11 @@ fn divergence_eval_defun_and_funcall() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_closure_composition() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (8 t 7 t 17 t 7 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((compose (lambda (f g)
@@ -184,17 +181,16 @@ fn divergence_closure_composition() {
             (funcall sq-add1 4)
             (= (funcall sq-add1 4) 17)
             (funcall (funcall compose add1 add1) 5)
-            (= (funcall (funcall compose add1 add1) 5) 7)))) "#,
+            (= (funcall (funcall compose add1 add1) 5) 7)))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_macro_anaphoric() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 76)""#]];
+    let expect = expect_test::expect![[r#""OK (13 t nil t 5 t 1 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defmacro test-ma-when-xxx (test &rest body)
@@ -207,7 +203,7 @@ fn divergence_macro_anaphoric() {
         (eval (macroexpand '(test-ma-when-xxx "hello" (length it))))
         (= (eval (macroexpand '(test-ma-when-xxx "hello" (length it)))) 5)
         (eval (macroexpand '(test-ma-when-xxx '(1 2 3) (car it))))
-        (eq (eval (macroexpand '(test-ma-when-xxx '(1 2 3) (car it)))) 1)))) "#,
+        (eq (eval (macroexpand '(test-ma-when-xxx '(1 2 3) (car it)))) 1)))"#,
         expect,
     );
 }

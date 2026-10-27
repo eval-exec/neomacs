@@ -107,18 +107,16 @@ fn div_f9_featurep_x() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_f9_global_ring_and_mode_string() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 5 43)""#]];
+    let expect = expect_test::expect![[r#""OK (nil nil nil nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (list (default-value 'mark-ring)
       global-mark-ring
       kill-ring-yank-pointer
-      (default-value 'global-mode-string)))
-"##,
+      (default-value 'global-mode-string))"##,
         expect,
     );
 }

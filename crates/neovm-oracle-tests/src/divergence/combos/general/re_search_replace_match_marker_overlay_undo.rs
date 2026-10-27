@@ -11,7 +11,6 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_re_search_forward_backward_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -65,17 +64,16 @@ fn combo_re_search_forward_backward_marker_overlay_undo() {
                                     (get-text-property 21 'grp)
                                     (get-text-property 31 'grp))))
                 (kill-buffer buf)
-                (list after restored)))))))))) "#,
+                (list after restored)))))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_replace_match_fixedcase_literal_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-rmfl")))
@@ -118,17 +116,16 @@ fn combo_replace_match_fixedcase_literal_marker_overlay_undo() {
                                 (get-text-property 25 'case)
                                 (get-text-property 31 'case))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_replace_match_backreference_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer " combo-rmbr")))
@@ -162,7 +159,7 @@ fn combo_replace_match_backreference_marker_overlay_undo() {
                                 (get-text-property 12 'item)
                                 (get-text-property 23 'item))))
             (kill-buffer buf)
-            (list after restored)))))) "#,
+            (list after restored)))))) )"#,
         expect,
     );
 }
@@ -226,7 +223,6 @@ fn combo_re_search_narrow_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_looking_at_replace_match_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -272,7 +268,7 @@ fn combo_looking_at_replace_match_marker_overlay_undo() {
                                     (get-text-property 17 'grp)
                                     (get-text-property 25 'grp))))
                 (kill-buffer buf)
-                (list after restored)))))))))) "#,
+                (list after restored)))))))))"#,
         expect,
     );
 }

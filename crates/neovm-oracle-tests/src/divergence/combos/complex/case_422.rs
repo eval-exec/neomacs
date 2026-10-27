@@ -163,11 +163,10 @@ fn div_cx422_regex_symbol_boundaries() {
 }
 
 /// char syntax classes for various syntax types.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx422_char_syntax_classes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 9 25)""#]];
+    let expect = expect_test::expect![[r#""OK (119 40 41 34 60 32 95 40)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (list (char-syntax ?a)
@@ -177,8 +176,7 @@ fn div_cx422_char_syntax_classes() {
       (char-syntax ?\;)
       (char-syntax ?\ )
       (char-syntax ?_)
-      (char-syntax ?\()))
-"##,
+      (char-syntax ?\())"##,
         expect,
     );
 }

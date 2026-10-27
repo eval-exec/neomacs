@@ -222,11 +222,11 @@ fn div_cx68_insert_file_contents_partial_range() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx68_file_modes_get_set_and_replace() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (error \"Parse error in modes near ‘rwxr-xr-x’\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((path (make-temp-file "neo-cx68-modes")))
@@ -237,16 +237,16 @@ fn div_cx68_file_modes_get_set_and_replace() {
       (let ((rw- (file-modes path)))
         (delete-file path)
         (list initial-modes rwx rw- (file-modes-symbolic-to-number "rwxr-xr-x")))))
-"##,
+)"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx68_temp_file_read_write_buffer_local_undo_marker_overlay_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (\"header line\\nsecond line\\nthird line\\n\" 35 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((path (make-temp-file "neo-cx68-mega"))
@@ -273,7 +273,7 @@ fn div_cx68_temp_file_read_write_buffer_local_undo_marker_overlay_mega() {
     (list content
           (length content)
           (file-exists-p path))))
-"##,
+)"##,
         expect,
     );
 }

@@ -112,7 +112,6 @@ fn oracle_prop_wam_heap_representation() {
 // WAM deref and unification on the heap
 // ---------------------------------------------------------------------------
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_wam_unification() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -245,8 +244,8 @@ fn oracle_prop_wam_unification() {
     (fmakunbound 'neovm--wam-deref)
     (fmakunbound 'neovm--wam-bind)
     (fmakunbound 'neovm--wam-unify)
-    (fmakunbound 'neovm--wam-read-term)))"#;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    (fmakunbound 'neovm--wam-read-term))))"#;
+    let expect = expect_test::expect![[r#""OK neovm--wam-read-term""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

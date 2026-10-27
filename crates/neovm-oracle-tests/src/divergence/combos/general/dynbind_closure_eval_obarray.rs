@@ -66,12 +66,11 @@ fn divergence_eval_defun_captures_dynvar() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_nested_closures_eval_mutating() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((2 3 3) 3 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defvar test-nc-counter-xxx 0)
@@ -86,7 +85,7 @@ fn divergence_nested_closures_eval_mutating() {
         (let ((r1 (funcall wrapper)))
           (list r1
                 test-nc-counter-xxx
-                (= test-nc-counter-xxx 0)))))) "#,
+                (= test-nc-counter-xxx 0)))))) )"#,
         expect,
     );
 }

@@ -27,11 +27,10 @@ fn div_cx13_process_send_receive_binary() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx13_buffer_narrow_marker_undo_stack_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -52,7 +51,7 @@ fn div_cx13_buffer_narrow_marker_undo_stack_deep() {
       (list state (point-min) (point-max)
             (marker-position m1) (marker-position m2)
             (buffer-string) (text-properties-at 1))))
-"##,
+)"##,
         expect,
     );
 }

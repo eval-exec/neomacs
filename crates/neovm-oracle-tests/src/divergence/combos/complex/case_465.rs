@@ -38,16 +38,15 @@ fn div_cx465_signal_process_self() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx465_backup_file_ops_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 52)""#]];
+    let expect = expect_test::expect![[r#""OK (12 nil \"/tmp/test.el\" \"/tmp/test.el\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(list (backup-file-name-p "/tmp/test.el~")
       (backup-file-name-p "/tmp/test.el")
       (file-name-sans-versions "/tmp/test.el~")
-      (file-name-sans-versions "/tmp/test.el.~1~")))"##,
+      (file-name-sans-versions "/tmp/test.el.~1~"))"##,
         expect,
     );
 }

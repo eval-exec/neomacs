@@ -1,6 +1,7 @@
 //! Divergence tests: timer + process + buffer + callback combos.
 
 use crate::common::assert_oracle_parity;
+use crate::common::assert_oracle_parity_frozen_time_expect;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
@@ -26,8 +27,10 @@ fn divergence_timer_idle_create_cancel() {
 fn divergence_current_time_format() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (t t t t \"2026-10-26\" t t t t)""#]];
-    crate::common::assert_oracle_parity_expect(
+    // The probe formats today's date, so the recorded answer must not cross a
+    // midnight boundary: pin both engines to the same frozen instant.
+    let expect = expect_test::expect![[r#""OK (t t t t \"2026-06-15\" t t t t)""#]];
+    crate::common::assert_oracle_parity_frozen_time_expect(
         r#"(progn
   (let ((time (current-time)))
     (list (listp time)

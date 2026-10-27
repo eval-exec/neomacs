@@ -188,11 +188,10 @@ fn div_cx27_set_buffer_multibyte_overlay_text_prop_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx27_window_buffer_marker_point_interaction() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (5 5 5 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx27-wb*")))
@@ -205,7 +204,7 @@ fn div_cx27_window_buffer_marker_point_interaction() {
     (prog1 (list wp bp (window-point) (point))
       (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
       (kill-buffer buf)))
-"##,
+)"##,
         expect,
     );
 }
@@ -242,11 +241,12 @@ fn div_cx27_coding_system_for_write_does_not_propagate() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx27_undo_redo_multiple_boundaries_precise() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"AAA\" \"AAABBB\" \"AAABBBCCC\" \"AAABBBCCCDDD\") \"AAABBBCCC\" nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -264,7 +264,7 @@ fn div_cx27_undo_redo_multiple_boundaries_precise() {
               (while t (redo) (push (buffer-string) redo-states))
             (error))
           (list forward after-undo (nreverse redo-states))))))
-"##,
+)"##,
         expect,
     );
 }

@@ -63,18 +63,17 @@ fn divergence_url_vars() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_dns_functions() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 5 26)""#]];
+    let expect = expect_test::expect![[r#""OK (t t t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(list
   (fboundp 'dns-query)
   (fboundp 'dns-lookup-host)
   (fboundp 'network-lookup-address-info)
-  (fboundp 'lookup-host)))) "#,
+  (fboundp 'lookup-host))"#,
         expect,
     );
 }

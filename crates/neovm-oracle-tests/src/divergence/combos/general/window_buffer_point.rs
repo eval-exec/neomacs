@@ -99,12 +99,13 @@ fn divergence_save_excursion_marker_overlay() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buffer_list_order_after_switch() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (t (#<killed buffer> #<killed buffer>) (#<killed buffer>) t t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((b1 (current-buffer))
@@ -119,7 +120,7 @@ fn divergence_buffer_list_order_after_switch() {
             (memq b3 bl)
             (>= (length bl) 3)
             (kill-buffer b2)
-            (kill-buffer b3)))) "#,
+            (kill-buffer b3)))) )"#,
         expect,
     );
 }

@@ -140,12 +140,11 @@ fn divergence_undo_after_replace() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_buffer_undo_list_torture() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"01234\" \"0123\" nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (setq buffer-undo-list nil)
@@ -158,7 +157,7 @@ fn divergence_buffer_undo_list_torture() {
       (undo))
     (list initial-string
           (buffer-string)
-          (= (point-max) (point-min))))"#,
+          (= (point-max) (point-min)))))"#,
         expect,
     );
 }

@@ -323,11 +323,12 @@ fn div_cx61_selective_display_and_invisible_text_property() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx61_overlay_invisibility_spec_buffer_local_combination_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"01234567890123456789\" \"01234567890123456789\" \"01234567890123456789\" t ((border . t) t) 2 hide border)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
@@ -347,7 +348,7 @@ fn div_cx61_overlay_invisibility_spec_buffer_local_combination_mega() {
               (length (overlays-in 1 21))
               (get-char-property 3 'invisible)
               (get-char-property 11 'invisible)))))
-"##,
+)"##,
         expect,
     );
 }

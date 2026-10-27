@@ -311,7 +311,6 @@ fn oracle_prop_trie_autocomplete() {
 // Delete word from trie
 // ---------------------------------------------------------------------------
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn oracle_prop_trie_delete() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -425,8 +424,8 @@ Returns t if word was found and deleted, nil otherwise."
     (fmakunbound 'neovm--trie-delete)
     (fmakunbound 'neovm--trie-find-node)
     (fmakunbound 'neovm--trie-count-from)
-    (fmakunbound 'neovm--trie-count-prefix)))"#;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    (fmakunbound 'neovm--trie-count-prefix))))"#;
+    let expect = expect_test::expect![[r#""OK neovm--trie-count-prefix""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

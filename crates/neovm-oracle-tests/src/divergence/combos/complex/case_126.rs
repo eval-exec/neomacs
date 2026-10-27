@@ -24,7 +24,6 @@ fn div_cx126_add_function_to_place_var() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx126_add_function_override_completely() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -36,13 +35,11 @@ fn div_cx126_add_function_override_completely() {
   (add-function :override (var 'neo-cx126-orig)
                 (lambda (x) (push :override calls) (* x 100)))
   (let ((r (funcall neo-cx126-orig 5)))
-    (list r (nreverse calls))))
-"##,
+    (list r (nreverse calls)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx126_add_function_filter_args() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -56,13 +53,11 @@ fn div_cx126_add_function_filter_args() {
   (add-function :filter-args (var 'neo-cx126-sum-fn)
                 (lambda (args) (mapcar (lambda (x) (* x 10)) args)))
   (let ((r (funcall neo-cx126-sum-fn 1 2 3)))
-    (list r (nreverse calls))))
-"##,
+    (list r (nreverse calls)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx126_add_function_filter_return() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -74,13 +69,11 @@ fn div_cx126_add_function_filter_return() {
   (add-function :filter-return (var 'neo-cx126-base)
                 (lambda (r) (push (list :filtered r) calls) (* r 2)))
   (let ((r (funcall neo-cx126-base)))
-    (list r (nreverse calls))))
-"##,
+    (list r (nreverse calls)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx126_add_function_around_with_call_next() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -96,8 +89,7 @@ fn div_cx126_add_function_around_with_call_next() {
                     (push (list :around-exit r) calls)
                     r)))
   (let ((r (funcall neo-cx126-target 7)))
-    (list r (nreverse calls))))
-"##,
+    (list r (nreverse calls)))"##,
         expect,
     );
 }

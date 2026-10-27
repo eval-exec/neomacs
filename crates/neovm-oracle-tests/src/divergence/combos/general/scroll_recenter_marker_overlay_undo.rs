@@ -63,7 +63,6 @@ fn combo_beginning_end_buffer_marker_overlay_undo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_beginning_end_buffer_narrow_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -115,12 +114,11 @@ fn combo_beginning_end_buffer_narrow_marker_overlay_undo() {
                                     (get-text-property 21 'sect)
                                     (get-text-property 26 'sect))))
                 (kill-buffer buf)
-                (list after restored)))))))))) "#,
+                (list after restored)))))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_beginning_end_buffer_buffer_local_marker_overlay_undo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -172,7 +170,7 @@ fn combo_beginning_end_buffer_buffer_local_marker_overlay_undo() {
                                     (get-text-property 16 'grp)
                                     (get-text-property 21 'grp))))
                 (kill-buffer buf)
-                (list after restored)))))))))) "#,
+                (list after restored)))))))))"#,
         expect,
     );
 }

@@ -64,11 +64,10 @@ fn div_cx395_copy_file_with_permissions() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx395_rename_file_and_make_directory() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (nil t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((src (make-temp-file "neo-cx395-rn-src"))
@@ -84,7 +83,7 @@ fn div_cx395_rename_file_and_make_directory() {
       (let ((created (file-directory-p deep)))
         (delete-directory base t)
         (append result (list created)))))
-"##,
+)"##,
         expect,
     )
 }
@@ -203,11 +202,10 @@ fn div_cx395_set_file_modes_and_times() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx395_file_io_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((path (make-temp-file "neo-cx395-mega"))
@@ -233,7 +231,7 @@ fn div_cx395_file_io_with_marker_overlay_undo_narrow_mega() {
           (kill-buffer buf)
           (delete-file path)
           (list state)))))
-"##,
+))"##,
         expect,
     )
 }

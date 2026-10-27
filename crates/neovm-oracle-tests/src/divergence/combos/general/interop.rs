@@ -112,26 +112,13 @@ fn divergence_eval_defmacro_then_use() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn divergence_funcall_compose_with_condition_case() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 34)""#]];
+    let expect = expect_test::expect![[r#""OK (3 div-error t -0.0e+NaN)""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn
-  (defun test-safe-div-xxx (a b)
-    (condition-case err
-        (/ a b)
-      (arith-error 'div-error)))
-  (defun test-safe-sqrt-xxx (x)
-    (condition-case err
-        (sqrt x)
-      (args-out-of-range 'sqrt-error)))
-  (list (test-safe-div-xxx 10 3)
-        (test-safe-div-xxx 10 0)
-        (> (test-safe-sqrt-xxx 16) 3.9)
-        (test-safe-sqrt-xxx -1)))) ",
+        "(progn\n  (defun test-safe-div-xxx (a b)\n    (condition-case err\n        (/ a b)\n      (arith-error 'div-error)))\n  (defun test-safe-sqrt-xxx (x)\n    (condition-case err\n        (sqrt x)\n      (args-out-of-range 'sqrt-error)))\n  (list (test-safe-div-xxx 10 3)\n        (test-safe-div-xxx 10 0)\n        (> (test-safe-sqrt-xxx 16) 3.9)\n        (test-safe-sqrt-xxx -1)))",
         expect,
     );
 }

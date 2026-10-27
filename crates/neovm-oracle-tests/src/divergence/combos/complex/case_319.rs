@@ -82,11 +82,10 @@ fn div_cx319_marker_after_kill_buffer_is_nil() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx319_marker_in_different_buffer_switch() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (3 t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf-a (get-buffer-create " *neo-cx319-mk-a*"))
@@ -100,7 +99,7 @@ fn div_cx319_marker_in_different_buffer_switch() {
       (kill-buffer buf-a)
       (kill-buffer buf-b)
       (list pos (eq buf buf-b) (marker-buffer m))))
-"##,
+)"##,
         expect,
     )
 }
@@ -183,7 +182,6 @@ fn div_cx319_marker_creation_and_query() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx319_marker_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -215,8 +213,7 @@ fn div_cx319_marker_with_marker_overlay_undo_narrow_mega() {
       (list state (buffer-string)
             (marker-position m1) (marker-position m2) (marker-position m3)
             (overlay-start ov) (overlay-end ov)
-            (text-properties-at 1)))))))
-"##,
+            (text-properties-at 1))))))"##,
         expect,
     )
 }

@@ -23,71 +23,35 @@ fn deficiency_intern_soft_vs_intern_obarray_lookup() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_mapatoms_counts_and_collect_with_custom_obarray() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable \\\"sym-%02d\\\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((ob (make-vector 7 0))\n\
-         (collected nil))\n\
-         (dotimes (i 10)\n\
-         (intern (format \\\"sym-%02d\\\" i) ob))\n\
-         (mapatoms (lambda (s) (push (symbol-name s) collected)) ob)\n\
-         (let ((sorted (sort collected #'string<)))\n\
-         (list (length sorted)\n\
-         (nth 0 sorted) (nth 4 sorted) (nth 9 sorted)\n\
-         (intern-soft \\\"sym-00\\\" ob)\n\
-         (intern-soft \\\"sym-09\\\" ob))))",
+        "(progn\n(let ((ob (make-vector 7 0))\n(collected nil))\n(dotimes (i 10)\n(intern (format \\\"sym-%02d\\\" i) ob))\n(mapatoms (lambda (s) (push (symbol-name s) collected)) ob)\n(let ((sorted (sort collected #'string<)))\n(list (length sorted)\n(nth 0 sorted) (nth 4 sorted) (nth 9 sorted)\n(intern-soft \\\"sym-00\\\" ob)\n(intern-soft \\\"sym-09\\\" ob)))))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_unintern_then_reintern_preserves_identity() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable \\\"test-sym\\\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((ob (make-vector 7 0)))\n\
-         (let ((s1 (intern \\\"test-sym\\\" ob)))\n\
-         (set s1 42)\n\
-         (let ((val1 (symbol-value s1)))\n\
-         (unintern \\\"test-sym\\\" ob)\n\
-         (let ((s2 (intern \\\"test-sym\\\" ob)))\n\
-         (set s2 99)\n\
-         (list val1\n\
-         (eq s1 s2)\n\
-         (symbol-value s2)\n\
-         (intern-soft \\\"test-sym\\\" ob))))))",
+        "(progn\n(let ((ob (make-vector 7 0)))\n(let ((s1 (intern \\\"test-sym\\\" ob)))\n(set s1 42)\n(let ((val1 (symbol-value s1)))\n(unintern \\\"test-sym\\\" ob)\n(let ((s2 (intern \\\"test-sym\\\" ob)))\n(set s2 99)\n(list val1\n(eq s1 s2)\n(symbol-value s2)\n(intern-soft \\\"test-sym\\\" ob)))))))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_intern_with_symbol_function_and_value_cells() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable \\\"my-test-fn\\\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((ob (make-vector 13 0)))\n\
-         (let ((fn-sym (intern \\\"my-test-fn\\\" ob)))\n\
-         (fset fn-sym (lambda (x) (* x x)))\n\
-         (let ((val-sym (intern \\\"my-test-val\\\" ob)))\n\
-         (set val-sym '(1 2 3))\n\
-         (list (funcall fn-sym 7)\n\
-         (symbol-value val-sym)\n\
-         (functionp fn-sym)\n\
-         (fboundp fn-sym)\n\
-         (boundp val-sym)\n\
-         (symbol-name fn-sym)\n\
-         (symbol-name val-sym)))))",
+        "(progn\n(let ((ob (make-vector 13 0)))\n(let ((fn-sym (intern \\\"my-test-fn\\\" ob)))\n(fset fn-sym (lambda (x) (* x x)))\n(let ((val-sym (intern \\\"my-test-val\\\" ob)))\n(set val-sym '(1 2 3))\n(list (funcall fn-sym 7)\n(symbol-value val-sym)\n(functionp fn-sym)\n(fboundp fn-sym)\n(boundp val-sym)\n(symbol-name fn-sym)\n(symbol-name val-sym))))))",
         expect,
     );
 }
@@ -116,52 +80,24 @@ fn deficiency_symbol_plist_with_obarray_interned_symbols() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_mapatoms_with_fboundp_and_boundp_filter() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument stringp \\\"alpha\\\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((ob (make-vector 11 0)))\n\
-         (dolist (name '(\\\"alpha\\\" \\\"beta\\\" \\\"gamma\\\" \\\"delta\\\" \\\"epsilon\\\"))\n\
-         (let ((s (intern name ob)))\n\
-         (when (member name '(\\\"alpha\\\" \\\"gamma\\\" \\\"epsilon\\\"))\n\
-         (fset s (lambda () 'active)))))\n\
-         (let ((bound-syms nil)\n\
-         (fbound-syms nil))\n\
-         (mapatoms (lambda (s)\n\
-         (when (fboundp s) (push (symbol-name s) fbound-syms))) ob)\n\
-         (list (sort fbound-syms #'string<)\n\
-         (length fbound-syms)\n\
-         (intern-soft \\\"beta\\\" ob))))",
+        "(progn\n(let ((ob (make-vector 11 0)))\n(dolist (name '(\\\"alpha\\\" \\\"beta\\\" \\\"gamma\\\" \\\"delta\\\" \\\"epsilon\\\"))\n(let ((s (intern name ob)))\n(when (member name '(\\\"alpha\\\" \\\"gamma\\\" \\\"epsilon\\\"))\n(fset s (lambda () 'active)))))\n(let ((bound-syms nil)\n(fbound-syms nil))\n(mapatoms (lambda (s)\n(when (fboundp s) (push (symbol-name s) fbound-syms))) ob)\n(list (sort fbound-syms #'string<)\n(length fbound-syms)\n(intern-soft \\\"beta\\\" ob)))))",
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_obarray_hash_collision_with_similar_names() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable \\\"abc\\\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((ob (make-vector 3 0)))\n\
-         (intern \\\"abc\\\" ob)\n\
-         (intern \\\"def\\\" ob)\n\
-         (intern \\\"ghi\\\" ob)\n\
-         (intern \\\"jkl\\\" ob)\n\
-         (intern \\\"mno\\\" ob)\n\
-         (intern \\\"pqr\\\" ob)\n\
-         (let ((count 0))\n\
-         (mapatoms (lambda (_) (setq count (1+ count))) ob)\n\
-         (list count\n\
-         (intern-soft \\\"abc\\\" ob)\n\
-         (intern-soft \\\"def\\\" ob)\n\
-         (intern-soft \\\"pqr\\\" ob)\n\
-         (intern-soft \\\"xyz\\\" ob))))",
+        "(progn\n(let ((ob (make-vector 3 0)))\n(intern \\\"abc\\\" ob)\n(intern \\\"def\\\" ob)\n(intern \\\"ghi\\\" ob)\n(intern \\\"jkl\\\" ob)\n(intern \\\"mno\\\" ob)\n(intern \\\"pqr\\\" ob)\n(let ((count 0))\n(mapatoms (lambda (_) (setq count (1+ count))) ob)\n(list count\n(intern-soft \\\"abc\\\" ob)\n(intern-soft \\\"def\\\" ob)\n(intern-soft \\\"pqr\\\" ob)\n(intern-soft \\\"xyz\\\" ob)))))",
         expect,
     );
 }
@@ -189,30 +125,13 @@ fn deficiency_symbol_name_intern_and_substring_interaction() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn deficiency_unintern_during_mapatoms_iteration() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable \\\"item-%d\\\")""#]];
     crate::common::assert_oracle_parity_expect(
-        "(progn\n\
-         (let ((ob (make-vector 7 0)))\n\
-         (dotimes (i 5)\n\
-         (intern (format \\\"item-%d\\\" i) ob))\n\
-         (let ((collected nil)\n\
-         (to-delete 'item-2))\n\
-         (mapatoms (lambda (s)\n\
-         (push (symbol-name s) collected)\n\
-         (when (equal (symbol-name s) \\\"item-2\\\")\n\
-         (unintern s ob)))\n\
-         ob)\n\
-         (let ((after-map (sort collected #'string<)))\n\
-         (let ((post-count 0))\n\
-         (mapatoms (lambda (_) (setq post-count (1+ post-count))) ob)\n\
-         (list after-map post-count\n\
-         (intern-soft \\\"item-0\\\" ob)\n\
-         (intern-soft \\\"item-2\\\" ob))))))",
+        "(progn\n(let ((ob (make-vector 7 0)))\n(dotimes (i 5)\n(intern (format \\\"item-%d\\\" i) ob))\n(let ((collected nil)\n(to-delete 'item-2))\n(mapatoms (lambda (s)\n(push (symbol-name s) collected)\n(when (equal (symbol-name s) \\\"item-2\\\")\n(unintern s ob)))\nob)\n(let ((after-map (sort collected #'string<)))\n(let ((post-count 0))\n(mapatoms (lambda (_) (setq post-count (1+ post-count))) ob)\n(list after-map post-count\n(intern-soft \\\"item-0\\\" ob)\n(intern-soft \\\"item-2\\\" ob)))))))",
         expect,
     );
 }

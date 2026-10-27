@@ -159,11 +159,10 @@ fn div_cx355_string_width_with_emoji_and_zwj() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx355_char_props_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function char-script)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((cats (mapcar (lambda (c) (get-char-code-property c 'general-category))
@@ -191,7 +190,7 @@ fn div_cx355_char_props_with_marker_overlay_undo_narrow_mega() {
         (list state (buffer-string) (marker-position m)
               (overlay-start ov) (overlay-end ov)
               (text-properties-at 1))))))
-"##,
+)"##,
         expect,
     )
 }

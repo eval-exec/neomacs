@@ -51,16 +51,15 @@ fn div_cx449_fillarray_ops() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx449_copy_alist_nested() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 53)""#]];
+    let expect = expect_test::expect![[r#""OK (99 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(let ((al '((a . 1) (b (c d) . e))))
   (let ((copy (copy-alist al)))
     (setcdr (assq 'a al) 99)
-    (list (cdr (assq 'a al)) (cdr (assq 'a copy))))))"##,
+    (list (cdr (assq 'a al)) (cdr (assq 'a copy)))))"##,
         expect,
     );
 }

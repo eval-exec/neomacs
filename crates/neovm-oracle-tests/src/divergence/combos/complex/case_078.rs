@@ -250,7 +250,6 @@ fn div_cx78_completion_table_case_insensitive() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx78_case_region_indent_fill_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -279,8 +278,7 @@ fn div_cx78_case_region_indent_fill_marker_overlay_undo_narrow_mega() {
         (list state
               (buffer-string) (marker-position m)
               (overlay-start ov) (overlay-end ov)
-              (text-properties-at 1))))))
-"##,
+              (text-properties-at 1)))))"##,
         expect,
     );
 }

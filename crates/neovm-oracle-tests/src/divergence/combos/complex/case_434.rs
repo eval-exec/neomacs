@@ -210,11 +210,10 @@ fn div_cx434_org_habit_ops() {
 }
 
 /// org-inlinetask: inline task operations.
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx434_org_inlinetask_ops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-inlinetask)
   (with-temp-buffer
@@ -223,7 +222,7 @@ fn div_cx434_org_inlinetask_ops() {
       (insert "*************** task\n*************** END\n")
       (list (fboundp 'org-inlinetask-insert-task)
             (org-inlinetask-at-task-p))))
-"##,
+)"##,
         expect,
     );
 }

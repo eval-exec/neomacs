@@ -5,7 +5,6 @@
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_button_type_supertype_inheritance_get_put() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -17,9 +16,8 @@ fn div_v8_button_type_supertype_inheritance_get_put() {
 (list (button-type-get 'probe-btn-base 'face)
       (button-type-get 'probe-btn-child 'face)
       (button-type-get 'probe-btn-child 'help-echo)
-      (button-type-get 'probe-btn-child 'extra)))
-"##;
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 9 49)""#]];
+      (button-type-get 'probe-btn-child 'extra))"##;
+    let expect = expect_test::expect![[r#""OK (bold italic \"base-tooltip\" extra-val)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

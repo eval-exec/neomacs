@@ -242,7 +242,6 @@ fn div_cl_do() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cl_position_find_count() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -251,8 +250,7 @@ fn div_cl_position_find_count() {
         r##"
 (list (cl-position 2 '(1 2 3))
       (cl-find 3 '(1 2 3))
-      (cl-count nil '(1 nil 2 nil))))
-"##,
+      (cl-count nil '(1 nil 2 nil)))"##,
         expect,
     );
 }

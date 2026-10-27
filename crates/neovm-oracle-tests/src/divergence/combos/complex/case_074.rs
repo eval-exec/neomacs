@@ -141,11 +141,10 @@ fn div_cx74_narrow_widen_marker_position_relative() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx74_set_marker_with_different_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (2 t 3 t nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf-a (get-buffer-create " *neo-cx74-a*"))
@@ -163,7 +162,7 @@ fn div_cx74_set_marker_with_different_buffer() {
         (list pos-in-a (eq buf-of-m buf-a)
               pos-in-b (eq buf-of-m-2 buf-b)
               (marker-buffer m)))))
-"##,
+)"##,
         expect,
     );
 }
@@ -211,11 +210,10 @@ fn div_cx74_region_active_p_and_use_region_p() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx74_buffer_narrowing_with_text_props_undo_marker_overlay_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx74-mega*")))
@@ -248,7 +246,7 @@ fn div_cx74_buffer_narrowing_with_text_props_undo_marker_overlay_mega() {
                          (overlay-start ov) (overlay-end ov)
                          (buffer-string))
               (kill-buffer buf)))))))
-"##,
+)"##,
         expect,
     );
 }

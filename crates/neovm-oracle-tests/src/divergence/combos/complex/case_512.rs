@@ -79,15 +79,13 @@ fn div_cx512_key_desc_alt() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx512_key_desc_punctuation() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 2 38)""#]];
+    let expect = expect_test::expect![[r#""OK (\"M-!\" \"M-?\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(list (single-key-description ?\M-!)
-      (single-key-description ?\M-?)))
-"##,
+      (single-key-description ?\M-?))"##,
         expect,
     );
 }

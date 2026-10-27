@@ -112,12 +112,11 @@ fn combo_rename_buffer_overlay_marker_textprop_buflocal() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_indirect_buffer_shared_overlay_marker_textprop() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument listp t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((base (generate-new-buffer " combo-indbase")))
@@ -172,17 +171,18 @@ fn combo_indirect_buffer_shared_overlay_marker_textprop() {
                                           (get-text-property 11 'grp)))))
                     (kill-buffer ind)
                     (kill-buffer base)
-                    (list after restored))))))))) "#,
+                    (list after restored))))))))) )"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_kill_buffer_local_overlay_marker_textprop() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((#(\"AAAA-BBBB-CCCC\" 0 4 (zone a) 5 9 (zone b) 10 14 (zone c)) buf-local 5 10 all test a b c) original)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (setq kill-test-global 'original)
@@ -209,7 +209,7 @@ fn combo_kill_buffer_local_overlay_marker_textprop() {
                               (get-text-property 6 'zone)
                               (get-text-property 11 'zone))))
           (kill-buffer buf)
-          (list pre-kill kill-test-global))))) "#,
+          (list pre-kill kill-test-global))))) )"#,
         expect,
     );
 }

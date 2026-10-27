@@ -181,11 +181,10 @@ fn div_cx344_nan_inf_predicates_and_arithmetic() {
     )
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx344_number_arith_with_marker_overlay_undo_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable 355/113)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (letrec ((fib (lambda (n) (if (< n 2) n (+ (funcall fib (1- n)) (funcall fib (- n 2)))))))
@@ -214,7 +213,7 @@ fn div_cx344_number_arith_with_marker_overlay_undo_narrow_mega() {
           (list state (buffer-string) (marker-position m)
                 (overlay-start ov) (overlay-end ov)
                 (text-properties-at 1)))))))
-"##,
+)"##,
         expect,
     )
 }

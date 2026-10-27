@@ -157,11 +157,10 @@ fn div_cx155_window_combination_resize_query() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_cx155_window_buffer_swap_via_set_window_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf-a (get-buffer-create " *neo-cx155-a*"))
@@ -176,7 +175,7 @@ fn div_cx155_window_buffer_swap_via_set_window_buffer() {
       (prog1 (list a-in-win b-in-win)
         (kill-buffer buf-a)
         (kill-buffer buf-b))))
-"##,
+)"##,
         expect,
     );
 }

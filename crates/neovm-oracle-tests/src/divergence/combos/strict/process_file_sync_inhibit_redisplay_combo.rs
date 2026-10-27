@@ -5,7 +5,6 @@
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn div_v8_process_file_output_to_file_sync() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -22,8 +21,10 @@ fn div_v8_process_file_output_to_file_sync() {
                 (insert-file-contents out)
                 (buffer-string)))
       (when (file-exists-p out) (delete-file out))))
-"##;
-    let expect = expect_test::expect![[r#""OK nil""#]];
+)"##;
+    let expect = expect_test::expect![[
+        r#""ERR (file-missing \"Opening input file\" \"No such file or directory\" \"[ORACLE-TMPDIR]/probe-pf-out.txt\")""#
+    ]];
     crate::common::assert_oracle_parity_with_shared_tempdir_expect(form, expect);
 }
 
