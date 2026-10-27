@@ -431,7 +431,7 @@ fn mode_line_dynamic_symbols_split_callback_keeps_live_value_reads() {
 }
 
 #[test]
-fn mode_line_dynamic_symbols_eval_reinterns_after_actual_registry_change() {
+fn mode_line_dynamic_symbols_eval_retains_object_after_actual_registry_change() {
     let mut ctx = context();
     let name = "ttykey-k5-dynamic-eval-reintern";
     let format = ctx
@@ -455,7 +455,8 @@ fn mode_line_dynamic_symbols_eval_reinterns_after_actual_registry_change() {
         Some(Value::T),
         "the callback must reach its successful reintern marker"
     );
-    assert_eq!(output, "oldnew");
+    // GNU retained-during-reintern TTY oracle produces OLDOLD.
+    assert_eq!(output, "oldold");
     assert_ne!(intern(name), old, "actual registry identity changed");
     assert_eq!(pctx.resolve_dynamic_symbol(name).0, intern(name));
 }
@@ -482,7 +483,7 @@ fn mode_line_dynamic_symbols_restore_invalidates_only_pass_identities() {
 }
 
 #[test]
-fn mode_line_dynamic_symbols_keep_spelling_semantics_for_noncanonical_and_encoded_names() {
+fn mode_line_dynamic_symbols_keep_object_identity_for_noncanonical_and_encoded_names() {
     let mut ctx = context();
     for (name, atom) in [
         (
@@ -508,7 +509,7 @@ fn mode_line_dynamic_symbols_keep_spelling_semantics_for_noncanonical_and_encode
         for walker in [Walker::Context, Walker::State, Walker::StateWithEval] {
             assert_eq!(
                 render(&mut ctx, &ModeLinePercentContext::default(), format, walker),
-                "spelling"
+                "input-object"
             );
         }
     }
@@ -524,12 +525,12 @@ fn mode_line_dynamic_symbols_keep_spelling_semantics_for_noncanonical_and_encode
             Value::from_sym_id(uninterned),
             Walker::Context
         ),
-        "canonical"
+        "uninterned"
     );
 }
 
 #[test]
-fn mode_line_dynamic_symbols_keep_positioned_and_invalid_utf8_admission() {
+fn mode_line_dynamic_symbols_physical_atom_and_conditional_admission_matches_gnu() {
     let mut ctx = context();
     let name = "ttykey-k5-dynamic-positioned";
     ctx.set_variable(name, Value::string("positioned"));
@@ -554,12 +555,33 @@ fn mode_line_dynamic_symbols_keep_positioned_and_invalid_utf8_admission() {
             positioned,
             Walker::Context
         ),
-        "positioned"
+        "*invalid*"
+    );
+    // GNU's conditional CAR uses SYMBOLP/XSYMBOL, unlike atom dispatch.
+    let actual = intern_uninterned(name);
+    ctx.obarray.set_symbol_value_id(actual, Value::NIL);
+    ctx.obarray.set_symbol_value_id(intern(name), Value::T);
+    let positioned_actual = ctx
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::from_sym_id(actual), Value::fixnum(7));
+    let conditional = Value::list(vec![
+        positioned_actual,
+        Value::string("TRUE"),
+        Value::string("FALSE"),
+    ]);
+    assert_eq!(
+        render(
+            &mut ctx,
+            &ModeLinePercentContext::default(),
+            conditional,
+            Walker::Context
+        ),
+        "FALSE"
     );
     let atom = LispString::from_unibyte_slice(b"ttykey-k5-dynamic-invalid-\xff");
     let invalid = ctx.obarray.intern_lisp_string(&atom);
     ctx.obarray
-        .set_symbol_value_id(invalid, Value::string("must-not-render"));
+        .set_symbol_value_id(invalid, Value::string("ACTUAL-INTERNED-BYTE"));
     assert!(Value::from_sym_id(invalid).as_bare_symbol_name().is_none());
     for walker in [Walker::Context, Walker::State, Walker::StateWithEval] {
         assert_eq!(
@@ -569,7 +591,7 @@ fn mode_line_dynamic_symbols_keep_positioned_and_invalid_utf8_admission() {
                 Value::from_sym_id(invalid),
                 walker
             ),
-            ""
+            "ACTUAL-INTERNED-BYTE"
         );
     }
 }
@@ -610,4 +632,95 @@ fn mode_line_dynamic_symbols_plain_void_and_alias_void_match_owner_fallback() {
         );
     }
     ctx.unbind_to(depth);
+}
+
+/// GNU 31.1 initialized-TTY oracle: make-symbol's value and risk property,
+/// not those of an interned same-name symbol, own the formatter's reads.
+#[test]
+fn mode_line_symbol_object_identity_and_conditional_match_gnu() {
+    let mut ctx = context();
+    let name = "mode-line-symbol-object-identity";
+    let canonical = intern(name);
+    let actual = intern_uninterned(name);
+    ctx.obarray
+        .set_symbol_value_id(canonical, Value::string("CANONICAL"));
+    ctx.obarray
+        .set_symbol_value_id(actual, Value::string("ACTUAL"));
+    let format = Value::from_sym_id(actual);
+    assert_eq!(
+        render(
+            &mut ctx,
+            &ModeLinePercentContext::default(),
+            format,
+            Walker::Context
+        ),
+        "ACTUAL"
+    );
+    ctx.obarray.set_symbol_value_id(actual, Value::NIL);
+    ctx.obarray.set_symbol_value_id(canonical, Value::T);
+    let conditional = Value::list(vec![format, Value::string("TRUE"), Value::string("FALSE")]);
+    assert_eq!(
+        render(
+            &mut ctx,
+            &ModeLinePercentContext::default(),
+            conditional,
+            Walker::Context
+        ),
+        "FALSE"
+    );
+}
+
+#[test]
+fn mode_line_symbol_object_risk_property_matches_gnu() {
+    let mut ctx = context();
+    let name = "mode-line-symbol-object-risk";
+    let canonical = intern(name);
+    let actual = intern_uninterned(name);
+    let value = ctx
+        .eval_str("'(:eval (propertize \"RISK-EVAL\" 'ep33-symbol-probe-property 'present))")
+        .expect("GNU probe value");
+    ctx.obarray.set_symbol_value_id(canonical, value);
+    ctx.obarray.set_symbol_value_id(actual, value);
+    let risk = ModeLineSymbol::RiskyLocalVariable.id();
+    ctx.obarray
+        .put_property_id(actual, risk, Value::T)
+        .expect("valid risk plist");
+    ctx.obarray
+        .put_property_id(canonical, risk, Value::NIL)
+        .expect("valid risk plist");
+    let format = Value::from_sym_id(actual);
+    let mut rendered = ModeLineRendered::default();
+    render_into(
+        &mut ctx,
+        &ModeLinePercentContext::default(),
+        format,
+        Walker::Context,
+        &mut rendered,
+    );
+    assert_eq!(
+        rendered.text,
+        "RISK-EVAL".chars().map(u32::from).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        rendered.text_props.get_property_at_char_pos(
+            crate::buffer::CharPos0::new(0),
+            Value::symbol("ep33-symbol-probe-property"),
+        ),
+        Some(Value::symbol("present"))
+    );
+    ctx.obarray
+        .put_property_id(actual, risk, Value::NIL)
+        .expect("valid risk plist");
+    ctx.obarray
+        .put_property_id(canonical, risk, Value::T)
+        .expect("valid risk plist");
+    assert_eq!(
+        render(
+            &mut ctx,
+            &ModeLinePercentContext::default(),
+            format,
+            Walker::Context
+        ),
+        ""
+    );
 }

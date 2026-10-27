@@ -197,19 +197,15 @@ pub(super) fn with_root_scope<R>(
     operation(roots.eval)
 }
 
-/// One decoded-kind/symbol classifier. Positioned symbols use canonical SYMBOLP.
+/// GNU display_mode_element switches on the physical Lisp type of an atom.
+/// A positioned-symbol vector is invalid here, even when SYMBOLP admits it as
+/// the CAR of a conditional. Only that latter boundary projects its payload.
 #[inline(always)]
-fn classify<P: WalkPolicy>(value: Value, symbol_mode: crate::tagged::SymbolMode) -> Node {
+fn classify<P: WalkPolicy>(value: Value) -> Node {
     match value.kind() {
         ValueKind::Nil => match P::GRAMMAR {
             Grammar::Native => Node::Empty,
-            Grammar::Stored => {
-                if value.is_symbol(symbol_mode) {
-                    Node::Symbol
-                } else {
-                    Node::Empty
-                }
-            }
+            Grammar::Stored => Node::Symbol,
         },
         ValueKind::String => Node::Text,
         ValueKind::Fixnum(_) => match P::GRAMMAR {
@@ -217,25 +213,12 @@ fn classify<P: WalkPolicy>(value: Value, symbol_mode: crate::tagged::SymbolMode)
             Grammar::Stored => Node::Invalid,
         },
         ValueKind::Cons => Node::Cons,
-        ValueKind::T | ValueKind::Symbol(_) => {
-            if value.is_symbol(symbol_mode) {
-                Node::Symbol
-            } else {
-                Node::Empty
-            }
-        }
+        ValueKind::T | ValueKind::Symbol(_) => Node::Symbol,
         ValueKind::Float
         | ValueKind::Subr(_)
         | ValueKind::Veclike(_)
         | ValueKind::Unbound
-        | ValueKind::Unknown => {
-            // Positioned symbols are vectorlike and must use canonical SYMBOLP.
-            if value.is_symbol(symbol_mode) {
-                Node::Symbol
-            } else {
-                Node::Invalid
-            }
-        }
+        | ValueKind::Unknown => Node::Invalid,
     }
 }
 
@@ -361,7 +344,7 @@ pub(super) fn walk<P: WalkPolicy>(
         pctx.target
             .begin_dispatch(eval, &element_root, &mut element, &mut depth)?;
         let symbol_mode = eval.symbol_mode();
-        match classify::<P>(element, symbol_mode) {
+        match classify::<P>(element) {
             Node::Empty => break,
             Node::Text => {
                 used = P::append_text(
@@ -377,10 +360,12 @@ pub(super) fn walk<P: WalkPolicy>(
                 break;
             }
             Node::Symbol => {
-                let Some(name) = element.as_symbol_name(symbol_mode) else {
+                let Some(symbol) = element
+                    .as_bare_symbol_id()
+                    .map(mode_line_symbols::ResolvedModeLineSymbol::from)
+                else {
                     break;
                 };
-                let symbol = pctx.resolve_dynamic_symbol(name);
                 match P::SYMBOL_RISK_TIMING {
                     SymbolRiskTiming::BeforeValue => {
                         controls = symbol_risk::<P>(eval, symbol, controls);
@@ -515,11 +500,9 @@ pub(super) fn walk<P: WalkPolicy>(
                             Grammar::Native => {}
                         }
                         let truth = car
-                            .as_symbol_name(symbol_mode)
-                            .and_then(|name| {
-                                pctx.resolve_dynamic_symbol(name)
-                                    .value(eval.variables(), &eval.buffers)
-                            })
+                            .as_symbol_id(symbol_mode)
+                            .map(mode_line_symbols::ResolvedModeLineSymbol::from)
+                            .and_then(|symbol| symbol.value(eval.variables(), &eval.buffers))
                             .is_some_and(|value| value.is_truthy());
                         match select_branch(cdr, truth.into()) {
                             Branch::Absent => break,

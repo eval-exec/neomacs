@@ -4498,11 +4498,11 @@ fn format_mode_line_recursive_in_state(
             // No special case for mode-line-front-space or
             // mode-line-end-spaces; see the note on the equivalent
             // branch in `format_mode_line_recursive`.
-            if let Some(name) = format.as_bare_symbol_name()
-                && let Some((symbol, val)) = {
-                    let symbol = pctx.resolve_dynamic_symbol(name);
-                    symbol.value(vars, buffers).map(|value| (symbol, value))
-                }
+            if let Some(symbol) = format
+                .as_bare_symbol_id()
+                .map(mode_line_symbols::ResolvedModeLineSymbol::from)
+                && let Some((symbol, val)) =
+                    { symbol.value(vars, buffers).map(|value| (symbol, value)) }
                 && !val.is_nil()
             {
                 if val.is_string() {
@@ -4584,11 +4584,11 @@ fn format_mode_line_recursive_in_state(
             }
 
             if car.is_bare_symbol() && !car.is_bare_symbol_named("t") {
-                let branch = if let Some(sym_name) = car.as_bare_symbol_name()
-                    && pctx
-                        .resolve_dynamic_symbol(sym_name)
-                        .value(vars, buffers)
-                        .is_some_and(|value| value.is_truthy())
+                let branch = if car
+                    .as_bare_symbol_id()
+                    .map(mode_line_symbols::ResolvedModeLineSymbol::from)
+                    .and_then(|symbol| symbol.value(vars, buffers))
+                    .is_some_and(|value| value.is_truthy())
                 {
                     mode_line_conditional_branch(cdr, true)
                 } else {
@@ -4678,11 +4678,11 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
             // No special case for mode-line-front-space or
             // mode-line-end-spaces; they are ordinary symbols whose
             // value must be resolved and recursed on.
-            if let Some(name) = format.as_bare_symbol_name()
-                && let Some((symbol, val)) = {
-                    let symbol = pctx.resolve_dynamic_symbol(name);
-                    symbol.value(vars, buffers).map(|value| (symbol, value))
-                }
+            if let Some(symbol) = format
+                .as_bare_symbol_id()
+                .map(mode_line_symbols::ResolvedModeLineSymbol::from)
+                && let Some((symbol, val)) =
+                    { symbol.value(vars, buffers).map(|value| (symbol, value)) }
                 && !val.is_nil()
             {
                 if val.is_string() {
@@ -4792,11 +4792,11 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
             }
 
             if car.is_bare_symbol() && !car.is_bare_symbol_named("t") {
-                let branch = if let Some(sym_name) = car.as_bare_symbol_name()
-                    && pctx
-                        .resolve_dynamic_symbol(sym_name)
-                        .value(vars, buffers)
-                        .is_some_and(|value| value.is_truthy())
+                let branch = if car
+                    .as_bare_symbol_id()
+                    .map(mode_line_symbols::ResolvedModeLineSymbol::from)
+                    .and_then(|symbol| symbol.value(vars, buffers))
+                    .is_some_and(|value| value.is_truthy())
                 {
                     mode_line_conditional_branch(cdr, true)
                 } else {
