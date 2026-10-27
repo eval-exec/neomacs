@@ -25,6 +25,41 @@ fn requested_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     adapter.features() & requested
 }
 
+/// Install the uncaptured-error handler for a freshly created device.
+///
+/// wgpu's default handler panics for every uncaptured error ("Handling wgpu
+/// errors as fatal by default").  A lost presentation surface is a RUNTIME
+/// condition, not a programming error: the compositor can exit, a monitor can
+/// be unplugged, or a window can be destroyed while its final resize is still
+/// queued.  Panicking there aborts the editor with status 101 instead of
+/// letting winit report the dead display and take the display-loss exit path
+/// that the `startup_failure` LoseDisplay scenarios assert (a non-zero exit,
+/// never a panic).
+///
+/// Only surface acquisition/configure failures are tolerated, and they stay
+/// visible at error level; every other uncaptured error keeps wgpu's fatal
+/// behaviour, so a genuine validation bug still fails loudly instead of being
+/// logged away.
+fn install_error_handler(device: &wgpu::Device) {
+    device.on_uncaptured_error(std::sync::Arc::new(|error| {
+        let text = error.to_string();
+        let surface_lost = text.contains("Surface::configure")
+            || text.contains("Surface::get_current_texture")
+            || text.contains("surface lost")
+            || text.contains("SURFACE_LOST");
+        if surface_lost {
+            tracing::error!(%error, "wgpu surface error (logged, not fatal)");
+        } else {
+            panic!("wgpu error: {error}");
+        }
+    }));
+}
+
+fn with_error_handler((device, queue): (wgpu::Device, wgpu::Queue)) -> (wgpu::Device, wgpu::Queue) {
+    install_error_handler(&device);
+    (device, queue)
+}
+
 /// Create the renderer's device and queue with platform interop enabled when
 /// the selected adapter can support it.
 ///
@@ -50,7 +85,7 @@ pub async fn request_renderer_device(
         target_os = "linux" => {
             if linux::supports_dma_buf_extensions(adapter) || crate::native_presentation::requested() {
                 match linux::request_interop_device(adapter, &descriptor) {
-                    Ok(device) => return Ok(device),
+                    Ok(device) => return Ok(with_error_handler(device)),
                     Err(error) => tracing::warn!(
                         %error,
                         "failed to enable Vulkan interop device extensions; falling back to a standard renderer device"
@@ -68,6 +103,7 @@ pub async fn request_renderer_device(
     adapter
         .request_device(&descriptor)
         .await
+        .map(with_error_handler)
         .map_err(|error| format!("failed to create renderer device: {error}"))
 }
 
