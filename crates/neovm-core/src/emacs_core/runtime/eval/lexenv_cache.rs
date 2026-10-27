@@ -46,6 +46,12 @@ impl LexenvConstant {
 
     #[inline]
     fn from_sym_id(sym_id: SymId) -> Option<Self> {
+        // The constant ids are the first seeds.  One unsigned range check is
+        // the whole dynamic-symbol rejection: the fast path runs once per
+        // interpreted symbol read, so classification stays inside the branch.
+        if sym_id.0 >= Self::COUNT as u32 {
+            return None;
+        }
         if sym_id == NIL_SYM_ID {
             Some(Self::Nil)
         } else if sym_id == T_SYM_ID {
@@ -72,12 +78,15 @@ impl LexenvConstant {
     }
 }
 
-// The constant slots are dense and immediately precede every dynamic slot.
+// The constant slots are dense and immediately precede every dynamic slot,
+// and the seed ids the range check assumes are the two constants.
 const _: () = {
     assert!(LexenvConstant::Nil.slot() < LexenvConstant::COUNT);
     assert!(LexenvConstant::T.slot() < LexenvConstant::COUNT);
     assert!(LexenvConstant::Nil.slot() != LexenvConstant::T.slot());
     assert!(LexenvConstant::T.slot() + 1 == LexenvConstant::COUNT);
+    assert!(NIL_SYM_ID.0 < LexenvConstant::COUNT as u32);
+    assert!(T_SYM_ID.0 < LexenvConstant::COUNT as u32);
 };
 
 /// Cache index owned by an ordinary symbol.  The private field is only built
