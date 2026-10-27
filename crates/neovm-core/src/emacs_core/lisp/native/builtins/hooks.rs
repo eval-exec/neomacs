@@ -534,6 +534,7 @@ fn run_redisplay_window_change_hooks_inner(eval: &mut super::eval::Context) -> E
         }
     }
 
+    eval.record_redisplay_selection();
     Ok(Value::NIL)
 }
 

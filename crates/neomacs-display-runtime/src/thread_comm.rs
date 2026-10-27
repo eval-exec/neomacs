@@ -777,7 +777,7 @@ pub enum RenderCommand {
 // silently dropping command input.  Keep Neomacs' render-to-evaluator input
 // queue at the same scale and use backpressure for durable user input below.
 const INPUT_CHANNEL_CAPACITY: usize = 4096;
-const COMMAND_CHANNEL_CAPACITY: usize = 64;
+pub(crate) const COMMAND_CHANNEL_CAPACITY: usize = 64;
 
 /// Effective full-frame shader availability published by the render thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

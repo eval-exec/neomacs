@@ -98,6 +98,17 @@ fn retiring_raw_invisible_frame_preserves_initial_window_readiness() {
     }
 }
 
+#[test]
+fn saturating_initial_frame_commands_do_not_block_startup() {
+    for editor in [Editor::Gnu, Editor::Neomacs] {
+        check_case(
+            GuiBackend::LinuxX11,
+            editor,
+            StartupCase::FloodInitialCommands,
+        );
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Editor {
     Gnu,
@@ -113,6 +124,7 @@ enum StartupCase {
     RecoverableFrameError,
     InitiallyInvisible,
     RetireRawInvisibleBeforeInitial,
+    FloodInitialCommands,
 }
 
 fn check_startup(backend: GuiBackend, editor: Editor) {
@@ -140,6 +152,7 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
         case,
         StartupCase::InitiallyInvisible
             | StartupCase::RetireRawInvisibleBeforeInitial
+            | StartupCase::FloodInitialCommands
             | StartupCase::InvalidInitialFrame
     ) {
         temporary.join("neomacs-gui-tests").join(&identity)
@@ -155,6 +168,7 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
     let trace = artifacts.join("startup-trace.json");
     let ready = artifacts.join("early-init-ready.json");
     let invalid_frame_ready = artifacts.join("invalid-frame-ready.json");
+    let flood_progress = artifacts.join("initial-command-progress.json");
     let release = temporary.join(format!("{identity}.release"));
     let invisible_ready = artifacts.join("invisible-initial-ready.json");
     let visible_ready = artifacts.join("visible-initial-ready.json");
@@ -207,7 +221,9 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
         StartupCase::RecoverableFrameError => {
             plan.with_env("NEOMACS_ISSUE_417_RECOVERABLE_FRAME_ERROR", "1")
         }
-        StartupCase::InitiallyInvisible | StartupCase::RetireRawInvisibleBeforeInitial => plan
+        StartupCase::InitiallyInvisible
+        | StartupCase::RetireRawInvisibleBeforeInitial
+        | StartupCase::FloodInitialCommands => plan
             .with_env("NEOMACS_ISSUE_417_INVISIBLE_INITIAL", "1")
             .with_env(
                 "NEOMACS_ISSUE_417_INVISIBLE_READY",
@@ -226,8 +242,18 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
                 visible_ack.to_string_lossy(),
             ),
     };
-    if matches!(case, StartupCase::RetireRawInvisibleBeforeInitial) {
+    if matches!(
+        case,
+        StartupCase::RetireRawInvisibleBeforeInitial | StartupCase::FloodInitialCommands
+    ) {
         plan = plan.with_env("NEOMACS_ISSUE_417_RETIRE_RAW_INVISIBLE", "1");
+    }
+    if matches!(case, StartupCase::FloodInitialCommands) {
+        plan = plan.with_env(
+            "NEOMACS_ISSUE_417_FLOOD_PROGRESS",
+            flood_progress.to_string_lossy(),
+        );
+        eprintln!("initial command progress: {}", flood_progress.display());
     }
     let result = match case {
         StartupCase::ObserveEarlyInit => {
@@ -239,16 +265,16 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
         StartupCase::InvalidInitialFrame => {
             run_invalid_initial_frame_with_prompt_exit(plan, &invalid_frame_ready)
         }
-        StartupCase::InitiallyInvisible | StartupCase::RetireRawInvisibleBeforeInitial => {
-            run_at_invisible_initial_frame_barrier(
-                plan,
-                session.env(),
-                &invisible_ready,
-                &release,
-                &visible_ready,
-                &visible_ack,
-            )
-        }
+        StartupCase::InitiallyInvisible
+        | StartupCase::RetireRawInvisibleBeforeInitial
+        | StartupCase::FloodInitialCommands => run_at_invisible_initial_frame_barrier(
+            plan,
+            session.env(),
+            &invisible_ready,
+            &release,
+            &visible_ready,
+            &visible_ack,
+        ),
     };
     assert!(!result.timed_out, "{result:#?}");
     match case {
@@ -260,12 +286,19 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
         | StartupCase::ObserveEarlyInit
         | StartupCase::RecoverableFrameError
         | StartupCase::InitiallyInvisible
-        | StartupCase::RetireRawInvisibleBeforeInitial => {
+        | StartupCase::RetireRawInvisibleBeforeInitial
+        | StartupCase::FloodInitialCommands => {
             assert_eq!(result.exit_code, Some(0), "{result:#?}")
         }
         StartupCase::EarlyExit(status) => {
             assert_eq!(result.exit_code, Some(status), "{result:#?}")
         }
+    }
+    if matches!(case, StartupCase::FloodInitialCommands) {
+        let progress: Value = serde_json::from_slice(&fs::read(&flood_progress).unwrap()).unwrap();
+        assert_eq!(progress["phase"], "after-alpha-updates", "{progress}");
+        assert_eq!(progress["count"], 256, "{progress}");
+        progress["pid"].as_u64().expect("owned editor PID");
     }
     let events: Vec<Value> =
         serde_json::from_slice(&fs::read(&trace).unwrap_or_else(|error| {
@@ -277,7 +310,8 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
         StartupCase::Complete
         | StartupCase::ObserveEarlyInit
         | StartupCase::InitiallyInvisible
-        | StartupCase::RetireRawInvisibleBeforeInitial => assert_lifecycle(&events),
+        | StartupCase::RetireRawInvisibleBeforeInitial
+        | StartupCase::FloodInitialCommands => assert_lifecycle(&events),
         StartupCase::RecoverableFrameError => {
             assert_early_state(&events);
             let caught = &events[2];
@@ -581,6 +615,7 @@ fn assert_early_state(events: &[Value]) {
     );
     assert_eq!(first["terminal_kind"], "tty");
     assert_eq!(first["display_kind"], "tty");
+    assert_eq!(first["window_system_kind"], "tty");
 }
 
 fn assert_lifecycle(events: &[Value]) {
@@ -605,6 +640,7 @@ fn assert_lifecycle(events: &[Value]) {
     );
     let before = &events[2];
     assert_eq!(before["selected_kind"], "tty");
+    assert_eq!(before["window_system_kind"], "tty");
     assert_eq!(before["frame_kinds"], json!(["tty"]));
     let made = &events[3];
     assert_eq!(made["created_kind"], "gui");
@@ -612,6 +648,7 @@ fn assert_lifecycle(events: &[Value]) {
     for event in &events[4..] {
         assert_eq!(event["selected_kind"], "gui", "{event}");
         assert_eq!(event["display_kind"], "gui", "{event}");
+        assert_eq!(event["window_system_kind"], "gui", "{event}");
         let display = event["display_pixels"].as_array().unwrap();
         assert!(
             display.len() == 2

@@ -44,6 +44,128 @@ fn terminal_startup_context() -> Context {
 }
 
 #[test]
+fn window_system_variable_follows_initial_frame_selection_and_dynamic_binding() {
+    // GNU dispnew.c DEFVAR_KBOARD forwards window-system through the
+    // selected frame's keyboard. Initial terminal state must not become a
+    // permanent global nil after Lisp selects its first graphical frame.
+    let mut eval = terminal_startup_context();
+    let terminal = eval.frames.selected_frame().unwrap().id;
+    crate::emacs_core::terminal::pure::configure_terminal_runtime(
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::window_system(
+            GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::X11),
+        ),
+    );
+    crate::emacs_core::terminal::pure::ensure_terminal_runtime_owner(
+        1,
+        "initial_terminal",
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::inactive(),
+    );
+    eval.frames.get_mut(terminal).unwrap().terminal_id = 1;
+    eval.set_variable("window-system", Value::NIL);
+    eval.set_variable("initial-window-system", Value::symbol("neo"));
+    eval.set_variable("issue417-terminal", Value::make_frame(terminal.0));
+    eval.set_display_host(Box::new(initial_host()));
+    let graphical = eval
+        .eval_str("(x-create-frame '((visibility . nil)))")
+        .unwrap();
+    eval.set_variable("issue417-graphical", graphical);
+
+    let observed: Vec<_> = eval
+        .eval_str_each(
+            "(progn
+               (select-frame issue417-terminal)
+               (list window-system (symbol-value 'window-system) (window-system)))
+             (progn
+               (select-frame issue417-graphical)
+               (list window-system (symbol-value 'window-system) (window-system)))
+             (let ((window-system 'w32))
+               (select-frame issue417-graphical)
+               (list window-system
+                     (progn (select-frame issue417-terminal) window-system)
+                     (progn (select-frame issue417-graphical) window-system)
+                     (symbol-value 'window-system)
+                     (window-system)))
+             window-system
+             (progn
+               (select-frame issue417-terminal)
+               (list window-system (symbol-value 'window-system) (window-system)))
+             (progn
+               (select-frame issue417-graphical)
+               (list window-system (symbol-value 'window-system) (window-system)))",
+        )
+        .iter()
+        .map(format_eval_result)
+        .collect();
+    assert_eq!(
+        observed,
+        [
+            "OK (nil nil nil)",
+            "OK (neo neo neo)",
+            "OK (w32 nil w32 w32 neo)",
+            "OK neo",
+            "OK (nil nil nil)",
+            "OK (neo neo neo)",
+        ]
+    );
+}
+
+#[test]
+fn graphical_terminal_initialization_replaces_cached_tty_keyboard_lifetime() {
+    let mut eval = terminal_startup_context();
+    let terminal = eval.frames.selected_frame().unwrap().id;
+    eval.set_variable("issue417-terminal", Value::make_frame(terminal.0));
+    assert_eq!(
+        format_eval_result(
+            &eval.eval_str("(progn (select-frame issue417-terminal) window-system)")
+        ),
+        "OK nil",
+    );
+    let depth = eval.specpdl.len();
+    eval.try_specbind(
+        crate::emacs_core::intern::intern("window-system"),
+        Value::symbol("w32"),
+    )
+    .unwrap();
+
+    eval.initialize_graphical_terminal(GraphicalDisplayIdentity::anonymous_connection(
+        GraphicalBackend::X11,
+    ));
+    crate::emacs_core::terminal::pure::ensure_terminal_runtime_owner(
+        1,
+        "initial_terminal",
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::inactive(),
+    );
+    eval.frames.get_mut(terminal).unwrap().terminal_id = 1;
+    // The host reassigned this frame in place. Lisp's same-frame selection
+    // is a no-op, so explicitly publish the new terminal ownership.
+    eval.sync_keyboard_terminal_owner();
+    eval.set_display_host(Box::new(initial_host()));
+    eval.eval_str("(select-frame issue417-terminal)").unwrap();
+    assert_eq!(
+        format_eval_result(&eval.eval_str("window-system")),
+        "OK nil"
+    );
+    let graphical = eval
+        .eval_str("(x-create-frame '((visibility . nil)))")
+        .unwrap();
+    eval.set_variable("issue417-graphical", graphical);
+    assert_eq!(
+        format_eval_result(
+            &eval.eval_str("(progn (select-frame issue417-graphical) window-system)")
+        ),
+        "OK neo",
+    );
+
+    // A binding from the cached TTY lifetime must not restore through the
+    // same terminal number after the graphical connection replaced it.
+    eval.unbind_to(depth);
+    assert_eq!(
+        format_eval_result(&eval.eval_str("(list window-system (window-system))")),
+        "OK (neo neo)",
+    );
+}
+
+#[test]
 fn first_graphical_frame_uses_opened_host_font_instead_of_terminal_cells() {
     let mut eval = terminal_startup_context();
     let host = initial_host();
@@ -187,4 +309,90 @@ fn initial_gui_font_seeding_preserves_early_init_new_frame_overrides() {
         assert_eq!(family.as_utf8_str(), Some("Configured Mono"));
         assert_eq!(height, Value::fixnum(210));
     }
+}
+
+#[test]
+fn initial_default_face_keeps_opened_font_after_user_font_parameter_is_cleared() {
+    // GNU xfaces.c:set_lface_from_font stores the opened object in LFACE_FONT.
+    // faces.el:x-create-frame-with-faces subsequently clears font-parameter
+    // when no user font was requested; that request marker is not font storage.
+    let mut eval = terminal_startup_context();
+    eval.set_display_host(Box::new(initial_host()));
+    eval.eval_str(
+        "(setq issue417-frame (x-create-frame '((visibility . nil))))
+         (select-frame issue417-frame)
+         (setq issue417-opened-font
+               (internal-get-lisp-face-attribute 'default :font issue417-frame))
+         (setq issue417-opened-font-info (font-info issue417-opened-font))",
+    )
+    .unwrap();
+    assert_eq!(
+        eval.eval_str("(fontp issue417-opened-font)").unwrap(),
+        Value::T,
+        "the raw initial frame must already own an opened font",
+    );
+    eval.eval_str("(modify-frame-parameters issue417-frame '((font-parameter . nil)))")
+        .unwrap();
+    assert_eq!(
+        eval.eval_str("(fontp (internal-get-lisp-face-attribute 'default :font issue417-frame))")
+            .unwrap(),
+        Value::T,
+        "clearing the user request must preserve the frame-local opened font",
+    );
+    assert_eq!(
+        eval.eval_str(
+            "(let ((font (internal-get-lisp-face-attribute 'default :font issue417-frame)))
+               (and (eq font issue417-opened-font)
+                    (equal (font-info font) issue417-opened-font-info)))"
+        )
+        .unwrap(),
+        Value::T,
+        "the opened font and its public metrics must survive Lisp finalization",
+    );
+}
+
+fn check_old_selected_window_after_gui_startup() {
+    let mut eval = terminal_startup_context();
+    eval.set_variable("noninteractive", Value::NIL);
+    eval.set_display_host(Box::new(initial_host()));
+    // Supply the frontend callback so public redisplay enters its ordinary
+    // window-change pass. This test checks Lisp observations, not hook records.
+    eval.redisplay_fn = Some(Box::new(|_| {}));
+
+    let before = eval.eval_str(
+        r#"(progn
+           (setq startup-terminal-frame (selected-frame)
+                 startup-terminal-window (selected-window)
+                 startup-gui-frame (x-create-frame '((name . "Initial GUI"))))
+           (select-frame startup-gui-frame)
+           (delete-frame startup-terminal-frame)
+           (list (window-live-p startup-terminal-window)
+                 (eq (selected-window) startup-terminal-window)
+                 (eq (old-selected-window) startup-terminal-window)))"#,
+    );
+    assert_eq!(format_eval_result(&before), "OK (nil nil t)");
+
+    // GNU window.c:496-503 defines old-selected-window as the selection at the
+    // last window-change pass; window_change_record:3993 advances it. Creating
+    // the first graphical frame must not preserve the dead terminal forever.
+    eval.eval_str("(redisplay t)").expect("public redisplay");
+    assert_eq!(
+        format_eval_result(&eval.eval_str(
+            "(list (eq (old-selected-window) (selected-window))
+                   (window-live-p (old-selected-window)))",
+        )),
+        "OK (t t)"
+    );
+}
+
+#[test]
+fn old_selected_window_follows_gui_startup_after_redisplay_gnu() {
+    let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
+    check_old_selected_window_after_gui_startup();
+}
+
+#[test]
+fn old_selected_window_follows_gui_startup_after_redisplay_legacy() {
+    let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
+    check_old_selected_window_after_gui_startup();
 }

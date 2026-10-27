@@ -1068,8 +1068,8 @@ pub(crate) fn publish_face_attribute_to_frame_parameter(
     Ok(())
 }
 
-/// Seed the selected frame's authoritative `default` Lisp face specification
-/// from its `font-parameter` without mutating Lisp override state.
+/// Seed the frame's authoritative `default` Lisp face specification
+/// from its opened `font-parameter` without mutating Lisp override state.
 ///
 /// GNU keeps the defface for `default` empty and realizes the actual frame
 /// font through the face subsystem in C.  Redisplay later derives the runtime
@@ -1082,6 +1082,7 @@ pub fn seed_live_frame_default_face_from_font_parameter(
         .frames
         .get(frame_id)
         .and_then(|frame| frame.fixed_parameter(crate::window::FrameQueryParam::FontParameter))
+        .filter(is_font_object)
     else {
         return;
     };
@@ -1091,6 +1092,10 @@ pub fn seed_live_frame_default_face_from_font_parameter(
     else {
         return;
     };
+    // GNU set_lface_from_font retains the opened object in LFACE_FONT.
+    // faces.el clears font-parameter when there was no explicit user request;
+    // that request marker cannot own the realized face font.
+    set_lisp_face_vector_attr(vector, LFaceAttr::Font, font_value);
     for (attr_name, attr_value) in derived_face_attrs_from_font_value(&font_value) {
         set_lisp_face_vector_attr(vector, attr_name, attr_value);
     }

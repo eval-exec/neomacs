@@ -7,7 +7,8 @@
         (mapcar #'framep (frame-list))
         (and (boundp 'terminal-frame) terminal-frame
              (framep terminal-frame))
-        (if (display-graphic-p) "gui" "tty")))
+        (if (display-graphic-p) "gui" "tty")
+        (if window-system "gui" "tty")))
 
 (setq package-enable-at-startup nil
       native-comp-jit-compilation nil
@@ -25,13 +26,15 @@
                          (mapcar #'framep (frame-list))
                          (and (boundp 'terminal-frame) terminal-frame
                               (framep terminal-frame))
-                         (if (display-graphic-p) "gui" "tty")))))
+                         (if (display-graphic-p) "gui" "tty")
+                         (if window-system "gui" "tty")))))
     (push `((tag . ,tag)
             (selected_kind . ,(issue-417-kind (nth 0 state)))
             (background . ,(format "%s" (nth 1 state)))
             (frame_kinds . ,(vconcat (mapcar #'issue-417-kind (nth 2 state))))
             (terminal_kind . ,(issue-417-kind (nth 3 state)))
             (display_kind . ,(nth 4 state))
+            (window_system_kind . ,(nth 5 state))
             (display_pixels . ,(if (equal (nth 4 state) "gui")
                                    (vector (display-pixel-width)
                                            (display-pixel-height))
@@ -122,6 +125,18 @@
        (unless (and (display-graphic-p frame)
                     (null (frame-visible-p frame)))
          (error "Raw frame was not an invisible graphical frame"))
+       (when-let* ((progress (getenv "NEOMACS_ISSUE_417_FLOOD_PROGRESS")))
+         ;; These public parameter updates occur before the first native
+         ;; readiness publication. A bounded render queue must not strand the
+         ;; evaluator before it can publish or retire this logical frame.
+         (issue-417-write-json
+          progress `((pid . ,(emacs-pid))
+                     (phase . "before-alpha-updates") (count . 0)))
+         (dotimes (index 256)
+           (set-frame-parameter frame 'alpha (if (= (% index 2) 0) 80 90)))
+         (issue-417-write-json
+          progress `((pid . ,(emacs-pid))
+                     (phase . "after-alpha-updates") (count . 256))))
        ;; Pending native intents belong to this constructor.  Its replacement
        ;; must keep its own visibility and ordinary window defaults.
        (iconify-frame frame)

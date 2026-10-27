@@ -225,7 +225,11 @@ impl RenderApp {
                         event_loop.owned_display_handle(),
                     );
                     let proxy = event_loop.create_proxy();
-                    match super::gpu_startup::PendingGpu::start(window.clone(), descriptor, proxy) {
+                    match super::gpu_startup::PendingGpuAttempt::start(
+                        window.clone(),
+                        descriptor,
+                        proxy,
+                    ) {
                         Ok(pending) => {
                             self.gpu_startup = Some(pending);
                             self.observe_pending_content(phys);
@@ -281,10 +285,13 @@ impl RenderApp {
         }
         if let Some(pending) = self.gpu_startup.take() {
             match pending.poll(&event_loop.create_proxy()) {
-                Ok(super::gpu_startup::GpuPoll::Pending(pending)) => {
+                Ok(super::gpu_startup::GpuAttemptPoll::Pending(pending)) => {
                     self.gpu_startup = Some(pending)
                 }
-                Ok(super::gpu_startup::GpuPoll::Ready(prepared)) => self.install_wgpu(prepared),
+                Ok(super::gpu_startup::GpuAttemptPoll::Ready { gpu, input }) => {
+                    self.install_wgpu(gpu);
+                    self.startup_input = Some(input);
+                }
                 Err(error) => {
                     self.startup_error = Some(error);
                     event_loop.exit();
@@ -434,6 +441,7 @@ impl RenderApp {
         }
 
         self.poll_frame();
+        self.replay_startup_input(event_loop);
         self.synchronize_toolbar_resources();
         #[cfg(feature = "webview")]
         self.synchronize_webview_presentations();
@@ -1038,7 +1046,34 @@ impl RenderApp {
         }
     }
 
+    fn replay_startup_input(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(mut input) = self.startup_input.take() else {
+            return;
+        };
+        let window_id = input.window_id();
+        let Some(window) = self.frame_windows.get_by_winit(window_id) else {
+            // The owning logical/native frame was retired while startup was
+            // pending. These events must never reach its replacement.
+            return;
+        };
+        let has_scene = window.render.compositor.current_frame.is_some();
+        while let Some(event) = input.pop_ready(has_scene) {
+            self.handle_window_event(event_loop, window_id, event);
+            if self.lifecycle_flags.is_shutting_down()
+                || self.frame_windows.get_by_winit(window_id).is_none()
+            {
+                return;
+            }
+        }
+        if !input.is_empty() {
+            // Pointer targeting needs the first ingested scene. Newly arriving
+            // input joins this same FIFO until it can be replayed.
+            self.startup_input = Some(input);
+        }
+    }
+
     pub(super) fn cancel_gpu_startup(&mut self) {
+        self.startup_input = None;
         if let Some(pending) = self.gpu_startup.take() {
             // While a native window exists these fields track its observed
             // surface. A new creation consumes editor dimensions instead;

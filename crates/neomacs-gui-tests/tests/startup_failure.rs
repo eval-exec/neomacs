@@ -25,12 +25,20 @@ fn resize_during_gpu_discovery_reaches_lisp_after_completion() {
 }
 
 #[cfg(target_os = "linux")]
+#[test]
+// Prerequisites: requires release binary/pdump, Vulkan ICD, procfs wait channels, Xvfb and xdotool.
+fn keyboard_input_during_gpu_discovery_reaches_lisp_after_completion() {
+    check_pending_gpu(GpuStartupAction::KeyboardAndComplete);
+}
+
+#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, strum::AsRefStr)]
 #[strum(serialize_all = "kebab-case")]
 enum GpuStartupAction {
     LoseDisplay,
     CloseWindow,
     ResizeAndComplete,
+    KeyboardAndComplete,
 }
 
 #[cfg(target_os = "linux")]
@@ -42,7 +50,12 @@ fn check_pending_gpu(action: GpuStartupAction) {
     };
 
     let root = neomacs_infra::workspace_root();
-    let artifacts = root.join("target/neomacs-gui-tests").join(format!(
+    let artifact_root = if matches!(action, GpuStartupAction::KeyboardAndComplete) {
+        root.join("tmp/neomacs-gui-tests")
+    } else {
+        root.join("target/neomacs-gui-tests")
+    };
+    let artifacts = artifact_root.join(format!(
         "startup-pending-gpu-{}-{}",
         action.as_ref(),
         std::process::id()
@@ -60,7 +73,9 @@ fn check_pending_gpu(action: GpuStartupAction) {
     );
     let backend = match action {
         GpuStartupAction::LoseDisplay => GuiBackend::LinuxWayland,
-        GpuStartupAction::CloseWindow | GpuStartupAction::ResizeAndComplete => GuiBackend::LinuxX11,
+        GpuStartupAction::CloseWindow
+        | GpuStartupAction::ResizeAndComplete
+        | GpuStartupAction::KeyboardAndComplete => GuiBackend::LinuxX11,
     };
     let session = DisplayHarness::for_backend(backend)
         .start_session(&artifacts)
@@ -87,7 +102,10 @@ fn check_pending_gpu(action: GpuStartupAction) {
         .stdout(fs::File::create(artifacts.join("stdout.log")).unwrap())
         .stderr(fs::File::create(artifacts.join("stderr.log")).unwrap())
         .stdin(Stdio::null());
-    let driver = if matches!(action, GpuStartupAction::ResizeAndComplete) {
+    let driver = if matches!(
+        action,
+        GpuStartupAction::ResizeAndComplete | GpuStartupAction::KeyboardAndComplete
+    ) {
         let driver = std::env::var_os("NEOMACS_GUI_VULKAN_ICD")
             .map(PathBuf::from)
             .or_else(|| {
@@ -114,13 +132,29 @@ fn check_pending_gpu(action: GpuStartupAction) {
         }
         None
     };
+    if matches!(action, GpuStartupAction::KeyboardAndComplete) {
+        command
+            .env("TMPDIR", root.join("tmp"))
+            .env("NEOMACS_GUI_GPU_KEY_FILE", artifacts.join("key-observed"))
+            .env(
+                "NEOMACS_GUI_GPU_RELEASE_FILE",
+                artifacts.join("gpu-released"),
+            );
+    }
     for (key, value) in session.env() {
         command.env(key, value);
     }
     let mut child = command.spawn().unwrap();
     let result = (|| -> Result<(), String> {
         let tasks = PathBuf::from(format!("/proc/{}/task", child.id()));
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Source-only debug runtimes can still be loading startup Lisp here.
+        // The post-release keyboard deadline remains independently bounded.
+        let startup_budget = if matches!(action, GpuStartupAction::KeyboardAndComplete) {
+            Duration::from_secs(45)
+        } else {
+            Duration::from_secs(10)
+        };
+        let deadline = Instant::now() + startup_budget;
         loop {
             // Unlike opening a FIFO writer, reading wchan cannot release the
             // loader's blocked open. This process has only our GPU FIFO.
@@ -147,7 +181,10 @@ fn check_pending_gpu(action: GpuStartupAction) {
         if matches!(action, GpuStartupAction::LoseDisplay) {
             drop(session);
         } else {
-            if matches!(action, GpuStartupAction::ResizeAndComplete) {
+            if matches!(
+                action,
+                GpuStartupAction::ResizeAndComplete | GpuStartupAction::KeyboardAndComplete
+            ) {
                 let deadline = Instant::now() + Duration::from_secs(25);
                 while !artifacts.join("lisp-ready").is_file() {
                     if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
@@ -162,7 +199,11 @@ fn check_pending_gpu(action: GpuStartupAction) {
                 }
             }
             let mut search = Command::new("xdotool");
-            search.args(["search", "--pid", &child.id().to_string()]);
+            search.arg("search");
+            if matches!(action, GpuStartupAction::KeyboardAndComplete) {
+                search.arg("--onlyvisible");
+            }
+            search.args(["--pid", &child.id().to_string()]);
             for (key, value) in session.env() {
                 search.env(key, value);
             }
@@ -172,12 +213,38 @@ fn check_pending_gpu(action: GpuStartupAction) {
                 .lines()
                 .next()
                 .ok_or("no native window owned by test child")?;
+            if matches!(action, GpuStartupAction::KeyboardAndComplete) {
+                let mut input = Command::new("xdotool");
+                input.args([
+                    "windowfocus",
+                    "--sync",
+                    window,
+                    "key",
+                    "--clearmodifiers",
+                    "z",
+                ]);
+                for (key, value) in session.env() {
+                    input.env(key, value);
+                }
+                if !input.status().map_err(|error| error.to_string())?.success() {
+                    return Err("xdotool could not send a key to the owned focused window".into());
+                }
+                // Keep real driver discovery blocked while native dispatch can
+                // consume the key. Delivery may happen now or be replayed once
+                // the GPU is ready; the post-release fixture accepts either.
+                let dispatch_deadline = Instant::now() + Duration::from_millis(500);
+                while !artifacts.join("key-observed").is_file()
+                    && Instant::now() < dispatch_deadline
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
             let mut change = Command::new("xdotool");
             match action {
                 GpuStartupAction::CloseWindow => {
                     change.args(["windowclose", window]);
                 }
-                GpuStartupAction::ResizeAndComplete => {
+                GpuStartupAction::ResizeAndComplete | GpuStartupAction::KeyboardAndComplete => {
                     change.args(["windowsize", window, "901", "603"]);
                 }
                 GpuStartupAction::LoseDisplay => unreachable!(),
@@ -205,6 +272,10 @@ fn check_pending_gpu(action: GpuStartupAction) {
                 fs::copy(driver, &replacement).map_err(|error| error.to_string())?;
                 fs::rename(replacement, &manifest).map_err(|error| error.to_string())?;
                 drop(writer);
+                if matches!(action, GpuStartupAction::KeyboardAndComplete) {
+                    fs::write(artifacts.join("gpu-released"), b"released\n")
+                        .map_err(|error| error.to_string())?;
+                }
             }
             // Keep this private X server alive until the process has exited.
             let _session = session;
@@ -247,6 +318,17 @@ fn check_pending_gpu(action: GpuStartupAction) {
             fs::read_to_string(artifacts.join("stderr.log"))
                 .unwrap()
                 .contains("GPU-RESIZE-PASS")
+        );
+    }
+    if result.is_ok() && matches!(action, GpuStartupAction::KeyboardAndComplete) {
+        assert_eq!(
+            fs::read_to_string(artifacts.join("key-observed")).unwrap(),
+            "z\n"
+        );
+        assert!(
+            fs::read_to_string(artifacts.join("stderr.log"))
+                .unwrap()
+                .contains("GPU-KEYBOARD-PASS")
         );
     }
     assert!(

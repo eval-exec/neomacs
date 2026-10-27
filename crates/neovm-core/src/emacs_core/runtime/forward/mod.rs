@@ -68,7 +68,9 @@
 use super::value::Value;
 use crate::buffer::buffer::BufferSlotPredicateError;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub use thread_projection::{
     BuiltinForwarder, CanonicalArm, CanonicalBlv, THREAD_PROJECTION_OFFSET,
@@ -438,7 +440,7 @@ impl FwdRef {
             ForwardSlot::Int(int_fwd) => Some(alloc_intfwd(LispInteger(int_fwd.get())).header()),
             ForwardSlot::Bool(bool_fwd) => Some(alloc_boolfwd(bool_fwd.get()).header()),
             ForwardSlot::Obj(obj_fwd) => Some(alloc_objfwd(obj_fwd.get()).header()),
-            ForwardSlot::KboardObj(kbd_fwd) => Some(alloc_kboard_objfwd(kbd_fwd.get()).header()),
+            ForwardSlot::KboardObj(kbd_fwd) => Some(kbd_fwd.clone_owned().header()),
             ForwardSlot::BufferObj(_) => None,
         }
     }
@@ -945,33 +947,44 @@ impl LispBufferObjFwd {
     }
 }
 
-/// `Lisp_Kboard_Objfwd`: forward to a per-keyboard slot (`src/lisp.h:3490-3495`).
+/// `Lisp_Kboard_Objfwd`: forward to a keyboard-owned slot.
 ///
-/// GNU's descriptor holds `offsetof (KBOARD, vname_)` and
-/// `do_symval_forwarding` applies it to `current_kboard`
-/// (`src/data.c:1352-1356`).  Neomacs has one keyboard, so the offset would
-/// index a one-element array; the slot lives in the descriptor instead, which
-/// is the same storage with the indirection folded out.  What the variant
-/// really carries is the two refusals `Lisp_Fwd_Obj` does not have --
-/// `Fmake_variable_buffer_local` and `Fmake_local_variable` both signal
-/// "Symbol %s may not be buffer-local" for it (`src/data.c:2220-2223`,
-/// `src/data.c:2287-2288`) -- and those key on the TYPE, not on the offset.
+/// GNU data.c:kboard_for_bindings chooses the selected frame's keyboard.
+/// `window-system` parks inactive keyboard values here while retaining one
+/// active atomic word at the existing JIT offset. Other keyboard variables
+/// retain their existing single-word behavior until they need distinct owners.
 ///
-/// The second half of the same single-terminal limitation, which ledger 170
-/// named and ledger 183 re-checked against the source: `specbind` records
-/// `specpdl_ptr->let.where.kbd = kboard_for_bindings ()` for a keyboard
-/// variable and takes `SPECPDL_LET` rather than `SPECPDL_LET_LOCAL`
-/// (`src/eval.c:3681-3683`), so `unbind_to` restores the old value into the
-/// keyboard the binding was made on.  With one keyboard there is nowhere else
-/// to restore it to, so the field has no counterpart here; a second terminal
-/// would need both it and the offset back, together, and neither is
-/// observable from Lisp until then.
+/// Dynamic bindings capture the owning keyboard and its generation, so unwind
+/// restores that keyboard even after frame selection changes, and cannot write
+/// into a terminal number reused by a new connection. Keyboard variables reject
+/// buffer-local bindings, matching GNU's Lisp_Fwd_Kboard_Obj discriminator.
 #[repr(C)]
 pub struct LispKboardObjFwd {
     ty: LispFwdType,
     /// The same atomic storage and root protocol as [`LispObjFwd`].
     value: AtomicValue,
     _mutator: PhantomData<*const ()>,
+    /// Only selected-keyboard variables use parked slots. The active word
+    /// stays at its existing JIT offset; the marker locks the parked roots.
+    keyboards: Mutex<Option<SelectedKeyboardSlots>>,
+}
+
+/// A particular keyboard lifetime, not just a terminal number that can be reused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KeyboardBindingOwner {
+    terminal: u64,
+    generation: u64,
+}
+
+struct ParkedKeyboardSlot {
+    owner: KeyboardBindingOwner,
+    value: AtomicValue,
+}
+
+struct SelectedKeyboardSlots {
+    active: Option<KeyboardBindingOwner>,
+    next_generation: u64,
+    parked: HashMap<u64, ParkedKeyboardSlot>,
 }
 
 /// Byte offset of a [`LispKboardObjFwd`]'s slot, for JIT code's inline read
@@ -1002,7 +1015,7 @@ const _: () = {
     assert!(align_of::<LispBoolFwd>() == 1);
     assert!(size_of::<LispIntFwd>() == 16);
     assert!(size_of::<LispObjFwd>() == 16);
-    assert!(size_of::<LispKboardObjFwd>() == 16);
+    assert!(offset_of!(LispKboardObjFwd, keyboards) >= 16);
     assert!(offset_of!(LispIntFwd, _mutator) == 16);
     assert!(offset_of!(LispObjFwd, _mutator) == 16);
     assert!(offset_of!(LispKboardObjFwd, _mutator) == 16);
@@ -1063,6 +1076,137 @@ static_assertions::assert_impl_all!(LispKboardObjFwd: std::fmt::Debug);
 static_assertions::assert_not_impl_any!(LispKboardObjFwd: Copy, Clone, Send, Sync);
 
 impl LispKboardObjFwd {
+    pub(crate) fn use_selected_keyboard(&self) {
+        let mut keyboards = self.keyboards.lock().unwrap();
+        keyboards.get_or_insert_with(|| SelectedKeyboardSlots {
+            active: None,
+            next_generation: 0,
+            parked: HashMap::new(),
+        });
+    }
+
+    pub(crate) fn is_selected_keyboard(&self) -> bool {
+        self.keyboards.lock().unwrap().is_some()
+    }
+
+    /// GNU data.c:kboard_for_bindings uses the selected frame's keyboard,
+    /// independently of the keyboard that most recently supplied input.
+    pub(crate) fn select_keyboard(&self, terminal: u64, initial: Value) {
+        let mut guard = self.keyboards.lock().unwrap();
+        let Some(keyboards) = guard.as_mut() else {
+            return;
+        };
+        if keyboards
+            .active
+            .is_some_and(|owner| owner.terminal == terminal)
+        {
+            return;
+        }
+        if let Some(owner) = keyboards.active.take() {
+            keyboards.parked.insert(
+                owner.terminal,
+                ParkedKeyboardSlot {
+                    owner,
+                    value: AtomicValue::new(self.get()),
+                },
+            );
+        }
+        let (owner, value) = if let Some(slot) = keyboards.parked.remove(&terminal) {
+            let value = slot.value.load();
+            crate::tagged::gc::note_root_overwrite(value);
+            (slot.owner, value)
+        } else {
+            let generation = keyboards.next_generation;
+            keyboards.next_generation = generation
+                .checked_add(1)
+                .expect("keyboard generation overflow");
+            (
+                KeyboardBindingOwner {
+                    terminal,
+                    generation,
+                },
+                initial,
+            )
+        };
+        keyboards.active = Some(owner);
+        self.set(value);
+    }
+
+    pub(crate) fn binding_owner(&self) -> Option<KeyboardBindingOwner> {
+        self.keyboards.lock().unwrap().as_ref()?.active
+    }
+
+    /// Exchange one captured owner's slot without selecting a different frame.
+    /// A binding of a deleted keyboard cannot change a newly opened terminal.
+    pub(crate) fn exchange_for_owner(
+        &self,
+        owner: KeyboardBindingOwner,
+        value: Value,
+    ) -> Option<Value> {
+        let mut guard = self.keyboards.lock().unwrap();
+        let keyboards = guard.as_mut()?;
+        if keyboards.active == Some(owner) {
+            let old = self.get();
+            self.set(value);
+            Some(old)
+        } else {
+            let slot = keyboards.parked.get_mut(&owner.terminal)?;
+            if slot.owner != owner {
+                return None;
+            }
+            let old = slot.value.load();
+            slot.value.store(value);
+            Some(old)
+        }
+    }
+
+    pub(crate) fn forget_keyboard(&self, terminal: u64) {
+        let mut guard = self.keyboards.lock().unwrap();
+        let Some(keyboards) = guard.as_mut() else {
+            return;
+        };
+        if let Some(slot) = keyboards.parked.remove(&terminal) {
+            crate::tagged::gc::note_root_overwrite(slot.value.load());
+        }
+        if keyboards
+            .active
+            .is_some_and(|owner| owner.terminal == terminal)
+        {
+            keyboards.active = None;
+            self.set(Value::NIL);
+        }
+    }
+
+    pub(crate) fn trace_parked_roots(&self, roots: &mut Vec<Value>) {
+        if let Some(keyboards) = self.keyboards.lock().unwrap().as_ref() {
+            roots.extend(keyboards.parked.values().map(|slot| slot.value.load()));
+        }
+    }
+
+    fn clone_owned(&self) -> &'static Self {
+        let copy = alloc_kboard_objfwd(self.get());
+        if let Some(keyboards) = self.keyboards.lock().unwrap().as_ref() {
+            *copy.keyboards.lock().unwrap() = Some(SelectedKeyboardSlots {
+                active: keyboards.active,
+                next_generation: keyboards.next_generation,
+                parked: keyboards
+                    .parked
+                    .iter()
+                    .map(|(&terminal, slot)| {
+                        (
+                            terminal,
+                            ParkedKeyboardSlot {
+                                owner: slot.owner,
+                                value: AtomicValue::new(slot.value.load()),
+                            },
+                        )
+                    })
+                    .collect(),
+            });
+        }
+        copy
+    }
+
     /// GNU `do_symval_forwarding`'s `Lisp_Fwd_Kboard_Obj` arm
     /// (`src/data.c:1352-1356`).
     #[inline]
@@ -1170,6 +1314,7 @@ pub fn alloc_kboard_objfwd(initial: Value) -> &'static LispKboardObjFwd {
         ty: LispFwdType::KboardObj,
         value: AtomicValue::new(initial),
         _mutator: PhantomData,
+        keyboards: Mutex::new(None),
     }))
 }
 

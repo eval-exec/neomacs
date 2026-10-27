@@ -49,6 +49,8 @@ The GNU checkout was used read-only. The source-research stage above preceded th
 
 The runtime investigation below followed the source research. All commands ran on `treeroot`; GNU source remained unchanged. The baseline was current main `c1ea6adf391cd1f9bd4061438614c7a8e2d17576`, whose tree equals the tested #595 branch. PR #586 was rebased privately from `1c62eea9afcc09fe1122ef707f3d84b27b7a6562` onto that baseline before fixes.
 
+The `tmp/pr586/` logs, JSON observations, PNG captures, cached binaries, and other private-host artifacts cited below are unpublished and are not available in this repository. Their paths and hashes identify local evidence only. Reproducible focused commands are included below; the checked-in [startup GUI tests](../../crates/neomacs-gui-tests/tests/issue_417_startup.rs) and fixtures provide the test source.
+
 The original #417 lifecycle regression failed twice on main with a passing GNU control. At early-init, GNU reported only a terminal frame; Neomacs already reported a selected graphical frame alongside its terminal. Main skipped the before/after frame-creation hooks and regular init still observed a white background rather than the requested green. The original PR correctly moves logical creation into Lisp startup: after rebase and a fresh matching debug dump, both ordinary X11 lifecycle cases passed. Evidence is in `tmp/pr586/current-main-startup{,-repeat}-red.log`, `main-repro-summary.json`, and `pr-head-startup-green.log`.
 
 Further tests exposed three independent review defects:
@@ -59,7 +61,7 @@ Further tests exposed three independent review defects:
 
 The channel deliberately carries only sendable native data. `GuiFrameHostRequest` also contains evaluator-owned Lisp strings and stays on the evaluator thread. Explicit visibility in every request makes omitted producers a compiler error. Completion still consumes the one-shot reply and preserves its evaluator-owned lifetime.
 
-The final GUI rerun passed all ten test functions after rebuilding the editor and producing its matching runtime image. The native invisibility regression observes both the hidden state and subsequent mapping after `make-frame-visible`, rather than treating Lisp visibility alone as evidence.
+An intermediate GUI rerun passed all ten then-existing test functions after rebuilding the editor and producing its matching runtime image, before the deferred-constructor retirement case was added. The native invisibility regression observes both the hidden state and subsequent mapping after `make-frame-visible`, rather than treating Lisp visibility alone as evidence.
 
 
 ## Additional verification findings
@@ -75,7 +77,7 @@ Four core failures were reproduced, without rebuilding, using the cached pre-PR 
 The original PR's failed Linux/Windows compilation gates were also compared with its exact mergebase: compiler error fingerprints and affected source blobs match. Cargo deny already failed on that base; its additional advisory appeared with an unchanged lockfile. This does not make failed checks successful: fresh checks on the rebased tree are reported separately. Detailed job links and normalized fingerprints are in `tmp/pr586/original-ci/summary.md` and `summary.json`.
 
 
-The complete startup GUI rerun passed 10/10 test functions (`gui-startup-with-readback-final.log`), including GNU/X11 ordering, Neomacs X11 and Wayland ordering, successful and unsuccessful early exits on both backends, caught constructor errors, fatal constructor errors, no mapped X11 window during early-init, and GNU/Neomacs invisible-frame mapping transitions. The constructor failure test passed its separate five-second post-marker deadline on both backends. Wayland startup no longer panics when diagnostic capture is unsupported.
+Before the deferred-constructor retirement case was added, an intermediate complete startup GUI rerun passed 10/10 then-existing test functions (`gui-startup-with-readback-final.log`), including GNU/X11 ordering, Neomacs X11 and Wayland ordering, successful and unsuccessful early exits on both backends, caught constructor errors, fatal constructor errors, no mapped X11 window during early-init, and GNU/Neomacs invisible-frame mapping transitions. The constructor failure test passed its separate five-second post-marker deadline on both backends. Wayland startup no longer panics when diagnostic capture is unsupported.
 
 
 ## Retiring a deferred raw constructor
@@ -129,3 +131,126 @@ NEOVM_ORACLE_MODE=verify cargo nextest run -p neovm-oracle-tests --test oracle -
 Both tab-line failures were additionally reproduced with recording and input pacing disabled on the final runtime and on cached main (`tui-tabs-default-final.log`, `tui-tabs-default-baseline.log`). The per-window assertion is identical in that mode: zero observed tab lines versus one expected. The startup case remains blank before its existing readiness deadline. These controls support classifying them as baseline/source-environment failures rather than new startup regressions.
 
 Final Linux gates passed: dependency coherence; `cargo check -p neomacs --no-default-features`; the CI's filtered `--no-default-features` capability test (1/1, with eight core test binaries compiled); `cargo check --workspace --all-targets`; formatting; and whitespace checks. The filtered capability assertion is in the SQLite module; its build also verifies the harnesses compile with JIT disabled. Existing warnings remain in unchanged code.
+
+
+## Premerge regressions found on published head 6e0ad91c
+
+The earlier verification table describes the published 6e0ad91c snapshot. The
+merge was held after new review and CI evidence exposed the following additional
+regressions. Local paths below are unpublished workspace evidence, not attached
+PR artifacts.
+
+- The native loop did not consume the 64-slot render-command transport during
+  evaluator preparation. A public GUI fixture issuing 256 alpha updates stalled
+  before readiness. The loop now drains transport fairly and retains FIFO
+  commands until the renderer can apply them. The paired GNU/Neo regression
+  failed before the fix and passed afterwards.
+- `window-system` remained the startup TTY value after GUI selection. GNU
+  `data.c:kboard_for_bindings` forwards through the selected frame's keyboard;
+  dynamic bindings restore their captured keyboard owner. Neo now preserves
+  that model with generation-checked owners, rooted parked slots, and captured
+  binding ownership. Host reassignment of the initial frame also explicitly
+  synchronizes ownership. Focused Core tests passed 61/61 and separate
+  thread/projection tests passed 25/25 before the final font/history changes.
+- Native input arriving during GPU discovery was discarded. A Vulkan manifest
+  FIFO holds discovery while the harness focuses the actual window and sends
+  `z`. The test failed with `GPU-KEYBOARD-FAIL` after successful llvmpipe GPU
+  completion, then passed after input became owned by the creation attempt.
+  Only validated replayable events enter the FIFO; close/destruction remain
+  synchronous, cancellation drops the attempt, and pointer replay waits for
+  scene ingestion. Native unit selection passed 162/162. Evidence:
+  `pending-gpu-keyboard-red.log`, `premerge-live-input-font-tab.log`, and
+  `premerge-native-complete.log` under `tmp/pr586/`.
+- GNU `xfaces.c:set_lface_from_font` retains the opened font in the frame-local
+  default face. Neo seeded derived attributes but relied on `font-parameter`
+  as a fallback. GNU `faces.el` legitimately clears that user-request marker;
+  the opened font then became unspecified. The native Wayland contract
+  reproduced the exact CI diagnostic, `Initial frame has no opened default
+  font`, before the fix. The face now owns its typed `LFaceAttr::Font` value.
+  The new opened-font identity/metrics unit test and the live native Wayland font/resize contract now pass.
+- `old-selected-window` retained the deleted startup terminal window even
+  after redisplay. GNU `window.c:window_change_record` advances this history
+  after window-change callbacks. Both Neo redisplay policies now share the
+  selection-recording boundary, preserving initial/batch behavior and the
+  pinned Context layout. Both public Core tests failed before the fix; the
+  live flat-button tab-line test independently reproduced the stale face.
+  Both policy unit tests and the live flat-button GUI case now pass.
+- Capture fixtures that exited after two seconds could finish before native
+  pixels existed. They now wait for a newly published nonempty capture while
+  the harness retains its existing process deadline. Startup settings passed
+  5/5 with the matching runtime and GNU control.
+
+The GUI keyboard experiment uses an isolated Arch software Vulkan package
+verified against the repository SHA-256
+`c099e085f778b3183b22a3ab81b7200dd013855c4bcbc7bb5c5189ed045311bf`;
+no system driver was installed. The subsequent combined runtime uses the
+repository test profile, which optimizes the interpreter, and a freshly
+produced matching pdump.
+
+Additional primary references:
+[GNU window-change history](https://www.gnu.org/software/emacs/manual/html_node/elisp/Window-Hooks.html),
+[upstream winit event ownership and surface-size writers](https://rust-windowing.github.io/winit/winit/event/enum.WindowEvent.html),
+and the pinned
+[winit event definitions](https://github.com/eval-exec/winit/blob/2290f91c602f8efdf102972457a25e8b6e36f90c/winit-core/src/event.rs).
+
+CI triage also established that the ARM64 installer ownership-check timeout
+occurs on main with identical scripts. Windows focus activation succeeded in
+CI but the initial key never reached Lisp, so that failure is treated as an
+input regression rather than dismissed as desktop infrastructure.
+
+
+### Premerge verification after repair
+
+| Check | Result |
+| --- | --- |
+| Core frame/window/font/forwarding/redisplay | 536/540 passed; all four assertion payloads match main |
+| Admission and thread/projection behavior | 54/54 passed |
+| Native startup/window/input/transport | 162/162 passed |
+| Application startup/primary routing | 76/77 passed; same missing `rfc6068.elc` assertion as main |
+| Live GNU startup oracle | 3/3 passed |
+| TUI startup/visibility/resize | 3/3 passed |
+| Initial combined GUI regression run | 40/44 passed; each of the four failures investigated below |
+| Opened-font native Wayland contract | 1/1 passed after its semantic RED reproduction |
+| Native menu first-presentation witness | 3/3 passed: unchanged CJK input case plus two parser tests |
+| MELPA git-gutter-fringe | Complete result/cleanup value matches; snapshot still differs only in local stderr |
+
+The GUI selection includes all 22 cases newly failing in the published head's
+CI, the complete 12-case issue-417 suite, and ten startup-failure cases. Its
+remaining failures were isolated with a main runtime built in the same
+repository test profile, with a matching pdump and an identical tracked tree
+to main `c1ea6adf391cd1f9bd4061438614c7a8e2d17576`.
+
+The desktop font fixture requires Ubuntu Mono. The remote host substituted
+Noto Sans Mono with different metrics. An isolated official Arch
+`ttf-ubuntu-font-family` package (SHA256
+`8d84962b5372e5a331fd9afa3aab0569b558bb4e78e8c1dfcc5e0c16b6527e86`)
+supplied the prerequisite without a system installation. The GNU control,
+main control, and repaired Neo fixture all pass with those fonts.
+
+Both small-buffer stalled-scroll presentation tests reproduce the exact same
+`no projected pixels with native presentation while evaluator is stalled`
+assertion on optimized main and the repaired branch. Their input does arrive;
+they are distinguished from the published head's earlier input-loss failures.
+Evidence: `main-optimized-gui-controls.log` and
+`fixed-optimized-gui-controls.log`.
+
+The CJK menu fixture published Lisp state before the nested Wayland compositor
+had mapped its content surface. The synthetic click happened before any button
+could be delivered. Main's earlier GPU initialization masked that assumption.
+The fixture now identifies the primary toplevel surface and waits for its
+non-null buffer commit and its own compositor frame callback before input.
+Cursor/sync callbacks and bufferless initial commits cannot satisfy it. Popup
+assertions, coordinates, and their existing per-stage deadlines are unchanged.
+The same CJK case failed before this witness and passed afterwards.
+
+MELPA's former `window-system` mismatch is gone. Token comparison of the entire
+expected and actual git-gutter-fringe payload finds one remaining difference:
+its final stderr string contains three source-only terminal-layer loading
+messages and two local Mesa DRI3 warnings, instead of an empty string. All
+result data, bitmap rows, geometry, and cleanup fields match. This local
+snapshot test is therefore not reported as fully passing; compiled-runtime CI
+is still required. Evidence: `melpa-final-differences.json`.
+
+Post-repair Linux gates passed: dependency coherence, the minimal editor build,
+the no-default-features capability control (1/1 with eight Core test binaries
+compiled), workspace all-target checks, formatting, and whitespace checks.

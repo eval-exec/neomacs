@@ -42,9 +42,26 @@
                  (insert (format "{\"passed\":%s,\"timer\":%s,\"outcome\":\"%s\",\"closed\":%s}\n"
                                  (if passed "true" "false") (if timer-fired "true" "false")
                                  outcome (if closed "true" "false"))))
-               ;; Allow the native presentation and terminal parser to observe
-               ;; the finished frame before the test exits.
-               (run-with-timer 0.5 nil (lambda () (kill-emacs (if passed 0 1)))))
+               (if (and passed (display-graphic-p)
+                        (fboundp 'neomacs--write-frame-snapshot))
+                   ;; Native initialization may still be pending after TLS
+                   ;; finishes. Await an atomically published complete capture.
+                   (let ((capture-timer nil))
+                     (setq capture-timer
+                           (run-with-timer
+                            0 0.05
+                            (lambda ()
+                              (let ((png (getenv "NEOMACS_DEBUG_SURFACE_READBACK_PNG")))
+                                (when (and png (file-exists-p png)
+                                           (> (file-attribute-size (file-attributes png)) 0)
+                                           (not (time-less-p
+                                                 (file-attribute-modification-time (file-attributes png))
+                                                 before-init-time)))
+                                  (cancel-timer capture-timer)
+                                  (kill-emacs 0)))))))
+                 ;; The TUI shares this fixture and needs time to read its
+                 ;; terminal grid; GNU has no native PNG capture protocol.
+                 (run-with-timer 0.5 nil (lambda () (kill-emacs (if passed 0 1))))))
            (cancel-timer timer)
            (dolist (process (process-list))
              (when (string-prefix-p "tls-" (process-name process)) (delete-process process)))))

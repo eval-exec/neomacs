@@ -552,36 +552,43 @@ fn run_render_loop_with_startup(
     tracing::info!("Render thread entering winit event loop");
     let preparation_proxy = event_loop.create_proxy();
     let exit_input = comms.input_tx.clone();
-    let result = startup::run(event_loop, initial, shared_monitors.clone(), move |size| {
-        let app = RenderApp::new(
-            comms,
-            size.width,
-            size.height,
-            title,
-            image_metadata,
-            shared_monitors,
-            poll_when_idle,
-            #[cfg(feature = "neo-term")]
-            shared_terminals,
-        );
-        let mut app = app;
-        match super::frame_preparation::FramePreparation::spawn(
-            app.comms.frame_rx.clone(),
-            move || preparation_proxy.wake_up(),
-        ) {
-            Ok(worker) => app.frame_preparation = Some(worker),
-            Err(error) => tracing::warn!(%error, "frame preparation worker unavailable"),
-        }
-        #[cfg(feature = "video")]
-        {
-            app.video_wake = video_wake;
-        }
-        #[cfg(feature = "webview")]
-        {
-            app.webview_wake = webview_wake;
-        }
-        app
-    });
+    let command_rx = comms.cmd_rx.clone();
+    let result = startup::run(
+        event_loop,
+        initial,
+        shared_monitors.clone(),
+        command_rx,
+        move |size| {
+            let app = RenderApp::new(
+                comms,
+                size.width,
+                size.height,
+                title,
+                image_metadata,
+                shared_monitors,
+                poll_when_idle,
+                #[cfg(feature = "neo-term")]
+                shared_terminals,
+            );
+            let mut app = app;
+            match super::frame_preparation::FramePreparation::spawn(
+                app.comms.frame_rx.clone(),
+                move || preparation_proxy.wake_up(),
+            ) {
+                Ok(worker) => app.frame_preparation = Some(worker),
+                Err(error) => tracing::warn!(%error, "frame preparation worker unavailable"),
+            }
+            #[cfg(feature = "video")]
+            {
+                app.video_wake = video_wake;
+            }
+            #[cfg(feature = "webview")]
+            {
+                app.webview_wake = webview_wake;
+            }
+            app
+        },
+    );
     if let Err(ref e) = result {
         tracing::error!("Event loop error: {:?}", e);
     }

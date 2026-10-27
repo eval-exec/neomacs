@@ -1720,6 +1720,7 @@ pub(crate) fn delete_terminal_owned(
         )?;
     }
     delete_terminal_record(terminal_id);
+    eval.forget_window_system_keyboard(terminal_id);
     eval.command_loop
         .keyboard
         .delete_terminal_kboard(terminal_id);

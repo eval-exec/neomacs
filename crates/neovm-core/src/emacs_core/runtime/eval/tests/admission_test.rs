@@ -600,3 +600,87 @@ fn admission_leaves_a_per_buffer_default_binding_legacy() {
     ev.unbind_to(0);
     assert_eq!(truncate_slot(&ev, buffer), Value::NIL);
 }
+
+#[test]
+fn selected_keyboard_binding_stays_owned_across_admission_and_thread_exchange() {
+    let mut ev = green();
+    let buffer = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buffer);
+    let tty = ev
+        .frames
+        .create_frame_on_terminal("terminal", 1, 80, 25, buffer);
+    let gui = ev
+        .frames
+        .create_frame_on_terminal("graphical", 0, 800, 600, buffer);
+    ev.frames
+        .get_mut(gui)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    ev.set_variable("keyboard-test-terminal", Value::make_frame(tty.0));
+    ev.set_variable("keyboard-test-graphical", Value::make_frame(gui.0));
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn (select-frame keyboard-test-graphical) window-system)"
+        ),
+        "neo"
+    );
+    let symbol = intern("window-system");
+    let depth = ev.specpdl.len();
+    ev.try_specbind(symbol, Value::string("bound graphical keyboard"))
+        .unwrap();
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn (select-frame keyboard-test-terminal) window-system)"
+        ),
+        "nil"
+    );
+
+    ev.admit_threads().unwrap();
+    assert!(
+        ev.obarray.thread_projection_of(symbol).is_none(),
+        "a default owner projection must not hide keyboard-local storage"
+    );
+    let suspended = ev.suspend_dynamic_bindings_for_thread_switch().unwrap();
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn (select-frame keyboard-test-graphical) window-system)"
+        ),
+        "neo"
+    );
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn (select-frame keyboard-test-terminal) window-system)"
+        ),
+        "nil"
+    );
+    ev.resume_dynamic_bindings_for_thread_switch(suspended)
+        .unwrap();
+    assert_eq!(eval(&mut ev, "window-system"), "nil");
+    ev.eval_str("(garbage-collect)").unwrap();
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn (select-frame keyboard-test-graphical) window-system)"
+        ),
+        "\"bound graphical keyboard\""
+    );
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn (select-frame keyboard-test-terminal) window-system)"
+        ),
+        "nil"
+    );
+    ev.unbind_to(depth);
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn (select-frame keyboard-test-graphical) window-system)"
+        ),
+        "neo"
+    );
+}

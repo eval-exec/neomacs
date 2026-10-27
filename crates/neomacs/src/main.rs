@@ -4041,7 +4041,7 @@ fn run_gui_evaluator_worker(
     let BootstrapDisplayKind::Gui { identity, .. } = &bootstrap_display.kind else {
         unreachable!("GUI evaluator requires graphical bootstrap configuration");
     };
-    configure_terminal_runtime(TerminalRuntimeConfig::window_system(identity.clone()));
+    evaluator.initialize_graphical_terminal(identity.clone());
     let font_display = identity.clone();
     evaluator.set_variable("dump-mode", Value::NIL);
     // GNU's window-system terminal inits do not measure a line speed, they
@@ -5664,8 +5664,7 @@ fn bootstrap_gui_startup_terminal(eval: &mut Context) -> FrameId {
     frame.displays_chrome = false;
     frame.set_known_parameter(FrameParam::ForegroundColor, Value::string("unspecified-fg"));
     frame.set_known_parameter(FrameParam::BackgroundColor, Value::string("unspecified-bg"));
-    eval.eval_str("(select-frame (selected-frame))")
-        .expect("initial terminal selection should synchronize keyboard ownership");
+    eval.sync_keyboard_terminal_owner();
     frame_id
 }
 

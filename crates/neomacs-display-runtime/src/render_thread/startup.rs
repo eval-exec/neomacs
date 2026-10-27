@@ -1,8 +1,12 @@
 //! Native event-loop startup before font-owned window geometry is available.
 
 use super::{RenderApp, SharedMonitorInfo};
+use crate::thread_comm::{
+    COMMAND_CHANNEL_CAPACITY, LifecycleCommand, RenderCommand, WindowCommand,
+};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use std::{cell::RefCell, rc::Rc};
+use std::{collections::VecDeque, ops::ControlFlow as CommandFlow};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -111,8 +115,39 @@ pub(super) enum InitialWindow {
     },
 }
 
+/// The native actor consumes commands even before a window may be allocated.
+/// Transfer the ordered work to RenderApp when geometry becomes available.
+#[derive(Default)]
+struct PreparingCommands(VecDeque<RenderCommand>);
+
+impl PreparingCommands {
+    fn drain(&mut self, receiver: &Receiver<RenderCommand>) -> CommandFlow<()> {
+        // Bound each dispatch so command traffic cannot starve readiness or
+        // native events. A remaining batch schedules another wake below.
+        for command in receiver.try_iter().take(COMMAND_CHANNEL_CAPACITY) {
+            match command {
+                RenderCommand::Lifecycle(LifecycleCommand::Shutdown) => {
+                    return CommandFlow::Break(());
+                }
+                RenderCommand::Window(WindowCommand::RefreshFrameOpacity)
+                    if matches!(
+                        self.0.back(),
+                        Some(RenderCommand::Window(WindowCommand::RefreshFrameOpacity))
+                    ) => {}
+                command => self.0.push_back(command),
+            }
+        }
+        CommandFlow::Continue(())
+    }
+}
+
 enum Phase<F> {
-    Preparing { initial: InitialWindow, create: F },
+    Preparing {
+        initial: InitialWindow,
+        create: F,
+        receiver: Receiver<RenderCommand>,
+        commands: PreparingCommands,
+    },
     Running(Box<RenderApp>),
     Stopped,
 }
@@ -228,7 +263,13 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
-        if let Phase::Preparing { initial, .. } = &mut self.phase {
+        if let Phase::Preparing {
+            initial,
+            receiver,
+            commands,
+            ..
+        } = &mut self.phase
+        {
             // Lisp can query display geometry during initialization before
             // requesting its first GUI frame. Publish that connection metadata
             // independently of first-window readiness and surface permission.
@@ -243,11 +284,8 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
             }
             if let InitialWindow::Waiting(receiver) = initial {
                 let result = match receiver.0.try_recv() {
-                    Ok(result) => result,
-                    Err(TryRecvError::Empty) => {
-                        event_loop.set_control_flow(ControlFlow::Wait);
-                        return;
-                    }
+                    Ok(result) => Some(result),
+                    Err(TryRecvError::Empty) => None,
                     Err(TryRecvError::Disconnected) => {
                         // early-init may intentionally exit before creating
                         // any GUI frame. Join the worker for its authoritative
@@ -259,19 +297,33 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
                     }
                 };
                 match result {
-                    Ok(preparation) => {
+                    Some(Ok(preparation)) => {
                         *initial = InitialWindow::Ready {
                             preparation,
                             evaluator: Some(receiver.0.clone()),
                         };
                     }
-                    Err(error) => {
+                    Some(Err(error)) => {
                         *self.outcome.borrow_mut() = Outcome::Failed(error);
                         self.phase = Phase::Stopped;
                         event_loop.exit();
                         return;
                     }
+                    None => {}
                 }
+            }
+            if commands.drain(receiver).is_break() {
+                *self.outcome.borrow_mut() = Outcome::EvaluatorExited;
+                self.phase = Phase::Stopped;
+                event_loop.exit();
+                return;
+            }
+            if !receiver.is_empty() {
+                event_loop.create_proxy().wake_up();
+            }
+            if matches!(initial, InitialWindow::Waiting(_)) {
+                event_loop.set_control_flow(ControlFlow::Wait);
+                return;
             }
             if let InitialWindow::Ready {
                 evaluator: Some(evaluator),
@@ -297,9 +349,12 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
                         evaluator,
                     },
                 create,
+                mut commands,
+                ..
             } = std::mem::replace(&mut self.phase, Phase::Stopped)
             {
                 let mut app = Box::new(create(preparation.size));
+                app.startup_commands.append(&mut commands.0);
                 let primary = app
                     .frame_windows
                     .primary_window_mut()
@@ -349,13 +404,19 @@ pub(super) fn run(
     event_loop: EventLoop,
     initial: InitialWindow,
     shared_monitors: SharedMonitorInfo,
+    command_rx: Receiver<RenderCommand>,
     create: impl FnOnce(InitialWindowSize) -> RenderApp + 'static,
 ) -> Result<RenderLoopExit, RenderLoopError> {
     event_loop.set_control_flow(ControlFlow::Wait);
     let outcome = Rc::new(RefCell::new(Outcome::Preparing));
     let gpu_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let result = event_loop.run_app(StartingApp {
-        phase: Phase::Preparing { initial, create },
+        phase: Phase::Preparing {
+            initial,
+            create,
+            receiver: command_rx,
+            commands: PreparingCommands::default(),
+        },
         shared_monitors,
         can_create_surfaces: false,
         outcome: Rc::clone(&outcome),
@@ -372,6 +433,51 @@ pub(super) fn run(
 mod tests {
     use super::*;
     use crate::render_thread::state::RenderShutdownReason;
+
+    #[test]
+    fn preparation_drains_saturated_channels_and_coalesces_opacity_refreshes() {
+        let (sender, receiver) = crossbeam_channel::bounded(COMMAND_CHANNEL_CAPACITY);
+        let mut commands = PreparingCommands::default();
+        for _ in 0..4 {
+            for _ in 0..COMMAND_CHANNEL_CAPACITY {
+                sender
+                    .try_send(RenderCommand::Window(WindowCommand::RefreshFrameOpacity))
+                    .unwrap();
+            }
+            assert!(commands.drain(&receiver).is_continue());
+        }
+        assert!(matches!(
+            commands.0.pop_front(),
+            Some(RenderCommand::Window(WindowCommand::RefreshFrameOpacity))
+        ));
+        assert!(commands.0.is_empty());
+    }
+
+    #[test]
+    fn preparation_preserves_ordered_commands_and_observes_shutdown() {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let mut commands = PreparingCommands::default();
+        for title in ["first", "second"] {
+            sender
+                .send(RenderCommand::Window(WindowCommand::SetWindowTitle {
+                    title: title.into(),
+                }))
+                .unwrap();
+        }
+        assert!(commands.drain(&receiver).is_continue());
+        for expected in ["first", "second"] {
+            let Some(RenderCommand::Window(WindowCommand::SetWindowTitle { title })) =
+                commands.0.pop_front()
+            else {
+                panic!("ordered title update")
+            };
+            assert_eq!(title, expected);
+        }
+        sender
+            .send(RenderCommand::Lifecycle(LifecycleCommand::Shutdown))
+            .unwrap();
+        assert!(commands.drain(&receiver).is_break());
+    }
 
     #[test]
     fn live_gpu_shutdown_preserves_native_event_loop_failure() {
