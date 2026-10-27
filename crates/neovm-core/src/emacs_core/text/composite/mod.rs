@@ -1582,11 +1582,17 @@ pub(crate) fn composition_get_gstring(
     encoded.extend(segment.iter().map(|code| Value::fixnum(*code as i64)));
 
     let mut gstring = vec![Value::vector(encoded), Value::NIL];
-    for code in segment {
+    // GNU `fill_gstring_body` sets each glyph's FROM and TO to the
+    // character's index in the gstring (src/composite.c:889-891).  The
+    // terminal path (no font object) then copies the character code into
+    // the glyph CODE slot and the char width table's width into WIDTH
+    // (src/composite.c:907-916).
+    for (i, code) in segment.iter().enumerate() {
         let code = *code as i64;
+        let index = Value::fixnum(i as i64);
         gstring.push(Value::vector(vec![
-            Value::fixnum(0),
-            Value::fixnum(0),
+            index,
+            index,
             Value::fixnum(code),
             Value::fixnum(code),
             Value::fixnum(1),

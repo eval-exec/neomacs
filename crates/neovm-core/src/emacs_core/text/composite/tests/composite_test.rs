@@ -754,6 +754,39 @@ fn composition_get_gstring_returns_vector_shape() {
 }
 
 #[test]
+fn composition_get_gstring_glyphs_carry_gnu_from_to_indices() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = super::super::eval::Context::new();
+    let result = composition_get_gstring(
+        &mut eval,
+        vec![
+            Value::fixnum(0),
+            Value::fixnum(3),
+            Value::NIL,
+            Value::string("-->"),
+        ],
+    )
+    .unwrap();
+    let gs = result.as_vector_data().expect("gstring vector").clone();
+    // GNU `fill_gstring_body` sets each glyph's FROM and TO to the
+    // character's index in the gstring (src/composite.c:889-891); the
+    // terminal path copies the character code into the glyph CODE slot
+    // (src/composite.c:907-916).  The gstring is [HEADER ID GLYPH...].
+    for (i, ch) in "-->".chars().enumerate() {
+        let glyph = gs[2 + i]
+            .as_vector_data()
+            .unwrap_or_else(|| panic!("glyph {i} missing"))
+            .clone();
+        assert_eq!(glyph[0], Value::fixnum(i as i64), "glyph {i} FROM");
+        assert_eq!(glyph[1], Value::fixnum(i as i64), "glyph {i} TO");
+        assert_eq!(glyph[2], Value::fixnum(ch as i64), "glyph {i} CHAR");
+        assert_eq!(glyph[3], Value::fixnum(ch as i64), "glyph {i} CODE");
+        assert_eq!(glyph[4], Value::fixnum(1), "glyph {i} WIDTH");
+    }
+    assert!(gs[2 + 3].is_nil(), "gstring terminator");
+}
+
+#[test]
 fn composition_get_gstring_uses_gnu_subarray_bounds() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
