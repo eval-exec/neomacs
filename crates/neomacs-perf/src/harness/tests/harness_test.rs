@@ -1132,7 +1132,6 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
             "NEOMACS_EDIT_SYNC_STILL",
             "NEOMACS_MODE_LINE_NUMERIC_PADDING",
             "NEOMACS_MODE_LINE_PROP_BORROW",
-            "NEOMACS_MODE_LINE_PROP_SLICE",
             "NEOMACS_OSR_DEBUG",
             "NEOMACS_PERF_SUSTAINED_VISIBLE",
             "NEOMACS_POSN_OBJECT_EXTENT",

@@ -1,120 +1,261 @@
-//! Cost-only mode-line property reads, compared with the copied baseline.
-//! Both selectors are forced in every differential; public GNU oracle tests
-//! remain the external behavior gate for the formatter.
+//! Raw formatter differentials against explicit test-only property references.
+//! Product source-slice grafting has one path; the two-step reference and its
+//! typed scoped selector exist only in unit-test binaries.
 
 use super::*;
 
-struct BorrowGuard;
-
-struct SliceGuard;
-
-impl SliceGuard {
-    fn set(enabled: bool) -> Self {
-        set_mode_line_prop_slice_for_test(Some(enabled));
-        Self
-    }
+#[derive(Clone, Copy, Debug)]
+enum PropertyReadCase {
+    Copied,
+    Borrowed,
 }
 
-impl Drop for SliceGuard {
-    fn drop(&mut self) {
-        set_mode_line_prop_slice_for_test(None);
-    }
+#[derive(Clone, Copy)]
+enum PreviousBorrowOverride {
+    ProcessDefault,
+    Copied,
+    Borrowed,
+}
+
+#[must_use]
+struct BorrowGuard {
+    previous: PreviousBorrowOverride,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 impl BorrowGuard {
-    fn set(enabled: bool) -> Self {
-        set_mode_line_prop_borrow_for_test(Some(enabled));
-        Self
+    fn enter(case: PropertyReadCase) -> Self {
+        let enabled = match case {
+            PropertyReadCase::Copied => false,
+            PropertyReadCase::Borrowed => true,
+        };
+        let previous =
+            MODE_LINE_PROP_BORROW_OVERRIDE.with(|cell| match cell.replace(Some(enabled)) {
+                None => PreviousBorrowOverride::ProcessDefault,
+                Some(false) => PreviousBorrowOverride::Copied,
+                Some(true) => PreviousBorrowOverride::Borrowed,
+            });
+        Self {
+            previous,
+            _thread: std::marker::PhantomData,
+        }
     }
 }
 
 impl Drop for BorrowGuard {
     fn drop(&mut self) {
-        set_mode_line_prop_borrow_for_test(None);
+        let previous = match self.previous {
+            PreviousBorrowOverride::ProcessDefault => None,
+            PreviousBorrowOverride::Copied => Some(false),
+            PreviousBorrowOverride::Borrowed => Some(true),
+        };
+        // Preserve the enclosing override, including during an unwinding test.
+        // If this thread's TLS has retired, Drop has no live state to restore.
+        let _ = MODE_LINE_PROP_BORROW_OVERRIDE.try_with(|cell| cell.set(previous));
+    }
+}
+
+#[must_use]
+struct SliceGuard {
+    previous: ModeLineSourceSliceTestMode,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl SliceGuard {
+    fn enter(mode: ModeLineSourceSliceTestMode) -> Self {
+        Self {
+            previous: replace_mode_line_source_slice_test_mode(mode),
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for SliceGuard {
+    fn drop(&mut self) {
+        restore_mode_line_source_slice_test_mode(self.previous);
+    }
+}
+
+static_assertions::assert_not_impl_any!(BorrowGuard: Send, Sync);
+static_assertions::assert_not_impl_any!(SliceGuard: Send, Sync);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StringEncoding {
+    Unibyte,
+    Multibyte,
+}
+
+/// Owned bytes and explicit encoding, valid after the producing heap closes.
+#[derive(Debug, PartialEq, Eq)]
+struct StringRepresentation {
+    bytes: Vec<u8>,
+    encoding: StringEncoding,
+    chars: CharLen,
+}
+
+impl StringRepresentation {
+    fn capture(value: Value) -> Self {
+        let string = value.as_lisp_string().expect("string representation");
+        Self {
+            bytes: string.as_bytes().to_vec(),
+            encoding: if string.is_multibyte() {
+                StringEncoding::Multibyte
+            } else {
+                StringEncoding::Unibyte
+            },
+            chars: CharLen::new(string.schars()),
+        }
+    }
+}
+
+impl From<&StringRepresentation> for Value {
+    fn from(representation: &StringRepresentation) -> Self {
+        let string = match representation.encoding {
+            StringEncoding::Unibyte => {
+                crate::heap_types::LispString::from_unibyte(representation.bytes.clone())
+            }
+            StringEncoding::Multibyte => {
+                crate::heap_types::LispString::from_emacs_bytes(representation.bytes.clone())
+            }
+        };
+        Value::heap_string(string)
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
+struct PropertyPairCount(usize);
+
+#[derive(Debug, PartialEq, Eq)]
+struct IntervalShape {
+    range: CharRange,
+    pairs: PropertyPairCount,
+}
+
+#[derive(Debug)]
 struct StringTrace {
-    bytes: Vec<u8>,
-    multibyte: bool,
-    char_len: usize,
-    interval_plists: String,
+    representation: StringRepresentation,
+    intervals: Vec<IntervalShape>,
+    interval_plists: StringRepresentation,
+    readable: StringRepresentation,
 }
 
 #[derive(Debug, PartialEq, Eq)]
+struct SourceOrdinal(usize);
+
+#[derive(Debug, PartialEq, Eq)]
+enum SourceRole {
+    OutputRoot,
+    InputSource,
+    OutputRootAndInputSource,
+    Other,
+}
+
+impl SourceRole {
+    fn of(source: Value, output: Value, input: Option<Value>) -> Self {
+        match (source == output, input == Some(source)) {
+            (true, true) => Self::OutputRootAndInputSource,
+            (true, false) => Self::OutputRoot,
+            (false, true) => Self::InputSource,
+            (false, false) => Self::Other,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SourceTopology {
+    output: CharRange,
+    source_start: CharPos0,
+    ordinal: SourceOrdinal,
+    role: SourceRole,
+}
+
+#[derive(Debug)]
 struct SourceTrace {
-    output_start: usize,
-    output_end: usize,
-    source_start: usize,
-    source_ordinal: usize,
-    is_root: bool,
-    is_input_source: bool,
+    topology: SourceTopology,
     text: StringTrace,
 }
 
 #[derive(Debug, PartialEq, Eq)]
+struct CallbackCount(i64);
+
+#[derive(Debug)]
 struct OutputTrace {
     text: StringTrace,
     sources: Vec<SourceTrace>,
-    eval_count: i64,
-    point: usize,
+    eval_count: CallbackCount,
+    point: CharPos0,
 }
 
 #[derive(Clone, Copy)]
-enum PropertyOrder {
-    Exact,
-    Canonical,
+enum OutputPropertyContract {
+    LiteralExactOrder,
+    RawPropertyEquality,
 }
 
-fn string_trace(eval: &mut Context, value: Value, order: PropertyOrder) -> StringTrace {
-    let string = value.as_lisp_string().expect("mode-line string");
-    let bytes = string.as_bytes().to_vec();
-    let multibyte = string.is_multibyte();
-    let char_len = string.schars();
-    // No interval borrow crosses these Lisp calls. Literal-only cases keep
-    // exact plist order. Percent expansion's existing HashMap overlay order
-    // is random even for two copied-baseline walks, so those comparisons sort
-    // property pairs within each output run, retaining boundaries and values.
-    // Original source strings always use Exact below.
+fn read_representation(eval: &mut Context, printed: &StringRepresentation) -> Value {
+    eval.set_variable("d5-borrow-readable", Value::from(printed));
+    let value = eval
+        .eval_str("(read d5-borrow-readable)")
+        .expect("read full raw value");
+    eval.push_specpdl_root(value);
+    value
+}
+
+fn string_trace(eval: &mut Context, value: Value) -> StringTrace {
+    let representation = StringRepresentation::capture(value);
+    let intervals = borrow_string_text_properties_table_for_value(value)
+        .map(|table| {
+            table
+                .interval_plist_runs_for_test()
+                .into_iter()
+                .map(|(start, end, pairs)| IntervalShape {
+                    range: CharRange::new(CharPos0::new(start), CharPos0::new(end)),
+                    pairs: PropertyPairCount(pairs.len()),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // The caller has rooted the original string and every output sidecar.
+    // No table borrow crosses any printer/reader/equality call.
     eval.set_variable("d5-borrow-result", value);
-    let inspect = match order {
-        PropertyOrder::Exact => "(prin1-to-string (object-intervals d5-borrow-result))",
-        PropertyOrder::Canonical => {
-            r#"(prin1-to-string
-          (mapcar
-           (lambda (run)
-             (let ((plist (nth 2 run)) (pairs nil))
-               (while plist
-                 (setq pairs (cons (cons (car plist) (car (cdr plist))) pairs))
-                 (setq plist (cdr (cdr plist))))
-               (list (car run) (car (cdr run))
-                     (apply #'append
-                            (mapcar (lambda (pair) (list (car pair) (cdr pair)))
-                                    (sort pairs
-                                          (lambda (a b)
-                                            (string-lessp (prin1-to-string (car a))
-                                                          (prin1-to-string (car b))))))))))
-           (object-intervals d5-borrow-result)))"#
-        }
-    };
-    let interval_plists = eval
-        .eval_str(inspect)
-        .expect("object intervals")
-        .as_utf8_str()
-        .expect("printed intervals")
-        .to_owned();
+    let intervals_value = eval
+        .eval_str(
+            "(let ((print-circle t) (print-level nil) (print-length nil))
+           (prin1-to-string (object-intervals d5-borrow-result)))",
+        )
+        .expect("raw object intervals");
+    let interval_plists = StringRepresentation::capture(intervals_value);
+    let printed_value = eval
+        .eval_str(
+            "(let ((print-circle t) (print-level nil) (print-length nil))
+           (prin1-to-string d5-borrow-result))",
+        )
+        .expect("print full raw string");
+    let readable = StringRepresentation::capture(printed_value);
+    let roundtrip = read_representation(eval, &readable);
+    eval.set_variable("d5-borrow-roundtrip", roundtrip);
+    assert!(
+        eval.eval_str("(equal-including-properties d5-borrow-result d5-borrow-roundtrip)")
+            .expect("raw property roundtrip")
+            .is_truthy(),
+        "unfiltered string roundtrip"
+    );
+    assert_eq!(
+        StringRepresentation::capture(roundtrip),
+        representation,
+        "roundtrip must preserve every byte, encoding and character"
+    );
     StringTrace {
-        bytes,
-        multibyte,
-        char_len,
+        representation,
+        intervals,
         interval_plists,
+        readable,
     }
 }
 
-fn output_trace(setup: &str, enabled: bool, order: PropertyOrder) -> OutputTrace {
+fn output_trace(setup: &str, case: PropertyReadCase) -> OutputTrace {
     crate::test_utils::init_test_tracing();
-    let _guard = BorrowGuard::set(enabled);
+    let _guard = BorrowGuard::enter(case);
     let mut eval = interactive_context();
     let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
     let frame_id = eval
@@ -140,90 +281,162 @@ fn output_trace(setup: &str, enabled: bool, order: PropertyOrder) -> OutputTrace
         Value::make_buffer(buffer_id),
         24,
     );
-    // Fresh :eval strings are owned only by the output sidecar. Root the
-    // complete sidecar before introspection calls that could collect.
-    let root_scope = eval.save_specpdl_roots();
-    eval.push_specpdl_root(output.value());
-    for span in output.source_spans() {
-        eval.push_specpdl_root(span.source());
-    }
-    let input_source = eval.obarray.symbol_value_copied("d5-borrow-source");
-    let mut identities = Vec::new();
-    let text = string_trace(&mut eval, output.value(), order);
-    let sources = output
-        .source_spans()
-        .iter()
-        .map(|span| {
-            let source = span.source();
-            let source_ordinal =
-                if let Some(index) = identities.iter().position(|seen| *seen == source) {
-                    index
-                } else {
-                    identities.push(source);
-                    identities.len() - 1
-                };
-            SourceTrace {
-                output_start: span.output_start(),
-                output_end: span.output_end(),
-                source_start: span.source_start(),
-                source_ordinal,
-                is_root: source == output.value(),
-                is_input_source: input_source == Some(source),
-                text: string_trace(&mut eval, source, PropertyOrder::Exact),
-            }
-        })
-        .collect();
-    let eval_count = eval
-        .obarray
-        .symbol_value_copied("d5-borrow-evals")
-        .and_then(Value::as_fixnum)
-        .expect("eval counter");
-    let point = eval
-        .buffers
-        .get(buffer_id)
-        .expect("buffer")
-        .point_char_pos()
-        .get();
-    eval.restore_specpdl_roots(root_scope);
-    OutputTrace {
-        text,
-        sources,
-        eval_count,
-        point,
-    }
+    // Fresh :eval source strings are retained only by this sidecar. The RAII
+    // extent roots the complete result before any introspection can collect.
+    mode_line_walk::with_root_scope(&mut eval, |eval| {
+        eval.push_specpdl_root(output.value());
+        for span in output.source_spans() {
+            eval.push_specpdl_root(span.source());
+        }
+        let input_source = eval.obarray.symbol_value_copied("d5-borrow-source");
+        let mut identities = Vec::new();
+        let text = string_trace(eval, output.value());
+        let sources = output
+            .source_spans()
+            .iter()
+            .map(|span| {
+                let source = span.source();
+                let ordinal =
+                    if let Some(index) = identities.iter().position(|seen| *seen == source) {
+                        SourceOrdinal(index)
+                    } else {
+                        identities.push(source);
+                        SourceOrdinal(identities.len() - 1)
+                    };
+                SourceTrace {
+                    topology: SourceTopology {
+                        output: CharRange::new(
+                            CharPos0::new(span.output_start()),
+                            CharPos0::new(span.output_end()),
+                        ),
+                        source_start: CharPos0::new(span.source_start()),
+                        ordinal,
+                        role: SourceRole::of(source, output.value(), input_source),
+                    },
+                    text: string_trace(eval, source),
+                }
+            })
+            .collect();
+        let eval_count = CallbackCount(
+            eval.obarray
+                .symbol_value_copied("d5-borrow-evals")
+                .and_then(Value::as_fixnum)
+                .expect("eval counter"),
+        );
+        let point = eval
+            .buffers
+            .get(buffer_id)
+            .expect("buffer")
+            .point_char_pos();
+        OutputTrace {
+            text,
+            sources,
+            eval_count,
+            point,
+        }
+    })
+}
+
+fn assert_raw_string_equal(eval: &mut Context, actual: &StringTrace, expected: &StringTrace) {
+    assert_eq!(
+        actual.representation, expected.representation,
+        "all string bytes/encoding/characters"
+    );
+    assert_eq!(
+        actual.intervals, expected.intervals,
+        "all interval boundaries and plist pair counts"
+    );
+    let actual_value = read_representation(eval, &actual.readable);
+    let expected_value = read_representation(eval, &expected.readable);
+    eval.set_variable("d5-borrow-actual", actual_value);
+    eval.set_variable("d5-borrow-expected", expected_value);
+    assert!(
+        eval.eval_str("(equal-including-properties d5-borrow-actual d5-borrow-expected)")
+            .expect("raw property comparison")
+            .is_truthy(),
+        "unfiltered properties differ: actual={actual:?}, expected={expected:?}"
+    );
+}
+
+fn assert_output_equal(
+    actual: &OutputTrace,
+    expected: &OutputTrace,
+    contract: OutputPropertyContract,
+) {
+    let mut eval = interactive_context();
+    mode_line_walk::with_root_scope(&mut eval, |eval| {
+        assert_raw_string_equal(eval, &actual.text, &expected.text);
+        match contract {
+            OutputPropertyContract::LiteralExactOrder => assert_eq!(
+                actual.text.interval_plists, expected.text.interval_plists,
+                "exact literal property order"
+            ),
+            OutputPropertyContract::RawPropertyEquality => {}
+        }
+        assert_eq!(
+            actual.eval_count, expected.eval_count,
+            "callback population"
+        );
+        assert_eq!(actual.point, expected.point, "buffer point");
+        assert_eq!(
+            actual.sources.len(),
+            expected.sources.len(),
+            "all source spans"
+        );
+        for (actual, expected) in actual.sources.iter().zip(&expected.sources) {
+            assert_eq!(
+                actual.topology, expected.topology,
+                "source position/identity topology"
+            );
+            assert_raw_string_equal(eval, &actual.text, &expected.text);
+            assert_eq!(
+                actual.text.interval_plists, expected.text.interval_plists,
+                "exact source property order and values"
+            );
+        }
+    });
 }
 
 fn compare(setup: &str) {
-    let _slice = SliceGuard::set(false);
-    let copied = output_trace(setup, false, PropertyOrder::Exact);
-    let borrowed = output_trace(setup, true, PropertyOrder::Exact);
-    assert_eq!(borrowed, copied, "format setup: {setup}");
-    let _slice = SliceGuard::set(true);
-    for borrow in [false, true] {
-        assert_eq!(
-            output_trace(setup, borrow, PropertyOrder::Exact),
-            copied,
-            "slice/borrow={borrow}: {setup}"
+    let _slice = SliceGuard::enter(ModeLineSourceSliceTestMode::TwoStepReference);
+    let copied = output_trace(setup, PropertyReadCase::Copied);
+    let borrowed = output_trace(setup, PropertyReadCase::Borrowed);
+    assert_output_equal(
+        &borrowed,
+        &copied,
+        OutputPropertyContract::LiteralExactOrder,
+    );
+    let _slice = SliceGuard::enter(ModeLineSourceSliceTestMode::Production);
+    for case in [PropertyReadCase::Copied, PropertyReadCase::Borrowed] {
+        assert_output_equal(
+            &output_trace(setup, case),
+            &copied,
+            OutputPropertyContract::LiteralExactOrder,
         );
     }
 }
 
 fn compare_percent_fields(setup: &str) {
-    let _slice = SliceGuard::set(false);
-    let copied = output_trace(setup, false, PropertyOrder::Canonical);
-    let copied_again = output_trace(setup, false, PropertyOrder::Canonical);
-    assert_eq!(
-        copied_again, copied,
-        "copied baseline must reproduce: {setup}"
+    let _slice = SliceGuard::enter(ModeLineSourceSliceTestMode::TwoStepReference);
+    let copied = output_trace(setup, PropertyReadCase::Copied);
+    let copied_again = output_trace(setup, PropertyReadCase::Copied);
+    assert_output_equal(
+        &copied_again,
+        &copied,
+        OutputPropertyContract::RawPropertyEquality,
     );
-    let borrowed = output_trace(setup, true, PropertyOrder::Canonical);
-    assert_eq!(borrowed, copied, "format setup: {setup}");
-    let _slice = SliceGuard::set(true);
-    for borrow in [false, true] {
-        assert_eq!(
-            output_trace(setup, borrow, PropertyOrder::Canonical),
-            copied,
-            "slice/borrow={borrow}: {setup}"
+    let borrowed = output_trace(setup, PropertyReadCase::Borrowed);
+    assert_output_equal(
+        &borrowed,
+        &copied,
+        OutputPropertyContract::RawPropertyEquality,
+    );
+    let _slice = SliceGuard::enter(ModeLineSourceSliceTestMode::Production);
+    for case in [PropertyReadCase::Copied, PropertyReadCase::Borrowed] {
+        assert_output_equal(
+            &output_trace(setup, case),
+            &copied,
+            OutputPropertyContract::RawPropertyEquality,
         );
     }
 }

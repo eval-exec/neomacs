@@ -21,7 +21,6 @@
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_FONTIFICATION_RAW_BOUNDARY` | `on` | `off`; `on`/`1`/`true`/`yes` | Reuse exact bounded raw fontified scans only when existing category/alias/default absence proofs hold |
 //! | `NEOMACS_POSN_BOUNDED_TEXT` | `on` | `off`; `on`/`1`/`true`/`yes` | Bound text copied by approximate window-position fallbacks |
-//! | `NEOMACS_MODE_LINE_PROP_SLICE` | `off` | `off`; `on`/`1`/`true`/`yes` | Clip and graft literal source intervals with one plist copy |
 //! | `NEOMACS_MODE_LINE_PROP_BORROW` | `off` | `off`; `on`/`1`/`true`/`yes` | Borrow source string intervals during synchronous mode-line property reads |
 //! | `NEOMACS_MODE_LINE_NUMERIC_PADDING` | `on` | `off`; `on`/`1`/`true`/`yes` | Keep numeric-wrapper padding independent of inherited mode-line properties |
 //! | `NEOMACS_REDISPLAY_GNU_HOOKS` | `off` | `off`; `on`/`1`/`true`/`yes` | GNU redisplay transaction, owned pre targets, live hook order and core configuration-hook default; selected-mini preparation; renderer-inert snapshot positions |
@@ -3146,64 +3145,76 @@ fn with_mode_line_string_properties<R>(
     }
 }
 
-/// Immutable process selector, published by OnceLock. A source-slice graft
-/// uses only a synchronous immutable source borrow and an exclusive destination;
-/// no source Lisp state is retained between formatter elements or mutators.
-#[inline]
-fn mode_line_prop_slice_enabled() -> bool {
-    #[cfg(test)]
-    if let Some(enabled) = MODE_LINE_PROP_SLICE_OVERRIDE.with(std::cell::Cell::get) {
-        return enabled;
-    }
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        matches!(
-            std::env::var("NEOMACS_MODE_LINE_PROP_SLICE")
-                .ok()
-                .map(|value| value.trim().to_ascii_lowercase())
-                .as_deref(),
-            Some("on" | "1" | "true" | "yes")
-        )
-    })
+/// The product always grafts directly. Unit tests retain the former two-step
+/// operation as an explicit reference, absent from production code.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModeLineSourceSliceTestMode {
+    Production,
+    TwoStepReference,
 }
 
 #[cfg(test)]
 thread_local! {
-    static MODE_LINE_PROP_SLICE_OVERRIDE: std::cell::Cell<Option<bool>> =
-        const { std::cell::Cell::new(None) };
+    // Replace the existing override slot in place; do not add TLS storage.
+    static MODE_LINE_PROP_SLICE_OVERRIDE: std::cell::Cell<ModeLineSourceSliceTestMode> =
+        const { std::cell::Cell::new(ModeLineSourceSliceTestMode::Production) };
 }
 
 #[cfg(test)]
-fn set_mode_line_prop_slice_for_test(enabled: Option<bool>) {
-    MODE_LINE_PROP_SLICE_OVERRIDE.with(|cell| cell.set(enabled));
+static_assertions::assert_eq_size!(
+    std::cell::Cell<ModeLineSourceSliceTestMode>,
+    std::cell::Cell<Option<bool>>
+);
+#[cfg(test)]
+static_assertions::const_assert_eq!(
+    std::mem::align_of::<std::cell::Cell<ModeLineSourceSliceTestMode>>(),
+    std::mem::align_of::<std::cell::Cell<Option<bool>>>()
+);
+
+#[cfg(test)]
+fn replace_mode_line_source_slice_test_mode(
+    mode: ModeLineSourceSliceTestMode,
+) -> ModeLineSourceSliceTestMode {
+    MODE_LINE_PROP_SLICE_OVERRIDE.with(|cell| cell.replace(mode))
 }
 
-/// Preserve the legacy capture point and interval partition while removing
-/// the intermediate sliced table and its plist spine copies when selected.
+#[cfg(test)]
+fn restore_mode_line_source_slice_test_mode(mode: ModeLineSourceSliceTestMode) {
+    // A test guard cannot move to another thread. If that thread's TLS has
+    // already retired, there is no live state to restore; Drop must not panic.
+    let _ = MODE_LINE_PROP_SLICE_OVERRIDE.try_with(|cell| cell.set(mode));
+}
+
+/// Capture the same source range and preserve the existing interval partition,
+/// publishing fresh destination roots before any later Lisp callback. The
+/// canonical graft performs clipping and the single destination plist copy;
+/// neither source descriptors nor borrowed plist spines escape this call.
 #[inline]
 fn append_mode_line_source_slice(
     target: &mut ModeLineRendered,
     source: &TextPropertyTable,
-    start: usize,
-    end: usize,
-    offset: usize,
+    range: CharRange,
+    offset: CharLen,
 ) {
-    let range = display_char_range(start, end);
-    let offset = CharLen::new(offset);
-    if mode_line_prop_slice_enabled() {
-        if let Some(roots) = &mut target.gc_roots {
-            target
-                .text_props
-                .append_source_slice_at_char_offset_with_roots(source, range, offset, |value| {
-                    mode_line_gc::pin_accumulator_value(roots, value)
-                });
-        } else {
-            target
-                .text_props
-                .append_source_slice_at_char_offset(source, range, offset);
+    #[cfg(test)]
+    match MODE_LINE_PROP_SLICE_OVERRIDE.with(std::cell::Cell::get) {
+        ModeLineSourceSliceTestMode::Production => {}
+        ModeLineSourceSliceTestMode::TwoStepReference => {
+            target.append_properties(&source.slice_char_range(range), offset);
+            return;
         }
+    }
+    if let Some(roots) = &mut target.gc_roots {
+        target
+            .text_props
+            .append_source_slice_at_char_offset_with_roots(source, range, offset, |value| {
+                mode_line_gc::pin_accumulator_value(roots, value)
+            });
     } else {
-        target.append_properties(&source.slice_char_range(range), offset);
+        target
+            .text_props
+            .append_source_slice_at_char_offset(source, range, offset);
     }
 }
 
@@ -3501,7 +3512,12 @@ impl ModeLineRendered {
                 );
                 self.record_source_span(char_offset, self.char_len(), *value, start_char);
                 with_mode_line_string_properties(*value, |props| {
-                    append_mode_line_source_slice(self, props, start_char, end_char, char_offset);
+                    append_mode_line_source_slice(
+                        self,
+                        props,
+                        display_char_range(start_char, end_char),
+                        CharLen::new(char_offset),
+                    );
                 });
             }
             None => {
@@ -3522,9 +3538,8 @@ impl ModeLineRendered {
                         append_mode_line_source_slice(
                             self,
                             props,
-                            start_char,
-                            end_char,
-                            char_offset,
+                            display_char_range(start_char, end_char),
+                            CharLen::new(char_offset),
                         );
                     });
                 }
