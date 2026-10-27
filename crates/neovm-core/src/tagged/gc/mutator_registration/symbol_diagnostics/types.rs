@@ -105,6 +105,7 @@ pub(super) enum Error {
     Read(Box<ReadFailure>),
     Affinity,
     Aborted,
+    Protocol,
 }
 impl From<RegistrationError> for Error {
     fn from(error: RegistrationError) -> Self {

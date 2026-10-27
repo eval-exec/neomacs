@@ -4,6 +4,7 @@
 //! external island lock. There is no production setting or authority change.
 mod affinity;
 mod reads;
+mod stopped;
 mod types;
 
 use super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
@@ -104,12 +105,32 @@ impl Drop for Guard<'_> {
         *self.cleanup.borrow_mut() = Cleanup::Complete(result);
     }
 }
-enum Receipt {
+enum Receipt<T> {
     ActivationFailed(Error),
     Retired {
-        body: thread::Result<Result<ReadRecord, Error>>,
+        body: thread::Result<Result<T, Error>>,
         cleanup: Cleanup,
     },
+}
+fn diagnostic_owner(permit: MutatorPermit<'_>) -> Result<Guard<'_>, Error> {
+    let key = permit.key();
+    let owner = retry_owned(
+        Deadline::contention(),
+        permit,
+        |permit| permit.activate(key.heap_identity(), key.owner()),
+        |failed| match contention::registration(&failed.reason) {
+            Retry::Busy => ControlFlow::Continue(failed.into_permit()),
+            Retry::Refuse => ControlFlow::Break(failed),
+        },
+    )
+    .map_err(|failed| Error::Registration(failed.reason))?;
+    Ok(Guard {
+        resources: Resources::Resident(Resident {
+            owner,
+            home: Home::Empty,
+        }),
+        cleanup: Rc::new(RefCell::new(Cleanup::Pending)),
+    })
 }
 fn worker<'era>(
     permit: MutatorPermit<'era>,
@@ -122,7 +143,7 @@ fn worker<'era>(
     active: &ActiveOwners,
     commands: Receiver<Command>,
     events: Sender<Event>,
-) -> Receipt {
+) -> Receipt<ReadRecord> {
     // Spawn while the controller still has its broad allowance; the parent
     // pins itself only after every worker has inherited that original mask.
     let affinity = match affinity::worker(mode, ordinal) {
@@ -133,33 +154,14 @@ fn worker<'era>(
             return Receipt::ActivationFailed(error);
         }
     };
-    let key = permit.key();
-    let activation = retry_owned(
-        Deadline::contention(),
-        permit,
-        |permit| permit.activate(key.heap_identity(), key.owner()),
-        |failed| match contention::registration(&failed.reason) {
-            Retry::Busy => ControlFlow::Continue(failed.into_permit()),
-            Retry::Refuse => ControlFlow::Break(failed),
-        },
-    );
-    let owner = match activation {
-        Ok(owner) => owner,
-        Err(failed) => {
-            let reason = failed.reason;
-            drop(failed);
+    let mut guard = match diagnostic_owner(permit) {
+        Ok(guard) => guard,
+        Err(error) => {
             let _ = events.send(Event::Failed(ordinal));
-            return Receipt::ActivationFailed(reason.into());
+            return Receipt::ActivationFailed(error);
         }
     };
-    let cleanup = Rc::new(RefCell::new(Cleanup::Pending));
-    let mut guard = Guard {
-        resources: Resources::Resident(Resident {
-            owner,
-            home: Home::Empty,
-        }),
-        cleanup: cleanup.clone(),
-    };
+    let cleanup = guard.cleanup.clone();
     let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let Resident { owner, home } = match &mut guard.resources {
             Resources::Resident(resident) => resident,
