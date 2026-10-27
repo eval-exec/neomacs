@@ -51,6 +51,7 @@ fn synthetic_key(window_start: i64, point: i64) -> RetainedWindowKey {
         props_modified_tick: 5,
         overlay_modified_tick: 5,
         overlay_digest: 0x51_9e_5a_11,
+        face_overlay_coverage: Default::default(),
         face_change_count: 5,
         display_var_change_count: 5,
     }

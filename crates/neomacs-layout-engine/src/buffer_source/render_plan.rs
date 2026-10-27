@@ -216,6 +216,7 @@ impl<'a> BufferWindowBackground<'a> {
         output: &mut TextWindowOutputTarget<'_>,
         params: &WindowParams,
         geometry: &BufferWindowGeometry,
+        layout_box: &WindowLayoutBox,
     ) {
         let Self::Resolved { face_id, face } = self else {
             return;
@@ -233,7 +234,11 @@ impl<'a> BufferWindowBackground<'a> {
             clip_rect: Some(params.bounds),
             bounds: Rect::new(
                 params.bounds.x,
-                geometry.text_y,
+                // A partial walk moves geometry.text_y to the first row it
+                // walks (the edit's dirty row, or a scroll replay's first
+                // newly exposed row). The window background still covers the
+                // full viewport.
+                layout_box.body().y,
                 params.bounds.width,
                 geometry.text_height,
             ),
@@ -743,6 +748,7 @@ impl BufferSourceOutputSetup {
             &mut output.output_target(),
             params,
             geometry,
+            layout_box,
         );
 
         let has_overlays = !buffer.layout_overlays().is_empty();

@@ -789,13 +789,25 @@ pub(crate) fn sync_allowed(
     scroll_margin: i64,
     buffer: &neovm_core::buffer::Buffer,
 ) -> bool {
+    // An edit can rewrite the rest of a paragraph, changing its automatic
+    // direction; a face-only overlay change cannot. Both of the edit-only
+    // refusals therefore live here, not in the shared set below.
+    curr.extra_line_spacing == 0.0
+        && !super::mode_line_gate::bidi_auto_paragraph(buffer)
+        && sync_layout_conditions(curr, scroll_margin)
+}
+
+/// Structural refusals shared by every synchronized replay, whatever moved:
+/// wrapped rows need a full rewalk, numbered gutters carry point-dependent
+/// prefixes, trailing whitespace adds buffer-dependent glyphs, and a
+/// horizontal scroll or scroll margin would make the full layout shift rows
+/// that a replay leaves in place.
+pub(crate) fn sync_layout_conditions(curr: &super::RetainedWindowKey, scroll_margin: i64) -> bool {
     !curr.word_wrap
         && !curr.display_line_numbers.enabled()
-        && curr.extra_line_spacing == 0.0
         && !curr.show_trailing_whitespace
         && curr.hscroll == 0
         && scroll_margin <= 0
-        && !super::mode_line_gate::bidi_auto_paragraph(buffer)
 }
 
 /// Build the synchronization plan for an edit, or `None` when no old row

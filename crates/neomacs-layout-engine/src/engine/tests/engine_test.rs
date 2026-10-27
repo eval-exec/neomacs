@@ -95,6 +95,8 @@ mod edit_sync_engine_test;
 #[cfg(test)]
 #[path = "edit_sync_prove_first_engine_test.rs"]
 mod edit_sync_prove_first_engine_test;
+#[path = "face_overlay_replay_test.rs"]
+mod face_overlay_replay_test;
 #[path = "../../tests/engine_layout_validity_test.rs"]
 mod layout_validity;
 #[path = "lazy_text_hit_test.rs"]
@@ -4118,21 +4120,23 @@ fn relative_line_numbers_follow_point_across_incremental_redisplay() {
     );
 }
 
-/// Phase 1 — an OVERLAY change (hl-line / show-paren / region) co-moving with
-/// the cursor MUST bail to a full rebuild: the overlay tick moved, so the
-/// retained rows are no longer trustworthy. This is the invalidation-completeness
-/// guarantee (spec §3) — silently staying cursor-only here would ship stale rows.
+/// A structural overlay change co-moving with the cursor must still bail to a
+/// full rebuild: `before-string` changes the displayed rows themselves, so
+/// neither a cursor-only replay nor the face-only replay can reproduce them.
+/// This is the invalidation-completeness guarantee (spec §3) — silently staying
+/// cursor-only here would ship stale rows. Face-only overlays take the narrower
+/// replay covered by `face_overlay_replay_test`.
 #[test]
-fn phase1_overlay_change_bails_to_full() {
+fn phase1_structural_overlay_change_bails_to_full() {
     // Counts the mini-window's full walk (NEOMACS_LAYOUT_MINI_STILL off).
     crate::incremental_layout::set_mini_window_still_for_test(Some(false));
     let text = "(defun f (a b) (+ a b))\n".repeat(40);
     let (mut eval, frame_id, buf_id, _win) = incr_editing_frame(&text, 800, 600);
     let mut engine = LayoutEngine::new();
     let m = measure_incremental_relayout(&mut engine, &mut eval, frame_id, |eval| {
-        // Use the Lisp `make-overlay` builtin (the path hl-line / show-paren take)
-        // so the overlay tick is bumped, exactly as real code does.
-        eval.eval_str("(overlay-put (make-overlay 1 24) 'face 'highlight)")
+        // Use the Lisp `make-overlay` builtin so the overlay content digest
+        // moves, exactly as real code does.
+        eval.eval_str(r#"(overlay-put (make-overlay 1 24) 'before-string "prefix")"#)
             .expect("make-overlay");
         let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
         buffer.goto_emacs_byte_pos(neovm_core::buffer::EmacsBytePos::new(10));
