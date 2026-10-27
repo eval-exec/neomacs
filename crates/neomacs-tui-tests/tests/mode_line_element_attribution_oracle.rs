@@ -462,147 +462,6 @@ const POLICY: &str = r#"{
   "disable_antiblink":false,"disable_eldoc":true
 }"#;
 
-#[derive(Clone, Copy)]
-enum ByteCodeField {
-    Documentation,
-}
-
-impl ByteCodeField {
-    const fn index(self) -> usize {
-        match self {
-            Self::Documentation => 4,
-        }
-    }
-}
-
-/// A test-input provenance difference, not a change to Lisp equality.
-/// GNU bytecomp.el:1855 disables lazy documentation while native-compiling.
-/// The in-tree GNU bindings.elc was 55051 bytes; a fresh nonnative compilation
-/// was 56106 bytes with 87 lazy references, matching Neo's input. Project only
-/// that documented field, never callback code, constants, properties or text.
-#[derive(Clone, Copy)]
-enum PropertyValueProjection {
-    ByteCodeDocumentation(ByteCodeField),
-}
-
-impl PropertyValueProjection {
-    fn lisp_policy(self) -> String {
-        match self {
-            Self::ByteCodeDocumentation(field) => format!(
-                "(defconst ep31-property-byte-code-documentation-slot {})\n\
-                 (defconst ep31-property-projection-name \"bytecode-documentation-in-property-values\")\n",
-                field.index()
-            ),
-        }
-    }
-}
-
-const PROPERTY_VALUE_PROJECTION: PropertyValueProjection =
-    PropertyValueProjection::ByteCodeDocumentation(ByteCodeField::Documentation);
-
-// Canonical comparison rule shared with the micro protocol. Its caller emits
-// PROPERTY_VALUE_PROJECTION.lisp_policy() first. It observes objects without
-// rewriting them or invoking callbacks. Only entry through a string's property
-// values admits the bytecode field projection; source forms use core equality.
-const PROPERTY_VALUE_PROJECTION_LISP: &str = r###"
-(defun ep31--seen-property-pair (left right seen)
-  (let ((pairs (car seen)) found)
-    (while (and pairs (not found))
-      (setq found (and (eq left (caar pairs)) (eq right (cdar pairs)))
-            pairs (cdr pairs)))
-    (if found t
-      (setcar seen (cons (cons left right) (car seen)))
-      nil)))
-(defun ep31--property-plists-equal (left right seen)
-  ;; Native text-property plists have unique EQ keys. Check presence separately
-  ;; from value so an absent key never becomes equivalent to a nil-valued key.
-  (let ((tail left) (same t))
-    (while (and same tail)
-      (let ((other (plist-member right (car tail))))
-        (setq same (and other
-                        (ep31--property-value-equal
-                         (cadr tail) (cadr other) seen))))
-      (setq tail (cddr tail)))
-    (setq tail right)
-    (while (and same tail)
-      (setq same (and (plist-member left (car tail)) t)
-            tail (cddr tail)))
-    same))
-(defun ep31--property-string-equal (left right seen)
-  (and (equal left right)
-       (let ((position 0) (same t))
-         (while (and same (< position (length left)))
-           (setq same (ep31--property-plists-equal
-                       (text-properties-at position left)
-                       (text-properties-at position right) seen)
-                 position (1+ position)))
-         same)))
-(defun ep31--property-array-equal (left right seen bytecode)
-  (and (= (length left) (length right))
-       (let ((index 0) (same t))
-         (while (and same (< index (length left)))
-           (unless (and bytecode
-                        (= index ep31-property-byte-code-documentation-slot))
-             (setq same (ep31--property-value-equal
-                         (aref left index) (aref right index) seen)))
-           (setq index (1+ index)))
-         same)))
-(defun ep31--property-value-equal (left right seen)
-  (cond
-   ((eq left right) t)
-   ((and (byte-code-function-p left) (byte-code-function-p right))
-    (or (ep31--seen-property-pair left right seen)
-        (ep31--property-array-equal left right seen t)))
-   ((and (consp left) (consp right))
-    (or (ep31--seen-property-pair left right seen)
-        (and (ep31--property-value-equal (car left) (car right) seen)
-             (ep31--property-value-equal (cdr left) (cdr right) seen))))
-   ((and (stringp left) (stringp right))
-    (or (ep31--seen-property-pair left right seen)
-        (ep31--property-string-equal left right seen)))
-   ((or (and (vectorp left) (vectorp right))
-        (and (recordp left) (recordp right)))
-    (or (ep31--seen-property-pair left right seen)
-        (ep31--property-array-equal left right seen nil)))
-   ;; Hash tables, char tables, markers, functions of other kinds and other
-   ;; opaque values retain the exact core predicate, including its errors.
-   (t (equal-including-properties left right))))
-(defun ep31-equal-output-properties (left right)
-  (and (stringp left) (stringp right)
-       (ep31--property-value-equal left right (list nil))))
-(defun ep31-projection-guards ()
-  (let* ((first (make-byte-code 0 "\300\207" [nil] 1 "doc-a" nil))
-         (second (make-byte-code 0 "\300\207" [nil] 1 "doc-b" nil))
-         (interactive (make-byte-code 0 "\300\207" [nil] 1 "doc-b" "p"))
-         (left (propertize "x" 'projection-guard first))
-         (right (propertize "x" 'projection-guard second))
-         (map-left (make-sparse-keymap)) (map-right (make-sparse-keymap)))
-    (define-key map-left [projection-guard] first)
-    (define-key map-right [projection-guard] second)
-    (define-key map-left [cycle] map-left)
-    (define-key map-right [cycle] map-right)
-    (unless (and
-             ;; Only the property route projects the documentation field.
-             (not (equal-including-properties first second))
-             (not (ep31-equal-output-properties first second))
-             (ep31-equal-output-properties left right)
-             (not (ep31-equal-output-properties
-                   left (propertize "x" 'projection-guard interactive)))
-             (not (ep31-equal-output-properties
-                   (propertize "x" 'projection-guard [0 1 2 3 "doc-a"])
-                   (propertize "x" 'projection-guard [0 1 2 3 "doc-b"])))
-             (not (ep31-equal-output-properties left
-                    (propertize "y" 'projection-guard second)))
-             (not (ep31-equal-output-properties left
-                    (propertize "x" 'other-property second)))
-             (not (ep31-equal-output-properties "x"
-                    (propertize "x" 'projection-guard nil)))
-             (ep31-equal-output-properties
-              (propertize "x" 'keymap map-left)
-              (propertize "x" 'keymap map-right)))
-      (error "Property-value documentation projection guard failed"))))
-"###;
-
 const STRICT_PROBE: &str = r###"
 (defvar ep30-strict-effects 0)
 (defun ep30-strict-counter ()
@@ -618,7 +477,6 @@ const STRICT_PROBE: &str = r###"
            (insert (number-to-string gnugap-seq) "\n")))))
 (advice-add 'gnugap--marker :after #'ep30-strict-marker)
 (defun ep30-strict-collect (&rest ignored)
-  (ep31-projection-guards)
   (unless (and (null noninteractive) (null window-system)
                (= gnugap-pairs 100) (= gnugap-seq 200)
                (= (window-width) 80) (= (window-height) 23)
@@ -632,7 +490,7 @@ const STRICT_PROBE: &str = r###"
                         (insert-file-contents reference-file)
                         (read (current-buffer)))))
          (observations nil) (reference-output nil)
-         (raw-strict-passes 0) (projected-passes 0))
+         (raw-strict-passes 0))
     (dolist (element mode-line-format)
       (setq targets (append targets (list (list (format "element-%02d" index) element)))
             index (1+ index)))
@@ -667,36 +525,25 @@ const STRICT_PROBE: &str = r###"
               (raw-output-equal (or (not reference-file)
                                 (and expected
                                      (equal-including-properties
-                                      value (nth 2 expected)))))
-              (projected-output-equal
-               (or (not reference-file)
-                   (and expected
-                        (ep31-equal-output-properties value (nth 2 expected))))))
+                                      value (nth 2 expected))))))
           (when (and source-equal raw-output-equal)
             (setq raw-strict-passes (1+ raw-strict-passes)))
-          (when (and source-equal projected-output-equal)
-            (setq projected-passes (1+ projected-passes)))
         (push (list name (ep30-strict-print form) value) reference-output)
         (push `((target . ,name) (source . ,(ep30-strict-print form))
                 (output . ,printed) (chars . ,(length value))
                 (bytes . ,(string-bytes value)) (strict_roundtrip . t)
                 (source_equal_including_properties . ,(if source-equal t :false))
-                (equal_including_properties . ,(if raw-output-equal t :false))
-                (properties_equal_under_projection
-                 . ,(if projected-output-equal t :false))) observations))))
+                (equal_including_properties . ,(if raw-output-equal t :false))) observations))))
     (with-temp-file (getenv "EP30_VALUES")
       (insert (ep30-strict-print (nreverse reference-output))))
     (with-temp-file (getenv "EP30_RESULT")
       (insert (json-serialize
                `((schema . "mode-line-element-attribution-w100-v1")
-                 (status . ,(if (= projected-passes 22)
-                                "PASS_PROPERTIES_DOCUMENTATION_PROJECTED"
-                              "FAIL_PROPERTIES_DOCUMENTATION_PROJECTED"))
-                 (property_projection . ,ep31-property-projection-name)
-                 (bytecode_documentation_slot . ,ep31-property-byte-code-documentation-slot)
-                 (projection_guards . t)
+                 (status . ,(if (= raw-strict-passes 22)
+                                "PASS_RAW_PROPERTIES"
+                              "FAIL_RAW_PROPERTIES"))
                  (raw_strict_passes . ,raw-strict-passes)
-                 (projected_passes . ,projected-passes) (emacs_version . ,emacs-version)
+                 (emacs_version . ,emacs-version)
                  (warmup_pairs . ,gnugap-pairs) (commands . ,gnugap-seq)
                  (outputs . 22) (point . ,(point)) (window_start . ,(window-start))
                  (width . ,(window-width)) (height . ,(window-height))
@@ -728,14 +575,8 @@ fn run_probe(name: &str, program: PathBuf, reference: Option<&str>) -> Observati
     let release = home.path().join("release");
     let values = home.path().join("values.el");
     let result = home.path().join("result.json");
-    let projection_policy = PROPERTY_VALUE_PROJECTION.lisp_policy();
-    std::fs::write(
-        &script,
-        format!(
-            "{ORIGINAL_W100}\n{projection_policy}\n{PROPERTY_VALUE_PROJECTION_LISP}\n{STRICT_PROBE}"
-        ),
-    )
-    .expect("write owned fixture");
+    std::fs::write(&script, format!("{ORIGINAL_W100}\n{STRICT_PROBE}"))
+        .expect("write owned fixture");
     std::fs::write(&policy, POLICY).expect("write original suppression policy");
     let mut launch = TuiLaunch::new(program.as_os_str()).arg("-nw").arg("-Q");
     if reference.is_none() {
@@ -795,25 +636,20 @@ fn run_probe(name: &str, program: PathBuf, reference: Option<&str>) -> Observati
             .expect("result JSON");
     assert_eq!(
         result["status"],
-        "PASS_PROPERTIES_DOCUMENTATION_PROJECTED",
-        "{name} raw strict and documented property-projection outcomes: {}",
+        "PASS_RAW_PROPERTIES",
+        "{name} unfiltered property outcomes: {}",
         serde_json::to_string_pretty(&result).expect("readable strict outcome")
     );
     assert_eq!(result["warmup_pairs"], 100);
     assert_eq!(result["commands"], 200);
     assert_eq!(result["outputs"], 22);
-    assert_eq!(result["projected_passes"], 22);
-    assert_eq!(result["projection_guards"], true);
-    assert_eq!(
-        result["bytecode_documentation_slot"],
-        ByteCodeField::Documentation.index()
-    );
+    assert_eq!(result["raw_strict_passes"], 22);
     let entries = result["entries"].as_array().expect("all target records");
     assert_eq!(entries.len(), 22);
     for entry in entries {
         assert_eq!(entry["strict_roundtrip"], true);
         assert_eq!(entry["source_equal_including_properties"], true);
-        assert_eq!(entry["properties_equal_under_projection"], true);
+        assert_eq!(entry["equal_including_properties"], true);
     }
     Observation { values, result }
 }
