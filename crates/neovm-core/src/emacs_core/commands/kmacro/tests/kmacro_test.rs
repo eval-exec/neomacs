@@ -492,6 +492,45 @@ fn test_execute_kbd_macro_real_key_events_use_command_loop_dispatch() {
     assert_eq!(format_eval_result(&results[0]), "OK 1");
 }
 
+/// GNU applies `command-remapping` once, in `read_key_sequence`
+/// (keyboard.c:11863-11868), and `command_loop_1` reuses that answer
+/// (keyboard.c:1464-1495).  A remapped command therefore is not remapped
+/// again, and `this-original-command` remains the binding the keymaps
+/// produced.  GNU 31.1 answers `(a remap-once-a next-line)`.
+#[test]
+fn execute_kbd_macro_remaps_once_and_records_the_keymap_binding() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let results = eval.eval_str_each(
+        r#"(progn
+             (fset 'command-execute
+                   (lambda (cmd &optional _record _keys _special) (funcall cmd)))
+             (setq remap-seen nil remap-seen-this nil remap-seen-original nil)
+             (fset 'remap-once-a
+                   (lambda () (interactive)
+                     (setq remap-seen 'a
+                           remap-seen-this this-command
+                           remap-seen-original this-original-command)))
+             (fset 'remap-once-b
+                   (lambda () (interactive)
+                     (setq remap-seen 'b
+                           remap-seen-this this-command
+                           remap-seen-original this-original-command)))
+             (let ((g (make-sparse-keymap)))
+               (use-global-map g)
+               (define-key g [14] 'next-line)
+               (define-key g [remap next-line] 'remap-once-a)
+               (define-key g [remap remap-once-a] 'remap-once-b)
+               (execute-kbd-macro [14])
+               (list remap-seen remap-seen-this remap-seen-original)))"#,
+    );
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        format_eval_result(&results[0]),
+        "OK (a remap-once-a next-line)"
+    );
+}
+
 #[test]
 fn execute_kbd_macro_tail_is_not_pending_input_for_while_no_input_like_gnu() {
     crate::test_utils::init_test_tracing();

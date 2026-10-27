@@ -3626,6 +3626,7 @@ fn read_key_sequence_function_translation_receives_prompt() {
         ))
         .expect("read translated key sequence");
 
+    let binding = binding.executed();
     assert_eq!(keys, vec![Value::symbol("f1")]);
     assert_eq!(
         binding,
@@ -4003,6 +4004,7 @@ fn read_key_sequence_dont_downcase_last_restores_original_event() {
         ))
         .expect("read shifted key without downcasing");
 
+    let binding = binding.executed();
     assert_eq!(keys, vec![Value::fixnum('A' as i64)]);
     assert_eq!(
         binding,
@@ -4272,6 +4274,7 @@ fn read_key_sequence_can_return_switch_frame_at_sequence_start() {
         ))
         .expect("read switch-frame sequence");
 
+    let binding = binding.executed();
     assert_eq!(
         keys,
         vec![Value::list(vec![
@@ -4535,6 +4538,7 @@ fn read_key_sequence_can_return_select_window_at_sequence_start() {
         ))
         .expect("read select-window sequence");
 
+    let binding = binding.executed();
     assert_eq!(
         keys,
         vec![Value::list(vec![

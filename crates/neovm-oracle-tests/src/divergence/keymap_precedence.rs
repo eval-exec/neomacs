@@ -300,6 +300,37 @@ fn div_km_command_remapping() {
     );
 }
 
+/// The command loop applies `command-remapping` once, in
+/// `read_key_sequence` (GNU keyboard.c:11863-11868), and reuses that answer
+/// for `this-command`/`real-this-command` (keyboard.c:1464-1495).  A remapped
+/// command is therefore not remapped a second time, and
+/// `this-original-command` is the binding the keymaps produced.
+#[test]
+fn div_km_command_remapping_is_one_level_in_the_command_loop() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK (a remap-once-a next-line)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"
+(let ((seen nil) (seen-this nil) (seen-orig nil))
+  (fset 'remap-once-a
+        (lambda () (interactive)
+          (setq seen 'a seen-this this-command seen-orig this-original-command)))
+  (fset 'remap-once-b
+        (lambda () (interactive)
+          (setq seen 'b seen-this this-command seen-orig this-original-command)))
+  (with-temp-buffer
+    (let ((g (make-sparse-keymap)))
+      (use-global-map g)
+      (define-key g [14] 'next-line)
+      (define-key g [remap next-line] 'remap-once-a)
+      (define-key g [remap remap-once-a] 'remap-once-b)
+      (execute-kbd-macro [14])
+      (list seen seen-this seen-orig))))
+"##,
+        expect,
+    );
+}
+
 #[test]
 fn div_km_accessible_keymaps() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -48,7 +48,6 @@ enum CommandLoopSymbol {
     MemoryFull,
     DelayedWarningsList,
     AutoSaveInterval,
-    CommandRemapping,
     Undefined,
     CommandExecute,
 }
@@ -133,10 +132,6 @@ impl CommandLoopSymbol {
             }
             Self::AutoSaveInterval => {
                 static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("auto-save-interval");
-                SYMBOL.get()
-            }
-            Self::CommandRemapping => {
-                static SYMBOL: EpochCachedSymbol = EpochCachedSymbol::new("command-remapping");
                 SYMBOL.get()
             }
             Self::Undefined => {
@@ -798,7 +793,8 @@ impl Context {
                 for key in keys.iter().copied() {
                     self.push_vm_frame_root(key);
                 }
-                self.push_vm_frame_root(*binding);
+                self.push_vm_frame_root(binding.original());
+                self.push_vm_frame_root(binding.executed());
             }
             let unwind_result = match read_result.as_ref() {
                 Ok(_) => self.unbind_to_with_result(read_specpdl_count, Ok(Value::NIL)),
@@ -807,13 +803,11 @@ impl Context {
             self.restore_vm_roots(read_root_scope);
             unwind_result?;
 
-            let (keys, binding, input_end) = match read_result? {
+            let (keys, binding) = match read_result? {
                 crate::keyboard::CommandKeySequenceRead::Command { keys, binding } => {
-                    (keys, binding, None)
+                    (keys, Some(binding))
                 }
-                crate::keyboard::CommandKeySequenceRead::End(end) => {
-                    (Vec::new(), Value::NIL, Some(end))
-                }
+                crate::keyboard::CommandKeySequenceRead::End(_) => (Vec::new(), None),
             };
 
             // Reconcile a quit that became pending DURING the command-loop read.
@@ -883,14 +877,17 @@ impl Context {
 
             self.sync_current_buffer_to_selected_window();
 
-            if input_end.is_some() {
+            let Some(binding) = binding else {
+                // The read reached a typed input boundary: GNU's
+                // `i == 0` return from `read_key_sequence`.
                 self.assign_by_id(CommandLoopSymbol::ThisCommand.id(), Value::NIL);
                 return Ok(Value::NIL);
-            }
+            };
 
             // Start only after the complete key sequence has arrived.  This
             // excludes the user's inter-key think time while retaining the
-            // command-loop work below, including command remapping.
+            // command-loop work below.  Command remapping already happened
+            // inside read_key_sequence, where GNU does it.
             let command_observation_start = UserCommandObservationStart::capture_if_enabled();
 
             // A non-empty key sequence with a nil binding is a truly-unbound
@@ -906,23 +903,21 @@ impl Context {
             // the user-visible "is undefined" feedback. Keyboard/command-loop
             // audit Finding 1. (The `undefined` command itself sets
             // `prefix-arg`, so we no longer reset it here.)
-            if binding.is_nil() {
+            if binding.executed().is_nil() {
                 let desc: Vec<String> = keys.iter().map(|v| format!("{:?}", v)).collect();
                 tracing::info!("Undefined key sequence: {}", desc.join(" "));
             }
 
-            // The unmapped command (real-this-command) is the binding
-            // we read from the keymap, before any remapping is applied.
-            // Do not touch `real-last-command` here: GNU updates it only after
-            // the preceding command's `post-command-hook` and leaves that
-            // value visible to the next `pre-command-hook` (keyboard.c's
+            // GNU `keyboard.c:1464-1507`: `read_key_sequence` already applied
+            // the one level of command remapping, so `this-command` and
+            // `real-this-command` are the command it produced; asking again
+            // would remap a remapped command. Do not touch
+            // `real-last-command` here: GNU updates it only after the
+            // preceding command's `post-command-hook` and leaves that value
+            // visible to the next `pre-command-hook` (keyboard.c's
             // `kset_real_last_command` near the command-loop finalize tail).
-            self.assign_by_id(CommandLoopSymbol::RealThisCommand.id(), binding);
-
-            // Apply command remapping per GNU
-            // `keyboard.c:1340-1343`. The remapped command becomes
-            // this-command for execution. Finding 4.
-            let remapped = self.command_remapping_for_loop(binding);
+            let remapped = binding.executed();
+            self.assign_by_id(CommandLoopSymbol::RealThisCommand.id(), remapped);
             self.assign_by_id(CommandLoopSymbol::ThisCommand.id(), remapped);
             let mut command_observation = command_observation_start.map(|start| {
                 UserCommandObservation::begin(
@@ -931,7 +926,7 @@ impl Context {
                         self.context_instance_id(),
                         self.command_loop.recursive_depth,
                         Self::command_keys_for_log(&keys),
-                        Self::command_value_for_log(binding),
+                        Self::command_value_for_log(binding.original()),
                         Self::command_value_for_log(remapped),
                         self.frames.selected_frame().map(|frame| frame.id),
                         self.buffers.current_buffer_id(),
@@ -949,7 +944,10 @@ impl Context {
                 .unwrap_or(Value::NIL)
                 .is_nil()
             {
-                self.assign_by_id(CommandLoopSymbol::ThisOriginalCommand.id(), binding);
+                self.assign_by_id(
+                    CommandLoopSymbol::ThisOriginalCommand.id(),
+                    binding.original(),
+                );
             }
 
             if let Some(last) = keys.last() {
@@ -1294,23 +1292,6 @@ impl Context {
             return true;
         }
         self.has_pending_frontend_input_with_configured_filter()
-    }
-
-    /// Apply `command-remapping` for the command-loop dispatch
-    /// path. Mirrors GNU `keyboard.c:1340-1343` calling
-    /// `Fcommand_remapping (cmd, Qnil, Qnil)` and substituting the
-    /// result when non-nil. Keyboard audit Finding 4.
-    pub(super) fn command_remapping_for_loop(&mut self, command: Value) -> Value {
-        if command.is_nil() {
-            return command;
-        }
-        match self.apply(
-            Value::from_sym_id(CommandLoopSymbol::CommandRemapping.id()),
-            vec![command],
-        ) {
-            Ok(remapped) if !remapped.is_nil() => remapped,
-            _ => command,
-        }
     }
 
     /// Dispatch the current `this-command` via GNU's

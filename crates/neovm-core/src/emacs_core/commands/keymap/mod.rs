@@ -3505,6 +3505,29 @@ pub(crate) fn command_remapping_command_name(
     command.as_symbol_id(symbol_mode)
 }
 
+/// GNU `Fcommand_remapping (COMMAND, Qnil, Qnil)`: the one-level remapping of
+/// COMMAND in the currently active keymaps, or nil.
+///
+/// `read_key_sequence` asks this once for every command it returns
+/// (keyboard.c:11863-11868) and `command_loop_1` reuses the answer
+/// (keyboard.c:1464-1495).  It is the raw active-map answer, without the
+/// menu-item resolution `key-binding` performs, because that is what GNU's
+/// `Fcommand_remapping` returns.
+pub(crate) fn command_remapping_in_active_maps(
+    ctx: &Context,
+    command: Value,
+) -> Result<Value, Flow> {
+    let symbol_mode = ctx.symbol_mode();
+    let Some(command_name) = command.as_symbol_id(symbol_mode) else {
+        return Ok(Value::NIL);
+    };
+    let active_maps = current_active_maps_for_position_read_only(ctx, true, None)?;
+    Ok(
+        command_remapping_lookup_in_keymaps(&active_maps, command_name, symbol_mode)
+            .unwrap_or(Value::NIL),
+    )
+}
+
 pub(crate) fn key_binding_apply_remap_in_active_maps(
     ctx: &mut Context,
     active_maps: &[Value],

@@ -897,13 +897,74 @@ pub(crate) struct ReadKeySequenceOptions {
     pub continue_echo: bool,
 }
 
+/// The two command values GNU `read_key_sequence` publishes at its `done`
+/// label: the binding the keymaps produced and the command `command_loop_1`
+/// executes after one level of `command-remapping`.
+///
+/// GNU applies the remapping inside `read_key_sequence`, before `unbind_to`,
+/// so it uses the keymaps of the buffer that was current while reading
+/// (keyboard.c:11860-11868).  `command_loop_1` then reuses that answer
+/// (keyboard.c:1464-1495) instead of asking again; asking again would remap a
+/// remapped command and would record the wrong `this-original-command`.
+/// Keeping the two values in one private-field type makes the relationship
+/// explicit at every caller.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ReadCommandBinding {
+    /// GNU `read_key_sequence_cmd`, recorded as `this-original-command`.
+    original: Value,
+    /// GNU `read_key_sequence_remapped` when non-nil, else `original`.
+    executed: Value,
+}
+
+impl ReadCommandBinding {
+    /// The keymaps bound COMMAND without remapping it.
+    pub(crate) fn unremapped(command: Value) -> Self {
+        Self {
+            original: command,
+            executed: command,
+        }
+    }
+
+    /// COMMAND is remapped to TARGET; a nil TARGET means no remapping.
+    pub(crate) fn remapped(command: Value, target: Value) -> Self {
+        Self {
+            original: command,
+            executed: if target.is_nil() { command } else { target },
+        }
+    }
+
+    /// Pair the keymaps' answer with the answer of the one remapping lookup
+    /// `resolve_active_key_binding` already performed.
+    fn from_resolution(resolution: crate::emacs_core::keymap::ActiveKeyBindingResolution) -> Self {
+        // `lookup` is what the keymaps bound; `binding` is its one-level
+        // remap, or the printable-character self-insert fallback when the
+        // keymaps bound nothing at all.
+        if resolution.lookup.is_nil() || resolution.lookup.is_fixnum() {
+            Self::unremapped(resolution.binding)
+        } else {
+            Self::remapped(resolution.lookup, resolution.binding)
+        }
+    }
+
+    pub(crate) fn original(self) -> Value {
+        self.original
+    }
+
+    pub(crate) fn executed(self) -> Value {
+        self.executed
+    }
+}
+
 /// A command-loop key read either resolves one complete command or reaches a
 /// typed input boundary.  Keeping the boundary distinct from an ordinary
 /// `(empty, nil)` tuple prevents callers from accidentally dispatching macro
 /// exhaustion as an undefined key sequence.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CommandKeySequenceRead {
-    Command { keys: Vec<Value>, binding: Value },
+    Command {
+        keys: Vec<Value>,
+        binding: ReadCommandBinding,
+    },
     End(CommandKeySequenceEnd),
 }
 
@@ -4511,7 +4572,9 @@ impl crate::emacs_core::eval::Context {
     pub(crate) fn read_key_sequence(
         &mut self,
     ) -> Result<(Vec<Value>, Value), crate::emacs_core::error::Flow> {
-        self.read_key_sequence_with_options(ReadKeySequenceOptions::default())
+        let (keys, binding) =
+            self.read_key_sequence_with_options(ReadKeySequenceOptions::default())?;
+        Ok((keys, binding.executed()))
     }
 
     /// Read one command-loop key sequence, preserving GNU's typed distinction
@@ -4539,7 +4602,7 @@ impl crate::emacs_core::eval::Context {
         }
 
         let (keys, binding) = self.read_key_sequence_with_options(options)?;
-        if keys.is_empty() && binding.is_nil() {
+        if keys.is_empty() && binding.executed().is_nil() {
             // The zero-length result is a macro-iteration boundary when the
             // macro is (still) exhausted -- GNU's `at_end_of_macro_p` check
             // ran mid-read -- and an ordinary EOF from command input
@@ -4614,10 +4677,14 @@ impl crate::emacs_core::eval::Context {
         self.assign("last-nonmenu-event", Value::NIL);
     }
 
+    /// Returns the key events and the command pair GNU's `done` label
+    /// publishes: the keymaps' binding plus its one-level remapping.  The
+    /// command loop executes the latter and records the former, so it must
+    /// not run `command-remapping` again.
     pub(crate) fn read_key_sequence_with_options(
         &mut self,
         options: ReadKeySequenceOptions,
-    ) -> Result<(Vec<Value>, Value), crate::emacs_core::error::Flow> {
+    ) -> Result<(Vec<Value>, ReadCommandBinding), crate::emacs_core::error::Flow> {
         use crate::emacs_core::keymap::{
             DefaultBindingMode, resolve_active_key_binding,
             resolve_prefix_keymap_binding_in_obarray,
@@ -4671,7 +4738,7 @@ impl crate::emacs_core::eval::Context {
                     self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
                     self.command_loop
                         .set_command_key_sequences(Vec::new(), Vec::new());
-                    return Ok((Vec::new(), Value::NIL));
+                    return Ok((Vec::new(), ReadCommandBinding::unremapped(Value::NIL)));
                 }
                 let read_event = match self.read_char_event_with_timeout_for_key_sequence() {
                     Ok(Some(event)) => event,
@@ -4684,7 +4751,7 @@ impl crate::emacs_core::eval::Context {
                         self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
                         self.command_loop
                             .set_command_key_sequences(Vec::new(), Vec::new());
-                        return Ok((Vec::new(), Value::NIL));
+                        return Ok((Vec::new(), ReadCommandBinding::unremapped(Value::NIL)));
                     }
                     Err(err) => {
                         self.restore_delayed_selection_event(&mut delayed_selection_event);
@@ -4959,15 +5026,15 @@ impl crate::emacs_core::eval::Context {
                     }
                 }
             };
-            let mut binding = resolved.binding;
+            let mut binding = ReadCommandBinding::from_resolution(resolved);
             let mut lookup_is_undefined = resolved.lookup.is_nil()
                 || self.symbol_mode().unwrap(resolved.lookup) == Value::symbol("undefined");
-            let mut binding_is_undefined = binding.is_nil()
-                || self.symbol_mode().unwrap(binding) == Value::symbol("undefined");
+            let mut binding_is_undefined = binding.executed().is_nil()
+                || self.symbol_mode().unwrap(binding.executed()) == Value::symbol("undefined");
             let mut sequence_is_undefined = lookup_is_undefined || binding_is_undefined;
             tracing::debug!(
                 "read_key_sequence: binding={}",
-                crate::emacs_core::print::print_value(&binding)
+                crate::emacs_core::print::print_value(&binding.executed())
             );
 
             if sequence_is_undefined {
@@ -4998,12 +5065,13 @@ impl crate::emacs_core::eval::Context {
                                 .rewrite_key_sequence_translation(events.clone());
                             translated_events = events;
                             resolved = rewritten_resolution;
-                            binding = resolved.binding;
+                            binding = ReadCommandBinding::from_resolution(resolved);
                             lookup_is_undefined = resolved.lookup.is_nil()
                                 || self.symbol_mode().unwrap(resolved.lookup)
                                     == Value::symbol("undefined");
-                            binding_is_undefined = binding.is_nil()
-                                || self.symbol_mode().unwrap(binding) == Value::symbol("undefined");
+                            binding_is_undefined = binding.executed().is_nil()
+                                || self.symbol_mode().unwrap(binding.executed())
+                                    == Value::symbol("undefined");
                             sequence_is_undefined = lookup_is_undefined || binding_is_undefined;
                         }
                         UndefinedMouseSequenceFallback::Drop { retained_events } => {
@@ -5052,9 +5120,17 @@ impl crate::emacs_core::eval::Context {
                         // help event itself, and command_loop_1 owns dispatch
                         // and its pre/post-command hooks. An empty sequence is
                         // reserved for end of input, never a handled command.
-                        binding = self
+                        // The `done` label remaps this command like any other
+                        // read_key_sequence_cmd (keyboard.c:11863-11868).
+                        let help_command = self
                             .eval_symbol("prefix-help-command")
                             .unwrap_or(Value::NIL);
+                        let help_remap =
+                            crate::emacs_core::keymap::command_remapping_in_active_maps(
+                                &*self,
+                                help_command,
+                            )?;
+                        binding = ReadCommandBinding::remapped(help_command, help_remap);
                         self.finalize_shift_translated_key_sequence(
                             sequence_is_undefined,
                             options,

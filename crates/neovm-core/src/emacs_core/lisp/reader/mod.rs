@@ -2747,7 +2747,8 @@ impl KeyboardInputRuntime for super::eval::Context {
         &mut self,
         options: crate::keyboard::ReadKeySequenceOptions,
     ) -> Result<(Vec<Value>, Value), Flow> {
-        super::eval::Context::read_key_sequence_with_options(self, options)
+        let (keys, binding) = super::eval::Context::read_key_sequence_with_options(self, options)?;
+        Ok((keys, binding.executed()))
     }
 
     fn symbol_value_or_nil(&self, name: &str) -> Value {
