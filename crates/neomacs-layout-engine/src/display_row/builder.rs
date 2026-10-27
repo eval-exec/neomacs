@@ -3645,7 +3645,19 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
                 if !width_px.is_finite() {
                     return None;
                 }
-                let cols = (width_px / self.layout.char_width_px.max(1.0)).round() as u16;
+                // The same column rule as the `Length` arm above: GNU's
+                // `produce_stretch_glyph` gives a GUI stretch one glyph and
+                // lays the following text out at the stretch's pixel width,
+                // while this engine's matrix counts cells.  Rounding to
+                // nearest let the two spellings of the same target diverge:
+                // a buffer `(space :align-to center)` resolves through
+                // `DisplaySpaceWidthPolicy` to a `Length` (ceil), while the
+                // same space inside a display string lands here.  With a
+                // 16-pixel scroll bar and a 7-pixel column, a 304-pixel
+                // stretch is 43.4 columns -- 44 for the buffer form, 43 for
+                // the string form -- and the two forms must agree
+                // (src/xdisp.c:32878, `produce_stretch_glyph`).
+                let cols = (width_px / self.layout.char_width_px.max(1.0)).ceil() as u16;
                 Some((cols, width_px))
             }
         }
