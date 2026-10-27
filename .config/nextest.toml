@@ -140,7 +140,7 @@ slow-timeout = { period = "120s", terminate-after = 1 }
 # probes (a longer-lived child would hold the process pipe open and block the
 # eval).
 [[profile.default.overrides]]
-filter = 'package(neovm-oracle-tests) and (test(process_attributes_running_child) or test(quit_process_sentinel_message) or test(div_cx45_process_env_coding_narrow_output_filter_hash_mega) or test(div_cx428_process_filter_insert) or test(proc_decode_search_replace))'
+filter = 'package(neovm-oracle-tests) and (test(process_attributes_running_child) or test(quit_process_sentinel_message) or test(div_cx45_process_env_coding_narrow_output_filter_hash_mega) or test(div_cx428_process_filter_insert) or test(proc_decode_search_replace) or test(div_cx33_process_kill_query_off_then_kill_buffer) or test(div_core_divergence_surface_process_attributes_running_child_combo) or test(divergence_process_output_to_buffer))'
 threads-required = "num-test-threads"
 
 # The generative window-tree property replays whole operation SEQUENCES in both
