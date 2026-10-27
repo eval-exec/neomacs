@@ -22,6 +22,14 @@ description: >-
   cached by commit; a dedicated test-suite.yml job warms that cache before the shards
   that spawn GNU start, and a cache hit costs one restore.
 
+inputs:
+  cache-version:
+    description: >-
+      Bump when the configure flags, dependency lists, or build script change.
+      Comment and description edits must not invalidate the cached oracle.
+    required: false
+    default: "1"
+
 runs:
   using: 'composite'
   steps:
@@ -46,15 +54,24 @@ runs:
         sudo mkdir -p /opt/gnu-emacs-oracle
         sudo chown "$(id -u):$(id -g)" /opt/gnu-emacs-oracle
 
-    - name: Install the oracle's build and runtime dependencies
+    - name: Restore the cached oracle build
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: /opt/gnu-emacs-oracle
+        # Keyed on the GNU commit and an explicit version. Bump cache-version
+        # when the configure flags, dependency lists, or build script change;
+        # do not invalidate the 60 MB entry for a comment edit.
+        key: gnu-emacs-oracle-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.commit }}-v${{ inputs.cache-version }}
+
+    - name: Install the oracle's runtime dependencies
       shell: bash
       run: |
-        # Unconditional, and before the cache step, because these are needed
-        # on a cache HIT too: the oracle links libgtk-3.so.0, so a job that
-        # restores it without GTK present has an Emacs that cannot start.
-        # The action owns this list rather than scripts/ci/setup-linux.sh
-        # because three of its callers use the `ecosystem` profile, which
-        # carries no GTK at all.
+        # Needed on a cache HIT too: the cached oracle links libgtk-3.so.0,
+        # so a job that restores it without GTK present has an Emacs that
+        # cannot start. The action owns this list rather than
+        # scripts/ci/setup-linux.sh because three of its callers use the
+        # `ecosystem` profile, which carries no GTK at all.
         #
         # The X/GTK development files are also load-bearing for the BUILD:
         # configure enables X11/GTK3 only when pkg-config finds them, and
@@ -65,7 +82,6 @@ runs:
         set -euo pipefail
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          autoconf texinfo make gcc pkg-config git \
           libgtk-3-dev \
           libx11-dev libxpm-dev libxext-dev libxinerama-dev libxi-dev libxrandr-dev \
           libtree-sitter-dev libdbus-1-dev dbus-daemon \
@@ -74,14 +90,15 @@ runs:
           libpng-dev libjpeg-dev libgif-dev libtiff-dev libwebp-dev \
           librsvg2-dev liblcms2-dev zlib1g-dev
 
-    - name: Restore the cached oracle build
-      id: cache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: /opt/gnu-emacs-oracle
-        # Keyed on the commit and on this file, so a re-pin or a configure
-        # change rebuilds instead of serving the previous oracle.
-        key: gnu-emacs-oracle-${{ runner.os }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('.github/actions/setup-gnu-emacs/action.yml') }}
+    - name: Install the oracle's build-only dependencies
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        # Only a cache miss compiles GNU. These tools are not needed to RUN
+        # the cached tree, so keep them off the hit path.
+        set -euo pipefail
+        sudo apt-get install -y --no-install-recommends \
+          autoconf texinfo make gcc pkg-config git
 
     - name: Build GNU Emacs from the pinned commit
       if: steps.cache.outputs.cache-hit != 'true'
@@ -91,8 +108,8 @@ runs:
         EMACS_VERSION: ${{ steps.pin.outputs.version }}
       run: |
         set -euo pipefail
-        # Dependencies are installed unconditionally above: restoring the
-        # cached oracle also needs GTK and D-Bus runtime libraries.
+        # Runtime libraries are installed above; the build tools were
+        # installed by the miss-only step immediately before this one.
         mkdir -p "$GITHUB_WORKSPACE/tmp"
         src="$(mktemp -d "$GITHUB_WORKSPACE/tmp/gnu-emacs-oracle.XXXXXX")"
         trap 'rm -rf "$src"' EXIT

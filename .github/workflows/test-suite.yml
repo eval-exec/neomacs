@@ -120,6 +120,7 @@ jobs:
 
   neomacs-daemon-lifecycle:
     name: daemon lifecycle (linux, matching debug runtime)
+    needs: gnu-emacs-oracle
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -252,8 +253,6 @@ jobs:
       # Emacs twenty-odd times in parallel on a cache miss.
       - name: Configure fast APT mirror
         uses: ./.github/actions/configure-apt-mirror
-      - name: Install Linux system dependencies
-        run: scripts/ci/setup-linux.sh oracle
 
       - name: Set up GNU Emacs oracle
         uses: ./.github/actions/setup-gnu-emacs
