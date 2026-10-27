@@ -77,7 +77,7 @@ impl TryFrom<WindowEvent> for PendingNativeInput {
 }
 
 /// Input belongs to one native window creation attempt. Moving this owner
-/// through GPU acquisition and scene ingestion preserves native event order.
+/// through GPU acquisition and native owner installation preserves event order.
 pub(super) struct StartupInputReplay {
     window_id: WindowId,
     events: VecDeque<PendingNativeInput>,
@@ -100,22 +100,11 @@ impl StartupInputReplay {
         Ok(())
     }
 
-    pub(super) fn pop_ready(&mut self, has_scene: bool) -> Option<WindowEvent> {
-        let next = self.events.front()?;
-        if !has_scene
-            && matches!(
-                next.0,
-                WindowEvent::PointerMoved { .. }
-                    | WindowEvent::PointerLeft { .. }
-                    | WindowEvent::PointerButton { .. }
-                    | WindowEvent::MouseWheel { .. }
-            )
-        {
-            return None;
-        }
+    pub(super) fn pop_front(&mut self) -> Option<WindowEvent> {
         self.events.pop_front().map(|input| input.0)
     }
 
+    #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
@@ -309,73 +298,5 @@ fn adapter_rank(kind: wgpu::DeviceType, preference: wgpu::PowerPreference) -> u8
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use winit::{
-        event::{Ime, Modifiers, MouseScrollDelta, TouchPhase},
-        keyboard::ModifiersState,
-    };
-
-    #[test]
-    fn startup_input_preserves_focus_modifier_and_ime_order() {
-        let mut input = StartupInputReplay::new(WindowId::from_raw(1));
-        let events = vec![
-            WindowEvent::Focused(true),
-            WindowEvent::ModifiersChanged(ModifiersState::SHIFT.into()),
-            WindowEvent::Ime(Ime::Enabled),
-            WindowEvent::Ime(Ime::Commit("A".into())),
-            WindowEvent::ModifiersChanged(Modifiers::default()),
-            WindowEvent::Focused(false),
-        ];
-        for event in &events {
-            input.defer_input(event.clone()).unwrap();
-        }
-        let mut replayed = Vec::new();
-        while let Some(event) = input.pop_ready(false) {
-            replayed.push(event);
-        }
-        assert_eq!(replayed, events);
-        assert!(input.is_empty());
-    }
-
-    #[test]
-    fn startup_input_waits_for_pointer_scene_without_overtaking() {
-        let mut input = StartupInputReplay::new(WindowId::from_raw(1));
-        input.defer_input(WindowEvent::Focused(true)).unwrap();
-        let wheel = WindowEvent::MouseWheel {
-            device_id: None,
-            delta: MouseScrollDelta::LineDelta(0.0, -1.0),
-            phase: TouchPhase::Moved,
-        };
-        input.defer_input(wheel.clone()).unwrap();
-        let commit = WindowEvent::Ime(Ime::Commit("after wheel".into()));
-        input.defer_input(commit.clone()).unwrap();
-
-        assert_eq!(input.pop_ready(false), Some(WindowEvent::Focused(true)));
-        assert_eq!(input.pop_ready(false), None);
-        // Input arriving after GPU completion cannot overtake the wheel.
-        let release = WindowEvent::ModifiersChanged(Modifiers::default());
-        input.defer_input(release.clone()).unwrap();
-        assert_eq!(input.pop_ready(true), Some(wheel));
-        assert_eq!(input.pop_ready(true), Some(commit));
-        assert_eq!(input.pop_ready(true), Some(release));
-        assert!(input.is_empty());
-    }
-
-    #[test]
-    fn startup_input_keeps_lifecycle_events_synchronous() {
-        let mut input = StartupInputReplay::new(WindowId::from_raw(1));
-        let commit = WindowEvent::Ime(Ime::Commit("owned input".into()));
-        input.defer_input(commit.clone()).unwrap();
-        for event in [
-            WindowEvent::CloseRequested,
-            WindowEvent::Destroyed,
-            WindowEvent::SurfaceResized(winit::dpi::PhysicalSize::new(0, 0)),
-            WindowEvent::RedrawRequested,
-        ] {
-            assert_eq!(input.defer_input(event.clone()), Err(event));
-        }
-        assert_eq!(input.pop_ready(false), Some(commit));
-        assert!(input.is_empty());
-    }
-}
+#[path = "tests/gpu_startup_test.rs"]
+mod gpu_startup_test;

@@ -1051,24 +1051,21 @@ impl RenderApp {
             return;
         };
         let window_id = input.window_id();
-        let Some(window) = self.frame_windows.get_by_winit(window_id) else {
+        if self.frame_windows.get_by_winit(window_id).is_none() {
             // The owning logical/native frame was retired while startup was
             // pending. These events must never reach its replacement.
             return;
-        };
-        let has_scene = window.render.compositor.current_frame.is_some();
-        while let Some(event) = input.pop_ready(has_scene) {
+        }
+        // Ordinary pointer delivery has an Unpresented target before the first
+        // scene. Preserve the whole FIFO so a pointer cannot postpone Ctrl-G
+        // or separate a keyboard event from its modifier/focus transitions.
+        while let Some(event) = input.pop_front() {
             self.handle_window_event(event_loop, window_id, event);
             if self.lifecycle_flags.is_shutting_down()
                 || self.frame_windows.get_by_winit(window_id).is_none()
             {
                 return;
             }
-        }
-        if !input.is_empty() {
-            // Pointer targeting needs the first ingested scene. Newly arriving
-            // input joins this same FIFO until it can be replayed.
-            self.startup_input = Some(input);
         }
     }
 

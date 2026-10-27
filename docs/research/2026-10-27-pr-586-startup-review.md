@@ -254,3 +254,37 @@ is still required. Evidence: `melpa-final-differences.json`.
 Post-repair Linux gates passed: dependency coherence, the minimal editor build,
 the no-default-features capability control (1/1 with eight Core test binaries
 compiled), workspace all-target checks, formatting, and whitespace checks.
+
+
+### Review follow-up on f031d830
+
+The fresh reviews exposed a scene-readiness barrier that could retain Ctrl-G
+behind a pointer event. A real-key regression failed with only the first focus
+event replayed. Native pointer handling already has a typed `Unpresented`
+fallback, so the barrier was removed: the full FIFO now reaches the common
+modifier/quit decoder once native ownership is valid. The queue API no longer
+accepts scene readiness. All 163 selected native tests pass, including the new
+quit chord and modifier/focus ordering cases.
+
+Inline startup and GPU unit tests now follow the crate's external test-file
+convention. The cleanup documentation is attached to `NativeUnwindAction`, and
+its discard match explicitly names all variants instead of using a wildcard.
+Clippy passes with existing warnings.
+
+CI also caught the evaluator facade exceeding its unchanged 8,000-line limit.
+Four keyboard lifecycle methods were moved verbatim into
+`eval/keyboard_forwarding.rs`, reducing the facade to 7,979 lines without
+changing API visibility or Context layout. The failing architecture guard,
+keyboard lifetime checks, and layout selection now pass 15/15. Workspace
+all-target checks, Clippy, formatting, and whitespace checks pass after this
+extraction.
+
+The consolidated GUI rerun with the font prerequisite and presentation witness
+passes 44/46; only the two stalled-scroll assertions also reproduced on
+optimized main remain. After the input-barrier change, 23/24 focused GUI
+cases pass. Its regular wheel case intermittently lacks prepared-row reuse:
+three matching stress iterations on both optimized main and this branch each
+produce one pass and two failures with the same assertion. Authoritative input
+arrives and scrolls in those failures; the diagnostic is about row reuse, not
+input loss. Evidence: `main-wheel-reuse-repeated.log` and
+`fixed-wheel-reuse-repeated.log`.

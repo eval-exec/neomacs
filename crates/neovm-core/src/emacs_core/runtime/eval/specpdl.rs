@@ -406,7 +406,11 @@ impl Context {
                     NativeUnwindAction::KeyboardBinding(binding) => {
                         let _ = self.restore_keyboard_binding(*binding, false);
                     }
-                    _ => {}
+                    NativeUnwindAction::RestoreEvalDepth { .. }
+                    | NativeUnwindAction::RestoreWindowConfiguration { .. }
+                    | NativeUnwindAction::MinibufferSession { .. }
+                    | NativeUnwindAction::MinibufferBuffer { .. }
+                    | NativeUnwindAction::BacktraceEvalRewind { .. } => {}
                 },
                 SpecBinding::GcRoot { .. }
                 | SpecBinding::Backtrace1 { .. }
