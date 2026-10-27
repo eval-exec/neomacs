@@ -70,16 +70,31 @@ fn auth_source_xoauth2_file_creds_uses_exact_hash_table_tuple() -> ParityBatchCa
 fn auth_source_xoauth2_file_creds_requires_gpg_extension() -> ParityBatchCase {
     ParityBatchCase::value(
         "auth_source_xoauth2_file_creds_requires_gpg_extension",
-        r##"(mapcar
-         (lambda (name)
-           (auth-source-xoauth2-test-error-data
-            (lambda ()
-              (auth-source-xoauth2--file-creds
-               name "host" "user" "port"))))
-         '("/fixture/creds.el"
-           "/fixture/creds.gpg~"
-           "/fixture/no-extension"
-           "/fixture/GPG"))"##,
+        r##"(progn
+         (require 'epg)
+         ;; The decryption attempt reaches the host's gpg through `epg', and
+         ;; its failure text is a property of that build (a Nix gpg reports
+         ;; `no usable configuration', the CI image's reports `Can't decrypt,
+         ;; Exit').  The fixture owns the program through the documented
+         ;; `epg-gpg-program' variable and makes it report one fixed failure,
+         ;; so the recorded text is the same on every host.
+         (let* ((root (getenv "NEOMACS_TEST_SANDBOX_ROOT"))
+                (gpg (expand-file-name "auth-source-xoauth2-gpg" root)))
+           (write-region
+            "#!/bin/sh\necho \"gpg: no usable configuration\" >&2\nexit 2\n"
+            nil gpg nil 'silent)
+           (set-file-modes gpg #o755)
+           (let ((epg-gpg-program gpg))
+             (mapcar
+              (lambda (name)
+                (auth-source-xoauth2-test-error-data
+                 (lambda ()
+                   (auth-source-xoauth2--file-creds
+                    name "host" "user" "port"))))
+              '("/fixture/creds.el"
+                "/fixture/creds.gpg~"
+                "/fixture/no-extension"
+                "/fixture/GPG")))))"##,
         expect![[
             r#"OK ((:error error ("The auth-source-xoauth2-creds file must be GPG encrypted")) (:ok "GPG error: \"no usable configuration\", OpenPGP") (:error error ("The auth-source-xoauth2-creds file must be GPG encrypted")) (:error error ("The auth-source-xoauth2-creds file must be GPG encrypted")))"#
         ]],

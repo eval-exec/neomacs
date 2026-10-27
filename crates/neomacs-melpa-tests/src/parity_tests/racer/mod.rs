@@ -514,9 +514,18 @@ fn failed_racer_process_records_reproducible_diagnostics_with_stdout_stderr_and_
       (progn
         (make-directory rust-src t)
         (make-directory cargo-home t)
+        ;; `racer--shell-command' waits on the MAIN process and then reads the
+        ;; separate stderr buffer, so it only sees stderr that the editor
+        ;; happened to drain before the main process died.  When the child
+        ;; exits immediately after writing, that is a scheduling race in both
+        ;; editors: measured with this exact shape, GNU loses the stderr line
+        ;; in 7 of 200 runs.  Closing stderr first and keeping the child alive
+        ;; briefly makes the stderr pipe's EOF a separate, earlier status
+        ;; change, which both editors drain before the exit; measured 0 misses
+        ;; in 1000 runs per editor with the gap below.
         (with-temp-file program
           (insert
-           "#!/bin/sh\nprintf 'partial completion\\n'\nprintf 'index unavailable\\n' >&2\nexit 7\n"))
+           "#!/bin/sh\nprintf 'partial completion\\n'\nprintf 'index unavailable\\n' >&2\nexec 2>&-\nsleep 0.2\nexit 7\n"))
         (set-file-modes program #o755)
         (let ((racer-cmd program)
               (racer-rust-src-path rust-src)

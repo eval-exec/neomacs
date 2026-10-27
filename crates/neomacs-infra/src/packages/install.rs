@@ -266,6 +266,20 @@ pub fn deterministic_process_environment(
             std::ffi::OsString::from("GIT_CEILING_DIRECTORIES"),
             os_string(crate::workspace_root().as_os_str()),
         ),
+        // `mailcap-parse-mimetypes' reads $MIMETYPES before /etc/mime.types,
+        // so an extension the editor does not ship itself would otherwise be
+        // answered by the host database: Ubuntu maps `md' to text/markdown,
+        // a NixOS host has no /etc/mime.types at all.  Pin the file to the
+        // suite's own database so a recorded MIME type is a property of the
+        // fixture rather than of the machine that produced the record.
+        (
+            std::ffi::OsString::from("MIMETYPES"),
+            os_string(
+                crate::workspace_root()
+                    .join("crates/neomacs-melpa-test-support/fixtures/mime.types")
+                    .as_os_str(),
+            ),
+        ),
     ]
 }
 

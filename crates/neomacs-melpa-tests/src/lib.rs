@@ -39,7 +39,15 @@ const DEFAULT_PROCESS_TIMEOUT: Duration = neomacs_melpa_test_support::DEFAULT_PR
 
 /// The exact Async release selected from GNU ELPA by the comprehensive API
 /// parity corpus.
-pub const ASYNC_GNU_ELPA_PIN: (&str, &str) = ("async", "1.9.9");
+///
+/// GNU ELPA serves only the LATEST release of a package: 1.9.9's tarball
+/// disappeared from `https://elpa.gnu.org/packages/` when upstream published
+/// 2.0, and `package-install` cannot reach a version the archive no longer
+/// lists.  This row therefore names the release the archive actually
+/// carries, and the expectations pinned against it; a later upstream release
+/// fails loudly here rather than silently installing something else.  (The
+/// immutable sibling axis is [`ASYNC_MELPA_PIN`], built from a Git revision.)
+pub const ASYNC_GNU_ELPA_PIN: (&str, &str) = ("async", "2.0");
 
 /// The exact current MELPA Async package selected by the comprehensive
 /// serialization, process, byte-compilation, Dired, package, and mail workflow

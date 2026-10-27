@@ -33,7 +33,12 @@ use std::sync::OnceLock;
 /// Keep this in step with the suites' actual tool requirements; a test that
 /// grows a new external dependency adds its row here rather than reaching
 /// for whatever the host happens to have.
-pub const REQUIRED_TOOLS: &[(&str, &str)] = &[("git", "*"), ("java", "*"), ("node", "*")];
+/// The ORDER is load-bearing: these rows' bin directories are prepended to
+/// `PATH` in order, and a `nix:` row's build environment (`melpa-tools`)
+/// carries its own git and node.  Keep every build-env row last so a
+/// `system` row's resolved binary — the one its identity gate published —
+/// stays the first hit for its own name.
+pub const REQUIRED_TOOLS: &[(&str, &str)] = &[("git", "*"), ("node", "*"), ("java", "*")];
 
 /// A row whose version is `*` asks only that the tool be *provided*.
 ///
@@ -64,6 +69,7 @@ pub fn provisioned_bin_dirs() -> Vec<PathBuf> {
         for (name, version) in REQUIRED_TOOLS {
             match resolve_locked(name, version) {
                 Ok(tool) => {
+                    publish_tool_identity(&tool);
                     if let Some(dir) = tool.bin_dir() {
                         if !dirs.contains(&dir) {
                             dirs.push(dir);
@@ -107,6 +113,41 @@ pub fn provision_pinned_tools_once() {
             Err(error) => eprintln!("tool provision: cannot prepend to PATH: {error}"),
         }
     });
+}
+
+/// Publish one resolved tool's identity to the editor sessions this process
+/// spawns.
+///
+/// A suite's Elisp gate cannot call [`resolve_tool`], so without this it can
+/// only compare against a literal version recorded on whichever host produced
+/// the expectation -- the drift that turned `helm-git-grep` and `nodejs-repl`
+/// red when the runner image moved past their recorded builds.  The gate
+/// instead asks "is the program the editor found the one the harness
+/// resolved?", which is the property the lock row exists to guarantee.
+fn publish_tool_identity(tool: &ResolvedTool) {
+    let stem = tool.name.to_ascii_uppercase().replace('-', "_");
+    let version_var = format!("NEOMACS_TOOLS_{stem}_VERSION");
+    let sha_var = format!("NEOMACS_TOOLS_{stem}_SHA");
+    // SAFETY: nextest runs each test in its own process; the variables are
+    // read by the editor children this process spawns, never by a peer.
+    unsafe {
+        std::env::set_var(&version_var, &tool.version);
+        match std::fs::read(&tool.bin) {
+            Ok(bytes) => {
+                use sha2::{Digest, Sha256};
+                let digest = Sha256::digest(&bytes);
+                let hex = digest
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                std::env::set_var(&sha_var, hex);
+            }
+            Err(error) => eprintln!(
+                "tool provision: cannot hash {} for {sha_var}: {error}",
+                tool.bin.display()
+            ),
+        }
+    }
 }
 
 /// Resolve every required tool; returns the directories whose union must be

@@ -47,16 +47,20 @@ fn current_smtpmail_send_captures_complete_message_environment_and_completion() 
           (list
            result
            (car child)
-           (string-match-p "sender@example.test" printed)
-           (string-match-p "Alice <alice@example.test>, bob@example.test" printed)
-           (string-match-p "Unicode λ and 日本語" printed)
-           (string-match-p "Second λ line" printed)
-           (string-match-p "async-smtpmail-before-send-hook" printed)
-           (string-match-p "smtpmail-send-it" printed)
+           ;; Presence, not offset: the printed child form embeds the
+           ;; injected mail/smtpmail variable environment, whose serialized
+           ;; length varies with the host (paths, hook state), so a match
+           ;; position is not a portable observation.
+           (and (string-match-p "sender@example.test" printed) t)
+           (and (string-match-p "Alice <alice@example.test>, bob@example.test" printed) t)
+           (and (string-match-p "Unicode λ and 日本語" printed) t)
+           (and (string-match-p "Second λ line" printed) t)
+           (and (string-match-p "async-smtpmail-before-send-hook" printed) t)
+           (and (string-match-p "smtpmail-send-it" printed) t)
            (nreverse messages)))))))
 "##,
         expect![[
-            r#"OK (fixture-mail-process lambda 65 90 145 213 3501 9021 ("Delivering message to Alice <alice@example.test>, bob@example.test..." "Delivering message to Alice <alice@example.test>, bob@example.test...done"))"#
+            r#"OK (fixture-mail-process lambda t t t t t t ("Delivering message to Alice <alice@example.test>, bob@example.test..." "Delivering message to Alice <alice@example.test>, bob@example.test...done"))"#
         ]],
     )
 }

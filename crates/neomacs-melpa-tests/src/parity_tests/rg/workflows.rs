@@ -89,7 +89,7 @@ fn a_search_populates_the_results_buffer_and_navigates_files() -> ParityBatchCas
                                    (line-end-position))))))))))
   (rg-test-reset))"####,
         expect![[
-            r#"OK (:initial (:mode rg-mode :grouped t :content "-*- mode: rg; default-directory: \"[ORACLE-SANDBOX]/rg-fixture-widgets/\" -*-\nrg started at [TIME]\n\n/etc/profiles/per-user/exec/bin/rg --color=always --colors=match:fg:red --colors=path:fg:magenta --colors=line:fg:green --colors=column:none -n --column -i --sort path . --heading --no-config -e widget\n\nFile: ./a.txt\n   1   1 widget one\n   3   3 a widget two\n\nFile: ./b.txt\n   2   1 widget here\n\nrg finished (3 matches found) at [TIME], duration [N] s\n" :command-hidden nil :first-match-faces (("w" nil rg-match-face) ("i" nil rg-match-face) ("d" nil rg-match-face) ("g" nil rg-match-face) ("e" nil rg-match-face) ("t" nil rg-match-face) (" " nil nil) ("o" nil nil) ("n" nil nil) ("e" nil nil)) :point-offset 272 :file-tags 2) :next-file (:point-offset 402 :line "") :prev-file (:point-offset 310 :line "   2   1 widget here"))"#
+            r#"OK (:initial (:mode rg-mode :grouped t :content "-*- mode: rg; default-directory: \"[ORACLE-SANDBOX]/rg-fixture-widgets/\" -*-\nrg started at [TIME]\n\nrg --color=always --colors=match:fg:red --colors=path:fg:magenta --colors=line:fg:green --colors=column:none -n --column -i --sort path . --heading --no-config -e widget\n\nFile: ./a.txt\n   1   1 widget one\n   3   3 a widget two\n\nFile: ./b.txt\n   2   1 widget here\n\nrg finished (3 matches found) at [TIME], duration [N] s\n" :command-hidden nil :first-match-faces (("w" nil rg-match-face) ("i" nil rg-match-face) ("d" nil rg-match-face) ("g" nil rg-match-face) ("e" nil rg-match-face) ("t" nil rg-match-face) (" " nil nil) ("o" nil nil) ("n" nil nil) ("e" nil nil)) :point-offset 240 :file-tags 2) :next-file (:point-offset 370 :line "") :prev-file (:point-offset 278 :line "   2   1 widget here"))"#
         ]],
     )
 }
@@ -144,7 +144,7 @@ fn wgrep_editing_round_trips_through_the_disk() -> ParityBatchCase {
                          (point-min) (point-max))))))))))
   (rg-test-reset))"####,
         expect![[
-            r#"OK (:editable (:mode rg-mode :read-only nil :content "-*- mode: rg; default-directory: \"[ORACLE-SANDBOX]/rg-fixture-wgrep/\" -*-\nrg started at [TIME]\n\n/etc/profiles/per-user/exec/bin/rg --color=always --colors=match:fg:red --colors=path:fg:magenta --colors=line:fg:green --colors=column:none -n --column -i --sort path . --heading --no-config -e widget\n\nFile: ./a.txt\n   1   1 widget one\n\nrg finished (1 matches found) at [TIME], duration [N] s\n") :finished (:mode rg-mode :read-only t) :committed "gadget one\nplain\n" :disk "gadget one\nplain\n")"#
+            r#"OK (:editable (:mode rg-mode :read-only nil :content "-*- mode: rg; default-directory: \"[ORACLE-SANDBOX]/rg-fixture-wgrep/\" -*-\nrg started at [TIME]\n\nrg --color=always --colors=match:fg:red --colors=path:fg:magenta --colors=line:fg:green --colors=column:none -n --column -i --sort path . --heading --no-config -e widget\n\nFile: ./a.txt\n   1   1 widget one\n\nrg finished (1 matches found) at [TIME], duration [N] s\n") :finished (:mode rg-mode :read-only t) :committed "gadget one\nplain\n" :disk "gadget one\nplain\n")"#
         ]],
     )
 }

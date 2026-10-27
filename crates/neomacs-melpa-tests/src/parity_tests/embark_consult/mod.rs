@@ -568,6 +568,16 @@ const PRELUDE: &str = r####"
                        "[ \"${10}\" = -e ] || exit 64\n"
                        "{ [ \"${11}\" = projec ] || [ \"${11}\" = project ]; } || exit 64\n"
                        "[ \"${12}\" = . ] || exit 64\n"
+                       ;; The workflow exports while the INCOMPLETE input
+                       ;; ("projec") is still being searched, and the
+                       ;; terminal ledger pins that search as killed by the
+                       ;; export.  A stand-in that prints and exits at once
+                       ;; races the export: on a loaded runner it had
+                       ;; already finished, and the ledger recorded
+                       ;; "finished" instead of "killed".  Hold the
+                       ;; incomplete search open until the export kills it;
+                       ;; the completed search still exits normally.
+                       "[ \"${11}\" = projec ] && sleep 30\n"
                        "printf 'project Ω/alpha.el\\0003:  \"Café alpha project.\"\\n'\n"))))
                 (set-file-modes tool #o700)
                 (unless (file-executable-p tool)

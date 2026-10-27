@@ -39,15 +39,22 @@ fn concurrent_invocations_complete_by_delay_without_cross_contaminating_results(
               (push label completion-order)
               (list label
                     (* value 10))))
+          ;; The three tasks are created in this order, so their timers start
+          ;; a few instructions apart -- not zero apart.  Delays only 20-30 ms
+          ;; apart made the completion order a scheduling property of the
+          ;; host: on a loaded CI runner the middle task was created more than
+          ;; 30 ms after the slow one and completed after it, which is not a
+          ;; promise-ordering divergence.  Keep the same three-way order with
+          ;; gaps wide enough to dominate start jitter.
           (let* ((slow
                   (parity-concurrent-task
-                   :slow 0.06 1))
+                   :slow 0.30 1))
                  (fast
                   (parity-concurrent-task
-                   :fast 0.01 2))
+                   :fast 0.02 2))
                  (middle
                   (parity-concurrent-task
-                   :middle 0.03 3))
+                   :middle 0.12 3))
                  (outcomes
                   (mapcar
                    #'async-await-test-settle

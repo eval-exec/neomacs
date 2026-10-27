@@ -48,10 +48,22 @@ const AMD_MODE_TEST_PRELUDE: &str = r##"(require 'cl-lib)
       js2-mode-show-strict-warnings nil)
 
 (defun amd-test-project (name)
-  "Create a projectile project called NAME in the sandbox and return its root."
+  "Create a projectile project called NAME in the sandbox and return its root.
+
+The tree is its own Git repository.  Projectile's default indexing method
+shells out to `git ls-files' for a project, and the harness exports
+`GIT_CEILING_DIRECTORIES' at the workspace root so a sandbox can never
+resolve to the enclosing checkout's repository: a fixture that relied on
+that enclosing repository worked only while the sandbox happened to sit
+inside one, and answered `fatal: not a git repository' once the sandbox
+moved below the target directory.  `git init' makes the project's VCS
+identity a property of the fixture.  No commit is needed: projectile asks
+for tracked and untracked files (`-zco')."
   (let ((root (expand-file-name name (getenv "NEOMACS_TEST_SANDBOX_ROOT"))))
     (make-directory root t)
     (write-region "" nil (expand-file-name ".projectile" root) nil 'silent)
+    (unless (zerop (call-process "git" nil nil nil "init" "--quiet" root))
+      (error "amd-test-project: git init failed in %s" root))
     (file-name-as-directory root)))
 
 (defun amd-test-write (root relative contents)

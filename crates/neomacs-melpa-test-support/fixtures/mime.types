@@ -1,0 +1,11 @@
+# The MELPA parity suites' MIME database.
+#
+# `mailcap-parse-mimetypes' consults $MIMETYPES before /etc/mime.types, so
+# pointing that variable here makes `mailcap-extension-to-mime' answer from
+# the editor's built-in `mailcap-mime-extensions' table alone.
+#
+# The host database is not part of the contract under test: Ubuntu's
+# /etc/mime.types maps `md' to text/markdown while a NixOS host has no
+# /etc/mime.types at all, so a recorded MIME type would be a property of the
+# machine that recorded it.  Add a mapping only when a fixture needs one the
+# editor does not ship itself.

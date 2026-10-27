@@ -6,7 +6,7 @@ use super::batch_support::{ParityBatchCase, assert_oracle_batch_cases};
 
 mod workflows;
 
-const TEST_TIMEOUT: Duration = Duration::from_secs(120);
+const TEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Org Cliplink's public commands cross GNU's kill-ring, url.el, TLS, and
 /// subprocess boundaries.  The fixture keeps them intact.  Loopback HTTP and
@@ -114,10 +114,19 @@ const PRELUDE: &str = r####"
   (setq neomacs-org-cliplink-test-tls-buffer nil))
 
 (defun neomacs-org-cliplink-test-wait-for (predicate description)
-  (let ((round 0))
-    (while (and (< round 800) (not (funcall predicate)))
-      (accept-process-output nil 0.01)
-      (setq round (1+ round)))
+  "Wait for PREDICATE, bounded by wall-clock time.
+
+The bound is a deadline rather than a round count: the observed event is
+a local TLS request plus the package's own callback chain, and on a
+loaded machine (every MELPA test in parallel, plus other build lanes) an
+editor can be scheduled for only a fraction of the wall clock, so the
+handshake and the callback chain stretch far beyond their unloaded cost.
+150 s admits a run that is merely starved -- a measured 90 s wait still
+timed out on this host while other builds ran -- and the test's own
+timeout remains the outer bound, so a real hang still fails here."
+  (let ((deadline (+ (float-time) 150)))
+    (while (and (< (float-time) deadline) (not (funcall predicate)))
+      (accept-process-output nil 0.02))
     (unless (funcall predicate)
       (error "Timed out waiting for %s" description))))
 

@@ -155,7 +155,8 @@ fn selected_line_bounded_history_and_frozen_resume() -> ParityBatchCase {
          (setq third-search (ffip-find-files "other.el" nil))
          (ffip356-test-own-buffer (current-buffer) root)
          (let ((other-trace (ffip356-test-finish-tool 'find))
-               (frozen-history (copy-tree ffip-find-files-history)))
+               (frozen-history (ffip356-test-sorted-history
+                                    ffip-find-files-history)))
            (ffip356-test-write-file root "project/new/app.el" ";;; new app\n")
            (ffip-find-files-resume 0)
            (ffip356-test-own-buffer (current-buffer) root)
@@ -183,7 +184,9 @@ fn selected_line_bounded_history_and_frozen_resume() -> ParityBatchCase {
                   '((:text "new/app.el" :keys "RET"))))
            (ffip356-test-own-buffer (current-buffer) root)
            (let ((fresh-trace (ffip356-test-finish-tool 'find))
-                 (history-after-fresh (copy-tree ffip-find-files-history))
+                 (history-after-fresh
+                  (ffip356-test-sorted-history
+                   ffip-find-files-history))
                  (fresh-file (ffip356-test-relative buffer-file-name root))
                  (fresh-bytes (buffer-string)))
              (ffip356-test-arm-tool
@@ -199,8 +202,11 @@ fn selected_line_bounded_history_and_frozen_resume() -> ParityBatchCase {
              (setq full-path
                    (list :trace (ffip356-test-finish-tool 'find)
                          :files
-                         (copy-tree
-                          (plist-get (car ffip-find-files-history) :files))
+                         (sort
+                          (copy-tree
+                           (plist-get (car ffip-find-files-history) :files))
+                          (lambda (left right)
+                            (string< (car left) (car right))))
                          :file
                          (ffip356-test-relative buffer-file-name root)
                          :keyword
@@ -231,7 +237,7 @@ fn selected_line_bounded_history_and_frozen_resume() -> ParityBatchCase {
         "selected-line-search-bounded-history-and-frozen-resume",
         elisp_form,
         expect![[
-            r#"OK (:result (:selected (:file "project/docs/Guide.md" :line 3 :point 10 :text "Practical notes.") :filename-history ("Guide.md:3") :readers (((:prompt "Find in project/: " :initial-input "" :require-match nil :category project-file :candidates ("docs/app.el" "src/app.el") :final-input "src/app.el")) ((:prompt "Find in project/: " :initial-input "" :require-match nil :category project-file :candidates ("docs/app.el" "new/app.el" "src/app.el") :final-input "new/app.el"))) :discarded-return nil :traces (((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "-iname" "*Guide.md*" "-print"))) ((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "-iname" "*app.el*" "-print"))) ((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "-iname" "*other.el*" "-print"))) ((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "-iname" "*app.el*" "-print")))) :frozen-history ((:files (("other.el" . "./other.el")) :keyword "other.el" :directory-p nil :function nil :forward-lines nil :default-directory "[ROOT]/project/") (:files (("src/app.el" . "./src/app.el") ("docs/app.el" . "./docs/app.el")) :keyword "app.el" :directory-p nil :function nil :forward-lines nil :default-directory "[ROOT]/project/")) :resume ((:index 0 :file "project/other.el") (:index 1 :reader ((:prompt "Find in project/: " :initial-input "" :require-match nil :category project-file :candidates ("docs/app.el" "src/app.el") :final-input "src/app.el")) :file "project/src/app.el")) :history-after-fresh ((:files (("src/app.el" . "./src/app.el") ("docs/app.el" . "./docs/app.el") ("new/app.el" . "./new/app.el")) :keyword "app.el" :directory-p nil :function nil :forward-lines nil :default-directory "[ROOT]/project/") (:files (("other.el" . "./other.el")) :keyword "other.el" :directory-p nil :function nil :forward-lines nil :default-directory "[ROOT]/project/")) :full-path (:trace ((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "(" "-iwholename" "*.el" ")" "-iwholename" "*docs*" "-print"))) :files (("docs/app.el" . "./docs/app.el")) :file "project/docs/app.el" :keyword "docs" :input-clean t) :fresh-file "project/new/app.el" :fresh-bytes ";;; new app\n") :cleanup (:new-buffers nil :new-processes nil :new-timers 0 :timer-details nil :owned-buffer-live nil :owned-process-live nil :owned-timer-live nil :root-exists nil :root-owned nil :current-buffer-restored t :window-restored t :transient-mark-restored t :dired-restored t :advice-count 1 :advice-restored t :hijack nil :unread-events nil :active-minibuffer nil :body-error nil :cleanup-errors nil))"#
+            r#"OK (:result (:selected (:file "project/docs/Guide.md" :line 3 :point 10 :text "Practical notes.") :filename-history ("Guide.md:3") :readers (((:prompt "Find in project/: " :initial-input "" :require-match nil :category project-file :candidates ("docs/app.el" "src/app.el") :final-input "src/app.el")) ((:prompt "Find in project/: " :initial-input "" :require-match nil :category project-file :candidates ("docs/app.el" "new/app.el" "src/app.el") :final-input "new/app.el"))) :discarded-return nil :traces (((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "-iname" "*Guide.md*" "-print"))) ((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "-iname" "*app.el*" "-print"))) ((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "-iname" "*other.el*" "-print"))) ((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "-iname" "*app.el*" "-print")))) :frozen-history ((:files (("other.el" . "./other.el")) :keyword "other.el" :directory-p nil :function nil :forward-lines nil :default-directory "[ROOT]/project/") (:files (("docs/app.el" . "./docs/app.el") ("src/app.el" . "./src/app.el")) :keyword "app.el" :directory-p nil :function nil :forward-lines nil :default-directory "[ROOT]/project/")) :resume ((:index 0 :file "project/other.el") (:index 1 :reader ((:prompt "Find in project/: " :initial-input "" :require-match nil :category project-file :candidates ("docs/app.el" "src/app.el") :final-input "src/app.el")) :file "project/src/app.el")) :history-after-fresh ((:files (("docs/app.el" . "./docs/app.el") ("new/app.el" . "./new/app.el") ("src/app.el" . "./src/app.el")) :keyword "app.el" :directory-p nil :function nil :forward-lines nil :default-directory "[ROOT]/project/") (:files (("other.el" . "./other.el")) :keyword "other.el" :directory-p nil :function nil :forward-lines nil :default-directory "[ROOT]/project/")) :full-path (:trace ((:tool find :mode delegate :cwd "project" :argv ("." "(" "-iwholename" "*/.git" ")" "-prune" "-o" "-type" "f" "(" "-iwholename" "*.el" ")" "-iwholename" "*docs*" "-print"))) :files (("docs/app.el" . "./docs/app.el")) :file "project/docs/app.el" :keyword "docs" :input-clean t) :fresh-file "project/new/app.el" :fresh-bytes ";;; new app\n") :cleanup (:new-buffers nil :new-processes nil :new-timers 0 :timer-details nil :owned-buffer-live nil :owned-process-live nil :owned-timer-live nil :root-exists nil :root-owned nil :current-buffer-restored t :window-restored t :transient-mark-restored t :dired-restored t :advice-count 1 :advice-restored t :hijack nil :unread-events nil :active-minibuffer nil :body-error nil :cleanup-errors nil))"#
         ]],
     )
 }

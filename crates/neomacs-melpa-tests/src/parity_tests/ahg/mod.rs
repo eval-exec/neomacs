@@ -181,17 +181,34 @@ visits."
                               "+Rollback if monitoring fails.\n")))
     root))
 
-(defun ahg-test-settle (&optional seconds)
-  "Let aHg's asynchronous hg processes and their sentinels finish."
-  (let ((deadline (+ (float-time) (or seconds 10.0)))
+(defun ahg-test-settle (&optional expected seconds)
+  "Let aHg's asynchronous hg processes and their sentinels finish.
+
+Wait until the stand-in has recorded EXPECTED invocations (when non-nil)
+and the whole buffer set has stayed identical for three consecutive
+rounds, bounded by SECONDS of wall clock (default 15).  Buffer stability
+alone was a race: the package starts its next hg process from the
+previous process's sentinel, so between two invocations nothing is
+running and nothing changes -- and under load an editor can be scheduled
+for so little of one 150 ms window that the chain has not started its
+next process yet.  The recorded invocation is the event that says the
+chain moved; the buffer set is what says the last answer was rendered."
+  (let ((deadline (+ (float-time) (or seconds 15.0)))
         (previous nil)
         (stable 0))
     (while (and (< (float-time) deadline) (< stable 3))
       (accept-process-output nil 0.05)
-      (let ((now (mapcar (lambda (buffer)
-                           (cons (buffer-name buffer) (buffer-size buffer)))
-                         (buffer-list))))
-        (if (equal now previous) (setq stable (1+ stable)) (setq stable 0))
+      (let* ((calls (ahg-test-calls))
+             (count (if (listp calls) (length calls) 0))
+             (now (cons (mapcar (lambda (buffer)
+                                  (cons (buffer-name buffer)
+                                        (buffer-size buffer)))
+                                (buffer-list))
+                        calls)))
+        (if (and (equal now previous)
+                 (or (null expected) (>= count expected)))
+            (setq stable (1+ stable))
+          (setq stable 0))
         (setq previous now)))
     stable))
 

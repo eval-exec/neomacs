@@ -330,12 +330,19 @@ fn auto_complete_clang_async_real_synchronous_process_parses_useful_candidates_o
                                              ac-clang-error-buffer-name
                                            (list
                                             buffer-read-only
-                                            (string-match-p
-                                             "clang failed with error"
-                                             (buffer-string))
-                                            (string-match-p
-                                             "diagnostic before completion"
-                                             (buffer-string))))))
+                                            ;; Presence, not offset: the
+                                            ;; buffer spells out the sh
+                                            ;; fixture's absolute path, so a
+                                            ;; position moves with the
+                                            ;; checkout's location.
+                                            (and (string-match-p
+                                                  "clang failed with error"
+                                                  (buffer-string))
+                                                 t)
+                                            (and (string-match-p
+                                                  "diagnostic before completion"
+                                                  (buffer-string))
+                                                 t)))))
                                      (when
                                          (get-buffer
                                           ac-clang-error-buffer-name)
@@ -346,7 +353,7 @@ fn auto_complete_clang_async_real_synchronous_process_parses_useful_candidates_o
                              (failure
                               "cat >/dev/null; printf 'diagnostic before completion\\nCOMPLETION: format : [#int#]format(<#const char *fmt#>)\\n'; exit 7")))"##,
         expect![[
-            r#"OK ((success (("fork" "[#void#]fork()" nil) ("format" "[#int#]format(<#const char *fmt#>)" nil)) nil) (failure (("format" "[#int#]format(<#const char *fmt#>)" nil)) (t 25 154)))"#
+            r#"OK ((success (("fork" "[#void#]fork()" nil) ("format" "[#int#]format(<#const char *fmt#>)" nil)) nil) (failure (("format" "[#int#]format(<#const char *fmt#>)" nil)) (t t t)))"#
         ]],
     )
 }

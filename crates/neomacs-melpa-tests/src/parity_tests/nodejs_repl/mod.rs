@@ -22,11 +22,14 @@ const PRELUDE: &str = r####"
 
 (defconst node405-test-source-sha256
   "18409462373f01a4933decf72c10a9c903785edaec74a532a9566e69caaba212")
-(defconst node405-test-node-sha256
-  "8aee2b5233e91de07502156662e8823eaba85f6a86bd5e717baed79cc807830d")
-;; Byte-identity is enforced only when the harness provisions a binary
-;; with a known hash (NEOMACS_TOOLS_NODE_SHA); a System-sourced node pins
-;; the version through --version.
+;; The harness resolves the tool through its lock row and publishes that
+;; resolution (NEOMACS_TOOLS_NODE_VERSION / _SHA) to this session; the gate
+;; checks that the editor found the resolved binary, not a literal version
+;; recorded on some earlier host.
+(defconst node405-test-node-expected-version
+  (getenv "NEOMACS_TOOLS_NODE_VERSION"))
+(defconst node405-test-node-expected-sha
+  (getenv "NEOMACS_TOOLS_NODE_SHA"))
 (defconst node405-test-node-environment-names
   '("NODE_OPTIONS" "NODE_PATH" "NODE_REPL_HISTORY" "NODE_REPL_HISTORY_SIZE"
     "NODE_DISABLE_COLORS" "NO_COLOR" "FORCE_COLOR" "NODE_EXTRA_CA_CERTS"
@@ -67,14 +70,19 @@ const PRELUDE: &str = r####"
                       node405-test-source-sha256))
     (error "Unexpected installed Node.js REPL source: %S %S" source payload)))
 
+(unless (and (stringp node405-test-node-expected-version)
+             (not (string-empty-p node405-test-node-expected-version))
+             (stringp node405-test-node-expected-sha)
+             (not (string-empty-p node405-test-node-expected-sha)))
+  (error "Node.js REPL requires the harness-resolved node identity; run this suite through its Rust gate"))
 (unless (and (file-name-absolute-p node405-test-node)
              (file-regular-p node405-test-node)
              (not (file-symlink-p node405-test-node))
-             (or (null (getenv "NEOMACS_TOOLS_NODE_SHA"))
-                 (equal (node405-test-file-sha256 node405-test-node)
-                        (getenv "NEOMACS_TOOLS_NODE_SHA"))))
-  (error "Unexpected Node executable: %s" node405-test-node))
+             (equal (node405-test-file-sha256 node405-test-node)
+                    node405-test-node-expected-sha))
+  (error "Node executable is not the harness-resolved binary: %s" node405-test-node))
 (let ((buffer (generate-new-buffer " *node405-version*"))
+      (expected (concat "v" node405-test-node-expected-version "\n"))
       (process-environment (copy-sequence process-environment)))
   (unwind-protect
       (progn
@@ -83,9 +91,10 @@ const PRELUDE: &str = r####"
         (let ((status (call-process node405-test-node nil buffer nil "--version")))
           (unless (and (equal status 0)
                        (equal (with-current-buffer buffer (buffer-string))
-                              "v22.22.2\n"))
-            (error "Unexpected Node version: %S %S" status
-                   (with-current-buffer buffer (buffer-string))))))
+                              expected))
+            (error "Unexpected Node version: %S %S (harness resolved %S)" status
+                   (with-current-buffer buffer (buffer-string))
+                   node405-test-node-expected-version))))
     (kill-buffer buffer)))
 
 (defvar node405-test-root nil)
@@ -162,8 +171,10 @@ const PRELUDE: &str = r####"
   (let* ((node405-test-version-descent 1)
          (output (funcall node405-test-original-shell-command-to-string
                           command)))
-    (unless (equal output "v22.22.2\n")
-      (error "Unexpected Node.js REPL version output: %S" output))
+    (unless (equal output
+                   (concat "v" node405-test-node-expected-version "\n"))
+      (error "Unexpected Node.js REPL version output: %S (harness resolved %S)"
+             output node405-test-node-expected-version))
     (push command node405-test-version-calls)
     output))
 
@@ -516,7 +527,13 @@ fn public_start_creates_the_exact_node22_comint_session() -> ParityBatchCase {
        (list :launches (reverse node405-test-launches)
              :versions (reverse node405-test-version-calls)
              :package-version nodejs-repl-version
-             :node-version nodejs-repl-nodejs-version
+             ;; `nodejs-repl' derives this from the node it started; record
+             ;; that it is the harness-resolved build rather than the build's
+             ;; literal version string, which is a property of the host.
+             :node-version
+             (and (equal nodejs-repl-nodejs-version
+                         node405-test-node-expected-version)
+                  t)
              :mode major-mode
              :derived (and (derived-mode-p 'comint-mode) t)
              :process (list (process-name process) (process-status process)
@@ -534,7 +551,7 @@ fn public_start_creates_the_exact_node22_comint_session() -> ParityBatchCase {
              :keys (list (key-binding (kbd "TAB"))
                          (key-binding (kbd "C-c C-c"))))))))"####,
         expect![[
-            r#"OK (:result (:launches ((:name "node405" :program "env" :startfile nil :switches ("TERM=xterm" "[NODE]" "-e" "require('repl').start({prompt: '> ', useGlobal: true, replMode: require('repl')['REPL_MODE_' + 'sloppy'.toUpperCase()], preview: false})") :environment ("C.UTF-8" nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil) :buffer "*node405*")) :versions ("[NODE] --version") :package-version "0.2.4" :node-version "22.22.2" :mode nodejs-repl-mode :derived t :process ("node405" run t t) :prompt "> " :text "> " :mark 3 :settings ("^" t t t) :keys (completion-at-point nodejs-repl-quit-or-cancel)) :cleanup (:new-buffers nil :new-processes 0 :new-timers 0 :new-frames 0 :root-exists nil :window-restored t :buffer-restored t :body-error nil :cleanup-errors nil))"#
+            r#"OK (:result (:launches ((:name "node405" :program "env" :startfile nil :switches ("TERM=xterm" "[NODE]" "-e" "require('repl').start({prompt: '> ', useGlobal: true, replMode: require('repl')['REPL_MODE_' + 'sloppy'.toUpperCase()], preview: false})") :environment ("C.UTF-8" nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil) :buffer "*node405*")) :versions ("[NODE] --version") :package-version "0.2.4" :node-version t :mode nodejs-repl-mode :derived t :process ("node405" run t t) :prompt "> " :text "> " :mark 3 :settings ("^" t t t) :keys (completion-at-point nodejs-repl-quit-or-cancel)) :cleanup (:new-buffers nil :new-processes 0 :new-timers 0 :new-frames 0 :root-exists nil :window-restored t :buffer-restored t :body-error nil :cleanup-errors nil))"#
         ]],
     )
 }

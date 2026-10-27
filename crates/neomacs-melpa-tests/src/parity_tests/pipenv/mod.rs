@@ -325,10 +325,20 @@ fn public_commands_drive_exact_async_process_boundaries() -> ParityBatchCase {
              "printf 'argv' >>\"$PIP384_LOG\"\n"
              "for arg in \"$@\"; do printf '<%s>' \"$arg\" >>\"$PIP384_LOG\"; done\n"
              "printf '\\n' >>\"$PIP384_LOG\"\n"
+             ;; `pipenv--clean-response' keeps only the first line of each
+             ;; filter CHUNK (pipenv.el: `(car (s-lines response))').  A
+             ;; `printf' with two newlines writes once per line (bash
+             ;; flushes at each newline), so whether the ignored line is
+             ;; dropped depends on whether the reader happens to wake
+             ;; between the two writes -- a scheduling race, not editor
+             ;; behavior.  Stage the text and `cat' it: one write, one
+             ;; chunk, in both editors.
              "if [ \"$#\" -eq 1 ] && [ \"$1\" = --where ]; then\n"
-             "  printf '%s\\nignored where line\\n' \"$PIP384_PROJECT\"\n"
+             "  printf '%s\\nignored where line\\n' \"$PIP384_PROJECT\" >\"$PIP384_LOG.where\"\n"
+             "  cat \"$PIP384_LOG.where\"\n"
              "elif [ \"$#\" -eq 1 ] && [ \"$1\" = --venv ]; then\n"
-             "  printf '%s\\nignored venv line\\n' \"$PIP384_VENV\"\n"
+             "  printf '%s\\nignored venv line\\n' \"$PIP384_VENV\" >\"$PIP384_LOG.venv\"\n"
+             "  cat \"$PIP384_LOG.venv\"\n"
              "elif [ \"$#\" -eq 1 ] && [ \"$1\" = install ]; then\n"
              "  printf 'Installing dependencies from Pipfile...\\n'\n"
              "elif [ \"$#\" -eq 4 ] && [ \"$1\" = run ] && "

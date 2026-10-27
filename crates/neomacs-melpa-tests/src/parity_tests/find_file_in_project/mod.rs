@@ -69,6 +69,25 @@ const FIND_FILE_IN_PROJECT_TEST_PRELUDE: &str = r####"
           ffip356-test-search-ledger)
     (ffip-project-search-default-function find-command)))
 
+(defun ffip356-test-sorted-history (history)
+  "HISTORY with every entry's :files sorted by display name.
+
+The candidates come from the real `find' the workflows delegate to, and
+`find' emits directory entries in readdir order, which is a property of
+the filesystem rather than of the package.  A directory created after
+the first search sorts first on an overlayfs host and last on ext4, so a
+recorded order would pin the machine.  The rest of each history entry -
+keyword, root, flags - is still asserted verbatim."
+  (mapcar (lambda (entry)
+            (let ((copy (copy-tree entry)))
+              (plist-put copy
+                         :files
+                         (sort (plist-get copy :files)
+                               (lambda (left right)
+                                 (string< (car left) (car right)))))
+              copy))
+          history))
+
 (defun ffip356-test-relative (path root)
   "Return PATH relative to ROOT while retaining a directory suffix."
   (when path

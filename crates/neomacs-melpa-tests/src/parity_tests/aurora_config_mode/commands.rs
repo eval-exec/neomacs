@@ -12,7 +12,13 @@ fn aurora_config_mode_run_aurora_builds_exact_cli_command_from_operation_job_and
            (expand-file-name
             "tmp/aurora-config/production/service.aurora"
             default-directory))
-          (let (calls)
+          ;; `compile-command' defaults to `make -k -jN', where N is the
+          ;; machine's processor count (GNU lisp/progmodes/compile.el:989-993),
+          ;; so its literal value is not a portable observation.  What the
+          ;; workflow must prove is that aurora's buffer-local `let' binding
+          ;; does not leak into the global, so compare before and after.
+          (let (calls
+                (initial-compile-command compile-command))
             (cl-letf
                 (((symbol-function 'compile)
                   (lambda (command)
@@ -39,9 +45,10 @@ fn aurora_config_mode_run_aurora_builds_exact_cli_command_from_operation_job_and
                     (bufferp
                      (nth 3 call))))
                  calls))
-               compile-command))))"##,
+               (equal compile-command
+                      initial-compile-command)))))"##,
         expect![[
-            r#"OK (:compile-result (("aurora inspect cluster/role/prod/service service.aurora" "aurora inspect cluster/role/prod/service service.aurora" "service.aurora" t)) "make -k -j22 ")"#
+            r#"OK (:compile-result (("aurora inspect cluster/role/prod/service service.aurora" "aurora inspect cluster/role/prod/service service.aurora" "service.aurora" t)) t)"#
         ]],
     )
 }

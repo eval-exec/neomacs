@@ -290,7 +290,22 @@ fn alchemist_iex_send_command_preserves_multiline_input_process_mark_and_comint_
                             (alchemist-iex--send-command
                              process
                              "first = 20\nsecond = 22\nfirst + second")
-                            (accept-process-output process 0.1)
+                            ;; Wait for the event this case observes -- the
+                            ;; `cat' child echoing the final input line --
+                            ;; rather than sleeping once: the echo arrives in
+                            ;; chunks, and a single 100 ms wait collected only
+                            ;; part of it on a loaded runner.
+                            (let ((deadline (+ (float-time) 10)))
+                              ;; The command's own insertion already ends
+                              ;; with the last input line, so wait for the
+                              ;; child's ECHO: two occurrences of it.
+                              (while (and
+                                      (< (float-time) deadline)
+                                      (< (how-many
+                                          (regexp-quote "first + second")
+                                          (point-min) (point-max))
+                                         2))
+                                (accept-process-output process 0.05)))
                             (list
                              (buffer-string)
                              (marker-position

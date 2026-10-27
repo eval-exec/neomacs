@@ -143,6 +143,14 @@ One write, one chunk, one filter call, in either editor.
 The `error' below is the point of the indirection: a search that is
 PTY-connected again cannot reach a pin, so the racy shape fails loudly
 here rather than intermittently in a snapshot."
+  ;; `rg-executable' defaults to the absolute `(executable-find "rg")', and
+  ;; `compilation-start' prints it verbatim in the results header.  That path
+  ;; is a property of the host (a developer's Nix profile, the CI image's
+  ;; /usr/bin) and its LENGTH shifts every buffer position the suite pins,
+  ;; because those are measured from the header.  Pin the documented variable
+  ;; to the bare program name: the shell still finds the same `rg' on PATH,
+  ;; and the rendered command is identical everywhere.
+  (set-default 'rg-executable "rg")
   (let ((process-connection-type nil))
     (rg-run pattern "everything" root nil nil (list "--sort" "path" ".")))
   (let* ((buffer (get-buffer (rg-buffer-name)))

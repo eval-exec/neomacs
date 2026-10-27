@@ -247,7 +247,10 @@ fn resolve_system(name: &str, version: &str) -> Result<ResolvedTool, ToolsError>
     }
     Ok(ResolvedTool {
         name: name.to_string(),
-        version: version.to_string(),
+        // The RESOLVED version, not the requested one: a `*` row asks only
+        // that the tool be provided, and the suites' identity gates compare
+        // the editor's tool against what this resolution actually found.
+        version: actual,
         strategy: ToolSource::System,
         bin: candidate.clone(),
         bin_dir: candidate.parent().map(PathBuf::from).ok_or_else(|| {

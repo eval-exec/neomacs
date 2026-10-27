@@ -283,6 +283,18 @@ fn marks_an_obsolete_package_confirms_the_plan_and_executes_its_removal() -> Par
                                    (string-match-p
                                     "removing old-theme"
                                     (buffer-string))))))
+                             ;; The package removes its progress reporter
+                             ;; from `post-command-hook' in the shell filter
+                             ;; when the child reports "Pacman finished",
+                             ;; which happens after the trace and output
+                             ;; lines above exist.  Sampling the hook before
+                             ;; that point measured scheduling, not cleanup.
+                             (neomacs-arch-packer-test-wait-for
+                              (lambda ()
+                                (not
+                                 (memq
+                                  'arch-packer-status-reporter
+                                  post-command-hook))))
                              (setq result
                                    (list
                                     :marked-menu marked-menu

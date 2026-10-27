@@ -177,6 +177,29 @@ fn agent_recall_reindexes_real_project_and_org_transcripts_then_reloads_the_pers
                                       reloaded
                                       (with-current-buffer
                                           "*agent-recall-stats*"
+                                        ;; `agent-recall-stats' sorts its rows
+                                        ;; by FILE COUNT only
+                                        ;; (agent-recall.el: `(sort
+                                        ;; project-stats (lambda (a b) (> (nth
+                                        ;; 1 a) (nth 1 b))))'), and leaves ties
+                                        ;; in `maphash' order.  Emacs Lisp
+                                        ;; leaves hash order unspecified, and
+                                        ;; here it depends on the sandbox's
+                                        ;; absolute transcript paths, so three
+                                        ;; one-file projects cannot be pinned in
+                                        ;; the order the package happened to
+                                        ;; produce.  Sort the section so the
+                                        ;; snapshot asserts the rows' content.
+                                        (let ((inhibit-read-only t))
+                                          (save-excursion
+                                            (goto-char (point-min))
+                                            (when (search-forward
+                                                   "By Project:" nil t)
+                                              ;; Past the marker line and
+                                              ;; past its ──── separator.
+                                              (forward-line 2)
+                                              (sort-lines
+                                               nil (point) (point-max)))))
                                         (buffer-substring-no-properties
                                          (point-min)
                                          (point-max)))
@@ -193,7 +216,7 @@ fn agent_recall_reindexes_real_project_and_org_transcripts_then_reloads_the_pers
                               root
                               t)))"####,
         expect![[
-            r#"OK (nil t (("org-transcripts/planning-session.org" "research-notes" "planning-session" "bbbbbbbb-1111-2222-3333-444444444444" "Compare the two garbage collection strategies.") ("projects/alpha/.agent-shell/transcripts/2026-07-10-17-07-00.md" "alpha" "2026-07-10-17-07-00" "aaaaaaaa-1111-2222-3333-444444444444" "Repair the production parser without changing its public API.") ("projects/nested/beta/.agent-shell/transcripts/2026-07-11-09-30-00.md" "beta" "2026-07-11-09-30-00" nil "Explain why the deployment cache is stale.")) (("[research-notes] planning-session" . "org-transcripts/planning-session.org") ("[beta] 2026-07-11-09-30-00" . "projects/nested/beta/.agent-shell/transcripts/2026-07-11-09-30-00.md") ("[alpha] 2026-07-10-17-07-00" . "projects/alpha/.agent-shell/transcripts/2026-07-10-17-07-00.md")) (("org-transcripts/planning-session.org" "research-notes" "planning-session" "bbbbbbbb-1111-2222-3333-444444444444" "Compare the two garbage collection strategies.") ("projects/alpha/.agent-shell/transcripts/2026-07-10-17-07-00.md" "alpha" "2026-07-10-17-07-00" "aaaaaaaa-1111-2222-3333-444444444444" "Repair the production parser without changing its public API.") ("projects/nested/beta/.agent-shell/transcripts/2026-07-11-09-30-00.md" "beta" "2026-07-11-09-30-00" nil "Explain why the deployment cache is stale.")) "Agent Recall -- Transcript Statistics\n════════════════════════════════════════\n\n  Transcripts: 3\n  Projects:    3\n  Total size:  0.0 MB\n\nBy Project:\n────────────────────────────────────────\n  research-notes                    1 files  (0.0 MB)\n  beta                              1 files  (0.0 MB)\n  alpha                             1 files  (0.0 MB)\n" nil)"#
+            r#"OK (nil t (("org-transcripts/planning-session.org" "research-notes" "planning-session" "bbbbbbbb-1111-2222-3333-444444444444" "Compare the two garbage collection strategies.") ("projects/alpha/.agent-shell/transcripts/2026-07-10-17-07-00.md" "alpha" "2026-07-10-17-07-00" "aaaaaaaa-1111-2222-3333-444444444444" "Repair the production parser without changing its public API.") ("projects/nested/beta/.agent-shell/transcripts/2026-07-11-09-30-00.md" "beta" "2026-07-11-09-30-00" nil "Explain why the deployment cache is stale.")) (("[research-notes] planning-session" . "org-transcripts/planning-session.org") ("[beta] 2026-07-11-09-30-00" . "projects/nested/beta/.agent-shell/transcripts/2026-07-11-09-30-00.md") ("[alpha] 2026-07-10-17-07-00" . "projects/alpha/.agent-shell/transcripts/2026-07-10-17-07-00.md")) (("org-transcripts/planning-session.org" "research-notes" "planning-session" "bbbbbbbb-1111-2222-3333-444444444444" "Compare the two garbage collection strategies.") ("projects/alpha/.agent-shell/transcripts/2026-07-10-17-07-00.md" "alpha" "2026-07-10-17-07-00" "aaaaaaaa-1111-2222-3333-444444444444" "Repair the production parser without changing its public API.") ("projects/nested/beta/.agent-shell/transcripts/2026-07-11-09-30-00.md" "beta" "2026-07-11-09-30-00" nil "Explain why the deployment cache is stale.")) "Agent Recall -- Transcript Statistics\n════════════════════════════════════════\n\n  Transcripts: 3\n  Projects:    3\n  Total size:  0.0 MB\n\nBy Project:\n────────────────────────────────────────\n  alpha                             1 files  (0.0 MB)\n  beta                              1 files  (0.0 MB)\n  research-notes                    1 files  (0.0 MB)\n" nil)"#
         ]],
     )
 }

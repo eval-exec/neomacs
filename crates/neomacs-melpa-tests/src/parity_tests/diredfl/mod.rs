@@ -108,6 +108,20 @@ const PRELUDE: &str = r####"
       (setq text (replace-regexp-in-string
                   (regexp-quote (directory-file-name tmp))
                   "[ORACLE-TMPDIR]" text t t)))
+    ;; Mask the owner and group columns as one unit before either name is
+    ;; looked up on its own.  A host whose user and primary group share a name
+    ;; (the CI runner's `runner:runner') would otherwise have the owner pass
+    ;; rewrite the group column too, and the group placeholder could never
+    ;; appear.  The recorded Dired lines keep the two columns' padding, so the
+    ;; separator whitespace is captured and re-emitted rather than collapsed.
+    (when (and (stringp owner) (stringp group)
+               (> (length owner) 1) (> (length group) 1))
+      ;; LITERAL must be nil here: the replacement re-emits the captured
+      ;; separator as a backreference, and a literal replacement would paste
+      ;; `\1' into the line instead.
+      (setq text (replace-regexp-in-string
+                  (concat (regexp-quote owner) "\\( +\\)" (regexp-quote group))
+                  "[ORACLE-OWNER]\\1[ORACLE-GROUP]" text t nil)))
     (when (and (stringp owner) (> (length owner) 1))
       (setq text (replace-regexp-in-string
                   (regexp-quote owner) "[ORACLE-OWNER]" text t t)))

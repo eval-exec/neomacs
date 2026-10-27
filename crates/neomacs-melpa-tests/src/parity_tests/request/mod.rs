@@ -521,13 +521,34 @@ fn synchronous_curl_file_request_parses_real_utf8_json_and_runs_public_callbacks
                     (request-test-normalize-root
                      (plist-get summary :url) root)))
                  :events (nreverse events)
-                 :cookie-jar-created
-                 (file-exists-p request--curl-cookie-jar)))))
+                 ;; Whether curl leaves an EMPTY jar file behind is a
+                 ;; property of the curl build (the Ubuntu image and this
+                 ;; Nix env disagree), not of the editor.  What the fixture
+                 ;; means to observe is that a response without Set-Cookie
+                 ;; stores no cookie, so count the jar's entries.
+                 :cookie-jar-entries
+                 (if (not (file-exists-p request--curl-cookie-jar))
+                     0
+                   (with-temp-buffer
+                     (insert-file-contents-literally
+                      request--curl-cookie-jar)
+                     (let ((entries 0))
+                       (goto-char (point-min))
+                       (while (not (eobp))
+                         (let ((line
+                                (buffer-substring-no-properties
+                                 (line-beginning-position)
+                                 (line-end-position))))
+                           (unless (or (zerop (length line))
+                                       (eq (aref line 0) ?#))
+                             (setq entries (1+ entries))))
+                         (forward-line 1))
+                       entries)))))))
     (delete-directory root t))
   result)
 "##;
     let expect = expect![[
-        r####"OK (:response (:status-code nil :symbol-status success :done t :url "file://[PROJECT]/release.json" :data (:artifact "neomacs" :label "发布 λ" :version 41) :error nil :backend curl :raw-header nil :buffer-live nil) :events ((success success "发布 λ") (complete success)) :cookie-jar-created nil)"####
+        r####"OK (:response (:status-code nil :symbol-status success :done t :url "file://[PROJECT]/release.json" :data (:artifact "neomacs" :label "发布 λ" :version 41) :error nil :backend curl :raw-header nil :buffer-live nil) :events ((success success "发布 λ") (complete success)) :cookie-jar-entries 0)"####
     ]];
     ParityBatchCase::value(
         "synchronous_curl_file_request_parses_real_utf8_json_and_runs_public_callbacks",

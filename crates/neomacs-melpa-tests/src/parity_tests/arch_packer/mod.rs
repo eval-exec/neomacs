@@ -199,15 +199,43 @@ follow-up query from the action snapshot regardless of sentinel timing."
     (list :root root :trace trace :state state)))
 
 (defun neomacs-arch-packer-test-wait-for (predicate)
-  (let ((remaining 200))
-    (while
-        (and
-         (> remaining 0)
-         (not (funcall predicate)))
-      (setq remaining (1- remaining))
+  "Wait for PREDICATE on a wall-clock deadline.
+
+The pacman stand-in, the shell filter and the menu rebuild are all real
+process and display work; on a loaded machine ten seconds of polling was
+not enough, and even a minute was not enough when the host is running
+other builds (both editors were measured to exceed 60 s here, on
+different cases).  The wait is still a deadline, not a round count, and
+the batch's own timeout is the outer bound."
+  (let ((deadline (+ (float-time) 150)))
+    (while (and (< (float-time) deadline)
+                (not (funcall predicate)))
       (accept-process-output nil 0.05))
     (unless (funcall predicate)
-      (error "arch-packer workflow timed out"))))
+      ;; A bare timeout says nothing about WHICH step stalled.  Include the
+      ;; observable state the predicate reads, so a failure names the step and
+      ;; the editor's view of it.
+      (error "arch-packer workflow timed out %s"
+             (let ((print-circle nil) (print-length 40) (print-level 6))
+               (prin1-to-string
+                (list
+                 :trace
+                 (ignore-errors
+                   (neomacs-arch-packer-test-file-string
+                    (getenv "ARCH_PACKER_TEST_TRACE")))
+                 :output
+                 (ignore-errors
+                   (with-current-buffer arch-packer-process-output-buffer
+                     (buffer-string)))
+                 :processes
+                 (mapcar (lambda (process)
+                           (list (process-name process)
+                                 (process-status process)))
+                         (process-list))
+                 :buffers
+                 (mapcar (lambda (buffer)
+                           (cons (buffer-name buffer) major-mode))
+                         (buffer-list)))))))))
 
 (defun neomacs-arch-packer-test-cleanup (root)
   (let* ((buffer

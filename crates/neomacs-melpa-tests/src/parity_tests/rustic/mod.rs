@@ -220,10 +220,13 @@ fi
 printf '%s\\n' \"$next\" > \"$RUSTIC419_CLAIM\"
 printf '%s\\t%s\\n' \"$mode:$joined\" \"${RUST_BACKTRACE-}\" >> \"$RUSTIC419_LOG\"
 if [ \"$mode\" = fail ]; then
-  printf 'error: this file contains an unclosed delimiter\\n'
-  printf ' --> <stdin>:1:31\\n'
-  printf '  |\\n1 | fn main(){println!(\"café 界\");\\n'
-  printf '  |          - unclosed delimiter ^\\n'
+  # One write: the editor parses this stream with `compilation-mode', and a
+  # diagnostic line that arrives in its own chunk after the sentinel has been
+  # observed is a scheduling race, not a rustfmt behaviour.  Stage the four
+  # lines and `cat' them (cat writes a small file with one write) so both
+  # editors parse the same bytes.
+  printf 'error: this file contains an unclosed delimiter\\n --> <stdin>:1:31\\n  |\\n1 | fn main(){println!(\"café 界\");\\n  |          - unclosed delimiter ^\\n' > \"$RUSTIC419_STDIN.diag\"
+  cat \"$RUSTIC419_STDIN.diag\"
   exit 1
 fi
 printf 'fn main() {\\n    println!(\"café 界\");\\n}\\n'

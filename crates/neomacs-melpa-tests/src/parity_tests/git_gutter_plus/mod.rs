@@ -266,19 +266,23 @@ const PRELUDE: &str = r####"
                 (error "Missing absolute Git-Gutter+ sandbox root"))
               (when (file-exists-p root)
                 (error "Git-Gutter+ sandbox root exists: %s" root))
-              ;; Byte-identity is enforced only when the harness provisions a
-              ;; binary with a known hash (NEOMACS_TOOLS_GIT_SHA); a
-              ;; System-sourced git pins the version alone -- the version is
-              ;; the behavioral identity, the host package manager owns the
-              ;; bytes.
-              (unless (and (file-regular-p ggp412-test-git)
-                           (not (file-symlink-p ggp412-test-git))
-                           (or (null (getenv "NEOMACS_TOOLS_GIT_SHA"))
-                               (equal (ggp412-test-file-sha ggp412-test-git)
-                                      (getenv "NEOMACS_TOOLS_GIT_SHA")))
-                           (string= (ggp412-test-git default-directory "--version")
-                                    "git version 2.51.2"))
-                (error "Git executable provenance mismatch: %s" ggp412-test-git))
+              ;; The harness resolves git through its lock row and publishes
+              ;; that resolution (NEOMACS_TOOLS_GIT_VERSION / _SHA) here; the
+              ;; gate checks that the editor found that binary, not a literal
+              ;; build string recorded on some earlier host.
+              (let ((expected-version (getenv "NEOMACS_TOOLS_GIT_VERSION"))
+                    (expected-sha (getenv "NEOMACS_TOOLS_GIT_SHA")))
+                (unless (and (stringp expected-version)
+                             (not (string-empty-p expected-version))
+                             (stringp expected-sha)
+                             (not (string-empty-p expected-sha))
+                             (file-regular-p ggp412-test-git)
+                             (not (file-symlink-p ggp412-test-git))
+                             (equal (ggp412-test-file-sha ggp412-test-git)
+                                    expected-sha)
+                             (string= (ggp412-test-git default-directory "--version")
+                                      (concat "git version " expected-version)))
+                  (error "Git executable provenance mismatch: %s" ggp412-test-git)))
               (dolist (name (list git-gutter+-popup-buffer
                                   git-gutter+-commit-buffer-name
                                   git-gutter+-staged-changes-buffer-name))
@@ -460,7 +464,11 @@ fn public_revert_confirms_saves_and_refreshes_one_hunk() -> ParityBatchCase {
 (ggp412-test-run
  "revert"
  (append ggp412-test-open-plan
-         '((file "--no-pager" "status" "--porcelain" "-z"
+         ;; `save-buffer' lets VC run its own `git status' (GNU
+         ;; lisp/vc/vc-git.el:2904-2907 adds --no-optional-locks to every
+         ;; status it issues), which is part of the editor behavior under
+         ;; this workflow.
+         '((file "--no-pager" "--no-optional-locks" "status" "--porcelain" "-z"
                  "--untracked-files" "--ignored" "--" "release 界.txt"))
          (list (cadr ggp412-test-open-plan)))
  (lambda (root file)
@@ -485,7 +493,7 @@ fn public_revert_confirms_saves_and_refreshes_one_hunk() -> ParityBatchCase {
            :status (ggp412-test-git-observation root "status" "--short")))))
 "####,
         expect![[
-            r##"OK (:source (:upstream-sha256 "f64612560477186db3d4e2533ba55a0316dcbae1539b0dc0abc721ac1890d948" :installed-sha256 "288d40efc9d52b6527aded6e8c4e34caf4d9cf7031810b3466f44c0820ff69fa" :version "20151204.923" :feature t) :result (:prompt "Revert hunk?" :before "# Release 界\nowner: delivery\n\nsteps:\n- validate\n- notify\n- publish\n\nnotes:\nend\n" :after "# Release 界\nowner: platform\n\nsteps:\n- validate\n- notify\n- publish\n\nnotes:\nend\n" :disk "# Release 界\nowner: platform\n\nsteps:\n- validate\n- notify\n- publish\n\nnotes:\nend\n" :hunks ((:type added :start 6 :end 6 :content "@@ -5,0 +6 @@ steps:\n+- notify") (:type deleted :start 10 :end 10 :content "@@ -9 +9,0 @@ notes:\n-- legacy")) :status " M \"release \\347\\225\\214.txt\"") :git ((call "rev-parse" "--is-inside-work-tree" :cwd "./") (call "--no-pager" "diff" "--no-color" "--no-ext-diff" "-U0" "release 界.txt" :cwd "./") (file "--no-pager" "status" "--porcelain" "-z" "--untracked-files" "--ignored" "--" "release 界.txt" :cwd "./") (call "--no-pager" "diff" "--no-color" "--no-ext-diff" "-U0" "release 界.txt" :cwd "./")) :cleanup (:source-unchanged t :new-buffers nil :new-processes 0 :new-timers 0 :new-frames 0 :root-exists nil :buffer-restored t :body-error nil :cleanup-errors nil))"##
+            r##"OK (:source (:upstream-sha256 "f64612560477186db3d4e2533ba55a0316dcbae1539b0dc0abc721ac1890d948" :installed-sha256 "288d40efc9d52b6527aded6e8c4e34caf4d9cf7031810b3466f44c0820ff69fa" :version "20151204.923" :feature t) :result (:prompt "Revert hunk?" :before "# Release 界\nowner: delivery\n\nsteps:\n- validate\n- notify\n- publish\n\nnotes:\nend\n" :after "# Release 界\nowner: platform\n\nsteps:\n- validate\n- notify\n- publish\n\nnotes:\nend\n" :disk "# Release 界\nowner: platform\n\nsteps:\n- validate\n- notify\n- publish\n\nnotes:\nend\n" :hunks ((:type added :start 6 :end 6 :content "@@ -5,0 +6 @@ steps:\n+- notify") (:type deleted :start 10 :end 10 :content "@@ -9 +9,0 @@ notes:\n-- legacy")) :status " M \"release \\347\\225\\214.txt\"") :git ((call "rev-parse" "--is-inside-work-tree" :cwd "./") (call "--no-pager" "diff" "--no-color" "--no-ext-diff" "-U0" "release 界.txt" :cwd "./") (file "--no-pager" "--no-optional-locks" "status" "--porcelain" "-z" "--untracked-files" "--ignored" "--" "release 界.txt" :cwd "./") (call "--no-pager" "diff" "--no-color" "--no-ext-diff" "-U0" "release 界.txt" :cwd "./")) :cleanup (:source-unchanged t :new-buffers nil :new-processes 0 :new-timers 0 :new-frames 0 :root-exists nil :buffer-restored t :body-error nil :cleanup-errors nil))"##
         ]],
     )
 }
@@ -581,12 +589,11 @@ fn git_gutter_plus_package_batch() {
     // neomacs-infra's tools lock; a host whose git identity diverges gets a
     // loud documented skip instead of a misleading provenance error.
     match neomacs_infra::tools::resolve_tool("git", "*") {
-        Ok(tool) => {
-            // System-sourced binaries are already on PATH (the editors
-            // inherit it); provisioned strategies (tarball/nix) will prepend
-            // tool.bin_dir here and publish NEOMACS_TOOLS_GIT_SHA so the
-            // elisp provenance check enforces byte identity.
-            let _ = &tool;
+        Ok(_tool) => {
+            // Resolving publishes the identity (NEOMACS_TOOLS_GIT_VERSION /
+            // _SHA) and prepends the resolved bin directory to PATH for the
+            // editor sessions; the elisp prelude then enforces that the
+            // editor found exactly that binary.
         }
         Err(neomacs_infra::tools::ToolsError::VersionMismatch { expected, actual }) => {
             eprintln!(
