@@ -4730,6 +4730,45 @@ impl LayoutEngine {
         let buffer = evaluator
             .buffer_manager()
             .get(neovm_core::buffer::BufferId(params.buffer_id))?;
+        if prev.key.overlay_digest != curr_key.overlay_digest {
+            // A face-only overlay change moves no text, so the row walker
+            // re-measures every changed face and the sync frontier's y-check
+            // refuses a reused row whose height moved. That is why this path
+            // accepts `line-spacing` and automatic paragraph direction, which
+            // an edit replay must refuse; wrapping, numbered gutters,
+            // trailing whitespace, horizontal scroll and a scroll margin still
+            // decline in `sync_layout_conditions`.
+            //
+            // Fontification callbacks are deliberately NOT a refusal here:
+            // jit-lock installs buffer-local `fontification-functions` in every
+            // font-locked buffer, which is exactly where hl-line, show-paren
+            // and region move. A face installed this frame bumps the property
+            // tick, so the leaf's post-fontification freshness revalidation
+            // rejects the attempt and the retry rebuilds from the new inputs
+            // rather than publishing rows this plan measured without them.
+            if !self.allow_below_reuse
+                || !crate::incremental_layout::edit_sync::sync_layout_conditions(
+                    &curr_key,
+                    params.scroll_margin,
+                )
+                // An alias can give an ordinary face overlay a structural
+                // meaning (for example, a display-property fallback).
+                || !crate::incremental_layout::face_overlay_aliases_supported(
+                    buffer.buffer_local_value("char-property-alias-alist")
+                        .or_else(|| evaluator.variable_value_by_name("char-property-alias-alist")),
+                )
+            {
+                return None;
+            }
+            let mut replay = prev.face_overlay_replay(&curr_key)?;
+            // Keep evaluating mode-line Lisp. Reuse its glyphs only when the
+            // existing chrome memo proves that its freshly evaluated output
+            // and rendering inputs are identical.
+            if crate::incremental_layout::chrome_memo::chrome_memo_mode().enabled() {
+                replay.chrome_memo = prev.chrome_memo();
+            }
+            return Some(replay);
+        }
         // The PRE-fontification span (GNU decision order): the keystroke's own
         // damage. The fontification pass has already run by now and widened
         // the live accumulator to the whole jit-lock chunk; using the live

@@ -34,6 +34,9 @@ use neovm_core::window::{DisplayPointSnapshot, DisplayRowSnapshot};
 pub(crate) mod chrome_memo;
 pub(crate) mod edit_sync;
 pub(crate) mod mode_line_gate;
+mod overlay_damage;
+use overlay_damage::FaceOverlayCoverage;
+pub(crate) use overlay_damage::face_overlay_aliases_supported;
 
 /// How a window's layout was produced this cycle.
 ///
@@ -127,6 +130,7 @@ impl WindowDelta {
         // that decides, so an identical rebuild is not a change.
         aligned.overlay_modified_tick = curr.overlay_modified_tick;
         aligned.overlay_digest = curr.overlay_digest;
+        aligned.face_overlay_coverage = curr.face_overlay_coverage;
         aligned.window_start = curr.window_start;
         Self {
             point_moved: prev.point != curr.point,
@@ -246,6 +250,8 @@ pub struct RetainedWindowKey {
     /// LSP client re-creates its diagnostics on every change -- and without
     /// this every such rebuild forces a full relayout of the window.
     pub overlay_digest: u64,
+    /// Numeric coverage only; no Lisp objects survive a layout/GC boundary.
+    pub(crate) face_overlay_coverage: FaceOverlayCoverage,
     /// Global face-subsystem change counter (spec §4.2 (C)). Catches
     /// `set-face-attribute` / theme load / face-remap that mutate pixels with
     /// no buffer tick.
@@ -354,6 +360,11 @@ impl RetainedWindowKey {
             props_modified_tick,
             overlay_modified_tick,
             overlay_digest,
+            face_overlay_coverage: evaluator
+                .buffer_manager()
+                .get(neovm_core::buffer::BufferId(p.buffer_id))
+                .map(FaceOverlayCoverage::capture)
+                .unwrap_or_default(),
             face_change_count: evaluator.face_change_count(),
             display_var_change_count: evaluator.display_var_change_count(),
         }
@@ -474,6 +485,7 @@ impl RetainedWindowKey {
             props_modified_tick,
             overlay_modified_tick,
             overlay_digest,
+            face_overlay_coverage,
             face_change_count,
             display_var_change_count,
         )
@@ -1737,6 +1749,46 @@ impl RetainedWindowMatrix {
         below: edit_sync::BelowReuse,
         source_proof: impl FnOnce() -> EditReplaySourceProof,
     ) -> Option<ScrollReplay> {
+        if !RetainedWindowKey::edit_eligible(&self.key, curr) {
+            return None;
+        }
+        self.localized_replay_with_source_proof(curr, damage, below, source_proof)
+    }
+
+    /// The text and its properties are unchanged. Rewalk the union of ALL old
+    /// and new face-overlay spans, then synchronize with unchanged rows. Never
+    /// use the monospace proof: a face can change font metrics and row height.
+    pub(crate) fn face_overlay_replay(&self, curr: &RetainedWindowKey) -> Option<ScrollReplay> {
+        let delta = WindowDelta::between(&self.key, curr);
+        if !delta.overlays_changed
+            || delta.text_changed
+            || delta.properties_changed
+            || delta.window_start_moved
+            || delta.other_changed
+        {
+            return None;
+        }
+        let (start, end) = self
+            .key
+            .face_overlay_coverage
+            .damage(curr.face_overlay_coverage)?;
+        self.localized_replay_with_source_proof(
+            curr,
+            EditReplayPositions::new(start, end, 0),
+            edit_sync::BelowReuse::Sync {
+                prove_fallback: false,
+            },
+            || EditReplaySourceProof::Rejected,
+        )
+    }
+
+    fn localized_replay_with_source_proof(
+        &self,
+        curr: &RetainedWindowKey,
+        damage: EditReplayPositions,
+        below: edit_sync::BelowReuse,
+        source_proof: impl FnOnce() -> EditReplaySourceProof,
+    ) -> Option<ScrollReplay> {
         let allow_below_reuse = below.prove_allowed();
         let sync = matches!(below, edit_sync::BelowReuse::Sync { .. });
         let dirty_start = damage.start();
@@ -1744,8 +1796,7 @@ impl RetainedWindowMatrix {
         if self.validity != MatrixValidity::Valid {
             return None;
         }
-        if !RetainedWindowKey::edit_eligible(&self.key, curr)
-            || curr.vscroll != 0
+        if curr.vscroll != 0
             || curr.display_line_numbers.point_motion_body_dependency()
                 == PointMotionBodyDependency::EntireWindow
         {
