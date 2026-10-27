@@ -1119,12 +1119,24 @@ pub(crate) fn builtin_frame_right_divider_width(args: Vec<Value>) -> EvalResult 
     Ok(Value::fixnum(0))
 }
 
-pub(crate) fn builtin_frame_scroll_bar_height(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_frame_scroll_bar_height(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args_range("frame-scroll-bar-height", &args, 0, 1)?;
-    if let Some(frame) = args.first() {
-        expect_frame_in_domain(frame, FrameDomain::Any)?;
-    }
-    Ok(Value::fixnum(0))
+    let fid = super::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        FrameDomain::Any,
+    )?;
+    // GNU returns FRAME_SCROLL_BAR_AREA_HEIGHT (src/frame.c:4496-4501): the
+    // configured height while the frame enables horizontal scroll bars, and
+    // zero otherwise.
+    Ok(Value::fixnum(eval.frames.get(fid).map_or(
+        0,
+        crate::window::Frame::horizontal_scroll_bar_area_height,
+    )))
 }
 
 pub(crate) fn builtin_frame_scroll_bar_width(

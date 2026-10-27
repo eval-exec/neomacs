@@ -70,10 +70,14 @@ use sibling_layout::{ChildExtent, sibling_bounds};
 pub use split::{CombinationLimit, DeleteOutcome, DeleteResize, ParentSeal, SplitAttachment};
 
 pub use display::{
-    WindowBufferDisplayDefaults, WindowFringeDefaults, WindowScrollBarDefaults,
-    WindowScrollBarGeometry, resolve_window_scroll_bar_geometry,
+    GUI_SCROLL_BAR_DEFAULT_WIDTH_PX, WindowBufferDisplayDefaults, WindowFringeDefaults,
+    WindowScrollBarDefaults, WindowScrollBarGeometry, resolve_window_scroll_bar_geometry,
 };
-pub(crate) use display::{WindowLayoutQueryAdapter, note_char_table_layout_mutation};
+pub(crate) use display::{
+    WindowLayoutQueryAdapter, frame_config_scroll_bar_height, frame_config_scroll_bar_width,
+    frame_has_horizontal_scroll_bar, frame_vertical_scroll_bar_side,
+    note_char_table_layout_mutation,
+};
 pub use frame_params::{
     CursorTypeSymbol, FrameFullscreen, FrameParam, FrameParamKey, FrameToolBarPosition,
     FrameZGroup, GNU_FRAME_PARAM_COUNT, GNU_FRAME_PARAMS,
@@ -5000,9 +5004,10 @@ impl Frame {
         // applies for the missing parameter, so seeding them changes reporting only,
         // never geometry: GTK builds default vertical scroll bars to the right,
         // horizontal off, the standard 8px fringes, and a zero internal/outer border.
-        // scroll-bar-width is intentionally left unset: its fallback tracks the live
-        // char width, so a fixed seed would go stale when the frame font changes
-        // (GNU re-resolves it on font change; our fallback already follows the font).
+        // scroll-bar-width/height are intentionally left unset: their shared
+        // fallback is GNU's toolkit default (16 px, xfns.c:2393-2438), which does
+        // not follow the frame font either; `frame-parameter` reports that same
+        // number for an unset frame (frame.c:5437-5456).
         self.set_known_parameter(FrameParam::VerticalScrollBars, Value::symbol("right"));
         self.set_known_parameter(FrameParam::HorizontalScrollBars, Value::NIL);
         self.set_known_parameter(FrameParam::LeftFringe, Value::fixnum(8));
@@ -5191,10 +5196,7 @@ impl Frame {
     }
 
     fn default_vertical_scroll_bar_width(&self) -> i64 {
-        self.known_parameter(FrameParam::ScrollBarWidth)
-            .and_then(|v| v.as_int())
-            .filter(|value| *value > 0)
-            .unwrap_or_else(|| self.char_width.max(1.0).round() as i64)
+        i64::from(display::frame_config_scroll_bar_width(self))
     }
 
     pub(crate) fn vertical_scroll_bar_area_width(&self) -> i64 {
@@ -5202,6 +5204,22 @@ impl Frame {
             && self.default_vertical_scroll_bar_side().is_some()
         {
             self.default_vertical_scroll_bar_width()
+        } else {
+            0
+        }
+    }
+
+    /// GNU `FRAME_SCROLL_BAR_AREA_HEIGHT` (src/frame.h:1342-1345): the
+    /// configured horizontal scroll-bar height only while the frame enables
+    /// horizontal scroll bars, zero otherwise.  This is what
+    /// `frame-scroll-bar-height` returns (src/frame.c:4496-4501); the
+    /// `scroll-bar-height` frame *parameter* keeps reporting the configured
+    /// height even with the bars turned off (src/frame.c:5437-5456).
+    pub(crate) fn horizontal_scroll_bar_area_height(&self) -> i64 {
+        if self.effective_window_system().is_some()
+            && display::frame_has_horizontal_scroll_bar(self)
+        {
+            i64::from(display::frame_config_scroll_bar_height(self))
         } else {
             0
         }

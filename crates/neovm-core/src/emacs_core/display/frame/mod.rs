@@ -2499,6 +2499,44 @@ pub(crate) fn frame_parameter_value(
         {
             return Value::NIL;
         }
+        // On a GUI frame GNU answers these four from the frame's realized
+        // state rather than from the stored parameter alist:
+        // `vertical-scroll-bars' comes from the internal type (left/right/nil)
+        // and `horizontal-scroll-bars' is normalized to t/nil
+        // (src/frame.c:4191-4198); `scroll-bar-width' and `scroll-bar-height'
+        // report the configured thickness, which is the toolkit default (16)
+        // when the frame names none and stays non-nil while the bars are
+        // switched off (src/frame.c:5437-5456).
+        FrameParamKey::Known(FrameParam::VerticalScrollBars) => {
+            return crate::window::frame_vertical_scroll_bar_side(frame).unwrap_or(Value::NIL);
+        }
+        FrameParamKey::Known(FrameParam::HorizontalScrollBars) => {
+            return if crate::window::frame_has_horizontal_scroll_bar(frame) {
+                Value::T
+            } else {
+                Value::NIL
+            };
+        }
+        FrameParamKey::Known(FrameParam::ScrollBarWidth)
+            if frame.effective_window_system().is_some() =>
+        {
+            let width = crate::window::frame_config_scroll_bar_width(frame);
+            return if width > 0 {
+                Value::fixnum(i64::from(width))
+            } else {
+                Value::NIL
+            };
+        }
+        FrameParamKey::Known(FrameParam::ScrollBarHeight)
+            if frame.effective_window_system().is_some() =>
+        {
+            let height = crate::window::frame_config_scroll_bar_height(frame);
+            return if height > 0 {
+                Value::fixnum(i64::from(height))
+            } else {
+                Value::NIL
+            };
+        }
         FrameParamKey::Known(FrameParam::Font) if frame.effective_window_system().is_none() => {
             return Value::string("tty");
         }

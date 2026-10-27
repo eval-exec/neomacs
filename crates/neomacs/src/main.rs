@@ -1027,10 +1027,18 @@ fn startup_dimensions(
             // GUI frame is therefore 80x35 of *counted* text; match that observable.
             let cols = 80u32;
             let text_rows = 35u32;
-            // Side chrome the layout reserves outside the text columns: a default
-            // vertical scroll bar (one char wide) plus the two 8px fringes.
+            // Side chrome the layout reserves outside the text columns: the
+            // default vertical scroll bar plus the two 8px fringes.  GNU's
+            // gui_figure_window_size adds FRAME_SCROLL_BAR_AREA_WIDTH, the
+            // toolkit default (16 px, src/xfns.c:2393-2438), not a character
+            // cell; sharing the layout's constant keeps the requested window
+            // and the text area the layout reserves in agreement.  Reserving
+            // one cell here made the first frame come up one column short
+            // whenever the font's cell was not 16 pixels (13 px DejaVu Sans
+            // Mono: 1069 requested, 79 columns realized).
             const DEFAULT_FRINGE_PX: f32 = 8.0;
-            let side_chrome = frame_metrics.char_width + 2.0 * DEFAULT_FRINGE_PX;
+            let side_chrome = neovm_core::window::GUI_SCROLL_BAR_DEFAULT_WIDTH_PX as f32
+                + 2.0 * DEFAULT_FRINGE_PX;
             // Top chrome reserved above the text lines for a default GUI frame: a
             // one-line menu bar (char_height) plus the icon-height tool bar. Both
             // default on under -Q; if a user disables either this slightly
