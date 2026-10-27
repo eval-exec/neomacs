@@ -655,12 +655,16 @@ jobs:
       - name: Prepare pinned GUI package fixtures
         run: bash scripts/ci/setup-gui-test-packages.sh
 
-      - name: Run real GUI tests
+      # The standalone Native display contract workflow is disabled. Keep its
+      # display-runtime scroll-input coverage in automatic CI by running it
+      # from the same archive; native_display itself is already part of
+      # package(neomacs-gui-tests).
+      - name: Run real GUI tests and display input units
         run: |
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
-            -E 'package(neomacs-gui-tests)' \
+            -E 'package(neomacs-gui-tests) or (package(neomacs-display-runtime) and test(scroll_input))' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --no-fail-fast
 

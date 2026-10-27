@@ -1,27 +1,31 @@
 name: Native display contract
 
+# Disabled for automatic CI: the Linux native_display tests already run from
+# the workspace test archive in the neomacs-gui-tests job. Uncomment the
+# pull_request block to restore the per-PR cross-platform contract run; the
+# manual workflow_dispatch entry remains for explicit macOS/Windows checks.
 on:
-  pull_request:
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - crates/neomacs-display-runtime/src/render_thread/scroll_input.rs
-      - crates/neomacs-display-runtime/src/render_thread/tests/scroll_input_test.rs
-      - crates/neomacs-display-runtime/src/window_identity.rs
-      - crates/neomacs-gui-tests/tests/native_display.rs
-      - crates/neomacs-gui-tests/tests/native_display/frame_focus_windows.rs
-      - crates/neomacs-gui-tests/fixtures/native-frame-focus.el
-      - crates/neovm-core/src/keyboard/tests/frame_focus_input_test.rs
-      - crates/neovm-core/src/emacs_core/display/frame/**
-      - crates/neovm-core/src/emacs_core/display/window_cmds/mod.rs
-      - crates/neovm-core/src/keyboard.rs
-      - crates/neovm-core/src/window/mod.rs
-      - crates/neomacs-display-runtime/src/render_thread/window_events.rs
-      - crates/neomacs-display-runtime/src/render_thread/frame_windows.rs
-      - crates/neomacs/src/input_bridge.rs
-      - crates/neomacs-gui-tests/fixtures/native-scroll-contract.el
-      - crates/neomacs-perf/fixtures/scrolling-content.el
-      - .github/workflows/native-display-contract.yml
+  # pull_request:
+  #   paths:
+  #     - Cargo.toml
+  #     - Cargo.lock
+  #     - crates/neomacs-display-runtime/src/render_thread/scroll_input.rs
+  #     - crates/neomacs-display-runtime/src/render_thread/tests/scroll_input_test.rs
+  #     - crates/neomacs-display-runtime/src/window_identity.rs
+  #     - crates/neomacs-gui-tests/tests/native_display.rs
+  #     - crates/neomacs-gui-tests/tests/native_display/frame_focus_windows.rs
+  #     - crates/neomacs-gui-tests/fixtures/native-frame-focus.el
+  #     - crates/neovm-core/src/keyboard/tests/frame_focus_input_test.rs
+  #     - crates/neovm-core/src/emacs_core/display/frame/**
+  #     - crates/neovm-core/src/emacs_core/display/window_cmds/mod.rs
+  #     - crates/neovm-core/src/keyboard.rs
+  #     - crates/neovm-core/src/window/mod.rs
+  #     - crates/neomacs-display-runtime/src/render_thread/window_events.rs
+  #     - crates/neomacs-display-runtime/src/render_thread/frame_windows.rs
+  #     - crates/neomacs/src/input_bridge.rs
+  #     - crates/neomacs-gui-tests/fixtures/native-scroll-contract.el
+  #     - crates/neomacs-perf/fixtures/scrolling-content.el
+  #     - .github/workflows/native-display-contract.yml
   workflow_dispatch:
     inputs:
       platform:
