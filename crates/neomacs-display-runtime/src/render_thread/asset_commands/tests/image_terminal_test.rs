@@ -102,3 +102,69 @@ fn bands_do_not_answer_a_terminal_query() {
         "the terminal state supersedes the bands"
     );
 }
+
+#[test]
+fn beginning_a_load_preserves_equal_newer_and_unrelated_terminal_state() {
+    let shared = super::super::ImageRenderState::default();
+    let image = ImageId::new(9);
+    let load = |attempt| ImageLoadToken::new(image, ImageLoadAttempt::new(attempt).unwrap());
+    let older = load(1);
+    let equal = load(2);
+    let newer = load(3);
+    let unrelated = ImageLoadToken::new(ImageId::new(10), ImageLoadAttempt::new(1).unwrap());
+    let failure = super::super::ImageDecodeTerminal::Failed(
+        neomacs_display_protocol::image_diagnostic::ImageDiagnostic::NotDrawable,
+    );
+    shared.publish_terminal(older, failure.clone());
+    shared.publish_terminal(
+        equal,
+        super::super::ImageDecodeTerminal::Ready(ResolvedImageMetadata::layout_is_image_pixels(
+            2,
+            3,
+            0,
+            true,
+            neomacs_display_protocol::ImageMaskKind::Clipping,
+        )),
+    );
+    let rows = super::super::RowRange::new(0, std::num::NonZeroU32::new(4).unwrap());
+    shared.publish_band(newer, rows);
+    shared.publish_terminal(unrelated, failure);
+
+    shared.begin_image_load(equal);
+    assert!(
+        shared.terminal(older).is_none(),
+        "strictly older attempt retires"
+    );
+    assert!(
+        matches!(
+            shared.terminal(equal),
+            Some(super::super::ImageDecodeTerminal::Ready(_))
+        ),
+        "a duplicate load must preserve its already-published terminal"
+    );
+    assert_eq!(
+        shared.band(newer),
+        Some(rows),
+        "newer band remains published"
+    );
+    assert!(
+        shared.terminal(unrelated).is_some(),
+        "another image is unaffected"
+    );
+
+    shared.begin_image_load(newer);
+    assert!(
+        shared.terminal(equal).is_none(),
+        "new generation removes older terminal"
+    );
+    assert_eq!(
+        shared.band(newer),
+        Some(rows),
+        "same-generation band survives"
+    );
+
+    // A delayed command cannot invalidate the terminal of a newer admission.
+    shared.begin_image_load(older);
+    assert_eq!(shared.band(newer), Some(rows));
+    assert!(shared.terminal(unrelated).is_some());
+}

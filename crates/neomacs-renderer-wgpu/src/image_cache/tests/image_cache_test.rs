@@ -102,7 +102,8 @@ fn freed_or_replaced_image_loads_reject_late_decode_outcomes() {
     assert!(!loads.accept(current), "a duplicate terminal is stale");
     let replacement = loads.begin_generated(ImageId::new(42));
     assert!(loads.accept(replacement), "a new generation remains valid");
-    assert!(loads.active.is_empty());
+    assert!(loads.was_admitted(replacement));
+    assert!(!loads.is_current(replacement));
 }
 
 #[test]
@@ -111,6 +112,7 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
     let ready = loads.begin_generated(ImageId::new(51));
     let failed = loads.begin_generated(ImageId::new(52));
 
+    let ready_token = ready;
     let ready = WorkerDecodeOutcome::Ready(ImageCache::decoded_image(
         ready,
         DecodedPixels {
@@ -128,7 +130,9 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
         loads.take_current(ready),
         Some(WorkerDecodeOutcome::Ready(_))
     ));
-    assert_eq!(loads.active.len(), 1);
+    assert!(loads.was_admitted(ready_token));
+    assert!(!loads.is_current(ready_token));
+    assert!(loads.is_current(failed));
 
     assert!(matches!(
         loads.take_current(WorkerDecodeOutcome::Failed {
@@ -137,7 +141,8 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
         }),
         Some(WorkerDecodeOutcome::Failed { .. })
     ));
-    assert!(loads.active.is_empty());
+    assert!(loads.was_admitted(failed));
+    assert!(!loads.is_current(failed));
     assert!(
         loads
             .take_current(WorkerDecodeOutcome::Failed {
@@ -156,7 +161,7 @@ fn decoder_worker_survives_a_panicking_request() {
         ImageCache::decoder_thread_pooled(
             0,
             Arc::new(Mutex::new(request_rx)),
-            outcome_tx,
+            DecodeOutputSink::Channel(outcome_tx),
             Arc::new(ImageSequenceCache::new()),
         )
     });
@@ -176,6 +181,7 @@ fn decoder_worker_survives_a_panicking_request() {
             animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: test_load_identity(),
+            limit: neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
         })
         .unwrap();
     request_tx
@@ -194,6 +200,7 @@ fn decoder_worker_survives_a_panicking_request() {
             animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: test_load_identity(),
+            limit: neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
         })
         .unwrap();
     drop(request_tx);

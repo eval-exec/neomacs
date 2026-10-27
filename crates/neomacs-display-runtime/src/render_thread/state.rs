@@ -200,6 +200,16 @@ impl ImageRenderState {
         self.begin_terminal_publication().remove(load);
     }
 
+    /// Retire only strictly older terminals when admitting a native load.
+    /// Duplicate or stale commands may be ignored by the renderer, so they
+    /// cannot erase an equal or newer result that will not be published again.
+    pub fn begin_image_load(&self, load: ImageLoadToken) {
+        let mut publication = self.begin_terminal_publication();
+        publication.terminals.retain(|published, _| {
+            published.image() != load.image() || published.attempt() >= load.attempt()
+        });
+    }
+
     pub fn clear_image_terminals(&self, image: ImageId) {
         self.begin_terminal_publication().clear_image(image);
     }

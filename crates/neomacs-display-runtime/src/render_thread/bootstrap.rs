@@ -184,8 +184,9 @@ impl RenderApp {
         }
         surface.configure(&device, &config);
 
+        let image_decoder = self.comms.image_decoder.take().unwrap_or_default();
         #[cfg(feature = "video")]
-        let renderer = WgpuRenderer::with_device_and_video_runtime(
+        let renderer = WgpuRenderer::with_device_and_video_runtime_and_image_decoder(
             device.clone(),
             queue.clone(),
             pending_width,
@@ -194,15 +195,17 @@ impl RenderApp {
             pending_scale_factor as f32,
             self.video_gpu_generation,
             self.video_wake.clone(),
+            image_decoder,
         );
         #[cfg(not(feature = "video"))]
-        let renderer = WgpuRenderer::with_device(
+        let renderer = WgpuRenderer::with_device_and_image_decoder(
             device.clone(),
             queue.clone(),
             pending_width,
             pending_height,
             format,
             pending_scale_factor as f32,
+            image_decoder,
         );
 
         tracing::info!(
@@ -325,7 +328,12 @@ impl RenderApp {
         if let Some(renderer) = self.renderer.as_ref() {
             self.pending_video_recovery = renderer.video_recovery_manifests();
         }
-        self.renderer = None;
+        if let Some(renderer) = self.renderer.take() {
+            // CPU decoding and pending pixels belong to the image pipeline,
+            // whose metadata client outlives this device and its textures.
+            debug_assert!(self.comms.image_decoder.is_none());
+            self.comms.image_decoder = Some(renderer.into_image_decoder());
+        }
         self.publish_image_cache_usage();
         #[cfg(feature = "video")]
         {

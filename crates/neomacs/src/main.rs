@@ -3737,8 +3737,10 @@ fn run_gui_main_thread(
     font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
 ) {
     let render_waker = GuiEventLoopWaker::new(event_loop.create_proxy());
+    let image_decoder = neomacs_display_runtime::render_thread::ImageDecoder::new();
+    let image_decode_client = image_decoder.client();
 
-    let comms = ThreadComms::new();
+    let comms = ThreadComms::new().with_image_decoder(image_decoder);
     let (emacs_comms, render_comms) = comms.split();
     let (startup_reply, startup_ready) =
         neomacs_display_runtime::render_thread::InitialWindowReply::channel(
@@ -3757,6 +3759,7 @@ fn run_gui_main_thread(
         bootstrap_display,
         font_observer,
         emacs_comms,
+        image_decode_client,
         Arc::clone(&gui_image_metadata),
         Arc::clone(&shared_monitors),
         #[cfg(feature = "neo-term")]
@@ -3874,6 +3877,7 @@ fn spawn_gui_evaluator_worker(
     bootstrap_display: BootstrapDisplayConfig,
     font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
     emacs_comms: EmacsComms,
+    image_decode_client: neomacs_display_runtime::render_thread::ImageDecodeClient,
     gui_image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
     #[cfg(feature = "neo-term")] shared_terminals: SharedTerminals,
@@ -3898,6 +3902,7 @@ fn spawn_gui_evaluator_worker(
                     bootstrap_display,
                     font_observer,
                     emacs_comms,
+                    image_decode_client,
                     gui_image_metadata,
                     shared_monitors,
                     #[cfg(feature = "neo-term")]
@@ -4018,6 +4023,7 @@ fn run_gui_evaluator_worker(
     bootstrap_display: BootstrapDisplayConfig,
     mut font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
     emacs_comms: EmacsComms,
+    image_decode_client: neomacs_display_runtime::render_thread::ImageDecodeClient,
     gui_image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
     #[cfg(feature = "neo-term")] shared_terminals: SharedTerminals,
@@ -4093,6 +4099,7 @@ fn run_gui_evaluator_worker(
             Some(render_waker.clone()),
             Arc::clone(&gui_image_metadata),
             Some(image_redisplay_waker),
+            image_decode_client,
         )),
         #[cfg(feature = "video")]
         resolved_videos: Mutex::new(ResolvedVideoRegistry::default()),

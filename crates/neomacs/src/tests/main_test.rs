@@ -1628,6 +1628,7 @@ fn test_image_catalog(
         None,
         image_metadata,
         None,
+        neomacs_display_runtime::render_thread::ImageDecoder::new().client(),
     ))
 }
 
@@ -2707,7 +2708,13 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
 #[test]
 fn animation_frames_share_sequence_identity_and_retirement_advances_generation() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, Arc::new(ImageRenderState::default()), None);
+    let catalog = AsyncImageCatalog::new(
+        cmd_tx,
+        None,
+        Arc::new(ImageRenderState::default()),
+        None,
+        neomacs_display_runtime::render_thread::ImageDecoder::new().client(),
+    );
     let source = ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(vec![
         b'G', b'I', b'F',
     ])));

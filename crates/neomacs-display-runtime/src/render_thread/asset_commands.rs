@@ -8,38 +8,6 @@ fn clear_image_terminals(shared: &super::SharedImageRenderState, image: ImageId)
     shared.clear_image_terminals(image);
 }
 
-/// The failure GNU's size limit answers a load with, if it answers one.
-///
-/// GNU checks `max-image-size` inside each loader, against the header it has
-/// just read, and gives up before creating any image storage
-/// (`check_image_size`, `src/image.c:1811`). Both load paths here read the same
-/// header first, so this is that moment: a source over the bound is answered
-/// with a failed decode — GNU's own diagnostic — and the renderer is never
-/// asked for a pixel.
-///
-/// The verdict is returned as a plain cache event so it travels the path a
-/// decoder failure already travels ([`RenderApp::handle_image_event`]) and
-/// carries no separate meaning of its own.
-fn oversized_load_event(
-    load: neomacs_display_protocol::ImageLoadToken,
-    source: neomacs_renderer_wgpu::ImageProbeSource<'_>,
-    limit: neomacs_display_protocol::ImageSizeLimit,
-) -> Option<neomacs_renderer_wgpu::ImageCacheEvent> {
-    let Err(oversized) = neomacs_renderer_wgpu::admit(source, limit) else {
-        return None;
-    };
-    tracing::debug!(
-        image = %load.image(),
-        extent = ?oversized.extent().dimensions(),
-        maximum = ?limit.maximum().dimensions(),
-        "refusing an image larger than max-image-size"
-    );
-    Some(neomacs_renderer_wgpu::ImageCacheEvent::Failed {
-        load,
-        error: neomacs_display_protocol::image_diagnostic::ImageDiagnostic::InvalidSize,
-    })
-}
-
 impl RenderApp {
     #[cfg(feature = "video")]
     fn video_renderer_identity(&self) -> Option<neomacs_video::VideoRendererIdentity> {
@@ -102,15 +70,7 @@ impl RenderApp {
                 limit,
                 identity,
             } => {
-                clear_image_terminals(&self.image_metadata, load.image());
-                if let Some(event) = oversized_load_event(
-                    load,
-                    neomacs_renderer_wgpu::ImageProbeSource::File(&path),
-                    limit,
-                ) {
-                    self.handle_image_event(event);
-                    return;
-                }
+                self.image_metadata.begin_image_load(load);
                 tracing::info!("Loading image {}: {} (size {:?})", load, path, size);
                 if let Some(ref mut renderer) = self.renderer {
                     renderer.load_image_file_with_id(
@@ -125,6 +85,7 @@ impl RenderApp {
                         frame,
                         sequence,
                         identity,
+                        limit,
                     );
                 } else {
                     tracing::warn!("Renderer not initialized, cannot load image {}", load);
@@ -145,15 +106,7 @@ impl RenderApp {
                 limit,
                 identity,
             } => {
-                clear_image_terminals(&self.image_metadata, load.image());
-                if let Some(event) = oversized_load_event(
-                    load,
-                    neomacs_renderer_wgpu::ImageProbeSource::Data(data.bytes()),
-                    limit,
-                ) {
-                    self.handle_image_event(event);
-                    return;
-                }
+                self.image_metadata.begin_image_load(load);
                 let (data, resources) = match data {
                     neovm_core::emacs_core::image_catalog::ImageDataSource::Isolated(data) => {
                         (data, neomacs_renderer_wgpu::SvgResourceContext::Isolated)
@@ -188,6 +141,7 @@ impl RenderApp {
                         sequence,
                         resources,
                         identity,
+                        limit,
                     );
                 } else {
                     tracing::warn!("Renderer not initialized, cannot load image data {}", load);
@@ -201,7 +155,7 @@ impl RenderApp {
                 height,
                 stride,
             } => {
-                clear_image_terminals(&self.image_metadata, load.image());
+                self.image_metadata.begin_image_load(load);
                 tracing::debug!(
                     "Loading ARGB32 image {}: {}x{} stride={}",
                     load,
@@ -221,7 +175,7 @@ impl RenderApp {
                 height,
                 stride,
             } => {
-                clear_image_terminals(&self.image_metadata, load.image());
+                self.image_metadata.begin_image_load(load);
                 tracing::debug!(
                     "Loading RGB24 image {}: {}x{} stride={}",
                     load,
