@@ -3183,8 +3183,17 @@ pub(crate) fn builtin_recordp_1(_eval: &mut super::eval::Context, arg: Value) ->
     Ok(Value::bool_val(arg.is_record()))
 }
 
-pub(crate) fn builtin_query_fontset(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_query_fontset(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args_range("query-fontset", &args, 1, 2)?;
+    // GNU `Fquery_fontset` calls `check_window_system (NULL)` before touching
+    // the pattern (src/fontset.c:1248), so a headless session signals instead
+    // of resolving the fontset registry.
+    if !crate::emacs_core::display::x_window_system_active(eval) {
+        return Err(crate::emacs_core::display::window_system_not_initialized_error());
+    }
     let pattern = expect_string_lossy(&args[0])?;
     if pattern.is_empty() {
         return Ok(Value::NIL);

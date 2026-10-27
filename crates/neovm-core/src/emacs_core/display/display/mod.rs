@@ -353,7 +353,7 @@ fn x_display_query_first_arg_error(value: &Value) -> Flow {
     }
 }
 
-fn window_system_not_initialized_error() -> Flow {
+pub(crate) fn window_system_not_initialized_error() -> Flow {
     signal(
         "error",
         vec![Value::string(

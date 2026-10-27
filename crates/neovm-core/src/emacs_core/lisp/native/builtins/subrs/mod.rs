@@ -4876,7 +4876,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "query-fontset",
-        NativeFn::ContextVec(|_ctx, args| builtin_query_fontset(args)),
+        NativeFn::ContextVec(|ctx, args| builtin_query_fontset(ctx, args)),
         SubrArity::new(1, Some(2)),
     ));
     ctx.register_subr(

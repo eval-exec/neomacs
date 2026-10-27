@@ -7015,14 +7015,29 @@ fn pure_dispatch_record_placeholders_match_compat_contracts() {
     assert!(recordp.is_nil());
 
     super::symbols::reset_symbols_thread_locals();
-    let query_fontset =
-        dispatch_builtin_pure("query-fontset", vec![Value::string("fontset-default")])
-            .expect("builtin query-fontset should resolve")
-            .expect("builtin query-fontset should evaluate");
-    assert_eq!(
-        query_fontset,
-        Value::string("-*-*-*-*-*-*-*-*-*-*-*-*-fontset-default")
-    );
+    // GNU `Fquery_fontset` calls `check_window_system (NULL)` first
+    // (src/fontset.c:1248), so a headless context signals instead of
+    // resolving the registry.
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let query_fontset = dispatch_builtin(
+        &mut eval,
+        "query-fontset",
+        vec![Value::string("fontset-default")],
+    )
+    .expect("builtin query-fontset should resolve")
+    .expect_err("headless query-fontset should signal like GNU");
+    match query_fontset.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "error");
+            assert_eq!(
+                sig.data,
+                vec![Value::string(
+                    "Window system is not in use or not initialized"
+                )]
+            );
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
 
     let read_pos = dispatch_builtin_pure("read-positioning-symbols", vec![Value::string("x")])
         .expect("builtin read-positioning-symbols should resolve")
@@ -7046,7 +7061,15 @@ fn query_fontset_matches_emacs_regexp_syntax() {
 
     // `[([]` is the character class emitted by GNU `rx` for `[` or `(`.
     // The second Emacs-regexp alternative matches the default fontset.
-    let query_fontset = dispatch_builtin_pure(
+    // GNU `Fquery_fontset` requires a window system (src/fontset.c:1248), so
+    // the regexp contract is exercised on a window-system frame.
+    let mut eval = crate::emacs_core::Context::new();
+    eval.set_variable(
+        "window-system",
+        Value::symbol(crate::emacs_core::display::gui_window_system_symbol()),
+    );
+    let query_fontset = dispatch_builtin(
+        &mut eval,
         "query-fontset",
         vec![Value::string("[([]\\|fontset-default"), Value::T],
     )
