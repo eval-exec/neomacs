@@ -14424,26 +14424,62 @@ fn stderr_pipe_sentinel_neighbour_audit() {
 /// A bare integer argument to `signal-process` is an OS pid, and GNU never
 /// looks it up: `internal-default-signal-process` calls `get_process` only for
 /// a NON-number (src/process.c:7369-7370), and a number goes straight to
-/// `CONS_TO_INTEGER (process, pid_t, pid)` (:7375-7376).  The docstring says so
-/// too (:7405-7407).
+/// `CONS_TO_INTEGER (process, pid_t, pid)` (:7375-7376) and `kill` (:7397).
 ///
-/// This port consulted the live process table first, so a small integer
-/// answered for whichever process happened to hold that internal `ProcessId`.
-/// Measured, `-Q --batch`, with exactly one live child:
-///
-/// ```text
-///                          GNU 31.0.90   Neomacs, before
-/// (signal-process 1 0)     -1            0      <- this port's process #1
-/// (signal-process 2 0)     -1            -1
-/// (signal-process 3 0)     -1            -1
-/// ```
-///
-/// `-1` is `kill (1, 0)` failing with EPERM against init.  Signal 0 only, so
-/// nothing is actually signalled.  Found by ledger 169's neighbour audit, not
-/// by the bug it set out to fix.
+/// Internal ProcessIds 1/2/3 must not capture the corresponding literal PID
+/// arguments. Prove that domain distinction through the canonical resolver
+/// with unbacked records, without probing unowned OS PIDs. In a PID namespace,
+/// even PID1 can belong to this test's supervisor, so its signal0 result is
+/// not a portable oracle. The public syscall path below probes only our own
+/// live child and retains its liveness and cleanup checks.
 #[test]
 fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
     crate::test_utils::init_test_tracing();
+    {
+        let mut processes = ProcessManager::new();
+        let buffers = crate::buffer::BufferManager::new();
+        for expected_id in [1_u64, 2, 3] {
+            let id = processes.create_process(
+                format!("pw169-unbacked-{expected_id}"),
+                Value::NIL,
+                "unbacked".into(),
+                vec![],
+                ProcessCodingSystems::gnu_make_process_initial(),
+            );
+            assert_eq!(id, expected_id);
+            let record = processes.get(id).expect("our synthetic process record");
+            assert!(record.os_pid.is_none());
+            assert!(!record.live_io.child.has_child());
+
+            let pid = i64::try_from(id).expect("small ProcessId fits literal PID domain");
+            let literal = Value::fixnum(pid);
+            match resolve_signal_process_target_in_state(&processes, &buffers, Some(&literal))
+                .expect("resolve the numeric PID without a syscall")
+            {
+                SignalProcessTarget::Pid(actual) => assert_eq!(actual, pid),
+                SignalProcessTarget::Process(actual) => {
+                    panic!("literal PID {pid} selected internal ProcessId {actual}")
+                }
+                SignalProcessTarget::MissingNamedProcess => {
+                    panic!("literal PID {pid} entered the named-process domain")
+                }
+            }
+
+            let object = Value::make_process(id);
+            match resolve_signal_process_target_in_state(&processes, &buffers, Some(&object))
+                .expect("resolve the actual process object without a syscall")
+            {
+                SignalProcessTarget::Process(actual) => assert_eq!(actual, id),
+                SignalProcessTarget::Pid(actual) => {
+                    panic!("process object {id} selected literal PID {actual}")
+                }
+                SignalProcessTarget::MissingNamedProcess => {
+                    panic!("our process object {id} was not found")
+                }
+            }
+        }
+    }
+
     let sh = find_bin("sh");
     let result = eval_one(&format!(
         r#"(let* ((p (make-process
@@ -14452,22 +14488,17 @@ fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
                       :command '("{sh}" "-c" "sleep 30")
                       :noquery t
                       :sentinel #'ignore))
-                  (answers (mapcar (lambda (n)
-                                     (condition-case e (signal-process n 0)
-                                       (error (list 'error (cadr e)))))
-                                   '(1 2 3)))
                   (own (condition-case e (signal-process (process-id p) 0)
                          (error (list 'error (cadr e))))))
-             (prog1 (list :small answers
-                          :own own
-                          :own-pid-is-large (and (> (process-id p) 100) t)
+             (prog1 (list :own own
+                          :own-pid-is-positive (and (> (process-id p) 0) t)
                           :still-live (and (process-live-p p) t))
                (delete-process p)))"#
     ));
 
     assert_eq!(
         result,
-        "OK (:small (-1 -1 -1) :own 0 :own-pid-is-large t :still-live t)"
+        "OK (:own 0 :own-pid-is-positive t :still-live t)"
     );
 }
 
