@@ -288,3 +288,12 @@ produce one pass and two failures with the same assertion. Authoritative input
 arrives and scrolls in those failures; the diagnostic is about row reuse, not
 input loss. Evidence: `main-wheel-reuse-repeated.log` and
 `fixed-wheel-reuse-repeated.log`.
+
+
+Rebased onto main `82c19e5284daf6ef6cc8277fd57d3dde0ead70d7`; range-diff
+confirms all six patches applied unchanged. Post-rebase verification passes
+104/104 focused Core checks (including incoming font validation and recursive
+load controls), 163/163 native checks, the native Wayland font/resize contract,
+23/23 startup/focus GUI cases, and 3/3 live GNU startup oracle cases. Workspace
+all-target checks, formatting, and whitespace checks also pass. Copilot's final
+minor startup-contract wording finding is corrected to name decoration intent.

@@ -1,7 +1,8 @@
 //! One-shot preparation before the first native window exists.
 //!
 //! Font parsing/opening stays on the evaluator thread after its TLS is ready.
-//! The native thread receives only geometry and visibility, never Lisp values or font handles.
+//! The readiness reply carries geometry, visibility, and decoration intent.
+//! Lisp values and font handles stay on the evaluator thread.
 
 use neomacs_display_runtime::render_thread::{
     InitialWindowLifetime, InitialWindowPreparation, InitialWindowReply,
