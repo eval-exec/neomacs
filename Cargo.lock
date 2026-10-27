@@ -3870,6 +3870,7 @@ dependencies = [
  "signal-hook 0.4.4",
  "socket2",
  "stacker",
+ "static_assertions",
  "strum",
  "tempfile",
  "tikv-jemalloc-sys",

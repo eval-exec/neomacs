@@ -4,6 +4,8 @@
 //! send uninterpreted byte batches. This module preserves that distinction
 //! while converting the display transport into the core input transport.
 
+pub(crate) mod publication;
+
 use neomacs_display_runtime::thread_comm::{
     InputEvent as DisplayEvent, MonitorInfo as DisplayMonitorInfo, PointerAction, PointerTarget,
     PositionedPointerInput, ScrollDelta,

@@ -5,6 +5,11 @@
 //! based for the same semantics; use crossterm's parsed events only where the
 //! platform does not expose the same Unix TTY model.
 
+mod publication;
+pub use publication::Publication;
+#[cfg(unix)]
+pub use publication::{PrimaryTtyInput, PrimaryTtyPublisher};
+
 pub mod terminal_size;
 pub use terminal_size::{TerminalCellSize, TerminalColumns, TerminalRows, TerminalSizeQuery};
 
@@ -220,8 +225,9 @@ fn read_tty_events(
 // Public API
 // ---------------------------------------------------------------------------
 
-/// A standalone TTY input reader that publishes byte and resize facts through
-/// the existing bounded RenderComms channel. Non-Unix keeps crossterm mapping.
+/// A standalone TTY input reader with a statically selected publication owner.
+/// The legacy constructor uses RenderComms; Unix primary input can publish
+/// directly to the core queue. Non-Unix keeps crossterm mapping.
 ///
 /// Used by the `-nw` path when rendering goes through `TtyRif` on the
 /// evaluator thread.
@@ -319,6 +325,16 @@ impl TtyInputReader {
         }
     }
 
+    /// Publish primary Unix input directly to the core queue. The concrete
+    /// publisher is moved into the reader; no forwarding thread is created.
+    #[cfg(unix)]
+    pub fn spawn_primary<P: PrimaryTtyPublisher>(
+        comms: RenderComms,
+        publisher: P,
+    ) -> io::Result<Self> {
+        unix_reader::spawn_primary(comms, publisher)
+    }
+
     /// Capacity notification for the primary bridge after it receives an event.
     pub fn capacity_notifier(&self) -> Option<TtyInputCapacityNotifier> {
         #[cfg(unix)]
@@ -354,6 +370,17 @@ impl TtyInputReader {
     }
 
     #[cfg(all(unix, test))]
+    fn spawn_primary_with_test_source<P: PrimaryTtyPublisher>(
+        comms: RenderComms,
+        input: std::os::fd::OwnedFd,
+        size_query: TerminalSizeQuery,
+        publisher: P,
+        hook: Option<Arc<dyn Fn(unix_reader::ReaderTestObservation) + Send + Sync>>,
+    ) -> io::Result<Self> {
+        unix_reader::spawn_primary_with_source(comms, input, size_query, publisher, hook)
+    }
+
+    #[cfg(all(unix, test))]
     fn request_stop_for_test(&self) -> io::Result<()> {
         self.request_stop()
     }
@@ -376,3 +403,7 @@ mod tests;
 #[cfg(all(test, unix))]
 #[path = "tty_input/tests/tty_relay_test.rs"]
 mod relay_tests;
+
+#[cfg(all(test, unix))]
+#[path = "tty_input/tests/primary_tty_relay_test.rs"]
+mod primary_relay_tests;

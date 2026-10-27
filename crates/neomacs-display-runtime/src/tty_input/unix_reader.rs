@@ -1,5 +1,6 @@
 //! The primary Unix reader owns acquisition and its old unbounded backlog.
-//! Only the existing4096-event RenderComms channel is a bounded admission point.
+//! Legacy delivery uses the bounded RenderComms channel; primary publication
+//! consumes each fact directly into the unbounded core input owner.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -13,8 +14,8 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{TryRecvError, TrySendError};
 
 use super::{
-    GNU_KBD_BUFFER_SIZE, TTY_READER_POLL_INTERVAL, TerminalCellSize, TerminalSizeQuery,
-    TtyInputReader, raw_tty_input_event,
+    GNU_KBD_BUFFER_SIZE, PrimaryTtyInput, PrimaryTtyPublisher, Publication,
+    TTY_READER_POLL_INTERVAL, TerminalCellSize, TerminalSizeQuery, TtyInputReader,
 };
 use crate::thread_comm::{InputEvent, LifecycleCommand, RenderCommand, RenderComms};
 
@@ -115,19 +116,107 @@ impl PendingTtyEvent {
     fn bytes(bytes: Vec<u8>) -> Self {
         Self {
             kind: TtyEventKind::Bytes,
-            event: raw_tty_input_event(bytes),
+            event: PrimaryTtyInput::Bytes(bytes).into(),
         }
     }
 
     fn resize(size: TerminalCellSize) -> Self {
         Self {
             kind: TtyEventKind::Resize,
-            event: InputEvent::WindowResize {
-                width: u32::from(size.columns()),
-                height: u32::from(size.rows()),
-                scale_factor: 1.0,
-                emacs_frame_id: 0,
-            },
+            event: PrimaryTtyInput::Resize(size).into(),
+        }
+    }
+}
+
+// Each constructor selects a concrete delivery owner. The bounded legacy
+// owner can return its exact envelope on Full. The primary owner consumes one
+// publication and has no retry outcome, even when notification fails later.
+#[derive(Debug)]
+enum DeliveryOutcome<T> {
+    Delivered,
+    Full(T),
+    ReceiverClosed,
+}
+
+trait InputDelivery: Send + std::fmt::Debug + 'static {
+    type Pending: Send + std::fmt::Debug + 'static;
+    fn bytes(bytes: Vec<u8>) -> Self::Pending;
+    fn resize(size: TerminalCellSize) -> Self::Pending;
+    fn kind(event: &Self::Pending) -> TtyEventKind;
+    fn publish(
+        &mut self,
+        event: Self::Pending,
+        comms: &RenderComms,
+    ) -> DeliveryOutcome<Self::Pending>;
+}
+
+#[derive(Debug)]
+struct ChannelDelivery;
+
+impl InputDelivery for ChannelDelivery {
+    type Pending = PendingTtyEvent;
+    fn bytes(bytes: Vec<u8>) -> Self::Pending {
+        PendingTtyEvent::bytes(bytes)
+    }
+    fn resize(size: TerminalCellSize) -> Self::Pending {
+        PendingTtyEvent::resize(size)
+    }
+    fn kind(event: &Self::Pending) -> TtyEventKind {
+        event.kind
+    }
+    fn publish(
+        &mut self,
+        pending: Self::Pending,
+        comms: &RenderComms,
+    ) -> DeliveryOutcome<Self::Pending> {
+        let PendingTtyEvent { kind, event } = pending;
+        match comms.input_tx.try_send(event) {
+            Ok(()) => DeliveryOutcome::Delivered,
+            Err(TrySendError::Full(event)) => {
+                DeliveryOutcome::Full(PendingTtyEvent { kind, event })
+            }
+            Err(TrySendError::Disconnected(_)) => DeliveryOutcome::ReceiverClosed,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum PrimaryDelivery<P> {
+    Connected(P),
+    ReceiverClosed,
+}
+
+impl<P: PrimaryTtyPublisher> InputDelivery for PrimaryDelivery<P> {
+    type Pending = PrimaryTtyInput;
+    fn bytes(bytes: Vec<u8>) -> Self::Pending {
+        PrimaryTtyInput::Bytes(bytes)
+    }
+    fn resize(size: TerminalCellSize) -> Self::Pending {
+        PrimaryTtyInput::Resize(size)
+    }
+    fn kind(event: &Self::Pending) -> TtyEventKind {
+        match event {
+            PrimaryTtyInput::Bytes(_) => TtyEventKind::Bytes,
+            PrimaryTtyInput::Resize(_) => TtyEventKind::Resize,
+        }
+    }
+    fn publish(
+        &mut self,
+        event: Self::Pending,
+        _comms: &RenderComms,
+    ) -> DeliveryOutcome<Self::Pending> {
+        let result = match self {
+            Self::Connected(publisher) => publisher.publish(event),
+            Self::ReceiverClosed => Publication::ReceiverClosed,
+        };
+        match result {
+            Publication::Delivered => DeliveryOutcome::Delivered,
+            Publication::ReceiverClosed => {
+                // Match bridge exit: no more resize/quit side effects once
+                // the core receiver closes. Acquisition still owns its stop.
+                *self = Self::ReceiverClosed;
+                DeliveryOutcome::ReceiverClosed
+            }
         }
     }
 }
@@ -196,14 +285,15 @@ type TestHook = Option<Arc<dyn Fn(ReaderTestObservation) + Send + Sync>>;
 // Moved into exactly one native worker. Only that worker mutates the FIFO,
 // in-flight head, acquisition phases and RenderComms; it runs no Lisp. The
 // query owner is Send; test observers are per-instance and absent in product.
-struct Reader {
+struct Reader<S: InputDelivery> {
     input: OwnedFd,
     wake_reader: UnixStream,
     notifier: TtyInputCapacityNotifier,
     stop: Arc<AtomicBool>,
     comms: RenderComms,
-    pending: VecDeque<PendingTtyEvent>,
-    head: Option<PendingTtyEvent>,
+    pending: VecDeque<S::Pending>,
+    head: Option<S::Pending>,
+    delivery: S,
     lifecycle: Lifecycle,
     read_state: ReadState,
     size_query: TerminalSizeQuery,
@@ -212,7 +302,7 @@ struct Reader {
     hook: TestHook,
 }
 
-impl std::fmt::Debug for Reader {
+impl<S: InputDelivery> std::fmt::Debug for Reader<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Reader")
             .field("input", &self.input)
@@ -230,9 +320,9 @@ impl std::fmt::Debug for Reader {
 
 // Construction moves this worker and its query resource to a native thread;
 // neither holds evaluator/TLS or Lisp heap references.
-static_assertions::assert_impl_all!(Reader: Send, std::fmt::Debug);
+static_assertions::assert_impl_all!(Reader<ChannelDelivery>: Send, std::fmt::Debug);
 
-impl Reader {
+impl<S: InputDelivery> Reader<S> {
     #[cfg(test)]
     fn checkpoint(&self, checkpoint: ReaderTestCheckpoint) {
         if let Some(hook) = &self.hook {
@@ -260,7 +350,7 @@ impl Reader {
         self.checkpoint(ReaderTestCheckpoint::ShutdownObserved);
     }
 
-    fn acquire(&mut self, event: PendingTtyEvent) {
+    fn acquire(&mut self, event: S::Pending) {
         if self.lifecycle != Lifecycle::ShutdownDiscard {
             self.pending.push_back(event);
         }
@@ -310,11 +400,12 @@ impl Reader {
 
     // Returns false only on Full, retaining exactly the same owned envelope.
     fn try_head(&mut self) -> bool {
-        let Some(PendingTtyEvent { kind, event }) = self.head.take() else {
+        let Some(event) = self.head.take() else {
             return true;
         };
-        match self.comms.input_tx.try_send(event) {
-            Ok(()) => {
+        let kind = S::kind(&event);
+        match self.delivery.publish(event, &self.comms) {
+            DeliveryOutcome::Delivered => {
                 self.notifier.wake.armed.store(false, Ordering::Release);
                 if matches!(kind, TtyEventKind::Resize) {
                     tracing::debug!("send_input: queued {}", kind.name());
@@ -323,11 +414,11 @@ impl Reader {
                 self.checkpoint(ReaderTestCheckpoint::AfterPublish);
                 true
             }
-            Err(TrySendError::Full(event)) => {
-                self.head = Some(PendingTtyEvent { kind, event });
+            DeliveryOutcome::Full(event) => {
+                self.head = Some(event);
                 false
             }
-            Err(TrySendError::Disconnected(_)) => {
+            DeliveryOutcome::ReceiverClosed => {
                 self.notifier.wake.armed.store(false, Ordering::Release);
                 tracing::warn!(
                     "send_input: dropped {} because the input queue is disconnected",
@@ -357,7 +448,7 @@ impl Reader {
                     && self.last_size != Some(size)
                 {
                     self.last_size = Some(size);
-                    self.acquire(PendingTtyEvent::resize(size));
+                    self.acquire(S::resize(size));
                 }
                 self.read_state = ReadState::PollInput {
                     deadline: Instant::now() + TTY_READER_POLL_INTERVAL,
@@ -397,8 +488,8 @@ impl Reader {
                     self.checkpoint(ReaderTestCheckpoint::AfterRawRead {
                         len: count as usize,
                     });
-                    let event = PendingTtyEvent::bytes(bytes[..count as usize].to_vec());
-                    tracing::debug!("tty_input: raw byte batch {:?}", event.event);
+                    let event = S::bytes(bytes[..count as usize].to_vec());
+                    tracing::debug!("tty_input: raw byte batch {:?}", event);
                     self.acquire(event);
                     self.read_state = ReadState::QuerySize;
                 }
@@ -549,6 +640,20 @@ impl Reader {
 }
 
 pub(super) fn spawn_default(comms: RenderComms) -> io::Result<TtyInputReader> {
+    spawn_default_delivery(comms, ChannelDelivery)
+}
+
+pub(super) fn spawn_primary<P: PrimaryTtyPublisher>(
+    comms: RenderComms,
+    publisher: P,
+) -> io::Result<TtyInputReader> {
+    spawn_default_delivery(comms, PrimaryDelivery::Connected(publisher))
+}
+
+fn spawn_default_delivery<S: InputDelivery>(
+    comms: RenderComms,
+    delivery: S,
+) -> io::Result<TtyInputReader> {
     // dup owns a CLOEXEC reference to the slave without changing the shared
     // open-file description's flags or closing the process's stdin.
     // SAFETY: fcntl borrows stdin and creates a new CLOEXEC descriptor; it
@@ -562,18 +667,46 @@ pub(super) fn spawn_default(comms: RenderComms) -> io::Result<TtyInputReader> {
     let query = TerminalSizeQuery::new();
     #[cfg(test)]
     {
-        spawn_with_source(comms, input, query, None)
+        spawn_with_delivery(comms, input, query, delivery, None)
     }
     #[cfg(not(test))]
     {
-        spawn_with_source(comms, input, query)
+        spawn_with_delivery(comms, input, query, delivery)
     }
 }
 
+#[cfg(test)]
 pub(super) fn spawn_with_source(
     comms: RenderComms,
     input: OwnedFd,
     size_query: TerminalSizeQuery,
+    hook: TestHook,
+) -> io::Result<TtyInputReader> {
+    spawn_with_delivery(comms, input, size_query, ChannelDelivery, hook)
+}
+
+#[cfg(test)]
+pub(super) fn spawn_primary_with_source<P: PrimaryTtyPublisher>(
+    comms: RenderComms,
+    input: OwnedFd,
+    size_query: TerminalSizeQuery,
+    publisher: P,
+    hook: TestHook,
+) -> io::Result<TtyInputReader> {
+    spawn_with_delivery(
+        comms,
+        input,
+        size_query,
+        PrimaryDelivery::Connected(publisher),
+        hook,
+    )
+}
+
+fn spawn_with_delivery<S: InputDelivery>(
+    comms: RenderComms,
+    input: OwnedFd,
+    size_query: TerminalSizeQuery,
+    delivery: S,
     #[cfg(test)] hook: TestHook,
 ) -> io::Result<TtyInputReader> {
     let (wake_reader, writer) = UnixStream::pair()?;
@@ -593,6 +726,7 @@ pub(super) fn spawn_with_source(
         notifier: notifier.clone(),
         stop: Arc::clone(&stop),
         comms,
+        delivery,
         pending: VecDeque::new(),
         head: None,
         lifecycle: Lifecycle::Running,

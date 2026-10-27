@@ -115,6 +115,8 @@ pub(crate) mod frame_layout;
 mod gc_memory_allocator;
 mod image_catalog;
 mod input_bridge;
+use input_bridge::publication::{InputPublisher, InputRoute, PrimaryInputPublisher};
+use neomacs_display_runtime::tty_input::Publication;
 mod secondary_tty;
 mod startup_font;
 mod startup_frame;
@@ -1073,6 +1075,28 @@ enum FrontendHandle {
     /// Single-thread TTY path: input reader only, rendering via TtyRif on eval thread.
     TtyRifInput(tty_frontend::TtyInputReader),
     Batch,
+}
+
+/// Startup owns one receiver/factory until the original installation step.
+/// The primary publisher has already moved into its selected native owner.
+enum TtyInputConnection {
+    Noninteractive,
+    Interactive {
+        receiver: crossbeam_channel::Receiver<neovm_core::keyboard::InputEvent>,
+        secondary_factory: secondary_tty::SecondaryTtyFactory,
+    },
+}
+
+impl std::fmt::Debug for TtyInputConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Noninteractive => f.write_str("TtyInputConnection::Noninteractive"),
+            Self::Interactive { receiver, .. } => f
+                .debug_struct("TtyInputConnection::Interactive")
+                .field("receiver", receiver)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 impl FrontendHandle {
@@ -4096,8 +4120,16 @@ fn run_gui_evaluator_worker(
 
     // Created before the display host: the image catalog resolves geometry
     // off-thread and must be able to ask for the redisplay that publishes it.
-    let (input_tx, input_rx) = crossbeam_channel::unbounded();
-    let image_redisplay_waker = RedisplayWaker::new(input_tx.clone(), evaluator.wait_notifier());
+    let (mut input_publisher, input_rx) = InputPublisher::unbounded(
+        InputRoute::gui(Arc::clone(&primary_frame)),
+        Arc::clone(&primary_window_size),
+        evaluator.quit_requested.clone(),
+        evaluator.wait_notifier(),
+    );
+    let image_redisplay_waker = RedisplayWaker::new(
+        input_publisher.sender().clone(),
+        input_publisher.clone_notifier(),
+    );
     evaluator.set_display_host(Box::new(PrimaryWindowDisplayHost {
         resources,
         system_fonts: bootstrap_display.font_defaults.system_fonts(),
@@ -4139,15 +4171,9 @@ fn run_gui_evaluator_worker(
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     let display_input_rx = emacs_comms.input_rx;
     let mut font_changes = font_observer.take_changes();
-    let primary_window_size_for_input = Arc::clone(&primary_window_size);
-    let quit_requested = evaluator.quit_requested.clone();
-    // Cross-platform wakeup: wake the evaluator's wait loop AFTER queueing input
-    // so it drains the channel immediately. Correct ordering (post-send) and
-    // works on every OS, unlike the Unix-only wakeup pipe.
-    let input_notifier = evaluator.wait_notifier();
-    let secondary_input_tx = input_tx.clone();
-    let secondary_input_notifier = input_notifier.clone();
-    let secondary_quit_requested = quit_requested.clone();
+    let secondary_input_tx = input_publisher.sender().clone();
+    let secondary_input_notifier = input_publisher.clone_notifier();
+    let secondary_quit_requested = input_publisher.clone_quit_request();
     std::thread::Builder::new()
         .name("input-bridge".to_string())
         .spawn(move || {
@@ -4162,67 +4188,21 @@ fn run_gui_evaluator_worker(
                             font_changes = crossbeam_channel::never();
                             continue;
                         };
-                        if input_tx.send(neovm_core::keyboard::InputEvent::SystemFontsChanged {
-                            fonts,
-                            display: font_display.clone(),
-                        }).is_err() {
-                            break;
-                        }
-                        if let Some(notifier) = &input_notifier
-                            && let Err(error) = notifier.notify()
-                        {
-                            tracing::error!(%error, "font preferences failed to wake evaluator");
+                        match input_publisher.publish_core(
+                            neovm_core::keyboard::InputEvent::SystemFontsChanged {
+                                fonts,
+                                display: font_display.clone(),
+                            },
+                        ) {
+                            Publication::Delivered => {}
+                            Publication::ReceiverClosed => break,
                         }
                         continue;
                     }
                 };
-                let should_log = input_bridge::should_log_display_event(&event);
-                if should_log {
-                    tracing::debug!("input-bridge: received display event {:?}", event);
-                }
-                record_primary_window_resize(&primary_window_size_for_input, &event);
-                let mut queued_input = false;
-                let mut evaluator_disconnected = false;
-                for mut kb_event in input_bridge::convert_display_event(&event) {
-                    // Before renderer adoption, zero identifies the original
-                    // native window. Lisp may already have selected a child;
-                    // resolve that transport alias before queuing the resize.
-                    if let neovm_core::keyboard::InputEvent::Resize { emacs_frame_id, .. } =
-                        &mut kb_event
-                        && *emacs_frame_id == 0
-                    {
-                        let primary = *primary_frame
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner());
-                        let Some(primary) = primary else {
-                            continue;
-                        };
-                        *emacs_frame_id = primary.0;
-                    }
-                    if should_log {
-                        tracing::debug!(
-                            "input-bridge: converted display event {:?} to keyboard event {:?}",
-                            event,
-                            kb_event
-                        );
-                    }
-                    if kb_event.requests_default_quit() {
-                        quit_requested.request();
-                    }
-                    if input_tx.send(kb_event).is_err() {
-                        evaluator_disconnected = true;
-                        break;
-                    }
-                    queued_input = true;
-                }
-                if evaluator_disconnected {
-                    break;
-                }
-                if queued_input
-                    && let Some(notifier) = &input_notifier
-                    && let Err(error) = notifier.notify()
-                {
-                    tracing::error!(%error, "input bridge failed to wake evaluator");
+                match input_publisher.publish_display(&event) {
+                    Publication::Delivered => {}
+                    Publication::ReceiverClosed => break,
                 }
             }
         })
@@ -4826,166 +4806,145 @@ pub fn run(mode: RuntimeMode) {
         )));
     }
 
-    // 5. Spawn the frontend loop matching the requested startup mode.
-    let frontend = if startup.noninteractive || startup.daemon.is_some() {
-        // Batch mode: no terminal I/O, matching GNU which skips
-        // init_display() for --batch (emacs.c:1835).
+    // Prepare the unbounded native publication owner before the reader can
+    // acquire input. The receiver is installed at the original step below.
+    let (frontend, input_connection) = if startup.noninteractive {
         tracing::info!("TTY batch mode — skipping terminal init");
-        FrontendHandle::Batch
+        (FrontendHandle::Batch, TtyInputConnection::Noninteractive)
     } else {
-        // Single-thread TTY path: terminal init here, rendering via TtyRif
-        // on the evaluator thread, input reader on a background thread.
-        // GNU init_tty parity: a terminal that cannot position the cursor
-        // cannot run a full-screen editor — refuse while stdout is still
-        // cooked, before any raw-mode or alternate-screen byte.
-        if let Err(diagnostic) = tty_init::tty_check_terminal_powerful_enough() {
-            eprintln!("{diagnostic}");
-            std::process::exit(1);
-        }
-        if let Err(diagnostic) = tty_init::tty_init_terminal() {
-            eprintln!("{diagnostic}");
-            std::process::exit(1);
-        }
-        let input_reader = match tty_frontend::TtyInputReader::spawn(render_comms) {
-            Ok(reader) => reader,
-            Err(error) => {
-                tty_init::tty_shutdown_terminal();
-                tracing::error!(%error, "Failed to start TTY input reader");
+        let (input_publisher, input_rx) = PrimaryInputPublisher::unbounded(
+            Arc::clone(&primary_window_size),
+            evaluator.quit_requested.clone(),
+            evaluator.wait_notifier(),
+        );
+        let secondary_factory = secondary_tty::SecondaryTtyFactory::new(
+            secondary_ttys.clone(),
+            input_publisher.sender().clone(),
+            input_publisher.clone_notifier(),
+            input_publisher.clone_quit_request(),
+        );
+        let frontend = if startup.daemon.is_some() {
+            // Daemon input belongs only to deferred auxiliary terminals.
+            drop(input_publisher);
+            drop(emacs_comms.input_rx);
+            tracing::info!("TTY daemon mode — skipping terminal init");
+            FrontendHandle::Batch
+        } else {
+            if let Err(diagnostic) = tty_init::tty_check_terminal_powerful_enough() {
+                eprintln!("{diagnostic}");
                 std::process::exit(1);
             }
+            if let Err(diagnostic) = tty_init::tty_init_terminal() {
+                eprintln!("{diagnostic}");
+                std::process::exit(1);
+            }
+            #[cfg(unix)]
+            let reader_result = {
+                // No bridge owns this unused bounded receiver. RenderComms
+                // still owns the original command and native resource lives.
+                drop(emacs_comms.input_rx);
+                tty_frontend::TtyInputReader::spawn_primary(render_comms, input_publisher)
+            };
+            #[cfg(not(unix))]
+            let reader_result = {
+                let reader = tty_frontend::TtyInputReader::spawn(render_comms);
+                if let Ok(reader) = &reader {
+                    let capacity = reader.capacity_notifier();
+                    let display_input_rx = emacs_comms.input_rx;
+                    let mut input_publisher = input_publisher.into_legacy();
+                    std::thread::Builder::new()
+                        .name("input-bridge".to_string())
+                        .spawn(move || {
+                            while let Ok(event) = display_input_rx.recv() {
+                                if let Some(notifier) = &capacity
+                                    && let Err(error) = notifier.notify_capacity()
+                                {
+                                    tracing::error!(%error, "TTY bridge failed to signal input capacity");
+                                }
+                                match input_publisher.publish_display(&event) {
+                                    Publication::Delivered => {}
+                                    Publication::ReceiverClosed => break,
+                                }
+                            }
+                        })
+                        .expect("Failed to spawn input bridge thread");
+                }
+                reader
+            };
+            let input_reader = match reader_result {
+                Ok(reader) => reader,
+                Err(error) => {
+                    tty_init::tty_shutdown_terminal();
+                    tracing::error!(%error, "Failed to start TTY input reader");
+                    std::process::exit(1);
+                }
+            };
+            tracing::info!("TTY frontend spawned (TtyRif single-thread redisplay)");
+            FrontendHandle::TtyRifInput(input_reader)
         };
-        tracing::info!("TTY frontend spawned (TtyRif single-thread redisplay)");
-        FrontendHandle::TtyRifInput(input_reader)
+        (
+            frontend,
+            TtyInputConnection::Interactive {
+                receiver: input_rx,
+                secondary_factory,
+            },
+        )
     };
 
-    // 6. Create input bridge: convert display runtime events → keyboard events.
-    //
-    // GNU Emacs does NOT initialize terminal I/O in --batch mode.
-    // The evaluator runs without any input receiver, so
-    // `input_rx.is_none()` correctly signals batch mode throughout
-    // the keyboard/command-loop code. This prevents blocking on
-    // `rx.recv()` in read_char_with_timeout and avoids spawning
-    // unnecessary threads.
-    if !startup.noninteractive {
-        // This is an interactively displayed session, so its frames show the
-        // menu / tab / tool bars, which occupy rows of the window text area.
-        // Mark each frame and recompute its window geometry so windows (and
-        // their tab / header lines) render below the chrome.  Batch sessions
-        // skip this block, leaving `displays_chrome` false so their
-        // `window-edges` stay GNU-batch-compatible (root at line 0).
-        for frame in evaluator
-            .frame_manager_mut()
-            .frames_mut()
-            .filter(|_| startup.daemon.is_none())
-        {
-            frame.displays_chrome = true;
-            frame.sync_window_area_bounds();
-        }
+    // GNU --batch installs no primary keyboard receiver. Interactive daemon
+    // sessions retain secondary input without creating primary TTY I/O.
+    match input_connection {
+        TtyInputConnection::Interactive {
+            receiver,
+            secondary_factory,
+        } => {
+            // This is an interactively displayed session, so its frames show the
+            // menu / tab / tool bars, which occupy rows of the window text area.
+            // Mark each frame and recompute its window geometry so windows (and
+            // their tab / header lines) render below the chrome.  Batch sessions
+            // skip this block, leaving `displays_chrome` false so their
+            // `window-edges` stay GNU-batch-compatible (root at line 0).
+            for frame in evaluator
+                .frame_manager_mut()
+                .frames_mut()
+                .filter(|_| startup.daemon.is_none())
+            {
+                frame.displays_chrome = true;
+                frame.sync_window_area_bounds();
+            }
 
-        let (input_tx, input_rx) = crossbeam_channel::unbounded();
-        let display_input_rx = emacs_comms.input_rx;
-        let primary_window_size_for_input = Arc::clone(&primary_window_size);
-        // Shared quit-request flag. When the bridge sees `C-g` it flips
-        // this so the evaluator's `maybe_quit` can observe it without
-        // waiting for `read_char` to drain the channel. Mirrors GNU's
-        // synchronous keystroke path (`keyboard.c:3812` sets Vquit_flag
-        // immediately); Rust can't longjmp into the evaluator, so we
-        // poll an atomic instead.
-        let quit_requested = evaluator.quit_requested.clone();
-        // Cross-platform wakeup (post-send): see the matching comment on the
-        // other input-bridge path.
-        let input_notifier = evaluator.wait_notifier();
-        let secondary_input_tx = input_tx.clone();
-        let secondary_input_notifier = input_notifier.clone();
-        let secondary_quit_requested = quit_requested.clone();
-        let tty_input_capacity = match &frontend {
-            FrontendHandle::TtyRifInput(reader) => reader.capacity_notifier(),
-            FrontendHandle::Batch => None,
-        };
-        if startup.daemon.is_none() {
-            std::thread::Builder::new()
-            .name("input-bridge".to_string())
-            .spawn(move || {
-                while let Ok(event) = display_input_rx.recv() {
-                    // Return transport capacity independently of evaluator progress.
-                    // The reader arms this wake only after a full bounded send;
-                    // ordinary input therefore requires no extra wakeup syscall.
-                    if let Some(notifier) = &tty_input_capacity
-                        && let Err(error) = notifier.notify_capacity()
-                    {
-                        tracing::error!(%error, "TTY bridge failed to signal input capacity");
-                    }
-                    let should_log = input_bridge::should_log_display_event(&event);
-                    if should_log {
-                        tracing::debug!("input-bridge: received display event {:?}", event);
-                    }
-                    record_primary_window_resize(&primary_window_size_for_input, &event);
-                    let mut queued_input = false;
-                    let mut evaluator_disconnected = false;
-                    for kb_event in input_bridge::convert_display_event(&event) {
-                        if should_log {
-                            tracing::debug!(
-                                "input-bridge: converted display event {:?} to keyboard event {:?}",
-                                event,
-                                kb_event
-                            );
-                        }
-                        if kb_event.requests_default_quit() {
-                            quit_requested.request();
-                        }
-                        if input_tx.send(kb_event).is_err() {
-                            evaluator_disconnected = true;
-                            break;
-                        }
-                        queued_input = true;
-                    }
-                    if evaluator_disconnected {
-                        break; // Context dropped
-                    }
-                    if queued_input
-                        && let Some(notifier) = &input_notifier
-                        && let Err(error) = notifier.notify()
-                    {
-                        tracing::error!(%error, "input bridge failed to wake evaluator");
-                    }
-                }
-            })
-            .expect("Failed to spawn input bridge thread");
+            // Connect the evaluator at the original post-frontend step.
+            evaluator.init_input_system(receiver);
+            evaluator.set_tty_frame_host_factory(Box::new(secondary_factory));
+            install_diagnostics_eval_hooks(&mut evaluator);
         }
-
-        // 7. Connect evaluator to input system
-        evaluator.init_input_system(input_rx);
-        evaluator.set_tty_frame_host_factory(Box::new(secondary_tty::SecondaryTtyFactory::new(
-            secondary_ttys.clone(),
-            secondary_input_tx,
-            secondary_input_notifier,
-            secondary_quit_requested,
-        )));
-        install_diagnostics_eval_hooks(&mut evaluator);
-    } else if neovm_core::face::realization::enabled() {
-        // GNU allows an explicit make-terminal-frame even in --batch
-        // (frame.c:1754-1823). Install the deferred auxiliary-device factory
-        // without initializing a primary terminal or a keyboard receiver.
-        let (auxiliary_input_tx, _auxiliary_input_rx) = crossbeam_channel::unbounded();
-        let mut factory = secondary_tty::SecondaryTtyFactory::new(
-            secondary_ttys.clone(),
-            auxiliary_input_tx,
-            evaluator.wait_notifier(),
-            evaluator.quit_requested.clone(),
-        );
-        // A noninteractive daemon still installs redisplay immediately below.
-        // Plain --batch waits until make-terminal-frame opens a device
-        // (frame.c:1811) so elb-style batch never builds the display runtime.
-        if startup.daemon.is_none() {
-            let render_registry = secondary_ttys.clone();
-            factory.defer_redisplay_until_open(Box::new(move |eval| {
-                frame_layout::install_headless_tty_redisplay(
-                    eval,
-                    Some(Box::new(move |eval| render_registry.render_selected(eval))),
+        TtyInputConnection::Noninteractive => {
+            if neovm_core::face::realization::enabled() {
+                // GNU allows an explicit make-terminal-frame even in --batch
+                // (frame.c:1754-1823). Install the deferred auxiliary-device factory
+                // without initializing a primary terminal or a keyboard receiver.
+                let (auxiliary_input_tx, _auxiliary_input_rx) = crossbeam_channel::unbounded();
+                let mut factory = secondary_tty::SecondaryTtyFactory::new(
+                    secondary_ttys.clone(),
+                    auxiliary_input_tx,
+                    evaluator.wait_notifier(),
+                    evaluator.quit_requested.clone(),
                 );
-            }));
+                // A noninteractive daemon still installs redisplay immediately below.
+                // Plain --batch waits until make-terminal-frame opens a device
+                // (frame.c:1811) so elb-style batch never builds the display runtime.
+                if startup.daemon.is_none() {
+                    let render_registry = secondary_ttys.clone();
+                    factory.defer_redisplay_until_open(Box::new(move |eval| {
+                        frame_layout::install_headless_tty_redisplay(
+                            eval,
+                            Some(Box::new(move |eval| render_registry.render_selected(eval))),
+                        );
+                    }));
+                }
+                evaluator.set_tty_frame_host_factory(Box::new(factory));
+            }
         }
-        evaluator.set_tty_frame_host_factory(Box::new(factory));
     }
 
     // 8. Set up redisplay callback (layout engine + TTY RIF render).

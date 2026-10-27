@@ -112,6 +112,7 @@ tikv-jemallocator = { version = "0.7", optional = true, default-features = false
 
 # Utilities
 tracing.workspace = true
+static_assertions.workspace = true
 crossbeam-channel.workspace = true
 libc.workspace = true
 socket2.workspace = true
