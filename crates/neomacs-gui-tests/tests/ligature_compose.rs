@@ -53,6 +53,7 @@ fn run_case(tag: &str, ligature_enabled: bool) -> (PathBuf, PathBuf) {
     // session when the thread finishes — the surface loss that aborted
     // every ligature run at the C-l keypress.
     let env = session.env().to_vec();
+    let input_artifacts = artifacts.clone();
     let input = std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while !ready.exists() {
@@ -62,6 +63,17 @@ fn run_case(tag: &str, ligature_enabled: bool) -> (PathBuf, PathBuf) {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+        // Lisp readiness can precede native mapping during asynchronous
+        // startup. Require an owned visible view before the first key.
+        let runtime = &env
+            .iter()
+            .find(|(key, _)| key == "XDG_RUNTIME_DIR")
+            .unwrap()
+            .1;
+        let _mapped_editor = crate::wayland_readiness::wait_for_mapped_child(
+            std::path::Path::new(runtime),
+            &input_artifacts,
+        );
         let output = std::process::Command::new(
             std::env::var_os("NEOMACS_GUI_WTYPE").unwrap_or_else(|| "wtype".into()),
         )

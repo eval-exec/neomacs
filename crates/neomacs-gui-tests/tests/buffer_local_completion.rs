@@ -9,10 +9,9 @@ use std::{fs, path::PathBuf, time::Duration};
 #[test]
 fn local_case_completion_selects_and_renders_the_candidate() {
     let root = neomacs_infra::workspace_root();
-    let backend = match std::env::var("NEOMACS_GUI_TEST_BACKEND").as_deref() {
-        Ok("wayland") => GuiBackend::LinuxWayland,
-        _ => GuiBackend::LinuxX11,
-    };
+    // This result-scene fence requires compositor wp_presentation feedback.
+    // Xvfb's optional Vulkan swapchain timing cannot provide that witness.
+    let backend = GuiBackend::LinuxWayland;
     let artifacts = root.join(format!(
         "target/neomacs-gui-tests/completion-{}",
         std::process::id()
@@ -32,7 +31,13 @@ fn local_case_completion_selects_and_renders_the_candidate() {
             root.join("crates/neomacs-gui-tests/fixtures/buffer-local-completion.el"),
         ),
     )
-    .with_program(binary);
+    .with_program(binary)
+    // Keep capture enabled through minibuffer completion and the final result scene.
+    .with_env("NEOMACS_DEBUG_SURFACE_READBACK", "10000")
+    .with_env(
+        "NEOMACS_GUI_PRESENTATION_RECEIPT",
+        artifacts.join("result-presentation.el").to_string_lossy(),
+    );
     for (key, value) in session.env() {
         plan = plan.with_env(key, value);
     }

@@ -12,8 +12,6 @@ use std::{
 };
 #[path = "native_scrolling/continuous.rs"]
 mod continuous;
-#[path = "native_scrolling/readiness.rs"]
-mod readiness;
 #[path = "native_scrolling/wayland.rs"]
 mod wayland;
 
@@ -389,8 +387,14 @@ focus_follows_mouse yes
     // Lisp timers and a complete readback PNG can precede the first native
     // buffer commit. Require the owned compositor's mapped view before input;
     // this setup gate is also outside the sustained stream's measured phase.
-    let mapped = readiness::wait_for_mapped_editor(Path::new(&runtime), &mut editor.0, &artifacts);
-    let mut trackpad = trackpad.for_mapped_editor(mapped);
+    let pointer_target = crate::wayland_readiness::wait_for_pointer_target(
+        Path::new(&runtime),
+        &mut editor.0,
+        &artifacts,
+        200,
+        200,
+    );
+    let mut trackpad = trackpad.for_pointer_target(pointer_target);
     trackpad.move_to_body();
     thread::sleep(Duration::from_millis(200));
     let mut previous = state(&state_path, initial["sample"].as_u64().unwrap());

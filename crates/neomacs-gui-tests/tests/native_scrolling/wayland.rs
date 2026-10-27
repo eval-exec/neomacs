@@ -1,5 +1,5 @@
-use super::readiness::MappedEditor;
-use std::{marker::PhantomData, os::unix::net::UnixStream, path::Path};
+use crate::wayland_readiness::PointerTarget;
+use std::{os::unix::net::UnixStream, path::Path};
 use wayland_client::{
     Connection, Dispatch, EventQueue, QueueHandle, delegate_noop,
     globals::{GlobalListContents, registry_queue_init},
@@ -29,11 +29,11 @@ pub(super) struct Unmapped;
 
 /// Keep one device alive throughout the gesture, just like a real trackpad.
 /// Only a compositor-observed mapped editor enables native input injection.
-pub(super) struct Trackpad<Readiness = MappedEditor> {
+pub(super) struct Trackpad<Readiness = PointerTarget> {
     pointer: ZwlrVirtualPointerV1,
     queue: EventQueue<State>,
     clock: u32,
-    readiness: PhantomData<Readiness>,
+    readiness: Readiness,
 }
 impl Trackpad<Unmapped> {
     pub fn connect(socket: &Path) -> Self {
@@ -47,24 +47,24 @@ impl Trackpad<Unmapped> {
             pointer,
             queue,
             clock: 1,
-            readiness: PhantomData,
+            readiness: Unmapped,
         }
     }
 
-    pub fn for_mapped_editor(self, _editor: MappedEditor) -> Trackpad {
+    pub fn for_pointer_target(self, target: PointerTarget) -> Trackpad {
         Trackpad {
             pointer: self.pointer,
             queue: self.queue,
             clock: self.clock,
-            readiness: PhantomData,
+            readiness: target,
         }
     }
 }
 
 impl Trackpad {
     pub fn move_to_body(&mut self) {
-        self.pointer
-            .motion_absolute(self.clock, 200, 200, 1000, 700);
+        let (x, y) = self.readiness.coordinates();
+        self.pointer.motion_absolute(self.clock, x, y, 1000, 700);
         self.pointer.frame();
         self.queue.roundtrip(&mut State).unwrap();
         self.clock += 16;

@@ -189,3 +189,7 @@ mod x11_presentation;
 
 #[path = "xpm_named_colors.rs"]
 mod xpm_named_colors;
+
+#[cfg(target_os = "linux")]
+#[path = "wayland_readiness.rs"]
+mod wayland_readiness;
