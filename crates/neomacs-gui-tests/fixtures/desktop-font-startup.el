@@ -49,7 +49,11 @@
             (if (and (= (frame-width) 91)
                      (= (frame-pixel-height) original-height))
                 (kill-emacs 0)
-              (message "Resized geometry: expected 91 columns and height %S, got %S / %S"
-                       original-height (frame-width) (frame-pixel-height))
+              (princ (format "DESKTOP-FONT-STARTUP-FAIL resized geometry: expected 91 columns and height %S, got %S / %S\n"
+                             original-height (frame-width) (frame-pixel-height))
+                     'external-debugging-output)
               (kill-emacs 1))))))
-     (error (message "Desktop font startup regression: %S" err) (kill-emacs 1)))))
+     (error
+      (princ (format "DESKTOP-FONT-STARTUP-FAIL %S\n" err) 'external-debugging-output)
+      (message "Desktop font startup regression: %S" err)
+      (kill-emacs 1)))))

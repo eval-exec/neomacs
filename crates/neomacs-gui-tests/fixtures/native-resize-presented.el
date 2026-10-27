@@ -39,7 +39,7 @@
           (let ((width (plist-get receipt :width)))
             (pcase native-presented-stage
               ('startup
-               (when (= width 745)
+               (when (= width 752)
                  (native-presented-enter-stage 'resized receipt)
                  (set-frame-width nil 91)))
               ('resized
