@@ -272,6 +272,18 @@ impl From<FrameQueryParam> for FrameParamKey {
     }
 }
 
+impl FrameQueryParam {
+    /// Interned symbol this query key names in the frame parameter map.
+    pub(crate) fn symbol_id(self) -> SymId {
+        FRAME_QUERY_SYMBOLS[usize::from(u8::from(self))].get()
+    }
+
+    /// Lisp-visible symbol value of this query key.
+    pub(crate) fn symbol(self) -> Value {
+        Value::from_sym_id(self.symbol_id())
+    }
+}
+
 impl FrameParam {
     pub fn gnu_index(self) -> usize {
         usize::from(u8::from(self))

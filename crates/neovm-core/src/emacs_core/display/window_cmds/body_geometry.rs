@@ -10,8 +10,8 @@ pub(super) fn body_height_pixels(
     wid: WindowId,
 ) -> Result<i64, Flow> {
     let window = get_leaf(frames, fid, wid)?;
-    if let Some(regions) = redisplay_window_regions(frames, fid, wid)? {
-        return Ok(regions.text_body().height().get() as i64);
+    if let Some(regions) = published_window_regions(frames, fid, wid)? {
+        return published_geometry(regions.text_body_height_pixels());
     }
     let frame = frames.get(fid).expect("live window has a frame");
     let mut height = window_height_pixels(window);
@@ -36,13 +36,8 @@ pub(super) fn chrome_height_pixels(
     wid: WindowId,
     line: WindowChromeLine,
 ) -> Result<i64, Flow> {
-    if let Some(regions) = redisplay_window_regions(frames, fid, wid)? {
-        return Ok(match line {
-            WindowChromeLine::ModeLine => regions.mode_line(),
-            WindowChromeLine::HeaderLine => regions.header_line(),
-            WindowChromeLine::TabLine => regions.tab_line(),
-        }
-        .map_or(0, |rect| rect.height().get() as i64));
+    if let Some(regions) = published_window_regions(frames, fid, wid)? {
+        return published_geometry(regions.chrome_height_pixels(line));
     }
     let window = get_leaf(frames, fid, wid)?;
     let frame = frames.get(fid).expect("live window has a frame");

@@ -7,12 +7,15 @@
 //! Layer boundary: this module answers "where was this window PRESENTED"
 //! from renderer publications (post-redisplay). The Lisp-facing edge
 //! builtins in emacs_core/window_cmds deliberately do NOT route through
-//! here -- window-edges and friends answer from the live Window tree
-//! (Window::bounds), matching GNU, which computes window.c edges from
-//! struct window fields without consulting the glyph matrix. The two
-//! systems are different layers, not duplication.
+//! the presentation queries below -- window-edges and friends answer from
+//! the live Window tree (Window::bounds), matching GNU, which computes
+//! window.c edges from struct window fields without consulting the glyph
+//! matrix. Body, chrome and scroll-bar area queries do read the same
+//! publication, as they always have, through [`PublishedWindowRegions`]:
+//! a borrowed, per-rectangle-validated view, so a query that needs one
+//! width does not pay for the fourteen-rectangle owned conversion.
 
-use super::{FrameId, LispCharPos1, WindowDisplaySnapshot, WindowId};
+use super::{FrameId, LispCharPos1, WindowChromeLine, WindowDisplaySnapshot, WindowId};
 use neomacs_display_protocol::frame_glyphs::PresentedWindowRegions;
 use neomacs_display_protocol::types::Rect as TransportRect;
 use rustc_hash::FxHashMap as HashMap;
@@ -367,6 +370,92 @@ impl WindowRegions {
     }
     pub const fn bottom_divider(self) -> Option<PixelRect<FrameLogicalSpace>> {
         self.bottom_divider
+    }
+}
+
+/// Borrowed view of the rectangle table one redisplay publication carries.
+///
+/// The Lisp geometry primitives (`window-body-width`, `window-fringes`,
+/// `window-mode-line-height`, …) each read one or two rectangles out of this
+/// table.  Converting the whole publication into [`WindowRegions`] validates
+/// and copies fourteen rectangles for every such query -- 24 conversions per
+/// C-n/C-p pair in the profile.  This view validates exactly the rectangle it
+/// returns, with the same predicate, so a malformed publication still
+/// surfaces the same [`GeometryError`] for the value that was requested.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PublishedWindowRegions<'a> {
+    regions: &'a PresentedWindowRegions,
+}
+
+impl<'a> PublishedWindowRegions<'a> {
+    pub(crate) const fn new(regions: &'a PresentedWindowRegions) -> Self {
+        Self { regions }
+    }
+
+    /// Validate one published rectangle and report its integer extent.
+    fn extent_pixels(rect: &TransportRect) -> Result<(i64, i64), GeometryError> {
+        let rect = PixelRect::<FrameLogicalSpace>::from_transport(rect)?;
+        Ok((rect.width().get() as i64, rect.height().get() as i64))
+    }
+
+    pub(crate) fn text_body_width_pixels(self) -> Result<i64, GeometryError> {
+        Self::extent_pixels(&self.regions.text_body).map(|(width, _)| width)
+    }
+
+    pub(crate) fn text_body_height_pixels(self) -> Result<i64, GeometryError> {
+        Self::extent_pixels(&self.regions.text_body).map(|(_, height)| height)
+    }
+
+    /// Margin columns are stored scalars in the publication, not a projection
+    /// of a rectangle, so reading them needs no geometry conversion.
+    pub(crate) fn left_margin_columns(self) -> i64 {
+        self.regions.left_margin_columns
+    }
+
+    pub(crate) fn right_margin_columns(self) -> i64 {
+        self.regions.right_margin_columns
+    }
+
+    pub(crate) fn fringe_widths_pixels(self) -> Result<(i64, i64), GeometryError> {
+        let width = |rect: Option<TransportRect>| {
+            rect.map(|rect| Self::extent_pixels(&rect).map(|(width, _)| width))
+                .transpose()
+                .map(Option::unwrap_or_default)
+        };
+        Ok((
+            width(self.regions.left_fringe)?,
+            width(self.regions.right_fringe)?,
+        ))
+    }
+
+    pub(crate) fn scroll_bar_width_pixels(self) -> Result<i64, GeometryError> {
+        match (self.regions.left_scroll_bar, self.regions.right_scroll_bar) {
+            (Some(rect), _) | (None, Some(rect)) => {
+                Self::extent_pixels(&rect).map(|(width, _)| width)
+            }
+            (None, None) => Ok(0),
+        }
+    }
+
+    pub(crate) fn horizontal_scroll_bar_height_pixels(self) -> Result<i64, GeometryError> {
+        self.regions
+            .horizontal_scroll_bar
+            .map(|rect| Self::extent_pixels(&rect).map(|(_, height)| height))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    /// Height of one window-chrome line, or zero when redisplay published no
+    /// such row for this window.
+    pub(crate) fn chrome_height_pixels(self, line: WindowChromeLine) -> Result<i64, GeometryError> {
+        let rect = match line {
+            WindowChromeLine::ModeLine => self.regions.mode_line,
+            WindowChromeLine::HeaderLine => self.regions.header_line,
+            WindowChromeLine::TabLine => self.regions.tab_line,
+        };
+        rect.map(|rect| Self::extent_pixels(&rect).map(|(_, height)| height))
+            .transpose()
+            .map(Option::unwrap_or_default)
     }
 }
 

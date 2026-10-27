@@ -1559,6 +1559,41 @@ fn nil_internal_window_system_does_not_make_tty_frame_graphic() {
 }
 
 #[test]
+fn window_system_parameter_fallback_follows_the_parameter() {
+    crate::test_utils::init_test_tracing();
+    let mut mgr = FrameManager::new();
+    let fid = mgr.create_frame("F1", 100, 80, BufferId(1));
+    let frame = mgr.get_mut(fid).expect("frame");
+    assert_eq!(frame.effective_window_system(), None);
+
+    // Frames no backend created (batch fixtures, tests) become window-system
+    // frames when Lisp says so, and stop being them when it says otherwise.
+    frame.set_parameter(Value::symbol("window-system"), Value::symbol("neo"));
+    assert_eq!(frame.effective_window_system(), Some(Value::symbol("neo")));
+    frame.set_parameter(Value::symbol("window-system"), Value::NIL);
+    assert_eq!(frame.effective_window_system(), None);
+    frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
+    frame.remove_parameter(Value::symbol("window-system"));
+    assert_eq!(frame.effective_window_system(), None);
+}
+
+#[test]
+fn internal_window_system_kind_wins_over_the_parameter() {
+    crate::test_utils::init_test_tracing();
+    let mut mgr = FrameManager::new();
+    let fid = mgr.create_frame("F1", 100, 80, BufferId(1));
+    let frame = mgr.get_mut(fid).expect("frame");
+    frame.set_window_system(Some(Value::symbol("x")));
+
+    // GNU's FRAME_WINDOW_P follows the output method: the Lisp parameter
+    // cannot retract the internal kind, and removing it leaves the kind.
+    frame.set_parameter(Value::symbol("window-system"), Value::NIL);
+    assert_eq!(frame.effective_window_system(), Some(Value::symbol("x")));
+    frame.remove_parameter(Value::symbol("window-system"));
+    assert_eq!(frame.effective_window_system(), Some(Value::symbol("x")));
+}
+
+#[test]
 fn gui_child_frame_border_width_acts_as_child_internal_border() {
     crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();

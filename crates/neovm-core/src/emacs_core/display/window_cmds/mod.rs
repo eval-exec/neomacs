@@ -24,6 +24,7 @@ use crate::emacs_core::xdisp::LineWrap;
 use crate::emacs_core::xdisp::motion::MotionEngine;
 use crate::window::WindowChromeLine;
 use crate::window::body::{WindowBodyAxis, WindowBodyCellSize, WindowBodyUnit};
+use crate::window::geometry::PublishedWindowRegions;
 use crate::window::{
     CombinationLimit, CursorTypeSymbol, DeleteResize, ForcedBodyRedisplay, FrameDeletion,
     FrameDeletionSelectionPolicy, FrameDivider, FrameFocusTracking, FrameFullscreen, FrameId,
@@ -1661,7 +1662,8 @@ fn window_body_horizontal_offsets_pixels(
             let char_width = frame.char_width.max(1.0);
             let left_margin = (margins.left() as f32 * char_width).round().max(0.0) as i64;
             let right_margin = (margins.right() as f32 * char_width).round().max(0.0) as i64;
-            let (left_fringe, right_fringe) = if frame.effective_window_system().is_some() {
+            let graphical = frame.effective_window_system().is_some();
+            let (left_fringe, right_fringe) = if graphical {
                 let (left, right, _, _) = frames
                     .window_fringes(w.id())
                     .unwrap_or((0, 0, false, false));
@@ -1681,10 +1683,10 @@ fn window_body_horizontal_offsets_pixels(
                 let divider = frame.effective_divider_width(FrameDivider::Right);
                 if divider > 0 {
                     divider
-                } else if frame.effective_window_system().is_none() {
-                    char_width.round().max(1.0) as i64
-                } else {
+                } else if graphical {
                     0
+                } else {
+                    char_width.round().max(1.0) as i64
                 }
             };
             (
@@ -3326,23 +3328,28 @@ fn geometry_invariant(message: impl Into<String>) -> Flow {
 ///
 /// GNU `window-*` primitives query synchronous editor/current-matrix state;
 /// they do not wait for a compositor or renderer acknowledgement.
-fn redisplay_window_regions(
-    frames: &FrameManager,
+fn published_window_regions<'a>(
+    frames: &'a FrameManager,
     fid: FrameId,
     wid: WindowId,
-) -> Result<Option<crate::window::geometry::WindowRegions>, Flow> {
+) -> Result<Option<PublishedWindowRegions<'a>>, Flow> {
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     let Some(snapshot) = frame.redisplay_snapshot(wid) else {
         return Ok(None);
     };
-    if !snapshot.regions_materialized {
-        return Ok(None);
-    }
-    crate::window::geometry::WindowRegions::from_transport(&snapshot.regions)
-        .map(Some)
-        .map_err(|error| geometry_invariant(format!("{error:?}")))
+    Ok(snapshot
+        .regions_materialized
+        .then(|| PublishedWindowRegions::new(&snapshot.regions)))
+}
+
+/// Map a published-geometry validation failure to the same Lisp error the
+/// full `WindowRegions` conversion reported.
+fn published_geometry<T>(
+    result: Result<T, crate::window::geometry::GeometryError>,
+) -> Result<T, Flow> {
+    result.map_err(|error| geometry_invariant(format!("{error:?}")))
 }
 
 fn tty_batch_pixel_left(window: &Window, char_width: f32) -> i64 {
@@ -3368,10 +3375,8 @@ pub(crate) fn builtin_window_pixel_left(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    eval.sync_pending_resize_events();
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-left", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
     let w = get_window(frames, window)?;
     let frame = frames.get(window.frame());
@@ -3393,10 +3398,8 @@ pub(crate) fn builtin_window_pixel_top(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    eval.sync_pending_resize_events();
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-top", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
     let w = get_window(frames, window)?;
     let frame = frames.get(window.frame());
@@ -3656,11 +3659,9 @@ pub(crate) fn builtin_window_margins(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-margins", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    if let Some(geometry) = redisplay_window_regions(frames, fid, wid)? {
-        let regions = geometry;
+    if let Some(regions) = published_window_regions(frames, fid, wid)? {
         let left = regions.left_margin_columns();
         let right = regions.right_margin_columns();
         return Ok(Value::cons(
@@ -3702,17 +3703,10 @@ pub(crate) fn builtin_window_fringes(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-fringes", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    if let Some(geometry) = redisplay_window_regions(frames, fid, wid)? {
-        let regions = geometry;
-        let left = regions
-            .left_fringe()
-            .map_or(0, |rect| rect.width().get() as i64);
-        let right = regions
-            .right_fringe()
-            .map_or(0, |rect| rect.width().get() as i64);
+    if let Some(regions) = published_window_regions(frames, fid, wid)? {
+        let (left, right) = published_geometry(regions.fringe_widths_pixels())?;
         let (_, _, outside, persistent) =
             frames.window_fringes(wid).unwrap_or((0, 0, false, false));
         return Ok(Value::list(vec![
@@ -3807,7 +3801,6 @@ pub(crate) fn builtin_window_scroll_bars(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-scroll-bars", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let (width, columns, vertical_type, height, lines, horizontal_type, persistent) = frames
@@ -3916,16 +3909,12 @@ pub(crate) fn builtin_window_scroll_bar_width(
 ) -> EvalResult {
     expect_max_args("window-scroll-bar-width", &args, 1)?;
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    if let Some(geometry) = redisplay_window_regions(frames, fid, wid)? {
-        let regions = geometry;
-        let width = regions
-            .left_scroll_bar()
-            .or(regions.right_scroll_bar())
-            .map_or(0, |rect| rect.width().get() as i64);
-        return Ok(Value::fixnum(width));
+    if let Some(regions) = published_window_regions(frames, fid, wid)? {
+        return Ok(Value::fixnum(published_geometry(
+            regions.scroll_bar_width_pixels(),
+        )?));
     }
     Ok(Value::fixnum(frames.window_scroll_bar_area_width(wid)))
 }
@@ -3937,14 +3926,12 @@ pub(crate) fn builtin_window_scroll_bar_height(
 ) -> EvalResult {
     expect_max_args("window-scroll-bar-height", &args, 1)?;
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    if let Some(geometry) = redisplay_window_regions(frames, fid, wid)? {
-        let height = geometry
-            .horizontal_scroll_bar()
-            .map_or(0, |rect| rect.height().get() as i64);
-        return Ok(Value::fixnum(height));
+    if let Some(regions) = published_window_regions(frames, fid, wid)? {
+        return Ok(Value::fixnum(published_geometry(
+            regions.horizontal_scroll_bar_height_pixels(),
+        )?));
     }
     Ok(Value::fixnum(frames.window_scroll_bar_area_height(wid)))
 }
@@ -3955,7 +3942,6 @@ pub(crate) fn builtin_window_mode_line_height(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-mode-line-height", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let height =
@@ -3969,7 +3955,6 @@ pub(crate) fn builtin_window_header_line_height(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-header-line-height", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     Ok(Value::fixnum(body_geometry::chrome_height_pixels(
@@ -3987,7 +3972,6 @@ pub(crate) fn builtin_window_tab_line_height(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-tab-line-height", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     Ok(Value::fixnum(body_geometry::chrome_height_pixels(
@@ -4006,10 +3990,8 @@ pub(crate) fn builtin_window_pixel_height(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    eval.sync_pending_resize_events();
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-height", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
     let w = get_window(frames, window)?;
     // GNU `Fwindow_pixel_height` returns `w->pixel_height` directly.  This is
@@ -4024,10 +4006,8 @@ pub(crate) fn builtin_window_pixel_width(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    eval.sync_pending_resize_events();
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-width", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
     let w = get_window(frames, window)?;
     // GNU `Fwindow_pixel_width` returns `w->pixel_width` directly.  Keep this
@@ -4044,10 +4024,8 @@ pub(crate) fn builtin_window_body_height(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    eval.sync_pending_resize_events();
     expect_max_args("window-body-height", &args, 2)?;
     let unit = window_body_unit_from_lisp(args.get(1));
-    let _ = ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.buffers);
     let (fid, wid) = resolve_window_id_with_pred_in_state(
         &mut eval.frames,
         &mut eval.buffers,
@@ -4064,7 +4042,6 @@ fn window_body_height_impl(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-body-height", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let unit = window_body_unit_from_lisp(args.get(1));
@@ -4134,10 +4111,8 @@ pub(crate) fn builtin_window_body_width(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    eval.sync_pending_resize_events();
     expect_max_args("window-body-width", &args, 2)?;
     let unit = window_body_unit_from_lisp(args.get(1));
-    let _ = ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.buffers);
     let (fid, wid) = resolve_window_id_with_pred_in_state(
         &mut eval.frames,
         &mut eval.buffers,
@@ -4146,8 +4121,8 @@ pub(crate) fn builtin_window_body_width(
     )?;
     let remapped = remapped_window_body_cell_size(eval, fid, unit);
     let window = get_leaf(&eval.frames, fid, wid)?;
-    let pixels = match redisplay_window_regions(&eval.frames, fid, wid)? {
-        Some(geometry) => geometry.text_body().width().get() as i64,
+    let pixels = match published_window_regions(&eval.frames, fid, wid)? {
+        Some(regions) => published_geometry(regions.text_body_width_pixels())?,
         None => window_body_width_pixels(&eval.frames, fid, window),
     };
     Ok(Value::fixnum(unit.measure(
@@ -4195,8 +4170,8 @@ pub(crate) fn builtin_window_text_width(
     let w = get_leaf(frames, fid, wid)?;
     let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
     if pixelwise {
-        let width = match redisplay_window_regions(frames, fid, wid)? {
-            Some(geometry) => geometry.text_body().width().get() as i64,
+        let width = match published_window_regions(frames, fid, wid)? {
+            Some(regions) => published_geometry(regions.text_body_width_pixels())?,
             None => window_body_width_pixels(frames, fid, w),
         };
         Ok(Value::fixnum(width))
@@ -4205,8 +4180,8 @@ pub(crate) fn builtin_window_text_width(
             .get(fid)
             .map(|f| f.char_width.max(1.0))
             .unwrap_or(8.0);
-        let width = match redisplay_window_regions(frames, fid, wid)? {
-            Some(geometry) => geometry.text_body().width().get() as i64,
+        let width = match published_window_regions(frames, fid, wid)? {
+            Some(regions) => published_geometry(regions.text_body_width_pixels())?,
             None => window_body_width_pixels(frames, fid, w),
         };
         Ok(Value::fixnum((width as f32 / cw).floor() as i64))

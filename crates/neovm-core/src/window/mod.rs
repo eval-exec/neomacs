@@ -4422,6 +4422,17 @@ pub struct Frame {
     /// Internal window-system kind, mirroring GNU Emacs frame state rather
     /// than the mutable Lisp-visible frame parameter alist.
     pub window_system: Option<Value>,
+    /// The Lisp-visible `window-system` parameter, cached beside the map entry.
+    ///
+    /// `effective_window_system` falls back to this parameter when no internal
+    /// kind is installed, and geometry/layout code calls it dozens of times
+    /// per command.  Reading the entry out of `parameters` on every call cost
+    /// 171 instructions (hash + symbol comparison) in the C-n profile; this
+    /// copy makes the accessor two field reads.  The parameter map is private
+    /// to this module and only [`Frame::set_parameter`] and
+    /// [`Frame::remove_parameter`] write it, so those two methods are the
+    /// complete set of writers that keep this copy current.
+    window_system_parameter: Option<Value>,
     /// Native display connection plus the X display inherited by child
     /// processes. These differ for a Wayland frame running alongside
     /// Xwayland, just as GNU's PGTK backend distinguishes its GDK display from
@@ -4629,6 +4640,7 @@ impl Frame {
             left_pos: 0,
             top_pos: 0,
             window_system: None,
+            window_system_parameter: None,
             display_identity: FrameDisplayIdentity::default(),
             // GNU terminal frames expose the terminal's default colors as
             // string sentinel values, not concrete RGB colors.  `term.c`
@@ -4814,11 +4826,20 @@ impl Frame {
     }
 
     /// Return the effective window-system symbol for this frame.
+    ///
+    /// GNU separates the backend output method (`FRAME_WINDOW_P`) from the
+    /// Lisp `window-system` frame parameter.  The internal kind wins; the
+    /// parameter is the fallback that lets frames no backend created (batch
+    /// fixtures, tests) act as window-system frames when Lisp says so.
+    /// [`Frame::window_system_parameter`] mirrors that one map entry so this
+    /// accessor -- called dozens of times per command by geometry queries,
+    /// layout inputs and redisplay signatures -- does not hash the parameter
+    /// alist on every call.
     pub fn effective_window_system(&self) -> Option<Value> {
         self.window_system
             .filter(|value| value.is_truthy())
             .or_else(|| {
-                self.fixed_parameter(crate::window::FrameQueryParam::WindowSystem)
+                self.window_system_parameter
                     .filter(|value| value.is_truthy())
             })
     }
@@ -4855,14 +4876,17 @@ impl Frame {
 
     /// Update the frame's internal window-system kind and keep the Lisp-visible
     /// frame parameter in sync.
+    ///
+    /// The field is the backend kind; the parameter is its Lisp projection.
+    /// This is the only path that can retract the kind (pass `None`).
     pub fn set_window_system(&mut self, window_system: Option<Value>) {
         self.window_system = window_system;
         match window_system {
             Some(value) => {
-                self.set_parameter(Value::symbol("window-system"), value);
+                self.set_parameter(FrameQueryParam::WindowSystem.symbol(), value);
             }
             None => {
-                self.remove_parameter(Value::symbol("window-system"));
+                self.remove_parameter(FrameQueryParam::WindowSystem.symbol());
             }
         }
     }
@@ -5002,6 +5026,9 @@ impl Frame {
             }
             _ => {}
         }
+        if key.as_bare_symbol_id() == Some(FrameQueryParam::WindowSystem.symbol_id()) {
+            self.window_system_parameter = Some(value);
+        }
         self.parameters.insert(key, value)
     }
 
@@ -5013,7 +5040,15 @@ impl Frame {
         self.set_parameter(key.symbol(), value)
     }
 
+    /// Remove one Lisp-visible frame parameter.
+    ///
+    /// Removing `window-system` drops only the parameter fallback: an internal
+    /// kind installed by [`Frame::set_window_system`] stays in force, matching
+    /// GNU, where deleting the parameter cannot change `FRAME_WINDOW_P`.
     pub fn remove_parameter(&mut self, key: Value) -> Option<Value> {
+        if key.as_bare_symbol_id() == Some(FrameQueryParam::WindowSystem.symbol_id()) {
+            self.window_system_parameter = None;
+        }
         self.parameters.remove(&key)
     }
 
