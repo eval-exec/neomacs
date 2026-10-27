@@ -12157,11 +12157,18 @@ fn vm_compiled_load_signals_after_gnu_recursive_load_limit() {
     let fixture_lisp = crate::heap_types::LispString::from_utf8(fixture.to_string_lossy().as_ref());
 
     let mut eval = Context::new_vm_runtime_harness();
+    // The Vec stores loads oldest-first; GNU's `Vloads_in_progress` cons
+    // list holds them newest-first, so the signal payload must reverse it.
+    // The two distinct outer entries make the order observable.
+    let older = crate::heap_types::LispString::from_utf8("/nonexistent/older.el");
+    let newest = crate::heap_types::LispString::from_utf8("/nonexistent/newest.el");
     eval.loads_in_progress = vec![
+        older.clone(),
         fixture_lisp.clone(),
         fixture_lisp.clone(),
         fixture_lisp.clone(),
         fixture_lisp.clone(),
+        newest.clone(),
     ];
 
     let err = eval
@@ -12174,14 +12181,20 @@ fn vm_compiled_load_signals_after_gnu_recursive_load_limit() {
     match err {
         EvalError::Signal { symbol, data, .. } => {
             assert_eq!(resolve_sym(symbol), "error");
+            // GNU `signal_error ("Recursive load", Fcons (found, loads))`
+            // (src/lread.c:1314) splices the proper list: the first data
+            // element after the message is the found filename itself, not a
+            // nested list (src/eval.c:2105-2111).
             assert_eq!(data[0].as_utf8_str(), Some("Recursive load"));
-            assert_eq!(data[1].cons_car(), Value::string(fixture.to_string_lossy()));
-            assert_eq!(
-                crate::emacs_core::value::list_to_vec(&data[1].cons_cdr())
-                    .expect("recursive load payload tail should be a proper list")
-                    .len(),
-                4
-            );
+            assert_eq!(data[1], Value::string(fixture.to_string_lossy()));
+            // Newest-first cons order: the newest outer load, the four
+            // copies of `found`, then the oldest entry.
+            assert_eq!(data[2], Value::string("/nonexistent/newest.el"));
+            for entry in &data[3..7] {
+                assert_eq!(*entry, Value::string(fixture.to_string_lossy()));
+            }
+            assert_eq!(data[7], Value::string("/nonexistent/older.el"));
+            assert_eq!(data.len(), 8);
         }
         other => panic!("unexpected error: {other:?}"),
     }

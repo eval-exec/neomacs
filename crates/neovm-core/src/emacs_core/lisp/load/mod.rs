@@ -6,7 +6,7 @@ use super::intern::{format_symbol_name_for_diagnostic, intern, resolve_sym};
 use super::keymap::is_list_keymap;
 use super::value::{Value, ValueKind, VecLikeType, list_to_vec};
 use super::value_reader::ReadSymbolShorthands;
-use crate::emacs_core::error::LispCondition;
+use crate::emacs_core::error::{LispCondition, signal_error_with_arg};
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::symbol::CanonicalAccess;
 use crate::heap_types::LispString;
@@ -2388,21 +2388,27 @@ pub(crate) fn load_file_with_requested_and_found_options(
         .count();
     if load_count > 3 {
         let found_value = Value::heap_string(found.clone());
+        // `Vloads_in_progress` is a cons list: `Vloads_in_progress =
+        // Fcons (found, Vloads_in_progress)` (src/lread.c:1314) puts the
+        // most recent load at the head, while this Vec appends the newest
+        // last. Walk it backwards so the signal data lists the stack in
+        // GNU's order.
         let in_progress = Value::list(
             eval.loads_in_progress
                 .iter()
+                .rev()
                 .cloned()
                 .map(Value::heap_string)
                 .collect(),
         );
-        return Err(EvalError::signal(
-            intern("error"),
-            vec![
-                Value::string("Recursive load"),
-                Value::cons(found_value, in_progress),
-            ],
-            None,
-        ));
+        // GNU passes `Fcons (found, Vloads_in_progress)` to `signal_error`,
+        // which splices a proper list into the signal data
+        // (src/eval.c:2105-2111).  Nested data would make `(cadr err)` a
+        // list instead of the found filename.
+        return Err(map_flow(signal_error_with_arg(
+            "Recursive load",
+            Value::cons(found_value, in_progress),
+        )));
     }
     // Both pieces of load bookkeeping ride the specpdl, mirroring GNU
     // lread.c Fload (`record_unwind_protect (record_load_unwind, ...)` +
