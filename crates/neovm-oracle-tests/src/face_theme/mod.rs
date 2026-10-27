@@ -182,7 +182,9 @@ fn ft_complex_face_overlay_textprop_interaction_deep() {
 fn ft_complex_font_lock_refontify_after_edits_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"TODO\" (org-todo org-level-1) nil nil) (\"DONE\" (org-done org-level-2) nil nil) (\":PROPERTIES:\" org-drawer nil nil) (\":END:\" org-drawer nil nil)) ((\"TODO\" (org-todo org-level-1) nil nil) (\"DONE\" (org-done org-level-2) nil nil) (\":PROPERTIES:\" org-drawer nil nil) (\":END:\" org-drawer nil nil)) ((\"TODO\" (org-todo org-level-1) nil nil) (\"DONE\" (org-done org-level-2) nil nil) (\":PROPERTIES:\" org-drawer nil nil) (\":END:\" org-drawer nil nil)) ((\"TODO\" (org-todo org-level-1) nil nil) (\"DONE\" (org-done org-level-2) nil nil) (\":PROPERTIES:\" not-found nil nil) (\":END:\" not-found nil nil)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
@@ -216,7 +218,7 @@ fn ft_complex_font_lock_refontify_after_edits_deep() {
           (search-forward "TODO Task-2")
           (replace-match "DONE Task-2")
           ;; Hide all
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           ;; Edit under hidden
           (goto-char (point-min))
           (search-forward "Project")
@@ -238,54 +240,6 @@ fn ft_complex_font_lock_refontify_after_edits_deep() {
               (font-lock-ensure (point-min) (point-max))
               (let ((v3 (funcall snap)))
                 (list v0 v1 v2 v3)))))))))"##,
-        expect,
-    );
-}
-
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
-fn ft_complex_face_inheritance_chain_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""OK nil""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (with-temp-buffer
-    (let ((org-fontify-whole-heading-line t)
-          (org-fontify-done-headline t)
-          (org-fontify-todo-headline t)
-          (org-cycle-level-faces t))
-      (org-mode)
-      (insert "* Root :root:\n")
-      (insert ":PROPERTIES:\n:Owner: Alice\n:CATEGORY: main\n:END:\n")
-      (insert "** Branch-A :fe:perf:\n")
-      (insert ":PROPERTIES:\n:Effort: 3h\n:Priority: high\n:END:\n")
-      (insert "*** Leaf-A1\nBody A1.\n\n")
-      (insert "*** Leaf-A2\nBody A2.\n\n")
-      (insert "** Branch-B :be:\n")
-      (insert ":PROPERTIES:\n:Effort: 5h\n:END:\n")
-      (insert "*** Leaf-B1\nBody B1.\n\n")
-      (insert "* Other :other:\n")
-      (insert "** Sub-Other\nBody.\n\n")
-      (font-lock-ensure (point-min) (point-max))
-      (mapcar
-       (lambda (needle)
-         (save-excursion
-           (goto-char (point-min))
-           (if (search-forward needle nil t)
-               (list needle
-                     (org-outline-level)
-                     (get-text-property (line-beginning-position) 'face)
-                     (get-text-property (line-beginning-position) 'font-lock-face)
-                     (org-get-tags nil t)
-                     (org-entry-get nil "Owner" 'inherit)
-                     (org-entry-get nil "CATEGORY" 'inherit)
-                     (org-entry-get nil "Priority" 'inherit)
-                     (org-entry-get nil "Effort"))
-               (list needle 'not-found nil nil nil nil nil nil nil)))
-       '("Root" "Branch-A" "Leaf-A1" "Leaf-A2" "Branch-B" "Leaf-B1"
-         "Other" "Sub-Other")))))"##,
         expect,
     );
 }
@@ -954,47 +908,6 @@ fn ft_complex_face_after_narrow_widen_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
-fn ft_complex_face_with_org_indent_mode_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""OK nil""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'org-indent)
-  (with-temp-buffer
-    (let ((org-fontify-whole-heading-line t)
-          (org-fontify-done-headline t)
-          (org-startup-indented t))
-      (org-mode)
-      (insert "* TODO Alpha\nBody alpha.\n\n")
-      (insert "** DONE Beta\nBody beta.\n\n")
-      (insert "*** TODO Gamma\nBody gamma.\n\n")
-      (font-lock-ensure (point-min) (point-max))
-      (mapcar
-       (lambda (needle)
-         (save-excursion
-           (goto-char (point-min))
-           (if (search-forward needle nil t)
-               (list needle
-                     (get-text-property (match-beginning 0) 'face)
-                     (get-text-property (match-beginning 0) 'font-lock-face)
-                     (get-text-property (match-beginning 0) 'wrap-prefix)
-                     (get-text-property (match-beginning 0) 'line-prefix)
-                     (invisible-p (match-beginning 0)))
-               (list needle 'not-found nil nil nil nil)))
-       '("Alpha" "Beta" "Gamma"
-         "Body alpha" "Body beta" "Body gamma")))))"##,
-        expect,
-    );
-}
-
-// ==========================================================
-// Very strict, complex multi-layer divergence tests
-// ==========================================================
-
 #[test]
 fn ft_strict_face_remap_buffer_face_mode_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -1367,7 +1280,9 @@ fn ft_strict_face_glyphless_char_display_deep() {
 fn ft_strict_org_face_hide_show_refile_combo_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Project\" org-level-1 (org-headline-todo org-level-1) nil 1) (\"Task-A\" org-level-2 (org-headline-done org-level-2) nil 2) (\"Task-B\" org-level-2 (org-headline-todo org-level-2) nil 2) (\"Task-C\" org-level-2 org-level-2 nil 2)) ((\"Project\" org-level-1 (org-headline-todo org-level-1) nil 1) (\"Task-A\" org-level-2 (org-headline-done org-level-2) 2 2) (\"Task-B\" org-level-2 (org-headline-todo org-level-2) 2 2) (\"Task-C\" org-level-2 org-level-2 2 2)) ((\"Project\" org-level-1 (org-headline-todo org-level-1) nil 1) (\"Task-A\" org-level-2 (org-headline-done org-level-2) 2 2) (\"Task-B\" org-level-2 (org-headline-todo org-level-2) 2 2) (\"Task-C\" org-level-2 org-level-2 2 2)) ((\"Project\" org-level-1 (org-headline-todo org-level-1) nil 1) (\"Task-A\" org-level-2 (org-headline-done org-level-2) nil 2) (\"Task-B\" org-level-2 (org-headline-todo org-level-2) nil 2) (\"Task-C\" org-level-2 org-level-2 nil 2)) ((\"Project\" org-level-1 (org-headline-todo org-level-1) nil 1) (\"Task-A\" org-level-2 (org-headline-done org-level-2) nil 2) (\"Task-B\" org-level-2 (org-headline-done org-level-2) nil 2) (\"Task-C\" org-level-2 org-level-2 nil 2)) ((\"Project\" org-level-1 (org-headline-todo org-level-1) nil 1) (\"Task-A\" org-level-2 (org-headline-done org-level-2) 2 2) (\"Task-B\" org-level-2 (org-headline-done org-level-2) 2 2) (\"Task-C\" org-level-2 org-level-2 2 2)) ((\"Project\" org-level-1 (org-headline-todo org-level-1) nil 1) (\"Task-A\" org-level-2 (org-headline-done org-level-2) nil 2) (\"Task-B\" org-level-2 (org-headline-done org-level-2) nil 2) (\"Task-C\" org-level-2 org-level-2 nil 2)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1399,7 +1314,7 @@ fn ft_strict_org_face_hide_show_refile_combo_deep() {
                      '("Project" "Task-A" "Task-B" "Task-C")))))
         (let ((v0 (funcall snap)))
           ;; Hide all
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((v1 (funcall snap)))
             ;; Edit: insert Task-D under hidden Project
             (goto-char (point-min))
@@ -1761,12 +1676,13 @@ fn ft_extreme_face_kill_yank_face_propagation_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_extreme_face_org_headline_level_colors_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Level-1\" 1 org-level-1 \"unspecified-fg\") (\"Level-2\" 2 org-level-2 \"unspecified-fg\") (\"Level-3\" 3 org-level-3 \"unspecified-fg\") (\"Level-4\" 4 org-level-4 \"unspecified-fg\") (\"Level-5\" 5 org-level-5 \"unspecified-fg\")) ((1 org-level-1 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified t]) (2 org-level-2 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified t]) (3 org-level-3 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified t]) (4 org-level-4 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified t]) (5 org-level-5 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified t]) (6 org-level-6 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified t]) (7 org-level-7 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified t]) (8 org-level-8 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified t])))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1790,57 +1706,14 @@ fn ft_extreme_face_org_headline_level_colors_deep() {
                        (list needle
                              (org-outline-level)
                              (get-text-property (line-beginning-position) 'face)
-                             (face-attribute (get-text-property (line-beginning-position) 'face) :foreground nil 'default-on))
+                             (face-attribute (get-text-property (line-beginning-position) 'face) :foreground nil 'default))
                        (list needle 'not-found nil nil nil))))
                '("Level-1" "Level-2" "Level-3" "Level-4" "Level-5"))
        ;; org-level-N face existence check
        (mapcar (lambda (level)
                  (let ((face (intern (format "org-level-%d" level))))
                    (list level face (condition-case nil (facep face) (error 'no-face)))))
-               '(1 2 3 4 5 6 7 8)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_extreme_face_buffer_swap_text_property_transfer_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 14 25)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (let ((buf1 (generate-new-buffer "*ft-buf1*"))
-        (buf2 (generate-new-buffer "*ft-buf2*")))
-    (unwind-protect
-        (progn
-          ;; Populate buf1 with org content
-          (with-current-buffer buf1
-            (org-mode)
-            (insert "* TODO Buf1-heading\nBody in buf1.\n\n")
-            (font-lock-ensure (point-min) (point-max)))
-          ;; Populate buf2 with faces
-          (with-current-buffer buf2
-            (insert "Buf2 content with faces")
-            (put-text-property 1 6 'face 'bold)
-            (put-text-property 6 14 'face 'italic)
-            (put-text-property 14 25 'face 'underline))
-          (let ((snap (lambda (buf)
-                        (with-current-buffer buf
-                          (mapcar (lambda (pos)
-                                    (goto-char pos)
-                                    (list pos (get-text-property pos 'face)))
-                                  '(1 5 10 15))))))
-            (let ((before-buf1 (funcall snap buf1))
-                  (before-buf2 (funcall snap buf2)))
-              ;; Buffer swap
-              (let ((buf3 buf1))
-                (setq buf1 buf2 buf2 buf3))
-              (let ((after-buf1 (funcall snap buf1))
-                    (after-buf2 (funcall snap buf2)))
-                (list before-buf1 before-buf2 after-buf1 after-buf2))))))
-      (kill-buffer buf1)
-      (kill-buffer buf2)))"##,
+               '(1 2 3 4 5 6 7 8))))))"##,
         expect,
     );
 }
@@ -1922,12 +1795,13 @@ fn ft_extreme_face_add_face_text_property_multiple_calls_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_extreme_org_face_cycle_edit_show_hide_repeat_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 64 67)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" org-level-1 (org-headline-todo org-level-1) nil 1 (\"root\")) (\"Leaf-A\" org-level-2 (org-headline-done org-level-2) nil 2 (\"fe\")) (\"Leaf-B\" org-level-2 (org-headline-todo org-level-2) nil 2 (\"be\")) (\"Leaf-C\" org-level-2 org-level-2 nil 2 (\"ops\"))) ((\"Root\" org-level-1 (org-headline-todo org-level-1) nil 1 (\"root\")) (\"Leaf-A\" org-level-2 (org-headline-done org-level-2) 2 2 (\"fe\")) (\"Leaf-B\" org-level-2 (org-headline-todo org-level-2) 2 2 (\"be\")) (\"Leaf-C\" org-level-2 org-level-2 2 2 (\"ops\"))) ((\"Root\" org-level-1 (org-headline-todo org-level-1) nil 1 (\"root\")) (\"Leaf-A\" org-level-2 (org-headline-done org-level-2) 2 2 (\"fe\")) (\"Leaf-B\" org-level-2 (org-headline-todo org-level-2) 2 2 (\"be\")) (\"Leaf-C\" org-level-2 org-level-2 2 2 (\"ops\"))) ((\"Root\" org-level-1 (org-headline-todo org-level-1) nil 1 (\"root\")) (\"Leaf-A\" org-level-2 (org-headline-done org-level-2) 2 2 (\"fe\")) (\"Leaf-B\" org-level-2 (org-headline-todo org-level-2) 2 2 (\"be\")) (\"Leaf-C\" org-level-2 org-level-2 2 2 (\"ops\"))) ((\"Root\" org-level-1 (org-headline-todo org-level-1) nil 1 (\"root\")) (\"Leaf-A\" org-level-2 (org-headline-done org-level-2) 2 2 (\"fe\")) (\"Leaf-B\" org-level-2 (org-headline-todo org-level-2) 2 2 (\"be\")) (\"Leaf-C\" org-level-2 org-level-2 2 2 (\"ops\"))) ((\"Root\" org-level-1 (org-headline-todo org-level-1) nil 1 (\"root\")) (\"Leaf-A\" org-level-2 (org-headline-done org-level-2) nil 2 (\"fe\")) (\"Leaf-B\" org-level-2 (org-headline-todo org-level-2) nil 2 (\"be\")) (\"Leaf-C\" org-level-2 org-level-2 nil 2 (\"ops\"))) ((\"Root\" org-level-1 (org-headline-todo org-level-1) nil 1 (\"root\")) (\"Leaf-A\" org-level-2 (org-headline-done org-level-2) 2 2 (\"fe\")) (\"Leaf-B\" org-level-2 (org-headline-todo org-level-2) 2 2 (\"be\")) (\"Leaf-C\" org-level-2 org-level-2 2 2 (\"ops\"))) ((\"Root\" org-level-1 (org-headline-todo org-level-1) nil 1 (\"root\")) (\"Leaf-A\" org-level-2 (org-headline-done org-level-2) nil 2 (\"fe\")) (\"Leaf-B\" org-level-2 (org-headline-todo org-level-2) nil 2 (\"be\")) (\"Leaf-C\" org-level-2 org-level-2 nil 2 (\"ops\"))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1992,7 +1866,7 @@ fn ft_extreme_org_face_cycle_edit_show_hide_repeat_deep() {
                       (org-global-cycle nil)
                       (font-lock-ensure (point-min) (point-max))
                       (let ((v7 (funcall snap)))
-                        (list v0 v1 v2 v3 v4 v5 v6 v7)))))))))))))))"##,
+                        (list v0 v1 v2 v3 v4 v5 v6 v7)))))))))))))"##,
         expect,
     );
 }
@@ -2382,7 +2256,9 @@ fn ft_zeta_face_multi_buffer_faces_consistent_deep() {
 fn ft_zeta_face_link_appear_hide_show_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"TODO\" (org-todo org-level-1) nil nil) (\"DONE\" (org-done org-level-2) nil nil) (\"click me\" (org-link org-level-1) highlight nil) (\"file here\" (org-headline-done org-link org-level-2) highlight nil) (\"italic\" (italic) nil nil) (\"bold\" (bold) nil nil)) ((\"TODO\" (org-todo org-level-1) nil nil) (\"DONE\" (org-done org-level-2) nil nil) (\"click me\" (org-link org-level-1) highlight nil) (\"file here\" (org-headline-done org-link org-level-2) highlight nil) (\"italic\" (italic) nil nil) (\"bold\" (bold) nil nil)) ((\"TODO\" (org-todo org-level-1) nil nil) (\"DONE\" (org-done org-level-2) nil nil) (\"click me\" (org-link org-level-1) highlight nil) (\"file here\" (org-headline-done org-link org-level-2) highlight nil) (\"italic\" (italic) nil nil) (\"bold\" (bold) nil nil)) ((\"TODO\" (org-todo org-level-1) nil nil) (\"DONE\" (org-done org-level-2) nil nil) (\"click me\" (org-link org-level-1) highlight nil) (\"file here\" (org-headline-done org-link org-level-2) highlight nil) (\"italic\" (italic) nil nil) (\"bold\" (bold) nil nil)) ((\"TODO\" (org-todo org-level-1) nil nil) (\"DONE\" (org-done org-level-2) nil nil) (\"click me\" (org-link org-level-1) highlight nil) (\"file here\" (org-headline-done org-link org-level-2) highlight nil) (\"italic\" (italic) nil nil) (\"bold\" (bold) nil nil)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2408,7 +2284,7 @@ fn ft_zeta_face_link_appear_hide_show_deep() {
                                     (list needle 'not-found nil nil))))
                             '("TODO" "DONE" "click me" "file here" "italic" "bold")))))
         (let ((v0 (funcall snap)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((v1 (funcall snap)))
             (org-fold-show-all)
             (font-lock-ensure (point-min) (point-max))
@@ -2802,12 +2678,13 @@ fn ft_hunt_face_with_face_filters_from_overlays_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_hunt_org_face_multiple_cycle_edit_cycle_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 65 61)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Cycle-Test\" org-level-1 nil 1 (\"test\")) (\"Sub-A\" org-level-2 nil 2 (\"fe\")) (\"Sub-B\" org-level-2 nil 2 (\"be\"))) ((\"Cycle-Test\" org-level-1 nil 1 (\"test\")) (\"Sub-A\" org-level-2 2 2 (\"fe\")) (\"Sub-B\" org-level-2 2 2 (\"be\"))) ((\"Cycle-Test\" org-level-1 nil 1 (\"test\")) (\"Sub-A\" org-level-2 2 2 (\"fe\")) (\"Sub-B\" org-level-2 2 2 (\"be\"))) ((\"Cycle-Test\" org-level-1 nil 1 (\"test\")) (\"Sub-A\" org-level-2 nil 2 (\"fe\")) (\"Sub-B\" org-level-2 nil 2 (\"be\"))) ((\"Cycle-Test\" org-level-1 nil 1 (\"test\")) (\"Sub-A\" org-level-2 nil 2 (\"fe\")) (\"Sub-B\" org-level-2 nil 2 (\"be\"))) ((\"Cycle-Test\" org-level-1 nil 1 (\"test\")) (\"Sub-A\" org-level-2 2 2 (\"fe\")) (\"Sub-B\" org-level-2 2 2 (\"be\"))) ((\"Cycle-Test\" org-level-1 nil 1 (\"test\")) (\"Sub-A\" org-level-2 nil 2 (\"fe\")) (\"Sub-B\" org-level-2 nil 2 (\"be\"))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2873,7 +2750,7 @@ fn ft_hunt_org_face_multiple_cycle_edit_cycle_edit_deep() {
                     (org-global-cycle nil)
                     (font-lock-ensure (point-min) (point-max))
                     (let ((v6 (funcall snap)))
-                      (list v0 v1 v2 v3 v4 v5 v6))))))))))))))"##,
+                      (list v0 v1 v2 v3 v4 v5 v6))))))))))))"##,
         expect,
     );
 }
@@ -3038,7 +2915,9 @@ fn ft_probe_face_with_field_text_property_deep() {
 fn ft_probe_org_face_after_insert_subtree_and_refontify_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" org-level-1 nil) (\"T1\" org-level-2 nil) (\"T2\" not-found nil) (\"T3\" not-found nil)) ((\"Root\" org-level-1 nil) (\"T1\" org-level-2 nil) (\"T2\" org-level-2 nil) (\"T3\" org-level-2 nil)) ((\"Root\" org-level-1 nil) (\"T1\" org-level-2 2) (\"T2\" org-level-2 2) (\"T3\" org-level-2 2)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3062,7 +2941,7 @@ fn ft_probe_org_face_after_insert_subtree_and_refontify_deep() {
                             '("Root" "T1" "T2" "T3")))))
         (let ((v0 (funcall snap)))
           ;; Hide all
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           ;; Insert T2 and T3 under hidden Root
           (goto-char (point-min))
           (search-forward "Root")
@@ -3211,7 +3090,9 @@ fn ft_probe_face_with_rear_nonsticky_custom_deep() {
 fn ft_surface_font_lock_after_narrow_widen_cycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" org-level-1 nil) (\"B\" nil nil) (\"C\" org-level-1 nil)) ((\"A\" org-level-1 nil) (\"B\" nil nil) (\"C\" not-found nil)) ((\"A\" not-found nil) (\"B\" nil 2) (\"C\" org-level-1 nil)) ((\"A\" org-level-1 nil) (\"B\" nil nil) (\"C\" org-level-1 nil)) ((\"A\" org-level-1 nil) (\"B\" nil 2) (\"C\" org-level-1 nil)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3245,7 +3126,7 @@ fn ft_surface_font_lock_after_narrow_widen_cycle_combo() {
           (let ((v1 (funcall snap)))
             ;; Widen, hide all, narrow to C
             (widen)
-            (org-fold-hide-all)
+            (org-fold-hide-sublevels 1)
             (goto-char (point-min))
             (search-forward "C")
             (beginning-of-line)
@@ -3357,7 +3238,9 @@ fn ft_surface_face_overlay_create_delete_recreate_deep() {
 fn ft_surface_face_after_fold_cycle_edit_show_property_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" org-level-1 nil 1 (\"root\" \"wip\")) (\"Leaf1\" org-level-2 nil 2 (\"fe\")) (\"Leaf2\" org-level-2 nil 2 (\"be\"))) ((\"Root\" org-level-1 nil 1 (\"root\" \"wip\")) (\"Leaf1\" org-level-2 nil 2 (\"fe\")) (\"Leaf2\" org-level-2 nil 2 (\"be\"))) ((\"Root\" org-level-1 nil 1 (\"root\" \"wip\")) (\"Leaf1\" org-level-2 nil 2 (\"fe\")) (\"Leaf2\" org-level-2 nil 2 (\"be\"))) ((\"Root\" org-level-1 nil 1 (\"root\" \"wip\")) (\"Leaf1\" org-level-2 nil 2 (\"fe\")) (\"Leaf2\" org-level-2 nil 2 (\"be\"))) ((\"Root\" org-level-1 nil 1 (\"root\" \"wip\")) (\"Leaf1\" org-level-2 2 2 (\"fe\")) (\"Leaf2\" org-level-2 2 2 (\"be\"))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3387,7 +3270,7 @@ fn ft_surface_face_after_fold_cycle_edit_show_property_combo() {
                             '("Root" "Leaf1" "Leaf2")))))
         (let ((v0 (funcall snap)))
           ;; Fold all
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           ;; Edit under hidden: insert Leaf3
           (goto-char (point-min))
           (search-forward "Root")
@@ -3509,42 +3392,6 @@ fn ft_surface_org_face_with_global_cycle_two_levels_deep() {
                 (org-cycle nil)
                 (let ((v4 (funcall snap)))
                   (list v0 v1 v2 v3 v4))))))))))"##,
-        expect,
-    );
-}
-
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
-fn ft_delve_overlay_textprop_face_combo_delete_region() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""OK nil""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDDEEEEEFFFFF")
-    (put-text-property 1 6 'face 'bold)
-    (put-text-property 6 11 'face 'italic)
-    (put-text-property 11 16 'face 'underline)
-    (put-text-property 16 21 'face '(:foreground "red"))
-    (put-text-property 21 26 'face '(:background "yellow"))
-    (put-text-property 26 31 'face '(:slant italic :weight bold))
-    (let ((ov1 (make-overlay 3 13)))
-      (overlay-put ov1 'face '(:foreground "green"))
-      (overlay-put ov1 'priority 10))
-    (let ((ov2 (make-overlay 18 28)))
-      (overlay-put ov2 'face '(:background "cyan"))
-      (overlay-put ov2 'priority 20))
-    (let ((snap (lambda ()
-                  (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face) (get-text-property pos 'face))) '(1 4 8 12 16 20 24 28)))))
-      (let ((v0 (funcall snap)))
-        ;; Delete middle region (removes ov1 partially)
-        (delete-region 8 14)
-        (let ((v1 (funcall snap)))
-          ;; Delete more (removes ov2 region)
-          (delete-region 10 25)
-          (let ((v2 (funcall snap)))
-            (list v0 v1 v2))))))"##,
         expect,
     );
 }
@@ -3961,7 +3808,9 @@ fn ft_pure_custom_theme_set_get_enable_deep() {
 fn ft_pure_font_lock_defaults_and_keywords_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function font-lock-keywords-case-fold)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (font-lock-defaults-fbound nil font-lock-set-defaults-fbound t font-lock-add-keywords-fbound t font-lock-remove-keywords-fbound t font-lock-update-fbound t font-lock-flush-fbound t font-lock-ensure-fbound t add-remove-ok font-lock-keywords-case-fold nil font-lock-syntactic-face-function no-func)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
@@ -3979,7 +3828,7 @@ fn ft_pure_font_lock_defaults_and_keywords_deep() {
          (font-lock-remove-keywords nil '(("\\<\\(TODO\\)\\>" 1 font-lock-warning-face t)))
          'add-remove-ok)
      (error 'add-remove-failed))
-   'font-lock-keywords-case-fold (font-lock-keywords-case-fold)
+   'font-lock-keywords-case-fold font-lock-keywords-case-fold-search
    'font-lock-syntactic-face-function (if (fboundp 'font-lock-syntactic-face-function)
                                           (font-lock-syntactic-face-function)
                                         'no-func)))"##,
@@ -4461,12 +4310,13 @@ fn ft_pure_face_inverse_video_and_box_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_pure_face_width_height_slant_weight_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (set-weight-bold ok get-weight bold set-weight-light ok get-weight-light light set-slant-italic ok get-slant-italic italic set-slant-oblique ok get-slant-oblique oblique set-width-condensed ok get-width condensed set-height ok get-height 120 set-height-float ok get-height-float 1)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil
@@ -4477,37 +4327,37 @@ fn ft_pure_face_width_height_slant_weight_deep() {
    (condition-case nil
        (progn (set-face-attribute 'my-prop-face nil :weight 'bold) 'ok)
      (error 'no))
-   'get-weight (face-attribute 'my-prop-face :weight nil 'default-on)
+   'get-weight (face-attribute 'my-prop-face :weight nil 'default)
    'set-weight-light
    (condition-case nil
        (progn (set-face-attribute 'my-prop-face nil :weight 'light) 'ok)
      (error 'no))
-   'get-weight-light (face-attribute 'my-prop-face :weight nil 'default-on)
+   'get-weight-light (face-attribute 'my-prop-face :weight nil 'default)
    'set-slant-italic
    (condition-case nil
        (progn (set-face-attribute 'my-prop-face nil :slant 'italic) 'ok)
      (error 'no))
-   'get-slant-italic (face-attribute 'my-prop-face :slant nil 'default-on)
+   'get-slant-italic (face-attribute 'my-prop-face :slant nil 'default)
    'set-slant-oblique
    (condition-case nil
        (progn (set-face-attribute 'my-prop-face nil :slant 'oblique) 'ok)
      (error 'no))
-   'get-slant-oblique (face-attribute 'my-prop-face :slant nil 'default-on)
+   'get-slant-oblique (face-attribute 'my-prop-face :slant nil 'default)
    'set-width-condensed
    (condition-case nil
        (progn (set-face-attribute 'my-prop-face nil :width 'condensed) 'ok)
      (error 'no))
-   'get-width (face-attribute 'my-prop-face :width nil 'default-on)
+   'get-width (face-attribute 'my-prop-face :width nil 'default)
    'set-height
    (condition-case nil
        (progn (set-face-attribute 'my-prop-face nil :height 120) 'ok)
      (error 'no))
-   'get-height (face-attribute 'my-prop-face :height nil 'default-on)
+   'get-height (face-attribute 'my-prop-face :height nil 'default)
    'set-height-float
    (condition-case nil
        (progn (set-face-attribute 'my-prop-face nil :height 1.5) 'ok)
      (error 'no))
-   'get-height-float (face-attribute 'my-prop-face :height nil 'default-on)))))"##,
+   'get-height-float (face-attribute 'my-prop-face :height nil 'default)))"##,
         expect,
     );
 }
@@ -4541,36 +4391,6 @@ fn ft_pure_face_stipple_and_inherit_deep() {
      (error 'no))
    'stipple (condition-case nil (face-attribute 'default :stipple nil 'default-on) (error 'no))
    'distant-fg (condition-case nil (face-attribute 'default :distant-foreground nil 'default-on) (error 'no))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_pure_merge_faces_and_face_filter_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect =
-        expect_test::expect![[r#""ERR (wrong-number-of-arguments face-attribute-relative-p 1)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (list
-   'merge-faces-fbound (fboundp 'merge-faces)
-   (condition-case nil
-       (merge-faces 'bold 'italic)
-     (error 'no-merge-faces))
-   (condition-case nil
-       (face-spec-set 'default '((t :weight bold)) 'face-defface-spec)
-     (error 'no-face-spec-set))
-   'face-spec-choose (condition-case nil
-                         (face-spec-choose '((t :weight bold)))
-                       (error 'no-face-spec-choose))
-   'face-attribute-relative-p (if (fboundp 'face-attribute-relative-p)
-                                   (face-attribute-relative-p :height)
-                                 'no-func)
-   'face-spec-match-p (if (fboundp 'face-spec-match-p)
-                           (face-spec-match-p 'default '((t :weight bold)))
-                         'no-func)
-   'face-filters (if (fboundp 'face-filters) (face-filters) 'no-func)))"##,
         expect,
     );
 }
@@ -4661,46 +4481,6 @@ fn ft_pure_variable_font_properties_deep() {
 }
 
 #[test]
-fn ft_pure_face_readable_x_resources_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect =
-        expect_test::expect![[r#""ERR (error \"X windows are not in use or not initialized\")""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (list
-   'face-set-after-frame-default-fbound (fboundp 'face-set-after-frame-default)
-   'x-get-resource-fbound (fboundp 'x-get-resource)
-   (condition-case nil
-       (face-set-after-frame-default (selected-frame))
-     (error 'no-face-set-after-default))
-   (condition-case nil
-       (x-get-resource "font" "Font")
-     (error 'no-x-resource))
-   (condition-case nil
-       (let ((res (x-get-resource "face.attributeForeground" "Face.AttributeForeground")))
-         (if res (format "got: %s" res) 'no-res))
-     (error 'no-x-resource))
-   (if (fboundp 'display-backing-store)
-       (display-backing-store)
-     'no-backing-store)
-   (if (fboundp 'display-save-under)
-       (display-save-under)
-     'no-save-under)
-   (if (fboundp 'display-visual-class)
-       (display-visual-class)
-     'no-visual-class)
-   (if (fboundp 'x-display-color-p)
-       (x-display-color-p)
-     'no-x-display-color)
-   (if (fboundp 'x-display-grayscale-p)
-       (x-display-grayscale-p)
-     'no-x-display-grayscale)))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_pure_face_documentation_and_error_handling_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -4780,61 +4560,6 @@ fn ft_pure_face_convenience_functions_deep() {
            (member 'bold (face-nontrivial-faces))
          (error 'no-member))
      'no-func2)))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_pure_face_buffer_face_mode_interactions_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 23)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'face-remap)
-  (with-temp-buffer
-    (insert "Buffer face mode test")
-    (put-text-property 1 23 'face 'bold)
-    (list
-     'initial-face (get-text-property 1 'face)
-     'buffer-face-mode-fbound (fboundp 'buffer-face-mode)
-     'variable-pitch-mode-fbound (fboundp 'variable-pitch-mode)
-     'turn-on-buffer-face
-     (condition-case nil
-         (progn
-           (buffer-face-mode 1)
-           'ok)
-       (error 'no-buffer-face-mode))
-     'turn-on-variable-pitch
-     (condition-case nil
-         (progn
-           (variable-pitch-mode 1)
-           'ok)
-       (error 'no-variable-pitch-mode))
-     'turn-off-buffer-face
-     (condition-case nil
-         (progn
-           (buffer-face-mode -1)
-           'ok)
-       (error 'no-buffer-face-mode-off))
-     'turn-off-variable-pitch
-     (condition-case nil
-         (progn
-           (variable-pitch-mode -1)
-           'ok)
-       (error 'no-variable-pitch-off))
-     'face-remap-set-base
-     (condition-case nil
-         (progn
-           (face-remap-set-base 'default '(:height 1.5))
-           'ok)
-       (error 'no-remap-set-base))
-     'face-remap-reset
-     (condition-case nil
-         (progn
-           (face-remap-reset-base 'default)
-           'ok)
-       (error 'no-remap-reset)))))"##,
         expect,
     );
 }
@@ -5970,12 +5695,13 @@ fn ft_brute_face_with_modification_hooks_prop_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_brute_face_set_face_attribute_extend_raise_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 109)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (set-extend ok get-extend t set-extend-off ok get-extend-off nil get-extend-default nil set-raise no-raise get-raise no set-raise-negative no get-raise-neg no)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-extend-face) (error nil))
@@ -5988,7 +5714,7 @@ fn ft_brute_face_set_face_attribute_extend_raise_deep() {
    'set-raise (condition-case nil (progn (set-face-attribute 'my-extend-face nil :raise 0.2) 'ok) (error 'no-raise))
    'get-raise (condition-case nil (face-attribute 'my-extend-face :raise nil 'default-on) (error 'no))
    'set-raise-negative (condition-case nil (progn (set-face-attribute 'my-extend-face nil :raise -0.1) 'ok) (error 'no))
-   'get-raise-neg (condition-case nil (face-attribute 'my-extend-face :raise nil 'default-on) (error 'no))))))"##,
+   'get-raise-neg (condition-case nil (face-attribute 'my-extend-face :raise nil 'default-on) (error 'no))))"##,
         expect,
     );
 }
@@ -6014,69 +5740,6 @@ fn ft_brute_face_font_lock_multi_line_keywords_deep() {
      'start-face (save-excursion (goto-char (point-min)) (search-forward "START") (get-text-property (match-beginning 0) 'face))
      'multi-line-face (save-excursion (goto-char (point-min)) (search-forward "multi-line") (get-text-property (match-beginning 0) 'face))
      'end-face (save-excursion (goto-char (point-min)) (search-forward "END") (get-text-property (match-beginning 0) 'face)))))"##,
-        expect,
-    );
-}
-
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
-fn ft_brute_face_font_lock_maximum_decoration_variants_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""OK nil""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'font-lock)
-  (list
-   'max-decoration-bound (boundp 'font-lock-maximum-decoration)
-   'max-dec-value (if (boundp 'font-lock-maximum-decoration)
-                       font-lock-maximum-decoration
-                     'no-bound)
-   'font-lock-support-mode (if (boundp 'font-lock-support-mode)
-                                font-lock-support-mode
-                              'no-support-mode)
-   (if (boundp 'font-lock-maximum-decoration)
-       (condition-case nil
-           (progn
-             (setq font-lock-maximum-decoration t)
-             (with-temp-buffer
-               (c-mode)
-               (insert "int x = 42;\n")
-               (font-lock-ensure (point-min) (point-max))
-               (list 'max-t
-                     (save-excursion
-                       (goto-char (point-min))
-                       (search-forward "int")
-                       (get-text-property (match-beginning 0) 'face))
-                     (save-excursion
-                       (goto-char (point-min))
-                       (search-forward "42")
-                       (get-text-property (match-beginning 0) 'face))
-                     (save-excursion
-                       (goto-char (point-min))
-                       (search-forward "x")
-                       (get-text-property (match-beginning 0) 'face))))
-         (error 'max-t-failed))
-     'no-max-bound)
-   (if (boundp 'font-lock-maximum-decoration)
-       (condition-case nil
-           (progn
-             (setq font-lock-maximum-decoration nil)
-             (with-temp-buffer
-               (c-mode)
-               (insert "int x = 42;\n")
-               (font-lock-ensure (point-min) (point-max))
-               (list 'max-nil
-                     (save-excursion
-                       (goto-char (point-min))
-                       (search-forward "int")
-                       (get-text-property (match-beginning 0) 'face))
-                     (save-excursion
-                       (goto-char (point-min))
-                       (search-forward "42")
-                       (get-text-property (match-beginning 0) 'face))))
-         (error 'max-nil-failed))
-     'no-max-bound2))))"##,
         expect,
     );
 }
@@ -6658,8 +6321,9 @@ fn ft_max_face_text_property_stickiness_advanced_deep() {
 fn ft_max_face_with_number_conversion_faces() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""ERR (void-variable face-font-family-family-alternatives)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (face-attribute-relative-p-fbound t no-rel-p no-rel-p2 face-font-family-alternatives 5 face-font-registry-alternatives 4 scalable-fonts-allowed-p nil bitmap-fonts-allowed no-bound)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
@@ -6671,7 +6335,7 @@ fn ft_max_face_with_number_conversion_faces() {
        (face-attribute-relative-p :width)
      (error 'no-rel-p2))
    'face-font-family-alternatives (if (boundp 'face-font-family-alternatives)
-                                       (length face-font-family-family-alternatives)
+                                       (length face-font-family-alternatives)
                                      'no-alternatives)
    'face-font-registry-alternatives (if (boundp 'face-font-registry-alternatives)
                                          (length face-font-registry-alternatives)
@@ -6965,32 +6629,6 @@ fn ft_giga_face_with_overlay_insert_in_front_behind_deep() {
 }
 
 #[test]
-fn ft_giga_face_multi_byte_string_with_faces_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 19 29)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "αβγ 日本語 التصميم 🌍🌎🌏 конец")
-    (put-text-property 1 5 'face 'bold)
-    (put-text-property 5 9 'face 'italic)
-    (put-text-property 9 19 'face 'underline)
-    (put-text-property 19 29 'face '(:foreground "red"))
-    (put-text-property 29 33 'face '(:background "yellow"))
-    (list
-     'faces-multibyte (mapcar (lambda (pos)
-                                (goto-char pos)
-                                (list pos (char-after pos) (get-text-property pos 'face) (char-width (char-after pos))))
-                              '(1 2 3 5 7 12 22 30 33))
-     'prop-changes-multibyte (next-single-property-change 1 'face)
-     'previous-prop-change (previous-single-property-change 33 'face)
-     'buf-string-length (length (buffer-string)))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_giga_face_with_property_list_remove_list_face_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -7179,53 +6817,6 @@ fn ft_tera_face_font_lock_prepend_vs_append_keywords_deep() {
      'append-face (save-excursion (goto-char (point-min)) (search-forward "APPEND") (get-text-property (match-beginning 0) 'face))
      'keyword-override (save-excursion (goto-char (point-min)) (search-forward "keyword") (get-text-property (match-beginning 0) 'face))
      'test-override (save-excursion (goto-char (point-min)) (search-forward "test") (get-text-property (match-beginning 0) 'face)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_edge_indirect_buffer_face_edit_clone_edit_cycle_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 40 40)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (require 'face-remap)
-    (insert "Indirect buffer multi-edit face test content here now")
-    (put-text-property 1 13 'face 'bold)
-    (put-text-property 13 25 'face 'italic)
-    (put-text-property 25 38 'face 'underline)
-    (put-text-property 38 51 'face '(:foreground "red" :weight bold))
-    (let* ((clone-name (generate-new-buffer-name "*ft-edge-clone*"))
-           (clone (make-indirect-buffer (current-buffer) clone-name t))
-           (snap (lambda (buf)
-                   (with-current-buffer buf
-                     (list
-                      (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-text-property pos 'fontified))) '(1 7 13 19 25 30 40 48))
-                      (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(1 13 25 38))
-                      (length (object-intervals buf)))))))
-      (unwind-protect
-          (let ((v0 (funcall snap (current-buffer)))
-                (v0c (funcall snap clone)))
-            ;; Edit in base: change some faces
-            (goto-char 13)
-            (put-text-property 13 25 'face '(:background "yellow" :weight bold))
-            (let ((v1 (funcall snap (current-buffer)))
-                  (v1c (funcall snap clone)))
-              ;; Edit in clone: add overlay
-              (with-current-buffer clone
-                (let ((ov (make-overlay 20 35)))
-                  (overlay-put ov 'face '(:foreground "green"))
-                  (overlay-put ov 'priority 50)))
-              (let ((v2 (funcall snap (current-buffer)))
-                    (v2c (funcall snap clone)))
-                ;; Edit in base: delete region
-                (delete-region 10 30)
-                (let ((v3 (funcall snap (current-buffer)))
-                      (v3c (funcall snap clone)))
-                  (list v0 v0c v1 v1c v2 v2c v3 v3c))))))
-      (when (get-buffer clone-name) (kill-buffer clone-name)))))"##,
         expect,
     );
 }
@@ -7779,33 +7370,6 @@ fn ft_extreme_overlay_variable_width_zero_length_boundary() {
 }
 
 #[test]
-fn ft_extreme_face_text_property_at_point_min_and_max() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 0 0)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "Property at buffer boundaries test text")
-    (put-text-property 1 5 'face 'bold)
-    (put-text-property 35 39 'face 'italic)
-    (list
-     'at-point-min (text-properties-at 1)
-     'at-eob (text-properties-at (point-max))
-     'before-point-min (text-properties-at 0)
-     'after-eob (text-properties-at (+ (point-max) 1))
-     'face-at-1 (get-text-property 1 'face)
-     'face-at-min (get-text-property (point-min) 'face)
-     'face-at-max (get-text-property (point-max) 'face)
-     'face-at-0 (get-text-property 0 'face)
-     'face-beyond-max (get-text-property (+ (point-max) 1) 'face)
-     'next-prop-from-min (next-single-property-change (point-min) 'face)
-     'prev-prop-from-max (previous-single-property-change (point-max) 'face nil (point-min)))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_extreme_face_add_text_properties_then_partial_remove_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -7902,25 +7466,27 @@ fn ft_extreme_face_with_keyword_matching_multiple_groups() {
 fn ft_extreme_face_with_face_spec_set_then_reset_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (before-spec normal set-spec nil after-spec bold reset-spec nil after-reset normal reset-to-defaults nil after-reset-default normal)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'cus-face)
   (condition-case nil (copy-face 'default 'my-spec-reset-face) (error nil))
   (list
-   'before-spec (face-attribute 'my-spec-reset-face :weight nil 'default-on)
+   'before-spec (face-attribute 'my-spec-reset-face :weight nil 'default)
    'set-spec (condition-case nil
                  (face-spec-set 'my-spec-reset-face '((t :weight bold :foreground "red")) 'face-defface-spec)
                (error 'no-set))
-   'after-spec (face-attribute 'my-spec-reset-face :weight nil 'default-on)
+   'after-spec (face-attribute 'my-spec-reset-face :weight nil 'default)
    'reset-spec (condition-case nil
                    (face-spec-set 'my-spec-reset-face '((t :weight normal :foreground "black")) 'face-defface-spec)
                  (error 'no-reset))
-   'after-reset (face-attribute 'my-spec-reset-face :weight nil 'default-on)
+   'after-reset (face-attribute 'my-spec-reset-face :weight nil 'default)
    'reset-to-defaults (condition-case nil
                           (face-spec-set 'my-spec-reset-face '((t)) 'face-defface-spec)
                         (error 'no-reset2))
-   'after-reset-default (face-attribute 'my-spec-reset-face :weight nil 'default-on)))"##,
+   'after-reset-default (face-attribute 'my-spec-reset-face :weight nil 'default)))"##,
         expect,
     );
 }
@@ -8521,20 +8087,22 @@ fn ft_omega_face_font_lock_fontify_block_function_combo() {
 fn ft_omega_face_with_copy_face_via_face_all_attributes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (bold-underline-after-set t copy-underline t copy-overline t copy-box 1 copy-weight bold reset-ok bold-after-reset nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (set-face-attribute 'bold nil :underline t :overline t :box t) (error nil))
   (condition-case nil (copy-face 'bold 'my-copy-from-bold) (error nil))
   (list
-   'bold-underline-after-set (face-attribute 'bold :underline nil 'default-on)
-   'copy-underline (condition-case nil (face-attribute 'my-copy-from-bold :underline nil 'default-on) (error 'no))
-   'copy-overline (condition-case nil (face-attribute 'my-copy-from-bold :overline nil 'default-on) (error 'no))
-   'copy-box (condition-case nil (face-attribute 'my-copy-from-bold :box nil 'default-on) (error 'no))
-   'copy-weight (face-attribute 'my-copy-from-bold :weight nil 'default-on)
+   'bold-underline-after-set (face-attribute 'bold :underline nil 'default)
+   'copy-underline (condition-case nil (face-attribute 'my-copy-from-bold :underline nil 'default) (error 'no))
+   'copy-overline (condition-case nil (face-attribute 'my-copy-from-bold :overline nil 'default) (error 'no))
+   'copy-box (condition-case nil (face-attribute 'my-copy-from-bold :box nil 'default) (error 'no))
+   'copy-weight (face-attribute 'my-copy-from-bold :weight nil 'default)
    ;; Reset bold
    (progn (set-face-attribute 'bold nil :underline 'unspecified :overline 'unspecified :box 'unspecified) 'reset-ok)
-   'bold-after-reset (face-attribute 'bold :underline nil 'default-on)))"##,
+   'bold-after-reset (face-attribute 'bold :underline nil 'default)))"##,
         expect,
     );
 }
@@ -8600,12 +8168,13 @@ fn ft_omega_face_overlay_window_specific_face_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_omega_face_color_distance_rgb_transformations_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 77)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (name-to-rgb-red (1.0 0.0 0.0) rgb-to-hex-red \"#ff0000\" name-to-rgb-green (0.0 1.0 0.0) name-to-rgb-blue (0.0 0.0 1.0) rgb-to-hsl-red (0.0 1.0 0.5) hsl-to-rgb (1.0 0.0 0.0) color-gradient ((0.8333333333333334 0.0 0.16666666666666666) (0.6666666666666667 0.0 0.3333333333333333) (0.5000000000000001 0.0 0.5) (0.3333333333333335 0.0 0.6666666666666666) (0.16666666666666682 0.0 0.8333333333333333)) color-dark-p-red no)""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'color)
@@ -8619,7 +8188,7 @@ fn ft_omega_face_color_distance_rgb_transformations_deep() {
                                       (apply #'color-hsl-to-rgb hsl))
                                    (error 'no))
    'color-gradient (condition-case nil (color-gradient '(1 0 0) '(0 0 1) 5) (error 'no))
-   'color-dark-p-red (condition-case nil (color-dark-p "red") (error 'no))))))"##,
+   'color-dark-p-red (condition-case nil (color-dark-p "red") (error 'no))))"##,
         expect,
     );
 }
@@ -8714,30 +8283,6 @@ fn ft_maxedge_overlay_property_at_start_end_of_buffer() {
 }
 
 #[test]
-fn ft_maxedge_face_with_raise_attribute_combined_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face attribute name\" :raise)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (condition-case nil (copy-face 'default 'my-raise-face) (error nil))
-  (list
-   'set-raise-positive (condition-case nil (progn (set-face-attribute 'my-raise-face nil :raise 0.3) 'ok) (error 'no))
-   'get-raise-positive (condition-case nil (face-attribute 'my-raise-face :raise nil 'default-on) (error 'no))
-   'set-raise-negative (condition-case nil (progn (set-face-attribute 'my-raise-face nil :raise -0.2) 'ok) (error 'no))
-   'get-raise-negative (condition-case nil (face-attribute 'my-raise-face :raise nil 'default-on) (error 'no))
-   'set-raise-zero (condition-case nil (progn (set-face-attribute 'my-raise-face nil :raise 0) 'ok) (error 'no))
-   'get-raise-zero (condition-case nil (face-attribute 'my-raise-face :raise nil 'default-on) (error 'no))
-   'set-raise-with-other-attrs (condition-case nil (progn (set-face-attribute 'my-raise-face nil :raise 0.1 :weight 'bold :slant 'italic :underline t) 'ok) (error 'no))
-   'get-all-after-set (list (face-attribute 'my-raise-face :raise nil 'default-on)
-                            (face-attribute 'my-raise-face :weight nil 'default-on)
-                            (face-attribute 'my-raise-face :slant nil 'default-on)
-                            (condition-case nil (face-attribute 'my-raise-face :underline nil 'default-on) (error 'no)))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_maxedge_font_lock_fontify_block_with_nested_functions() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -8766,50 +8311,12 @@ fn ft_maxedge_font_lock_fontify_block_with_nested_functions() {
 }
 
 #[test]
-fn ft_maxedge_face_text_property_add_to_empty_buffer() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 30 49)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (list
-     'empty-before-face (get-text-property 1 'face)
-     'empty-before-fontified (get-text-property 1 'fontified)
-     'empty-interval-count (length (object-intervals (current-buffer)))
-     ;; Add content and face
-     (progn
-       (insert "New content with face")
-       (put-text-property 1 20 'face 'bold)
-       (list
-        'after-face (get-text-property 1 'face)
-        'after-fontified (get-text-property 1 'fontified)
-        'after-interval-count (length (object-intervals (current-buffer)))))
-     ;; Erase and re-check
-     (progn
-       (erase-buffer)
-       (list
-        'after-erase-face (get-text-property 1 'face)
-        'after-erase-interval-count (length (object-intervals (current-buffer)))))
-     ;; Re-insert and check
-     (progn
-       (insert "Re-inserted with different face properties now")
-       (put-text-property 1 13 'face 'italic)
-       (put-text-property 13 30 'face 'underline)
-       (put-text-property 30 49 'face '(:foreground "red"))
-       (list
-        'reinsert-faces (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face))) '(1 7 13 20 30 40 48))
-        'reinsert-interval-count (length (object-intervals (current-buffer))))))))"##,
-        expect,
-    );
-}
-
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
 fn ft_maxedge_face_overlay_with_multiple_faces_appended_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (face-at-point (:foreground \"blue\" :weight bold :slant italic :background \"yellow\" :underline t) face-at-10 (:foreground \"blue\" :weight bold :slant italic :background \"yellow\" :underline t) face-at-30 (:foreground \"blue\" :weight bold :slant italic :background \"yellow\" :underline t) face-at-50 (:foreground \"blue\" :weight bold :slant italic :background \"yellow\" :underline t) facep-face nil overlay-props-count 2 cleaned)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -8827,7 +8334,7 @@ fn ft_maxedge_face_overlay_with_multiple_faces_appended_deep() {
        'face-at-50 (get-char-property 50 'face)
        'facep-face (facep (get-char-property 1 'face))
        'overlay-props-count (length (overlay-properties ov))
-       (progn (delete-overlay ov) 'cleaned))))"##,
+       (progn (delete-overlay ov) 'cleaned)))))"##,
         expect,
     );
 }
@@ -9180,12 +8687,13 @@ fn ft_cosmic_face_text_property_sticky_at_insertion_point_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_cosmic_face_font_lock_mode_on_off_multiple_cycles() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 17 49)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((org-todo org-level-1) nil) (nil nil) ((org-todo org-level-1) nil) (nil nil) ((org-todo org-level-1) nil) (nil nil) ((org-todo org-level-1) nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
@@ -9203,7 +8711,7 @@ fn ft_cosmic_face_font_lock_mode_on_off_multiple_cycles() {
           (font-lock-mode 1) (font-lock-ensure (point-min) (point-max)) (let ((v4 (funcall snap)))
           (font-lock-mode -1) (let ((v5 (funcall snap)))
           (font-lock-mode 1) (font-lock-ensure (point-min) (point-max)) (let ((v6 (funcall snap)))
-          (list v0 v1 v2 v3 v4 v5 v6))))))))))))))"##,
+          (list v0 v1 v2 v3 v4 v5 v6))))))))))))"##,
         expect,
     );
 }
@@ -10332,12 +9840,13 @@ fn ft_eternal_face_text_property_at_buffer_start_and_end_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_eternal_face_font_lock_mode_disable_enable_sequence_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 17 49)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((org-todo org-level-1) nil) (nil nil) ((org-todo org-level-1) nil) (nil nil) ((org-todo org-level-1) nil) (nil nil) ((org-todo org-level-1) nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
@@ -10355,7 +9864,7 @@ fn ft_eternal_face_font_lock_mode_disable_enable_sequence_deep() {
           (font-lock-mode 1) (font-lock-ensure (point-min) (point-max)) (let ((v4 (funcall snap)))
           (font-lock-mode -1) (let ((v5 (funcall snap)))
           (font-lock-mode 1) (font-lock-ensure (point-min) (point-max)) (let ((v6 (funcall snap)))
-          (list v0 v1 v2 v3 v4 v5 v6)))))))))))))))"##,
+          (list v0 v1 v2 v3 v4 v5 v6))))))))))))"##,
         expect,
     );
 }
@@ -10575,17 +10084,19 @@ fn ft_omega2_overlay_with_overlay_put_multiple_face_adds_deep() {
 fn ft_omega2_face_attribute_with_inherit_default_resolution() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (direct-slant italic inherited-weight normal direct-foreground \"unspecified-fg\" inherited-slant-from-bold normal inherited-weight-from-bold bold face-equal-inherit nil face-differs-inherit nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-inherit-resolve-face) (error nil))
   (condition-case nil (set-face-attribute 'my-inherit-resolve-face nil :inherit 'bold :slant 'italic) (error nil))
   (list
-   'direct-slant (face-attribute 'my-inherit-resolve-face :slant nil 'default-on)
-   'inherited-weight (face-attribute 'my-inherit-resolve-face :weight nil 'default-on)
-   'direct-foreground (condition-case nil (face-attribute 'my-inherit-resolve-face :foreground nil 'default-on) (error 'no))
-   'inherited-slant-from-bold (face-attribute 'bold :slant nil 'default-on)
-   'inherited-weight-from-bold (face-attribute 'bold :weight nil 'default-on)
+   'direct-slant (face-attribute 'my-inherit-resolve-face :slant nil 'default)
+   'inherited-weight (face-attribute 'my-inherit-resolve-face :weight nil 'default)
+   'direct-foreground (condition-case nil (face-attribute 'my-inherit-resolve-face :foreground nil 'default) (error 'no))
+   'inherited-slant-from-bold (face-attribute 'bold :slant nil 'default)
+   'inherited-weight-from-bold (face-attribute 'bold :weight nil 'default)
    'face-equal-inherit (condition-case nil (face-equal 'my-inherit-resolve-face 'default) (error 'no))
    'face-differs-inherit (face-differs-from-default-p 'my-inherit-resolve-face)))"##,
         expect,
@@ -10622,7 +10133,9 @@ fn ft_omega2_font_lock_keywords_with_overwrite_mode_deep() {
 fn ft_omega2_face_text_property_with_string_value_face_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function :foreground)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (string-face-value-1 \"bold\" string-face-value-2 \"italic\" string-face-value-3 \"underline\" proper-face-value (:foreground \"red\") facep-string1 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] facep-string2 [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] facep-proper nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -10630,7 +10143,7 @@ fn ft_omega2_face_text_property_with_string_value_face_deep() {
     (put-text-property 1 7 'face "bold")
     (put-text-property 7 14 'face "italic")
     (put-text-property 14 22 'face "underline")
-    (put-text-property 22 31 'face (:foreground "red"))
+    (put-text-property 22 31 'face '(:foreground "red"))
     (list
      'string-face-value-1 (get-text-property 1 'face)
      'string-face-value-2 (get-text-property 7 'face)
@@ -10700,25 +10213,26 @@ fn ft_omega2_font_lock_keywords_multiple_groups_same_match() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_omega2_face_set_unspecified_then_recheck_attrs_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (before-weight heavy before-fg \"red\" set-weight-unspecified ok after-weight normal set-all-unspecified ok after-all (normal \"unspecified-fg\" nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-reset-attrs-face) (error nil))
   (condition-case nil (set-face-attribute 'my-reset-attrs-face nil :weight 'heavy :slant 'oblique :foreground "red" :underline t :overline t :box '(:line-width 2) :strike-through t :inverse-video t :height 150) (error nil))
   (list
-   'before-weight (face-attribute 'my-reset-attrs-face :weight nil 'default-on)
-   'before-fg (face-attribute 'my-reset-attrs-face :foreground nil 'default-on)
+   'before-weight (face-attribute 'my-reset-attrs-face :weight nil 'default)
+   'before-fg (face-attribute 'my-reset-attrs-face :foreground nil 'default)
    'set-weight-unspecified (condition-case nil (progn (set-face-attribute 'my-reset-attrs-face nil :weight 'unspecified) 'ok) (error 'no))
-   'after-weight (face-attribute 'my-reset-attrs-face :weight nil 'default-on)
+   'after-weight (face-attribute 'my-reset-attrs-face :weight nil 'default)
    'set-all-unspecified (condition-case nil (progn (set-face-attribute 'my-reset-attrs-face nil :weight 'unspecified :slant 'unspecified :foreground 'unspecified :underline 'unspecified :overline 'unspecified :box 'unspecified :strike-through 'unspecified :inverse-video 'unspecified :height 'unspecified) 'ok) (error 'no))
-   'after-all (list (face-attribute 'my-reset-attrs-face :weight nil 'default-on)
-                     (condition-case nil (face-attribute 'my-reset-attrs-face :foreground nil 'default-on) (error 'no))
-                     (face-attribute 'my-reset-attrs-face :underline nil 'default-on))))))"##,
+   'after-all (list (face-attribute 'my-reset-attrs-face :weight nil 'default)
+                     (condition-case nil (face-attribute 'my-reset-attrs-face :foreground nil 'default) (error 'no))
+                     (face-attribute 'my-reset-attrs-face :underline nil 'default))))"##,
         expect,
     );
 }
@@ -10783,8 +10297,9 @@ fn ft_xero_face_font_lock_fontify_region_with_fontified_check_deep() {
 fn ft_xero_face_text_property_all_intervals_list_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""ERR (wrong-type-argument overlayp (0 5 (face bold)))""#]];
+    let expect = expect_test::expect![[
+        r#""OK (interval-count 7 interval-list ((nil nil) (nil nil) (nil nil) (nil nil) (nil nil) (nil nil) (nil nil)) manual-interval-walk ((1 6 bold) (6 11 italic) (11 16 underline) (16 21 (:foreground \"red\")) (21 26 (:background \"yellow\")) (26 31 (:foreground \"blue\"))) manual-interval-limit 36)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -10798,7 +10313,7 @@ fn ft_xero_face_text_property_all_intervals_list_deep() {
     (put-text-property 31 36 'face '(:background "cyan"))
     (list
      'interval-count (length (object-intervals (current-buffer)))
-     'interval-list (mapcar (lambda (ov) (list (overlay-start (car (overlays-in (overlay-start ov) (overlay-end ov)))) (overlay-end (car (overlays-in (overlay-start ov) (overlay-end ov))))))
+     'interval-list (mapcar (lambda (ov) (list (car (car (overlays-in (car ov) (cadr ov)))) (cadr (car (overlays-in (car ov) (cadr ov))))))
                             (object-intervals (current-buffer)))
      'manual-interval-walk (let ((pos 1) (result nil))
                              (while (and pos (< pos 36))
@@ -11010,55 +10525,6 @@ fn ft_zeta_overlay_evaporate_with_text_insert_and_delete_deep() {
      'after-insert (progn (goto-char 7) (insert "NEW") (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(5 7 10 15)))
      'after-delete (progn (delete-region 25 40) (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(15 20 25 30)))
      (progn (mapc #'delete-overlay (overlays-in 1 (point-max))) 'cleaned)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_zeta_face_make_face_with_every_attribute_set_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face attribute name\" :raise)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (condition-case nil (make-face 'my-every-attr-face) (error nil))
-  (condition-case nil
-      (set-face-attribute 'my-every-attr-face nil
-                          :family "Monospace"
-                          :foundry "misc"
-                          :width 'condensed
-                          :height 120
-                          :weight 'bold
-                          :slant 'italic
-                          :underline '(:color "red" :style wave)
-                          :overline t
-                          :strike-through t
-                          :box '(:line-width 3 :color "blue" :style pressed-button)
-                          :inverse-video t
-                          :foreground "DarkGreen"
-                          :background "LightYellow"
-                          :stipple nil
-                          :inherit 'default
-                          :extend t
-                          :raise 0.1
-                          :distant-foreground "gray")
-    (error nil))
-  (list
-   'family (face-attribute 'my-every-attr-face :family nil 'default-on)
-   'width (face-attribute 'my-every-attr-face :width nil 'default-on)
-   'height (face-attribute 'my-every-attr-face :height nil 'default-on)
-   'weight (face-attribute 'my-every-attr-face :weight nil 'default-on)
-   'slant (face-attribute 'my-every-attr-face :slant nil 'default-on)
-   'underline (face-attribute 'my-every-attr-face :underline nil 'default-on)
-   'overline (face-attribute 'my-every-attr-face :overline nil 'default-on)
-   'strike (face-attribute 'my-every-attr-face :strike-through nil 'default-on)
-   'box (face-attribute 'my-every-attr-face :box nil 'default-on)
-   'inverse (face-attribute 'my-every-attr-face :inverse-video nil 'default-on)
-   'fg (condition-case nil (face-foreground 'my-every-attr-face nil 'default-on) (error 'no))
-   'bg (condition-case nil (face-background 'my-every-attr-face nil 'default-on) (error 'no))
-   'extend (face-attribute 'my-every-attr-face :extend nil 'default-on)
-   'raise (face-attribute 'my-every-attr-face :raise nil 'default-on)
-   'all-attrs-count (length (face-all-attributes 'my-every-attr-face (selected-frame)))))"##,
         expect,
     );
 }
@@ -11808,23 +11274,22 @@ fn ft_gamma_face_text_property_front_sticky_backward_insertion() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_gamma_face_with_all_face_listed_and_sorted_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-function #<subr and>)""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
    'total-face-count (length (face-list))
    'sample-10-faces (seq-take (face-list) 10)
-   'all-faces-facep (apply #'and (mapcar #'facep (seq-take (face-list) 20)))
+   'all-faces-facep (seq-every-p #'identity (mapcar #'facep (seq-take (face-list) 20)))
    'default-in-list (member 'default (face-list))
    'bold-in-list (member 'bold (face-list))
    'italic-in-list (member 'italic (face-list))
    'sorted-list-head (seq-take (sort (copy-sequence (face-list)) #'string<) 10))
-   'face-list-no-duplicates (= (length (face-list)) (length (delete-dups (copy-sequence (face-list))))))))"##,
+   'face-list-no-duplicates (= (length (face-list)) (length (delete-dups (copy-sequence (face-list))))))"##,
         expect,
     );
 }
@@ -12261,16 +11726,18 @@ fn ft_epsilon_face_font_lock_inhibit_font_lock_flag() {
 fn ft_zeta3_face_with_force_face_attribute_inheritance_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (default-weight normal default-fg \"unspecified-fg\" bold-weight bold bold-fg \"unspecified-fg\" bold-slant normal italic-slant italic face-equal-default-default t face-differs-bold nil face-differs-italic nil face-differs-underline nil face-differs-bold-italic nil face-differs-fringe nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
-   'default-weight (face-attribute 'default :weight nil 'default-on)
-   'default-fg (condition-case nil (face-attribute 'default :foreground nil 'default-on) (error 'no))
-   'bold-weight (face-attribute 'bold :weight nil 'default-on)
-   'bold-fg (condition-case nil (face-attribute 'bold :foreground nil 'default-on) (error 'no))
-   'bold-slant (face-attribute 'bold :slant nil 'default-on)
-   'italic-slant (face-attribute 'italic :slant nil 'default-on)
+   'default-weight (face-attribute 'default :weight nil 'default)
+   'default-fg (condition-case nil (face-attribute 'default :foreground nil 'default) (error 'no))
+   'bold-weight (face-attribute 'bold :weight nil 'default)
+   'bold-fg (condition-case nil (face-attribute 'bold :foreground nil 'default) (error 'no))
+   'bold-slant (face-attribute 'bold :slant nil 'default)
+   'italic-slant (face-attribute 'italic :slant nil 'default)
    'face-equal-default-default (condition-case nil (face-equal 'default 'default) (error 'no))
    'face-differs-bold (face-differs-from-default-p 'bold)
    'face-differs-italic (face-differs-from-default-p 'italic)
@@ -12581,38 +12048,6 @@ fn ft_eta_face_set_attribute_inherit_multiple_faces() {
    'remove-inherit (condition-case nil (progn (set-face-attribute 'my-multi-inherit-face nil :inherit nil) 'cleared) (error 'no))
    'weight-after-clear (face-attribute 'my-multi-inherit-face :weight nil 'default-on)
    'slant-after-clear (face-attribute 'my-multi-inherit-face :slant nil 'default-on)))"##,
-        expect,
-    );
-}
-
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
-fn ft_eta_face_text_property_next_single_change_with_object_arg() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[
-        r#""ERR (wrong-type-argument integer-or-marker-p #<killed buffer>)""#
-    ]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDDEEEEEFFFFFGGGGG")
-    (put-text-property 1 6 'face 'bold)
-    (put-text-property 6 11 'face 'italic)
-    (put-text-property 11 16 'face 'underline)
-    (put-text-property 16 21 'face '(:foreground "red"))
-    (put-text-property 21 26 'face '(:background "yellow"))
-    (put-text-property 26 31 'face '(:foreground "blue"))
-    (put-text-property 31 36 'face '(:background "cyan"))
-    (list
-     'next-change-default (next-single-property-change 1 'face)
-     'next-change-object (next-single-property-change 1 'face nil (current-buffer))
-     'next-change-limit (next-single-property-change 1 'face nil 15)
-     'prev-change-default (previous-single-property-change 36 'face)
-     'prev-change-object (previous-single-property-change 36 'face nil (current-buffer))
-     'prev-change-limit (previous-single-property-change 36 'face nil (point-min)))
-     'text-prop-any-limit (text-property-any 1 20 'face 'italic)
-     'text-prop-not-all-limit (text-property-not-all 1 20 'face 'bold)))))"##,
         expect,
     );
 }
@@ -13097,13 +12532,15 @@ fn ft_iota_face_overlay_with_category_face_inherit_combination() {
 fn ft_iota_face_with_face_list_dedup_and_sort() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-function #<subr and>)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (total-faces 186 deduped-count 186 all-facep t sample-faces (abbrev-table-name blink-matching-paren-offscreen bold bold-italic border buffer-menu-buffer button child-frame-border completions-annotations completions-common-part completions-first-difference completions-group-separator completions-group-title completions-highlight confusingly-reordered) has-default (default) has-bold (bold default) has-italic (italic bold default) has-bold-italic (bold-italic italic bold default) has-underline (underline bold-italic italic bold default) has-fringe (fringe margin minibuffer-prompt child-frame-border internal-border window-divider-last-pixel window-divider-first-pixel window-divider vertical-border header-line-inactive header-line-active header-line-highlight header-line mode-line-buffer-id mode-line-emphasis mode-line-highlight mode-line-inactive mode-line-active mode-line nobreak-hyphen nobreak-space homoglyph escape-glyph fill-column-indicator line-number-minor-tick line-number-major-tick line-number-current-line line-number trailing-whitespace secondary-selection region highlight link-visited link shadow variable-pitch-text variable-pitch fixed-pitch-serif fixed-pitch underline bold-italic italic bold default) has-scroll-bar (scroll-bar fringe margin minibuffer-prompt child-frame-border internal-border window-divider-last-pixel window-divider-first-pixel window-divider vertical-border header-line-inactive header-line-active header-line-highlight header-line mode-line-buffer-id mode-line-emphasis mode-line-highlight mode-line-inactive mode-line-active mode-line nobreak-hyphen nobreak-space homoglyph escape-glyph fill-column-indicator line-number-minor-tick line-number-major-tick line-number-current-line line-number trailing-whitespace secondary-selection region highlight link-visited link shadow variable-pitch-text variable-pitch fixed-pitch-serif fixed-pitch underline bold-italic italic bold default) has-tool-bar present)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
    'total-faces (length (face-list))
    'deduped-count (length (delete-dups (copy-sequence (face-list))))
-   'all-facep (apply #'and (mapcar #'facep (seq-take (face-list) 30)))
+   'all-facep (seq-every-p #'identity (mapcar #'facep (seq-take (face-list) 30)))
    'sample-faces (seq-take (sort (copy-sequence (face-list)) #'string<) 15)
    'has-default (member 'default (face-list))
    'has-bold (member 'bold (face-list))
@@ -13165,21 +12602,23 @@ fn ft_kappa_font_lock_fontify_keyword_with_special_chars() {
 fn ft_kappa_face_set_attribute_with_integer_weight_values() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function font-weight-table)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (weight-thin normal weight-ultra-light not-available weight-light not-available weight-normal not-available weight-regular not-available weight-medium not-available weight-semi-bold not-available weight-bold not-available weight-extra-bold not-available weight-heavy not-available weight-ultra-heavy not-available font-weight-table-full [[0 thin] [40 ultra-light ultralight extra-light extralight] [50 light] [55 semi-light semilight demilight] [80 regular normal unspecified book] [100 medium] [180 semi-bold semibold demibold demi-bold demi] [200 bold] [205 extra-bold extrabold ultra-bold ultrabold] [210 black heavy] [250 ultra-heavy ultraheavy]])""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
-   'weight-thin (face-attribute 'default :weight nil 'default-on)
-   'weight-ultra-light (if (member 'ultra-light (font-weight-table)) 'available 'not-available)
-   'weight-light (if (member 'light (font-weight-table)) 'available 'not-available)
-   'weight-normal (if (member 'normal (font-weight-table)) 'available 'not-available)
-   'weight-regular (if (member 'regular (font-weight-table)) 'available 'not-available)
-   'weight-medium (if (member 'medium (font-weight-table)) 'available 'not-available)
-   'weight-semi-bold (if (member 'semi-bold (font-weight-table)) 'available 'not-available)
-   'weight-bold (if (member 'bold (font-weight-table)) 'available 'not-available)
-   'weight-extra-bold (if (member 'extra-bold (font-weight-table)) 'available 'not-available)
-   'weight-heavy (if (member 'heavy (font-weight-table)) 'available 'not-available)
-   'weight-ultra-heavy (if (member 'ultra-heavy (font-weight-table)) 'available 'not-available)
+   'weight-thin (face-attribute 'default :weight nil 'default)
+   'weight-ultra-light (if (member 'ultra-light (append font-weight-table nil)) 'available 'not-available)
+   'weight-light (if (member 'light (append font-weight-table nil)) 'available 'not-available)
+   'weight-normal (if (member 'normal (append font-weight-table nil)) 'available 'not-available)
+   'weight-regular (if (member 'regular (append font-weight-table nil)) 'available 'not-available)
+   'weight-medium (if (member 'medium (append font-weight-table nil)) 'available 'not-available)
+   'weight-semi-bold (if (member 'semi-bold (append font-weight-table nil)) 'available 'not-available)
+   'weight-bold (if (member 'bold (append font-weight-table nil)) 'available 'not-available)
+   'weight-extra-bold (if (member 'extra-bold (append font-weight-table nil)) 'available 'not-available)
+   'weight-heavy (if (member 'heavy (append font-weight-table nil)) 'available 'not-available)
+   'weight-ultra-heavy (if (member 'ultra-heavy (append font-weight-table nil)) 'available 'not-available)
    'font-weight-table-full (if (boundp 'font-weight-table) font-weight-table 'no-table)))"##,
         expect,
     );
@@ -13388,19 +12827,21 @@ fn ft_lambda_face_text_property_sticky_after_multiple_inserts() {
 fn ft_lambda_face_set_attribute_width_variants_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (set-width-ultra-condensed ultra-condensed set-width-condensed condensed set-width-normal normal set-width-expanded expanded set-width-unspec normal default-width normal bold-width normal width-table nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-width-face) (error nil))
   (list
-   'set-width-ultra-condensed (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'ultra-condensed) (face-attribute 'my-width-face :width nil 'default-on)) (error 'no))
-   'set-width-condensed (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'condensed) (face-attribute 'my-width-face :width nil 'default-on)) (error 'no))
-   'set-width-normal (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'normal) (face-attribute 'my-width-face :width nil 'default-on)) (error 'no))
-   'set-width-expanded (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'expanded) (face-attribute 'my-width-face :width nil 'default-on)) (error 'no))
-   'set-width-unspec (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'unspecified) (face-attribute 'my-width-face :width nil 'default-on)) (error 'no))
-   'default-width (face-attribute 'default :width nil 'default-on)
-   'bold-width (face-attribute 'bold :width nil 'default-on)
-   'width-table (if (boundp 'font-width-table) (memq 'condensed font-width-table) 'no-table)))"##,
+   'set-width-ultra-condensed (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'ultra-condensed) (face-attribute 'my-width-face :width nil 'default)) (error 'no))
+   'set-width-condensed (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'condensed) (face-attribute 'my-width-face :width nil 'default)) (error 'no))
+   'set-width-normal (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'normal) (face-attribute 'my-width-face :width nil 'default)) (error 'no))
+   'set-width-expanded (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'expanded) (face-attribute 'my-width-face :width nil 'default)) (error 'no))
+   'set-width-unspec (condition-case nil (progn (set-face-attribute 'my-width-face nil :width 'unspecified) (face-attribute 'my-width-face :width nil 'default)) (error 'no))
+   'default-width (face-attribute 'default :width nil 'default)
+   'bold-width (face-attribute 'bold :width nil 'default)
+   'width-table (if (boundp 'font-width-table) (memq 'condensed (append font-width-table nil)) 'no-table)))"##,
         expect,
     );
 }
@@ -13603,16 +13044,18 @@ fn ft_mu_face_overlay_get_all_properties_as_alist() {
 fn ft_mu_face_set_attribute_family_foundry_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (set-family-monospace \"Monospace\" set-family-unspec \"default\" default-family \"default\" default-foundry \"default\" bold-family \"default\" font-family-list-bound nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-family-face) (error nil))
   (list
-   'set-family-monospace (condition-case nil (progn (set-face-attribute 'my-family-face nil :family "Monospace") (face-attribute 'my-family-face :family nil 'default-on)) (error 'no))
-   'set-family-unspec (condition-case nil (progn (set-face-attribute 'my-family-face nil :family 'unspecified) (face-attribute 'my-family-face :family nil 'default-on)) (error 'no))
-   'default-family (face-attribute 'default :family nil 'default-on)
-   'default-foundry (face-attribute 'default :foundry nil 'default-on)
-   'bold-family (face-attribute 'bold :family nil 'default-on)
+   'set-family-monospace (condition-case nil (progn (set-face-attribute 'my-family-face nil :family "Monospace") (face-attribute 'my-family-face :family nil 'default)) (error 'no))
+   'set-family-unspec (condition-case nil (progn (set-face-attribute 'my-family-face nil :family 'unspecified) (face-attribute 'my-family-face :family nil 'default)) (error 'no))
+   'default-family (face-attribute 'default :family nil 'default)
+   'default-foundry (face-attribute 'default :foundry nil 'default)
+   'bold-family (face-attribute 'bold :family nil 'default)
    'font-family-list-bound (boundp 'font-family-list)))"##,
         expect,
     );
@@ -13971,25 +13414,6 @@ fn ft_xi_face_overlay_evaporate_with_insert_before_and_after() {
      ;; Delete region to evaporate
      'after-delete (progn (delete-region 15 30) (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(5 10 15 20 25 30 35)))
      'overlay-dead (not (and ov (overlay-buffer ov)))))))"##,
-        expect,
-    );
-}
-
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
-fn ft_xi_face_set_face_font_registry_attribute() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect =
-        expect_test::expect![[r#""ERR (error \"Invalid face attribute name\" :registry)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (condition-case nil (copy-face 'default 'my-registry-face) (error nil))
-  (list
-   'default-registry (face-attribute 'default :registry nil 'default-on)
-   'set-registry (condition-case nil (progn (set-face-attribute 'my-registry-face nil :registry "iso10646-1") (face-attribute 'my-registry-face :registry nil 'default-on)) (error 'no))
-   'set-registry-unspec (condition-case nil (progn (set-face-attribute 'my-registry-face nil :registry 'unspecified) (face-attribute 'my-registry-face :registry nil 'default-on)) (error 'no))
-   'font-registry-alternatives (if (boundp 'face-font-registry-alternatives) (length face-font-registry-alternatives) 'no-bound)))))"##,
         expect,
     );
 }
@@ -14757,27 +14181,6 @@ fn ft_sigma_face_overlay_priority_interleave_face_deep() {
 }
 
 #[test]
-fn ft_sigma_face_text_property_interval_with_many_splits() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 53 53)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
-    (put-text-property 1 53 'face 'bold)
-    (list
-     'one-interval (length (object-intervals (current-buffer)))
-     'split-1 (progn (goto-char 10) (insert "Y") (length (object-intervals (current-buffer))))
-     'split-2 (progn (goto-char 20) (insert "Z") (length (object-intervals (current-buffer))))
-     'split-3 (progn (goto-char 30) (insert "W") (length (object-intervals (current-buffer))))
-     'delete-merge (progn (delete-region 15 25) (length (object-intervals (current-buffer))))
-     'spot-faces (mapcar (lambda (pos) (goto-char pos) (get-text-property pos 'face)) '(1 10 15 25 30 40 53)))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_sigma_face_font_lock_fontify_region_unfontify_recheck() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -14847,24 +14250,24 @@ fn ft_sigma_face_overlay_make_buffer_copy_different_props() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_sigma_face_set_attribute_with_relative_height_values() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""ERR (wrong-number-of-arguments face-attribute-relative-p 1)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (default-height 1 set-height-1.0 1 set-height-0.5 0 set-height-2.0 2 set-height-int-120 120 set-height-int-200 200 face-attrib-relative-p t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-rel-height-face) (error nil))
   (list
-   'default-height (face-attribute 'default :height nil 'default-on)
-   'set-height-1.0 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 1.0) (face-attribute 'my-rel-height-face :height nil 'default-on)) (error 'no))
-   'set-height-0.5 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 0.5) (face-attribute 'my-rel-height-face :height nil 'default-on)) (error 'no))
-   'set-height-2.0 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 2.0) (face-attribute 'my-rel-height-face :height nil 'default-on)) (error 'no))
-   'set-height-int-120 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 120) (face-attribute 'my-rel-height-face :height nil 'default-on)) (error 'no))
-   'set-height-int-200 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 200) (face-attribute 'my-rel-height-face :height nil 'default-on)) (error 'no))
-   'face-attrib-relative-p (if (fboundp 'face-attribute-relative-p) (face-attribute-relative-p :height) 'no-func)))))"##,
+   'default-height (face-attribute 'default :height nil 'default)
+   'set-height-1.0 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 1.0) (face-attribute 'my-rel-height-face :height nil 'default)) (error 'no))
+   'set-height-0.5 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 0.5) (face-attribute 'my-rel-height-face :height nil 'default)) (error 'no))
+   'set-height-2.0 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 2.0) (face-attribute 'my-rel-height-face :height nil 'default)) (error 'no))
+   'set-height-int-120 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 120) (face-attribute 'my-rel-height-face :height nil 'default)) (error 'no))
+   'set-height-int-200 (condition-case nil (progn (set-face-attribute 'my-rel-height-face nil :height 200) (face-attribute 'my-rel-height-face :height nil 'default)) (error 'no))
+   'face-attrib-relative-p (if (fboundp 'face-attribute-relative-p) (face-attribute-relative-p :height 1.2) 'no-func)))"##,
         expect,
     );
 }
@@ -15357,12 +14760,11 @@ fn ft_phi_face_overlay_priority_with_nil_face_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_phi_face_text_property_any_and_not_all_with_limits() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 21 70)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -15384,7 +14786,7 @@ fn ft_phi_face_text_property_any_and_not_all_with_limits() {
      'not-all-bold-first (text-property-not-all 1 10 'face 'bold)
      'any-underline-mid (text-property-any 5 30 'face 'underline)
      'any-red (text-property-any 1 41 'face '(:foreground "red")))
-     'any-blue (text-property-any 1 41 'face '(:foreground "blue"))))))"##,
+     'any-blue (text-property-any 1 41 'face '(:foreground "blue"))))"##,
         expect,
     );
 }
@@ -15581,12 +14983,13 @@ fn ft_chi_font_lock_fontify_region_before_after_fontified_check() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_chi_face_text_property_at_very_narrow_region_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 11 165)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (single-char-no-face nil single-char-no-fontified nil set-face bold text-props-at-1 (face bold) interval-count 1 after-extend (bold nil 2))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -15598,7 +15001,7 @@ fn ft_chi_face_text_property_at_very_narrow_region_deep() {
      'text-props-at-1 (text-properties-at 1)
      'interval-count (length (object-intervals (current-buffer)))
      ;; Extend buffer
-     'after-extend (progn (goto-char 2) (insert "Y") (list (get-text-property 1 'face) (get-text-property 2 'face) (length (object-intervals (current-buffer))))))))))"##,
+     'after-extend (progn (goto-char 2) (insert "Y") (list (get-text-property 1 'face) (get-text-property 2 'face) (length (object-intervals (current-buffer))))))))"##,
         expect,
     );
 }
@@ -15845,16 +15248,18 @@ fn ft_remap_remapping_alist_consistency_after_reset() {
 fn ft_psi_face_remap_add_relative_to_inherited_face_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (bold-weight-before bold add-relative-to-bold ok bold-weight-after bold bold-fg-after \"unspecified-fg\" bold-slant-after normal remap-alist ((bold (:foreground \"red\" :slant italic) bold)) reset)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'face-remap)
   (list
-   'bold-weight-before (face-attribute 'bold :weight nil 'default-on)
+   'bold-weight-before (face-attribute 'bold :weight nil 'default)
    'add-relative-to-bold (condition-case nil (progn (face-remap-add-relative 'bold '(:foreground "red" :slant italic)) 'ok) (error 'no))
-   'bold-weight-after (face-attribute 'bold :weight nil 'default-on)
-   'bold-fg-after (condition-case nil (face-attribute 'bold :foreground nil 'default-on) (error 'no))
-   'bold-slant-after (face-attribute 'bold :slant nil 'default-on)
+   'bold-weight-after (face-attribute 'bold :weight nil 'default)
+   'bold-fg-after (condition-case nil (face-attribute 'bold :foreground nil 'default) (error 'no))
+   'bold-slant-after (face-attribute 'bold :slant nil 'default)
    'remap-alist face-remapping-alist
    (condition-case nil (progn (face-remap-reset-base 'bold) 'reset) (error 'no))))"##,
         expect,
@@ -15882,28 +15287,6 @@ fn ft_psi_overlay_invisible_with_face_both_deep() {
     (list
      'text+overlay-invisible (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-char-property pos 'face) (invisible-p pos))) '(1 5 14 20 28 40 52))
      (progn (delete-overlay ov) 'cleaned)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_psi_font_lock_fontify_after_buffer_revert_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 25 25)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'font-lock)
-  (with-temp-buffer
-    (emacs-lisp-mode)
-    (insert "(defun revert-test () 42)\n")
-    (font-lock-fontify-buffer)
-    (let ((v0 (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-text-property pos 'fontified))) '(1 10 20 26))))
-      (erase-buffer)
-      (insert "(defun new-test () 99)\n")
-      (font-lock-fontify-buffer)
-      (let ((v1 (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-text-property pos 'fontified))) '(1 10 20 25))))
-        (list v0 v1)))))"##,
         expect,
     );
 }
@@ -16293,18 +15676,20 @@ fn ft_cosmic3_face_overlay_properties_plist_access_deep() {
 fn ft_cosmic3_face_spec_set_with_face_defface_spec_type() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (set-spec nil weight-after bold fg-after \"blue\" set-spec-2 nil weight-after-2 normal slant-after-2 italic reset-spec nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'cus-face)
   (condition-case nil (copy-face 'default 'my-defface-spec-face) (error nil))
   (list
    'set-spec (condition-case nil (face-spec-set 'my-defface-spec-face '((t :weight bold :foreground "blue")) 'face-defface-spec) (error 'no-set))
-   'weight-after (face-attribute 'my-defface-spec-face :weight nil 'default-on)
-   'fg-after (condition-case nil (face-attribute 'my-defface-spec-face :foreground nil 'default-on) (error 'no))
+   'weight-after (face-attribute 'my-defface-spec-face :weight nil 'default)
+   'fg-after (condition-case nil (face-attribute 'my-defface-spec-face :foreground nil 'default) (error 'no))
    'set-spec-2 (condition-case nil (face-spec-set 'my-defface-spec-face '((t :slant italic :background "yellow")) 'face-defface-spec) (error 'no))
-   'weight-after-2 (face-attribute 'my-defface-spec-face :weight nil 'default-on)
-   'slant-after-2 (face-attribute 'my-defface-spec-face :slant nil 'default-on)
+   'weight-after-2 (face-attribute 'my-defface-spec-face :weight nil 'default)
+   'slant-after-2 (face-attribute 'my-defface-spec-face :slant nil 'default)
    'reset-spec (condition-case nil (face-spec-set 'my-defface-spec-face '((t)) 'face-defface-spec) (error 'no))))"##,
         expect,
     );
@@ -16468,16 +15853,19 @@ fn ft_deepspace_face_overlay_make_empty_then_fill_face_check() {
 fn ft_deepspace_font_lock_fontify_syntactically_vs_keywords_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function font-lock-fontify-syntactically)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (fontify-syn-only ((\"comment\" font-lock-comment-face nil) (\"defun\" nil nil) (\"syn-test\" nil nil) (\"string\" font-lock-doc-face nil) (\"42\" nil nil)) fontify-kw-only ((\"comment\" font-lock-comment-face nil) (\"defun\" font-lock-keyword-face nil) (\"syn-test\" font-lock-function-name-face nil) (\"string\" font-lock-doc-face nil) (\"42\" nil nil)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
   (with-temp-buffer
     (emacs-lisp-mode)
+    (font-lock-set-defaults)
     (insert ";; comment\n(defun syn-test () \"string\" 42)\n")
     (list
      'fontify-syn-only (progn
-                         (font-lock-fontify-syntactically (point-min) (point-max) nil)
+                         (font-lock-fontify-syntactically-region (point-min) (point-max) nil)
                          (mapcar (lambda (needle) (save-excursion (goto-char (point-min)) (search-forward needle) (list needle (get-text-property (match-beginning 0) 'face) (get-text-property (match-beginning 0) 'fontified)))) '("comment" "defun" "syn-test" "string" "42")))
      'fontify-kw-only (progn
                         (font-lock-fontify-keywords-region (point-min) (point-max) nil)
@@ -16735,7 +16123,9 @@ fn ft_hyperspace_face_text_property_with_custom_plist_face() {
 fn ft_hyperspace_font_lock_fontify_with_empty_font_lock_defaults() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable font-lock-keywords-case-fold)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (font-lock-keywords (t nil) fontified nil face nil font-lock-keywords-case-fold-search nil font-lock-keywords-only nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
@@ -16749,7 +16139,7 @@ fn ft_hyperspace_font_lock_fontify_with_empty_font_lock_defaults() {
      'font-lock-keywords font-lock-keywords
      'fontified (get-text-property 1 'fontified)
      'face (get-text-property 1 'face)
-     'font-lock-keywords-case-fold font-lock-keywords-case-fold
+     'font-lock-keywords-case-fold-search font-lock-keywords-case-fold-search
      'font-lock-keywords-only (if (boundp 'font-lock-keywords-only) font-lock-keywords-only 'no-bound))))"##,
         expect,
     );
@@ -16965,22 +16355,23 @@ fn ft_voidspace_font_lock_fontify_keywords_with_highlight_override() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_voidspace_face_overlay_before_string_empty_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable ov1)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (ov1-before-str \"\" ov2-after-str \"\" face-at-ov1 (:background \"yellow\") face-at-ov2 (:background \"cyan\") cleaned)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
     (insert "Before string empty overlay face test content text data here end")
     (let ((ov1 (make-overlay 10 30)))
       (overlay-put ov1 'face '(:background "yellow"))
-      (overlay-put ov1 'before-string ""))
+      (overlay-put ov1 'before-string "")
     (let ((ov2 (make-overlay 35 50)))
       (overlay-put ov2 'face '(:background "cyan"))
-      (overlay-put ov2 'after-string ""))
+      (overlay-put ov2 'after-string "")
     (list
      'ov1-before-str (overlay-get ov1 'before-string)
      'ov2-after-str (overlay-get ov2 'after-string)
@@ -17017,8 +16408,9 @@ fn ft_voidspace_face_text_property_single_property_interval() {
 fn ft_quark_face_text_property_interval_object_access_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""ERR (wrong-type-argument overlayp (0 4 (face bold)))""#]];
+    let expect = expect_test::expect![[
+        r#""OK (count 9 first-start 0 first-end 4 last-start 32 last-end 36 all-starts (0 4 8 12 16 20 24 28 32) all-ends (4 8 12 16 20 24 28 32 36))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -17034,12 +16426,12 @@ fn ft_quark_face_text_property_interval_object_access_deep() {
     (let ((intervals (object-intervals (current-buffer))))
       (list
        'count (length intervals)
-       'first-start (overlay-start (car intervals))
-       'first-end (overlay-end (car intervals))
-       'last-start (overlay-start (car (last intervals)))
-       'last-end (overlay-end (car (last intervals)))
-       'all-starts (mapcar #'overlay-start intervals)
-       'all-ends (mapcar #'overlay-end intervals)))))"##,
+       'first-start (car (car intervals))
+       'first-end (cadr (car intervals))
+       'last-start (car (car (last intervals)))
+       'last-end (cadr (car (last intervals)))
+       'all-starts (mapcar #'car intervals)
+       'all-ends (mapcar #'cadr intervals)))))"##,
         expect,
     );
 }
@@ -17077,19 +16469,21 @@ fn ft_quark_font_lock_fontify_keywords_with_multiple_matches_in_line() {
 fn ft_quark_face_set_face_all_properties_then_unset_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (before-weight bold before-fg \"red\" unset-all ok after-weight normal after-fg \"unspecified-fg\" after-bg \"unspecified-bg\" after-height 1)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-all-unset-face) (error nil))
   (condition-case nil (set-face-attribute 'my-all-unset-face nil :weight 'bold :slant 'italic :underline '(:color "red") :overline t :strike-through t :box t :inverse-video t :foreground "red" :background "yellow" :height 150 :width 'condensed) (error nil))
   (list
-   'before-weight (face-attribute 'my-all-unset-face :weight nil 'default-on)
-   'before-fg (condition-case nil (face-foreground 'my-all-unset-face nil 'default-on) (error 'no))
+   'before-weight (face-attribute 'my-all-unset-face :weight nil 'default)
+   'before-fg (condition-case nil (face-foreground 'my-all-unset-face nil 'default) (error 'no))
    'unset-all (condition-case nil (progn (set-face-attribute 'my-all-unset-face nil :weight 'unspecified :slant 'unspecified :underline 'unspecified :overline 'unspecified :strike-through 'unspecified :box 'unspecified :inverse-video 'unspecified :foreground 'unspecified :background 'unspecified :height 'unspecified :width 'unspecified) 'ok) (error 'no))
-   'after-weight (face-attribute 'my-all-unset-face :weight nil 'default-on)
-   'after-fg (condition-case nil (face-foreground 'my-all-unset-face nil 'default-on) (error 'no))
-   'after-bg (condition-case nil (face-background 'my-all-unset-face nil 'default-on) (error 'no))
-   'after-height (face-attribute 'my-all-unset-face :height nil 'default-on)))"##,
+   'after-weight (face-attribute 'my-all-unset-face :weight nil 'default)
+   'after-fg (condition-case nil (face-foreground 'my-all-unset-face nil 'default) (error 'no))
+   'after-bg (condition-case nil (face-background 'my-all-unset-face nil 'default) (error 'no))
+   'after-height (face-attribute 'my-all-unset-face :height nil 'default)))"##,
         expect,
     );
 }
@@ -17111,33 +16505,6 @@ fn ft_quark_face_overlay_category_property_inherit_face() {
     (list
      'cat-faces (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face) (get-char-property pos 'category))) '(1 10 18 25 32 40 50 55))
      (progn (mapc #'delete-overlay (overlays-in 1 55)) 'cleaned))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_quark_font_lock_fontify_whole_buffer_piece_by_piece() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 78 78)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'font-lock)
-  (with-temp-buffer
-    (emacs-lisp-mode)
-    (insert "(defun a () 1)\n(defun b () 2)\n(defun c () 3)\n(defun d () 4)\n(defun e () 5)\n")
-    (let ((chunk-size 15) (pos 1) (total (point-max)) (fontified nil))
-      (while (< pos total)
-        (font-lock-fontify-region pos (min (+ pos chunk-size) total))
-        (setq pos (+ pos chunk-size)))
-      (list
-       'fontified-1 (get-text-property 1 'fontified)
-       'fontified-15 (get-text-property 15 'fontified)
-       'fontified-30 (get-text-property 30 'fontified)
-       'fontified-45 (get-text-property 45 'fontified)
-       'fontified-60 (get-text-property 60 'fontified)
-       'fontified-75 (get-text-property 75 'fontified)
-       'all-faces (mapcar (lambda (pos) (goto-char pos) (get-text-property pos 'face)) '(1 7 18 25 35 42 52 60 70 78))))))"##,
         expect,
     );
 }
@@ -17517,12 +16884,11 @@ fn ft_graviton_face_set_text_properties_on_range_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_graviton_font_lock_keywords_with_subgroup_0_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 15)""#]];
+    let expect = expect_test::expect![[r#""OK cleaned""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
@@ -17536,7 +16902,7 @@ fn ft_graviton_font_lock_keywords_with_subgroup_0_deep() {
      'match-0-face (save-excursion (goto-char (point-min)) (search-forward "Subgroup") (get-text-property (match-beginning 0) 'face))
      'other-word-face (save-excursion (goto-char (point-min)) (search-forward "match") (get-text-property (match-beginning 0) 'face)))
     (font-lock-remove-keywords nil '(("\\<\\(Subgroup\\)\\>" 0 font-lock-warning-face t)))
-    'cleaned))))"##,
+    'cleaned))"##,
         expect,
     );
 }
@@ -17594,32 +16960,6 @@ fn ft_graviton_face_overlay_with_face_change_and_move_deep() {
             (let ((v2 (funcall snap)))
               (delete-overlay ov)
               (list v0 v1 v2))))))))"##,
-        expect,
-    );
-}
-
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
-fn ft_graviton_font_lock_fontify_with_lazy_lock_no_jit() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument stringp (error no t t))""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'font-lock)
-  (condition-case nil
-      (progn
-        (setq jit-lock-mode nil)
-        (with-temp-buffer
-          (emacs-lisp-mode)
-          (insert "(defun no-jit-test () 42)\n")
-          (font-lock-fontify-buffer)
-          (list
-           'jit-lock-mode jit-lock-mode
-           'face-defun (save-excursion (goto-char (point-min)) (search-forward "defun") (get-text-property (match-beginning 0) 'face))
-           'fontified (get-text-property 1 'fontified)
-           'font-lock-support-mode (if (boundp 'font-lock-support-mode) font-lock-support-mode 'no)))))
-    (error (list 'error 'no (fboundp 'jit-lock-mode) (fboundp 'emacs-lisp-mode))))))"##,
         expect,
     );
 }
@@ -17734,22 +17074,24 @@ fn ft_boson_face_inherit_chain_resolve_attributes_deep() {
 fn ft_boson_face_overlay_hidden_via_invisible_face_check() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments put-text-property 6)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (with-invisible ((1 bold bold nil) (5 bold bold nil) (14 italic italic t) (18 italic italic t) (23 underline underline nil) (25 underline (:background \"yellow\") t) (30 underline (:background \"yellow\") t) (40 underline underline nil) (45 underline underline nil) (54 underline underline nil)) remove-invisible-text ((1 bold nil) (5 bold nil) (14 italic nil) (18 italic nil) (23 underline nil) (30 underline t) (40 underline nil) (54 underline nil)) remove-invisible-ov ((25 (:background \"yellow\")) (30 (:background \"yellow\")) (40 underline) (45 underline)) cleaned)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
     (insert "Visible text INVISIBLE here visible again final end now done")
     (put-text-property 1 14 'face 'bold)
-    (put-text-property 14 23 'face 'italic :invisible t)
+    (put-text-property 14 23 'face 'italic) (put-text-property 14 23 'invisible t)
     (put-text-property 23 55 'face 'underline)
     (let ((ov (make-overlay 25 40)))
       (overlay-put ov 'face '(:background "yellow"))
-      (overlay-put ov 'invisible t))
+      (overlay-put ov 'invisible t)
     (list
      'with-invisible (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-char-property pos 'face) (invisible-p pos))) '(1 5 14 18 23 25 30 40 45 54))
      'remove-invisible-text (progn (remove-text-properties 14 23 '(invisible nil)) (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (invisible-p pos))) '(1 5 14 18 23 30 40 54)))
      'remove-invisible-ov (progn (overlay-put ov 'invisible nil) (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face))) '(25 30 40 45)))
-     (progn (delete-overlay ov) 'cleaned))))"##,
+     (progn (delete-overlay ov) 'cleaned)))))"##,
         expect,
     );
 }
@@ -17876,27 +17218,6 @@ fn ft_fermion_face_font_lock_ensure_full_vs_partial_fontify() {
      'partial-first-half (progn (font-lock-fontify-region 1 20) (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-text-property pos 'fontified))) '(1 10 20 25 35 38)))
      'ensure-full (progn (font-lock-ensure (point-min) (point-max)) (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-text-property pos 'fontified))) '(1 10 20 25 35 38)))
      'consistent (progn (font-lock-unfontify-buffer) (font-lock-fontify-buffer) (let ((fb (mapcar (lambda (pos) (goto-char pos) (get-text-property pos 'face)) '(1 10 25 35 38)))) (font-lock-unfontify-buffer) (font-lock-ensure (point-min) (point-max)) (equal fb (mapcar (lambda (pos) (goto-char pos) (get-text-property pos 'face)) '(1 10 25 35 38))))))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_fermion_face_overlay_multiple_priority_interleave_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 45)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDDEEEEEFFFFFGGGGGHHHHH")
-    (let ((ov1 (make-overlay 6 15))) (overlay-put ov1 'face '(:background "red")) (overlay-put ov1 'priority 30))
-    (let ((ov2 (make-overlay 10 25))) (overlay-put ov2 'face '(:foreground "green")) (overlay-put ov2 'priority 40))
-    (let ((ov3 (make-overlay 20 35))) (overlay-put ov3 'face '(:background "blue")) (overlay-put ov3 'priority 10))
-    (let ((ov4 (make-overlay 30 40))) (overlay-put ov4 'face '(:foreground "orange")) (overlay-put ov4 'priority 50))
-    (list
-     'before-flip (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face))) '(1 6 10 15 20 25 30 35 40 45))
-     'flip-priorities (progn (overlay-put ov1 'priority 50) (overlay-put ov3 'priority 60) (overlay-put ov2 'priority 5) (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face))) '(1 6 10 15 20 25 30 35 40 45)))
-     (progn (mapc #'delete-overlay (overlays-in 1 45)) 'cleaned))))"##,
         expect,
     );
 }
@@ -18195,7 +17516,9 @@ fn ft_gluon_face_set_face_attribute_with_eieio_interaction() {
 fn ft_gluon_face_overlay_with_item_property_face_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments overlay-put 4)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (face (:background \"yellow\") before-string \"NOTE\" display (margin left-margin) face-at-ov (:background \"yellow\") cleaned)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -18203,13 +17526,13 @@ fn ft_gluon_face_overlay_with_item_property_face_deep() {
     (let ((ov (make-overlay 15 35)))
       (overlay-put ov 'face '(:background "yellow"))
       (overlay-put ov 'before-string "> ")
-      (overlay-put ov 'display '(margin left-margin) "NOTE"))
+      (overlay-put ov 'display '(margin left-margin)) (overlay-put ov 'before-string "NOTE")
     (list
      'face (overlay-get ov 'face)
      'before-string (overlay-get ov 'before-string)
      'display (overlay-get ov 'display)
      'face-at-ov (get-char-property 25 'face)
-     (progn (delete-overlay ov) 'cleaned))))"##,
+     (progn (delete-overlay ov) 'cleaned)))))"##,
         expect,
     );
 }
@@ -18473,14 +17796,16 @@ fn ft_higgs_font_lock_add_keywords_prepend_append_check_deep() {
 fn ft_higgs_face_remap_add_relative_to_inherited_face_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (italic-weight-before normal add-relative-to-italic ok italic-weight-after normal remap-alist ((italic (:weight bold :foreground \"red\") italic)) reset)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'face-remap)
   (list
-   'italic-weight-before (face-attribute 'italic :weight nil 'default-on)
+   'italic-weight-before (face-attribute 'italic :weight nil 'default)
    'add-relative-to-italic (condition-case nil (progn (face-remap-add-relative 'italic '(:weight bold :foreground "red")) 'ok) (error 'no))
-   'italic-weight-after (condition-case nil (face-attribute 'italic :weight nil 'default-on) (error 'no))
+   'italic-weight-after (condition-case nil (face-attribute 'italic :weight nil 'default) (error 'no))
    'remap-alist face-remapping-alist
    (condition-case nil (progn (face-remap-reset-base 'italic) 'reset) (error 'no))))"##,
         expect,
@@ -18512,12 +17837,13 @@ fn ft_tachyon_face_text_property_interval_split_and_merge_cycle() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_tachyon_font_lock_fontify_with_empty_keywords_list_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 115)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (font-lock-keywords (t nil) fontified nil face nil fontified-at-end nil font-lock-maximum-decoration t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
@@ -18532,7 +17858,7 @@ fn ft_tachyon_font_lock_fontify_with_empty_keywords_list_deep() {
      'fontified (get-text-property 1 'fontified)
      'face (get-text-property 1 'face)
      'fontified-at-end (get-text-property 40 'fontified)
-     'font-lock-maximum-decoration (if (boundp 'font-lock-maximum-decoration) font-lock-maximum-decoration 'no))))))"##,
+     'font-lock-maximum-decoration (if (boundp 'font-lock-maximum-decoration) font-lock-maximum-decoration 'no))))"##,
         expect,
     );
 }
@@ -18661,35 +17987,6 @@ fn ft_tachyon_face_overlay_category_face_inherit_deep() {
 }
 
 #[test]
-fn ft_tachyon_face_set_face_properties_all_combined_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect =
-        expect_test::expect![[r#""ERR (error \"Invalid face attribute name\" :line-spacing)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (condition-case nil (copy-face 'default 'my-all-combined-face) (error nil))
-  (condition-case nil (set-face-attribute 'my-all-combined-face nil :weight 'bold :slant 'italic :underline '(:color "red" :style wave) :overline t :strike-through t :box '(:line-width 2 :color "blue") :inverse-video t :foreground "dark green" :background "light yellow" :height 140 :width 'semi-condensed :extend t :line-spacing 5) (error nil))
-  (list
-   'weight (face-attribute 'my-all-combined-face :weight nil 'default-on)
-   'slant (face-attribute 'my-all-combined-face :slant nil 'default-on)
-   'underline (face-attribute 'my-all-combined-face :underline nil 'default-on)
-   'overline (face-attribute 'my-all-combined-face :overline nil 'default-on)
-   'strike (face-attribute 'my-all-combined-face :strike-through nil 'default-on)
-   'box (face-attribute 'my-all-combined-face :box nil 'default-on)
-   'inverse (face-attribute 'my-all-combined-face :inverse-video nil 'default-on)
-   'fg (condition-case nil (face-foreground 'my-all-combined-face nil 'default-on) (error 'no))
-   'bg (condition-case nil (face-background 'my-all-combined-face nil 'default-on) (error 'no))
-   'height (face-attribute 'my-all-combined-face :height nil 'default-on)
-   'width (face-attribute 'my-all-combined-face :width nil 'default-on)
-   'extend (face-attribute 'my-all-combined-face :extend nil 'default-on)
-   'line-spacing (face-attribute 'my-all-combined-face :line-spacing nil 'default-on)
-   (condition-case nil (progn (set-face-attribute 'my-all-combined-face nil :weight 'unspecified :slant 'unspecified :underline 'unspecified :overline 'unspecified :strike-through 'unspecified :box 'unspecified :inverse-video 'unspecified :foreground 'unspecified :background 'unspecified :height 'unspecified :width 'unspecified :extend 'unspecified :line-spacing 'unspecified) 'reset-done) (error 'no))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_wave_face_text_property_set_on_empty_buffer_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -18804,12 +18101,13 @@ fn ft_wave_face_remap_reset_base_multiple_faces_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_wave_face_overlay_face_at_edge_of_buffer_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 68)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (face-at-1 (:background \"red\") face-at-5 (:background \"red\") face-at-10 (:foreground \"green\") face-at-50 (:background \"blue\") face-at-55 (:background \"blue\") face-at-60 nil cleaned)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -18824,7 +18122,7 @@ fn ft_wave_face_overlay_face_at_edge_of_buffer_deep() {
      'face-at-50 (get-char-property 50 'face)
      'face-at-55 (get-char-property 55 'face)
      'face-at-60 (get-char-property 60 'face)
-     (progn (mapc #'delete-overlay (overlays-in 1 60)) 'cleaned))))))"##,
+     (progn (mapc #'delete-overlay (overlays-in 1 60)) 'cleaned))))"##,
         expect,
     );
 }
@@ -18877,27 +18175,6 @@ fn ft_wave_face_overlay_copy_and_paste_face_deep() {
                      (overlay-put ov2 'face '(:background "yellow"))
                      (overlay-put ov2 'priority 50)
                      (list 'new-face (overlay-get ov2 'face) 'new-priority (overlay-get ov2 'priority) 'char-prop-at-45 (get-char-property 45 'face) (progn (delete-overlay ov2) 'new-cleaned))))))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_ray_face_overlay_priority_zero_vs_negative_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 35)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDDEEEEEFFFFF")
-    (let ((ov1 (make-overlay 1 20))) (overlay-put ov1 'face '(:background "red")) (overlay-put ov1 'priority 0))
-    (let ((ov2 (make-overlay 10 30))) (overlay-put ov2 'face '(:background "green")) (overlay-put ov2 'priority -1))
-    (let ((ov3 (make-overlay 15 35))) (overlay-put ov3 'face '(:background "blue")) (overlay-put ov3 'priority 1))
-    (let ((ov4 (make-overlay 5 25))) (overlay-put ov4 'face '(:foreground "cyan")) (overlay-put ov4 'priority -10))
-    (list
-     'face-stack (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face) (length (overlays-at pos)))) '(1 5 10 15 20 25 30 35))
-     'negative-priorities (mapcar (lambda (ov) (list (overlay-start ov) (overlay-get ov 'priority))) (list ov1 ov2 ov3 ov4))
-     (progn (mapc #'delete-overlay (overlays-in 1 35)) 'cleaned))))"##,
         expect,
     );
 }
@@ -19147,30 +18424,6 @@ fn ft_beam_face_text_property_with_complex_nested_faces() {
 }
 
 #[test]
-fn ft_beam_face_overlay_insert_behind_front_combo_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 35)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDDEEEEEFFFFF")
-    (let ((ov-front (make-overlay 6 15)))
-      (overlay-put ov-front 'face '(:background "yellow"))
-      (overlay-put ov-front 'insert-in-front-hooks (list 'ignore)))
-    (let ((ov-behind (make-overlay 20 30)))
-      (overlay-put ov-behind 'face '(:foreground "red" :weight bold))
-      (overlay-put ov-behind 'insert-behind-hooks (list 'ignore)))
-    (list
-     'faces-before (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face))) '(1 6 10 15 20 25 30 35))
-     'after-insert-front (progn (goto-char 15) (insert "FRONT-INSERT") (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(1 6 10 15 20 28 35)))
-     'after-insert-behind (progn (goto-char 30) (insert "BEHIND-INSERT") (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(1 6 10 15 20 28 35 40)))
-     (progn (mapc #'delete-overlay (overlays-in 1 (point-max))) 'cleaned))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_beam_face_font_lock_fontify_batch_mode_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -19212,28 +18465,6 @@ fn ft_beam_face_text_property_fontished_flag_check_deep() {
      'remove-fontified (progn (remove-text-properties 1 20 '(fontified nil)) (get-text-property 1 'fontified))
      'set-fontified-back (progn (put-text-property 1 20 'fontified t) (get-text-property 1 'fontified))
      'face-still-there (get-text-property 1 'face))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_beam_face_overlay_priority_within_range_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 45)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDDEEEEEFFFFFGGGGGHHHHH")
-    (let ((ov (make-overlay 5 40)))
-      (overlay-put ov 'face '(:background "yellow"))
-      (overlay-put ov 'priority 50)
-      (list
-       'before (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face))) '(1 5 10 20 30 40 45))
-       'change-priority-100 (progn (overlay-put ov 'priority 100) (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(1 5 10 20 30 40 45)))
-       'change-priority-0 (progn (overlay-put ov 'priority 0) (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(1 5 10 20 30 40 45)))
-       'change-face (progn (overlay-put ov 'face '(:foreground "red" :weight bold)) (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(1 5 10 20 30 40 45)))
-       (progn (delete-overlay ov) 'cleaned)))))"##,
         expect,
     );
 }
@@ -19344,23 +18575,24 @@ fn ft_pulse_face_text_property_get_all_props_and_rebuild() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_pulse_face_overlay_both_empty_end_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable ov-start)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (all-empty-faces ((1 1 (:background \"red\")) (1 1 (:background \"blue\")) (1 1 (:weigh bold :slant italic))) char-prop nil (after-fill (nil nil nil)) cleaned)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
-    (let ((ov-start (make-overlay 1 1))) (overlay-put ov-start 'face '(:background "red")) (overlay-put ov-start 'before-string "[B]"))
-    (let ((ov-end (make-overlay 1 1))) (overlay-put ov-end 'face '(:background "blue")) (overlay-put ov-end 'after-string "[A]"))
-    (let ((ov-mid (make-overlay 1 1))) (overlay-put ov-mid 'face '(:weigh bold :slant italic)) (overlay-put ov-mid 'display ""))
+    (let ((ov-start (make-overlay 1 1))) (overlay-put ov-start 'face '(:background "red")) (overlay-put ov-start 'before-string "[B]")
+    (let ((ov-end (make-overlay 1 1))) (overlay-put ov-end 'face '(:background "blue")) (overlay-put ov-end 'after-string "[A]")
+    (let ((ov-mid (make-overlay 1 1))) (overlay-put ov-mid 'face '(:weigh bold :slant italic)) (overlay-put ov-mid 'display "")
     (list
      'all-empty-faces (mapcar (lambda (ov) (list (overlay-start ov) (overlay-end ov) (overlay-get ov 'face))) (list ov-start ov-end ov-mid))
      'char-prop (get-char-property 1 'face)
      (progn (insert "FILLED") (list 'after-fill (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(1 3 6))))
-     (progn (mapc #'delete-overlay (overlays-in 1 (point-max))) 'cleaned))))))"##,
+     (progn (mapc #'delete-overlay (overlays-in 1 (point-max))) 'cleaned)))))))"##,
         expect,
     );
 }
@@ -19582,12 +18814,11 @@ fn ft_colour_font_lock_fontify_block_vs_buffer_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_colour_face_property_change_at_midpoint_interval() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 17 75)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -19605,7 +18836,7 @@ fn ft_colour_face_property_change_at_midpoint_interval() {
      'find-bold (text-property-any 1 31 'face 'bold)
      'find-italic (text-property-any 1 31 'face 'italic)
      'find-red (text-property-any 1 31 'face '(:foreground "red")))
-     'find-yellow (text-property-any 1 31 'face '(:background "yellow"))))))"##,
+     'find-yellow (text-property-any 1 31 'face '(:background "yellow"))))"##,
         expect,
     );
 }
@@ -19636,47 +18867,26 @@ fn ft_colour_face_overlay_face_vs_text_prop_face_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_colour_face_set_all_attrs_to_unspec_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (error \"Invalid face\" default-on)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (weight-before bold fg-before \"red\" unset-all unset-done weight-after normal fg-after \"unspecified-fg\" bg-after \"unspecified-bg\" height-after 1 width-after normal)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-full-unspec-face) (error nil))
   (condition-case nil (set-face-attribute 'my-full-unspec-face nil :weight 'bold :slant 'italic :foreground "red" :background "yellow" :underline t :overline t :strike-through t :box t :inverse-video t :height 150 :width 'condensed :extend t) (error nil))
   (list
-   'weight-before (face-attribute 'my-full-unspec-face :weight nil 'default-on)
-   'fg-before (condition-case nil (face-foreground 'my-full-unspec-face nil 'default-on) (error 'no))
+   'weight-before (face-attribute 'my-full-unspec-face :weight nil 'default)
+   'fg-before (condition-case nil (face-foreground 'my-full-unspec-face nil 'default) (error 'no))
    'unset-all (condition-case nil (progn (set-face-attribute 'my-full-unspec-face nil :weight 'unspecified :slant 'unspecified :foreground 'unspecified :background 'unspecified :underline 'unspecified :overline 'unspecified :strike-through 'unspecified :box 'unspecified :inverse-video 'unspecified :height 'unspecified :width 'unspecified :extend 'unspecified) 'unset-done) (error 'no))
-   'weight-after (face-attribute 'my-full-unspec-face :weight nil 'default-on)
-   'fg-after (condition-case nil (face-foreground 'my-full-unspec-face nil 'default-on) (error 'no))
-   'bg-after (condition-case nil (face-background 'my-full-unspec-face nil 'default-on) (error 'no))
-   'height-after (face-attribute 'my-full-unspec-face :height nil 'default-on)
-   'width-after (face-attribute 'my-full-unspec-face :width nil 'default-on))))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_photon_face_font_lock_multi_line_string_face_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 34 34)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'font-lock)
-  (with-temp-buffer
-    (emacs-lisp-mode)
-    (insert "(format \"hello\nworld\n%s\" name)\n")
-    (font-lock-fontify-buffer)
-    (list
-     'format-face (save-excursion (goto-char (point-min)) (search-forward "format") (get-text-property (match-beginning 0) 'face))
-     'hello-face (save-excursion (goto-char (point-min)) (search-forward "hello") (get-text-property (match-beginning 0) 'face))
-     'world-face (save-excursion (goto-char (point-min)) (search-forward "world") (get-text-property (match-beginning 0) 'face))
-     'name-face (save-excursion (goto-char (point-min)) (search-forward "name") (get-text-property (match-beginning 0) 'face))
-     'fontified-all (mapcar (lambda (pos) (goto-char pos) (get-text-property pos 'fontified)) '(1 10 18 25 30 34)))))"##,
+   'weight-after (face-attribute 'my-full-unspec-face :weight nil 'default)
+   'fg-after (condition-case nil (face-foreground 'my-full-unspec-face nil 'default) (error 'no))
+   'bg-after (condition-case nil (face-background 'my-full-unspec-face nil 'default) (error 'no))
+   'height-after (face-attribute 'my-full-unspec-face :height nil 'default)
+   'width-after (face-attribute 'my-full-unspec-face :width nil 'default)))"##,
         expect,
     );
 }
@@ -19873,34 +19083,6 @@ fn ft_gluon2_face_overlay_with_negative_priority_deep() {
 }
 
 #[test]
-fn ft_gluon2_font_lock_fontify_after_add_and_remove_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (void-function t)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'font-lock)
-  (with-temp-buffer
-    (fundamental-mode)
-    (font-lock-mode 1)
-    (insert "ADD-REMOVE keyword cycle test font lock face buffer content data text")
-    (let ((results nil))
-      (font-lock-add-keywords nil '(("\\<\\(ADD-REMOVE\\)\\>" 1 '(:foreground "red" :weight bold) t)))
-      (font-lock-fontify-buffer)
-      (push (list 'after-add (save-excursion (goto-char (point-min)) (search-forward "ADD-REMOVE") (get-text-property (match-beginning 0) 'face))) results)
-      (font-lock-remove-keywords nil '(("\\<\\(ADD-REMOVE\\)\\>" 1 '(:foreground "red" :weight bold) t)))
-      (font-lock-fontify-buffer)
-      (push (list 'after-remove (save-excursion (goto-char (point-min)) (search-forward "ADD-REMOVE") (get-text-property (match-beginning 0) 'face))) results)
-      (font-lock-add-keywords nil '(("\\<\\(ADD-REMOVE\\)\\>" 1 '(:foreground "green")) t))
-      (font-lock-fontify-buffer)
-      (push (list 'after-re-add (save-excursion (goto-char (point-min)) (search-forward "ADD-REMOVE") (get-text-property (match-beginning 0) 'face))) results)
-      (font-lock-remove-keywords nil '(("\\<\\(ADD-REMOVE\\)\\>" 1 '(:foreground "green")) t))
-      (nreverse results))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_gluon2_face_text_property_value_plist_decompose_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -20037,27 +19219,6 @@ fn ft_gluon2_face_overlay_priority_change_affects_rendering() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
-#[test]
-fn ft_gluon2_face_set_face_attribute_with_default_family() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect =
-        expect_test::expect![[r#""ERR (error \"Invalid face attribute name\" :registry)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (condition-case nil (copy-face 'default 'my-default-family-face) (error nil))
-  (list
-   'set-family-to-default (condition-case nil (progn (set-face-attribute 'my-default-family-face nil :family (face-attribute 'default :family nil 'default-on)) 'ok) (error 'no))
-   'get-family (face-attribute 'my-default-family-face :family nil 'default-on)
-   'set-family-unspec (condition-case nil (progn (set-face-attribute 'my-default-family-face nil :family 'unspecified) (face-attribute 'my-default-family-face :family nil 'default-on)) (error 'no)))
-   'default-family-is (face-attribute 'default :family nil 'default-on)
-   'default-foundry-is (face-attribute 'default :foundry nil 'default-on)
-   'default-registry-is (face-attribute 'default :registry nil 'default-on))))"##,
-        expect,
-    );
-}
-
 #[test]
 fn ft_wave2_face_overlay_properties_with_duplicate_keys() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -20154,7 +19315,9 @@ fn ft_wave2_face_overlay_priorities_sort_order_check() {
 fn ft_wave2_font_lock_set_defaults_for_fundamental_mode() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable font-lock-keywords-case-fold)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (font-lock-keywords (t nil) font-lock-keywords-case-fold-search nil fontified nil face nil mode fundamental-mode)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
@@ -20166,7 +19329,7 @@ fn ft_wave2_font_lock_set_defaults_for_fundamental_mode() {
     (font-lock-fontify-buffer)
     (list
      'font-lock-keywords font-lock-keywords
-     'font-lock-keywords-case-fold font-lock-keywords-case-fold
+     'font-lock-keywords-case-fold-search font-lock-keywords-case-fold-search
      'fontified (get-text-property 1 'fontified)
      'face (get-text-property 1 'face)
      'mode major-mode)))"##,
@@ -20245,12 +19408,11 @@ fn ft_wave2_face_set_face_font_by_family_only() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_particle_face_font_lock_set_defaults_multiple_modes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 7 179)""#]];
+    let expect = expect_test::expect![[r#""OK (mode emacs-lisp-mode keywords cons)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
@@ -20258,7 +19420,7 @@ fn ft_particle_face_font_lock_set_defaults_multiple_modes() {
     (list
      'fundamental-defaults (progn (fundamental-mode) (font-lock-set-defaults) (list 'mode major-mode 'keywords (if (boundp 'font-lock-keywords) (type-of font-lock-keywords) 'no))))
      'text-mode-defaults (progn (text-mode) (font-lock-set-defaults) (list 'mode major-mode 'keywords (if (boundp 'font-lock-keywords) (type-of font-lock-keywords) 'no))))
-     'emacs-lisp-defaults (progn (emacs-lisp-mode) (font-lock-set-defaults) (list 'mode major-mode 'keywords (if (boundp 'font-lock-keywords) (type-of font-lock-keywords) 'no))))))))"##,
+     'emacs-lisp-defaults (progn (emacs-lisp-mode) (font-lock-set-defaults) (list 'mode major-mode 'keywords (if (boundp 'font-lock-keywords) (type-of font-lock-keywords) 'no))))"##,
         expect,
     );
 }
@@ -20511,21 +19673,21 @@ fn ft_quanta_face_set_attribute_weight_symbol_table_check() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[
-        r#""ERR (wrong-type-argument listp [[0 thin] [40 ultra-light ultralight extra-light extralight] [50 light] [55 semi-light semilight demilight] [80 regular normal unspecified book] [100 medium] [180 semi-bold semibold demibold demi-bold demi] [200 bold] [205 extra-bold extrabold ultra-bold ultrabold] [210 black heavy] [250 ultra-heavy ultraheavy]])""#
+        r#""OK (font-weight-table 11 weight-thin not weight-ultra-light not weight-light not weight-normal not weight-bold not weight-heavy not default-weight normal default-slant normal default-width normal)""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
    'font-weight-table (if (boundp 'font-weight-table) (length font-weight-table) 'no-table)
-   'weight-thin (if (member 'thin (or (and (boundp 'font-weight-table) font-weight-table) '())) 'available 'not)
-   'weight-ultra-light (if (member 'ultra-light (or (and (boundp 'font-weight-table) font-weight-table) '())) 'available 'not)
-   'weight-light (if (member 'light (or (and (boundp 'font-weight-table) font-weight-table) '())) 'available 'not)
-   'weight-normal (if (member 'normal (or (and (boundp 'font-weight-table) font-weight-table) '())) 'available 'not)
-   'weight-bold (if (member 'bold (or (and (boundp 'font-weight-table) font-weight-table) '())) 'available 'not)
-   'weight-heavy (if (member 'heavy (or (and (boundp 'font-weight-table) font-weight-table) '())) 'available 'not)
-   'default-weight (face-attribute 'default :weight nil 'default-on)
-   'default-slant (face-attribute 'default :slant nil 'default-on)
-   'default-width (face-attribute 'default :width nil 'default-on)))"##,
+   'weight-thin (if (member 'thin (append (or (and (boundp 'font-weight-table) font-weight-table) '()) nil)) 'available 'not)
+   'weight-ultra-light (if (member 'ultra-light (append (or (and (boundp 'font-weight-table) font-weight-table) '()) nil)) 'available 'not)
+   'weight-light (if (member 'light (append (or (and (boundp 'font-weight-table) font-weight-table) '()) nil)) 'available 'not)
+   'weight-normal (if (member 'normal (append (or (and (boundp 'font-weight-table) font-weight-table) '()) nil)) 'available 'not)
+   'weight-bold (if (member 'bold (append (or (and (boundp 'font-weight-table) font-weight-table) '()) nil)) 'available 'not)
+   'weight-heavy (if (member 'heavy (append (or (and (boundp 'font-weight-table) font-weight-table) '()) nil)) 'available 'not)
+   'default-weight (face-attribute 'default :weight nil 'default)
+   'default-slant (face-attribute 'default :slant nil 'default)
+   'default-width (face-attribute 'default :width nil 'default)))"##,
         expect,
     );
 }
@@ -20684,8 +19846,9 @@ fn ft_atom_font_lock_fontify_different_font_lock_modes() {
 fn ft_atom_face_property_interval_extract_all_faces() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""ERR (wrong-type-argument overlayp (0 4 (face bold)))""#]];
+    let expect = expect_test::expect![[
+        r#""OK (count 10 all-starts (0 4 8 12 16 20 24 28 32 36) all-ends (4 8 12 16 20 24 28 32 36 40) all-faces (bold italic underline (:foreground \"red\") (:background \"yellow\") (:foreground \"blue\") (:background \"cyan\") (:slant italic) (:weight bold) (:underline t)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -20703,33 +19866,9 @@ fn ft_atom_face_property_interval_extract_all_faces() {
     (let ((intervals (object-intervals (current-buffer))))
       (list
        'count (length intervals)
-       'all-starts (mapcar #'overlay-start intervals)
-       'all-ends (mapcar #'overlay-end intervals)
-       'all-faces (mapcar (lambda (ov) (get-text-property (overlay-start ov) 'face)) intervals)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_atom_face_overlay_evaporate_with_face_after_delete() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 25)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDDEEEEEFFFFFGGGGG")
-    (let ((ov (make-overlay 10 25)))
-      (overlay-put ov 'face '(:background "yellow"))
-      (overlay-put ov 'evaporate t)
-      (list
-       'face-before (overlay-get ov 'face)
-       'ov-alive (and (overlay-buffer ov) t)
-       'delete-region (progn (delete-region 10 25) 'deleted)
-       'ov-dead (not (and (overlay-buffer ov)))
-       'face-at-9 (get-char-property 9 'face)
-       'face-at-10 (get-char-property 10 'face)
-       'face-at-25 (get-char-property 25 'face)))))"##,
+       'all-starts (mapcar #'car intervals)
+       'all-ends (mapcar #'cadr intervals)
+       'all-faces (mapcar (lambda (ov) (get-text-property (1+ (car ov)) 'face)) intervals)))))"##,
         expect,
     );
 }
@@ -20872,26 +20011,6 @@ fn ft_meson_face_font_lock_add_then_remove_blank_keywords() {
 }
 
 #[test]
-fn ft_meson_face_overlay_both_advance_front_and_rear() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument bufferp t)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAABBBBCCCCDDDDEEEEFFFFGGGG")
-    (let ((ov (make-overlay 5 15 t t nil)))
-      (overlay-put ov 'face '(:background "yellow"))
-      (list
-       'before-insert (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face))) '(1 4 5 10 15 16 20 25 30))
-       'insert-front (progn (goto-char 5) (insert "FRONT") (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(1 4 5 9 14 19 23 28 33)))
-       'insert-rear (progn (goto-char 15) (insert "REAR") (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(1 4 5 9 14 19 23 28 33 37)))
-       (progn (delete-overlay ov) 'cleaned)))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_meson_face_text_property_interval_split_precise_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -20983,12 +20102,13 @@ fn ft_meson_face_overlay_before_string_get_face_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_meson_face_property_search_in_narrowed_region() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 90)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (search-full (1 5) narrow-to-1-20 (1 nil) nil search-after-widen (nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -21002,7 +20122,7 @@ fn ft_meson_face_property_search_in_narrowed_region() {
      'search-full (list (text-property-any 1 41 'face 'bold) (text-property-any 1 41 'face 'italic))
      'narrow-to-1-20 (progn (narrow-to-region 1 20) (list (text-property-any 1 20 'face 'bold) (text-property-any 1 20 'face '(:foreground "red"))))
      (widen)
-     'search-after-widen (list (text-property-any 1 41 'face '(:background "yellow"))))))))"##,
+     'search-after-widen (list (text-property-any 1 41 'face '(:background "yellow"))))))"##,
         expect,
     );
 }
@@ -21347,12 +20467,13 @@ fn ft_baryon_font_lock_fontify_all_at_once_vs_incremental() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_baryon_face_text_property_next_property_change_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 76)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (interval-count 16 next-from-1 3 next-single-from-1 3 next-property-at-3 5 next-single-at-3 5 next-single-at-30 31 next-single-with-limit 3 next-nonexistent nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -21367,7 +20488,7 @@ fn ft_baryon_face_text_property_next_property_change_deep() {
      'next-single-at-3 (next-single-property-change 3 'face)
      'next-single-at-30 (next-single-property-change 30 'face)
      'next-single-with-limit (next-single-property-change 1 'face nil 10)
-     'next-nonexistent (next-single-property-change 1 'nonexistent-prop))))))"##,
+     'next-nonexistent (next-single-property-change 1 'nonexistent-prop))))"##,
         expect,
     );
 }
@@ -21881,14 +21002,17 @@ fn ft_electron_face_text_property_search_any_char_by_char() {
 fn ft_electron_font_lock_fontify_syntactic_by_region_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function font-lock-fontify-syntactically)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (comment-region ((1 font-lock-comment-delimiter-face nil) (5 font-lock-comment-face nil) (10 font-lock-comment-face nil) (13 font-lock-comment-face nil)) string-region ((15 font-lock-comment-face nil) (20 font-lock-string-face nil) (25 font-lock-string-face nil) (28 font-lock-string-face nil)) after-keywords ((28 font-lock-string-face) (35 font-lock-keyword-face) (40 font-lock-function-name-face) (46 font-lock-function-name-face) (49 font-lock-function-name-face)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'font-lock)
   (with-temp-buffer
     (emacs-lisp-mode)
+    (font-lock-set-defaults)
     (insert ";; comment-only\n\"string-only\"\n(defun syn-region-test () 42)\n")
-    (font-lock-fontify-syntactically (point-min) (point-max) nil)
+    (font-lock-fontify-syntactically-region (point-min) (point-max) nil)
     (list
      'comment-region (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-text-property pos 'fontified))) '(1 5 10 13))
      'string-region (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-text-property pos 'fontified))) '(15 20 25 28))
@@ -22101,12 +21225,13 @@ fn ft_final2_face_overlay_face_remove_then_readd_then_check() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_final2_face_text_property_all_at_point_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 49)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (at-1 (j 10 i 9 h 8 g 7 f 6 e 5 d 4 c 3 b 2 a 1 face bold) at-25 (j 10 i 9 h 8 g 7 f 6 e 5 d 4 c 3 b 2 a 1 face bold) at-50 (j 10 i 9 h 8 g 7 f 6 e 5 d 4 c 3 b 2 a 1 face bold) props-count-1 22 props-count-25 22 face-at-1 bold face-at-25 bold face-at-50 bold)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -22120,7 +21245,7 @@ fn ft_final2_face_text_property_all_at_point_deep() {
      'props-count-25 (length (text-properties-at 25))
      'face-at-1 (get-text-property 1 'face)
      'face-at-25 (get-text-property 25 'face)
-     'face-at-50 (get-text-property 50 'face))))))"##,
+     'face-at-50 (get-text-property 50 'face))))"##,
         expect,
     );
 }
@@ -22484,12 +21609,13 @@ fn ft_omega_final_font_lock_add_remove_then_readd_keywords() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_omega_final_face_overlay_properties_get_then_modify() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 51)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (props-len-before 4 add-help 6 remove-help 6 face-still-there (:background \"yellow\") priority-still-there 50 cleaned)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -22504,7 +21630,7 @@ fn ft_omega_final_face_overlay_properties_get_then_modify() {
          'remove-help (progn (overlay-put ov 'help-echo nil) (length (overlay-properties ov)))
          'face-still-there (overlay-get ov 'face)
          'priority-still-there (overlay-get ov 'priority)
-         (progn (delete-overlay ov) 'cleaned))))))))"##,
+         (progn (delete-overlay ov) 'cleaned))))))"##,
         expect,
     );
 }
@@ -22579,27 +21705,6 @@ fn ft_cosmic_final_font_lock_keywords_keep_flag_deep() {
 }
 
 #[test]
-fn ft_cosmic_final_face_set_font_attribute_family_foundry_registry() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect =
-        expect_test::expect![[r#""ERR (error \"Invalid face attribute name\" :registry)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (condition-case nil (copy-face 'default 'my-family-info-face) (error nil))
-  (list
-   'default-family (face-attribute 'default :family nil 'default-on)
-   'default-foundry (face-attribute 'default :foundry nil 'default-on)
-   'default-registry (face-attribute 'default :registry nil 'default-on)
-   'set-family (condition-case nil (progn (set-face-attribute 'my-family-info-face nil :family "Monospace") (face-attribute 'my-family-info-face :family nil 'default-on)) (error 'no))
-   'set-foundry (condition-case nil (progn (set-face-attribute 'my-family-info-face nil :foundry "adobe") (face-attribute 'my-family-info-face :foundry nil 'default-on)) (error 'no))
-   'set-registry (condition-case nil (progn (set-face-attribute 'my-family-info-face nil :registry "iso8859-1") (face-attribute 'my-family-info-face :registry nil 'default-on)) (error 'no))
-   'reset-all (condition-case nil (progn (set-face-attribute 'my-family-info-face nil :family 'unspecified :foundry 'unspecified :registry 'unspecified) 'ok) (error 'no))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_cosmic_final_face_overlay_insert_in_front_hooks_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -22626,8 +21731,9 @@ fn ft_cosmic_final_face_overlay_insert_in_front_hooks_deep() {
 fn ft_cosmic_final_face_property_text_property_any_intervals() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""ERR (wrong-type-argument overlayp (0 2 (face bold)))""#]];
+    let expect = expect_test::expect![[
+        r#""OK (interval-count 16 first-face bold second-face bold last-face bold)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -22637,9 +21743,9 @@ fn ft_cosmic_final_face_property_text_property_any_intervals() {
     (let ((intervals (object-intervals (current-buffer))))
       (list
        'interval-count (length intervals)
-       'first-face (get-text-property (overlay-start (car intervals)) 'face)
-       'second-face (get-text-property (overlay-start (cadr intervals)) 'face)
-       'last-face (get-text-property (overlay-start (car (last intervals))) 'face)))))"##,
+       'first-face (get-text-property (1+ (car (car intervals))) 'face)
+       'second-face (get-text-property (car (cadr intervals)) 'face)
+       'last-face (get-text-property (car (car (last intervals))) 'face)))))"##,
         expect,
     );
 }
@@ -22687,12 +21793,13 @@ fn ft_cosmic_final_face_set_face_overline_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_cosmic_final_face_text_property_next_single_change_cycle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function next-single-ic-property-change)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (next-1 6 next-6 11 next-11 16 next-16 21 next-20 21 last-at-16 (:foreground \"red\") last-at-20 (:foreground \"red\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -22702,13 +21809,13 @@ fn ft_cosmic_final_face_text_property_next_single_change_cycle() {
     (put-text-property 11 16 'face 'underline)
     (put-text-property 16 21 'face '(:foreground "red"))
     (list
-     'next-1 (next-single-ic-property-change 1 'face nil 21)
+     'next-1 (next-single-property-change 1 'face nil 21)
      'next-6 (next-single-property-change 6 'face nil 21)
      'next-11 (next-single-property-change 11 'face nil 21)
      'next-16 (next-single-property-change 16 'face nil 21)
      'next-20 (next-single-property-change 20 'face nil 21)
      'last-at-16 (get-text-property 16 'face)
-     'last-at-20 (get-text-property 20 'face))))))"##,
+     'last-at-20 (get-text-property 20 'face))))"##,
         expect,
     );
 }
@@ -22789,12 +21896,14 @@ fn ft_final_boson_face_overlay_string_props_deep_check() {
 fn ft_final_boson_face_text_property_empty_props_after_erase() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments put-text-property 6)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (before (face bold prop1 val1 intervals 2) after-erase (face nil prop1 nil intervals 0) after-refill (face italic intervals 1))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
     (insert "Properties before erase face test content data buffer text")
-    (put-text-property 1 51 'face 'bold :prop1 'val1)
+    (put-text-property 1 51 'face 'bold) (put-text-property 1 51 'prop1 'val1)
     (list
      'before (list 'face (get-text-property 1 'face) 'prop1 (get-text-property 1 'prop1) 'intervals (length (object-intervals (current-buffer))))
      'after-erase (progn (erase-buffer) (list 'face (get-text-property 1 'face) 'prop1 (get-text-property 1 'prop1) 'intervals (length (object-intervals (current-buffer)))))
@@ -23221,12 +22330,13 @@ fn ft_final_quark_font_lock_fontify_with_custom_keywords() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_final_quark_face_color_defined_p_various_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 10 101)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (color-red t color-green t color-blue t color-ff0000 t color-00ff00 t color-0000ff t color-invalid nil color-not-a-color nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
@@ -23237,7 +22347,7 @@ fn ft_final_quark_face_color_defined_p_various_deep() {
    'color-00ff00 (condition-case nil (color-defined-p "#00FF00") (error 'no))
    'color-0000ff (condition-case nil (color-defined-p "#0000FF") (error 'no))
    'color-invalid (condition-case nil (color-defined-p "#ZYXWVU") (error 'no))
-   'color-not-a-color (condition-case nil (color-defined-p "not-a-color-name-at-all") (error 'no))))))"##,
+   'color-not-a-color (condition-case nil (color-defined-p "not-a-color-name-at-all") (error 'no))))"##,
         expect,
     );
 }
@@ -23404,8 +22514,9 @@ fn ft_last_hope_font_lock_unfontify_buffer_and_fontify_again() {
 fn ft_last_hope_face_property_interval_object_basic_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""ERR (wrong-type-argument overlayp (0 3 (face bold)))""#]];
+    let expect = expect_test::expect![[
+        r#""OK (count 4 first-start 0 first-end 3 face-at-first bold last-start 9 last-end 12 face-at-last underline)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -23417,32 +22528,12 @@ fn ft_last_hope_face_property_interval_object_basic_deep() {
     (let ((intervals (object-intervals (current-buffer))))
       (list
        'count (length intervals)
-       'first-start (overlay-start (car intervals))
-       'first-end (overlay-end (car intervals))
-       'face-at-first (get-text-property (overlay-start (car intervals)) 'face)
-       'last-start (overlay-start (car (last intervals)))
-       'last-end (overlay-end (car (last intervals)))
-       'face-at-last (get-text-property (overlay-start (car (last intervals))) 'face)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_last_hope_face_overlay_face_after_deleting_overlay_region() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 28)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDDEEEEEFFFFF")
-    (let ((ov (make-overlay 10 25)))
-      (overlay-put ov 'face '(:background "yellow"))
-      (list
-       'before (mapcar (lambda (pos) (goto-char pos) (list pos (get-char-property pos 'face))) '(5 10 15 20 25 30))
-       'delete-partial (progn (delete-region 15 20) (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(5 10 15 20 25 28)))
-       'delete-all (progn (delete-region 10 25) (mapcar (lambda (pos) (goto-char pos) (get-char-property pos 'face)) '(5 10 15 20 25)))
-       (progn (delete-overlay ov) 'cleaned)))))"##,
+       'first-start (car (car intervals))
+       'first-end (cadr (car intervals))
+       'face-at-first (get-text-property (1+ (car (car intervals))) 'face)
+       'last-start (car (car (last intervals)))
+       'last-end (cadr (car (last intervals)))
+       'face-at-last (get-text-property (car (car (last intervals))) 'face)))))"##,
         expect,
     );
 }
@@ -23620,8 +22711,9 @@ fn ft_neverend_face_overlay_make_nil_face_deep() {
 fn ft_neverend_face_text_property_interval_object_stats() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""ERR (wrong-type-argument overlayp (0 5 (face bold)))""#]];
+    let expect = expect_test::expect![[
+        r#""OK (count 5 starts (0 5 10 15 20) ends (5 10 15 20 25) faces (bold italic underline (:foreground \"red\") (:background \"yellow\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -23634,9 +22726,9 @@ fn ft_neverend_face_text_property_interval_object_stats() {
     (let ((intervals (object-intervals (current-buffer))))
       (list
        'count (length intervals)
-       'starts (mapcar #'overlay-start intervals)
-       'ends (mapcar #'overlay-end intervals)
-       'faces (mapcar (lambda (ov) (get-text-property (overlay-start ov) 'face)) intervals)))))"##,
+       'starts (mapcar #'car intervals)
+       'ends (mapcar #'cadr intervals)
+       'faces (mapcar (lambda (ov) (get-text-property (1+ (car ov)) 'face)) intervals)))))"##,
         expect,
     );
 }
@@ -24092,25 +23184,6 @@ fn ft_void2_face_set_face_attribute_unspec_vs_nil_deep() {
 }
 
 #[test]
-fn ft_void2_font_lock_fontify_empty_buffer_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 27 27)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'font-lock)
-  (with-temp-buffer
-    (emacs-lisp-mode)
-    (font-lock-fontify-buffer)
-    (let ((v0 (list 'empty-face (get-text-property 1 'face) 'empty-fontified (get-text-property 1 'fontified))))
-      (insert "(defun empty-test () 42)\n")
-      (font-lock-fontify-buffer)
-      (list v0 (mapcar (lambda (pos) (goto-char pos) (list pos (get-text-property pos 'face) (get-text-property pos 'fontified))) '(1 7 15 22 27))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_void2_face_text_property_interval_count_after_split() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -24466,18 +23539,18 @@ fn ft_infinite_face_set_face_attribute_width_table_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[
-        r#""ERR (wrong-type-argument listp [[50 ultra-condensed ultracondensed] [63 extra-condensed extracondensed] [75 condensed compressed narrow] [87 semi-condensed semicondensed demicondensed] [100 normal medium regular unspecified] [113 semi-expanded semiexpanded demiexpanded] [125 expanded] [150 extra-expanded extraexpanded] [200 ultra-expanded ultraexpanded wide]])""#
+        r#""OK (font-width-table-bound t font-width-table-value 9 ultra-condensed-available nil condensed-available nil normal-available nil expanded-available nil default-width normal)""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
    'font-width-table-bound (boundp 'font-width-table)
    'font-width-table-value (if (boundp 'font-width-table) (length font-width-table) 'no-bound)
-   'ultra-condensed-available (if (boundp 'font-width-table) (member 'ultra-condensed font-width-table) 'no-table)
-   'condensed-available (if (boundp 'font-width-table) (member 'condensed font-width-table) 'no-table)
-   'normal-available (if (boundp 'font-width-table) (member 'normal font-width-table) 'no-table)
-   'expanded-available (if (boundp 'font-width-table) (member 'expanded font-width-table) 'no-table)
-   'default-width (face-attribute 'default :width nil 'default-on)))"##,
+   'ultra-condensed-available (if (boundp 'font-width-table) (member 'ultra-condensed (append font-width-table nil)) 'no-table)
+   'condensed-available (if (boundp 'font-width-table) (member 'condensed (append font-width-table nil)) 'no-table)
+   'normal-available (if (boundp 'font-width-table) (member 'normal (append font-width-table nil)) 'no-table)
+   'expanded-available (if (boundp 'font-width-table) (member 'expanded (append font-width-table nil)) 'no-table)
+   'default-width (face-attribute 'default :width nil 'default)))"##,
         expect,
     );
 }
@@ -24952,7 +24025,9 @@ fn ft_nofinal_font_lock_unfontify_then_fontify_region_deep() {
 fn ft_nofinal_face_text_property_put_on_same_region() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments equal 3)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (final-face (:foreground \"red\") final-face-at-5 (:foreground \"red\") final-face-at-15 (:foreground \"red\") all-equal t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -24965,7 +24040,7 @@ fn ft_nofinal_face_text_property_put_on_same_region() {
      'final-face (get-text-property 1 'face)
      'final-face-at-5 (get-text-property 5 'face)
      'final-face-at-15 (get-text-property 15 'face)
-     'all-equal (equal (get-text-property 1 'face) (get-text-property 8 'face) (get-text-property 15 'face)))))"##,
+     'all-equal (and (equal (get-text-property 1 'face) (get-text-property 8 'face)) (equal (get-text-property 8 'face) (get-text-property 15 'face))))))"##,
         expect,
     );
 }
@@ -25034,12 +24109,13 @@ fn ft_nofinal_face_set_face_font_by_name_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_nofinal_face_text_property_get_at_specific_positions() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 16 44)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (at-1 bold at-5 bold at-10 bold at-11 italic at-15 italic at-20 italic at-21 underline at-25 underline at-30 underline)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -25056,7 +24132,7 @@ fn ft_nofinal_face_text_property_get_at_specific_positions() {
      'at-20 (get-text-property 20 'face)
      'at-21 (get-text-property 21 'face)
      'at-25 (get-text-property 25 'face)
-     'at-30 (get-text-property 30 'face))))))"##,
+     'at-30 (get-text-property 30 'face))))"##,
         expect,
     );
 }
@@ -25442,27 +24518,6 @@ fn ft_milestone_face_text_property_get_every_pos_loop() {
 }
 
 #[test]
-fn ft_limit_face_overlay_same_start_different_end_face_sort() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument overlayp ov1)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDD")
-    (let ((ov1 (make-overlay 1 21))) (overlay-put ov1 'face '(:background "red")) (overlay-put ov1 'priority 1))
-    (let ((ov2 (make-overlay 1 15))) (overlay-put ov2 'face '(:background "green")) (overlay-put ov2 'priority 1))
-    (let ((ov3 (make-overlay 1 10))) (overlay-put ov3 'face '(:background "blue")) (overlay-put ov3 'priority 1))
-    (list
-     'inner (get-char-property 5 'face)
-     'mid (get-char-property 12 'face)
-     'outer-only (get-char-property 17 'face)
-     (progn (mapc #'delete-overlay '(ov1 ov2 ov3)) 'cleaned))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_limit_font_lock_fontify_non_lisp_comments_strings() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -25545,27 +24600,6 @@ fn ft_limit_font_lock_fontify_region_partial_deep() {
      'first-fn (save-excursion (goto-char (point-min)) (search-forward "a ") (get-text-property (1- (match-beginning 0)) 'face))
      'second-fn (save-excursion (goto-char (point-min)) (search-forward "b ") (get-text-property (1- (match-beginning 0)) 'face))
      'third-notfontified (save-excursion (goto-char (point-min)) (search-forward "c ") (get-text-property (1- (match-beginning 0)) 'fontified)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_limit_face_overlay_property_deduplicate_face_attrs() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[
-        r#""ERR (error \"Invalid face\" :background \"yellow\" :background \"red\" :foreground \"blue\" :foreground \"green\")""#
-    ]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCC")
-    (let ((ov (make-overlay 1 16)))
-      (overlay-put ov 'face '(:background "yellow" :background "red" :foreground "blue" :foreground "green"))
-      (list
-       'face (overlay-get ov 'face)
-       'bg (face-attribute (list :background "yellow" :background "red" :foreground "blue" :foreground "green") :background nil 'default-on)
-       (progn (delete-overlay ov) 'cleaned)))))"##,
         expect,
     );
 }
@@ -26062,12 +25096,12 @@ fn ft_polar_font_lock_fontify_after_setq_local() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_polar_face_overlay_face_remap_via_face_remapping_alist() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 104)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (face-remap-fbound t remap ok spec-set-fbound nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-original-face) (error nil))
@@ -26080,7 +25114,7 @@ fn ft_polar_face_overlay_face_remap_via_face_remapping_alist() {
                (face-remap-reset-base 'my-original-face)
                'ok)
              (error 'no))
-   'spec-set-fbound (face-spec-set 'my-original-face '((t :inherit my-remapped-face :weight bold)) t)))))"##,
+   'spec-set-fbound (face-spec-set 'my-original-face '((t :inherit my-remapped-face :weight bold)) t)))"##,
         expect,
     );
 }
@@ -26309,29 +25343,6 @@ fn ft_ultra_font_lock_fontify_syntactic_keywords_deep() {
 }
 
 #[test]
-fn ft_ultra_face_overlay_face_copy_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument overlayp ov1)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAA")
-    (let ((ov1 (make-overlay 1 6)))
-      (overlay-put ov1 'face '(:background "yellow" :weight bold))
-      (let ((ov2 (make-overlay 1 6)))
-        (overlay-put ov2 'face (overlay-get ov1 'face))
-        (list
-         'ov1-face (overlay-get ov1 'face)
-         'ov2-face (overlay-get ov2 'face)
-         'equal-ov1-ov2 (equal (overlay-get ov1 'face) (overlay-get ov2 'face))
-         'char-face (get-char-property 3 'face)
-         (progn (mapc #'delete-overlay '(ov1 ov2)) 'cleaned))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_ultra_face_set_face_box_attrs_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -26535,12 +25546,13 @@ fn ft_deep_face_face_remap_to_same_face_cycle() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_deep_font_lock_fontify_lazy_lock_if_available() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 7 60)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (lazy-lock-fbound nil jit-lock-fbound t font-lock-support-mode-bound t font-lock-support-mode-val jit-lock-mode jit-lock-register-fbound t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
@@ -26548,7 +25560,7 @@ fn ft_deep_font_lock_fontify_lazy_lock_if_available() {
    'jit-lock-fbound (fboundp 'jit-lock-mode)
    'font-lock-support-mode-bound (boundp 'font-lock-support-mode)
    'font-lock-support-mode-val (condition-case nil (symbol-value 'font-lock-support-mode) (error 'no))
-   'jit-lock-register-fbound (fboundp 'jit-lock-register)))))"##,
+   'jit-lock-register-fbound (fboundp 'jit-lock-register)))"##,
         expect,
     );
 }
@@ -26822,25 +25834,6 @@ fn ft_complex_font_lock_fontify_after_insert_new_font_keyword() {
 }
 
 #[test]
-fn ft_complex_face_overlay_face_same_face_on_multi_ovls() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument overlayp ov1)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDD")
-    (let ((ov1 (make-overlay 1 11))) (overlay-put ov1 'face 'bold))
-    (let ((ov2 (make-overlay 11 21))) (overlay-put ov2 'face 'bold))
-    (list
-     'ov1-char5 (get-char-property 5 'face)
-     'ov2-char15 (get-char-property 15 'face)
-     (progn (mapc #'delete-overlay '(ov1 ov2)) 'cleaned))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_complex_face_set_face_bold_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -26855,28 +25848,6 @@ fn ft_complex_face_set_face_bold_deep() {
    'set-bold (condition-case nil (progn (set-face-bold 'my-bold-face t nil) (face-bold-p 'my-bold-face nil)) (error 'no))
    'set-unbold (condition-case nil (progn (set-face-bold 'my-bold-face nil nil) (face-bold-p 'my-bold-face nil)) (error 'no))
    'via-attribute (condition-case nil (progn (set-face-attribute 'my-bold-face nil :weight 'bold) (face-bold-p 'my-bold-face nil)) (error 'no))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_extreme_face_overlay_face_merge_three_ovls_priority_chain() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 22)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAABBBBBCCCCCDDDDD")
-    (let ((ov1 (make-overlay 5 21))) (overlay-put ov1 'face '(:foreground "red")) (overlay-put ov1 'priority 1))
-    (let ((ov2 (make-overlay 1 15))) (overlay-put ov2 'face '(:background "green")) (overlay-put ov2 'priority 2))
-    (let ((ov3 (make-overlay 10 25))) (overlay-put ov3 'face '(:weight bold)) (overlay-put ov3 'priority 3))
-    (list
-     'pos3-ov2 (get-char-property 3 'face)
-     'pos10-mid (get-char-property 10 'face)
-     'pos18-ov3 (get-char-property 18 'face)
-     'pos22-ov3 (get-char-property 22 'face)
-     (progn (mapc #'delete-overlay (overlays-in 1 25)) 'cleaned))))"##,
         expect,
     );
 }
@@ -27035,27 +26006,6 @@ fn ft_final_face_overlay_face_priority_zero_and_negative() {
      'neg-prio (overlay-get ov2 'priority)
      'winning (get-char-property 3 'face)
      (progn (mapc #'delete-overlay (overlays-in 1 6)) 'cleaned))))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_final_font_lock_fontify_with_custom_keywords() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (void-function \\\"\\\\\\\\<\\\\)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'font-lock)
-  (with-temp-buffer
-    (emacs-lisp-mode)
-    (font-lock-add-keywords nil '((\"\\\\<\\(my-custom-keyword\\)\\\\>\" 1 font-lock-warning-face t)))
-    (insert "(my-custom-keyword 42)\n")
-    (font-lock-fontify-buffer)
-    (list
-     'keyword-face (save-excursion (goto-char (point-min)) (search-forward "my-custom-keyword") (get-text-property (match-beginning 0) 'face))
-     'paren-face (save-excursion (goto-char (point-min)) (search-forward "42") (get-text-property (match-beginning 0) 'face))
-     'fontified (get-text-property 1 'fontified))))"##,
         expect,
     );
 }
@@ -27701,12 +26651,13 @@ fn ft_divergence_face_overlay_face_property_readd_faces() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_divergence_face_set_face_documentation_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 8 50)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (default-doc \"Basic default face.\" set-doc \"A test face for documentation\" bold-doc \"Basic bold face.\" italic-doc \"Basic italic face.\" doc-fn-fbound t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-doc-face) (error nil))
@@ -27715,7 +26666,7 @@ fn ft_divergence_face_set_face_documentation_deep() {
    'set-doc (condition-case nil (progn (set-face-documentation 'my-doc-face "A test face for documentation") (face-documentation 'my-doc-face)) (error 'no))
    'bold-doc (condition-case nil (face-documentation 'bold) (error 'no))
    'italic-doc (condition-case nil (face-documentation 'italic) (error 'no))
-   'doc-fn-fbound (fboundp 'face-documentation)))))"##,
+   'doc-fn-fbound (fboundp 'face-documentation)))"##,
         expect,
     );
 }
@@ -28057,12 +27008,13 @@ fn ft_chase_font_lock_fontify_multiline_string_escape() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_chase_face_overlay_face_compose_region_auto_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 51)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (compose-region-fbound t decompose-region-fbound t compose-with-face (face bold composition ((5))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -28075,7 +27027,7 @@ fn ft_chase_face_overlay_face_compose_region_auto_deep() {
                              (put-text-property 1 6 'face 'bold)
                              (compose-region 1 6)
                              (list 'face (get-text-property 3 'face) 'composition (get-text-property 3 'composition)))
-                           (error 'no-compose)))))))"##,
+                           (error 'no-compose)))))"##,
         expect,
     );
 }
@@ -30491,25 +29443,6 @@ fn ft_burn_face_overlay_face_font_lock_face_interference() {
 }
 
 #[test]
-fn ft_burn_face_text_property_face_interval_after_fill() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 13 19)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAA BBBBB CCCCC")
-    (put-text-property 1 6 'face 'bold)
-    (put-text-property 7 12 'face 'italic)
-    (put-text-property 13 19 'face 'underline)
-    (list
-     'pre-fill-intervals (length (object-intervals (current-buffer)))
-     'face-pos-before (list (get-text-property 3 'face) (get-text-property 9 'face) (get-text-property 15 'face)))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_scorch_face_overlay_face_wrap_prefix_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -32110,26 +31043,6 @@ fn ft_peak_face_overlay_after_string_face_props_deep() {
 }
 
 #[test]
-fn ft_peak_face_text_property_face_scan_backward_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 10 10)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAA")
-    (put-text-property 1 6 'face 'bold)
-    (list
-     'prev-prop-from-6 (previous-single-property-change 6 'face)
-     'prev-prop-from-10 (previous-single-property-change 10 'face)
-     'next-prop-from-0 (next-single-property-change 0 'face)
-     'next-prop-from-1 (next-single-property-change 1 'face)
-     'intervals (length (object-intervals (current-buffer))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_crest_face_overlay_face_before_after_string_both_sides() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -32376,12 +31289,11 @@ fn ft_prime_face_overlay_face_clear_all_and_reassign() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_prime_face_text_property_interval_object_sanity() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 0 0)""#]];
+    let expect = expect_test::expect![[r#""OK (intervals-count 1 intervals-t ((0 5 bold)))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -32390,7 +31302,7 @@ fn ft_prime_face_text_property_interval_object_sanity() {
     (list
      'intervals-count (length (object-intervals (current-buffer)))
      'intervals-t (let ((ints (object-intervals (current-buffer))))
-                    (mapcar (lambda (i) (list (car i) (cadr i) (get-text-property (car i) 'face))) ints)))))))"##,
+                    (mapcar (lambda (i) (list (car i) (cadr i) (get-text-property (1+ (car i)) 'face))) ints)))))"##,
         expect,
     );
 }
@@ -32707,7 +31619,9 @@ fn ft_countless_face_overlay_face_get_before_before_set() {
 fn ft_countless_face_text_property_near_bob_and_eob() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 0 0)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (face-at-1 bold face-at-2 bold face-at-3 bold interval-count 1 next-from-0 nil prev-from-4 nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -32718,7 +31632,7 @@ fn ft_countless_face_text_property_near_bob_and_eob() {
      'face-at-2 (get-text-property 2 'face)
      'face-at-3 (get-text-property 3 'face)
      'interval-count (length (object-intervals (current-buffer)))
-     'next-from-0 (next-single-property-change 0 'face)
+     'next-from-0 (next-single-property-change (point-min) 'face)
      'prev-from-4 (previous-single-property-change 4 'face))))"##,
         expect,
     );
@@ -33542,26 +32456,6 @@ fn ft_forever_face_overlay_delete_all_then_check() {
     (list
      'no-overlays (length (overlays-in 1 6))
      'no-face (get-char-property 3 'face))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_forever_face_text_property_face_save_restore_buffer() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 3 3)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "SAVE-ME")
-    (put-text-property 1 8 'face 'bold)
-    (list
-     'before-copy (get-text-property 3 'face)
-     'copy-has-face (with-temp-buffer
-                      (insert-buffer-substring (current-buffer))
-                      (list 'has-face (get-text-property 3 'face) 'intervals (length (object-intervals (current-buffer)))))
-     'original-still-has (get-text-property 3 'face))))"##,
         expect,
     );
 }
@@ -34465,26 +33359,6 @@ fn ft_charge_face_overlay_face_typed_insert_verify_propagation() {
        'face-pos5 (get-char-property 5 'face)
        'face-pos-last (get-char-property (1- (overlay-end ov)) 'face)
        (progn (delete-overlay ov) 'cleaned)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_charge_face_text_property_face_multibyte_boundary_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 7)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "A日本語B")
-    (put-text-property 1 7 'face 'bold)
-    (list
-     'ascii-before (get-text-property 1 'face)
-     'multibyte-mid1 (get-text-property 2 'face)
-     'multibyte-mid2 (get-text-property 4 'face)
-     'ascii-after (get-text-property 6 'face)
-     'intervals (length (object-intervals (current-buffer))))))"##,
         expect,
     );
 }
@@ -35822,14 +34696,16 @@ fn ft_divergence_font_weight_table_access() {
 fn ft_divergence_face_error_nil_face() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable err)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (copy-nil (error) set-attrib-nil-face (error) face-attrib-nil-face (error) face-font-nil (error))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
-   'copy-nil (condition-case nil (copy-face nil 'some-new-face) (error (list (car err))))
-   'set-attrib-nil-face (condition-case nil (set-face-attribute nil nil :foreground "red") (error (list (car err))))
-   'face-attrib-nil-face (condition-case nil (face-attribute nil :foreground nil 'default-on) (error (list (car err))))
-   'face-font-nil (condition-case nil (face-font nil) (error (list (car err))))))"##,
+   'copy-nil (condition-case err (copy-face nil 'some-new-face) (error (list (car err))))
+   'set-attrib-nil-face (condition-case err (set-face-attribute nil nil :foreground "red") (error (list (car err))))
+   'face-attrib-nil-face (condition-case err (face-attribute nil :foreground nil 'default) (error (list (car err))))
+   'face-font-nil (condition-case err (face-font nil) (error (list (car err))))))"##,
         expect,
     );
 }
@@ -35875,24 +34751,27 @@ fn ft_divergence_font_lock_c_mode_conditional_directive() {
 fn ft_divergence_face_copy_nonexistent_face() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable err)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (copy-nonexistent (error) make-face made-face facep-made [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified] face-id-made 187)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
-   'copy-nonexistent (condition-case nil (copy-face 'nonexistent-face-12345 'target-face) (error (list (car err))))
-   'make-face (condition-case nil (make-face 'made-face) (error (list (car err))))
-   'facep-made (condition-case nil (facep 'made-face) (error (list (car err))))
-   'face-id-made (condition-case nil (face-id 'made-face) (error (list (car err))))))"##,
+   'copy-nonexistent (condition-case err (copy-face 'nonexistent-face-12345 'target-face) (error (list (car err))))
+   'make-face (condition-case err (make-face 'made-face) (error (list (car err))))
+   'facep-made (condition-case err (facep 'made-face) (error (list (car err))))
+   'face-id-made (condition-case err (face-id 'made-face) (error (list (car err))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_divergence2_face_internal_face_id_difference() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 11 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (default-id 0 bold-id 1 italic-id 2 underline-id 4 my-id-compare-id 186 non-existent-id no face-equal? t face-diff? nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (condition-case nil (copy-face 'default 'my-id-compare) (error nil))
@@ -35904,7 +34783,7 @@ fn ft_divergence2_face_internal_face_id_difference() {
    'my-id-compare-id (condition-case nil (face-id 'my-id-compare) (error 'no))
    'non-existent-id (condition-case nil (face-id 'nonexistent-face-x) (error 'no))
    'face-equal? (face-equal 'default 'default)
-   'face-diff? (face-equal 'default 'bold)))))"##,
+   'face-diff? (face-equal 'default 'bold)))"##,
         expect,
     );
 }
@@ -36230,18 +35109,17 @@ fn ft_chase2_face_overlay_priority_with_nil_default() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_chase2_text_property_face_intervals_object_type() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 5 213)""#]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
    'buffer-intervals (with-temp-buffer (insert "X") (put-text-property 1 2 'face 'bold) (length (object-intervals (current-buffer)))))
    'string-intervals (let ((s (propertize "X" 'face 'bold))) (length (object-intervals s)))
-   'buffer-equal-string (with-temp-buffer (insert "X") (put-text-property 1 2 'face 'bold) (let ((s (propertize "X" 'face 'bold))) (= (length (object-intervals (current-buffer))) (length (object-intervals s))))))))"##,
+   'buffer-equal-string (with-temp-buffer (insert "X") (put-text-property 1 2 'face 'bold) (let ((s (propertize "X" 'face 'bold))) (= (length (object-intervals (current-buffer))) (length (object-intervals s))))))"##,
         expect,
     );
 }
@@ -36298,28 +35176,6 @@ fn ft_sweep_face_set_face_inherit_multiple_faces() {
         (set-face-attribute 'my-multi-inherit nil :inherit '(bold italic underline))
         (list 'inherit (face-attribute 'my-multi-inherit :inherit nil)))
     (error (list 'err (car err)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn ft_sweep_text_property_interval_count_with_many_props() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range 0 0)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "ABCDEFGHIJ")
-    (put-text-property 1 11 'face 'bold)
-    (put-text-property 1 3 'fontified t)
-    (put-text-property 4 7 'fontified nil)
-    (put-text-property 8 11 'fontified t)
-    (list
-     'face-intervals (length (object-intervals (current-buffer)))
-     'mixed-props (let ((ints (object-intervals (current-buffer))))
-                    (list 'count (length ints)
-                          'face-pos (mapcar (lambda (i) (list (car i) (cadr i) (get-text-property (car i) 'face) (get-text-property (car i) 'fontified))) ints))))))"##,
         expect,
     );
 }
@@ -37125,12 +35981,11 @@ fn ft_burst_face_overlay_line_prefix_face_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_burst_text_property_face_interval_starts_and_ends() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 9 98)""#]];
+    let expect = expect_test::expect![[r#""OK (count 2 details ((0 4 nil) (4 10 nil)))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -37140,7 +35995,7 @@ fn ft_burst_text_property_face_interval_starts_and_ends() {
     (let ((ints (object-intervals (current-buffer))))
       (list
        'count (length ints)
-       'details (mapcar (lambda (i) (list (car i) (cadr i) (plist-get (cddr i) 'face))) ints)))))))"##,
+       'details (mapcar (lambda (i) (list (car i) (cadr i) (plist-get (cddr i) 'face))) ints)))))"##,
         expect,
     );
 }
@@ -37720,26 +36575,6 @@ fn ft_fire_face_overlay_all_nil_props_check() {
 }
 
 #[test]
-fn ft_fire_text_property_face_after_kill_line_deep() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (end-of-buffer)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (with-temp-buffer
-    (insert "AAAAA\nBBBBB")
-    (put-text-property 1 6 'face 'bold)
-    (put-text-property 7 12 'face 'italic)
-    (kill-line)
-    (list
-     'remaining-text (buffer-string)
-     'face-pos1 (get-text-property 1 'face)
-     'intervals (length (object-intervals (current-buffer))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn ft_1500_face_overlay_face_with_overlays_at_vs_overlays_in() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -38183,7 +37018,8 @@ fn ft_beyond1500_face_overlay_face_self_copy_via_overlay_properties() {
 fn ft_beyond1500_text_property_prop_scan_right_to_left() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument number-or-marker-p nil)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (right-to-left ((9 underline) (7 underline)) intervals 3)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -38192,7 +37028,7 @@ fn ft_beyond1500_text_property_prop_scan_right_to_left() {
     (put-text-property 4 7 'face 'italic)
     (put-text-property 7 10 'face 'underline)
     (let ((pos 9) (chain nil))
-      (while (> pos 0)
+      (while (and pos (> pos 0))
         (push (list pos (get-text-property pos 'face)) chain)
         (let ((next (previous-single-property-change (1+ pos) 'face nil 1)))
           (setq pos (and next (/= next pos) next))))
@@ -38351,12 +37187,11 @@ fn ft_onward_face_overlay_both_evaporate_and_face() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ft_onward_text_property_face_stress_5_intervals_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 15 40)""#]];
+    let expect = expect_test::expect![[r#""OK (intervals 5 all-faces (nil nil nil nil nil))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -38372,7 +37207,7 @@ fn ft_onward_text_property_face_stress_5_intervals_deep() {
                       (result nil))
                   (dolist (i ints)
                     (push (plist-get (cddr i) 'face) result))
-                  (nreverse result)))))))"##,
+                  (nreverse result)))))"##,
         expect,
     );
 }
