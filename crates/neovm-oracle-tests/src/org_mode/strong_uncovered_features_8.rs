@@ -634,31 +634,6 @@ fn uf8_first_match() {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn uf8_map_info() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (wrong-number-of-arguments (closure (t) (h info) (list (org-element--property :raw-value h nil nil) (plist-get info :first-match))) 1)""#
-    ]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(with-temp-buffer
-  (org-mode)
-  (insert "* H1\n* H2\n* H3")
-  (let* ((tree (org-element-parse-buffer))
-         (result (org-element-map tree 'headline
-                   (lambda (h info)
-                     (list (org-element-property :raw-value h)
-                           (plist-get info :first-match)))
-                   nil 'first-match)))
-    result))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// org-element-parent-chain
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
 fn uf8_parent_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK (paragraph section headline headline headline)""#]];

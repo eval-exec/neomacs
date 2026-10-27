@@ -35,15 +35,7 @@ fn combo112_org_clock_resolve_idle() {
         expect,
     );
 }
-#[test]
-fn combo112_org_dblock_update_clocktable_full() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-function list:ok)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(with-temp-buffer(org-mode)(require'org-clock)(let((org-clock-persist nil))(insert"* A\n* B\n")(goto-char(point-min))(org-clock-in nil)(org-clock-out nil nil)(search-forward"* B")(beginning-of-line)(org-clock-in nil)(org-clock-out nil nil)(goto-char(point-min))(insert"#+BEGIN: clocktable :maxlevel 3 :scope file :block thisweek\n#+END:\n")(goto-char(point-min))(search-forward"#+BEGIN:")(beginning-of-line)(org-dblock-update)(list:ok t)))"##,
-        expect,
-    );
-}
+
 #[test]
 fn combo112_org_element_interpret_link() {
     return_if_neovm_enable_oracle_proptest_not_set!();

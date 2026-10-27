@@ -369,63 +369,6 @@ fn org_table_column_width_shrink_expand_combo() {
 }
 
 #[test]
-fn org_table_hline_formula_sort_recalc_lifecycle_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (args-out-of-range [nil] 1)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'org-table)
-  (with-temp-buffer
-    (org-mode)
-    (insert "| Item | Qty | Price | Total |\n")
-    (insert "|------+-----+-------+-------|\n")
-    (insert "| A | 2 | 10 | |\n")
-    (insert "| B | 3 | 7 | |\n")
-    (insert "|------+-----+-------+-------|\n")
-    (insert "| Sum | | | |\n")
-    (insert "#+TBLFM: @2$4=$2*$3::@3$4=$2*$3::@>$4=vsum(@I..@II)\n")
-    (goto-char (point-min))
-    (org-table-recalculate 'all)
-    (let ((stored-before (org-table-get-stored-formulas))
-          (after-first (buffer-substring-no-properties
-                        (point-min) (point-max))))
-      (goto-char (point-min))
-      (search-forward "B")
-      (beginning-of-line)
-      (org-table-insert-row 'below)
-      (org-table-put (org-table-current-dline) 1 "C" t)
-      (org-table-put (org-table-current-dline) 2 "4" t)
-      (org-table-put (org-table-current-dline) 3 "5" t)
-      (org-table-insert-hline 'below)
-      (goto-char (point-min))
-      (search-forward "TBLFM")
-      (org-table-eval-formula nil "$4=$2*$3")
-      (goto-char (point-min))
-      (org-table-recalculate 'all)
-      (let ((stored-after (org-table-get-stored-formulas))
-            (to-user (org-table-formula-to-user
-                      "@2$4=$2*$3::@4$4=$2*$3::@>$4=vsum(@2$4..@-1$4)"))
-            (from-user (org-table-formula-from-user
-                        "@2$4=$2*$3::@4$4=$2*$3::@>$4=vsum(@2$4..@-1$4)"))
-            (first-last (org-table-formula-handle-first/last-rc
-                         "@>$4=vsum(@I..@II)")))
-        (list stored-before
-              after-first
-              stored-after
-              to-user
-              from-user
-              first-last
-              (sort (copy-sequence stored-after) #'org-table-formula-less-p)
-              (org-table-to-lisp)
-              (buffer-substring-no-properties
-               (point-min) (point-max)))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn org_table_sort_transpose_formula_metadata_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

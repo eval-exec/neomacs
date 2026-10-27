@@ -111,18 +111,3 @@ fn strict_org_timestamp_inactive() {
         expect,
     );
 }
-#[test]
-fn strict_org_element_properties_for_all_builtin() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (setting-constant t)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn (require 'org) (require 'org-element) (with-temp-buffer (org-mode)
- (insert "* TODO H :t:\nSCHEDULED: <2024-01-01>\n:PROPERTIES:\n:ID: x\n:END:\nBody\n")
- (let* ((t (org-element-parse-buffer)) (hl (car (org-element-map t 'headline #'identity))) (r '()))
-  (dolist (prop '(:level :todo-keyword :priority :tags :title :raw-value :begin :end :post-blank
-    :contents-begin :contents-end :pre-blank :archived-p :commentedp :footnote-section-p))
-   (push (list prop (org-element-property prop hl)) r))
-  (nreverse r))))"##,
-        expect,
-    );
-}

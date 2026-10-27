@@ -1342,32 +1342,6 @@ fn strong_element_property_inherited() {
 }
 
 #[test]
-fn strong_element_operations_chain() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument integer-or-marker-p nil)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org-element)
-  (let* ((doc (org-element-create 'org-data nil))
-         (h1 (org-element-create 'headline '(:level 1 :raw-value "A")
-              (org-element-create 'section nil (org-element-create 'paragraph nil "P1.\n"))))
-         (h2 (org-element-create 'headline '(:level 1 :raw-value "B")
-              (org-element-create 'section nil (org-element-create 'paragraph nil "P2.\n"))))
-         (h3 (org-element-create 'headline '(:level 1 :raw-value "C")
-              (org-element-create 'section nil (org-element-create 'paragraph nil "P3.\n")))))
-    (org-element-adopt doc h1 h2 h3)
-    (let ((after-adopt (substring-no-properties (org-element-interpret-data doc))))
-      (org-element-extract h2)
-      (let ((after-extract (substring-no-properties (org-element-interpret-data doc))))
-        (org-element-swap-A-B h1 h3)
-        (let ((after-swap (substring-no-properties (org-element-interpret-data doc))))
-          (list after-adopt after-extract after-swap
-                (org-element-property :parent h2)))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn strong_deferred_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[

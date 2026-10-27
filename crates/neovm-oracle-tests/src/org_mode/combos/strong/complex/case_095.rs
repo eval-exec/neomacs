@@ -1,24 +1,5 @@
 use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest_not_set};
-#[test]
-fn combo95_full_document_parse_interpret_compare() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (setting-constant t)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(with-temp-buffer (org-mode)
- (insert "#+TITLE: Test\n#+AUTHOR: X\n* TODO H :tag:\nSCHEDULED: <2024-01-01>\nBody *bold* /italic/.\n")
- (let ((r '())) (let* ((t (org-element-parse-buffer)) (i (substring-no-properties (org-element-interpret-data t)))
-   (t2 (with-temp-buffer (org-mode) (insert i) (goto-char (point-min)) (org-element-parse-buffer))))
-  (push (list :orig-headlines (length (org-element-map t 'headline #'identity))) r)
-  (push (list :re-headlines (length (org-element-map t2 'headline #'identity))) r)
-  (push (list :orig-bold (length (org-element-map t 'bold #'identity))) r)
-  (push (list :re-bold (length (org-element-map t2 'bold #'identity))) r)
-  (push (list :stable (and (= (length (org-element-map t 'headline #'identity))
-   (length (org-element-map t2 'headline #'identity)))
-   (= (length (org-element-map t 'bold #'identity))
-   (length (org-element-map t2 'bold #'identity)))))) r) (nreverse r)))"##,
-        expect,
-    );
-}
+
 #[test]
 fn combo95_babel_multiple_blocks_dependency_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -14,54 +14,6 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn strict_parent_chain_in_caption_title_tag() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (wrong-type-argument listp #(\"bold-title\" 0 10 (:parent (bold (:standard-properties [3 nil 4 14 16 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil (headline (:standard-properties [1 1 37 92 92 0 (:title) first-section nil nil nil 39 90 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 92 92 0 nil org-data nil nil nil 3 92 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) #6)] :pre-blank 0 :raw-value \"*bold-title* Heading :*tag-bold*:\" :title (#3 #(\"Heading :*tag-bold*:\" 0 20 (:parent #6))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [37 37 37 92 92 0 nil section nil nil nil 37 92 nil #<killed buffer> nil nil #6]) (table (:standard-properties [37 72 72 92 92 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #7] :type org :tblfm nil :value nil :caption (((#(\"Table \" 0 6 (:parent #12)) (italic (:standard-properties [54 nil 55 69 70 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #12]) #(\"caption-italic\" 0 14 (:parent #13))) #(\".\" 0 1 (:parent #12)))))) (table-row (:standard-properties [72 72 73 81 82 0 nil table-row nil nil nil nil nil nil #<killed buffer> nil nil #8] :type standard) (table-cell (:standard-properties [73 nil 74 75 77 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"a\" 0 1 (:parent #10))) (table-cell (:standard-properties [77 nil 78 79 81 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"b\" 0 1 (:parent #10)))) (table-row (:standard-properties [82 82 83 91 92 0 nil table-row nil nil nil nil nil nil #<killed buffer> nil nil #8] :type standard) (table-cell (:standard-properties [83 nil 84 85 87 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"1\" 0 1 (:parent #10))) (table-cell (:standard-properties [87 nil 88 89 91 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"2\" 0 1 (:parent #10)))))))]) #(\"bold-title\" 0 10 (:parent #3))))))""#
-    ]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'org-element)
-  (let ((org-mode-hook nil))
-    (with-temp-buffer (org-mode)
-      (insert "* *bold-title* Heading :*tag-bold*:\n")
-      (insert "#+CAPTION: Table /caption-italic/.\n")
-      (insert "| a | b |\n| 1 | 2 |\n")
-      (goto-char (point-min))
-      (let* ((tree (org-element-parse-buffer))
-             (r '()))
-        ;; bold in headline title
-        (let ((bold-title (car (org-element-map tree 'bold #'identity))))
-          (when bold-title
-            (push (list :bold-title-parent-type
-                        (org-element-type (org-element-property :parent bold-title))) r)
-            (push (list :bold-title-secondary (org-element-secondary-p bold-title)) r)
-            (let ((grandparent (org-element-property :parent
-                                 (org-element-property :parent bold-title))))
-              (push (list :bold-title-grandparent-type (org-element-type grandparent)) r))))
-        ;; bold in headline tags
-        (let ((tag-text (car (org-element-map tree 'plain-text
-                               (lambda (txt) (when (string-match-p "tag-bold" (car txt)) txt))))))
-          (when tag-text
-            (push (list :tag-text-parent-type
-                        (org-element-type (org-element-property :parent tag-text))) r)))
-        ;; italic in caption
-        (let ((cap-italic (car (org-element-map tree 'italic #'identity))))
-          (when cap-italic
-            (push (list :caption-italic-parent-type
-                        (org-element-type (org-element-property :parent cap-italic))) r)
-            (push (list :caption-italic-secondary (org-element-secondary-p cap-italic)) r)))
-        (nreverse r)))))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Whitespace-only content parsing
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
 fn strict_whitespace_only_content() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[

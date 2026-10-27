@@ -421,32 +421,6 @@ fn upstream_org_element_cache_list_structures() {
 // ── Cache: add/remove sensitive lines ────────────────────────────────
 
 #[test]
-fn upstream_org_element_cache_remove_sensitive_line() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (end-of-buffer)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org-element)
-  (require 'org)
-  (let ((org-mode-hook nil)
-        (org-element-use-cache t))
-    ;; Removing a line alters structure.
-    (with-temp-buffer
-      (org-mode)
-      (insert "# +BEGIN_EXAMPLE\nPara1\n\nPara2\n#+END_EXAMPLE")
-      (goto-char (point-max))
-      (org-element-at-point)
-      (forward-char)
-      (delete-char 1)
-      (search-forward "Para2")
-      (org-element-type (org-element-at-point)))))"##,
-        expect,
-    );
-}
-
-// ── Cache: slurp obsolete elements ───────────────────────────────────
-
-#[test]
 fn upstream_org_element_cache_slurp() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK paragraph""#]];

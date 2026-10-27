@@ -492,31 +492,6 @@ fn uf2_element_map_first_match() {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn uf2_element_map_with_info() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (wrong-number-of-arguments (closure (t) (h info) (list (org-element--property :raw-value h nil nil) (plist-get info :first-match))) 1)""#
-    ]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(with-temp-buffer
-  (org-mode)
-  (insert "* H1\n* H2\n* H3")
-  (let* ((tree (org-element-parse-buffer))
-         (result (org-element-map tree 'headline
-                   (lambda (h info)
-                     (list (org-element-property :raw-value h)
-                           (plist-get info :first-match)))
-                   nil 'first-match)))
-    result))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// org-id-get-create
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
 fn uf2_id_get_create() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect =

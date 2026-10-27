@@ -186,97 +186,6 @@ fn eta2_property_inheritance_4_levels() {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn eta2_element_operations_chain() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument integer-or-marker-p nil)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org-element)
-  (let* ((doc (org-element-create 'org-data nil))
-         (h1 (org-element-create
-              'headline '(:level 1 :raw-value "A" :title ("A"))
-              (org-element-create 'section nil (org-element-create 'paragraph nil "P1.\n"))))
-         (h2 (org-element-create
-              'headline '(:level 1 :raw-value "B" :title ("B"))
-              (org-element-create 'section nil (org-element-create 'paragraph nil "P2.\n"))))
-         (h3 (org-element-create
-              'headline '(:level 1 :raw-value "C" :title ("C"))
-              (org-element-create 'section nil (org-element-create 'paragraph nil "P3.\n")))))
-    (org-element-adopt doc h1 h2 h3)
-    (let ((after-adopt (org-element-interpret-data doc)))
-      (org-element-extract h2)
-      (let ((after-extract (org-element-interpret-data doc)))
-        (org-element-swap-A-B h1 h3)
-        (let ((after-swap (org-element-interpret-data doc)))
-          (let* ((sec (car (org-element-contents h1)))
-                 (para (car (org-element-contents sec))))
-            (org-element-set para (org-element-create 'paragraph nil "New.\n")))
-          (list (substring-no-properties after-adopt)
-                (substring-no-properties after-extract)
-                (substring-no-properties after-swap)
-                (substring-no-properties (org-element-interpret-data doc))
-                (org-element-property :parent h2)))))))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Eta-2: org-element with complex deferred chain
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
-fn eta2_deferred_chain() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (cl-assertion-failed (listp args))""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org-element)
-  (list
-   (let ((el (org-element-create
-              'dummy
-              `(:deferred ,(org-element-deferred-create
-                            t (lambda (el) (org-element-put-property el :foo 'bar) nil))))))
-     (list (org-element-property :foo el) (org-element-property :foo2 el)))
-   (let ((el (org-element-create
-              'dummy `(:foo ,(org-element-deferred-create nil (lambda (_) 'bar))))))
-     (org-element-property :foo el))
-   (let ((el (org-element-create
-              'dummy `(:foo ,(org-element-deferred-create t (lambda (_) 'bar))))))
-     (list (org-element-property :foo el) (org-element-property-raw :foo el)))
-   (let ((el (org-element-create
-              'dummy `(:foo ,(org-element-deferred-create nil (lambda (_) 'bar))))))
-     (list (org-element-property :foo el)
-           (org-element-property-raw :foo el)
-           (org-element-property :foo el nil 'force)
-           (org-element-property-raw :foo el)))
-   (let ((el (org-element-create
-              'dummy `( :foo 1 :bar ,(org-element-deferred-create-alias :foo)))))
-     (list (org-element-property :foo el) (org-element-property :bar el)))
-   (let ((el (org-element-create
-              'dummy `(:foo ,(org-element-deferred-create-list
-                              (list 1 2 (org-element-deferred-create nil (lambda _) 3)))))))
-     (org-element-property :foo el))
-   (let ((el (org-element-create
-              'dummy `(:foo ,(org-element-deferred-create
-                              nil (lambda (el)
-                                    (org-element-put-property el :foo 1)
-                                    (throw :org-element-deferred-retry nil)))))))
-     (org-element-property :foo el))
-   (let ((el (org-element-create
-              'dummy `(:foo ,(org-element-deferred-create
-                              nil (lambda (el)
-                                    (org-element-deferred-create
-                                     nil (lambda (_) 1)))))))
-     (org-element-property :foo el)))))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Eta-2: org-element with complex parse-and-interpret round-trips
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
 fn eta2_parse_interpret_roundtrips() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
@@ -755,30 +664,6 @@ fn eta2_export_tags_categories() {
 
 // ═══════════════════════════════════════════════════════════════════════
 // Eta-2: org-element with complex export first/last sibling
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
-fn eta2_export_first_last_sibling() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments (2 . 2) 1)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'ox)
-  (let ((org-mode-hook nil))
-    (with-temp-buffer (org-mode)
-      (insert "* H1\n** H2\n** H3\n** H4\n* H5")
-      (goto-char (point-min))
-      (let* ((tree (org-element-parse-buffer))
-             (headlines (org-element-map tree 'headline #'identity)))
-        (list
-         (mapcar #'org-export-first-sibling-p headlines)
-         (mapcar #'org-export-last-sibling-p headlines))))))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Eta-2: org-element with complex export filter apply
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]

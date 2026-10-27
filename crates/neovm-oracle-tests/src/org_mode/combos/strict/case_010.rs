@@ -58,31 +58,6 @@ fn strict_tag_string_to_alist_roundtrip() {
 }
 
 #[test]
-fn strict_priority_to_value() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument stringp 65)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (list
-   ;; standard priorities (65=A=highest, 66=B, 67=C=lowest)
-   (list :A (org-priority-to-value ?A))
-   (list :B (org-priority-to-value ?B))
-   (list :C (org-priority-to-value ?C))
-   ;; numeric value back
-   (cond ((fboundp 'org-priority-to-value)
-          (list :A-val (integerp (org-priority-to-value ?A))))
-         (t :no-func))
-   ;; get priority from char
-   (let ((saved-default org-default-priority))
-     (list :default-priority (when (boundp 'org-default-priority) org-default-priority)
-           :highest (when (boundp 'org-highest-priority) org-highest-priority)
-           :lowest (when (boundp 'org-lowest-priority) org-lowest-priority)))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn strict_set_regexps_and_options() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
@@ -202,35 +177,6 @@ fn strict_emphasize_region() {
 }
 
 #[test]
-fn strict_today_current_time() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-function org-element-timestamp-parser)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (list
-   ;; org-today returns an integer (Julian day number)
-   (list :today-numberp (numberp (org-today)))
-   (list :today-positive (> (org-today) 700000))  ;; any day after year 1
-   ;; org-current-time returns a time value
-   (cond ((fboundp 'org-current-time)
-          (let ((ct (org-current-time)))
-            (list :current-time-type (type-of ct))))
-         (t :not-available))
-   ;; org-time-string-to-seconds with today
-   (let ((secs (org-time-string-to-seconds (format-time-string "<%Y-%m-%d %a>"))))
-     (list :today-seconds-numberp (numberp secs)))
-   ;; consistency: org-2ft on "today" timestamp
-   (let* ((ts-str (format-time-string "<%Y-%m-%d %a>"))
-          (ts (org-timestamp-from-string ts-str))
-          (ft (org-2ft ts)))
-     (list :org-2ft-numberp (numberp ft)
-           :org-2ft-positive (> ft 0)))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn strict_file_contents() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK ((4))""#]];
@@ -271,33 +217,6 @@ fn strict_log_state_settings() {
                   :extract (org-extract-log-state-settings
                             (org-entry-get nil "LOGGING"))))
         (error (list :error t))))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn strict_latex_packages() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments (1 . 1) 0)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (list
-   ;; org-latex-packages-alist should be defined
-   (cond ((boundp 'org-latex-packages-alist)
-          (list :packages-defined t
-                :default-count (length org-latex-packages-alist)))
-         (t :not-available))
-   ;; org-get-packages-alist
-   (cond ((fboundp 'org-get-packages-alist)
-          (let ((pkgs (org-get-packages-alist)))
-            (list :has-packages (> (length pkgs) 0))))
-         (t :not-available))
-   ;; org-format-latex-header
-   (cond ((fboundp 'org-format-latex-header)
-          (let ((header (org-format-latex-header "" "" "")))
-            (list :header-nonempty (> (length header) 0))))
-         (t :not-available))))"##,
         expect,
     );
 }

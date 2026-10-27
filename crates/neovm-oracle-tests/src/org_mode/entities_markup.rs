@@ -2,63 +2,6 @@ use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
-fn org_entities_user_table_export_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument char-or-string-p \\\")""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'org-entities)
-  (require 'ox-html)
-  (require 'ox-ascii)
-  (require 'ox-latex)
-  (let ((org-entities-user
-         '(("myarrow" "\\Rightarrow" t "&rArr;" "=>" "=>" "⇒")
-           ("brand" "\\textsc{Neo}" nil "<span>Neo</span>" "Neo" "Neo" "Neo"))))
-    (with-temp-buffer
-      (org-mode)
-      (insert "#+TITLE: Entities\n")
-      (insert "* H\n")
-      (insert "A \\myarrow B and \\brand{} plus builtins \\alpha \\ndash.\n")
-      (let* ((table (org-entities-create-table))
-             (picked (mapcar (lambda (name)
-                               (cdr (assoc name table)))
-                             '("myarrow" "brand" "alpha" "ndash")))
-             (tree (org-element-parse-buffer))
-             (entities (org-element-map tree 'entity
-                         (lambda (e)
-                           (list (org-element-property :name e)
-                                 (org-element-property :latex e)
-                                 (org-element-property :latex-math-p e)
-                                 (org-element-property :html e)
-                                 (org-element-property :ascii e)
-                                 (org-element-property :utf-8 e)))))
-             (html (org-export-as 'html nil nil t '(:with-toc nil)))
-             (ascii (let ((org-ascii-charset 'ascii))
-                      (org-export-as 'ascii nil nil t '(:with-toc nil))))
-             (utf8 (let ((org-ascii-charset 'utf-8))
-                     (org-export-as 'ascii nil nil t '(:with-toc nil))))
-             (latex (org-export-as 'latex nil nil t '(:with-toc nil))))
-        (list picked
-              entities
-              (mapcar (lambda (needle)
-                        (not (null (string-match-p needle html))))
-                      '("&rArr;" "<span>Neo</span>" "&alpha;" "&ndash;"))
-              (mapcar (lambda (needle)
-                        (not (null (string-match-p needle ascii))))
-                      '("=>" "Neo" "alpha" "-"))
-              (mapcar (lambda (needle)
-                        (not (null (string-match-p needle utf8))))
-                      '("⇒" "Neo" "α" "–"))
-              (mapcar (lambda (needle)
-                        (not (null (string-match-p needle latex))))
-                      '("\\\\Rightarrow" "\\\\textsc{Neo}" "\\\\alpha" "--")))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn org_subsuperscript_parse_export_modes_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

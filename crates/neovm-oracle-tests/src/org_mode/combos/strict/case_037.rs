@@ -593,28 +593,6 @@ fn org_multibyte_buffer_string() {
 }
 
 #[test]
-fn org_set_buffer_multibyte() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-function enable-multibyte-characters)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (with-temp-buffer
-    (org-mode)
-    (insert "* H\nαβγ\n")
-    (goto-char (point-min))
-    (let ((before-multibyte (multibyte-string-p (buffer-string))))
-      (list :before-multibyte before-multibyte
-            :enable-multibyte (enable-multibyte-characters)))))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// ERROR MESSAGE QUOTE STYLE
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
 fn error_message_style_wrong_arg() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[

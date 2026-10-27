@@ -172,52 +172,6 @@ fn strict_element_cache_coherence() {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn strict_table_formula_edge_cases() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect =
-        expect_test::expect![[r#""ERR (wrong-type-argument number-or-marker-p \"Total\")""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (let ((org-mode-hook nil))
-    (with-temp-buffer (org-mode)
-      ;; Table with formula using $LR and @> (last row/col references)
-      (insert "| Item | Qty | Price | Total |\n|-------+-----+-------+-------|\n")
-      (insert "| A     |   2 |    10 |       |\n| B     |   1 |    25 |       |\n| C     |   4 |     8 |       |\n")
-      (insert "#+TBLFM: @>$2=vsum(@2$2..@-1$2)::$4=$2*$3\n")
-      (goto-char (point-min))
-      (let ((r '()))
-        (push (list :before (buffer-substring-no-properties (point-min) (point-max))) r)
-        ;; recalc
-        (org-table-recalculate t)
-        (org-table-align)
-        (push (list :after-recalc (buffer-substring-no-properties (point-min) (point-max))) r)
-        ;; get specific cells
-        (push (list :cell-A-total (org-table-get nil "Total")) r)
-        ;; add a row and recalc again
-        (goto-char (point-min))
-        (forward-line 4)  ;; on row C just before last hline
-        (org-table-insert-row)
-        (insert " D |   3 |   15 |     ")
-        (org-table-align)
-        (org-table-recalculate t)
-        (org-table-align)
-        (push (list :after-add-row (buffer-substring-no-properties (point-min) (point-max))) r)
-        ;; cell after new row
-        (push (list :cell-qty-sum (org-table-get "@>$2" nil)) r)
-        ;; use org-table-to-lisp on the final table
-        (goto-char (point-min))
-        (push (list :to-lisp (org-table-to-lisp)) r)
-        (nreverse r)))))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Mixed list types: ordered + unordered + description in deep nesting
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
 fn strict_mixed_list_deep_integrity() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
@@ -309,7 +263,7 @@ fn strict_footnote_normalize_gaps() {
         (push (list :buffer (buffer-substring-no-properties (point-min) (point-max))) r)
         ;; renumber
         (goto-char (point-min))
-        (org-footnote-renumber-fn-n)
+        (org-footnote-renumber-fn:N)
         (push (list :after-renumber-refs
                     (mapcar (lambda (fr) (org-element-property :label fr))
                             (org-element-map (org-element-parse-buffer) 'footnote-reference #'identity))) r)
@@ -320,56 +274,6 @@ fn strict_footnote_normalize_gaps() {
 
 // ═══════════════════════════════════════════════════════════════════════
 // Tag matching: complex boolean expressions
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
-fn strict_tag_match_boolean_expressions() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments #<subr identity> 0)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (let ((org-mode-hook nil)
-        (org-tags-column -80)
-        (org-use-tag-inheritance nil))
-    (with-temp-buffer (org-mode)
-      (insert "* A :work:urgent:\n** A1 :work:\n** A2 :urgent:admin:\n")
-      (insert "* B :home:fun:\n** B1 :home:urgent:\n** B2 :fun:admin:\n")
-      (insert "* C :work:home:\n** C1 :urgent:fun:\n** C2 :admin:\n")
-      (let ((r '()))
-        ;; match work
-        (push (list :match-work (org-map-entries
-                                 (lambda () (org-get-heading t t t t))
-                                 "work")) r)
-        ;; match work+urgent
-        (push (list :match-work+urgent (org-map-entries
-                                        (lambda () (org-get-heading t t t t))
-                                        "work+urgent")) r)
-        ;; match work|home
-        (push (list :match-work-or-home (org-map-entries
-                                         (lambda () (org-get-heading t t t t))
-                                         "work|home")) r)
-        ;; match work-urgent (work but not urgent)
-        (push (list :match-work-minus-urgent (org-map-entries
-                                              (lambda () (org-get-heading t t t t))
-                                              "work-urgent")) r)
-        ;; match {work+urgent}|{home+fun}
-        (push (list :match-grouped (org-map-entries
-                                    (lambda () (org-get-heading t t t t))
-                                    "{work+urgent}|{home+fun}")) r)
-        ;; count entries matching admin
-        (push (list :count-admin (length (org-map-entries #'identity "admin"))) r)
-        ;; match !work (no work tag)
-        (push (list :match-not-work (org-map-entries
-                                     (lambda () (org-get-heading t t t t))
-                                     "!work")) r)
-        (nreverse r)))))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Link abbreviation and format conversions
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]

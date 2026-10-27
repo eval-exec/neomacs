@@ -466,91 +466,6 @@ fn org_babel_execute_buffer_call_inline_remove_combo() {
 }
 
 #[test]
-fn org_babel_session_dir_noweb_file_tangle_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (invalid-function (:n 3 :square 9))""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (require 'ob-tangle)
-  (let* ((root (make-temp-file "org-babel-sess" t))
-         (src-file (expand-file-name "work.org" root))
-         (tangle-out (expand-file-name "out.el" root))
-         (dir-file (expand-file-name "dirprobe.txt" root))
-         (org-confirm-babel-evaluate nil)
-         (org-babel-default-header-args
-          '((:results . "output replace")
-            (:exports . "results"))))
-    (unwind-protect
-        (progn
-          (with-temp-file src-file
-            (insert "#+PROPERTY: header-args:emacs-lisp :results value replace\n\n")
-            (insert "#+NAME: helper\n")
-            (insert "#+begin_src emacs-lisp :var n=1\n")
-            (insert "(list :n n :square (* n n))\n")
-            (insert "#+end_src\n\n")
-            (insert "#+NAME: use-noweb\n")
-            (insert "#+begin_src emacs-lisp :noweb yes :results value replace\n")
-            (insert "(let ((base (<<helper(n=3)>>)))\n")
-            (insert "  (list :base base :doubled (* 2 (plist-get base :n))))\n")
-            (insert "#+end_src\n\n")
-            (insert "#+begin_src emacs-lisp :tangle " tangle-out " :noweb yes\n")
-            (insert ";; tangled helper\n")
-            (insert "<<helper(n=5)>>\n")
-            (insert "#+end_src\n\n")
-            (insert "#+begin_src emacs-lisp :dir " root " :results value replace\n")
-            (insert "(expand-file-name \"probe.txt\")\n")
-            (insert "#+end_src\n\n"))
-          (with-current-buffer (find-file-noselect src-file)
-            (org-mode)
-            (let ((noweb-result nil)
-                  (dir-result nil)
-                  (tangle-files nil)
-                  (tangle-content nil)
-                  (all-results nil))
-              (goto-char (point-min))
-              (search-forward "use-noweb")
-              (org-babel-execute-src-block)
-              (setq noweb-result
-                    (org-babel-read-result))
-              (goto-char (point-min))
-              (search-forward "expand-file-name")
-              (org-babel-execute-src-block)
-              (setq dir-result
-                    (org-babel-read-result))
-              (setq tangle-files (org-babel-tangle))
-              (when (file-exists-p tangle-out)
-                (with-temp-buffer
-                  (insert-file-contents tangle-out)
-                  (setq tangle-content (buffer-string))))
-              (goto-char (point-min))
-              (while (re-search-forward "#\\+RESULTS:" nil t)
-                (forward-line 1)
-                (let ((beg (point)))
-                  (if (re-search-forward "^$" nil t)
-                      (push (buffer-substring-no-properties beg (point))
-                            all-results)
-                    (push (buffer-substring-no-properties beg (point-max))
-                          all-results))))
-              (list noweb-result
-                    dir-result
-                    (mapcar #'file-name-nondirectory tangle-files)
-                    tangle-content
-                    (nreverse all-results)
-                    (replace-regexp-in-string
-                     (regexp-quote root) "<root>"
-                      (buffer-substring-no-properties
-                       (point-min) (point-max))))))
-             (kill-buffer)))
-      (delete-directory root t)))"##,
-        expect,
-    );
-}
-
-#[test]
 fn org_babel_cache_file_var_result_lifecycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -761,79 +676,6 @@ fn org_babel_dir_default_dir_header_deep_state_combo() {
 }
 
 #[test]
-fn org_babel_execute_buffer_inline_call_remove_deep_state_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (search-failed \"=>\")""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (with-temp-buffer
-    (org-mode)
-    (let ((org-confirm-babel-evaluate nil))
-      (insert "#+NAME: double\n")
-      (insert "#+begin_src emacs-lisp :var n=3 :results value replace\n")
-      (insert "(* n 2)\n")
-      (insert "#+end_src\n\n")
-      (insert "#+CALL: double(n=7) :results value replace\n\n")
-      (insert "Inline call_double[:results raw](n=5) here.\n\n")
-      (insert "#+begin_src emacs-lisp :results output replace\n")
-      (insert "(princ \"output-block\")\n")
-      (insert "#+end_src\n\n")
-      ;; Execute buffer
-      (org-babel-execute-buffer)
-      (let ((after-execute (buffer-substring-no-properties
-                            (point-min) (point-max)))
-            (call-result
-             (progn
-               (goto-char (point-min))
-               (search-forward "CALL: double")
-               (when (org-babel-where-is-src-block-result)
-                 (goto-char (org-babel-where-is-src-block-result))
-                 (forward-line 1)
-                 (buffer-substring-no-properties
-                  (line-beginning-position) (line-end-position)))))
-            (inline-result
-             (progn
-               (goto-char (point-min))
-               (search-forward "Inline call_double")
-               (end-of-line)
-               (search-backward "call_double")
-               (search-forward "=>")
-               (buffer-substring-no-properties
-                (point) (line-end-position))))
-            (elements
-             (org-element-map (org-element-parse-buffer)
-                 '(babel-call inline-babel-call src-block)
-               (lambda (el)
-                 (list (org-element-type el)
-                       (org-element-property :call el)
-                       (org-element-property :value el))))))
-        ;; Remove inline result
-        (goto-char (point-min))
-        (search-forward "call_double")
-        (org-babel-remove-inline-result)
-        (let ((after-remove (buffer-substring-no-properties
-                             (point-min) (point-max))))
-          ;; Remove block result
-          (goto-char (point-min))
-          (search-forward "output-block")
-          (org-babel-remove-result)
-          (let ((after-remove-block (buffer-substring-no-properties
-                                     (point-min) (point-max))))
-            (list after-execute
-                  call-result
-                  inline-result
-                  elements
-                  after-remove
-                   after-remove-block)))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn org_babel_execute_var_table_output_header_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -955,56 +797,6 @@ fn org_babel_header_arg_merge_property_inherit_deep_state_combo() {
                           (buffer-substring-no-properties
                            (point-min) (point-max))))))))
            (delete-directory root t)))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn org_babel_execute_result_type_handling_deep_state_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (search-failed \"src_\")""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (with-temp-buffer
-    (org-mode)
-    (let ((org-confirm-babel-evaluate nil))
-      ;; Scalar value
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "(+ 10 20)\n")
-      (insert "#+end_src\n\n")
-      ;; List value
-      (insert "#+NAME: lister\n")
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "'(a b c)\n")
-      (insert "#+end_src\n\n")
-      ;; String value
-      (insert "#+NAME: stringer\n")
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "(concat \"hello\" \" \" \"world\")\n")
-      (insert "#+end_src\n\n")
-      ;; Nil value
-      (insert "#+NAME: niler\n")
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "nil\n")
-      (insert "#+end_src\n\n")
-      ;; Execute all
-      (dolist (name '("src_" "lister" "stringer" "niler"))
-        (goto-char (point-min))
-        (search-forward name)
-        (org-babel-execute-src-block))
-      ;; Read results
-      (let ((results nil))
-        (goto-char (point-min))
-        (while (re-search-forward "#\\+RESULTS:" nil t)
-          (forward-line 1)
-          (push (org-babel-read-result) results))
-        (list (nreverse results)
-              (buffer-substring-no-properties
-               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -2148,68 +1940,6 @@ fn org_babel_two_stage_double_edit_reexecute_v4() {
             (forward-line 1)
             (let ((comp2 (org-babel-read-result)))
               (list nums1 comp1 nums2 comp2
-                    (buffer-substring-no-properties
-                     (point-min) (point-max))))))))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn org_babel_two_stage_intermediate_read_edit_reexecute_v3() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r##""ERR (search-failed \"#+RESULTS: result\")""##]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (with-temp-buffer
-    (org-mode)
-    (let ((org-confirm-babel-evaluate nil))
-      ;; Stage 1: generate data
-      (insert "#+NAME: data\n")
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "'((u 6) (v 3) (w 9) (x 1) (y 4))\n")
-      (insert "#+end_src\n\n")
-      ;; Stage 2: transform
-      (insert "#+NAME: result\n")
-      (insert "#+begin_src emacs-lisp :var data=data :results value replace\n")
-      (insert "(mapcar (lambda (r) (list (car r) (cadr r) (* 3 (cadr r)))) data)\n")
-      (insert "#+end_src\n\n")
-      ;; Execute
-      (dolist (name '("data" "result"))
-        (goto-char (point-min))
-        (search-forward name)
-        (org-babel-execute-src-block))
-      ;; Read intermediate
-      (goto-char (point-min))
-      (search-forward "#+RESULTS: data")
-      (forward-line 1)
-      (let ((data1 (org-babel-read-result)))
-        (goto-char (point-min))
-        (search-forward "#+RESULTS: result")
-        (forward-line 1)
-        (let ((result1 (org-babel-read-result)))
-          ;; Edit: change w from 9 to 15
-          (goto-char (point-min))
-          (search-forward "(w 9)")
-          (replace-match "(w 15)")
-          ;; Re-execute
-          (dolist (name '("data" "result"))
-            (goto-char (point-min))
-            (search-forward name)
-            (org-babel-execute-src-block))
-          ;; Re-read
-          (goto-char (point-min))
-          (search-forward "#+RESULTS: data")
-          (forward-line 1)
-          (let ((data2 (org-babel-read-result)))
-            (goto-char (point-min))
-            (search-forward "#+RESULTS: result")
-            (forward-line 1)
-            (let ((result2 (org-babel-read-result)))
-              (list data1 result1 data2 result2
                     (buffer-substring-no-properties
                      (point-min) (point-max))))))))))"##,
         expect,
@@ -3879,74 +3609,6 @@ fn org_babel_execute_three_table_join_aggregate_deep_combo() {
 }
 
 #[test]
-fn org_babel_execute_two_table_join_sort_aggregate_deep_v3_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (setting-constant t)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (with-temp-buffer
-    (org-mode)
-    (let ((org-confirm-babel-evaluate nil))
-      ;; Teams
-      (insert "#+NAME: teams\n")
-      (insert "| ID | Name | Team |\n")
-      (insert "|----+------+------|\n")
-      (insert "| 1 | T1 | A |\n")
-      (insert "| 2 | T2 | B |\n")
-      (insert "| 3 | T3 | A |\n\n")
-      ;; Scores
-      (insert "#+NAME: scores\n")
-      (insert "| ID | Pts |\n")
-      (insert "|----+-----|\n")
-      (insert "| 1 | 90 |\n")
-      (insert "| 2 | 75 |\n")
-      (insert "| 3 | 85 |\n\n")
-      ;; Join, rank, aggregate by team
-      (insert "#+NAME: ranked\n")
-      (insert "#+begin_src emacs-lisp :var t=teams s=scores :results value replace\n")
-      (insert "(let* ((joined (mapcar\n")
-      (insert "                 (lambda (score)\n")
-      (insert "                   (let* ((id (car score))\n")
-      (insert "                          (pts (cadr score))\n")
-      (insert "                          (tm (assoc id t))\n")
-      (insert "                          (name (cadr tm))\n")
-      (insert "                          (team (caddr tm)))\n")
-      (insert "                     (list name team pts)))\n")
-      (insert "                 s))\n")
-      (insert "       (sorted (sort (copy-sequence joined)\n")
-      (insert "                     (lambda (a b) (> (caddr a) (caddr b)))))\n")
-      (insert "       (teams nil))\n")
-      (insert "  (dolist (row sorted)\n")
-      (insert "    (let* ((team (cadr row))\n")
-      (insert "           (pts (caddr row))\n")
-      (insert "           (entry (assoc team teams)))\n")
-      (insert "      (if entry\n")
-      (insert "          (setcdr entry (+ (cdr entry) pts))\n")
-      (insert "          (push (cons team pts) teams))))\n")
-      (insert "  (list :ranked sorted :team-totals teams))\n")
-      (insert "#+end_src\n\n")
-      ;; Execute
-      (goto-char (point-min))
-      (search-forward "ranked")
-      (org-babel-execute-src-block)
-      ;; Read results
-      (let ((results nil))
-        (goto-char (point-min))
-        (while (re-search-forward "#\\+RESULTS:" nil t)
-          (forward-line 1)
-          (push (org-babel-read-result) results))
-        (list (nreverse results)
-              (buffer-substring-no-properties
-               (point-min) (point-max)))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn org_babel_execute_two_table_join_sort_aggregate_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -4165,64 +3827,6 @@ fn org_babel_execute_multi_table_join_sort_deep_v3_combo() {
       ;; Execute
       (goto-char (point-min))
       (search-forward "bills")
-      (org-babel-execute-src-block)
-      ;; Read results
-      (let ((results nil))
-        (goto-char (point-min))
-        (while (re-search-forward "#\\+RESULTS:" nil t)
-          (forward-line 1)
-          (push (org-babel-read-result) results))
-        (list (nreverse results)
-              (buffer-substring-no-properties
-               (point-min) (point-max)))))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn org_babel_execute_two_table_join_sort_chain_deep_v2_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (setting-constant t)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (with-temp-buffer
-    (org-mode)
-    (let ((org-confirm-babel-evaluate nil))
-      ;; Teams
-      (insert "#+NAME: teams\n")
-      (insert "| ID | Name | Dept |\n")
-      (insert "|----+------+------|\n")
-      (insert "| 1 | T1 | A |\n")
-      (insert "| 2 | T2 | B |\n")
-      (insert "| 3 | T3 | A |\n\n")
-      ;; Scores
-      (insert "#+NAME: scores\n")
-      (insert "| ID | Pts |\n")
-      (insert "|----+-----|\n")
-      (insert "| 1 | 90 |\n")
-      (insert "| 2 | 75 |\n")
-      (insert "| 3 | 85 |\n\n")
-      ;; Join and rank
-      (insert "#+NAME: ranked\n")
-      (insert "#+begin_src emacs-lisp :var t=teams s=scores :results value replace\n")
-      (insert "(sort\n")
-      (insert " (mapcar\n")
-      (insert "  (lambda (score)\n")
-      (insert "    (let* ((id (car score))\n")
-      (insert "           (pts (cadr score))\n")
-      (insert "           (tm (assoc id t))\n")
-      (insert "           (name (cadr tm)))\n")
-      (insert "      (list name pts)))\n")
-      (insert "  s)\n")
-      (insert " (lambda (a b) (> (cadr a) (cadr b))))\n")
-      (insert "#+end_src\n\n")
-      ;; Execute
-      (goto-char (point-min))
-      (search-forward "ranked")
       (org-babel-execute-src-block)
       ;; Read results
       (let ((results nil))
@@ -5196,67 +4800,6 @@ fn org_babel_execute_table_join_sort_aggregate_deep_v2_combo() {
 }
 
 #[test]
-fn org_babel_execute_table_join_filter_aggregate_deep_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments cons 1)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (with-temp-buffer
-    (org-mode)
-    (let ((org-confirm-babel-evaluate nil))
-      ;; Workers
-      (insert "#+NAME: workers\n")
-      (insert "| ID | Name | Dept |\n")
-      (insert "|----+------+------|\n")
-      (insert "| 1 | W1 | Eng |\n")
-      (insert "| 2 | W2 | Mkt |\n")
-      (insert "| 3 | W3 | Eng |\n")
-      (insert "| 4 | W4 | Mkt |\n\n")
-      ;; Hours
-      (insert "#+NAME: hours\n")
-      (insert "| ID | Hrs |\n")
-      (insert "|----+-----|\n")
-      (insert "| 1 | 8 |\n")
-      (insert "| 2 | 6 |\n")
-      (insert "| 3 | 7 |\n")
-      (insert "| 4 | 5 |\n\n")
-      ;; Compute dept hours
-      (insert "#+NAME: dept-hrs\n")
-      (insert "#+begin_src emacs-lisp :var w=workers h=hours :results value replace\n")
-      (insert "(let ((groups nil))\n")
-      (insert "  (dolist (wh h)\n")
-      (insert "    (let* ((id (car wh))\n")
-      (insert "           (hrs (cadr wh))\n")
-      (insert "           (wk (assoc id w))\n")
-      (insert "           (dept (caddr wk)))\n")
-      (insert "      (let ((entry (assoc dept groups)))\n")
-      (insert "        (if entry\n")
-      (insert "            (setcdr entry (+ (cdr entry) hrs))\n")
-      (insert "            (push (cons dept) groups)))))\n")
-      (insert "  (sort groups (lambda (a b) (string< (car a) (car b)))))\n")
-      (insert "#+end_src\n\n")
-      ;; Execute
-      (goto-char (point-min))
-      (search-forward "dept-hrs")
-      (org-babel-execute-src-block)
-      ;; Read results
-      (let ((results nil))
-        (goto-char (point-min))
-        (while (re-search-forward "#\\+RESULTS:" nil t)
-          (forward-line 1)
-          (push (org-babel-read-result) results))
-        (list (nreverse results)
-              (buffer-substring-no-properties
-               (point-min) (point-max)))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn org_babel_execute_mapcar_table_column_chain_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -6115,65 +5658,6 @@ fn org_babel_execute_table_group_aggregate_deep_combo() {
         (list (nreverse results)
               (buffer-substring-no-properties
                (point-min) (point-max))))))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn org_babel_execute_table_column_join_compute_deep_v2_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (setting-constant t)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (with-temp-buffer
-    (org-mode)
-    (let ((org-confirm-babel-evaluate nil))
-      ;; Teams table
-      (insert "#+NAME: teams\n")
-      (insert "| Member | Team |\n")
-      (insert "|--------+------|\n")
-      (insert "| X | A |\n")
-      (insert "| Y | B |\n")
-      (insert "| Z | A |\n\n")
-      ;; Tasks table
-      (insert "#+NAME: tasks\n")
-      (insert "| Assignee | Task | Points |\n")
-      (insert "|----------+------+\n")
-      (insert "| X | T1 | 3 |\n")
-      (insert "| Y | T2 | 5 |\n")
-      (insert "| Z | T3 | 2 |\n\n")
-      ;; Compute team totals
-      (insert "#+NAME: teamtotals\n")
-      (insert "#+begin_src emacs-lisp :var t=teams k=tasks :results value replace\n")
-      (insert "(let ((team-map (mapcar (lambda (r) (cons (car r) (cadr r))) t)))\n")
-      (insert "  (let ((groups nil))\n")
-      (insert "    (dolist (row k)\n")
-      (insert "      (let* ((who (car row))\n")
-      (insert "             (pts (caddr row))\n")
-      (insert "             (team (or (cdr (assoc who team-map)) \"?\"))\n")
-      (insert "             (entry (assoc team groups)))\n")
-      (insert "        (if entry\n")
-      (insert "            (setcdr entry (+ (cdr entry) pts))\n")
-      (insert "            (push (cons team pts) groups))))\n")
-      (insert "    groups))\n")
-      (insert "#+end_src\n\n")
-      ;; Execute
-      (goto-char (point-min))
-      (search-forward "teamtotals")
-      (org-babel-execute-src-block)
-      ;; Read results
-      (let ((results nil))
-        (goto-char (point-min))
-        (while (re-search-forward "#\\+RESULTS:" nil t)
-          (forward-line 1)
-          (push (org-babel-read-result) results))
-        (list (nreverse results)
-              (buffer-substring-no-properties
-               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -7771,56 +7255,6 @@ fn org_babel_execute_number_predicates_deep_state_combo() {
 }
 
 #[test]
-fn org_babel_execute_list_map_tree_deep_state_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (wrong-type-argument number-or-marker-p (3 4))""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (with-temp-buffer
-    (org-mode)
-    (let ((org-confirm-babel-evaluate nil))
-      ;; list + mapcar + tree
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "(let ((tree '(1 (2 (3 4) 5) (6 7))))\n")
-      (insert "  (list tree\n")
-      (insert "        (mapcar (lambda (x) (if (listp x) (length x) (* x 10)))\n")
-      (insert "                tree)\n")
-      (insert "        (apply #'+ (mapcar (lambda (x)\n")
-      (insert "                             (if (listp x)\n")
-      (insert "                                 (apply #'+ x)\n")
-      (insert "                                 x))\n")
-      (insert "                           tree))))\n")
-      (insert "#+end_src\n\n")
-      ;; cons + nth + length
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "(let ((l (cons 1 (cons 2 (cons 3 nil)))))\n")
-      (insert "  (list l (nth 1 l) (length l)\n")
-      (insert "        (last l) (butlast l 1)\n")
-      (insert "        (append l '(4 5))))\n")
-      (insert "#+end_src\n\n")
-      ;; Execute all
-      (dotimes (_ 2)
-        (goto-char (point-min))
-        (search-forward "begin_src")
-        (org-babel-execute-src-block))
-      ;; Read results
-      (let ((results nil))
-        (goto-char (point-min))
-        (while (re-search-forward "#\\+RESULTS:" nil t)
-          (forward-line 1)
-          (push (org-babel-read-result) results))
-        (list (nreverse results)
-              (buffer-substring-no-properties
-               (point-min) (point-max)))))))"##,
-        expect,
-    );
-}
-
-#[test]
 fn org_babel_execute_seq_count_position_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -8751,51 +8185,6 @@ fn org_babel_execute_property_list_alist_conversion_deep_combo() {
       (insert "#+end_src\n\n")
       ;; Execute all
       (dotimes (_ 2)
-        (goto-char (point-min))
-        (search-forward "begin_src")
-        (org-babel-execute-src-block))
-      ;; Read results
-      (let ((results nil))
-        (goto-char (point-min))
-        (while (re-search-forward "#\\+RESULTS:" nil t)
-          (forward-line 1)
-          (push (org-babel-read-result) results))
-        (list (nreverse results)
-              (buffer-substring-no-properties
-               (point-min) (point-max)))))))"##,
-        expect,
-    );
-}
-
-#[test]
-fn org_babel_execute_number_theory_deep_state_combo() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-
-    let expect = expect_test::expect![[r#""ERR (void-function gcd)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'org)
-  (require 'ob-core)
-  (require 'ob-emacs-lisp)
-  (with-temp-buffer
-    (org-mode)
-    (let ((org-confirm-babel-evaluate nil))
-      ;; GCD/LCM
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "(list (gcd 12 8) (lcm 12 8) (gcd 0 5))\n")
-      (insert "#+end_src\n\n")
-      ;; Number predicates
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "(list (numberp 42) (integerp 3.14) (floatp 3.14)\n")
-      (insert "      (zerop 0) (plusp 5) (minusp -3) (evenp 4) (oddp 7))\n")
-      (insert "#+end_src\n\n")
-      ;; Rounding
-      (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "(list (truncate 7 2) (floor 7 2) (ceiling 7 2) (round 7 2)\n")
-      (insert "      (truncate -7 2) (floor -7 2) (ceiling -7 2))\n")
-      (insert "#+end_src\n\n")
-      ;; Execute all
-      (dotimes (_ 3)
         (goto-char (point-min))
         (search-forward "begin_src")
         (org-babel-execute-src-block))

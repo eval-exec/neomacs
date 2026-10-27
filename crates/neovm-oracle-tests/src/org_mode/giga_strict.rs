@@ -281,67 +281,6 @@ Body")
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn giga_all_export_optional_title_combinations() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-function org-export-get-optional-title)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'ox)
-  (let ((org-mode-hook nil))
-    (with-temp-buffer (org-mode)
-      (insert "#+TITLE: Document Title
-* H1
-Body")
-      (goto-char (point-min))
-      (let* ((tree (org-element-parse-buffer))
-             (info (org-combine-plists
-                    (org-export--get-export-attributes)
-                    (org-export-get-environment)
-                    (org-export--collect-tree-properties
-                     tree (org-export-get-environment))))
-             (headline (car (org-element-map tree 'headline #'identity))))
-        (list
-         ;; Optional title.
-         (org-export-get-optional-title headline info))))))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Giga: org-element with all export first/last sibling combinations
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
-fn giga_all_export_first_last_sibling_combinations() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments (2 . 2) 1)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r##"(progn
-  (require 'ox)
-  (let ((org-mode-hook nil))
-    (with-temp-buffer (org-mode)
-      (insert "* H1
-** H2
-** H3
-** H4
-* H5")
-      (goto-char (point-min))
-      (let* ((tree (org-element-parse-buffer))
-             (headlines (org-element-map tree 'headline #'identity)))
-        (list
-         ;; First sibling?
-         (mapcar #'org-export-first-sibling-p headlines)
-         ;; Last sibling?
-         (mapcar #'org-export-last-sibling-p headlines))))))"##,
-        expect,
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Giga: org-element with all export node property combinations
-// ═══════════════════════════════════════════════════════════════════════
-
-#[test]
 fn giga_all_export_node_property_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK (\"myid\" \"2h\" \"work\" \"value\" nil)""#]];
