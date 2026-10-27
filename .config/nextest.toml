@@ -116,16 +116,31 @@ slow-timeout = { period = "120s", terminate-after = 1 }
 filter = 'package(neovm-core) and (test(expanded_cache_replay_preserves_nadvice_eval_and_compile_helpers) or test(expanded_cache_replay_preserves_oclosure_define_class_registration))'
 slow-timeout = { period = "1200s", terminate-after = 1 }
 
-# A couple of subprocess probes are timing sensitive rather than divergent:
-# `process_attributes_running_child` reads `process-running-child-p' while a
-# 0.2s child is alive, and `quit_process_sentinel_message' waits (a bounded
-# `accept-process-output' budget) for a SIGQUIT sentinel to fire. A fully
-# parallel run can steal enough scheduling latency to miss the window. Run them
-# isolated (adequate latency), like the heavy families, rather than reshaping
-# the probes (a longer-lived child would hold the process pipe open and block
-# the eval).
+# Each inlined_call_semantics test runs the full engine matrix: both GNU and
+# Neomacs evaluate every ~40 env row, so one test is ~80 subprocess runs.
+# Measured alone they take 17-23s; a fully parallel oracle run starves them
+# past the 60s single-form watchdog (four of them timed out in a 12-thread run
+# on a loaded machine, then all passed in isolation).  They are heavy, not
+# hung: run them without parallel contention and keep the 120s ceiling of the
+# other heavy oracle families.
 [[profile.default.overrides]]
-filter = 'package(neovm-oracle-tests) and (test(process_attributes_running_child) or test(quit_process_sentinel_message))'
+filter = 'package(neovm-oracle-tests) and test(inlined_call_semantics::)'
+threads-required = "num-test-threads"
+slow-timeout = { period = "120s", terminate-after = 1 }
+
+# A handful of subprocess probes are timing sensitive rather than divergent:
+# `process_attributes_running_child` reads `process-running-child-p' while a
+# 0.2s child is alive, `quit_process_sentinel_message' waits (a bounded
+# `accept-process-output' budget) for a SIGQUIT sentinel to fire, and the
+# process-filter/coding probes below read output a child writes immediately
+# after start (`accept-process-output` returns as soon as any bytes arrive, so
+# a starved run can observe a partial or empty buffer). A fully parallel run
+# can steal enough scheduling latency to miss the window. Run them isolated
+# (adequate latency), like the heavy families, rather than reshaping the
+# probes (a longer-lived child would hold the process pipe open and block the
+# eval).
+[[profile.default.overrides]]
+filter = 'package(neovm-oracle-tests) and (test(process_attributes_running_child) or test(quit_process_sentinel_message) or test(div_cx45_process_env_coding_narrow_output_filter_hash_mega) or test(div_cx428_process_filter_insert) or test(proc_decode_search_replace))'
 threads-required = "num-test-threads"
 
 # The generative window-tree property replays whole operation SEQUENCES in both
