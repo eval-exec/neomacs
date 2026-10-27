@@ -132,7 +132,7 @@ fn org_timer_countdown_effort_title_mode_line_combo() {
 fn org_timer_restart_offset_parse_item_error_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK ((4877 nil \"<494870:38:43>\") \"<494870:38:43>\" \"* Timer\\nExisting stamp 0:02:03 here.\\n- plain item\\n\\nInserted: <494870:38:43>\" (error \"This is not a timer list\") ((\"7\" \"0:00:07\" 7) (\"2:03\" \"0:02:03\" 123) (\"1:02:03\" \"1:02:03\" 3723) (\"bad\" (error \"Cannot parse HMS string \\\"bad\\\"\"))) (\"-1:02:03\" \"-0:00:01\" \"0:00:00\" \"0:01:01\" \"1:01:01\") nil nil nil)""#]];
+    let expect = expect_test::expect![[r#""OK ((4877 nil \"<0:02:03>\") \"<0:02:03>\" \"* Timer\\nExisting stamp 0:02:03 here.\\n- plain item\\n\\nInserted: <0:02:03>\" (error \"This is not a timer list\") ((\"7\" \"0:00:07\" 7) (\"2:03\" \"0:02:03\" 123) (\"1:02:03\" \"1:02:03\" 3723) (\"bad\" (error \"Cannot parse HMS string \\\"bad\\\"\"))) (\"-1:02:03\" \"-0:00:01\" \"0:00:00\" \"0:01:01\" \"1:01:01\") nil nil nil)""#]];
     crate::common::assert_oracle_parity_frozen_time_expect(
         r##"(progn
   (require 'org)
@@ -142,7 +142,15 @@ fn org_timer_restart_offset_parse_item_error_combo() {
     (let ((org-timer-format "<%s>")
           (org-timer-display nil)
           (events nil))
-      (add-hook 'org-timer-start-hook
+      ;; `float-time' with no TIME reads the C clock, which the harness's
+      ;; frozen clock anchors but still lets advance; the probe observes
+      ;; whole-second timer state, so pin it for the whole form.
+      (cl-letf (((symbol-function 'float-time)
+                 (lambda (&optional time)
+                   (if time
+                       (float (time-convert time 'integer))
+                     5000.0))))
+        (add-hook 'org-timer-start-hook
                 (lambda () (push (list 'start (tf-secs org-timer-start-time))
                                  events))
                 nil t)
@@ -204,7 +212,7 @@ fn org_timer_restart_offset_parse_item_error_combo() {
                               (if (consp event) (car event) event))
                             (nreverse events))
                     (tf-secs org-timer-start-time)
-                    (tf-secs org-timer-pause-time)))))))))"##,
+                    (tf-secs org-timer-pause-time))))))))))"##,
         expect,
     );
 }
