@@ -9047,6 +9047,55 @@ fn make_network_process_nowait_tcp_refusal_fails_like_gnu() {
     );
 }
 
+/// Killing a buffer whose network process already reported a failed connect
+/// must run that process's sentinel a second time, synchronously, before the
+/// buffer dies.  GNU: `kill-buffer` -> `kill_buffer_processes` ->
+/// `Fdelete_process` (src/process.c:1123-1129) stamps `(exit . 0)` and a fresh
+/// tick, then calls `status_notify (p, NULL)`; the tick moved, so the process
+/// is visited and `exec_sentinel` (:7937) runs with the "deleted" message
+/// while the buffer is still live.  url-http's retry relies on this nested
+/// sentinel (it prepends the second `:error` to `url-callback-arguments`).
+#[cfg(target_os = "linux")]
+#[test]
+fn kill_buffer_reruns_the_sentinel_of_a_failed_connection_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let results = eval_all(
+        r#"(let ((events nil) (srv nil) (cli nil) (buf nil) (port nil))
+             (unwind-protect
+                 (progn
+                   (setq srv (make-network-process
+                              :name "kb-fail-srv" :server t :service 0
+                              :host 'local :noquery t))
+                   (setq port (process-contact srv :service))
+                   (delete-process srv)
+                   (setq srv nil)
+                   (setq buf (generate-new-buffer " *kb-fail*"))
+                   (setq cli (make-network-process
+                              :name "kb-fail-cli" :host 'local :service port
+                              :nowait t :noquery t :buffer buf
+                              :sentinel (lambda (p e)
+                                          (push (list (substring e 0 -1)
+                                                      (buffer-live-p (process-buffer p))
+                                                      (buffer-name (process-buffer p)))
+                                                events))))
+                   (dotimes (_ 20) (accept-process-output cli 0.05))
+                   (let ((before (nreverse events)))
+                     (setq events nil)
+                     (kill-buffer buf)
+                     (dotimes (_ 20) (accept-process-output nil 0.05))
+                     (list before (nreverse events)
+                           (buffer-live-p buf) (process-live-p cli))))
+               (when buf (ignore-errors (kill-buffer buf)))
+               (when cli (delete-process cli))
+               (when srv (delete-process srv))))"#,
+    );
+
+    assert_eq!(
+        results[0],
+        "OK (((\"failed with code 111\" t \" *kb-fail*\")) ((\"deleted\" t \" *kb-fail*\")) nil nil)"
+    );
+}
+
 #[test]
 fn process_contact_no_block_returns_nil_for_pending_nowait_network_like_gnu() {
     crate::test_utils::init_test_tracing();
@@ -16835,7 +16884,7 @@ fn stalled_tls_handshake_services_lisp_timers_and_timeout() {
 }
 
 #[test]
-fn deleting_tls_during_an_open_sentinel_does_not_reenter_the_sentinel() {
+fn deleting_tls_during_an_open_sentinel_reenters_the_sentinel_like_gnu() {
     let peer = crate::emacs_core::tls_test::loopback::StalledPeer::spawn();
     let port = peer.port;
     let result = eval_one(&format!(
@@ -16860,7 +16909,19 @@ fn deleting_tls_during_an_open_sentinel_does_not_reenter_the_sentinel() {
 "#
     ));
     drop(peer);
-    assert_eq!(result, "OK (t closed 1 nil)");
+    // GNU re-enters: Fdelete_process stamps a fresh tick and calls
+    // `status_notify (p, NULL)` (src/process.c:1128-1129), whose per-process
+    // guard is `p->tick != p->update_tick` -- and the tick was just moved --
+    // so it reaches `exec_sentinel` (:7937) for THIS process even though the
+    // outer sentinel is still on the stack.  `exec_sentinel` only refuses when
+    // the global `inhibit_sentinels` is set, which happens at shutdown
+    // (emacs.c:3155), never mid-session.  Measured on GNU 31.1 with the same
+    // open-then-timer-delete shape on a plain network process (the TLS wrapper
+    // does not change the process arm): `CALLS 2`, events
+    // `((1 . "open\n") timer-delete (2 . "deleted\n"))`.  Neomacs used to
+    // suppress the nested call with a per-process recursion guard, which also
+    // swallowed url-http's retry sentinel (anaconda-mode parity).
+    assert_eq!(result, "OK (t closed 2 nil)");
 }
 
 #[test]
