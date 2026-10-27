@@ -62,7 +62,9 @@ pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews}
 pub(crate) use world::{ObarrayView, OwnedRootRegistryView, WorldSlot, WorldView};
 
 mod callback;
+mod lexenv_cache;
 mod lexical_symbols;
+pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
 mod subrs;
 #[cfg(test)]
@@ -108,7 +110,6 @@ const STACK_GROWTH_PROBE_INTERVAL: usize = 16;
 /// distinct functions called during batch-byte-compile so the cache
 /// never thrashes once warmed.
 const NAMED_CALL_CACHE_CAPACITY: usize = 4096;
-const LEXENV_ASSQ_CACHE_CAPACITY: usize = 16;
 const LEXENV_SPECIAL_CACHE_CAPACITY: usize = 16;
 const GC_DEFAULT_THRESHOLD_BYTES: usize = 100_000 * std::mem::size_of::<usize>();
 const GC_THRESHOLD_FLOOR_BYTES: usize = GC_DEFAULT_THRESHOLD_BYTES / 10;
@@ -1758,55 +1759,6 @@ enum NamedAutoloadCallStep {
 struct NamedCallCacheEntry {
     function_epoch: u64,
     target: NamedCallTarget,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct LexenvAssqCacheEntry {
-    lexenv_bits: usize,
-    symbol: SymId,
-    /// The `(symbol . value)` cell this environment binds the symbol to, or
-    /// `nil` for "this environment binds it nowhere".  A binding cell is
-    /// always a cons, so `nil` cannot be confused for one.
-    cell: Value,
-}
-
-struct LexenvAssqCache {
-    entries: [Cell<Option<LexenvAssqCacheEntry>>; LEXENV_ASSQ_CACHE_CAPACITY],
-}
-
-impl Default for LexenvAssqCache {
-    fn default() -> Self {
-        Self {
-            entries: std::array::from_fn(|_| Cell::new(None)),
-        }
-    }
-}
-
-impl LexenvAssqCache {
-    #[inline]
-    fn slot(lexenv_bits: usize, sym_id: SymId) -> usize {
-        let mixed = lexenv_bits.rotate_left(7) ^ (sym_id.0 as usize).wrapping_mul(0x9E37_79B1);
-        mixed & (LEXENV_ASSQ_CACHE_CAPACITY - 1)
-    }
-
-    #[inline]
-    fn find(&self, lexenv_bits: usize, sym_id: SymId) -> Option<Value> {
-        let entry = self.entries[Self::slot(lexenv_bits, sym_id)].get()?;
-        (entry.lexenv_bits == lexenv_bits && entry.symbol == sym_id).then_some(entry.cell)
-    }
-
-    #[inline]
-    fn push(&self, entry: LexenvAssqCacheEntry) {
-        let index = Self::slot(entry.lexenv_bits, entry.symbol);
-        self.entries[index].set(Some(entry));
-    }
-
-    #[inline]
-    fn clear(&self) {
-        for entry in &self.entries {
-            entry.set(None);
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -7211,40 +7163,6 @@ impl Context {
     }
 
     // -----------------------------------------------------------------------
-
-    pub(crate) fn lexenv_assq_cached_in(&self, lexenv: Value, sym_id: SymId) -> Option<Value> {
-        let lexenv_bits = lexenv.bits();
-        let cache = &self.lexenv_assq_cache;
-        if let Some(cell) = cache.find(lexenv_bits, sym_id) {
-            // `nil` is not a binding cell -- `lexenv_assq` only ever returns a
-            // cons -- so it is free to record the other answer: this
-            // environment has no binding for this symbol.  Absence is the
-            // common answer and used to be the one nobody remembered.  Every
-            // reference to a dynamically-bound variable in interpreted code
-            // walks the environment to its end and finds nothing, and then
-            // the next reference to the same variable walks it again; that
-            // walk was 130M of the 208M a magit-status run spent resolving
-            // symbols.
-            return (!cell.is_nil()).then_some(cell);
-        }
-
-        let cell = if self.symbols_with_pos_enabled {
-            lexical_symbols::assq(lexenv, sym_id)
-        } else {
-            lexenv_assq(lexenv, sym_id)
-        };
-        cache.push(LexenvAssqCacheEntry {
-            lexenv_bits,
-            symbol: sym_id,
-            cell: cell.unwrap_or(Value::NIL),
-        });
-        cell
-    }
-
-    pub(crate) fn lexenv_lookup_cached_in(&self, lexenv: Value, sym_id: SymId) -> Option<Value> {
-        self.lexenv_assq_cached_in(lexenv, sym_id)
-            .map(|cell| cell.cons_cdr())
-    }
 
     pub(crate) fn lexenv_declares_special_cached_in(&self, lexenv: Value, sym_id: SymId) -> bool {
         let lexenv_bits = lexenv.bits();

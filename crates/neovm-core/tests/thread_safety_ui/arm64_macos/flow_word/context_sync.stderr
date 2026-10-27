@@ -82,7 +82,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Sync`
            `*mut builtins::collections::HashTestGcInhibitAccounting: Sync`
            which is required by `neovm_core::Context: Sync`
-           `Cell<Option<eval::LexenvAssqCacheEntry>>: Sync`
+           `Cell<Option<eval::lexenv_cache::LexenvAssqCacheEntry>>: Sync`
            which is required by `neovm_core::Context: Sync`
            `Cell<Option<eval::LexenvSpecialCacheEntry>>: Sync`
            which is required by `neovm_core::Context: Sync`
