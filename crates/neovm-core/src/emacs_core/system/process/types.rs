@@ -762,13 +762,6 @@ impl Drop for LiveProcessIo {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-enum SentinelExecution {
-    #[default]
-    Idle,
-    Running,
-}
-
 /// A tracked process record.
 pub struct Process {
     pub id: ProcessId,
@@ -808,7 +801,6 @@ pub struct Process {
     pub filter: Value,
     /// Process sentinel callback (or default marker symbol).
     pub sentinel: Value,
-    sentinel_execution: SentinelExecution,
     /// Server process log callback.
     pub log: Value,
     /// Process plist state.
@@ -5913,7 +5905,6 @@ impl ProcessManager {
             exit_query_policy: ExitQueryPolicy::GNU_MAKE_PROCESS,
             filter: Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL),
             sentinel: Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL),
-            sentinel_execution: SentinelExecution::Idle,
             log: Value::NIL,
             plist: Value::NIL,
             stderrproc: Value::NIL,
@@ -9136,23 +9127,21 @@ impl super::super::eval::Context {
         if sentinel.is_nil() {
             return Ok(());
         }
-        // A sentinel may enter a wait and delete its own process from a timer.
-        // Keep its recursion guard with the record, including after retirement.
-        if let Some(process) = self.processes.get_any_mut(pid) {
-            if process.sentinel_execution == SentinelExecution::Running {
-                return Ok(());
-            }
-            process.sentinel_execution = SentinelExecution::Running;
-        }
-        let result = self.run_async_process_callback_preserving_state(
+        // GNU has no per-process sentinel recursion guard: `exec_sentinel`
+        // (src/process.c:7800) only checks the global `inhibit_sentinels`,
+        // which is set during shutdown (emacs.c:3155).  Nested invocations are
+        // real: a sentinel that kills its own buffer runs `Fdelete_process` ->
+        // `status_notify (p, NULL)` (:1129), which stamps a fresh tick (:1128)
+        // and calls this sentinel again while the outer call is still on the
+        // stack -- url-http's retry depends on it.  The tick discipline
+        // (`update_tick = tick` before `exec_sentinel`, :7894, :7935) is what
+        // prevents a *notification* from running twice; a recursion guard here
+        // would instead drop a legitimately new status change.
+        self.run_async_process_callback_preserving_state(
             sentinel,
             vec![Value::make_process(pid), Value::string(message)],
             AsyncCallbackKind::ProcessSentinel,
-        );
-        if let Some(process) = self.processes.get_any_mut(pid) {
-            process.sentinel_execution = SentinelExecution::Idle;
-        }
-        result
+        )
     }
 
     /// GNU `exec_sentinel` (src/process.c:7800), driven from a
