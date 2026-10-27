@@ -243,9 +243,9 @@ fn census(era: &ParallelHeapEra<'_>) -> Collections {
     stopped.complete().unwrap();
     collections
 }
-fn scenario(backing: PlainSymbolBacking, owners: Owners, workload: Workload, action: Action) {
+fn scenario(backing: DiagnosticBacking, owners: Owners, workload: Workload, action: Action) {
     let mode = DiagnosticMode::load();
-    Context::with_test_symbol_backing_era(backing, |era, id| {
+    Context::with_test_symbol_backing_era(backing.initial(), |era, id| {
         let handle = era.admit_plain_symbol(id).unwrap();
         let before = census(&era);
         let permits: Vec<_> = (0..owners.count())
@@ -419,7 +419,7 @@ macro_rules! row {
         #[test]
         fn $name() {
             scenario(
-                PlainSymbolBacking::$backing,
+                DiagnosticBacking::$backing,
                 Owners::$owners,
                 Workload::$workload,
                 Action::Run,
@@ -427,82 +427,67 @@ macro_rules! row {
         }
     };
 }
-row!(
-    p3sym_c6_diagnostic_read_plain_one,
-    Unprojected,
-    One,
-    Readers
-);
-row!(
-    p3sym_c6_diagnostic_read_plain_two,
-    Unprojected,
-    Two,
-    Readers
-);
-row!(
-    p3sym_c6_diagnostic_read_plain_four,
-    Unprojected,
-    Four,
-    Readers
-);
+row!(p3sym_c6_diagnostic_read_plain_one, Plain, One, Readers);
+row!(p3sym_c6_diagnostic_read_plain_two, Plain, Two, Readers);
+row!(p3sym_c6_diagnostic_read_plain_four, Plain, Four, Readers);
 row!(
     p3sym_c6_diagnostic_read_projected_one,
-    VoidProjection,
+    ProjectedPlain,
     One,
     Readers
 );
 row!(
     p3sym_c6_diagnostic_read_projected_two,
-    VoidProjection,
+    ProjectedPlain,
     Two,
     Readers
 );
 row!(
     p3sym_c6_diagnostic_read_projected_four,
-    VoidProjection,
+    ProjectedPlain,
     Four,
     Readers
 );
 row!(
     p3sym_c6_diagnostic_writer_plain_one,
-    Unprojected,
+    Plain,
     One,
     PeriodicWriter
 );
 row!(
     p3sym_c6_diagnostic_writer_plain_two,
-    Unprojected,
+    Plain,
     Two,
     PeriodicWriter
 );
 row!(
     p3sym_c6_diagnostic_writer_plain_four,
-    Unprojected,
+    Plain,
     Four,
     PeriodicWriter
 );
 row!(
     p3sym_c6_diagnostic_writer_projected_one,
-    VoidProjection,
+    ProjectedPlain,
     One,
     PeriodicWriter
 );
 row!(
     p3sym_c6_diagnostic_writer_projected_two,
-    VoidProjection,
+    ProjectedPlain,
     Two,
     PeriodicWriter
 );
 row!(
     p3sym_c6_diagnostic_writer_projected_four,
-    VoidProjection,
+    ProjectedPlain,
     Four,
     PeriodicWriter
 );
 #[test]
 fn p3sym_c6_diagnostic_noop_teardown() {
     scenario(
-        PlainSymbolBacking::VoidProjection,
+        DiagnosticBacking::ProjectedPlain,
         Owners::Four,
         Workload::Readers,
         Action::Noop,
@@ -511,7 +496,7 @@ fn p3sym_c6_diagnostic_noop_teardown() {
 #[test]
 fn p3sym_c6_diagnostic_refusal_teardown() {
     scenario(
-        PlainSymbolBacking::Unprojected,
+        DiagnosticBacking::Plain,
         Owners::Two,
         Workload::Readers,
         Action::Refuse(Ordinal(1)),
@@ -520,7 +505,7 @@ fn p3sym_c6_diagnostic_refusal_teardown() {
 #[test]
 fn p3sym_c6_diagnostic_unwind_teardown() {
     scenario(
-        PlainSymbolBacking::VoidProjection,
+        DiagnosticBacking::ProjectedPlain,
         Owners::Two,
         Workload::Readers,
         Action::Unwind(Ordinal(1)),

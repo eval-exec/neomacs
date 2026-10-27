@@ -1,6 +1,22 @@
 //! Diagnostic domains and the test-tool boundary. No product setting.
 use super::*;
 
+/// Reader rows require a bound global. The shared-VOID initial state is
+/// useful for intern publication tests, but is not a diagnostic row choice.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum DiagnosticBacking {
+    Plain,
+    ProjectedPlain,
+}
+impl DiagnosticBacking {
+    pub(super) fn initial(self) -> PlainSymbolBacking {
+        match self {
+            Self::Plain => PlainSymbolBacking::Unprojected,
+            Self::ProjectedPlain => PlainSymbolBacking::Projected,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Owners {
     One,
