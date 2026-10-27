@@ -154,6 +154,8 @@ mod source_navigation;
 mod spacemacs_boot;
 #[path = "startup_terminal_initialization.rs"]
 mod startup_terminal_initialization;
+#[path = "strict_cluster_invisible.rs"]
+mod strict_cluster_invisible;
 #[path = "strict_grid.rs"]
 mod strict_grid;
 #[path = "tty_color_index.rs"]

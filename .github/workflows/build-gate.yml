@@ -93,15 +93,15 @@ jobs:
 
       # Every formerly ignored test now lives behind an explicit feature.
       # The neovm-core perf/measurement probes and trybuild compile-contract
-      # suites, the layout engine's benchmark and post-rung contracts, the tui
-      # Doom reproduction aid, and neomacs' release-pdump integration suites are
-      # all compiled out of the default set; keep each opt-in set building so
-      # the mechanisms cannot rot.
+      # suites, the layout engine's benchmark probes, the tui Doom reproduction
+      # aid, and neomacs' release-pdump integration suites are all compiled out
+      # of the default set; keep each opt-in set building so the mechanisms
+      # cannot rot.
       - name: cargo check opt-in test mechanisms
         if: matrix.label == 'linux-x86_64'
         run: |
           cargo check -p neovm-core --tests --features perf-probes,contract-fixtures
-          cargo check -p neomacs-layout-engine --tests --features perf-probes,producer-rung-c6-c7
+          cargo check -p neomacs-layout-engine --tests --features perf-probes
           cargo check -p neomacs-tui-tests --tests --features doom-repro
           cargo check -p neomacs --tests --features release-pdump-tests
 
