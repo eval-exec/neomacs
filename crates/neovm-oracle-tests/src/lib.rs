@@ -143,6 +143,7 @@ mod font_otf_availability_semantics;
 #[cfg(test)]
 #[path = "fontset_repertory_test.rs"]
 mod fontset_repertory;
+mod form_source_sweep;
 mod format;
 mod forward;
 mod frame;
