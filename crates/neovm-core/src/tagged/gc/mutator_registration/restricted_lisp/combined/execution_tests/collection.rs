@@ -2,6 +2,7 @@
 //! Counterfactual omissions inspect copied ledgers, never a damaged live heap.
 mod fresh;
 mod minor_adapter;
+mod relog;
 
 use super::*;
 use crate::tagged::gc::mutator_registration::image::PublishedGcWork;
@@ -47,6 +48,9 @@ enum Scenario {
     Fresh,
     FreshUnwind,
     FreshNoop,
+    Relog,
+    RelogNoop,
+    RelogUnwind,
 }
 enum GraphSetup {
     Empty,
@@ -59,9 +63,15 @@ enum Command {
     Finish,
     PrepareFresh,
     CheckFreshAnswer,
+    InitializeRelog,
+    ReplaceRelog,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OwnerId(u64);
+enum Construction {
+    Definition(fresh::FreshGraph),
+    Relog(relog::Facts),
+}
 enum Ready {
     Parked(OwnerId),
     Failed(OwnerId),
@@ -91,6 +101,7 @@ struct Ledger {
     owners: Vec<(OwnerId, Vec<WordIdentity>)>,
     other_work: Vec<String>,
     young_owners: Vec<OwnerId>,
+    cons_writes: Vec<(OwnerId, WordIdentity)>,
 }
 impl Ledger {
     fn without_world(&self) -> impl Iterator<Item = &WordIdentity> {
@@ -188,8 +199,10 @@ fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
                     PublishedGcWork::YoungBlock(_) => {
                         result.young_owners.push(OwnerId(key.owner()))
                     }
+                    PublishedGcWork::ConsWrite(word) => result
+                        .cons_writes
+                        .push((OwnerId(key.owner()), WordIdentity(word.value().bits()))),
                     PublishedGcWork::Remembered(_)
-                    | PublishedGcWork::ConsWrite(_)
                     | PublishedGcWork::MappedOwner(_)
                     | PublishedGcWork::BlackHeader(_)
                     | PublishedGcWork::BlackRegion(_)
@@ -275,7 +288,12 @@ fn program(role: Role, scenario: Scenario) -> CombinedTape {
         Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
             return fresh::program(role);
         }
-        Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
+        Scenario::Noop
+        | Scenario::Unwind
+        | Scenario::MinorAdapter
+        | Scenario::Relog
+        | Scenario::RelogNoop
+        | Scenario::RelogUnwind => {
             return tape(vec![CombinedInstruction::Safepoint; 4]);
         }
     }
@@ -429,21 +447,24 @@ fn cohort(
             let preparation = fresh::Preparation::admit(&era, lambda, scenario);
             let placement = RefCell::new(fresh::Placement::start(&era, scenario));
             let mut permits = Vec::new();
-            for (index, _) in cohort.roles().iter().enumerate() {
+            for (index, role) in cohort.roles().iter().enumerate() {
                 let program =
                     ProgramIndex::checked(u16::try_from(index).unwrap(), &session).unwrap();
                 let owner = OwnerId(u64::try_from(index).unwrap() + 1);
-                let permit = era
-                    .register(owner.0, session.root_capacity(program).unwrap().as_usize())
-                    .unwrap();
-                permits.push((owner, program, permit));
+                let roots = relog::ReservedHomes::for_worker(
+                    session.root_capacity(program).unwrap(),
+                    scenario,
+                    *role,
+                );
+                let permit = era.register(owner.0, roots.as_usize()).unwrap();
+                permits.push((owner, *role, program, permit));
             }
             let (outcome, workers) = std::thread::scope(|scope| {
                 let (ready_tx, ready_rx) = mpsc::channel();
                 let (fresh_tx, fresh_rx) = mpsc::channel();
                 let mut commands = Commands(Vec::new());
                 let mut joins = Vec::new();
-                for (id, program, permit) in permits {
+                for (id, role, program, permit) in permits {
                     let session = session.clone();
                     let preparation = preparation.clone();
                     let fresh = fresh_tx.clone();
@@ -494,6 +515,7 @@ fn cohort(
                                 )
                                 .unwrap(),
                             );
+                            let mut mutation = relog::Mutation::seed(scenario, role, &mut worker.owner);
                             loop {
                                 let command = {
                                     let _probes = a8_probes::suppress();
@@ -523,7 +545,15 @@ fn cohort(
                                     }
                                     Command::PrepareFresh => {
                                         let facts = preparation.construct(worker);
-                                        fresh.send(facts).unwrap();
+                                        fresh.send(Construction::Definition(facts)).unwrap();
+                                    }
+                                    Command::InitializeRelog => {
+                                        let facts = mutation.initialize(&preparation, worker);
+                                        fresh.send(Construction::Relog(facts)).unwrap();
+                                    }
+                                    Command::ReplaceRelog => {
+                                        let facts = mutation.replace(&preparation, worker);
+                                        fresh.send(Construction::Relog(facts)).unwrap();
                                     }
                                     Command::Advance => loop {
                                         match worker.step(&session).unwrap() {
@@ -587,6 +617,13 @@ fn cohort(
                             );
                             return;
                         }
+                        Scenario::Relog | Scenario::RelogNoop | Scenario::RelogUnwind => {
+                            relog::exercise(
+                                &era, cohort, scenario, &commands, &await_all, &fresh_rx,
+                                &placement,
+                            );
+                            return;
+                        }
                         Scenario::MinorAdapter => {
                             minor_adapter::exercise(&era, graph, cohort, &commands, &await_all);
                             return;
@@ -609,7 +646,10 @@ fn cohort(
                             | Scenario::MinorAdapter
                             | Scenario::Fresh
                             | Scenario::FreshUnwind
-                            | Scenario::FreshNoop => {}
+                            | Scenario::FreshNoop
+                            | Scenario::Relog
+                            | Scenario::RelogNoop
+                            | Scenario::RelogUnwind => {}
                         }
                         match phase {
                             Phase::Selected => {}
@@ -628,7 +668,9 @@ fn cohort(
                                 assert!(second.cycle > first.cycle);
                                 let CollectionReceipt { roots, live, .. } = second;
                                 assert!(
-                                    roots.other_work.is_empty() && roots.young_owners.is_empty(),
+                                    roots.other_work.is_empty()
+                                        && roots.young_owners.is_empty()
+                                        && roots.cons_writes.is_empty(),
                                     "hidden history work: {roots:?}"
                                 );
                                 match phase {
@@ -733,7 +775,12 @@ fn cohort(
             placement.borrow_mut().return_for_finish(&era, &stopped);
             stopped.symbols().unwrap().reconcile_functions().unwrap();
             match scenario {
-                Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
+                Scenario::Fresh
+                | Scenario::FreshUnwind
+                | Scenario::FreshNoop
+                | Scenario::Relog
+                | Scenario::RelogNoop
+                | Scenario::RelogUnwind => {
                     era.collect_stopped(&mut stopped).unwrap();
                 }
                 Scenario::Transfer | Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {

@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 pub(super) struct Atoms {
     lambda: SharedRoot,
-    answer: SharedRoot,
-    nil: SharedRoot,
+    pub(super) answer: SharedRoot,
+    pub(super) nil: SharedRoot,
 }
 #[derive(Clone)]
 pub(super) enum Preparation {
@@ -26,7 +26,12 @@ impl Preparation {
             Scenario::Transfer | Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
                 Self::Disabled
             }
-            Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
+            Scenario::Fresh
+            | Scenario::FreshUnwind
+            | Scenario::FreshNoop
+            | Scenario::Relog
+            | Scenario::RelogNoop
+            | Scenario::RelogUnwind => {
                 let mut stopped = contention::retry(
                     Deadline::contention(),
                     || era.stop(),
@@ -66,41 +71,53 @@ impl Preparation {
         let mut body = frame.home(home(0)).unwrap().clone();
         let mut args = frame.home(home(1)).unwrap().clone();
         let mut head = frame.home(home(2)).unwrap().clone();
-        contention::retry(
-            Deadline::contention(),
-            || {
-                let mut run = worker.owner.run_access()?;
-                // Catch INSIDE the run loan. Closing after RunAccess::drop is too
-                // late: an open region would already have poisoned the era.
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                    || -> Result<_, RegistrationError> {
-                        run.cons_into(&atoms.answer, &atoms.nil, &mut body)?;
-                        run.cons_into(&atoms.nil, &body, &mut args)?;
-                        run.cons_into(&atoms.lambda, &args, &mut head)?;
-                        let nodes = [&head, &args, &body]
-                            .map(|slot| WordIdentity(slot.word_for_test(&run)));
-                        run.clear_owner_root_for_test(&args)?;
-                        run.clear_owner_root_for_test(&body)?;
-                        // A real unrelated young allocation in the SAME inventory;
-                        // inventory publication must not retain every allocated cell.
-                        run.cons_into(&atoms.answer, &atoms.nil, &mut body)?;
-                        let garbage = WordIdentity(body.word_for_test(&run));
-                        run.clear_owner_root_for_test(&body)?;
-                        Ok(FreshGraph { nodes, garbage })
-                    },
-                ));
-                let close = run.close_cons_region();
-                drop(run);
-                close?;
-                match result {
-                    Ok(result) => result,
-                    Err(panic) => std::panic::resume_unwind(panic),
-                }
-            },
-            contention::registration,
-        )
-        .unwrap()
+        with_allocation(&mut worker.owner, |run| {
+            run.cons_into(&atoms.answer, &atoms.nil, &mut body)?;
+            run.cons_into(&atoms.nil, &body, &mut args)?;
+            run.cons_into(&atoms.lambda, &args, &mut head)?;
+            let nodes = [&head, &args, &body].map(|slot| WordIdentity(slot.word_for_test(run)));
+            run.clear_owner_root_for_test(&args)?;
+            run.clear_owner_root_for_test(&body)?;
+            // A real unrelated young allocation in the SAME inventory;
+            // inventory publication must not retain every allocated cell.
+            run.cons_into(&atoms.answer, &atoms.nil, &mut body)?;
+            let garbage = WordIdentity(body.word_for_test(run));
+            run.clear_owner_root_for_test(&body)?;
+            Ok(FreshGraph { nodes, garbage })
+        })
     }
+}
+
+impl Preparation {
+    pub(super) fn atoms(&self) -> &Atoms {
+        match self {
+            Self::Disabled => panic!("native construction not admitted"),
+            Self::Enabled(atoms) => atoms,
+        }
+    }
+}
+/// The only native allocation wrapper: unwind is caught while the run can
+/// still close its real region. It never wraps an unfinished RunSlice panic.
+pub(super) fn with_allocation<'era, R>(
+    owner: &mut Mutator<'era>,
+    mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<R, RegistrationError>,
+) -> R {
+    contention::retry(
+        Deadline::contention(),
+        || {
+            let mut run = owner.run_access()?;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut run)));
+            let close = run.close_cons_region();
+            drop(run);
+            close?;
+            match result {
+                Ok(result) => result,
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        },
+        contention::registration,
+    )
+    .unwrap()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -133,7 +150,12 @@ impl Placement {
             Scenario::Transfer | Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
                 Self::Unused
             }
-            Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
+            Scenario::Fresh
+            | Scenario::FreshUnwind
+            | Scenario::FreshNoop
+            | Scenario::Relog
+            | Scenario::RelogNoop
+            | Scenario::RelogUnwind => {
                 let mut stopped = era.stop().unwrap();
                 let cycle = era
                     .with_stopped_heap_for_test(&stopped, |heap| {
@@ -173,7 +195,7 @@ impl Placement {
             }
         }
     }
-    fn resume(&mut self, era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>) {
+    pub(super) fn resume(&mut self, era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>) {
         match *self {
             Self::Collector(cycle) => {
                 contention::retry(
@@ -187,7 +209,7 @@ impl Placement {
             Self::Unused | Self::Workers(_) => panic!("fresh response requires returned catalog"),
         }
     }
-    fn cycle(&self) -> Cycle {
+    pub(super) fn cycle(&self) -> Cycle {
         match *self {
             Self::Workers(cycle) | Self::Collector(cycle) => cycle,
             Self::Unused => panic!("fresh cycle not admitted"),
@@ -362,7 +384,7 @@ fn round(
                 "fresh closure survives, unrelated young cell reclaimed"
             );
             assert!(
-                roots.other_work.is_empty(),
+                roots.other_work.is_empty() && roots.cons_writes.is_empty(),
                 "unexpected root-bearing work: {roots:?}"
             );
             assert!(
@@ -409,7 +431,7 @@ fn dispatch(commands: &Commands, command: Command, await_all: &impl Fn()) {
     }
     await_all();
 }
-fn dispatch_role(
+pub(super) fn dispatch_role(
     commands: &Commands,
     cohort: Cohort,
     recipient: Role,
@@ -430,7 +452,7 @@ fn prepare(
     commands: &Commands,
     cohort: Cohort,
     await_all: &impl Fn(),
-    facts: &mpsc::Receiver<FreshGraph>,
+    facts: &mpsc::Receiver<Construction>,
 ) -> FreshGraph {
     dispatch_role(
         commands,
@@ -439,9 +461,13 @@ fn prepare(
         Command::PrepareFresh,
         await_all,
     );
-    facts
+    match facts
         .try_recv()
         .expect("constructor publishes facts before native acknowledgment")
+    {
+        Construction::Definition(graph) => graph,
+        Construction::Relog(_) => panic!("wrong native construction kind"),
+    }
 }
 fn sole_world(roots: &Ledger, graph: FreshGraph) {
     assert_eq!(
@@ -466,7 +492,7 @@ pub(super) fn exercise(
     scenario: Scenario,
     commands: &Commands,
     await_all: &impl Fn(),
-    facts: &mpsc::Receiver<FreshGraph>,
+    facts: &mpsc::Receiver<Construction>,
     placement: &RefCell<Placement>,
 ) {
     let warm = round(era, cohort, placement, Observation::Warm);
@@ -474,7 +500,13 @@ pub(super) fn exercise(
     match scenario {
         Scenario::FreshNoop => return,
         Scenario::Fresh | Scenario::FreshUnwind => {}
-        Scenario::Transfer | Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
+        Scenario::Transfer
+        | Scenario::Noop
+        | Scenario::Unwind
+        | Scenario::MinorAdapter
+        | Scenario::Relog
+        | Scenario::RelogNoop
+        | Scenario::RelogUnwind => {
             panic!("wrong fresh scenario")
         }
     }
@@ -487,7 +519,13 @@ pub(super) fn exercise(
     match scenario {
         Scenario::FreshUnwind => panic!("controlled fresh unwind after completed young collection"),
         Scenario::Fresh | Scenario::FreshNoop => {}
-        Scenario::Transfer | Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
+        Scenario::Transfer
+        | Scenario::Noop
+        | Scenario::Unwind
+        | Scenario::MinorAdapter
+        | Scenario::Relog
+        | Scenario::RelogNoop
+        | Scenario::RelogUnwind => {
             panic!("wrong fresh scenario")
         }
     }
