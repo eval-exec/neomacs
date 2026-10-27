@@ -5,6 +5,9 @@
 //! based for the same semantics; use crossterm's parsed events only where the
 //! platform does not expose the same Unix TTY model.
 
+pub mod terminal_size;
+pub use terminal_size::{TerminalCellSize, TerminalColumns, TerminalRows, TerminalSizeQuery};
+
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -344,7 +347,7 @@ impl TtyInputReader {
     fn spawn_with_test_source(
         comms: RenderComms,
         input: std::os::fd::OwnedFd,
-        size_query: Box<dyn FnMut() -> io::Result<(u16, u16)> + Send>,
+        size_query: TerminalSizeQuery,
         hook: Option<Arc<dyn Fn(unix_reader::ReaderTestObservation) + Send + Sync>>,
     ) -> io::Result<Self> {
         unix_reader::spawn_with_source(comms, input, size_query, hook)

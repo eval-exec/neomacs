@@ -211,3 +211,44 @@ fn tty_erase_char_value_mirrors_init_sys_modes() {
     assert_eq!(tty_erase_char_value(Some(0x7f)), Value::fixnum(127));
     assert_eq!(tty_erase_char_value(Some(0x08)), Value::fixnum(8));
 }
+
+#[test]
+fn terminal_size_query_success_keeps_zero_size_and_skips_environment() {
+    use neomacs_display_runtime::tty_input::TerminalCellSize;
+    use std::cell::Cell;
+
+    let calls = Cell::new(0);
+    let zero = TerminalCellSize::from((0_u32, 0_u32));
+    let result = super::terminal_size_or_fallback(Ok(zero), || {
+        calls.set(calls.get() + 1);
+        Some(TerminalCellSize::from((160_u32, 50_u32)))
+    });
+    assert_eq!(result, Some(zero));
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn terminal_size_query_failure_preserves_full_u32_environment_dimensions() {
+    use neomacs_display_runtime::tty_input::TerminalCellSize;
+    use std::cell::Cell;
+
+    let calls = Cell::new(0);
+    let expected = TerminalCellSize::from((u32::MAX, 70_000_u32));
+    let result = super::terminal_size_or_fallback(Err(std::io::ErrorKind::NotFound.into()), || {
+        calls.set(calls.get() + 1);
+        super::terminal_size_from_env_values(Some(u32::MAX.to_string()), Some("70000".to_string()))
+            .map(TerminalCellSize::from)
+    });
+    assert_eq!(result, Some(expected));
+    assert_eq!(<(u32, u32)>::from(expected), (u32::MAX, 70_000));
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn terminal_size_query_failure_without_valid_environment_remains_unavailable() {
+    let result = super::terminal_size_or_fallback(Err(std::io::ErrorKind::NotFound.into()), || {
+        super::terminal_size_from_env_values(Some("0".to_string()), Some("25".to_string()))
+            .map(neomacs_display_runtime::tty_input::TerminalCellSize::from)
+    });
+    assert_eq!(result, None);
+}

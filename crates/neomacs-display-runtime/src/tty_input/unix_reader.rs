@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{TryRecvError, TrySendError};
 
-use super::{GNU_KBD_BUFFER_SIZE, TTY_READER_POLL_INTERVAL, TtyInputReader, raw_tty_input_event};
+use super::{
+    GNU_KBD_BUFFER_SIZE, TTY_READER_POLL_INTERVAL, TerminalCellSize, TerminalSizeQuery,
+    TtyInputReader, raw_tty_input_event,
+};
 use crate::thread_comm::{InputEvent, LifecycleCommand, RenderCommand, RenderComms};
 
 #[derive(Debug)]
@@ -116,12 +119,12 @@ impl PendingTtyEvent {
         }
     }
 
-    fn resize(columns: u16, rows: u16) -> Self {
+    fn resize(size: TerminalCellSize) -> Self {
         Self {
             kind: TtyEventKind::Resize,
             event: InputEvent::WindowResize {
-                width: columns as u32,
-                height: rows as u32,
+                width: u32::from(size.columns()),
+                height: u32::from(size.rows()),
                 scale_factor: 1.0,
                 emacs_frame_id: 0,
             },
@@ -189,11 +192,10 @@ pub(super) struct ReaderTestObservation {
 
 #[cfg(test)]
 type TestHook = Option<Arc<dyn Fn(ReaderTestObservation) + Send + Sync>>;
-type SizeQuery = Box<dyn FnMut() -> io::Result<(u16, u16)> + Send>;
 
 // Moved into exactly one native worker. Only that worker mutates the FIFO,
 // in-flight head, acquisition phases and RenderComms; it runs no Lisp. The
-// closures are Send, and test observers are per-instance and absent in product.
+// query owner is Send; test observers are per-instance and absent in product.
 struct Reader {
     input: OwnedFd,
     wake_reader: UnixStream,
@@ -204,8 +206,8 @@ struct Reader {
     head: Option<PendingTtyEvent>,
     lifecycle: Lifecycle,
     read_state: ReadState,
-    size_query: SizeQuery,
-    last_size: Option<(u16, u16)>,
+    size_query: TerminalSizeQuery,
+    last_size: Option<TerminalCellSize>,
     #[cfg(test)]
     hook: TestHook,
 }
@@ -226,12 +228,9 @@ impl std::fmt::Debug for Reader {
     }
 }
 
-// Construction moves this worker to its native thread. Its FnMut callback
-// remains Send-only; it contains no evaluator/TLS or Lisp heap references.
-const _: fn() = || {
-    fn assert_send_debug<T: Send + std::fmt::Debug>() {}
-    assert_send_debug::<Reader>();
-};
+// Construction moves this worker and its query resource to a native thread;
+// neither holds evaluator/TLS or Lisp heap references.
+static_assertions::assert_impl_all!(Reader: Send, std::fmt::Debug);
 
 impl Reader {
     #[cfg(test)]
@@ -354,11 +353,11 @@ impl Reader {
                 }
                 #[cfg(test)]
                 self.checkpoint(ReaderTestCheckpoint::BeforeSizeQuery);
-                if let Ok(size) = (self.size_query)()
+                if let Ok(size) = self.size_query.query()
                     && self.last_size != Some(size)
                 {
                     self.last_size = Some(size);
-                    self.acquire(PendingTtyEvent::resize(size.0, size.1));
+                    self.acquire(PendingTtyEvent::resize(size));
                 }
                 self.read_state = ReadState::PollInput {
                     deadline: Instant::now() + TTY_READER_POLL_INTERVAL,
@@ -510,7 +509,7 @@ impl Reader {
     }
 
     fn run(mut self) {
-        self.last_size = (self.size_query)().ok();
+        self.last_size = self.size_query.query().ok();
         loop {
             self.observe_owner_stop();
             let delivery_progress = self.progress_delivery();
@@ -560,7 +559,7 @@ pub(super) fn spawn_default(comms: RenderComms) -> io::Result<TtyInputReader> {
     }
     // SAFETY: fd is the successful new fcntl result, transferred exactly once.
     let input = unsafe { OwnedFd::from_raw_fd(fd) };
-    let query: SizeQuery = Box::new(crossterm::terminal::size);
+    let query = TerminalSizeQuery::new();
     #[cfg(test)]
     {
         spawn_with_source(comms, input, query, None)
@@ -574,7 +573,7 @@ pub(super) fn spawn_default(comms: RenderComms) -> io::Result<TtyInputReader> {
 pub(super) fn spawn_with_source(
     comms: RenderComms,
     input: OwnedFd,
-    size_query: SizeQuery,
+    size_query: TerminalSizeQuery,
     #[cfg(test)] hook: TestHook,
 ) -> io::Result<TtyInputReader> {
     let (wake_reader, writer) = UnixStream::pair()?;

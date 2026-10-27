@@ -12,6 +12,7 @@ use super::terminal_capabilities::StringCapability;
 use super::terminal_capabilities::TerminalCapabilityDatabase;
 use super::{FrontendKind, StartupOptions};
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
+use neomacs_display_runtime::tty_input::{TerminalCellSize, TerminalSizeQuery};
 use neovm_core::emacs_core::terminal::pure::TerminalRuntimeConfig;
 
 /// Return a TTY terminal runtime configuration for interactive sessions.
@@ -266,13 +267,26 @@ fn terminal_size_from_env() -> Option<(u32, u32)> {
     terminal_size_from_env_values(std::env::var("COLUMNS").ok(), std::env::var("LINES").ok())
 }
 
-/// Query the terminal size in character cells via crossterm.
-/// Falls back to `COLUMNS`/`LINES` environment variables.
+/// Query the terminal size, retaining the legacy tuple boundary for callers.
+/// Falls back to positive COLUMNS/LINES values after native/platform failure.
 pub fn query_terminal_size_cells() -> Option<(u32, u32)> {
-    crossterm::terminal::size()
-        .ok()
-        .map(|(cols, rows)| (cols as u32, rows as u32))
-        .or_else(terminal_size_from_env)
+    query_terminal_size_cells_with(&TerminalSizeQuery::new()).map(Into::into)
+}
+
+/// Query an existing resource without caching the returned dimensions.
+pub(crate) fn query_terminal_size_cells_with(
+    query: &TerminalSizeQuery,
+) -> Option<TerminalCellSize> {
+    terminal_size_or_fallback(query.query(), || {
+        terminal_size_from_env().map(TerminalCellSize::from)
+    })
+}
+
+fn terminal_size_or_fallback(
+    query_result: std::io::Result<TerminalCellSize>,
+    fallback: impl FnOnce() -> Option<TerminalCellSize>,
+) -> Option<TerminalCellSize> {
+    query_result.ok().or_else(fallback)
 }
 
 // ── TTY terminal lifecycle (raw mode, alt screen) ────────────────────────

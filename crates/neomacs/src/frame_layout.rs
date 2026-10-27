@@ -15,6 +15,7 @@ use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
 use neomacs_display_runtime::backend::tty::rif::TtyRif;
 use neomacs_display_runtime::redisplay::RedisplayRuntime;
 pub use neomacs_display_runtime::redisplay::{FrameLayoutPurpose, PreparedFrameDisplay};
+use neomacs_display_runtime::tty_input::{TerminalCellSize, TerminalSizeQuery};
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::window::{FrameId, RenderFrameScope, RenderFrameVisibility};
 use std::sync::Arc;
@@ -442,10 +443,14 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
         return;
     }
 
-    let (cols, rows) = tty_init::query_terminal_size_cells().unwrap_or((80, 25));
+    // This callback and TtyRif own the same lifetime. Retain the terminal
+    // resource, while every redisplay still samples its current dimensions.
+    let terminal_size_query = TerminalSizeQuery::new();
+    let size = tty_init::query_terminal_size_cells_with(&terminal_size_query)
+        .unwrap_or_else(|| TerminalCellSize::from((80_u32, 25_u32)));
     let mut tty_rif = TtyRif::new_with_caps(
-        cols as usize,
-        rows as usize,
+        u32::from(size.columns()) as usize,
+        u32::from(size.rows()) as usize,
         super::tty_init::detect_term_caps(),
     );
     // TTY frames use 1x1 character cell metrics (GNU Emacs
@@ -466,9 +471,9 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
         {
             return;
         }
-        if let Some((cols, rows)) = tty_init::query_terminal_size_cells() {
-            let cols = cols as usize;
-            let rows = rows as usize;
+        if let Some(size) = tty_init::query_terminal_size_cells_with(&terminal_size_query) {
+            let cols = u32::from(size.columns()) as usize;
+            let rows = u32::from(size.rows()) as usize;
             if tty_rif.width() != cols || tty_rif.height() != rows {
                 tty_rif.resize(cols, rows);
             }

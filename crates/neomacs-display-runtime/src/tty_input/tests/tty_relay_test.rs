@@ -225,22 +225,9 @@ impl NativePty {
         }
     }
 
-    fn size_query(&self) -> Box<dyn FnMut() -> io::Result<(u16, u16)> + Send> {
+    fn size_query(&self) -> TerminalSizeQuery {
         let slave = self.slave.try_clone().expect("size-query lease");
-        Box::new(move || {
-            let mut size = libc::winsize {
-                ws_row: 0,
-                ws_col: 0,
-                ws_xpixel: 0,
-                ws_ypixel: 0,
-            };
-            // SAFETY: a still-owned descriptor and writable local winsize.
-            if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCGWINSZ, &mut size) } < 0 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok((size.ws_col, size.ws_row))
-            }
-        })
+        TerminalSizeQuery::ControllingTerminal(File::from(slave))
     }
 
     fn resize(&self, columns: u16, rows: u16) {
