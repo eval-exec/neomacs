@@ -447,25 +447,63 @@ pub fn start_xvfb(artifact_root: &Path) -> io::Result<DisplaySession> {
     start_xvfb_with_size(artifact_root, 1280, 800)
 }
 
+/// How the private X server is reached by its clients.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum XTransport {
+    /// Loopback TCP only: no filesystem socket below system /tmp.
+    Tcp,
+    /// The local Unix socket, which is the only transport an X server grants
+    /// MIT-SHM on.
+    Local,
+}
+
 /// An isolated framebuffer large enough for every pixel of a scaled compositor.
 pub fn start_xvfb_with_size(
     artifact_root: &Path,
     width: u32,
     height: u32,
 ) -> io::Result<DisplaySession> {
+    start_xvfb_with_transport(artifact_root, width, height, XTransport::Tcp)
+}
+
+/// An isolated framebuffer whose clients connect through Xvfb's local Unix
+/// socket.
+///
+/// MIT-SHM is disabled for every non-local transport, and a modern Weston X11
+/// backend refuses to enable its output when `xcb_shm_attach` is denied
+/// ("Failed to initialize SHM for the X11 output"); Mesa's software GL also
+/// loses its shared-memory present path.  Scenarios that run a compositor on
+/// this server therefore need the local socket.  The session keeps its own
+/// Xauthority cookie and a process-unique display number, so the socket below
+/// /tmp/.X11-unix carries the same isolation as the TCP port.
+pub fn start_local_xvfb_with_size(
+    artifact_root: &Path,
+    width: u32,
+    height: u32,
+) -> io::Result<DisplaySession> {
+    start_xvfb_with_transport(artifact_root, width, height, XTransport::Local)
+}
+
+fn start_xvfb_with_transport(
+    artifact_root: &Path,
+    width: u32,
+    height: u32,
+    transport: XTransport,
+) -> io::Result<DisplaySession> {
     if width == 0 || height == 0 {
         return Err(io::Error::other("Xvfb dimensions must be positive"));
     }
-    // X's conventional Unix socket and lock live below system /tmp. Package
-    // and GUI tests deliberately never use that filesystem. Run Xvfb over
-    // loopback TCP without a lock instead, and keep its cwd/logs in one exact
-    // owned directory below the caller-provided workspace-local root.
+    // Package and GUI tests keep their files, logs and lock files in the
+    // caller-provided workspace-local root.  The TCP transport needs no
+    // filesystem socket under system /tmp; the local transport does, because
+    // that is the only place the X protocol puts it, and only it carries
+    // MIT-SHM (see start_local_xvfb_with_size).
     fs::create_dir_all(artifact_root)?;
     let base = 90 + (std::process::id() % 1000);
     let mut last_err = None;
     for offset in 0..8u32 {
         let display_number = base + offset * 1000;
-        match start_xvfb_on(artifact_root, display_number, width, height) {
+        match start_xvfb_on(artifact_root, display_number, width, height, transport) {
             Ok(session) => return Ok(session),
             Err(err) => last_err = Some(err),
         }
@@ -478,11 +516,23 @@ fn start_xvfb_on(
     display_number: u32,
     width: u32,
     height: u32,
+    transport: XTransport,
 ) -> io::Result<DisplaySession> {
-    let port_number = u16::try_from(6000 + display_number)
-        .map_err(|_| io::Error::other(format!("X display {display_number} has no TCP port")))?;
-    let endpoint = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port_number);
-    let display = format!("127.0.0.1:{display_number}");
+    let (endpoint, display) = match transport {
+        XTransport::Tcp => {
+            let port_number = u16::try_from(6000 + display_number).map_err(|_| {
+                io::Error::other(format!("X display {display_number} has no TCP port"))
+            })?;
+            (
+                format!(
+                    "{}",
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port_number)
+                ),
+                format!("127.0.0.1:{display_number}"),
+            )
+        }
+        XTransport::Local => ("local socket".to_string(), format!(":{display_number}")),
+    };
     let session_dir = artifact_root.join(format!("xvfb-{}-{display_number}", std::process::id()));
     fs::create_dir(&session_dir)?;
     let mut pending = PendingXvfbSession::new(session_dir.clone());
@@ -514,15 +564,22 @@ fn start_xvfb_on(
     }
     let stdout = fs::File::create(&stdout_path)?;
     let stderr = fs::File::create(&stderr_path)?;
-    let child = Command::new("Xvfb")
-        .arg(format!(":{display_number}"))
+    let mut xvfb = Command::new("Xvfb");
+    xvfb.arg(format!(":{display_number}"))
         .arg("-screen")
         .arg("0")
-        .arg(format!("{width}x{height}x24"))
-        .arg("-nolisten")
-        .arg("unix")
-        .arg("-listen")
-        .arg("tcp")
+        .arg(format!("{width}x{height}x24"));
+    match transport {
+        XTransport::Tcp => {
+            xvfb.arg("-nolisten").arg("unix").arg("-listen").arg("tcp");
+        }
+        XTransport::Local => {
+            // The local Unix socket is the only MIT-SHM-capable transport;
+            // keep the host's TCP ports out of this server entirely.
+            xvfb.arg("-nolisten").arg("tcp");
+        }
+    }
+    let child = xvfb
         .arg("-nolock")
         // DisplaySession owns the server lifetime. Short-lived probe clients
         // must not reset it while the editor establishes its first connection.
@@ -559,9 +616,7 @@ fn start_xvfb_on(
     let diagnostics = read_log_tail(&stderr_path);
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
-        format!(
-            "Xvfb did not come up on loopback display {display} ({endpoint}); stderr: {diagnostics}"
-        ),
+        format!("Xvfb did not come up on display {display} ({endpoint}); stderr: {diagnostics}"),
     ))
 }
 

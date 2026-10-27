@@ -220,7 +220,10 @@ fn with_native_menu_at_scale(
     // Keep the handle alive: this short alias avoids Unix socket path limits.
     let directory = fs::File::open(&artifacts).unwrap();
     let runtime = format!("/proc/{}/fd/{}", std::process::id(), directory.as_raw_fd());
-    let display = neomacs_infra::display::start_xvfb_with_size(
+    // The compositor's X11 backend enables its output through MIT-SHM, which
+    // an X server denies to TCP clients; the local socket is the only
+    // transport that carries it.
+    let display = neomacs_infra::display::start_local_xvfb_with_size(
         &artifacts,
         (1000 * scale).max(1280),
         (700 * scale).max(800),
@@ -231,7 +234,11 @@ fn with_native_menu_at_scale(
         Command::new(std::env::var_os("NEOMACS_GUI_WESTON").unwrap_or_else(|| "weston".into()))
             .args([
                 "--backend=x11",
-                "--renderer=gl",
+                // Software compositing like the harness's headless sessions:
+                // the x11 backend presents through MIT-SHM, and the private
+                // Xvfb is started on the local socket precisely so that
+                // works.  No EGL screen is needed on the runner.
+                "--renderer=pixman",
                 "--shell=kiosk-shell.so",
                 "--no-config",
                 "--width=1000",
@@ -270,8 +277,10 @@ fn with_native_menu_at_scale(
             .env("WAYLAND_DISPLAY", "menu-test")
             .env_remove("DISPLAY")
             .env("WINIT_UNIX_BACKEND", "wayland")
-            // Avoid the separate software Vulkan/Weston GL dma-buf import failure.
-            .env("WGPU_BACKEND", "gl")
+            // Pin the software Vulkan backend the rest of the suite presents
+            // through: the runner image has no EGL screen, so a GL editor
+            // never reaches the fixture's readiness file.
+            .env("WGPU_BACKEND", "vulkan")
             .env("NEOMACS_GUI_MENU_CONTROL", &artifacts)
             .env("WAYLAND_DEBUG", "1")
             .env("RUST_LOG", "warn,neomacs_display_runtime=debug")
@@ -330,10 +339,13 @@ fn alive(child: &mut OwnedChild, role: &str, artifacts: &Path) {
     }
 }
 fn popup_requests(artifacts: &Path) -> usize {
+    // libwayland 1.26 colorizes the dump and inserts a reset between the
+    // method name and its argument list (".get_popup[0m("), so the raw
+    // substring test misses it; the runner's 1.22 prints plain.
     fs::read_to_string(artifacts.join("wayland.log"))
         .unwrap_or_default()
         .lines()
-        .filter(|line| line.contains(".get_popup("))
+        .filter(|line| popup_trace::strip_ansi(line).contains(".get_popup("))
         .count()
 }
 fn wait_for<T>(label: &str, artifacts: &Path, mut observe: impl FnMut() -> Option<T>) -> T {

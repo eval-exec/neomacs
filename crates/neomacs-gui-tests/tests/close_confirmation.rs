@@ -66,7 +66,9 @@ impl CloseFixture {
                 .envs(display.env().iter().map(|(k, v)| (k, v)))
                 .env_remove("DISPLAY")
                 .env("WINIT_UNIX_BACKEND", "wayland")
-                .env("WGPU_BACKEND", "gl")
+                // The runner image cannot do GL (no EGL screen); the rest of
+                // the suite presents through software Vulkan (llvmpipe).
+                .env("WGPU_BACKEND", "vulkan")
                 .env("WAYLAND_DEBUG", "1")
                 .env("NEOMACS_GUI_CLOSE_CONTROL", &artifacts)
                 .env("NEOMACS_GUI_CLOSE_MODE", mode)
@@ -135,9 +137,16 @@ impl CloseFixture {
     }
 
     fn popup_count(&self) -> usize {
+        // libwayland 1.26 colorizes the dump and puts a reset between the
+        // method name and its argument list, so a raw ".configure(" probe
+        // misses every configure on such a host; the runner's 1.22 prints
+        // plain text.  Strip the CSI sequences first.
         fs::read_to_string(self.artifacts.join("wayland.log"))
             .unwrap_or_default()
             .lines()
+            .map(|line| {
+                neomacs_gui_tests::interaction::linux::popup_trace::strip_ansi(line).into_owned()
+            })
             .filter(|line| line.contains("xdg_popup") && line.contains(".configure("))
             .count()
     }

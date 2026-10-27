@@ -176,9 +176,10 @@ fn child_frame_fades_progress_across_presented_frames() {
     let _ = fs::remove_dir_all(&artifacts);
     fs::create_dir(&artifacts).unwrap();
     // The same session the grim-driven close-confirmation suite uses: sway
-    // headless implements the wlr-screencopy protocol grim needs, and the
-    // editor runs on the GL backend there — the software-compatibility mode
-    // this family is deliberately allowed to animate under.
+    // headless implements the wlr-screencopy protocol grim needs, and both
+    // sides composite in software (wlroots' pixman renderer, the editor on
+    // llvmpipe Vulkan) — the software-compatibility mode this family is
+    // deliberately allowed to animate under.
     let session = neomacs_infra::display::start_sway(
         &artifacts,
         r#"
@@ -203,7 +204,8 @@ focus_follows_mouse yes
             .envs(display_env.iter().map(|(k, v)| (k.clone(), v.clone())))
             .env_remove("DISPLAY")
             .env("WINIT_UNIX_BACKEND", "wayland")
-            .env("WGPU_BACKEND", "gl")
+            // The runner image cannot do GL (no EGL screen); see close_confirmation.rs.
+            .env("WGPU_BACKEND", "vulkan")
             .env("NEOMACS_GUI_ANIMATION_STATE_JSON", &state_path)
             .env("NEOMACS_GUI_ANIMATION_SNAPSHOT_JSON", &snapshot_path)
             .env("RUST_LOG", "warn,neomacs_display_runtime=debug")
