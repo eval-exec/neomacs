@@ -698,30 +698,31 @@ fn oracle_prop_map_adv_bool_vector_maps_logical_bits_like_gnu() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn oracle_prop_map_adv_mapconcat_list_mutation_error_like_gnu() {
+fn oracle_prop_map_adv_mapconcat_mutation_uses_original_length() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    // GNU Emacs `src/fns.c:Fmapconcat` computes SEQUENCE length before
-    // mapping and uses `mapcar1` to fill the concat argument vector.  If the
-    // callback shortens the original list, the remaining argument slots are
-    // not valid character sequences, so `concat` signals `sequencep`.  This
-    // pins that observable behavior instead of silently walking stale cdrs.
-    let form = r####"(let* ((xs (list 1 2 3 4))
+    // GNU Emacs `src/fns.c:Fmapconcat` computes SEQUENCE's length before
+    // mapping and fills a fixed-size argument vector with `mapcar1`.  The
+    // previous form shortened the list inside the callback, which leaves the
+    // remaining argument slots UNINITIALIZED; `Fconcat' then reads that
+    // garbage.  The -O3 oracle happened to produce `(sequencep 0)'; the
+    // pinned default-CFLAGS build segfaults on the same form.  That outcome
+    // is undefined memory, not a contract, so this form pins the defined
+    // consequence of the pre-computed length: a callback that GROWS the list
+    // must not map the appended element.
+    let form = r####"(let* ((xs (list 1 2 3))
        (seen nil))
-  (condition-case err
-      (list 'ok
-            (mapconcat (lambda (x)
-                         (push x seen)
-                         (when (= x 1)
-                           (setcdr xs nil))
-                         (number-to-string x))
-                       xs
-                       ",")
-            (nreverse seen)
-            xs)
-    (error (list 'error (car err) (cdr err) (nreverse seen) xs))))"####;
-    let expect =
-        expect_test::expect![[r#""OK (error wrong-type-argument (sequencep 0) (1) (1))""#]];
+  (list 'ok
+        (mapconcat (lambda (x)
+                     (push x seen)
+                     (when (= x 1)
+                       (setcdr (last xs) (list 99)))
+                     (number-to-string x))
+                   xs
+                   ",")
+        (nreverse seen)
+        xs))"####;
+    let expect = expect_test::expect![[r#""OK (ok \"1,2,3\" (1 2 3) (1 2 3 99))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

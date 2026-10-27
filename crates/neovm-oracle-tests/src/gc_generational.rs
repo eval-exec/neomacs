@@ -209,10 +209,18 @@ fn gc_generational_contract_and_old_lifecycle_match_gnu() {
         expect_test::expect![[r#""OK (key-and-value 4 1 0)""#]],
     );
 
-    // Case 9: the function refers only to a special counter, never to its
-    // own finalizer. The drop helper returns before explicit reclamation.
+    // Case 9: GNU runs a finalizer when the collector decides the object is
+    // unreachable, and GNU's collector scans the C stack conservatively: a
+    // stale stack slot can keep the object alive for an unspecified number of
+    // collections, and which slot survives depends on the C compiler's frame
+    // layout.  The previous form asserted (0 1 1) from the -O3 build; the
+    // pinned default build answers (0 0 0) for the same source.  That timing
+    // is undefined, so this case pins the defined half: a finalizer that
+    // stays rooted is never run, and the object reports type `finalizer'.
+    // Neo's precise-collector "runs once after unreachable" contract is
+    // covered by neovm-core's own unit tests, not by an oracle comparison.
     check_case(
-        "old_finalizer_runs_once_after_explicit_major",
+        "rooted_finalizer_never_runs",
         r#"
 (let ((gc-cons-threshold most-positive-fixnum)
       (gc-cons-percentage 1000)
@@ -221,65 +229,38 @@ fn gc_generational_contract_and_old_lifecycle_match_gnu() {
   (defvar u34b-finalizer-count 0)
   (defvar u34b-finalizer-root nil)
   (setq u34b-finalizer-count 0)
-  (defun u34b--install-finalizer ()
-    (setq u34b-finalizer-root
-          (make-finalizer
-           (lambda ()
-             (setq u34b-finalizer-count (1+ u34b-finalizer-count)))))
-    nil)
-  (defun u34b--drop-finalizer ()
-    (setq u34b-finalizer-root nil)
-    nil)
-  (u34b--install-finalizer)
+  (setq u34b-finalizer-root
+        (make-finalizer
+         (lambda ()
+           (setq u34b-finalizer-count (1+ u34b-finalizer-count)))))
   (garbage-collect)
   (garbage-collect)
   (garbage-collect)
-  (let ((while-rooted u34b-finalizer-count))
-    (u34b--drop-finalizer)
-    (garbage-collect)
-    (let ((after-first u34b-finalizer-count))
-      (garbage-collect)
-      (list while-rooted after-first u34b-finalizer-count))))
+  (list (type-of u34b-finalizer-root) u34b-finalizer-count))
 "#,
-        expect_test::expect![[r#""OK (0 1 1)""#]],
+        expect_test::expect![[r#""OK (finalizer 0)""#]],
     );
 
-    // Case 10: observe ordering, not GNU/Neomacs' differing publication
-    // time for gcs-done inside the finalizer. Each event snapshot is rooted.
+    // Case 10: ordering a finalizer against `post-gc-hook' is only observable
+    // when the finalizer runs in that collection, which Case 9 shows is
+    // undefined under GNU's conservative stack scan.  Pin the defined
+    // creation contract instead: GNU's `Fmake_finalizer' type-checks its
+    // argument with FUNCTIONP before allocating it (src/alloc.c), so a
+    // non-function is rejected at creation rather than ignored when the
+    // callback would finally run.
     check_case(
-        "old_finalizer_precedes_post_gc_hook",
+        "finalizer_creation_type_check",
         r#"
 (let ((gc-cons-threshold most-positive-fixnum)
       (gc-cons-percentage 1000)
       (post-gc-hook nil))
   (garbage-collect)
-  (defvar u34b-finalizer-events nil)
-  (defvar u34b-finalizer-root nil)
-  (setq u34b-finalizer-events nil)
-  (defun u34b--install-finalizer ()
-    (setq u34b-finalizer-root
-          (make-finalizer
-           (lambda ()
-             (setq u34b-finalizer-events
-                   (cons 'finalizer u34b-finalizer-events)))))
-    nil)
-  (defun u34b--drop-finalizer ()
-    (setq u34b-finalizer-root nil)
-    nil)
-  (defun u34b--post-hook ()
-    (setq u34b-finalizer-events (cons 'hook u34b-finalizer-events)))
-  (u34b--install-finalizer)
-  (garbage-collect)
-  (garbage-collect)
-  (garbage-collect)
-  (setq u34b-finalizer-events nil)
-  (setq post-gc-hook (list #'u34b--post-hook))
-  (u34b--drop-finalizer)
-  (garbage-collect)
-  (let ((first (reverse u34b-finalizer-events)))
-    (garbage-collect)
-    (list first (reverse u34b-finalizer-events))))
+  (list (type-of (make-finalizer #'ignore))
+        (condition-case err (make-finalizer 1) (error (list (car err) (cdr err))))
+        (condition-case err (make-finalizer "x") (error (list (car err) (cdr err))))))
 "#,
-        expect_test::expect![[r#""OK ((finalizer hook) (finalizer hook hook))""#]],
+        expect_test::expect![[
+            r#""OK (finalizer (wrong-type-argument (functionp 1)) (wrong-type-argument (functionp \"x\")))""#
+        ]],
     );
 }
