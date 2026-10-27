@@ -111,3 +111,20 @@ fn strict_org_timestamp_inactive() {
         expect,
     );
 }
+#[test]
+fn strict_org_element_properties_for_all_builtin() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:level 1) (:todo-keyword \"TODO\") (:priority nil) (:tags (\"t\")) (:title (#(\"H\" 0 1 (:parent (headline (:standard-properties [1 1 14 69 69 0 (:title) first-section nil nil nil 63 67 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 69 69 0 nil org-data nil nil nil 3 69 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) #5)] :pre-blank 0 :raw-value \"H\" :title (#(\"H\" 0 1 (:parent #5))) :level 1 :priority nil :tags (\"t\") :todo-keyword \"TODO\" :todo-type todo :footnote-section-p nil :archivedp nil :commentedp nil :scheduled (timestamp (:standard-properties [25 nil nil nil 37 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-01>\" :year-start 2024 :month-start 1 :day-start 1 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 1 :hour-end nil :minute-end nil)) :ID \"x\") (section (:standard-properties [14 14 14 69 69 0 nil section nil nil nil 14 69 nil #<killed buffer> nil nil #5]) (planning (:standard-properties [14 14 nil nil 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #6] :closed nil :deadline nil :scheduled (timestamp (:standard-properties [25 nil nil nil 37 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-01>\" :year-start 2024 :month-start 1 :day-start 1 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 1 :hour-end nil :minute-end nil)))) (property-drawer (:standard-properties [38 38 51 58 64 0 nil property-drawer nil nil nil nil nil nil #<killed buffer> nil nil #6]) (node-property (:standard-properties [51 51 nil nil 58 0 nil node-property nil nil nil nil nil nil #<killed buffer> nil nil #7] :key \"ID\" :value \"x\"))) (paragraph (:standard-properties [64 64 64 69 69 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #6]) #(\"Body\\n\" 0 5 (:parent #7))))))))) (:raw-value \"H\") (:begin 1) (:end 69) (:post-blank 0) (:contents-begin 14) (:contents-end 69) (:pre-blank 0) (:archived-p nil) (:commentedp nil) (:footnote-section-p nil))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn (require 'org) (require 'org-element) (with-temp-buffer (org-mode)
+ (insert "* TODO H :t:\nSCHEDULED: <2024-01-01>\n:PROPERTIES:\n:ID: x\n:END:\nBody\n")
+ (let* ((tree (org-element-parse-buffer)) (hl (car (org-element-map tree 'headline #'identity))) (r '()))
+  (dolist (prop '(:level :todo-keyword :priority :tags :title :raw-value :begin :end :post-blank
+    :contents-begin :contents-end :pre-blank :archived-p :commentedp :footnote-section-p))
+   (push (list prop (org-element-property prop hl)) r))
+  (nreverse r))))"##,
+        expect,
+    );
+}

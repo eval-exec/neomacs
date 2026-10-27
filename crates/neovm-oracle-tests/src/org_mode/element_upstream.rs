@@ -230,6 +230,76 @@ fn upstream_org_element_property_raw_general() {
 // ── Getters: org-element-property (deferred) ─────────────────────────
 
 #[test]
+fn upstream_org_element_property_deferred() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((bar nil) bar (bar bar) (bar [org-element-deferred (closure (t) (_) 'bar) nil nil] bar bar) (1 1) (1 2 3) 1 1)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org-element)
+  (list
+   ;; Resolve :deferred property
+   (let ((el (org-element-create
+              'dummy
+              `(:deferred
+                ,(org-element-deferred-create
+                  t (lambda (el) (org-element-put-property el :foo 'bar) nil))))))
+     (list (org-element-property :foo el)
+           (org-element-property :foo2 el)))
+   ;; Deferred value
+   (let ((el (org-element-create
+              'dummy
+              `(:foo ,(org-element-deferred-create nil (lambda (_) 'bar))))))
+     (org-element-property :foo el))
+   ;; Auto-undefer
+   (let ((el (org-element-create
+              'dummy
+              `(:foo ,(org-element-deferred-create t (lambda (_) 'bar))))))
+     (list (org-element-property :foo el)
+           (org-element-property-raw :foo el)))
+   ;; Force undefer
+   (let ((el (org-element-create
+              'dummy
+              `(:foo ,(org-element-deferred-create nil (lambda (_) 'bar))))))
+     (list (org-element-property :foo el)
+           (org-element-property-raw :foo el)
+           (org-element-property :foo el nil 'force)
+           (org-element-property-raw :foo el)))
+   ;; Deferred alias
+   (let ((el (org-element-create
+              'dummy
+              `( :foo 1
+                 :bar ,(org-element-deferred-create-alias :foo)))))
+     (list (org-element-property :foo el)
+           (org-element-property :bar el)))
+   ;; Deferred list
+   (let ((el (org-element-create
+              'dummy
+              `(:foo ,(org-element-deferred-create-list
+                       (list 1 2 (org-element-deferred-create nil (lambda (_) 3))))))))
+     (org-element-property :foo el))
+   ;; Deferred with side effects (retry)
+   (let ((el (org-element-create
+              'dummy
+              `(:foo ,(org-element-deferred-create
+                       nil (lambda (el)
+                             (org-element-put-property el :foo 1)
+                             (throw :org-element-deferred-retry nil)))))))
+     (org-element-property :foo el))
+   ;; Recursive undefer
+   (let ((el (org-element-create
+              'dummy
+              `(:foo ,(org-element-deferred-create
+                       nil (lambda (el)
+                             (org-element-deferred-create
+                              nil (lambda (_) 1))))))))
+     (org-element-property :foo el))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn upstream_org_element_property_2() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK t""#]];

@@ -1459,3 +1459,54 @@ fn org_attach_copy_list_and_tag_mutation_combo() {
         expect,
     );
 }
+#[test]
+fn org_element_planning_property_timestamp_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((headline \"TODO\" \"Alpha\" (active nil \"<2026-05-28 Thu>\" 2026 5 28 nil nil nil nil) (active nil \"<2026-05-27 Wed>\" 2026 5 27 nil nil nil nil) nil nil (nil nil \"Alpha\" nil nil nil nil nil nil nil)) (planning nil nil (active nil \"<2026-05-28 Thu>\" 2026 5 28 nil nil nil nil) (active nil \"<2026-05-27 Wed>\" 2026 5 27 nil nil nil nil) nil nil (nil nil nil nil nil nil nil nil nil nil)) (node-property nil nil nil nil \"Effort\" \"1:30\" (nil nil nil nil nil nil nil nil nil nil)) (headline nil \"Plain\" nil nil nil nil (nil nil \"Plain\" nil nil nil nil nil nil nil)) (timestamp nil \"<2026-05-29 Fri 10:00-11:15>\" nil nil nil nil (active-range timerange \"<2026-05-29 Fri 10:00-11:15>\" 2026 5 29 10 0 11 15)))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+  (require 'org)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* TODO Alpha\n")
+    (insert "DEADLINE: <2026-05-28 Thu> SCHEDULED: <2026-05-27 Wed>\n")
+    (insert ":PROPERTIES:\n:Effort: 1:30\n:END:\n")
+    (insert "* Plain\n")
+    (insert "<2026-05-29 Fri 10:00-11:15>\n")
+    (let ((out nil)
+          (timestamp-summary
+           (lambda (timestamp)
+             (and timestamp
+                  (list (org-element-property :type timestamp)
+                        (org-element-property :range-type timestamp)
+                        (org-element-property :raw-value timestamp)
+                        (org-element-property :year-start timestamp)
+                        (org-element-property :month-start timestamp)
+                        (org-element-property :day-start timestamp)
+                        (org-element-property :hour-start timestamp)
+                        (org-element-property :minute-start timestamp)
+                        (org-element-property :hour-end timestamp)
+                        (org-element-property :minute-end timestamp))))))
+      (org-element-map
+          (org-element-parse-buffer)
+          '(headline planning timestamp node-property)
+        (lambda (element)
+          (push
+           (list (org-element-type element)
+                 (org-element-property :todo-keyword element)
+                 (org-element-property :raw-value element)
+                 (funcall timestamp-summary
+                          (org-element-property :deadline element))
+                 (funcall timestamp-summary
+                          (org-element-property :scheduled element))
+                 (org-element-property :key element)
+                 (org-element-property :value element)
+                 (funcall timestamp-summary element))
+           out)))
+      (nreverse out))))"#,
+        expect,
+    );
+}

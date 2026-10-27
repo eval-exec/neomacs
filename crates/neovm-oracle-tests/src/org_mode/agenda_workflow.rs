@@ -1305,6 +1305,57 @@ fn org_agenda_bulk_mark_tag_filter_effort_deep_state_combo() {
 }
 
 #[test]
+fn org_agenda_entry_text_switch_context_deep_state_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (\"Day-agenda (W22):\\nWednesday  27 May 2026\\n  tasks:      Scheduled:  TODO Alpha                                     :work:\\n  tasks:      Scheduled:  WAIT Beta                                      :home:\\n\" \"Alpha body paragraph.\" \"tasks\" \"2:00\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-agenda)
+  (let* ((root (make-temp-file "org-agenda-entry" t))
+         (file (expand-file-name "tasks.org" root))
+         (org-agenda-files (list file))
+         (org-agenda-span 'day)
+         (org-agenda-start-day "2026-05-27")
+         (org-agenda-start-on-weekday nil))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "* TODO Alpha :work:\n")
+            (insert "SCHEDULED: <2026-05-27 Wed>\n")
+            (insert ":PROPERTIES:\n:Effort: 2:00\n:END:\n")
+            (insert "Alpha body paragraph.\n")
+            (insert "* WAIT Beta :home:\n")
+            (insert "SCHEDULED: <2026-05-27 Wed>\n")
+            (insert ":PROPERTIES:\n:Effort: 0:30\n:END:\n")
+            (insert "Beta body paragraph.\n"))
+          (org-agenda-list nil "2026-05-27" 1)
+          (with-current-buffer org-agenda-buffer-name
+            (let ((agenda-text
+                   (replace-regexp-in-string
+                    (regexp-quote root) "<root>"
+                    (buffer-substring-no-properties
+                     (point-min) (point-max)))))
+              (goto-char (point-min))
+              (search-forward "Alpha")
+              (beginning-of-line)
+              (let ((entry-text
+                     (org-agenda-get-some-entry-text
+                      (get-text-property (point) 'org-hd-marker) 100)))
+                (let ((cat (org-entry-get (get-text-property (point) 'org-hd-marker) "CATEGORY"))
+                      (effort (org-entry-get (get-text-property (point) 'org-hd-marker) "Effort")))
+                  (list agenda-text entry-text cat effort))))))
+      (when (get-buffer org-agenda-buffer-name)
+        (kill-buffer org-agenda-buffer-name))
+      (delete-directory root t))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_agenda_day_entries_properties_timestamp_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -1482,6 +1533,69 @@ fn org_agenda_list_edit_todo_reagenda_deep() {
 }
 
 #[test]
+fn org_agenda_tag_filter_edit_clock_reagenda_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (\"Day-agenda (W22):\\nThursday   28 May 2026\\n  a:          Scheduled:  TODO Alpha                                     :work:\\n  a:          Scheduled:  TODO Beta                                      :home:\\n  a:          Scheduled:  NEXT Gamma                              :work:urgent:\\n  a:          Scheduled:  DONE Delta                                     :home:\\n\" \"Day-agenda (W22):\\nThursday   28 May 2026\\n  a:          Scheduled:  TODO Alpha                                     :work:\\n  a:          Scheduled:  TODO Beta                                      :home:\\n  a:          Scheduled:  NEXT Gamma                              :work:urgent:\\n  a:          Scheduled:  DONE Delta                                     :home:\\n\" \"Day-agenda (W22):\\nThursday   28 May 2026\\n  a:          Scheduled:  TODO Alpha                                     :work:\\n  a:          Scheduled:  TODO Beta                                      :home:\\n  a:          Scheduled:  NEXT Gamma                              :work:urgent:\\n  a:          Scheduled:  DONE Delta                                     :home:\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-agenda)
+  (require 'org-clock)
+  (let* ((root (make-temp-file "org-agenda-clock-" t))
+         (org-agenda-files (list (expand-file-name "a.org" root)))
+         (org-agenda-buffer-name "*TestAgendaClock*")
+         (file (expand-file-name "a.org" root)))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "* TODO Alpha :work:\nSCHEDULED: <2026-05-28 Wed>\n")
+            (insert "* TODO Beta :home:\nSCHEDULED: <2026-05-28 Wed>\n")
+            (insert "* NEXT Gamma :work:urgent:\nSCHEDULED: <2026-05-28 Wed>\n")
+            (insert "* DONE Delta :home:\nSCHEDULED: <2026-05-28 Wed>\n"))
+          ;; Agenda full
+          (org-agenda-list nil "2026-05-28" 1)
+          (with-current-buffer org-agenda-buffer-name
+            (let ((full (replace-regexp-in-string
+                         (regexp-quote root) "<root>"
+                         (buffer-substring-no-properties
+                          (point-min) (point-max)))))
+              ;; Filter by work tag
+              (org-agenda-filter-apply '("+work") 'tag)
+              (let ((work-only (replace-regexp-in-string
+                                (regexp-quote root) "<root>"
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max)))))
+                (org-agenda-filter-remove-all)
+                ;; Edit: clock in on Alpha
+                (goto-char (point-min))
+                (search-forward "Alpha")
+                (beginning-of-line)
+                (org-agenda-goto nil)
+                (with-current-buffer (current-buffer)
+                  (org-clock-in)
+                  (org-clock-out))
+                ;; Re-agenda
+                (set-buffer org-agenda-buffer-name)
+                (org-agenda-quit)
+                (org-agenda-list nil "2026-05-28" 1)
+                (with-current-buffer org-agenda-buffer-name
+                  (let ((after-clock (replace-regexp-in-string
+                                     (regexp-quote root) "<root>"
+                                     (buffer-substring-no-properties
+                                      (point-min) (point-max)))))
+                    (org-agenda-quit)
+                    (list full work-only after-clock)))))))
+      (when (get-buffer org-agenda-buffer-name)
+        (kill-buffer org-agenda-buffer-name))
+      (delete-directory root t))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_agenda_multi_file_edit_clock_reagenda_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -1528,6 +1642,67 @@ fn org_agenda_multi_file_edit_clock_reagenda_deep() {
                                  (point-min) (point-max)))))
                   (org-agenda-quit)
                   (list agenda1 agenda2))))))
+      (when (get-buffer org-agenda-buffer-name)
+        (kill-buffer org-agenda-buffer-name))
+      (delete-directory root t))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_agenda_todo_filter_edit_reschedule_reagenda_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (\"2 days-agenda (W22):\\nThursday   28 May 2026\\n  a:          Scheduled:  TODO Alpha\\n  a:          Scheduled:  DONE Beta\\n  a:          Scheduled:  TODO Gamma\\nFriday     29 May 2026\\n  a:          Scheduled:  NEXT Delta\\n\" \"2 days-agenda (W22):\\nThursday   28 May 2026\\n  a:          Scheduled:  TODO Alpha\\n  a:          Scheduled:  DONE Beta\\n  a:          Scheduled:  TODO Gamma\\nFriday     29 May 2026\\n  a:          Scheduled:  NEXT Delta\\n\" \"2 days-agenda (W22):\\nThursday   28 May 2026\\n  a:          Scheduled:  TODO Alpha\\n  a:          Scheduled:  DONE Beta\\nFriday     29 May 2026\\n  a:          Scheduled:  TODO Gamma\\n  a:          Scheduled:  NEXT Delta\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-agenda)
+  (let* ((root (make-temp-file "org-agenda-filter-" t))
+         (org-agenda-files (list (expand-file-name "a.org" root)))
+         (org-agenda-buffer-name "*TestAgendaFilter*")
+         (file (expand-file-name "a.org" root)))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "* TODO Alpha\nSCHEDULED: <2026-05-28 Wed>\n")
+            (insert "* DONE Beta\nSCHEDULED: <2026-05-28 Wed>\n")
+            (insert "* TODO Gamma\nSCHEDULED: <2026-05-28 Wed>\n")
+            (insert "* NEXT Delta\nSCHEDULED: <2026-05-29 Thu>\n"))
+          ;; Agenda for two days
+          (org-agenda-list nil "2026-05-28" 2)
+          (with-current-buffer org-agenda-buffer-name
+            (let ((full (replace-regexp-in-string
+                         (regexp-quote root) "<root>"
+                         (buffer-substring-no-properties
+                          (point-min) (point-max)))))
+              ;; Filter TODO
+              (org-agenda-filter-apply '("+TODO") 'todo)
+              (let ((todo-only (replace-regexp-in-string
+                                (regexp-quote root) "<root>"
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max)))))
+                (org-agenda-filter-remove-all)
+                ;; Edit: reschedule Gamma to Friday
+                (goto-char (point-min))
+                (search-forward "Gamma")
+                (beginning-of-line)
+                (org-agenda-goto nil)
+                (with-current-buffer (current-buffer)
+                  (org-schedule nil "2026-05-29"))
+                ;; Re-agenda
+                (set-buffer org-agenda-buffer-name)
+                (org-agenda-quit)
+                (org-agenda-list nil "2026-05-28" 2)
+                (with-current-buffer org-agenda-buffer-name
+                  (let ((after-reschedule (replace-regexp-in-string
+                                          (regexp-quote root) "<root>"
+                                          (buffer-substring-no-properties
+                                           (point-min) (point-max)))))
+                    (org-agenda-quit)
+                    (list full todo-only after-reschedule)))))))
       (when (get-buffer org-agenda-buffer-name)
         (kill-buffer org-agenda-buffer-name))
       (delete-directory root t))))"##,

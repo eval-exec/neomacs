@@ -103,6 +103,70 @@ fn org_goto_location_indirect_return_combo() {
 }
 
 #[test]
+fn org_goto_outline_path_completion_command_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (1 (3 \"*** Target\\n\" ((nil :maxlevel . 4)) (10 nil nil nil)) 6 3 \"*** Target\\n\" (56 10 nil nil))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-goto)
+  (with-temp-buffer
+    (let ((org-goto-interface 'outline-path-completion)
+          (org-goto-max-level 4)
+          (org-mark-ring
+           (let ((ring (mapcar (lambda (_) (make-marker))
+                               (number-sequence 1 org-mark-ring-length))))
+             (setcdr (last ring) ring)
+             ring)))
+      (org-mode)
+      (insert "* Project\n")
+      (insert "** Area\n")
+      (insert "*** Target\nBody\n")
+      (insert "**** Too deep\n")
+      (insert "* Other\n")
+      (goto-char (point-min))
+      (search-forward "Project")
+      (let ((origin (line-number-at-pos))
+            (target (save-excursion
+                      (search-forward "*** Target")
+                      (beginning-of-line)
+                      (point)))
+            captured-targets)
+        (cl-letf (((symbol-function 'org-refile-get-location)
+                   (lambda (&rest _)
+                     (setq captured-targets org-refile-targets)
+                     (list "Project/Area/Target" nil nil target)))
+                  ((symbol-function 'org-refile-check-position)
+                   (lambda (location)
+                     (list 'checked (car location) (nth 3 location)))))
+          (org-goto)
+          (let ((after-path (list (line-number-at-pos)
+                                  (thing-at-point 'line t)
+                                  captured-targets
+                                  (mapcar #'marker-position
+                                          (seq-take org-mark-ring org-mark-ring-length)))))
+            (goto-char (point-min))
+            (search-forward "Other")
+            (cl-letf (((symbol-function 'org-goto-location)
+                       (lambda (&rest _)
+                         (cons target 'return))))
+              (let ((before-alt (line-number-at-pos)))
+                (org-goto t)
+                (list origin
+                      after-path
+                      before-alt
+                      (line-number-at-pos)
+                      (thing-at-point 'line t)
+                      (mapcar #'marker-position
+                                          (seq-take org-mark-ring org-mark-ring-length)))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_goto_exit_commands_and_tag_search_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

@@ -40,6 +40,32 @@ fn strong_todo_workflow_state_logging() {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
+fn strong_nested_blocks_with_results() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect =
+        expect_test::expect![[r#""OK (((\"(+ 1 2)\\n\" 1) (\"(* 3 4)\\n\" 59)) (\"3\" \"12\"))""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(with-temp-buffer
+  (org-mode)
+  (insert "#+BEGIN_SRC emacs-lisp\n(+ 1 2)\n#+END_SRC\n\n#+RESULTS:\n: 3\n\n#+BEGIN_SRC emacs-lisp\n(* 3 4)\n#+END_SRC\n\n#+RESULTS:\n: 12")
+  (let* ((tree (org-element-parse-buffer))
+         (blocks (org-element-map tree 'src-block
+                   (lambda (b)
+                     (list (org-element-property :value b)
+                           (org-element-property :post-affiliated b)))))
+         (results (org-element-map tree 'fixed-width
+                    (lambda (f)
+                      (org-element-property :value f)))))
+    (list blocks results)))"##,
+        expect,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Advanced combo: table with column operations
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
 fn strong_table_column_operations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[

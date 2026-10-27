@@ -303,6 +303,131 @@ fn org_inlinetask_cycle_hook_odd_levels_error_combo() {
 }
 
 #[test]
+fn org_inlinetask_adjacent_boundary_cut_paste_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((user-error \"Cannot nest inline tasks\") 3 ((initial ((\"First inline\" 3 \"**** TODO First inline\" t t 4 3 6 org-hide) (\"First body\" 4 \"First body\" nil t 4 3 6 nil) (\"Second inline\" 6 \"**** WAIT Second inline\" t t 4 6 9 org-hide) (\"Second body\" 7 \"Second body\" nil t 4 6 9 nil) (\"Third no end\" 9 \"**** TODO Third no end\" t t 4 9 10 org-hide) (\"Third body\" 10 \"Third body\" nil nil 4 9 11 nil) (\"After\" 11 \"** After\" nil nil 4 9 12 org-level-2)) 5 \"* Parent\\nIntro\\n**** TODO First inline\\nFirst body\\n**** END\\n**** WAIT Second inline\\nSecond body\\n**** END\\n**** TODO Third no end\\nThird body\\n** After\\nAfter body\\n\") (after-boundary-insert ((\"First inline\" 3 \"**** TODO First inline\" t t 4 3 6 org-hide) (\"First body\" 4 \"First body\" nil t 4 3 6 nil) (\"Second inline\" 9 \"**** WAIT Second inline\" t t 4 9 12 org-hide) (\"Second body\" 10 \"Second body\" nil t 4 9 12 nil) (\"Third no end\" 12 \"**** TODO Third no end\" t t 4 12 13 org-hide) (\"Third body\" 13 \"Third body\" nil nil 4 12 14 nil) (\"After\" 14 \"** After\" nil nil 4 12 15 org-level-2)) 7 \"* Parent\\nIntro\\n**** TODO First inline\\nFirst body\\n**** END\\n**** NEXT Inserted before second\\n\\n**** END\\n**** WAIT Second inline\\nSecond body\\n**** END\\n**** TODO Third no end\\nThird body\\n** After\\nAfter body\\n\") (after-no-end-goto-end ((\"First inline\" 3 \"**** TODO First inline\" t t 4 3 6 org-hide) (\"First body\" 4 \"First body\" nil t 4 3 6 nil) (\"Second inline\" 9 \"**** WAIT Second inline\" t t 4 9 12 org-hide) (\"Second body\" 10 \"Second body\" nil t 4 9 12 nil) (\"Third no end\" 12 \"**** TODO Third no end\" t t 4 12 13 org-hide) (\"Third body\" 14 \"Third body\" nil nil 4 12 15 nil) (\"After\" 13 \"Line after third end calc\" nil nil 4 12 14 nil)) 7 \"* Parent\\nIntro\\n**** TODO First inline\\nFirst body\\n**** END\\n**** NEXT Inserted before second\\n\\n**** END\\n**** WAIT Second inline\\nSecond body\\n**** END\\n**** TODO Third no end\\nLine after third end calc\\nThird body\\n** After\\nAfter body\\n\") (after-demote-first ((\"First inline\" 3 \"***** TODO First inline\" t t 5 3 6 nil) (\"First body\" 4 \" First body\" nil t 5 3 6 nil) (\"Second inline\" 9 \"**** WAIT Second inline\" t t 4 9 12 org-hide) (\"Second body\" 10 \"Second body\" nil t 4 9 12 nil) (\"Third no end\" 12 \"**** TODO Third no end\" t t 4 12 13 org-hide) (\"Third body\" 14 \"Third body\" nil nil 4 12 15 nil) (\"After\" 13 \"Line after third end calc\" nil nil 4 12 14 nil)) 7 \"* Parent\\nIntro\\n***** TODO First inline\\n First body\\n***** END\\n**** NEXT Inserted before second\\n\\n**** END\\n**** WAIT Second inline\\nSecond body\\n**** END\\n**** TODO Third no end\\nLine after third end calc\\nThird body\\n** After\\nAfter body\\n\") (after-promote-first ((\"First inline\" 3 \"**** TODO First inline\" t t 4 3 6 nil) (\"First body\" 4 \"First body\" nil t 4 3 6 nil) (\"Second inline\" 9 \"**** WAIT Second inline\" t t 4 9 12 org-hide) (\"Second body\" 10 \"Second body\" nil t 4 9 12 nil) (\"Third no end\" 12 \"**** TODO Third no end\" t t 4 12 13 org-hide) (\"Third body\" 14 \"Third body\" nil nil 4 12 15 nil) (\"After\" 13 \"Line after third end calc\" nil nil 4 12 14 nil)) 7 \"* Parent\\nIntro\\n**** TODO First inline\\nFirst body\\n**** END\\n**** NEXT Inserted before second\\n\\n**** END\\n**** WAIT Second inline\\nSecond body\\n**** END\\n**** TODO Third no end\\nLine after third end calc\\nThird body\\n** After\\nAfter body\\n\") (after-cut-paste-first ((\"First inline\" 10 \"**** TODO First inline\" t t 4 10 13 nil) (\"First body\" 11 \"First body\" nil t 4 10 13 nil) (\"Second inline\" 6 \"**** WAIT Second inline\" t t 4 6 9 org-hide) (\"Second body\" 7 \"Second body\" nil t 4 6 9 nil) (\"Third no end\" 9 \"**** TODO Third no end\" t t 4 9 10 org-hide) (\"Third body\" 14 \"Third body\" nil nil 4 10 15 nil) (\"After\" 13 \"Line after third end calc\" nil nil 4 10 14 nil)) 7 \"* Parent\\nIntro\\n**** NEXT Inserted before second\\n\\n**** END\\n**** WAIT Second inline\\nSecond body\\n**** END\\n**** TODO Third no end\\n**** TODO First inline\\nFirst body\\n**** END\\nLine after third end calc\\nThird body\\n** After\\nAfter body\\n\") (after-region-no-state ((\"First inline\" 10 \"**** TODO First inline\" t t 4 10 13 nil) (\"First body\" 11 \"First body\" nil t 4 10 13 nil) (\"Second inline\" 6 \"**** WAIT Second inline\" t t 4 6 9 org-hide) (\"Second body\" 7 \"Second body\" nil t 4 6 9 nil) (\"Third no end\" 9 \"**** TODO Third no end\" t t 4 9 10 org-hide) (\"Third body\" 14 \"Third body\" nil nil 4 10 17 nil) (\"After\" 13 \"Line after third end calc\" nil nil 4 10 17 nil)) 9 \"* Parent\\nIntro\\n**** NEXT Inserted before second\\n\\n**** END\\n**** WAIT Second inline\\nSecond body\\n**** END\\n**** TODO Third no end\\n**** TODO First inline\\nFirst body\\n**** END\\nLine after third end calc\\nThird body\\n** After\\n**** \\nAfter body\\n\\n**** END\\n\\n\")) \"* Parent\\nIntro\\n**** NEXT Inserted before second\\n\\n**** END\\n**** WAIT Second inline\\nSecond body\\n**** END\\n**** TODO Third no end\\n**** TODO First inline\\nFirst body\\n**** END\\nLine after third end calc\\nThird body\\n** After\\n**** \\nAfter body\\n\\n**** END\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-inlinetask)
+  (with-temp-buffer
+    (let ((org-inlinetask-min-level 4)
+          (org-inlinetask-default-state "NEXT")
+          (org-adapt-indentation t)
+          (transient-mark-mode t))
+      (org-mode)
+      (insert "* Parent\n")
+      (insert "Intro\n")
+      (insert "**** TODO First inline\n")
+      (insert "First body\n")
+      (insert "**** END\n")
+      (insert "**** WAIT Second inline\n")
+      (insert "Second body\n")
+      (insert "**** END\n")
+      (insert "**** TODO Third no end\n")
+      (insert "Third body\n")
+      (insert "** After\n")
+      (insert "After body\n")
+      (font-lock-ensure (point-min) (point-max))
+      (let (states)
+        (cl-labels
+            ((row
+              (needle)
+              (save-excursion
+                (goto-char (point-min))
+                (search-forward needle)
+                (beginning-of-line)
+                (list needle
+                      (line-number-at-pos)
+                      (buffer-substring-no-properties
+                       (line-beginning-position) (line-end-position))
+                      (org-inlinetask-at-task-p)
+                      (org-inlinetask-in-task-p)
+                      (condition-case err
+                          (org-inlinetask-get-task-level)
+                        (error (cons (car err) (cdr err))))
+                      (save-excursion
+                        (condition-case err
+                            (progn
+                              (org-inlinetask-goto-beginning)
+                              (line-number-at-pos))
+                          (error (cons (car err) (cdr err)))))
+                      (save-excursion
+                        (condition-case err
+                            (progn
+                              (org-inlinetask-goto-end)
+                              (line-number-at-pos))
+                          (error (cons (car err) (cdr err)))))
+                      (get-text-property (point) 'face))))
+             (snapshot
+              (label)
+              (list label
+                    (mapcar #'row
+                            '("First inline" "First body"
+                              "Second inline" "Second body"
+                              "Third no end" "Third body" "After"))
+                    (count-matches "^\\*\\{4,\\} " (point-min) (point-max))
+                    (buffer-substring-no-properties
+                     (point-min) (point-max)))))
+          (push (snapshot 'initial) states)
+          (goto-char (point-min))
+          (search-forward "Second body")
+          (beginning-of-line)
+          (let ((nest-error
+                 (condition-case err
+                     (progn (org-inlinetask-insert-task nil) 'no-error)
+                   (error (list (car err) (cadr err))))))
+            (goto-char (point-min))
+            (search-forward "Second inline")
+            (beginning-of-line)
+            (org-inlinetask-insert-task nil)
+            (insert "Inserted before second\n")
+            (push (snapshot 'after-boundary-insert) states)
+            (goto-char (point-min))
+            (search-forward "Third no end")
+            (beginning-of-line)
+            (org-inlinetask-goto-end)
+            (insert "Line after third end calc\n")
+            (push (snapshot 'after-no-end-goto-end) states)
+            (goto-char (point-min))
+            (search-forward "First inline")
+            (beginning-of-line)
+            (org-inlinetask-demote)
+            (push (snapshot 'after-demote-first) states)
+            (org-inlinetask-promote)
+            (push (snapshot 'after-promote-first) states)
+            (goto-char (point-min))
+            (search-forward "First inline")
+            (beginning-of-line)
+            (let ((cut-start (line-number-at-pos)))
+              (kill-region (point)
+                           (save-excursion
+                             (org-inlinetask-goto-end)
+                             (point)))
+              (goto-char (point-min))
+              (search-forward "After")
+              (beginning-of-line)
+              (yank)
+              (push (snapshot 'after-cut-paste-first) states)
+              (goto-char (point-min))
+              (search-forward "After body")
+              (end-of-line)
+              (push-mark (line-beginning-position) nil t)
+              (org-inlinetask-insert-task t)
+              (push (snapshot 'after-region-no-state) states)
+              (list nest-error
+                    cut-start
+                    (nreverse states)
+                    (buffer-substring-no-properties
+                     (point-min) (point-max))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_inlinetask_insert_promote_demote_export_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

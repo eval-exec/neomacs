@@ -129,6 +129,81 @@ fn org_timer_countdown_effort_title_mode_line_combo() {
 }
 
 #[test]
+fn org_timer_restart_offset_parse_item_error_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((27360 29214 830338 537000) nil \"<0:02:03>\") \"<0:02:03>\" \"* Timer\\nExisting stamp 0:02:03 here.\\n- plain item\\n\\nInserted: <0:02:03>\" (error \"This is not a timer list\") ((\"7\" \"0:00:07\" 7) (\"2:03\" \"0:02:03\" 123) (\"1:02:03\" \"1:02:03\" 3723) (\"bad\" (error \"Cannot parse HMS string \\\"bad\\\"\"))) (\"-1:02:03\" \"-0:00:01\" \"0:00:00\" \"0:01:01\" \"1:01:01\") nil nil nil)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-timer)
+  (with-temp-buffer
+    (let ((org-timer-format "<%s>")
+          (org-timer-display nil)
+          (events nil))
+      (add-hook 'org-timer-start-hook
+                (lambda () (push (list 'start org-timer-start-time)
+                                 events))
+                nil t)
+      (add-hook 'org-timer-stop-hook
+                (lambda () (push 'stop events)) nil t)
+      (org-mode)
+      (insert "* Timer\n")
+      (insert "Existing stamp 0:02:03 here.\n")
+      (insert "- plain item\n")
+      (goto-char (point-min))
+      (search-forward "0:02:03")
+      (cl-letf (((symbol-function 'current-time)
+                 (lambda () (seconds-to-time 5000)))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _) "")))
+        (org-timer-start '(4)))
+      (let ((after-start (list org-timer-start-time
+                               org-timer-pause-time
+                               (org-timer-value-string))))
+        (cl-letf (((symbol-function 'current-time)
+                   (lambda () (seconds-to-time 5010))))
+          (let ((no-insert (org-timer nil t)))
+            (goto-char (point-max))
+            (insert "\nInserted: ")
+            (org-timer nil nil)
+            (let ((after-insert
+                   (buffer-substring-no-properties
+                    (point-min) (point-max)))
+                  (plain-item-error
+                   (progn
+                     (goto-char (point-min))
+                     (search-forward "- plain item")
+                     (condition-case err
+                         (progn (org-timer-item nil) 'no-error)
+                       (error (cons (car err) (cdr err)))))))
+              (org-timer-stop)
+              (list after-start
+                    no-insert
+                    after-insert
+                    plain-item-error
+                    (mapcar (lambda (s)
+                              (condition-case err
+                                  (list s
+                                        (org-timer-fix-incomplete s)
+                                        (org-timer-hms-to-secs
+                                         (org-timer-fix-incomplete s)))
+                                (error (list s (cons (car err) (cdr err))))))
+                            '("7" "2:03" "1:02:03" "bad"))
+                    (mapcar #'org-timer-secs-to-hms
+                            '(-3723 -1 0 61 3661))
+                    (mapcar (lambda (event)
+                              (if (consp event) (car event) event))
+                            (nreverse events))
+                    org-timer-start-time
+                    org-timer-pause-time))))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_timer_list_region_countdown_element_lifecycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -251,6 +326,128 @@ fn org_timer_list_region_countdown_element_lifecycle_combo() {
                 global-mode-string
                 (buffer-substring-no-properties
                  (point-min) (point-max))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_timer_countdown_replace_done_display_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((effort-set t (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) \"TODO Countdown target\" (27360 29677 273768 575000) nil \" <0:05:59>\" (:fake-timer 1 1 org-timer-update-mode-line nil) (\"\") (org-timer-mode-line-string) \"0:05:59 \" (force-mode-line) nil nil ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil))) (replace-declined t (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) \"TODO Countdown target\" (27360 29677 273768 575000) nil \" <0:05:59>\" (:fake-timer 1 1 org-timer-update-mode-line nil) (\"\") (org-timer-mode-line-string) \"0:05:59 \" (force-mode-line) nil nil ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil))) (replace-accepted t (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) \"TODO Countdown target\" (27360 29677 273858 327000) nil \" <0:05:59>\" (:fake-timer 1 1 org-timer-update-mode-line nil) (\"\") (org-timer-mode-line-string) \"0:05:59 \" (force-mode-line force-mode-line) ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil)) nil ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil))) (paused nil paused \"TODO Countdown target\" (27360 29677 273858 327000) (0 1000 0 0) \" <0:05:59>\" nil (\"\") (org-timer-mode-line-string) \"498081:33:57 \" (force-mode-line force-mode-line) ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil)) nil ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil))) (continued t (:fake-timer 1793093637.2738583 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) \"TODO Countdown target\" (29378051395975166531929 . 0) nil \" <498081:33:57>\" (:fake-timer 1 1 org-timer-update-mode-line nil) (\"\") (org-timer-mode-line-string) \"498081:33:57 \" (force-mode-line force-mode-line force-mode-line) ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil)) nil ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 1793093637.2738583 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil))) (forced-replace t (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) \"TODO Countdown target\" (27360 29677 273925 726000) nil \" <0:05:59>\" (:fake-timer 1 1 org-timer-update-mode-line nil) (\"\") (org-timer-mode-line-string) \"0:05:59 \" (force-mode-line force-mode-line force-mode-line force-mode-line) ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 1793093637.2738583 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil)) nil ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 1793093637.2738583 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil))) (after-callback nil nil \"TODO Countdown target\" nil nil \" <0:05:59>\" nil (\"\") nil \"0:00:01 \" (force-mode-line force-mode-line force-mode-line force-mode-line force-mode-line) ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 1793093637.2738583 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 1 1 org-timer-update-mode-line nil)) ((\"TODO Countdown target: time out\" \"ding\")) ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 1793093637.2738583 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil)))) (force-mode-line force-mode-line force-mode-line force-mode-line force-mode-line (user-error \"No timer running\")) ((:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 360 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 1793093637.2738583 nil #[0 \"���\\\"���!���!�ɉ\u{12}�\u{13}�\" [\"ding\" \"TODO Countdown target: time out\" org-timer-countdown-timer org-timer-start-time org-notify org-timer-set-mode-line off run-hooks org-timer-done-hook nil] 4] nil) (:fake-timer 1 1 org-timer-update-mode-line nil) (:fake-timer 1 1 org-timer-update-mode-line nil)) ((\"TODO Countdown target: time out\" \"ding\")) nil nil nil (\"\") nil \"* TODO Countdown target\\n:PROPERTIES:\\n:Effort: 0:06\\n:END:\\nBody\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-timer)
+  (with-temp-buffer
+    (let ((org-timer-display 'both)
+          (org-timer-default-timer "0:04")
+          (org-clock-sound "ding")
+          (global-mode-string nil)
+          (frame-title-format nil)
+          (events nil)
+          (fake-timers nil)
+          (cancelled nil)
+          (notify nil)
+          (answers nil))
+      (add-hook 'org-timer-set-hook
+                (lambda () (push (list 'set
+                                       org-timer-countdown-timer-title
+                                       org-timer-start-time)
+                                 events))
+                nil t)
+      (add-hook 'org-timer-pause-hook
+                (lambda () (push (list 'pause org-timer-pause-time)
+                                 events))
+                nil t)
+      (add-hook 'org-timer-continue-hook
+                (lambda () (push (list 'continue org-timer-start-time)
+                                 events))
+                nil t)
+      (add-hook 'org-timer-stop-hook
+                (lambda () (push 'stop events))
+                nil t)
+      (add-hook 'org-timer-done-hook
+                (lambda () (push 'done events))
+                nil t)
+      (org-mode)
+      (insert "* TODO Countdown target\n")
+      (insert ":PROPERTIES:\n:Effort: 0:06\n:END:\nBody\n")
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'run-with-timer)
+                 (lambda (secs repeat function &rest args)
+                   (let ((timer (list :fake-timer secs repeat function args)))
+                     (push timer fake-timers)
+                     timer)))
+                ((symbol-function 'timerp)
+                 (lambda (object)
+                   (and (consp object) (eq (car object) :fake-timer))))
+                ((symbol-function 'cancel-timer)
+                 (lambda (timer) (push timer cancelled) nil))
+                ((symbol-function 'timer--time)
+                 (lambda (timer) (seconds-to-time (plist-get (cdr timer) :fake-timer))))
+                ((symbol-function 'org-notify)
+                 (lambda (message sound) (push (list message sound) notify)))
+                ((symbol-function 'y-or-n-p)
+                 (lambda (&rest _) (pop answers)))
+                ((symbol-function 'force-mode-line-update)
+                 (lambda (&rest _) (push 'force-mode-line events)))
+                ((symbol-function 'current-time)
+                 (lambda () (seconds-to-time 1000))))
+        (let (states)
+          (let ((snapshot
+                 (lambda (label)
+                   (list label
+                         (timerp org-timer-countdown-timer)
+                         org-timer-countdown-timer
+                         org-timer-countdown-timer-title
+                         org-timer-start-time
+                         org-timer-pause-time
+                         org-timer-mode-line-string
+                         org-timer-mode-line-timer
+                         global-mode-string
+                         frame-title-format
+                         (org-timer-value-string)
+                         (nreverse (copy-sequence events))
+                         (nreverse (copy-sequence cancelled))
+                         (nreverse (copy-sequence notify))
+                         (nreverse (copy-sequence fake-timers))))))
+            (org-timer-set-timer nil)
+            (push (funcall snapshot 'effort-set) states)
+            (setq answers '(nil))
+            (org-timer-set-timer "0:02")
+            (push (funcall snapshot 'replace-declined) states)
+            (setq answers '(t))
+            (org-timer-set-timer "0:02")
+            (push (funcall snapshot 'replace-accepted) states)
+            (org-timer-pause-or-continue nil)
+            (push (funcall snapshot 'paused) states)
+            (cl-letf (((symbol-function 'current-time)
+                       (lambda () (seconds-to-time 1015))))
+              (org-timer-pause-or-continue nil))
+            (push (funcall snapshot 'continued) states)
+            (org-timer-set-timer '(16))
+            (push (funcall snapshot 'forced-replace) states)
+            (let* ((timer org-timer-countdown-timer)
+                   (callback (nth 3 timer)))
+              (funcall callback))
+            (push (funcall snapshot 'after-callback) states)
+            (condition-case err
+                (org-timer-stop)
+              (error (push (cons (car err) (cdr err)) events)))
+            (list (nreverse states)
+                  (nreverse events)
+                  (nreverse cancelled)
+                  (nreverse notify)
+                  org-timer-start-time
+                  org-timer-pause-time
+                  org-timer-countdown-timer
+                  global-mode-string
+                  frame-title-format
+                   (buffer-substring-no-properties
+                    (point-min) (point-max)))))))))"##,
         expect,
     );
 }

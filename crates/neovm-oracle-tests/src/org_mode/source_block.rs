@@ -460,6 +460,92 @@ fn org_babel_named_navigation_results_combo() {
 }
 
 #[test]
+fn org_babel_subtree_execute_hooks_results_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r##""OK (((confirm \"emacs-lisp\" \"(+ base 1)\") (confirm \"emacs-lisp\" \"(+ base 1)\") (after 143 \"first\") (confirm \"emacs-lisp\" \"(+ base 2)\") (confirm \"emacs-lisp\" \"(+ base 2)\") (after 235 \"second\")) \"#+RESULTS: first\" \"#+RESULTS: second\" nil \"#+RESULTS: outside\" ((confirm \"emacs-lisp\" \"(+ 100 3)\") (confirm \"emacs-lisp\" \"(+ 100 3)\") (after 340 \"outside\") (confirm \"emacs-lisp\" \"(* base 3)\") (confirm \"emacs-lisp\" \"(* base 3)\") (after 143 \"first\") (confirm \"emacs-lisp\" \"(+ base 2)\") (confirm \"emacs-lisp\" \"(+ base 2)\") (after 235 \"second\") (confirm \"emacs-lisp\" \"(+ 100 3)\") (confirm \"emacs-lisp\" \"(+ 100 3)\") (after 340 \"outside\")) \"#+PROPERTY: header-args:emacs-lisp :results value replace drawer\\n* Run\\n:PROPERTIES:\\n:header-args:emacs-lisp: :var base=10\\n:END:\\n#+NAME: first\\n#+begin_src emacs-lisp\\n(+ base 1)\\n#+end_src\\n\\n#+RESULTS: first\\n: 11\\n\\n** Child\\n#+NAME: second\\n#+begin_src emacs-lisp :var base=20\\n(+ base 2)\\n#+end_src\\n\\n#+RESULTS: second\\n: 22\\n\\n* Skip\\n#+NAME: outside\\n#+begin_src emacs-lisp\\n(+ 100 3)\\n#+end_src\\n\" \"#+PROPERTY: header-args:emacs-lisp :results value replace drawer\\n* Run\\n:PROPERTIES:\\n:header-args:emacs-lisp: :var base=10\\n:END:\\n#+NAME: first\\n#+begin_src emacs-lisp\\n(* base 3)\\n#+end_src\\n\\n#+RESULTS: first\\n: 30\\n\\n** Child\\n#+NAME: second\\n#+begin_src emacs-lisp :var base=20\\n(+ base 2)\\n#+end_src\\n\\n#+RESULTS: second\\n: 22\\n\\n* Skip\\n#+NAME: outside\\n#+begin_src emacs-lisp\\n(+ 100 3)\\n#+end_src\\n\\n#+RESULTS: outside\\n: 103\\n\")""##
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'ob-core)
+  (require 'ob-emacs-lisp)
+  (with-temp-buffer
+    (let* (events
+           (org-confirm-babel-evaluate
+           (lambda (lang body)
+             (push (list 'confirm lang
+                         (replace-regexp-in-string "[ \t\n]+" " " body))
+                   events)
+             nil))
+          (org-babel-after-execute-hook
+           (list (lambda ()
+                   (push (list 'after
+                               (org-babel-where-is-src-block-head)
+                               (save-excursion
+                                 (org-babel-goto-src-block-head)
+                                 (org-element-property
+                                  :name (org-element-at-point))))
+                         events)))))
+      (org-mode)
+      (insert "#+PROPERTY: header-args:emacs-lisp :results value replace drawer\n")
+      (insert "* Run\n")
+      (insert ":PROPERTIES:\n:header-args:emacs-lisp: :var base=10\n:END:\n")
+      (insert "#+NAME: first\n")
+      (insert "#+begin_src emacs-lisp\n(+ base 1)\n#+end_src\n\n")
+      (insert "** Child\n")
+      (insert "#+NAME: second\n")
+      (insert "#+begin_src emacs-lisp :var base=20\n(+ base 2)\n#+end_src\n")
+      (insert "* Skip\n")
+      (insert "#+NAME: outside\n")
+      (insert "#+begin_src emacs-lisp\n(+ 100 3)\n#+end_src\n")
+      (goto-char (point-min))
+      (search-forward "* Run")
+      (beginning-of-line)
+      (org-babel-execute-subtree)
+      (let ((after-subtree
+             (buffer-substring-no-properties (point-min) (point-max)))
+            (subtree-events (nreverse events))
+            (first-result (save-excursion
+                            (org-babel-goto-named-result "first")
+                            (buffer-substring-no-properties
+                             (line-beginning-position)
+                             (line-end-position))))
+            (second-result (save-excursion
+                             (org-babel-goto-named-result "second")
+                             (buffer-substring-no-properties
+                              (line-beginning-position)
+                              (line-end-position))))
+            (outside-result (org-babel-find-named-result "outside")))
+        (setq events nil)
+        (goto-char (point-min))
+        (search-forward "(+ 100 3)")
+        (org-babel-execute-src-block)
+        (let ((outside-after-one
+               (save-excursion
+                 (org-babel-goto-named-result "outside")
+                 (buffer-substring-no-properties
+                  (line-beginning-position)
+                  (line-end-position)))))
+          (goto-char (point-min))
+          (search-forward "(+ base 1)")
+          (replace-match "(* base 3)" t t)
+          (org-babel-execute-buffer)
+          (list subtree-events
+                first-result
+                second-result
+                outside-result
+                outside-after-one
+                (nreverse events)
+                after-subtree
+                (buffer-substring-no-properties
+                 (point-min) (point-max))))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_babel_tangle_collect_single_block_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -1318,6 +1404,52 @@ fn org_babel_tangle_header_args_noweb_comments_deep_state_combo() {
                        (and content-a
                             (not (string-match-p "<<shared>>" content-a)))))))))
       (delete-directory root t)))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_src_edit_exit_writeback_preserve_structure_deep_state_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r##""OK (emacs-lisp-mode \"(+ 1 2)\\n\" \"#+begin_src emacs-lisp\\n  (+ 10 20)\\n  (+ 30 40)\\n#+end_src\\n\\n#+begin_src python\\nprint('hello')\\n#+end_src\\n\\nBetween blocks.\\n\\n#+begin_src emacs-lisp\\n(message \\\"test\\\")\\n#+end_src\\n\" \"#+begin_src emacs-lisp\\n  (+ 10 20)\\n  (+ 30 40)\\n#+end_src\\n\\n#+begin_src python\\n  print('modified')\\n  print('extra')\\n#+end_src\\n\\nBetween blocks.\\n\\n#+begin_src emacs-lisp\\n(message \\\"test\\\")\\n#+end_src\\n\" ((\"emacs-lisp\" \"  (+ 10 20)\\n  (+ 30 40)\\n\") (\"python\" \"  print('modified')\\n  print('extra')\\n\") (\"emacs-lisp\" \"(message \\\"test\\\")\\n\")))""##
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-src)
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_src emacs-lisp\n(+ 1 2)\n#+end_src\n\n")
+    (insert "#+begin_src python\nprint('hello')\n#+end_src\n\n")
+    (insert "Between blocks.\n\n")
+    (insert "#+begin_src emacs-lisp\n(message \"test\")\n#+end_src\n")
+    (goto-char (point-min))
+    (search-forward "(+ 1 2)")
+    (org-edit-src-code)
+    (let ((edit-mode major-mode)
+          (edit-buf (buffer-substring-no-properties
+                     (point-min) (point-max))))
+      (erase-buffer)
+      (insert "(+ 10 20)\n(+ 30 40)\n")
+      (org-edit-src-exit)
+    (let ((after-first-edit (buffer-substring-no-properties
+                             (point-min) (point-max))))
+      (goto-char (point-min))
+      (search-forward "print")
+      (org-edit-src-code)
+      (erase-buffer)
+      (insert "print('modified')\nprint('extra')\n")
+      (org-edit-src-exit)
+      (let ((after-second-edit (buffer-substring-no-properties
+                                (point-min) (point-max))))
+        (let ((blocks
+               (org-element-map (org-element-parse-buffer) 'src-block
+                 (lambda (sb)
+                   (list (org-element-property :language sb)
+                         (org-element-property :value sb))))))
+          (list edit-mode edit-buf after-first-edit after-second-edit blocks)))))))"##,
         expect,
     );
 }

@@ -438,6 +438,50 @@ fn org_export_collect_options_references_combo() {
 }
 
 #[test]
+fn org_export_derived_backend_transcoder_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (t t t t t t \"<div id=\\\"outline-container-org-id\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"org-id\\\"><span class=\\\"section-number-2\\\">1.</span> H</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p class=\\\"oracle-p\\\">Text <strong data-oracle=\\\"yes\\\">bold</strong> and <a href=\\\"https://example.org\\\">link</a>.\\n</p>\\n</div>\\n</div>\\n\\n<!--oracle-html-->\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'ox-html)
+  (org-export-define-derived-backend
+      'oracle-html 'html
+    :translate-alist
+    '((bold . (lambda (bold contents info)
+                (format "<strong data-oracle=\"yes\">%s</strong>" contents)))
+      (paragraph . (lambda (paragraph contents info)
+                     (format "<p class=\"oracle-p\">%s</p>" contents))))
+    :filters-alist
+    '((:filter-final-output
+       . ((lambda (output backend info)
+           (concat output "\n<!--oracle-html-->"))))))
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+TITLE: Derived\n")
+    (insert "* H\n")
+    (insert "Text *bold* and [[https://example.org][link]].\n")
+    (let* ((org-export-with-toc nil)
+           (out (org-export-as 'oracle-html nil nil t nil))
+           (backend (org-export-get-backend 'oracle-html)))
+      (list (not (null (org-export-get-backend 'oracle-html)))
+            (not (null (assq 'bold (org-export-get-all-transcoders backend))))
+            (not (null (assq :filter-final-output
+                             (org-export-get-all-filters backend))))
+            (not (null (string-match-p "data-oracle" out)))
+            (not (null (string-match-p "oracle-p" out)))
+            (not (null (string-match-p "oracle-html" out)))
+                 (replace-regexp-in-string
+                  "org[[:alnum:]]+"
+                  "org-id"
+                  out)))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_export_headline_number_tags_todo_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

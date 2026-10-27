@@ -87,6 +87,58 @@ fn org_done_log_drawer_timestamp_normalized_combo() {
 }
 
 #[test]
+fn org_property_inheritance_allowed_cycle_delete_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r##""OK ((\"Bea\" \"M1\" \"M1\") ((#(\"Todo\" 0 4 (org-unrestricted t))) (\"Doing\") (\"Done\")) \"Doing\" (\"y\") (\"y\") nil \"#+PROPERTY: Status_ALL Todo Doing Done :ETC\\n* Project\\n:PROPERTIES:\\n:Owner: Ada\\n:Milestone: M1\\n:END:\\n** Task\\n:PROPERTIES:\\n:Status:   Doing\\n:Owner: Bea\\n:Multi:    y\\n:END:\\n\")""##
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (with-temp-buffer
+    (let ((org-use-property-inheritance '("Owner" "Milestone"))
+          (changes nil))
+      (add-hook 'org-property-changed-functions
+                (lambda (key value) (push (list key value) changes))
+                nil t)
+      (org-mode)
+      (insert "#+PROPERTY: Status_ALL Todo Doing Done :ETC\n")
+      (insert "* Project\n")
+      (insert ":PROPERTIES:\n:Owner: Ada\n:Milestone: M1\n:END:\n")
+      (insert "** Task\n")
+      (insert ":PROPERTIES:\n:Status: Todo\n:Owner: Bea\n:Other: keep\n:END:\n")
+      (org-set-regexps-and-options)
+      (goto-char (point-min))
+      (search-forward "Task")
+      (beginning-of-line)
+      (let ((inherited (list (org-entry-get nil "Owner" 'inherit)
+                             (org-entry-get nil "Milestone" 'inherit)
+                             (org-entry-get-with-inheritance "Milestone")))
+            (allowed (org-property-get-allowed-values nil "Status" 'table)))
+        (search-forward ":Status:")
+        (org-property-next-allowed-value)
+        (org-property-next-allowed-value)
+        (org-property-previous-allowed-value)
+        (goto-char (point-min))
+        (search-forward "Task")
+        (beginning-of-line)
+        (org-entry-add-to-multivalued-property nil "Multi" "x")
+        (org-entry-add-to-multivalued-property nil "Multi" "y")
+        (org-entry-remove-from-multivalued-property nil "Multi" "x")
+        (org-entry-delete nil "Other")
+        (list inherited
+              allowed
+              (org-entry-get nil "Status")
+              (org-entry-get-multivalued-property nil "Multi")
+              (org-entry-member-in-multivalued-property nil "Multi" "y")
+              (nreverse changes)
+              (buffer-substring-no-properties (point-min) (point-max)))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_property_values_global_delete_roundtrip_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -118,6 +170,48 @@ fn org_property_values_global_delete_roundtrip_combo() {
             (org-property-values "Effort")
             (org-entry-properties nil 'standard)
             (buffer-substring-no-properties (point-min) (point-max))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_property_set_delete_allowed_values_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r##""OK (\"#+PROPERTY: Phase_ALL Plan Build Ship\\n* Project\\n** Task\\n:PROPERTIES:\\n:Phase:    Plan\\n:Owner:    Ada\\n:END:\\n\" ((\"Plan\") (\"Build\") (\"Ship\")) ((\"CATEGORY\" . \"???\") (\"PHASE\" . \"Plan\")) \"Owner\" \"Owner: Ada\" \"#+PROPERTY: Phase_ALL Plan Build Ship\\n* Project\\n** Task\\n:PROPERTIES:\\n:Phase:    Plan\\n:END:\\n\")""##
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+PROPERTY: Phase_ALL Plan Build Ship\n")
+    (insert "* Project\n")
+    (insert "** Task\n")
+    (org-set-regexps-and-options)
+    (goto-char (point-min))
+    (search-forward "Task")
+    (beginning-of-line)
+    (let ((org-last-set-property "Phase")
+          (org-last-set-property-value "Build"))
+      (org-set-property "Phase" "Plan")
+      (org-set-property "Owner" "Ada")
+      (let ((after-set (buffer-substring-no-properties
+                        (point-min) (point-max)))
+            (allowed (org-property-get-allowed-values nil "Phase" 'table)))
+        (org-delete-property "Owner")
+        (search-forward ":Phase:")
+        (org-property-next-allowed-value)
+        (org-property-next-allowed-value)
+        (org-property-next-allowed-value)
+        (list after-set
+              allowed
+              (org-entry-properties nil 'standard)
+              org-last-set-property
+              org-last-set-property-value
+              (buffer-substring-no-properties
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -194,6 +288,137 @@ fn org_log_repeat_reschedule_redeadline_combo() {
              "[stamp]"
              (buffer-substring-no-properties
               (point-min) (point-max)))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_property_clock_drawer_fold_element_lifecycle_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r##""OK (((initial ((\"Project\" 2 nil headline) (\":Client:\" 4 nil node-property) (\"Alpha\" 7 nil headline) (\":Status:\" 9 nil node-property) (\"Alpha body\" 12 nil paragraph) (\"CLOCK:\" not-found) (\"Beta\" 13 nil headline) (\"Beta child\" 18 nil headline) (\"Child body\" 23 nil paragraph) (\"Tail\" 24 nil headline)) ((headline 48 344 \"Project\" nil (\"work\")) (property-drawer 65 110 nil nil nil) (headline 110 191 \"Alpha\" \"TODO\" (\"billable\")) (property-drawer 135 180 nil nil nil) (headline 191 344 \"Beta\" \"TODO\" (\"internal\")) (property-drawer 215 246 nil nil nil) (headline 256 344 \"WAIT Beta child\" nil (\"blocked\")) (property-drawer 286 333 nil nil nil) (headline 344 361 \"Tail\" nil nil)) ((\"Project\" \"Acme\" \"S1\" nil nil nil) (\"Alpha\" \"Acme\" \"S1\" \"Todo\" nil nil) (\"Beta\" \"Acme\" \"S1\" nil nil nil) (\"WAIT Beta child\" \"Acme\" \"S1\" \"Blocked\" nil nil) (\"Tail\" nil nil nil nil nil)) \"#+PROPERTY: Status_ALL Todo Doing Blocked Done\\n* Project :work:\\n:PROPERTIES:\\n:Client: Acme\\n:Sprint: S1\\n:END:\\n** TODO Alpha :billable:\\n:PROPERTIES:\\n:Status: Todo\\n:Owner: Ada\\n:END:\\nAlpha body\\n** TODO Beta :internal:\\n:PROPERTIES:\\n:Owner: Bea\\n:END:\\nBeta body\\n*** WAIT Beta child :blocked:\\n:PROPERTIES:\\n:Status: Blocked\\n:Owner: Cy\\n:END:\\nChild body\\n* Tail\\nTail body\\n\") (after-alpha-clock ((\"Project\" 2 nil headline) (\":Client:\" 4 nil node-property) (\"Alpha\" 7 nil headline) (\":Status:\" 9 nil node-property) (\"Alpha body\" 16 nil paragraph) (\"CLOCK:\" 14 2 clock) (\"Beta\" 17 nil headline) (\"Beta child\" 22 nil headline) (\"Child body\" 27 nil paragraph) (\"Tail\" 28 nil headline)) ((headline 48 448 \"Project\" nil (\"work\")) (property-drawer 65 110 nil nil nil) (headline 110 295 \"Alpha\" \"TODO\" (\"billable\")) (property-drawer 135 205 nil nil nil) (drawer 205 284 nil nil nil) (clock 215 278 nil nil nil) (headline 295 448 \"Beta\" \"TODO\" (\"internal\")) (property-drawer 319 350 nil nil nil) (headline 360 448 \"WAIT Beta child\" nil (\"blocked\")) (property-drawer 390 437 nil nil nil) (headline 448 465 \"Tail\" nil nil)) ((\"Project\" \"Acme\" \"S1\" nil nil nil) (\"Alpha\" \"Acme\" \"S1\" \"Doing\" (\"review\" \"api\") nil) (\"Beta\" \"Acme\" \"S1\" nil nil nil) (\"WAIT Beta child\" \"Acme\" \"S1\" \"Blocked\" nil nil) (\"Tail\" nil nil nil nil nil)) \"#+PROPERTY: Status_ALL Todo Doing Blocked Done\\n* Project :work:\\n:PROPERTIES:\\n:Client: Acme\\n:Sprint: S1\\n:END:\\n** TODO Alpha :billable:\\n:PROPERTIES:\\n:Status:   Doing\\n:Owner: Ada\\n:Multi:    review api\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 09:00]--[2026-05-27 Wed 10:45] =>  1:45\\n:END:\\nAlpha body\\n** TODO Beta :internal:\\n:PROPERTIES:\\n:Owner: Bea\\n:END:\\nBeta body\\n*** WAIT Beta child :blocked:\\n:PROPERTIES:\\n:Status: Blocked\\n:Owner: Cy\\n:END:\\nChild body\\n* Tail\\nTail body\\n\") (after-child-clock ((\"Project\" 2 nil headline) (\":Client:\" 4 nil node-property) (\"Alpha\" 7 nil headline) (\":Status:\" 9 nil node-property) (\"Alpha body\" 16 nil paragraph) (\"CLOCK:\" 14 2 clock) (\"Beta\" 17 nil headline) (\"Beta child\" 22 nil headline) (\"Child body\" 31 nil paragraph) (\"Tail\" 32 nil headline)) ((headline 48 541 \"Project\" nil (\"work\")) (property-drawer 65 110 nil nil nil) (headline 110 295 \"Alpha\" \"TODO\" (\"billable\")) (property-drawer 135 205 nil nil nil) (drawer 205 284 nil nil nil) (clock 215 278 nil nil nil) (headline 295 541 \"Beta\" \"TODO\" (\"internal\")) (property-drawer 319 350 nil nil nil) (headline 360 541 \"WAIT Beta child\" nil (\"blocked\")) (property-drawer 390 451 nil nil nil) (drawer 451 530 nil nil nil) (clock 461 524 nil nil nil) (headline 541 558 \"Tail\" nil nil)) ((\"Project\" \"Acme\" \"S1\" nil nil nil) (\"Alpha\" \"Acme\" \"S1\" \"Doing\" (\"review\" \"api\") nil) (\"Beta\" \"Acme\" \"S1\" nil nil nil) (\"WAIT Beta child\" \"Acme\" \"S2\" \"Blocked\" nil nil) (\"Tail\" nil nil nil nil nil)) \"#+PROPERTY: Status_ALL Todo Doing Blocked Done\\n* Project :work:\\n:PROPERTIES:\\n:Client: Acme\\n:Sprint: S1\\n:END:\\n** TODO Alpha :billable:\\n:PROPERTIES:\\n:Status:   Doing\\n:Owner: Ada\\n:Multi:    review api\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 09:00]--[2026-05-27 Wed 10:45] =>  1:45\\n:END:\\nAlpha body\\n** TODO Beta :internal:\\n:PROPERTIES:\\n:Owner: Bea\\n:END:\\nBeta body\\n*** WAIT Beta child :blocked:\\n:PROPERTIES:\\n:Status: Blocked\\n:Owner: Cy\\n:Sprint:   S2\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 11:15]--[2026-05-27 Wed 12:00] =>  0:45\\n:END:\\nChild body\\n* Tail\\nTail body\\n\") (after-clock-sum ((\"Project\" 2 nil headline) (\":Client:\" 4 nil node-property) (\"Alpha\" 7 nil headline) (\":Status:\" 9 nil node-property) (\"Alpha body\" 16 nil paragraph) (\"CLOCK:\" 14 2 clock) (\"Beta\" 17 nil headline) (\"Beta child\" 22 nil headline) (\"Child body\" 31 nil paragraph) (\"Tail\" 32 nil headline)) ((headline 48 541 \"Project\" nil (\"work\")) (property-drawer 65 110 nil nil nil) (headline 110 295 \"Alpha\" \"TODO\" (\"billable\")) (property-drawer 135 205 nil nil nil) (drawer 205 284 nil nil nil) (clock 215 278 nil nil nil) (headline 295 541 \"Beta\" \"TODO\" (\"internal\")) (property-drawer 319 350 nil nil nil) (headline 360 541 \"WAIT Beta child\" nil (\"blocked\")) (property-drawer 390 451 nil nil nil) (drawer 451 530 nil nil nil) (clock 461 524 nil nil nil) (headline 541 558 \"Tail\" nil nil)) ((#(\"Project\" 0 7 (:probe-minutes 150)) \"Acme\" \"S1\" nil nil 150) (#(\"Alpha\" 0 5 (:probe-minutes 105)) \"Acme\" \"S1\" \"Doing\" (\"review\" \"api\") 105) (#(\"Beta\" 0 4 (:probe-minutes 45)) \"Acme\" \"S1\" nil nil 45) (#(\"WAIT Beta child\" 0 15 (:probe-minutes 45)) \"Acme\" \"S2\" \"Blocked\" nil 45) (\"Tail\" nil nil nil nil nil)) \"#+PROPERTY: Status_ALL Todo Doing Blocked Done\\n* Project :work:\\n:PROPERTIES:\\n:Client: Acme\\n:Sprint: S1\\n:END:\\n** TODO Alpha :billable:\\n:PROPERTIES:\\n:Status:   Doing\\n:Owner: Ada\\n:Multi:    review api\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 09:00]--[2026-05-27 Wed 10:45] =>  1:45\\n:END:\\nAlpha body\\n** TODO Beta :internal:\\n:PROPERTIES:\\n:Owner: Bea\\n:END:\\nBeta body\\n*** WAIT Beta child :blocked:\\n:PROPERTIES:\\n:Status: Blocked\\n:Owner: Cy\\n:Sprint:   S2\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 11:15]--[2026-05-27 Wed 12:00] =>  0:45\\n:END:\\nChild body\\n* Tail\\nTail body\\n\") (drawers-hidden ((\"Project\" 2 nil headline) (\":Client:\" 4 2 node-property) (\"Alpha\" 7 nil headline) (\":Status:\" 9 2 node-property) (\"Alpha body\" 16 nil paragraph) (\"CLOCK:\" 14 2 clock) (\"Beta\" 17 nil headline) (\"Beta child\" 22 nil headline) (\"Child body\" 31 nil paragraph) (\"Tail\" 32 nil headline)) ((headline 48 541 \"Project\" nil (\"work\")) (property-drawer 65 110 nil nil nil) (headline 110 295 \"Alpha\" \"TODO\" (\"billable\")) (property-drawer 135 205 nil nil nil) (drawer 205 284 nil nil nil) (clock 215 278 nil nil nil) (headline 295 541 \"Beta\" \"TODO\" (\"internal\")) (property-drawer 319 350 nil nil nil) (headline 360 541 \"WAIT Beta child\" nil (\"blocked\")) (property-drawer 390 451 nil nil nil) (drawer 451 530 nil nil nil) (clock 461 524 nil nil nil) (headline 541 558 \"Tail\" nil nil)) ((#(\"Project\" 0 7 (:probe-minutes 150)) \"Acme\" \"S1\" nil nil 150) (#(\"Alpha\" 0 5 (:probe-minutes 105)) \"Acme\" \"S1\" \"Doing\" (\"review\" \"api\") 105) (#(\"Beta\" 0 4 (:probe-minutes 45)) \"Acme\" \"S1\" nil nil 45) (#(\"WAIT Beta child\" 0 15 (:probe-minutes 45)) \"Acme\" \"S2\" \"Blocked\" nil 45) (\"Tail\" nil nil nil nil nil)) \"#+PROPERTY: Status_ALL Todo Doing Blocked Done\\n* Project :work:\\n:PROPERTIES:\\n:Client: Acme\\n:Sprint: S1\\n:END:\\n** TODO Alpha :billable:\\n:PROPERTIES:\\n:Status:   Doing\\n:Owner: Ada\\n:Multi:    review api\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 09:00]--[2026-05-27 Wed 10:45] =>  1:45\\n:END:\\nAlpha body\\n** TODO Beta :internal:\\n:PROPERTIES:\\n:Owner: Bea\\n:END:\\nBeta body\\n*** WAIT Beta child :blocked:\\n:PROPERTIES:\\n:Status: Blocked\\n:Owner: Cy\\n:Sprint:   S2\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 11:15]--[2026-05-27 Wed 12:00] =>  0:45\\n:END:\\nChild body\\n* Tail\\nTail body\\n\") (clock-context ((\"Project\" 2 nil headline) (\":Client:\" 4 2 node-property) (\"Alpha\" 7 nil headline) (\":Status:\" 9 2 node-property) (\"Alpha body\" 16 nil paragraph) (\"CLOCK:\" 14 nil clock) (\"Beta\" 17 nil headline) (\"Beta child\" 22 nil headline) (\"Child body\" 31 nil paragraph) (\"Tail\" 32 nil headline)) ((headline 48 541 \"Project\" nil (\"work\")) (property-drawer 65 110 nil nil nil) (headline 110 295 \"Alpha\" \"TODO\" (\"billable\")) (property-drawer 135 205 nil nil nil) (drawer 205 284 nil nil nil) (clock 215 278 nil nil nil) (headline 295 541 \"Beta\" \"TODO\" (\"internal\")) (property-drawer 319 350 nil nil nil) (headline 360 541 \"WAIT Beta child\" nil (\"blocked\")) (property-drawer 390 451 nil nil nil) (drawer 451 530 nil nil nil) (clock 461 524 nil nil nil) (headline 541 558 \"Tail\" nil nil)) ((#(\"Project\" 0 7 (:probe-minutes 150)) \"Acme\" \"S1\" nil nil 150) (#(\"Alpha\" 0 5 (:probe-minutes 105)) \"Acme\" \"S1\" \"Doing\" (\"review\" \"api\") 105) (#(\"Beta\" 0 4 (:probe-minutes 45)) \"Acme\" \"S1\" nil nil 45) (#(\"WAIT Beta child\" 0 15 (:probe-minutes 45)) \"Acme\" \"S2\" \"Blocked\" nil 45) (\"Tail\" nil nil nil nil nil)) \"#+PROPERTY: Status_ALL Todo Doing Blocked Done\\n* Project :work:\\n:PROPERTIES:\\n:Client: Acme\\n:Sprint: S1\\n:END:\\n** TODO Alpha :billable:\\n:PROPERTIES:\\n:Status:   Doing\\n:Owner: Ada\\n:Multi:    review api\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 09:00]--[2026-05-27 Wed 10:45] =>  1:45\\n:END:\\nAlpha body\\n** TODO Beta :internal:\\n:PROPERTIES:\\n:Owner: Bea\\n:END:\\nBeta body\\n*** WAIT Beta child :blocked:\\n:PROPERTIES:\\n:Status: Blocked\\n:Owner: Cy\\n:Sprint:   S2\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 11:15]--[2026-05-27 Wed 12:00] =>  0:45\\n:END:\\nChild body\\n* Tail\\nTail body\\n\") (after-property-cycle ((\"Project\" 2 nil headline) (\":Client:\" 4 nil node-property) (\"Alpha\" 7 nil headline) (\":Status:\" 9 nil node-property) (\"Alpha body\" 15 nil paragraph) (\"CLOCK:\" 13 nil clock) (\"Beta\" 16 nil headline) (\"Beta child\" 21 nil headline) (\"Child body\" 30 nil paragraph) (\"Tail\" 31 nil headline)) ((headline 48 531 \"Project\" nil (\"work\")) (property-drawer 65 110 nil nil nil) (headline 110 285 \"Alpha\" \"TODO\" (\"billable\")) (property-drawer 135 195 nil nil nil) (drawer 195 274 nil nil nil) (clock 205 268 nil nil nil) (headline 285 531 \"Beta\" \"TODO\" (\"internal\")) (property-drawer 309 340 nil nil nil) (headline 350 531 \"WAIT Beta child\" nil (\"blocked\")) (property-drawer 380 441 nil nil nil) (drawer 441 520 nil nil nil) (clock 451 514 nil nil nil) (headline 531 548 \"Tail\" nil nil)) ((#(\"Project\" 0 7 (:probe-minutes 150)) \"Acme\" \"S1\" nil nil 150) (#(\"Alpha\" 0 5 (:probe-minutes 105)) \"Acme\" \"S1\" \"Blocked\" (\"review\" \"api\") 105) (#(\"Beta\" 0 4 (:probe-minutes 45)) \"Acme\" \"S1\" nil nil 45) (#(\"WAIT Beta child\" 0 15 (:probe-minutes 45)) \"Acme\" \"S2\" \"Blocked\" nil 45) (\"Tail\" nil nil nil nil nil)) \"#+PROPERTY: Status_ALL Todo Doing Blocked Done\\n* Project :work:\\n:PROPERTIES:\\n:Client: Acme\\n:Sprint: S1\\n:END:\\n** TODO Alpha :billable:\\n:PROPERTIES:\\n:Status:   Blocked\\n:Multi:    review api\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 09:00]--[2026-05-27 Wed 10:45] =>  1:45\\n:END:\\nAlpha body\\n** TODO Beta :internal:\\n:PROPERTIES:\\n:Owner: Bea\\n:END:\\nBeta body\\n*** WAIT Beta child :blocked:\\n:PROPERTIES:\\n:Status: Blocked\\n:Owner: Cy\\n:Sprint:   S2\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 11:15]--[2026-05-27 Wed 12:00] =>  0:45\\n:END:\\nChild body\\n* Tail\\nTail body\\n\")) (\"Bea\" \"Cy\") 105 (#(\"WAIT Beta child\" 0 15 (:probe-minutes 45)) #(\"Alpha\" 0 5 (:probe-minutes 105 :org-clock-minutes 105))) \"#+PROPERTY: Status_ALL Todo Doing Blocked Done\\n* Project :work:\\n:PROPERTIES:\\n:Client: Acme\\n:Sprint: S1\\n:END:\\n** TODO Alpha :billable:\\n:PROPERTIES:\\n:Status:   Blocked\\n:Multi:    review api\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 09:00]--[2026-05-27 Wed 10:45] =>  1:45\\n:END:\\nAlpha body\\n** TODO Beta :internal:\\n:PROPERTIES:\\n:Owner: Bea\\n:END:\\nBeta body\\n*** WAIT Beta child :blocked:\\n:PROPERTIES:\\n:Status: Blocked\\n:Owner: Cy\\n:Sprint:   S2\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 11:15]--[2026-05-27 Wed 12:00] =>  0:45\\n:END:\\nChild body\\n* Tail\\nTail body\\n\")""##
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-clock)
+  (require 'org-element)
+  (require 'org-fold)
+  (with-temp-buffer
+    (let ((org-use-property-inheritance '("Client" "Sprint"))
+          (org-clock-into-drawer "LOGBOOK")
+          (org-log-into-drawer "LOGBOOK")
+          (org-clock-history-length 8)
+          (org-clock-persist nil)
+          (org-clock-out-remove-zero-time-clocks t))
+      (org-mode)
+      (insert "#+PROPERTY: Status_ALL Todo Doing Blocked Done\n")
+      (insert "* Project :work:\n")
+      (insert ":PROPERTIES:\n:Client: Acme\n:Sprint: S1\n:END:\n")
+      (insert "** TODO Alpha :billable:\n")
+      (insert ":PROPERTIES:\n:Status: Todo\n:Owner: Ada\n:END:\n")
+      (insert "Alpha body\n")
+      (insert "** TODO Beta :internal:\n")
+      (insert ":PROPERTIES:\n:Owner: Bea\n:END:\n")
+      (insert "Beta body\n")
+      (insert "*** WAIT Beta child :blocked:\n")
+      (insert ":PROPERTIES:\n:Status: Blocked\n:Owner: Cy\n:END:\n")
+      (insert "Child body\n")
+      (insert "* Tail\nTail body\n")
+      (org-set-regexps-and-options)
+      (let ((snapshot
+             (lambda (label)
+               (list label
+                     (mapcar
+                      (lambda (needle)
+                        (save-excursion
+                          (goto-char (point-min))
+                          (if (search-forward needle nil t)
+                              (list needle
+                                    (line-number-at-pos)
+                                    (invisible-p (point))
+                                    (org-element-type
+                                     (org-element-at-point)))
+                            (list needle 'not-found))))
+                      '("Project" ":Client:" "Alpha" ":Status:" "Alpha body"
+                        "CLOCK:" "Beta" "Beta child" "Child body" "Tail"))
+                     (org-element-map (org-element-parse-buffer)
+                         '(headline drawer property-drawer clock planning)
+                       (lambda (el)
+                         (list (org-element-type el)
+                               (org-element-property :begin el)
+                               (org-element-property :end el)
+                               (org-element-property :raw-value el)
+                               (org-element-property :todo-keyword el)
+                               (org-element-property :tags el))))
+                     (save-excursion
+                       (goto-char (point-min))
+                       (let (out)
+                         (while (re-search-forward "^\\*+ " nil t)
+                           (push (list (org-get-heading t t t t)
+                                       (org-entry-get nil "Client" 'inherit)
+                                       (org-entry-get nil "Sprint" 'inherit)
+                                       (org-entry-get nil "Status")
+                                       (org-entry-get-multivalued-property
+                                        nil "Multi")
+                                       (get-text-property
+                                        (line-beginning-position)
+                                        :probe-minutes))
+                                 out))
+                         (nreverse out)))
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))))
+        (let (states)
+          (push (funcall snapshot 'initial) states)
+          (goto-char (point-min))
+          (search-forward "Alpha")
+          (beginning-of-line)
+          (org-entry-put nil "Status" "Doing")
+          (org-entry-add-to-multivalued-property nil "Multi" "review")
+          (org-entry-add-to-multivalued-property nil "Multi" "api")
+          (org-clock-in nil (encode-time 0 0 9 27 5 2026))
+          (org-clock-out nil t (encode-time 0 45 10 27 5 2026))
+          (push (funcall snapshot 'after-alpha-clock) states)
+          (goto-char (point-min))
+          (search-forward "Beta child")
+          (beginning-of-line)
+          (org-entry-put nil "Sprint" "S2")
+          (org-entry-remove-from-multivalued-property nil "Multi" "api")
+          (org-clock-in nil (encode-time 0 15 11 27 5 2026))
+          (org-clock-out nil t (encode-time 0 0 12 27 5 2026))
+          (push (funcall snapshot 'after-child-clock) states)
+          (goto-char (point-min))
+          (org-clock-sum "2026-05-27" "2026-05-28" nil :probe-minutes)
+          (push (funcall snapshot 'after-clock-sum) states)
+          (org-fold-hide-drawer-all)
+          (push (funcall snapshot 'drawers-hidden) states)
+          (goto-char (point-min))
+          (search-forward "CLOCK:")
+          (org-fold-show-context 'default)
+          (push (funcall snapshot 'clock-context) states)
+          (org-fold-show-all)
+          (goto-char (point-min))
+          (search-forward "Alpha")
+          (beginning-of-line)
+          (org-entry-delete nil "Owner")
+          (search-forward ":Status:")
+          (org-property-next-allowed-value)
+          (push (funcall snapshot 'after-property-cycle) states)
+          (list (nreverse states)
+                (sort (copy-sequence (org-property-values "Owner"))
+                      #'string<)
+                (org-clock-sum-current-item "2026-05-27")
+                (mapcar (lambda (m)
+                          (and (markerp m)
+                               (marker-buffer m)
+                               (with-current-buffer (marker-buffer m)
+                                 (save-excursion
+                                   (goto-char m)
+                                   (org-get-heading t t t t)))))
+                        org-clock-history)
+                (buffer-substring-no-properties
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
@@ -328,6 +553,75 @@ fn org_startup_log_options_todo_property_combo() {
                  "[stamp]"
                  (buffer-substring-no-properties
                   (point-min) (point-max)))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_property_inherit_literal_special_views_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r##""OK (((\"Owner\" \"NilLike\" \"Effort\") nil (\"Effort\") nil (\"NilLike\" \"Effort\")) (nil \"nil\" nil \"nil\") (nil \"C\" \"DemoCat\" \"WAIT Child [#C]\" \"%25ITEM %TODO %PRIORITY %Owner %Effort{:}\") ((\"CATEGORY\" . \"DemoCat\") (\"LOCAL\" . \"child-only\")) ((\"CATEGORY\" . \"DemoCat\") (\"BLOCKED\" . \"\") (\"FILE\") (\"PRIORITY\" . \"C\") (\"ITEM\" . \"WAIT Child [#C]\")) ((\"CATEGORY\" . \"DemoCat\") (\"LOCAL\" . \"child-only\") (\"BLOCKED\" . \"\") (\"FILE\") (\"PRIORITY\" . \"C\") (\"ITEM\" . \"WAIT Child [#C]\")) nil ((\"CATEGORY\" . \"DemoCat\") (\":NILLIKE:\" . \"\") (\":OWNER:\" . \"Bea\")) ((\"CATEGORY\" . \"DemoCat\") (\"BLOCKED\" . \"\") (\"FILE\") (\"PRIORITY\" . \"A\") (\"TODO\" . \"DONE\") (\"ITEM\" . \"WAIT Child [#A]\")) \"DONE\" \"A\" \"nil\" \"#+CATEGORY: DemoCat\\n#+PROPERTY: Owner_ALL Ada Bea Cy\\n#+COLUMNS: %25ITEM %TODO %PRIORITY %Owner %Effort{:}\\n* TODO Parent [#B]\\n:PROPERTIES:\\n:Owner: Ada\\n:NilLike: nil\\n:Effort: 1:00\\n:END:\\n** DONE WAIT Child [#A]\\n:PROPERTIES:\\n::Owner:: Bea\\n::NilLike::\\n:END:\\n\")""##
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (with-temp-buffer
+    (let ((org-use-property-inheritance '("Owner" "NilLike" "Effort"))
+          (org-property-format ":%s: %s")
+          (changes nil))
+      (add-hook 'org-property-changed-functions
+                (lambda (key value) (push (list key value) changes))
+                nil t)
+      (org-mode)
+      (insert "#+CATEGORY: DemoCat\n")
+      (insert "#+PROPERTY: Owner_ALL Ada Bea Cy\n")
+      (insert "#+COLUMNS: %25ITEM %TODO %PRIORITY %Owner %Effort{:}\n")
+      (insert "* TODO Parent [#B]\n")
+      (insert ":PROPERTIES:\n:Owner: Ada\n:NilLike: nil\n:Effort: 1:00\n:END:\n")
+      (insert "** WAIT Child [#C]\n")
+      (insert ":PROPERTIES:\n:Local: child-only\n:END:\n")
+      (goto-char (point-min))
+      (org-set-regexps-and-options)
+      (search-forward "Child")
+      (beginning-of-line)
+      (let ((inherit-flags
+             (mapcar #'org-property-inherit-p
+                     '("Owner" "Local" "Effort" "CATEGORY" "NilLike")))
+            (literal-values
+             (list (org-entry-get nil "NilLike" 'inherit)
+                   (org-entry-get nil "NilLike" 'inherit 'literal-nil)
+                   (org-entry-get-with-inheritance "NilLike")
+                   (org-entry-get-with-inheritance "NilLike" 'literal-nil)))
+            (special-before
+             (list (org-entry-get nil "TODO")
+                   (org-entry-get nil "PRIORITY")
+                   (org-entry-get nil "CATEGORY")
+                   (org-entry-get nil "ITEM")
+                   (org-property-or-variable-value 'org-columns-default-format 'inherit)))
+            (props-standard-before (org-entry-properties nil 'standard))
+            (props-special-before (org-entry-properties nil 'special))
+            (props-all-before (org-entry-properties nil)))
+        (org-entry-put nil "TODO" "DONE")
+        (org-entry-put nil "PRIORITY" "A")
+        (org-entry-put nil "Owner" "Bea")
+        (org-entry-put nil "NilLike" nil)
+        (org-entry-delete nil "Local")
+        (list inherit-flags
+              literal-values
+              special-before
+              props-standard-before
+              props-special-before
+              props-all-before
+              (nreverse changes)
+              (org-entry-properties nil 'standard)
+              (org-entry-properties nil 'special)
+              (org-entry-get nil "TODO")
+              (org-entry-get nil "PRIORITY")
+              (org-entry-get nil "NilLike" 'inherit 'literal-nil)
+              (buffer-substring-no-properties
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }

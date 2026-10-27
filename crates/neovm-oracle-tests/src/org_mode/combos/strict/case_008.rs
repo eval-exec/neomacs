@@ -13,6 +13,54 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
+fn strict_beginning_end_subtree_consistency() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:a1-end 27) (:a1-beg-again 13) (:a-end 42) (:a-beg 1) (:b-end 54) (:b-beg 43) (:b-beg-stable t))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (let ((org-mode-hook nil))
+    (with-temp-buffer (org-mode)
+      (insert "* A\nBody A.\n** A1\nBody A1.\n** A2\nBody A2.\n* B\nBody B.\n")
+      (let ((r '()))
+        ;; on A1: beginning → end should be same subtree
+        (goto-char (point-min))
+        (search-forward "** A1") (beginning-of-line)
+        (let ((beg (progn (org-back-to-heading t) (point)))
+              (end (progn (org-end-of-subtree) (point))))
+          (push (list :a1-end (point)) r)
+          ;; beginning again: should go back to same place
+          (org-back-to-heading t)
+          (push (list :a1-beg-again (point)) r))
+        ;; on A: end should encompass A1 + A2
+        (goto-char (point-min))
+        (org-end-of-subtree)
+        (push (list :a-end (point)) r)
+        ;; beginning again
+        (org-back-to-heading t)
+        (org-up-heading-safe)
+        (push (list :a-beg (point)) r)
+        ;; on B: end should be at EOF or next heading
+        (search-forward "* B") (beginning-of-line)
+        (org-end-of-subtree)
+        (push (list :b-end (point)) r)
+        (org-back-to-heading t)
+        (push (list :b-beg (point)) r)
+        ;; repeated begin/end should be stable
+        (org-end-of-subtree) (org-back-to-heading t)
+        (push (list :b-beg-stable (equal (point) (plist-get (car r) :b-beg))) r)
+        (nreverse r)))))"##,
+        expect,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// org-complex-heading-regexp matching on various heading types
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
 fn strict_complex_heading_regexp_match() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[

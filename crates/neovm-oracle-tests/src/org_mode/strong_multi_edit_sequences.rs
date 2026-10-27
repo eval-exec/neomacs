@@ -388,6 +388,32 @@ fn mes_affiliated() {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
+fn mes_element_map_info() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK (\"H2\" t)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(with-temp-buffer
+  (org-mode)
+  (insert "* H1\n* H2\n* H3")
+  (let* ((tree (org-element-parse-buffer))
+         (info (list :ignore-list
+                     (list (org-element-map tree 'headline #'identity nil t))
+                     :first-match t))
+         (result (org-element-map tree 'headline
+                   (lambda (h)
+                     (list (org-element-property :raw-value h)
+                           (plist-get info :first-match)))
+                   info 'first-match)))
+    result))"##,
+        expect,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Property inheritance deep
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
 fn mes_property_inherit() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK (\"3\" nil)""#]];

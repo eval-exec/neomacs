@@ -419,6 +419,23 @@ fn mo_element_type_predicates() {
 }
 
 #[test]
+fn mo_export_element_types() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK (org-data headline plain-text section paragraph plain-text plain-list item paragraph plain-text table table-row table-cell plain-text src-block)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(with-temp-buffer
+  (org-mode)
+  (insert "* H\nBody\n- item\n| tbl |\n#+BEGIN_SRC\n(+ 1)\n#+END_SRC")
+  (let* ((tree (org-element-parse-buffer))
+         (types (org-element-map tree t (lambda (el) (org-element-type el)))))
+    types))"##,
+        expect,
+    );
+}
+
+#[test]
 fn mo_export_element_contents() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK (headline)""#]];

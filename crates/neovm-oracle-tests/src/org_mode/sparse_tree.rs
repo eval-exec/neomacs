@@ -455,3 +455,126 @@ fn org_occur_highlight_count_visibility_deep_state_combo() {
         expect,
     );
 }
+#[test]
+fn org_sparse_tree_todo_tag_edit_resparse_occur_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((\"* TODO Alpha :work:\" nil) (\"Body alpha.\" nil) (\"\" nil) (\"** DONE Beta :home:\" nil) (\"Body beta.\" nil) (\"\" nil) (\"*** TODO Gamma :work:\" nil) (\"Body gamma.\" nil) (\"\" nil) (\"** WAIT Delta :home:\" nil) (\"Body delta.\" nil) (\"\" nil) (\"* DONE Epsilon :work:\" nil) (\"Body epsilon.\" nil) (\"\" nil) (\"* TODO Zeta :work:\" nil) (\"Body zeta.\" nil) (\"\" nil)) ((\"* TODO Alpha :work:\" nil) (\"Body alpha.\" 2) (\"\" nil) (\"** DONE Beta :home:\" nil) (\"Body beta.\" 2) (\"\" nil) (\"*** TODO Gamma :work:\" nil) (\"Body gamma.\" 2) (\"\" 2) (\"** WAIT Delta :home:\" 2) (\"Body delta.\" 2) (\"\" nil) (\"* DONE Epsilon :work:\" nil) (\"Body epsilon.\" 2) (\"\" nil) (\"* TODO Zeta :work:\" nil) (\"Body zeta.\" 2) (\"\" 2)) ((\"* TODO Alpha :work:\" nil) (\"Body alpha.\" 2) (\"\" nil) (\"** DONE Beta :home:\" nil) (\"Body beta.\" 2) (\"\" nil) (\"*** TODO Gamma :work:\" nil) (\"Body gamma.\" 2) (\"\" 2) (\"** WAIT Delta :home:\" 2) (\"Body delta.\" 2) (\"\" nil) (\"* DONE Epsilon :work:\" nil) (\"Body epsilon.\" 2) (\"\" nil) (\"* DONE Zeta :work:\" nil) (\"Body zeta.\" 2) (\"\" 2)) ((\"* TODO Alpha :work:\" nil) (\"Body alpha.\" 2) (\"\" nil) (\"** DONE Beta :home:\" nil) (\"Body beta.\" 2) (\"\" nil) (\"*** TODO Gamma :work:\" nil) (\"Body gamma.\" 2) (\"\" nil) (\"** WAIT Delta :home:\" nil) (\"Body delta.\" 2) (\"\" nil) (\"* DONE Epsilon :work:\" nil) (\"Body epsilon.\" 2) (\"\" nil) (\"* DONE Zeta :work:\" nil) (\"Body zeta.\" 2) (\"\" 2)) 6 \"* TODO Alpha :work:\\nBody alpha.\\n\\n** DONE Beta :home:\\nBody beta.\\n\\n*** TODO Gamma :work:\\nBody gamma.\\n\\n** WAIT Delta :home:\\nBody delta.\\n\\n* DONE Epsilon :work:\\nBody epsilon.\\n\\n* DONE Zeta :work:\\nBody zeta.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-agenda)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* TODO Alpha :work:\nBody alpha.\n\n")
+    (insert "** DONE Beta :home:\nBody beta.\n\n")
+    (insert "*** TODO Gamma :work:\nBody gamma.\n\n")
+    (insert "** WAIT Delta :home:\nBody delta.\n\n")
+    (insert "* DONE Epsilon :work:\nBody epsilon.\n\n")
+    (insert "* TODO Zeta :work:\nBody zeta.\n\n")
+    (let ((vis (lambda ()
+                 (mapcar
+                  (lambda (pos)
+                    (save-excursion
+                      (goto-char pos)
+                      (list (buffer-substring-no-properties
+                             (line-beginning-position) (line-end-position))
+                            (invisible-p pos))))
+                  (let ((positions nil))
+                    (goto-char (point-min))
+                    (while (not (eobp))
+                      (push (point) positions)
+                      (forward-line 1))
+                    (nreverse positions))))))
+      ;; Sparse tree for TODO
+      (let ((before-vis (funcall vis)))
+        (org-match-sparse-tree nil "TODO=\"TODO\"")
+        (let ((after-todo-vis (funcall vis)))
+          ;; Edit: change Zeta to DONE
+          (goto-char (point-min))
+          (search-forward "TODO Zeta")
+          (replace-match "DONE Zeta")
+          ;; Re-sparse
+          (org-match-sparse-tree nil "TODO=\"TODO\"")
+          (let ((after-resparse-vis (funcall vis)))
+            ;; Sparse by tag
+            (org-match-sparse-tree nil "work")
+            (let ((tag-vis (funcall vis)))
+              ;; Occur for "Body"
+              (goto-char (point-min))
+              (occur "Body")
+              (let ((occur-count (length org-occur-highlights)))
+                (org-remove-occur-highlights)
+                (list before-vis
+                      after-todo-vis
+                      after-resparse-vis
+                      tag-vis
+                      occur-count
+                      (buffer-substring-no-properties
+                       (point-min) (point-max)))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_sparse_tree_tag_todo_match_edit_occur_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((\"* TODO Alpha :work:\" nil) (\"Body alpha.\" nil) (\"\" nil) (\"** DONE Beta :home:\" nil) (\"Body beta.\" nil) (\"\" nil) (\"*** TODO Gamma :work:urgent:\" nil) (\"Body gamma.\" nil) (\"\" nil) (\"** WAIT Delta :home:\" nil) (\"Body delta.\" nil) (\"\" nil) (\"* DONE Epsilon :work:\" nil) (\"Body epsilon.\" nil) (\"\" nil)) ((\"* TODO Alpha :work:\" nil) (\"Body alpha.\" 2) (\"\" nil) (\"** DONE Beta :home:\" nil) (\"Body beta.\" 2) (\"\" nil) (\"*** TODO Gamma :work:urgent:\" nil) (\"Body gamma.\" 2) (\"\" 2) (\"** WAIT Delta :home:\" 2) (\"Body delta.\" 2) (\"\" nil) (\"* DONE Epsilon :work:\" nil) (\"Body epsilon.\" 2) (\"\" 2)) 2 \"5 matches for \\\"Body\\\" in buffer:  *temp*\\n      2:Body alpha.\\n      5:Body beta.\\n      8:Body gamma.\\n     11:Body delta.\\n     14:Body epsilon.\\n\" \"* TODO Alpha :work:\\nBody alpha.\\n\\n** DONE Beta :home:\\nBody beta.\\n\\n*** TODO Gamma                                            :work:urgent:extra:\\nBody gamma.\\n\\n** WAIT Delta :home:\\nBody delta.\\n\\n* DONE Epsilon :work:\\nBody epsilon.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-agenda)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* TODO Alpha :work:\nBody alpha.\n\n")
+    (insert "** DONE Beta :home:\nBody beta.\n\n")
+    (insert "*** TODO Gamma :work:urgent:\nBody gamma.\n\n")
+    (insert "** WAIT Delta :home:\nBody delta.\n\n")
+    (insert "* DONE Epsilon :work:\nBody epsilon.\n\n")
+    (let ((vis (lambda ()
+                 (mapcar
+                  (lambda (pos)
+                    (save-excursion
+                      (goto-char pos)
+                      (list (buffer-substring-no-properties
+                             (line-beginning-position) (line-end-position))
+                            (invisible-p pos))))
+                  (let ((positions nil))
+                    (goto-char (point-min))
+                    (while (not (eobp))
+                      (push (point) positions)
+                      (forward-line 1))
+                    (nreverse positions))))))
+      ;; Sparse tree for TODO
+      (let ((before-vis (funcall vis)))
+        (org-match-sparse-tree nil "TODO=\"TODO\"")
+        (let ((after-match-vis (funcall vis)))
+          ;; Edit: add tag to Gamma
+          (goto-char (point-min))
+          (search-forward "Gamma")
+          (org-toggle-tag "extra" 'on)
+          ;; Occur for "Body"
+          (goto-char (point-min))
+          (occur "Body")
+          (let ((occur-count (length org-occur-highlights))
+                (occur-text
+                 (when (get-buffer "*Occur*")
+                   (with-current-buffer "*Occur*"
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))))
+            ;; Remove highlights
+            (org-remove-occur-highlights)
+            (list before-vis
+                  after-match-vis
+                  occur-count
+                  occur-text
+                  (buffer-substring-no-properties
+                   (point-min) (point-max)))))))))"##,
+        expect,
+    );
+}

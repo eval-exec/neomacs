@@ -334,6 +334,152 @@ fn org_todo_planning_tags_fold_cookie_combo() {
 }
 
 #[test]
+fn org_ordered_region_statistics_hook_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[r#""ERR (void-variable events)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (with-temp-buffer
+    (let ((org-todo-keywords '((sequence "TODO" "WAIT" "|" "DONE")))
+          (org-enforce-todo-dependencies t)
+          (org-track-ordered-property-with-tag "sequence")
+          (org-use-tag-inheritance t)
+          (org-auto-align-tags t)
+          (org-tags-column 48)
+          (org-hierarchical-todo-statistics t)
+          (org-log-done nil)
+          (org-after-todo-statistics-hook
+           (list (lambda (n-done n-not-done)
+                   (push (list (org-get-heading t t t t)
+                               n-done
+                               n-not-done
+                               (org-get-todo-state))
+                         events)
+                   (let ((org-enforce-todo-dependencies nil)
+                         (org-log-done nil))
+                     (org-todo (if (= n-not-done 0) "DONE" "TODO"))))))
+          events)
+      (org-mode)
+      (insert "#+TAGS: sequence(s) audit(a) team(t)\n")
+      (insert "* TODO Project [0/3] :team:\n")
+      (insert ":PROPERTIES:\n:Owner: Ada\n:END:\n")
+      (insert "** TODO First :audit:\n")
+      (insert "Body one\n")
+      (insert "** TODO Second\n")
+      (insert "Body two\n")
+      (insert "** TODO Third\n")
+      (insert ":PROPERTIES:\n:Owner: Cy\n:END:\n")
+      (insert "Body three\n")
+      (goto-char (point-min))
+      (search-forward "Project")
+      (beginning-of-line)
+      (org-toggle-ordered-property)
+      (let ((after-ordered
+             (buffer-substring-no-properties (point-min) (point-max)))
+            (project-state
+             (list (org-entry-get nil "ORDERED")
+                   (org-get-tags nil t)
+                   (org-entry-get nil "Owner" t)))
+            blocked-summary region-summary final-summary parsed)
+        (goto-char (point-min))
+        (search-forward "Second")
+        (beginning-of-line)
+        (setq blocked-summary
+              (list (org-entry-blocked-p)
+                    org-block-entry-blocking
+                    (condition-case err
+                        (progn (org-todo "DONE") 'ok)
+                      (error (cons (car err) (cdr err))))
+                    (org-get-todo-state)
+                    (org-get-tags nil t)
+                    (org-entry-get nil "Owner" t)))
+        (goto-char (point-min))
+        (search-forward "First")
+        (beginning-of-line)
+        (org-todo "DONE")
+        (org-update-statistics-cookies t)
+        (let ((after-first
+               (buffer-substring-no-properties (point-min) (point-max))))
+          (goto-char (point-min))
+          (search-forward "Second")
+          (beginning-of-line)
+          (org-todo "DONE")
+          (goto-char (point-min))
+          (search-forward "Second")
+          (beginning-of-line)
+          (let ((region-beg (point)))
+            (search-forward "Body three")
+            (let ((region-end (point))
+                  (org-loop-over-headlines-in-active-region t)
+                  (transient-mark-mode t)
+                  (deactivate-mark nil))
+              (goto-char region-beg)
+              (set-mark region-end)
+              (setq mark-active t)
+              (org-todo "WAIT")
+              (setq region-summary
+                    (list (buffer-substring-no-properties
+                           region-beg region-end)
+                          (mapcar (lambda (needle)
+                                    (save-excursion
+                                      (goto-char (point-min))
+                                      (search-forward needle)
+                                      (beginning-of-line)
+                                      (list needle
+                                            (org-get-todo-state)
+                                            (org-entry-blocked-p)
+                                            (org-get-tags nil t)
+                                            (org-entry-get nil "Owner" t))))
+                                  '("Second" "Third"))))))
+          (goto-char (point-min))
+          (search-forward "Second")
+          (beginning-of-line)
+          (org-todo "DONE")
+          (goto-char (point-min))
+          (search-forward "Third")
+          (beginning-of-line)
+          (org-todo "DONE")
+          (goto-char (point-min))
+          (search-forward "Project")
+          (beginning-of-line)
+          (org-update-statistics-cookies t)
+          (org-toggle-ordered-property)
+          (setq parsed
+                (org-element-map (org-element-parse-buffer)
+                    '(headline node-property)
+                  (lambda (el)
+                    (pcase (org-element-type el)
+                      ('headline
+                       (list 'headline
+                             (org-element-property :level el)
+                             (org-element-property :todo-keyword el)
+                             (org-element-property :raw-value el)
+                             (org-element-property :tags el)))
+                      ('node-property
+                       (list 'property
+                             (org-element-property :key el)
+                             (org-element-property :value el)))))))
+          (setq final-summary
+                (list (org-get-todo-state)
+                      (org-entry-get nil "ORDERED")
+                      (org-get-tags nil t)
+                      (nreverse events)
+                      parsed
+                      (buffer-substring-no-properties
+                       (point-min) (point-max))))
+          (list after-ordered
+                project-state
+                blocked-summary
+                after-first
+                region-summary
+                 final-summary))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_todo_state_transition_log_drawer_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

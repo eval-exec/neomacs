@@ -208,6 +208,105 @@ fn org_refile_targets_cache_new_child_outline_path_combo() {
 }
 
 #[test]
+fn org_capture_refile_to_file_headline_then_archive_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[r#""OK nil""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-capture)
+  (require 'org-refile)
+  (require 'org-archive)
+  (let* ((root (make-temp-file "org-cap-ref-archive" t))
+         (main (expand-file-name "main.org" root))
+         (archive (expand-file-name "archive.org" root))
+         (org-capture-templates
+          `(("t" "Todo" entry (file+headline ,main "Inbox")
+             "** TODO %i%?\n:PROPERTIES:\n:Source: %a\n:END:\n"
+             :empty-lines 0)))
+         (org-refile-targets `((,main :maxlevel . 2)))
+         (org-archive-location
+          (concat archive "::"))
+         (org-log-done 'time)
+         (org-log-refile 'time)
+         (org-stored-links nil))
+    (unwind-protect
+        (progn
+          (with-temp-file main
+            (insert "#+TITLE: Main\n")
+            (insert "* Inbox\n")
+            (insert "* Project :work:\n")
+            (insert "** TODO Existing\n")
+            (insert "Existing body.\n")
+            (insert "** DONE Finished\n")
+            (insert "Finished body.\n")
+            (insert "* Archive target\n"))
+          (with-current-buffer (find-file-noselect main)
+            (org-mode)
+            (let ((result nil))
+              (org-capture-string "New task from capture" "t")
+              (org-capture-finalize)
+              (setq result
+                    (cons 'after-capture
+                          (list (buffer-substring-no-properties
+                                 (point-min) (point-max)))))
+              (goto-char (point-min))
+              (search-forward "New task from capture")
+              (beginning-of-line)
+              (let ((org-refile-use-outline-path t)
+                    (org-outline-path-complete-in-steps nil))
+                (org-refile nil nil
+                            (list "Existing" main nil
+                                  (save-excursion
+                                    (goto-char (point-min))
+                                    (search-forward "Existing")
+                                    (line-beginning-position)))))
+              (save-buffer)
+              (setq result
+                    (cons (list 'after-refile
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max)))
+                          result))
+              (goto-char (point-min))
+              (search-forward "Finished")
+              (beginning-of-line)
+              (org-archive-subtree)
+              (save-buffer)
+              (setq result
+                    (cons (list 'after-archive-main
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max)))
+                          result))
+              (let ((archive-content
+                     (when (file-exists-p archive)
+                       (with-temp-buffer
+                         (insert-file-contents archive)
+                         (buffer-string)))))
+                (setq result
+                      (cons (list 'archive-file
+                                  (replace-regexp-in-string
+                                   ":ARCHIVE_TIME: \\[.*\\]"
+                                   ":ARCHIVE_TIME: [stamp]"
+                                   (or archive-content "")))
+                            result)))
+              (kill-buffer)
+              (list (nreverse result)
+                    (replace-regexp-in-string
+                     (regexp-quote root) "<root>"
+                     (mapconcat
+                      #'identity
+                      (mapcar (lambda (s)
+                                (replace-regexp-in-string
+                                 (regexp-quote root) "<root>" s))
+                              org-stored-links)
+                      "\n")))))
+      (delete-directory root t)))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_archive_sibling_reversed_order_stats_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

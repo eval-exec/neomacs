@@ -362,6 +362,44 @@ fn eb_export_element_map_no_recurse() {
 }
 
 #[test]
+fn eb_export_element_map_types() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK (org-data headline plain-text section paragraph plain-text plain-list item paragraph plain-text table table-row table-cell plain-text src-block)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(with-temp-buffer
+  (org-mode)
+  (insert "* H\nBody\n- item\n| tbl |\n#+BEGIN_SRC\n(+ 1)\n#+END_SRC")
+  (let* ((tree (org-element-parse-buffer))
+         (types (org-element-map tree t (lambda (el) (org-element-type el)))))
+    types))"##,
+        expect,
+    );
+}
+
+#[test]
+fn eb_export_element_map_with_info() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK (\"H2\" t)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(with-temp-buffer
+  (org-mode)
+  (insert "* H1\n* H2\n* H3")
+  (let* ((tree (org-element-parse-buffer))
+         (info (list :ignore-list (list (car (org-element-contents tree)))
+                     :first-match t))
+         (result (org-element-map tree 'headline
+                   (lambda (h)
+                     (list (org-element-property :raw-value h)
+                           (plist-get info :first-match)))
+                   info 'first-match)))
+    result))"##,
+        expect,
+    );
+}
+
+#[test]
 fn sb_export_element_contents() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK (headline)""#]];

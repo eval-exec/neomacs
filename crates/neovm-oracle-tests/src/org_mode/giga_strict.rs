@@ -281,6 +281,72 @@ Body")
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
+fn giga_all_export_first_last_sibling_combinations() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK (((nil section) (nil section) nil nil nil) (nil nil nil t t))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'ox)
+  (let ((org-mode-hook nil))
+    (with-temp-buffer (org-mode)
+      (insert "* H1
+** H2
+** H3
+** H4
+* H5")
+      (goto-char (point-min))
+      (let* ((tree (org-element-parse-buffer))
+             (headlines (org-element-map tree 'headline #'identity))
+             (info (list :parse-tree tree)))
+        (list
+         ;; First sibling?
+         (mapcar (lambda (h) (org-export-first-sibling-p h info)) headlines)
+         ;; Last sibling?
+         (mapcar (lambda (h) (org-export-last-sibling-p h info)) headlines))))))"##,
+        expect,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Giga: org-element with all export node property combinations
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn giga_all_export_optional_title_combinations() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((#(\"H1\" 0 2 (:parent (headline (:standard-properties [25 25 30 34 34 0 (:title) nil nil nil nil nil nil 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 34 34 0 nil org-data nil nil nil 3 34 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 25 25 0 nil first-section nil nil nil 1 25 nil #<killed buffer> nil nil #7]) (keyword (:standard-properties [1 1 nil nil 25 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #8] :key \"TITLE\" :value \"Document Title\"))) #4)] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #4))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [30 30 30 34 34 0 nil section nil nil nil 30 34 nil #<killed buffer> nil nil #4]) (paragraph (:standard-properties [30 30 30 34 34 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #5]) #(\"Body\" 0 4 (:parent #6)))))))))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'ox)
+  (let ((org-mode-hook nil))
+    (with-temp-buffer (org-mode)
+      (insert "#+TITLE: Document Title
+* H1
+Body")
+      (goto-char (point-min))
+      (let* ((tree (org-element-parse-buffer))
+             (info (org-combine-plists
+                    (org-export--get-export-attributes)
+                    (org-export-get-environment)
+                    (org-export--collect-tree-properties
+                     tree (org-export-get-environment))))
+             (headline (car (org-element-map tree 'headline #'identity))))
+        (list
+         ;; Optional title.
+         (org-export-get-alt-title headline info))))))"##,
+        expect,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Giga: org-element with all export first/last sibling combinations
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
 fn giga_all_export_node_property_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK (\"myid\" \"2h\" \"work\" \"value\" nil)""#]];

@@ -79,6 +79,24 @@ fn combo94_org_babel_row_col_indexing() {
 }
 
 #[test]
+fn combo94_org_timestamp_special_dates() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK (:feb28 (2024 2 28) :leap-feb29 (2024 2 29) :dec31 (2024 12 31))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn (require 'org) (require 'org-element) (list
+ :feb28 (let ((ts (org-timestamp-from-string "<2024-02-28 Wed>")))
+  (list (org-element-property :year-start ts) (org-element-property :month-start ts) (org-element-property :day-start ts)))
+ :leap-feb29 (let ((ts (org-timestamp-from-string "<2024-02-29 Thu>")))
+  (list (org-element-property :year-start ts) (org-element-property :month-start ts) (org-element-property :day-start ts)))
+ :dec31 (let ((ts (org-timestamp-from-string "<2024-12-31 Tue>")))
+  (list (org-element-property :year-start ts) (org-element-property :month-start ts) (org-element-property :day-start ts)))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn combo94_org_block_switch_headers() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""ERR (setting-constant t)""#]];
@@ -103,6 +121,23 @@ fn combo94_org_export_body_only_all_backends_compact() {
   (let ((r '())) (dolist (b '(ascii html latex)) (condition-case nil
    (let ((out (org-export-as b nil nil t t))) (push (list b (> (length out) 0)) r)) (error nil)))
   (nreverse r))))"##,
+        expect,
+    );
+}
+#[test]
+fn combo94_org_entry_properties_special_and_all() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:special ((\"CATEGORY\" . \"???\") (\"BLOCKED\" . \"\") (\"FILE\") (\"PRIORITY\" . \"B\") (\"TODO\" . \"TODO\") (\"ITEM\" . \"Task\"))) (:standard ((\"CATEGORY\" . \"???\") (\"A\" . \"10\"))) (:all ((\"A\" . \"10\") (\"BLOCKED\" . \"\") (\"CATEGORY\" . \"???\") (\"FILE\") (\"ITEM\" . \"Task\") (\"PRIORITY\" . \"B\") (\"TODO\" . \"TODO\"))))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(with-temp-buffer (org-mode)
+ (insert "* TODO Task\n:PROPERTIES:\n:A: 10\n:END:\n")
+ (let ((r '())) (goto-char (point-min))
+  (push (list :special (org-entry-properties nil 'special)) r)
+  (push (list :standard (org-entry-properties nil 'standard)) r)
+  (push (list :all (sort (org-entry-properties nil 'all) (lambda (a b) (string-lessp (car a) (car b))))) r)
+  (nreverse r)))"##,
         expect,
     );
 }

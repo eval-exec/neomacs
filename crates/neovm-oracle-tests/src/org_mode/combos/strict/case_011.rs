@@ -112,6 +112,46 @@ fn strict_get_heading_all_args() {
 }
 
 #[test]
+fn strict_toggle_pretty_entities_unicode() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:entities-before 5) (:has-alpha 11) (:after-length t) (:buffer-changed nil) (:entities-after-toggle 5) (:entity-names (\"alpha\" \"beta\" \"gamma\" \"rightarrow\" \"sum\")))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (let ((org-mode-hook nil))
+    (with-temp-buffer (org-mode)
+      (insert "* Symbols: \\alpha \\beta \\gamma \\rightarrow \\sum\n")
+      (goto-char (point-min))
+      (let ((r '())
+            (before (buffer-substring-no-properties (point-min) (point-max))))
+        (let ((tree-before (org-element-parse-buffer)))
+          (push (list :entities-before (length (org-element-map tree-before 'entity #'identity))) r)
+          (push (list :has-alpha (string-match-p "\\\\alpha" before)) r))
+        ;; toggle entities
+        (condition-case nil
+            (org-toggle-pretty-entities)
+          (error nil))
+        (let ((after (buffer-substring-no-properties (point-min) (point-max))))
+          (push (list :after-length (> (length after) 0)) r)
+          (push (list :buffer-changed
+                      (not (string= before (buffer-substring-no-properties (point-min) (point-max))))) r))
+        ;; toggle back (should be idempotent-like)
+        (condition-case nil
+            (org-toggle-pretty-entities)
+          (error nil))
+        ;; element parse after toggling
+        (let ((entities (org-element-map (org-element-parse-buffer) 'entity #'identity)))
+          (push (list :entities-after-toggle (length entities)) r)
+          ;; entity names
+          (push (list :entity-names (mapcar (lambda (e) (org-element-property :name e)) entities)) r))
+        (nreverse r)))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn strict_cjk_heading_regexp_match() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
@@ -135,6 +175,35 @@ fn strict_cjk_heading_regexp_match() {
                 r))
         (push (list :count (length r)) r)
         (nreverse r)))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn strict_match_any_p() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:match1 0) (:match2 6) (:match3 nil) (:regex 5) (:empty nil) nil (:case-insensitive 0))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (list
+   ;; basic matches
+   (list :match1 (org-match-any-p "hello" '("hello world")))
+   (list :match2 (org-match-any-p "world" '("hello world")))
+   (list :match3 (org-match-any-p "missing" '("hello world")))
+   ;; regex
+   (list :regex (org-match-any-p "[0-9]+" '("hello123")))
+   ;; empty string
+   (list :empty (org-match-any-p "x" '("")))
+   ;; nil inputs
+   (condition-case nil
+       (org-match-any-p ".*" nil)
+     (error :error))
+   ;; case insensitive
+   (let ((case-fold-search t))
+     (list :case-insensitive (org-match-any-p "hello" '("Hello"))))))"##,
         expect,
     );
 }
@@ -269,6 +338,45 @@ fn strict_clock_in_with_logging() {
         ;; check logbook has note
         (push (list :logbook-count (length (org-element-map (org-element-parse-buffer) 'drawer
                                              (lambda (d) (when (equal "LOGBOOK" (org-element-property :drawer-name d)) d))))) r)
+        (nreverse r)))))"##,
+        expect,
+    );
+}
+#[test]
+fn strict_todo_dependencies_cycle() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:parent-before-child \"TODO\") (:child-todo #(\"DONE\" 0 4 (org-todo-head \"TODO\"))) (:parent-after-child #(\"DONE\" 0 4 (org-todo-head \"TODO\"))) (:final-states ((#(\"Parent\" 0 6 (org-todo-head \"TODO\")) #(\"DONE\" 0 4 (org-todo-head \"TODO\"))) (#(\"Child\" 0 5 (org-todo-head \"TODO\")) #(\"DONE\" 0 4 (org-todo-head \"TODO\"))))))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (let ((org-mode-hook nil)
+        (org-enforce-todo-dependencies t))
+    (with-temp-buffer (org-mode)
+      (insert "* TODO Parent\n** TODO Child\n")
+      (let ((r '()))
+        ;; Parent completion is blocked while its child is TODO.
+        (goto-char (point-min))
+        (let ((before (buffer-substring-no-properties (point-min) (point-max))))
+          (condition-case nil
+              (progn (org-todo "DONE")
+                     (push (list :parent-before-child (org-get-todo-state)) r))
+            (error (push (list :parent-blocked t) r))))
+        ;; Complete the child.
+        (goto-char (point-min))
+        (search-forward "** TODO Child") (beginning-of-line)
+        (org-todo "DONE")
+        (push (list :child-todo (org-get-todo-state)) r)
+        ;; Now the parent can be DONE.
+        (goto-char (point-min))
+        (condition-case nil
+            (progn (org-todo "DONE")
+                   (push (list :parent-after-child (org-get-todo-state)) r))
+          (error (push (list :parent-error t) r)))
+        ;; todo states
+        (push (list :final-states (org-map-entries (lambda () (list (org-get-heading t t t t)
+                                                                    (org-get-todo-state))))) r)
         (nreverse r)))))"##,
         expect,
     );

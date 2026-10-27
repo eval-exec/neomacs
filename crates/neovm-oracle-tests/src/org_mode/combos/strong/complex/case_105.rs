@@ -46,6 +46,16 @@ fn combo105_org_babel_tangle_comment_links() {
 }
 
 #[test]
+fn combo105_org_agenda_file_check() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK (:file-p-fbound t :has-buffer nil)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn(require'org-agenda)(list :file-p-fbound(fboundp'org-agenda-file-p):has-buffer(progn(set-buffer(get-buffer-create"*test*"))(with-temp-buffer(org-mode)(condition-case nil(org-agenda-file-p)(error :err))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn combo105_org_column_view_get_format() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""ERR (void-function list:format-fbound)""#]];

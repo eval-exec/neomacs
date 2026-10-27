@@ -369,6 +369,66 @@ fn org_table_column_width_shrink_expand_combo() {
 }
 
 #[test]
+fn org_table_hline_formula_sort_recalc_lifecycle_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((\"@2$4\" . \"$2*$3\") (\"@3$4\" . \"$2*$3\") (\"@>$4\" . \"vsum(@I..@II)\")) \"| Item | Qty | Price | Total |\\n|------+-----+-------+-------|\\n| A    |   2 |    10 |    20 |\\n| B    |   3 |     7 |    21 |\\n|------+-----+-------+-------|\\n| Sum  |     |       |    41 |\\n#+TBLFM: @2$4=$2*$3::@3$4=$2*$3::@>$4=vsum(@I..@II)\\n\" ((\"@>$4\" . \"vsum(@I..@II)\") (\"$4\" . \"$2*$3\") (\"@2$4\" . \"$2*$3\") (\"@3$4\" . \"$2*$3\")) \"@2$4=$2*$3::@4$4=$2*$3::@>$4=vsum(@2$4..@-1$4)\" \"@2$4=$2*$3::@4$4=$2*$3::@>$4=vsum(@2$4..@-1$4)\" \"@5$4=vsum(@I..@II)\" ((\"@>$4\" . \"vsum(@I..@II)\") (\"$4\" . \"$2*$3\") (\"@2$4\" . \"$2*$3\") (\"@3$4\" . \"$2*$3\")) ((#(\"Item\" 0 4 (face org-table)) #(\"Qty\" 0 3 (face org-table)) #(\"Price\" 0 5 (face org-table)) #(\"Total\" 0 5 (face org-table))) hline (#(\"A\" 0 1 (face org-table)) #(\"2\" 0 1 (face org-table)) #(\"10\" 0 2 (face org-table)) #(\"20\" 0 2 (face org-table))) (#(\"B\" 0 1 (face org-table)) #(\"3\" 0 1 (face org-table)) #(\"7\" 0 1 (face org-table)) #(\"21\" 0 2 (face org-table))) hline (#(\"C\" 0 1 (face org-table)) #(\"4\" 0 1 (face org-table)) #(\"5\" 0 1 (face org-table)) #(\"20\" 0 2 (face org-table))) hline (#(\"Sum\" 0 3 (face org-table)) \"\" \"\" #(\"41\" 0 2 (face org-table)))) \"| Item | Qty | Price | Total |\\n|------+-----+-------+-------|\\n| A    |   2 |    10 |    20 |\\n| B    |   3 |     7 |    21 |\\n|------+-----+-------+-------|\\n| C    |   4 |     5 |    20 |\\n|------+-----+-------+-------|\\n| Sum  |     |       |    41 |\\n#+TBLFM: @>$4=vsum(@I..@II)::$4=$2*$3::@2$4=$2*$3::@3$4=$2*$3\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-table)
+  (with-temp-buffer
+    (org-mode)
+    (insert "| Item | Qty | Price | Total |\n")
+    (insert "|------+-----+-------+-------|\n")
+    (insert "| A | 2 | 10 | |\n")
+    (insert "| B | 3 | 7 | |\n")
+    (insert "|------+-----+-------+-------|\n")
+    (insert "| Sum | | | |\n")
+    (insert "#+TBLFM: @2$4=$2*$3::@3$4=$2*$3::@>$4=vsum(@I..@II)\n")
+    (goto-char (point-min))
+    (org-table-recalculate 'all)
+    (let ((stored-before (org-table-get-stored-formulas))
+          (after-first (buffer-substring-no-properties
+                        (point-min) (point-max))))
+      (goto-char (point-min))
+      (search-forward "B")
+      (beginning-of-line)
+      (org-table-insert-row 'below)
+      (org-table-put (org-table-current-dline) 1 "C" t)
+      (org-table-put (org-table-current-dline) 2 "4" t)
+      (org-table-put (org-table-current-dline) 3 "5" t)
+      (org-table-insert-hline 'below)
+      (goto-char (point-min))
+      (search-forward "| C")
+      (org-table-goto-column 4)
+      (org-table-eval-formula nil "$2*$3")
+      (goto-char (point-min))
+      (org-table-recalculate 'all)
+      (let ((stored-after (org-table-get-stored-formulas))
+            (to-user (org-table-formula-to-user
+                      "@2$4=$2*$3::@4$4=$2*$3::@>$4=vsum(@2$4..@-1$4)"))
+            (from-user (org-table-formula-from-user
+                        "@2$4=$2*$3::@4$4=$2*$3::@>$4=vsum(@2$4..@-1$4)"))
+            (first-last (org-table-formula-handle-first/last-rc
+                         "@>$4=vsum(@I..@II)")))
+        (list stored-before
+              after-first
+              stored-after
+              to-user
+              from-user
+              first-last
+              (sort (copy-sequence stored-after) #'org-table-formula-less-p)
+              (org-table-to-lisp)
+              (buffer-substring-no-properties
+               (point-min) (point-max)))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_table_sort_transpose_formula_metadata_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

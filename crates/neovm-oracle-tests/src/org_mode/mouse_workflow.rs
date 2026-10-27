@@ -2,6 +2,112 @@ use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
+fn org_mouse_insert_menu_priority_checkbox_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((headline-middle :middle \"A\" \"A\") (headline-end 18 \"* TODO [#A] Alpha\") (item-begin :beginning)) ((todo-menu ((\"TODO\" :style :selected) (\"WAIT\" :style :selected) (\"DONE\" :style :selected))) (tag-menu ((\"urgent\" :style :selected) (\"work\" :style :selected) \"--\" (\"Align Tags Here\" t nil) (\"Align Tags in Buffer\" t nil) (\"Set Tags ...\" t nil)))) ((\"Priority A\" :style :selected) (\"Priority B\" :style :selected) (\"Priority C\" :style :selected) (\"Priority D\" :style :selected) (\"None\" :style :selected)) \"* TODO [#C] Alpha :work:urgent:\\n- [ ] item one\\n- [ ] item two\\nMiddle line\\n       + dropped text\\n\\n* Inserted heading: tail text\" \"abcdefghi...\" \"TODO tree: \" \"Agenda command ???\" \"* TODO [#C] Alpha :work:urgent:\\n- [ ] item one\\n- [ ] item two\\nMiddle line\\n       + dropped text\\n\\n* Inserted heading: tail text\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-mouse)
+  (with-temp-buffer
+    (let ((org-priority-lowest ?D)
+          (org-priority-default ?B)
+          (org-todo-keywords '((sequence "TODO" "WAIT" "|" "DONE")))
+          menu-after-actions replace-menu)
+      (org-mode)
+      (insert "* TODO [#A] Alpha :work:urgent:\n")
+      (insert "- item one\n")
+      (insert "- [ ] item two\n")
+      (insert "Middle line\n")
+      (insert "\n")
+      (let ((line-states nil)
+            (menus nil))
+        (goto-char (point-min))
+        (search-forward "Alpha")
+        (push (list 'headline-middle
+                    (org-mouse-line-position)
+                    (org-mouse-get-priority)
+                    (org-mouse-get-priority t))
+              line-states)
+        (org-mouse-end-headline)
+        (push (list 'headline-end
+                    (point)
+                    (buffer-substring-no-properties
+                     (line-beginning-position) (point)))
+              line-states)
+        (goto-char (point-min))
+        (search-forward "item one")
+        (beginning-of-line)
+        (push (list 'item-begin (org-mouse-line-position))
+              line-states)
+        (org-mouse-insert-checkbox)
+        (goto-char (point-min))
+        (search-forward "item two")
+        (beginning-of-line)
+        (org-mouse-for-each-item 'org-mouse-insert-checkbox)
+        (goto-char (point-max))
+        (org-mouse-insert-heading)
+        (insert "Inserted heading")
+        (goto-char (point-min))
+        (search-forward "Middle")
+        (org-mouse-insert-item "dropped text")
+        (goto-char (point-max))
+        (org-mouse-insert-item "tail text")
+        (goto-char (point-min))
+        (search-forward "TODO")
+        (push (list 'todo-menu
+                    (mapcar (lambda (item)
+                              (and (vectorp item)
+                                   (list (aref item 0)
+                                         (aref item 2)
+                                         (and (> (length item) 4) (aref item 4)))))
+                            (org-mouse-todo-menu "TODO")))
+              menus)
+        (goto-char (point-min))
+        (search-forward ":work:")
+        (push (list 'tag-menu
+                    (mapcar (lambda (item)
+                              (cond ((vectorp item)
+                                     (list (aref item 0)
+                                           (aref item 2)
+                                           (and (> (length item) 4) (aref item 4))))
+                                    (t item)))
+                            (org-mouse-tag-menu)))
+              menus)
+        (goto-char (point-min))
+        (re-search-forward org-mouse-priority-regexp)
+        (setq replace-menu
+              (mapcar (lambda (item)
+                        (cond ((vectorp item)
+                               (list (aref item 0)
+                                     (aref item 2)
+                                     (and (> (length item) 4) (aref item 4))))
+                              (t item)))
+                      (org-mouse-keyword-replace-menu
+                       (org-mouse-priority-list) 1 "Priority %s" t)))
+        (eval (aref (nth 2 (org-mouse-keyword-replace-menu
+                               (org-mouse-priority-list) 1
+                               "Priority %s" t))
+                       1))
+        (setq menu-after-actions
+              (buffer-substring-no-properties (point-min) (point-max)))
+        (list (nreverse line-states)
+              (nreverse menus)
+              replace-menu
+              menu-after-actions
+              (org-mouse-clip-text "abcdefghijklmnopqrstuvwxyz" 12)
+              (org-mouse-agenda-type 'todo-tree)
+              (org-mouse-agenda-type 'unknown)
+              (buffer-substring-no-properties
+               (point-min) (point-max)))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_mouse_timestamp_options_visibility_mutation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -106,6 +212,87 @@ fn org_mouse_timestamp_options_visibility_mutation_combo() {
                 (org-mouse-clip-text "0123456789abcdef" 10)
                  (buffer-substring-no-properties
                   (point-min) (point-max))))))))"##,
+        expect,
+    );
+}
+#[test]
+fn org_mouse_context_menu_move_drag_link_open_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((\"Tags and Priorities\" \"TODO Status\" \"Show Tags\" \"Show Priority\" \"--\" \"New Heading\" \"Set Deadline\" \"Schedule Task\" \"Insert Timestamp\" \"--\" \"Archive Subtree\" \"Cut Subtree\" \"Copy Subtree\" \"Paste Subtree\" \"Sort Children\" \"--\" \"Move Trees\") (\"* Beta :home:\\nBeta body.\\n** TODO Alpha                                                          :work:\\nBody with [[https://example.org][link]].\\n*** Child\\nchild body\\n* Gamma\\nGamma body.\\n\" ((\"Beta\" (\"home\")) (\"Alpha\" (\"work\")) (\"Child\" nil) (\"Gamma\" nil))) (\"* Gamma\\nGamma body.\\n* Beta :home:\\nBeta body.\\n** TODO Alpha                                                          :work:\\nBody with [[https://example.org][link]].\\n*** Child\\nchild body\\n\" ((\"Gamma\" nil) (\"Beta\" (\"home\")) (\"Alpha\" (\"work\")) (\"Child\" nil))) (\"* Gamma\\nGamma body.\\n* Beta                                                          :urgent:home:\\nBeta body.\\n** TODO Alpha                                                          :work:\\nBody with [[https://example.org][link]].\\n*** Child\\nchild body\\n\" ((\"Gamma\" nil) (\"Beta\" (\"urgent\" \"home\")) (\"Alpha\" (\"work\")) (\"Child\" nil))) \"https://example.org\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-mouse)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* TODO Alpha :work:\n")
+    (insert "Body with [[https://example.org][link]].\n")
+    (insert "** Child\nchild body\n")
+    (insert "* Beta :home:\n")
+    (insert "Beta body.\n")
+    (insert "* Gamma\n")
+    (insert "Gamma body.\n")
+    (let ((snap (lambda ()
+                  (list (buffer-substring-no-properties
+                         (point-min) (point-max))
+                        (org-element-map (org-element-parse-buffer) 'headline
+                          (lambda (h)
+                            (list (org-element-property :raw-value h)
+                                  (org-element-property :tags h))))))))
+      ;; Show context menu items
+      (let ((context-items
+             (progn
+               (goto-char (point-min))
+               (search-forward "Alpha")
+               (cl-letf (((symbol-function 'popup-menu)
+                          (lambda (menu &rest _)
+                            (mapcar (lambda (item)
+                                      (cond ((vectorp item) (aref item 0))
+                                            ((consp item) (car item))
+                                            (t item)))
+                                    (cdr menu)))))
+                 (org-mouse-context-menu)))))
+        ;; Drag Alpha onto Beta, decoding deterministic buffer positions.
+        (goto-char (point-min))
+        (search-forward "Alpha")
+        (beginning-of-line)
+        (let ((start (point))
+              (end (save-excursion
+                     (search-forward "Beta")
+                     (beginning-of-line)
+                     (point))))
+          (cl-letf (((symbol-function 'org-mouse-make-marker)
+                     (lambda (position) (copy-marker (car position)))))
+            (org-mouse-move-tree
+             (list 'drag-mouse-3 (list start) (list end)))))
+        (let ((after-move (funcall snap)))
+          ;; Move subtree up
+          (goto-char (point-min))
+          (search-forward "Gamma")
+          (beginning-of-line)
+          (org-move-subtree-up)
+          (let ((after-move-up (funcall snap)))
+            ;; Toggle tag
+            (goto-char (point-min))
+            (search-forward "Beta")
+            (beginning-of-line)
+            (org-mouse-set-tags (cons "urgent" (org-get-tags nil t)))
+            (let ((after-tag (funcall snap)))
+              (list context-items
+                    after-move
+                    after-move-up
+                    after-tag
+                    (save-excursion
+                      (goto-char (point-min))
+                      (search-forward "https://example.org")
+                      (let (opened)
+                        (cl-letf (((symbol-function 'browse-url)
+                                   (lambda (url &rest _) (setq opened url))))
+                          (org--mouse-open-at-point #'org-open-at-point))
+                        opened))))))))))"##,
         expect,
     );
 }

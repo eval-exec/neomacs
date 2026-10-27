@@ -55,6 +55,20 @@ fn combo92_config_org_export_backends_available() {
 }
 
 #[test]
+fn combo92_config_org_babel_python_session() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect =
+        expect_test::expect![[r#""OK (:python-ok t :output #(\"3\" 0 1 (field output)))""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(with-temp-buffer (org-mode) (condition-case nil (require 'ob-python) (error nil))
+ (let ((org-confirm-babel-evaluate nil)) (condition-case nil (progn (insert "#+begin_src python :results output :session py91\nprint(1+2)\n#+end_src\n")
+  (goto-char (point-min)) (search-forward "#+begin_src python") (list :python-ok t :output (org-babel-execute-src-block)))
+ (error (list :python-error t)))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn combo92_config_org_agenda_entry_types_all() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[

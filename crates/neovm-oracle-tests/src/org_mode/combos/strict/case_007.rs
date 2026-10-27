@@ -172,6 +172,53 @@ fn strict_element_cache_coherence() {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
+fn strict_table_formula_edge_cases() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:before \"| Item | Qty | Price | Total |\\n|-------+-----+-------+-------|\\n| A     |   2 |    10 |       |\\n| B     |   1 |    25 |       |\\n| C     |   4 |     8 |       |\\n#+TBLFM: @>$2=vsum(@2$2..@-1$2)::$4=$2*$3\\n\") (:after-recalc \"| Item | Qty | Price | Total |\\n|------+-----+-------+-------|\\n| A    |   2 |    10 |    20 |\\n| B    |   1 |    25 |    25 |\\n| C    |   3 |     8 |    32 |\\n#+TBLFM: @>$2=vsum(@2$2..@-1$2)::$4=$2*$3\\n\") (:cell-A-total #(\"20\" 0 2 (face org-table))) (:after-add-row \"| Item | Qty | Price | Total |   |   |   |\\n|------+-----+-------+-------+---+---+---|\\n| A    |   2 |    10 |    20 |   |   |   |\\n| B    |   1 |    25 |    25 |   |   |   |\\n| D    |   3 |    15 |    45 |   |   |   |\\n| C    |   6 |     8 |    24 |   |   |   |\\n#+TBLFM: @>$2=vsum(@2$2..@-1$2)::$4=$2*$3\\n\") (:cell-qty-sum #(\"6\" 0 1 (face org-table))) (:to-lisp ((#(\"Item\" 0 4 (face org-table)) #(\"Qty\" 0 3 (face org-table)) #(\"Price\" 0 5 (face org-table)) #(\"Total\" 0 5 (face org-table)) \"\" \"\" \"\") hline (#(\"A\" 0 1 (face org-table)) #(\"2\" 0 1 (face org-table)) #(\"10\" 0 2 (face org-table)) #(\"20\" 0 2 (face org-table)) \"\" \"\" \"\") (#(\"B\" 0 1 (face org-table)) #(\"1\" 0 1 (face org-table)) #(\"25\" 0 2 (face org-table)) #(\"25\" 0 2 (face org-table)) \"\" \"\" \"\") (#(\"D\" 0 1 (face org-table)) #(\"3\" 0 1 (face org-table)) #(\"15\" 0 2 (face org-table)) #(\"45\" 0 2 (face org-table)) \"\" \"\" \"\") (#(\"C\" 0 1 (face org-table)) #(\"6\" 0 1 (face org-table)) #(\"8\" 0 1 (face org-table)) #(\"24\" 0 2 (face org-table)) \"\" \"\" \"\"))))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (let ((org-mode-hook nil))
+    (with-temp-buffer (org-mode)
+      ;; Table with formula using $LR and @> (last row/col references)
+      (insert "| Item | Qty | Price | Total |\n|-------+-----+-------+-------|\n")
+      (insert "| A     |   2 |    10 |       |\n| B     |   1 |    25 |       |\n| C     |   4 |     8 |       |\n")
+      (insert "#+TBLFM: @>$2=vsum(@2$2..@-1$2)::$4=$2*$3\n")
+      (goto-char (point-min))
+      (let ((r '()))
+        (push (list :before (buffer-substring-no-properties (point-min) (point-max))) r)
+        ;; recalc
+        (org-table-recalculate t)
+        (org-table-align)
+        (push (list :after-recalc (buffer-substring-no-properties (point-min) (point-max))) r)
+        ;; get specific cells
+        (push (list :cell-A-total (org-table-get 2 4)) r)
+        ;; add a row and recalc again
+        (goto-char (point-min))
+        (forward-line 4)  ;; on row C just before last hline
+        (org-table-insert-row)
+        (insert " D |   3 |   15 |     ")
+        (org-table-align)
+        (org-table-recalculate t)
+        (org-table-align)
+        (push (list :after-add-row (buffer-substring-no-properties (point-min) (point-max))) r)
+        ;; cell after new row
+        (push (list :cell-qty-sum (org-table-get (length (delq 'hline (org-table-to-lisp))) 2)) r)
+        ;; use org-table-to-lisp on the final table
+        (goto-char (point-min))
+        (push (list :to-lisp (org-table-to-lisp)) r)
+        (nreverse r)))))"##,
+        expect,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Mixed list types: ordered + unordered + description in deep nesting
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
 fn strict_mixed_list_deep_integrity() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
@@ -274,6 +321,58 @@ fn strict_footnote_normalize_gaps() {
 
 // ═══════════════════════════════════════════════════════════════════════
 // Tag matching: complex boolean expressions
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn strict_tag_match_boolean_expressions() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:match-work (\"A\" \"A1\" \"C\")) (:match-work+urgent (\"A\")) (:match-work-or-home (\"A\" \"A1\" \"B\" \"B1\" \"C\")) (:match-work-minus-urgent (\"A1\" \"C\")) (:match-grouped nil) (:count-admin 3) (:match-not-work (\"A\" \"A1\" \"A2\" \"B\" \"B1\" \"B2\" \"C\" \"C1\" \"C2\")))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (let ((org-mode-hook nil)
+        (org-tags-column -80)
+        (org-use-tag-inheritance nil))
+    (with-temp-buffer (org-mode)
+      (insert "* A :work:urgent:\n** A1 :work:\n** A2 :urgent:admin:\n")
+      (insert "* B :home:fun:\n** B1 :home:urgent:\n** B2 :fun:admin:\n")
+      (insert "* C :work:home:\n** C1 :urgent:fun:\n** C2 :admin:\n")
+      (let ((r '()))
+        ;; match work
+        (push (list :match-work (org-map-entries
+                                 (lambda () (org-get-heading t t t t))
+                                 "work")) r)
+        ;; match work+urgent
+        (push (list :match-work+urgent (org-map-entries
+                                        (lambda () (org-get-heading t t t t))
+                                        "work+urgent")) r)
+        ;; match work|home
+        (push (list :match-work-or-home (org-map-entries
+                                         (lambda () (org-get-heading t t t t))
+                                         "work|home")) r)
+        ;; match work-urgent (work but not urgent)
+        (push (list :match-work-minus-urgent (org-map-entries
+                                              (lambda () (org-get-heading t t t t))
+                                              "work-urgent")) r)
+        ;; match {work+urgent}|{home+fun}
+        (push (list :match-grouped (org-map-entries
+                                    (lambda () (org-get-heading t t t t))
+                                    "{work+urgent}|{home+fun}")) r)
+        ;; count entries matching admin
+        (push (list :count-admin (length (org-map-entries (lambda () t) "admin"))) r)
+        ;; match !work (no work tag)
+        (push (list :match-not-work (org-map-entries
+                                     (lambda () (org-get-heading t t t t))
+                                     "!work")) r)
+        (nreverse r)))))"##,
+        expect,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Link abbreviation and format conversions
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]

@@ -37,6 +37,41 @@ fn org_timestamp_change_toggle_repeater_delay_combo() {
 }
 
 #[test]
+fn org_read_date_relative_default_time_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (\"2026-06-10\" \"2026-05-30\" \"2026-11-27 08:15\" ((\"<2026-05-27 Wed>\" \"2026-05-27 00:00\" nil) (\"[2026-05-27 Wed 09:30]\" \"2026-05-27 09:30\" 9) (\"<2026-05-27 Wed 09:30-10:45>\" \"2026-05-27 09:30\" 9)))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-element)
+  (let* ((base (encode-time 0 15 8 27 5 2026))
+         (org-read-date-popup-calendar nil)
+         (org-overriding-default-time base))
+    (list
+     (org-read-date nil nil "++2w" nil base)
+     (org-read-date t nil "++3d 14:45" nil base)
+     (format-time-string
+      "%Y-%m-%d %H:%M"
+      (org-read-date t t "+1m" nil base))
+     (mapcar
+      (lambda (s)
+        (let ((ts (org-timestamp-from-string s)))
+          (list s
+                (format-time-string
+                 "%Y-%m-%d %H:%M"
+                 (org-timestamp-to-time ts))
+                (org-timestamp-has-time-p ts))))
+      '("<2026-05-27 Wed>"
+        "[2026-05-27 Wed 09:30]"
+        "<2026-05-27 Wed 09:30-10:45>")))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_timestamp_time_range_eval_parse_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -140,6 +175,170 @@ fn org_planning_repeater_warning_element_combo() {
              (format-time-string
               "%Y-%m-%d"
               (org-timestamp-to-time deadline)))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_todo_auto_repeat_planning_logbook_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (#(\"NEXT\" 0 4 (org-todo-head \"TODO\")) \".+2d\" \"[2026-05-27 Wed 12:00]\" ((#(\"Repeating task\" 0 14 (org-todo-head \"TODO\")) #(\"NEXT\" 0 4 (org-todo-head \"TODO\")) \"<2026-10-29 Thu .+2d>\" \"<2026-05-27 Wed +1w -2d>\" \"[2026-05-27 Wed 12:00]\")) \"* NEXT Repeating task\\nSCHEDULED: <2026-10-29 Thu .+2d> DEADLINE: <2026-05-27 Wed +1w -2d>\\n:PROPERTIES:\\n:REPEAT_TO_STATE: NEXT\\n:LAST_REPEAT: [2026-05-27 Wed 12:00]\\n:END:\\nBody timestamp <2026-06-20 Sat +1m>\\n:LOGBOOK:\\nCLOCK: [2026-05-26 Tue 09:00]--[2026-05-26 Tue 10:15] =>  1:15\\n:END:\\n\" \"* NEXT Repeating task\\nSCHEDULED: <2026-10-29 Thu .+0d> DEADLINE: <2026-05-27 Wed +0w -2d>\\n:PROPERTIES:\\n:REPEAT_TO_STATE: NEXT\\n:LAST_REPEAT: [2026-05-27 Wed 12:00]\\n:END:\\nBody timestamp <2026-06-20 Sat +0m>\\n:LOGBOOK:\\nCLOCK: [2026-05-26 Tue 09:00]--[2026-05-26 Tue 10:15] =>  1:15\\n:END:\\n\" ((headline \"NEXT\" \"Repeating task\") (planning \"<2026-10-29 Thu .+0d>\" \"<2026-05-27 Wed +0w -2d>\") (property \"REPEAT_TO_STATE\" \"NEXT\") (property \"LAST_REPEAT\" \"[2026-05-27 Wed 12:00]\") (timestamp \"<2026-06-20 Sat +0m>\" cumulate 0 month nil nil)))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-clock)
+  (with-temp-buffer
+    (let* ((events nil)
+           (org-todo-keywords '((sequence "TODO" "NEXT" "|" "DONE")))
+          (org-log-repeat 'time)
+          (org-log-into-drawer t)
+          (org-log-done nil)
+          (org-todo-repeat-hook
+           (list (lambda ()
+                   (push (list (org-get-heading t t t t)
+                               (org-get-todo-state)
+                               (org-entry-get nil "SCHEDULED")
+                               (org-entry-get nil "DEADLINE")
+                               (org-entry-get nil "LAST_REPEAT"))
+                         events)))))
+      (org-mode)
+      (insert "* TODO Repeating task\n")
+      (insert "SCHEDULED: <2026-05-20 Wed .+2d> ")
+      (insert "DEADLINE: <2026-05-20 Wed +1w -2d>\n")
+      (insert ":PROPERTIES:\n")
+      (insert ":REPEAT_TO_STATE: NEXT\n")
+      (insert ":END:\n")
+      (insert "Body timestamp <2026-05-20 Wed +1m>\n")
+      (insert ":LOGBOOK:\n")
+      (insert "CLOCK: [2026-05-26 Tue 09:00]--[2026-05-26 Tue 10:15] =>  1:15\n")
+      (insert ":END:\n")
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'org-current-time)
+                 (lambda (&rest _)
+                   (encode-time 0 0 12 27 5 2026)))
+                ((symbol-function 'current-time)
+                 (lambda ()
+                   (encode-time 0 0 12 27 5 2026))))
+        (org-todo "DONE"))
+      (let ((after-done
+             (buffer-substring-no-properties (point-min) (point-max)))
+            (state-after (org-get-todo-state))
+            (repeat-after (org-get-repeat))
+            (last-repeat (org-entry-get nil "LAST_REPEAT")))
+        (goto-char (point-min))
+        (search-forward "+1m")
+        (org-cancel-repeater)
+        (list state-after
+              repeat-after
+              last-repeat
+              (nreverse events)
+              after-done
+              (buffer-substring-no-properties
+               (point-min) (point-max))
+              (org-element-map (org-element-parse-buffer)
+                  '(headline planning timestamp node-property)
+                (lambda (el)
+                  (pcase (org-element-type el)
+                    ('headline
+                     (list 'headline
+                           (org-element-property :todo-keyword el)
+                           (org-element-property :raw-value el)))
+                    ('planning
+                     (list 'planning
+                           (and (org-element-property :scheduled el)
+                                (org-element-property
+                                 :raw-value
+                                 (org-element-property :scheduled el)))
+                           (and (org-element-property :deadline el)
+                                (org-element-property
+                                 :raw-value
+                                 (org-element-property :deadline el)))))
+                    ('timestamp
+                     (list 'timestamp
+                           (org-element-property :raw-value el)
+                           (org-element-property :repeater-type el)
+                           (org-element-property :repeater-value el)
+                           (org-element-property :repeater-unit el)
+                           (org-element-property :warning-type el)
+                           (org-element-property :warning-value el)))
+                    ('node-property
+                     (list 'property
+                           (org-element-property :key el)
+                           (org-element-property :value el)))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_schedule_deadline_timestamp_range_shift_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (\"* TODO Task\\nDEADLINE: <2026-06-10 Wed> SCHEDULED: <2026-06-03 Wed 08:15>\\nBody with <2026-05-27 Wed 09:30-10:45> and [2026-05-28 Thu].\\n\" (\"<2026-05-27 Wed 09:30> \" \"<2026-05-27 Wed 10:45> \") \"<2026-05-27 Wed 09:30-10:45> \" \"<2026-05-27 Wed 09:30-10:45> \" ((\"<2026-05-27 Wed 09:30-10:45>\" \"<2026-05-27 Wed 09:30-10:45>\" 9 \"2026-05-27 09:30\" \"2026-05-27 10:45\") (\"<2026-06-03 Wed 08:15>\" \"<2026-06-03 Wed 08:15>\" 8 \"2026-06-03 08:15\" \"2026-06-03 08:15\") (\"[2026-05-28 Thu]\" \"[2026-05-28 Thu]\" nil \"2026-05-28 00:00\" \"2026-05-28 00:00\")) \"* TODO Task\\nDEADLINE: [stamp] SCHEDULED: [stamp]\\nBody with [stamp] and [stamp].\\n\\n[stamp]\\n[stamp]\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (with-temp-buffer
+    (let ((org-log-reschedule nil)
+          (org-log-redeadline nil))
+      (org-mode)
+      (insert "* TODO Task\n")
+      (insert "Body with <2026-05-27 Wed 09:30-10:45> and ")
+      (insert "[2026-05-28 Thu].\n")
+      (goto-char (point-min))
+      (org-schedule nil "2026-06-03 08:15")
+      (org-deadline nil "2026-06-10 +1w -2d")
+      (let ((after-planning
+             (buffer-substring-no-properties (point-min) (point-max))))
+        (search-forward "09:30")
+        (let* ((range-ts (org-element-context))
+               (split-start
+                (mapcar (lambda (ts)
+                          (and ts (org-element-property :raw-value ts)))
+                        (list (org-timestamp-split-range range-ts)
+                              (org-timestamp-split-range range-ts t))))
+               (translated-start
+                (org-timestamp-translate range-ts 'start))
+               (translated-end
+                (org-timestamp-translate range-ts 'end)))
+          (org-timestamp-up-day 2)
+          (search-forward "[2026")
+          (org-timestamp-down-day 1)
+          (goto-char (point-max))
+          (insert "\n")
+          (org-timestamp '(16) nil)
+          (insert "\n")
+          (org-timestamp-inactive '(16))
+          (let ((parsed
+                 (mapcar
+                  (lambda (s)
+                    (let ((ts (org-timestamp-from-string s)))
+                      (list s
+                            (org-element-property :raw-value ts)
+                            (org-timestamp-has-time-p ts)
+                            (format-time-string
+                             "%Y-%m-%d %H:%M"
+                             (org-timestamp-to-time ts))
+                            (format-time-string
+                             "%Y-%m-%d %H:%M"
+                             (org-timestamp-to-time ts 'end)))))
+                  '("<2026-05-27 Wed 09:30-10:45>"
+                    "<2026-06-03 Wed 08:15>"
+                    "[2026-05-28 Thu]"))))
+            (list after-planning
+                  split-start
+                  translated-start
+                  translated-end
+                  parsed
+                  (replace-regexp-in-string
+                   "\\[[0-9][^]\n]+\\]\\|<[0-9][^>\n]+>"
+                   "[stamp]"
+                   (buffer-substring-no-properties
+                    (point-min) (point-max))))))))))"##,
         expect,
     );
 }
@@ -281,6 +480,85 @@ Body <2026-05-27 Wed 11:00-12:15>
         (kill-buffer org-agenda-buffer-name))
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
       (delete-file file))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_timestamp_parse_shift_range_element_extract_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((headline \"Alpha\" \"TODO\") (planning \"<2026-05-27 Wed 10:00-11:30 +1w -3d>\" nil nil) (timestamp active \"<2026-05-29 Fri>\" 2026 5 29 nil nil nil nil nil nil nil nil nil) (timestamp inactive \"[2026-05-26 Mon 15:30]\" 2026 5 26 15 30 15 30 nil nil nil nil nil) (headline \"WAIT Beta\" \"\") (planning \"<2026-05-28 Thu .+2d/5d>\" nil nil) (timestamp active \"<2026-06-01 Mon 09:00>\" 2026 6 1 9 0 9 0 nil nil nil nil nil) (headline \"Meeting\" \"\") (timestamp active-range \"<2026-05-30 Fri 14:00-15:00>\" 2026 5 30 14 0 15 0 nil nil nil nil nil) (timestamp inactive \"[2026-05-27 Wed]\" 2026 5 27 nil nil nil nil nil nil nil nil nil)) \"* TODO Alpha\\nSCHEDULED: <2026-05-27 Wed 10:00-11:30 +1w -3d>\\nDEADLINE: <2026-05-29 Fri>\\nCLOSED: [2026-05-26 Mon 15:30]\\n\\n* WAIT Beta\\nSCHEDULED: <2026-05-28 Thu .+2d/5d>\\nDEADLINE: <2026-06-01 Mon 09:00>\\n\\n* Meeting\\n<2026-05-31 Sun 14:00-15:00>\\n[2026-05-27 Wed]\\n\" ((\"<2026-05-29 Fri>\" 29 5) (\"[2026-05-26 Mon 15:30]\" 26 5) (\"<2026-06-01 Mon 09:00>\" 1 6) (\"<2026-05-31 Sun 14:00-15:00>\" 31 5) (\"[2026-05-27 Wed]\" 27 5)))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* TODO Alpha\n")
+    (insert "SCHEDULED: <2026-05-27 Wed 10:00-11:30 +1w -3d>\n")
+    (insert "DEADLINE: <2026-05-29 Fri>\n")
+    (insert "CLOSED: [2026-05-26 Mon 15:30]\n\n")
+    (insert "* WAIT Beta\n")
+    (insert "SCHEDULED: <2026-05-28 Thu .+2d/5d>\n")
+    (insert "DEADLINE: <2026-06-01 Mon 09:00>\n\n")
+    (insert "* Meeting\n")
+    (insert "<2026-05-30 Fri 14:00-15:00>\n")
+    (insert "[2026-05-27 Wed]\n")
+    (let ((parsed
+           (org-element-map (org-element-parse-buffer)
+               '(planning timestamp headline)
+             (lambda (el)
+               (pcase (org-element-type el)
+                 ('headline
+                  (list 'headline
+                        (org-element-property :raw-value el)
+                        (substring-no-properties
+                         (or (org-element-property :todo-keyword el) ""))))
+                 ('planning
+                  (list 'planning
+                        (org-element-property :raw-value
+                         (org-element-property :scheduled el))
+                        (org-element-property :raw-value
+                         (org-element-property :deadline el))
+                        (org-element-property :raw-value
+                         (org-element-property :closed el))))
+                 ('timestamp
+                  (list 'timestamp
+                        (org-element-property :type el)
+                        (org-element-property :raw-value el)
+                        (org-element-property :year-start el)
+                        (org-element-property :month-start el)
+                        (org-element-property :day-start el)
+                        (org-element-property :hour-start el)
+                        (org-element-property :minute-start el)
+                        (org-element-property :hour-end el)
+                        (org-element-property :minute-end el)
+                        (org-element-property :repeater-type el)
+                        (org-element-property :repeater-value el)
+                        (org-element-property :repeater-unit el)
+                        (org-element-property :warning-type el)
+                        (org-element-property :warning-value el))))))))
+      ;; Shift timestamp
+      (goto-char (point-min))
+      (search-forward "Meeting")
+      (forward-line 1)
+      (beginning-of-line)
+      (org-timestamp-change 1 'day)
+      (let ((after-shift (buffer-substring-no-properties
+                          (point-min) (point-max))))
+        ;; Parse after shift
+        (goto-char (point-min))
+        (let ((shifted-ts
+               (org-element-map (org-element-parse-buffer) 'timestamp
+                 (lambda (ts)
+                   (list (org-element-property :raw-value ts)
+                         (org-element-property :day-start ts)
+                         (org-element-property :month-start ts))))))
+          (list parsed
+                after-shift
+                shifted-ts))))))"##,
         expect,
     );
 }

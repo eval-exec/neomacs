@@ -55,6 +55,16 @@ fn strict_org_table_tab_first_hook() {
 }
 
 #[test]
+fn strict_org_list_search_text() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK (:at-item t :item-bullet \"- \")""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(with-temp-buffer(org-mode)(insert"- apple\n- banana\n- cherry\n")(goto-char(point-min))(search-forward"banana")(beginning-of-line)(list :at-item(org-at-item-p):item-bullet(org-list-bullet-string (org-list-get-bullet (point) (org-list-struct)))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn strict_org_export_title_date_author() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""ERR (void-function list:title)""#]];

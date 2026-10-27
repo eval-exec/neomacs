@@ -2,6 +2,110 @@ use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
+fn org_drag_transpose_element_buffer_integrity_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (\"* H\\nFirst paragraph.\\n\\n- item one\\n- item two\\n\\n#+begin_quote\\nQuote block.\\n#+end_quote\\n\\nFinal paragraph.\\n\" \"* H\\nFirst paragraph.\\n\\n- item one\\n- item two\\n\\nFinal paragraph.\\n\\n#+begin_quote\\nQuote block.\\n#+end_quote\\n\" \"* H\\nFirst paragraph.\\n\\n- item two\\n- item one\\n\\nFinal paragraph.\\n\\n#+begin_quote\\nQuote block.\\n#+end_quote\\n\" ((paragraph 5 23) (plain-list 23 46) (item 23 34) (paragraph 25 34) (item 34 45) (paragraph 36 45) (paragraph 46 64) (quote-block 64 103) (paragraph 78 91)))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* H\n")
+    (insert "First paragraph.\n\n")
+    (insert "#+begin_quote\nQuote block.\n#+end_quote\n\n")
+    (insert "- item one\n- item two\n\n")
+    (insert "Final paragraph.\n")
+    (goto-char (point-min))
+    (search-forward "begin_quote")
+    (beginning-of-line)
+    (org-drag-element-forward)
+    (let ((after-forward
+           (buffer-substring-no-properties (point-min) (point-max))))
+      (search-forward "Final paragraph")
+      (beginning-of-line)
+      (org-drag-element-backward)
+      (let ((after-backward
+             (buffer-substring-no-properties (point-min) (point-max))))
+        (goto-char (point-min))
+        (search-forward "item two")
+        (beginning-of-line)
+        (org-transpose-element)
+        (list after-forward
+              after-backward
+              (buffer-substring-no-properties (point-min) (point-max))
+              (org-element-map (org-element-parse-buffer)
+                  '(paragraph quote-block plain-list item)
+                (lambda (e)
+                  (list (org-element-type e)
+                        (org-element-property :begin e)
+                        (org-element-property :end e)))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_element_navigation_positions_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r##""OK ((start 1 headline 1 89 \"* A\\n\") (forward-headline 89 headline 89 100 \"* C\\n\") (paragraph 14 paragraph 5 21 \"Paragraph one.\\n\") (forward-list 21 plain-list 21 44 \"- item one\\n\") (down-item 22 item 21 32 \"- item one\\n\") (up-list 21 plain-list 21 44 \"- item one\\n\") (forward-quote 44 quote-block 44 77 \"#+begin_quote\\n\") (backward-list 21 plain-list 21 44 \"- item one\\n\") (end-subtree 88 89 11))""##
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* A\n")
+    (insert "Paragraph one.\n\n")
+    (insert "- item one\n- item two\n\n")
+    (insert "#+begin_quote\nquoted\n#+end_quote\n")
+    (insert "** B\nBody B\n")
+    (insert "* C\nBody C\n")
+    (let ((snap (lambda (label)
+                  (let ((e (org-element-at-point)))
+                    (list label
+                          (point)
+                          (org-element-type e)
+                          (org-element-property :begin e)
+                          (org-element-property :end e)
+                          (thing-at-point 'line t)))))
+          states)
+      (goto-char (point-min))
+      (push (funcall snap 'start) states)
+      (org-forward-element)
+      (push (funcall snap 'forward-headline) states)
+      (goto-char (point-min))
+      (search-forward "Paragraph")
+      (push (funcall snap 'paragraph) states)
+      (org-forward-element)
+      (push (funcall snap 'forward-list) states)
+      (org-down-element)
+      (push (funcall snap 'down-item) states)
+      (org-up-element)
+      (push (funcall snap 'up-list) states)
+      (org-forward-element)
+      (push (funcall snap 'forward-quote) states)
+      (org-backward-element)
+      (push (funcall snap 'backward-list) states)
+      (goto-char (point-min))
+      (search-forward "** B")
+      (beginning-of-line)
+      (push (list 'end-subtree
+                  (org-end-of-subtree t nil)
+                  (save-excursion
+                    (org-end-of-subtree t t)
+                    (point))
+                  (line-number-at-pos))
+            states)
+      (nreverse states))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_mark_narrow_unindent_navigation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -402,6 +506,555 @@ fn org_navigate_up_forward_end_subtree_cycle_edit_deep() {
                         fwd-to-mod-b
                         (line-number-at-pos end-of-mod-a)
                         at-sub2
+                        (buffer-substring-no-properties
+                         (point-min) (point-max))))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_navigate_fourteen_heading_tree_fold_edit_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((3 \"*** Q1A1\" 3 nil) (6 \"*** Q1A2\" 3 nil) (2 \"** Q1A\" 2 nil) (9 \"** Q1B\" 2 nil) (10 \"*** Q1B1\" 3 nil) (13 \"*** Q1B2\" 3 nil) (26 \"*** Q2C1\" 3 nil) (1 \"* Q1\" 1 nil) \"* Q1\\n** Q1A\\n*** Q1A1\\nBody.\\n\\n*** Q1A2\\nBody.\\n\\n** Q1B\\n*** Q1B1\\nBody.\\n\\n*** Q1B2\\n*** Q1B3\\nBody.\\n\\nBody.\\n\\n* Q2\\n** Q2A\\n*** Q2A1\\nBody.\\n\\n** Q2B\\n*** Q2B1\\nBody.\\n\\n** Q2C\\n*** Q2C1\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Q1\n")
+    (insert "** Q1A\n")
+    (insert "*** Q1A1\nBody.\n\n")
+    (insert "*** Q1A2\nBody.\n\n")
+    (insert "** Q1B\n")
+    (insert "*** Q1B1\nBody.\n\n")
+    (insert "*** Q1B2\nBody.\n\n")
+    (insert "* Q2\n")
+    (insert "** Q2A\n")
+    (insert "*** Q2A1\nBody.\n\n")
+    (insert "** Q2B\n")
+    (insert "*** Q2B1\nBody.\n\n")
+    (insert "** Q2C\n")
+    (insert "*** Q2C1\nBody.\n\n")
+    (let ((track (lambda ()
+                   (list (line-number-at-pos)
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))
+                         (org-outline-level)
+                         (invisible-p (point))))))
+      ;; At Q1A1
+      (goto-char (point-min))
+      (search-forward "Q1A1")
+      (beginning-of-line)
+      (let ((at-q1a1 (funcall track)))
+        ;; Forward to Q1A2
+        (org-forward-heading-same-level 1)
+        (let ((at-q1a2 (funcall track)))
+          ;; Up to Q1A
+          (org-up-heading-safe)
+          (let ((at-q1a (funcall track)))
+            ;; Forward to Q1B
+            (org-forward-heading-same-level 1)
+            (let ((at-q1b (funcall track)))
+              ;; Down to Q1B1
+              (org-next-visible-heading 1)
+              (let ((at-q1b1 (funcall track)))
+                ;; Forward to Q1B2
+                (org-forward-heading-same-level 1)
+                (let ((at-q1b2 (funcall track)))
+                  ;; Jump to Q2C1
+                  (goto-char (point-min))
+                  (search-forward "Q2C1")
+                  (beginning-of-line)
+                  (let ((at-q2c1 (funcall track)))
+                    ;; Edit: insert Q1B3 under Q1B
+                    (goto-char (point-min))
+                    (search-forward "Q1B2")
+                    (end-of-line)
+                    (insert "\n*** Q1B3\nBody.\n")
+                    ;; Fold Q1 subtree
+                    (goto-char (point-min))
+                    (search-forward "Q1")
+                    (beginning-of-line)
+                    (org-fold-subtree t)
+                    (let ((after-fold (funcall track)))
+                      (list at-q1a1 at-q1a2 at-q1a at-q1b at-q1b1 at-q1b2 at-q2c1
+                            after-fold
+                            (buffer-substring-no-properties
+                             (point-min) (point-max))))))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_navigate_twelve_heading_tree_fold_edit_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((3 \"*** P1A1\" 3 nil) (6 \"*** P1A2\" 3 nil) (2 \"** P1A\" 2 nil) (9 \"** P1B\" 2 nil) (10 \"*** P1B1\" 3 nil) (23 \"*** P2C1\" 3 nil) (1 \"* P1\" 1 nil) \"* P1\\n** P1A\\n*** P1A1\\nBody.\\n\\n*** P1A2\\nBody.\\n\\n** P1B\\n*** P1B1\\n*** P1B2\\nBody.\\n\\nBody.\\n\\n* P2\\n** P2A\\n*** P2A1\\nBody.\\n\\n** P2B\\n*** P2B1\\nBody.\\n\\n** P2C\\n*** P2C1\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* P1\n")
+    (insert "** P1A\n")
+    (insert "*** P1A1\nBody.\n\n")
+    (insert "*** P1A2\nBody.\n\n")
+    (insert "** P1B\n")
+    (insert "*** P1B1\nBody.\n\n")
+    (insert "* P2\n")
+    (insert "** P2A\n")
+    (insert "*** P2A1\nBody.\n\n")
+    (insert "** P2B\n")
+    (insert "*** P2B1\nBody.\n\n")
+    (insert "** P2C\n")
+    (insert "*** P2C1\nBody.\n\n")
+    (let ((track (lambda ()
+                   (list (line-number-at-pos)
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))
+                         (org-outline-level)
+                         (invisible-p (point))))))
+      ;; At P1A1
+      (goto-char (point-min))
+      (search-forward "P1A1")
+      (beginning-of-line)
+      (let ((at-p1a1 (funcall track)))
+        ;; Forward to P1A2
+        (org-forward-heading-same-level 1)
+        (let ((at-p1a2 (funcall track)))
+          ;; Up to P1A
+          (org-up-heading-safe)
+          (let ((at-p1a (funcall track)))
+            ;; Forward to P1B
+            (org-forward-heading-same-level 1)
+            (let ((at-p1b (funcall track)))
+              ;; Down to P1B1
+              (org-next-visible-heading 1)
+              (let ((at-p1b1 (funcall track)))
+                ;; Jump to P2C1
+                (goto-char (point-min))
+                (search-forward "P2C1")
+                (beginning-of-line)
+                (let ((at-p2c1 (funcall track)))
+                  ;; Edit: insert P1B2 under P1B
+                  (goto-char (point-min))
+                  (search-forward "P1B1")
+                  (end-of-line)
+                  (insert "\n*** P1B2\nBody.\n")
+                  ;; Fold P1 subtree
+                  (goto-char (point-min))
+                  (search-forward "P1")
+                  (beginning-of-line)
+                  (org-fold-subtree t)
+                  (let ((after-fold (funcall track)))
+                    (list at-p1a1 at-p1a2 at-p1a at-p1b at-p1b1 at-p2c1
+                          after-fold
+                          (buffer-substring-no-properties
+                           (point-min) (point-max)))))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_navigate_ten_heading_tree_fold_edit_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((3 \"*** T1a1\" 3 nil) (6 \"*** T1a2\" 3 nil) (2 \"** T1a\" 2 nil) (9 \"** T1b\" 2 nil) (10 \"*** T1b1\" 3 nil) (15 \"*** T2a1\" 3 nil) (1 \"* T1\" 1 nil) \"* T1\\n** T1a\\n*** T1a1\\nBody.\\n\\n*** T1a2\\nBody.\\n\\n** T1b\\n*** T1b1\\n*** T1b2\\nBody.\\n\\nBody.\\n\\n* T2\\n** T2a\\n*** T2a1\\nBody.\\n\\n** T2b\\n*** T2b1\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* T1\n")
+    (insert "** T1a\n")
+    (insert "*** T1a1\nBody.\n\n")
+    (insert "*** T1a2\nBody.\n\n")
+    (insert "** T1b\n")
+    (insert "*** T1b1\nBody.\n\n")
+    (insert "* T2\n")
+    (insert "** T2a\n")
+    (insert "*** T2a1\nBody.\n\n")
+    (insert "** T2b\n")
+    (insert "*** T2b1\nBody.\n\n")
+    (let ((track (lambda ()
+                   (list (line-number-at-pos)
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))
+                         (org-outline-level)
+                         (invisible-p (point))))))
+      ;; At T1a1
+      (goto-char (point-min))
+      (search-forward "T1a1")
+      (beginning-of-line)
+      (let ((at-t1a1 (funcall track)))
+        ;; Forward to T1a2
+        (org-forward-heading-same-level 1)
+        (let ((at-t1a2 (funcall track)))
+          ;; Up to T1a
+          (org-up-heading-safe)
+          (let ((at-t1a (funcall track)))
+            ;; Forward to T1b
+            (org-forward-heading-same-level 1)
+            (let ((at-t1b (funcall track)))
+              ;; Down to T1b1
+              (org-next-visible-heading 1)
+              (let ((at-t1b1 (funcall track)))
+                ;; Jump to T2a1
+                (goto-char (point-min))
+                (search-forward "T2a1")
+                (beginning-of-line)
+                (let ((at-t2a1 (funcall track)))
+                  ;; Edit: insert T1b2 under T1b
+                  (goto-char (point-min))
+                  (search-forward "T1b1")
+                  (end-of-line)
+                  (insert "\n*** T1b2\nBody.\n")
+                  ;; Fold T1 subtree
+                  (goto-char (point-min))
+                  (search-forward "T1")
+                  (beginning-of-line)
+                  (org-fold-subtree t)
+                  (let ((after-fold (funcall track)))
+                    (list at-t1a1 at-t1a2 at-t1a at-t1b at-t1b1 at-t2a1
+                          after-fold
+                          (buffer-substring-no-properties
+                           (point-min) (point-max)))))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_navigate_complex_tree_fold_edit_show_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((3 \"*** R1a\" 3 nil) (6 \"*** R1b\" 3 nil) (2 \"** R1\" 2 nil) (9 \"** R2\" 2 nil) (16 \"** R3\" 2 nil) (17 \"*** R3a\" 3 nil) (2 \"** R1\" 2 nil) \"* R\\n** R1\\n*** R1a\\nBody.\\n\\n*** R1b\\nBody.\\n\\n** R2\\n*** R2a\\nBody.\\n\\n*** R2b\\n*** R2c\\nBody.\\n\\nBody.\\n\\n** R3\\n*** R3a\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* R\n")
+    (insert "** R1\n")
+    (insert "*** R1a\nBody.\n\n")
+    (insert "*** R1b\nBody.\n\n")
+    (insert "** R2\n")
+    (insert "*** R2a\nBody.\n\n")
+    (insert "*** R2b\nBody.\n\n")
+    (insert "** R3\n")
+    (insert "*** R3a\nBody.\n\n")
+    (let ((track (lambda ()
+                   (list (line-number-at-pos)
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))
+                         (org-outline-level)
+                         (invisible-p (point))))))
+      ;; At R1a
+      (goto-char (point-min))
+      (search-forward "R1a")
+      (beginning-of-line)
+      (let ((at-r1a (funcall track)))
+        ;; Forward to R1b
+        (org-forward-heading-same-level 1)
+        (let ((at-r1b (funcall track)))
+          ;; Up to R1
+          (org-up-heading-safe)
+          (let ((at-r1 (funcall track)))
+            ;; Forward to R2
+            (org-forward-heading-same-level 1)
+            (let ((at-r2 (funcall track)))
+              ;; Forward to R3
+              (org-forward-heading-same-level 1)
+              (let ((at-r3 (funcall track)))
+                ;; Down to R3a
+                (org-next-visible-heading 1)
+                (let ((at-r3a (funcall track)))
+                  ;; Edit: insert R2c under R2
+                  (goto-char (point-min))
+                  (search-forward "R2b")
+                  (end-of-line)
+                  (insert "\n*** R2c\nBody.\n")
+                  ;; Fold R1 subtree
+                  (goto-char (point-min))
+                  (search-forward "R1")
+                  (beginning-of-line)
+                  (org-fold-subtree t)
+                  (let ((after-fold (funcall track)))
+                    (list at-r1a at-r1b at-r1 at-r2 at-r3 at-r3a
+                          after-fold
+                          (buffer-substring-no-properties
+                           (point-min) (point-max)))))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_navigate_multi_level_cycle_edit_fold_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((3 \"*** A1a\" 3 nil) (6 \"*** A1b\" 3 nil) (2 \"** A1\" 2 nil) (9 \"** A2\" 2 nil) (10 \"*** A2a\" 3 nil) (1 \"* A\" 1 nil) \"* A\\n** A1\\n*** A1a\\nBody.\\n\\n*** A1b\\nBody.\\n\\n** A2\\n*** A2b\\nBody.\\n\\n*** A2a\\nBody.\\n\\n* B\\n** B1\\n*** B1a\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* A\n")
+    (insert "** A1\n")
+    (insert "*** A1a\nBody.\n\n")
+    (insert "*** A1b\nBody.\n\n")
+    (insert "** A2\n")
+    (insert "*** A2a\nBody.\n\n")
+    (insert "* B\n")
+    (insert "** B1\n")
+    (insert "*** B1a\nBody.\n\n")
+    (let ((track (lambda ()
+                   (list (line-number-at-pos)
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))
+                         (org-outline-level)
+                         (invisible-p (point))))))
+      ;; At A1a
+      (goto-char (point-min))
+      (search-forward "A1a")
+      (beginning-of-line)
+      (let ((at-a1a (funcall track)))
+        ;; Next sibling: A1b
+        (org-forward-heading-same-level 1)
+        (let ((at-a1b (funcall track)))
+          ;; Up to A1
+          (org-up-heading-safe)
+          (let ((at-a1 (funcall track)))
+            ;; Forward to A2
+            (org-forward-heading-same-level 1)
+            (let ((at-a2 (funcall track)))
+              ;; Down to A2a
+              (org-next-visible-heading 1)
+              (let ((at-a2a (funcall track)))
+                ;; Edit: insert under A2
+                (goto-char (point-min))
+                (search-forward "A2")
+                (end-of-line)
+                (insert "\n*** A2b\nBody.\n")
+                ;; Fold A subtree
+                (goto-char (point-min))
+                (re-search-forward "^\\* A$")
+                (beginning-of-line)
+                (org-fold-subtree t)
+                (let ((after-fold (funcall track)))
+                  (list at-a1a at-a1b at-a1 at-a2 at-a2a
+                        after-fold
+                        (buffer-substring-no-properties
+                         (point-min) (point-max))))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_navigate_siblings_descendants_edit_fold_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((3 \"*** Gamma\" 3 nil) (6 \"*** Delta\" 3 nil) (2 \"** Beta\" 2 nil) (9 \"** Epsilon\" 2 nil) (10 \"*** Zeta\" 3 nil) (2 \"** Beta\" 2 nil) (1 \"* Alpha\" 1 nil) \"* Alpha\\n** Beta\\n*** Gamma\\nBody.\\n\\n*** Delta\\nBody.\\n\\n** Epsilon\\n*** Iota\\nBody.\\n\\n*** Zeta\\nBody.\\n\\n* Eta\\n** Theta\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Alpha\n")
+    (insert "** Beta\n")
+    (insert "*** Gamma\nBody.\n\n")
+    (insert "*** Delta\nBody.\n\n")
+    (insert "** Epsilon\n")
+    (insert "*** Zeta\nBody.\n\n")
+    (insert "* Eta\n")
+    (insert "** Theta\nBody.\n\n")
+    (let ((track (lambda ()
+                   (list (line-number-at-pos)
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))
+                         (org-outline-level)
+                         (invisible-p (point))))))
+      ;; At Gamma
+      (goto-char (point-min))
+      (search-forward "Gamma")
+      (beginning-of-line)
+      (let ((at-gamma (funcall track)))
+        ;; Next sibling: Delta
+        (org-forward-heading-same-level 1)
+        (let ((at-delta (funcall track)))
+          ;; Up to Beta
+          (org-up-heading-safe)
+          (let ((at-beta (funcall track)))
+            ;; Forward to Epsilon
+            (org-forward-heading-same-level 1)
+            (let ((at-epsilon (funcall track)))
+              ;; Down to Zeta
+              (org-next-visible-heading 1)
+              (let ((at-zeta (funcall track)))
+                ;; Jump to Eta
+                (goto-char (point-min))
+                (search-forward "Eta")
+                (beginning-of-line)
+                (let ((at-eta (funcall track)))
+                  ;; Edit: insert under Epsilon
+                  (goto-char (point-min))
+                  (search-forward "Epsilon")
+                  (end-of-line)
+                  (insert "\n*** Iota\nBody.\n")
+                  ;; Fold Alpha subtree
+                  (goto-char (point-min))
+                  (search-forward "Alpha")
+                  (beginning-of-line)
+                  (org-fold-subtree t)
+                  (let ((after-fold (funcall track)))
+                    (list at-gamma at-delta at-beta at-epsilon at-zeta
+                          at-eta after-fold
+                          (buffer-substring-no-properties
+                           (point-min) (point-max)))))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_navigate_level_jump_fold_edit_reparse_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((3 \"*** Component X\" 3 nil) (2 \"** Module A\" 2 nil) (9 \"** Module B\" 2 nil) (10 \"*** Component Z\" 3 nil) (13 \"* Archive\" 1 nil) (2 \"** Module A\" 2 nil) \"* Project\\n** Module A\\n*** Component X\\nBody X.\\n\\n*** Component Y\\nBody Y.\\n\\n** Module B\\n*** Component W\\nBody W.\\n\\n*** Component Z\\nBody Z.\\n\\n* Archive\\n** Old stuff\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Project\n")
+    (insert "** Module A\n")
+    (insert "*** Component X\nBody X.\n\n")
+    (insert "*** Component Y\nBody Y.\n\n")
+    (insert "** Module B\n")
+    (insert "*** Component Z\nBody Z.\n\n")
+    (insert "* Archive\n")
+    (insert "** Old stuff\nBody.\n\n")
+    (let ((track (lambda ()
+                   (list (line-number-at-pos)
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))
+                         (org-outline-level)
+                         (invisible-p (point))))))
+      ;; At Component X
+      (goto-char (point-min))
+      (search-forward "Component X")
+      (beginning-of-line)
+      (let ((at-x (funcall track)))
+        ;; Up to Module A
+        (org-up-heading-safe)
+        (let ((up-to-mod-a (funcall track)))
+          ;; Forward to Module B
+          (org-forward-heading-same-level 1)
+          (let ((fwd-to-mod-b (funcall track)))
+            ;; Down to Component Z
+            (org-next-visible-heading 1)
+            (let ((at-z (funcall track)))
+              ;; Forward to Archive (cross parent)
+              (goto-char (point-min))
+              (search-forward "Archive")
+              (beginning-of-line)
+              (let ((at-archive (funcall track)))
+                ;; Edit: insert under Module B
+                (goto-char (point-min))
+                (search-forward "Module B")
+                (end-of-line)
+                (insert "\n*** Component W\nBody W.\n")
+                ;; Fold Module A
+                (goto-char (point-min))
+                (search-forward "Module A")
+                (beginning-of-line)
+                (org-fold-subtree t)
+                (let ((after-fold (funcall track)))
+                  (list at-x up-to-mod-a fwd-to-mod-b at-z at-archive
+                        after-fold
+                        (buffer-substring-no-properties
+                         (point-min) (point-max))))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_navigate_up_down_forward_backward_edit_fold_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((7 \"*** Gamma\" 3 nil) (4 \"** Beta\" 2 nil) (10 \"** Delta\" 2 nil) (4 \"** Beta\" 2 nil) (7 \"*** Gamma\" 3 nil) (4 \"** Beta\" 2 nil) \"* Alpha\\nBody alpha.\\n\\n** Beta\\nBody beta.\\n\\n*** Gamma\\nBody gamma.\\n\\n** Delta\\n*** Zeta\\nBody zeta.\\n\\nBody delta.\\n\\n* Epsilon\\nBody epsilon.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Alpha\nBody alpha.\n\n")
+    (insert "** Beta\nBody beta.\n\n")
+    (insert "*** Gamma\nBody gamma.\n\n")
+    (insert "** Delta\nBody delta.\n\n")
+    (insert "* Epsilon\nBody epsilon.\n\n")
+    (let ((track (lambda ()
+                   (list (line-number-at-pos)
+                         (buffer-substring-no-properties
+                          (line-beginning-position) (line-end-position))
+                         (org-outline-level)
+                         (invisible-p (point))))))
+      ;; At Gamma
+      (goto-char (point-min))
+      (search-forward "Gamma")
+      (beginning-of-line)
+      (let ((at-gamma (funcall track)))
+        ;; Up to Beta
+        (org-up-heading-safe)
+        (let ((up-to-beta (funcall track)))
+          ;; Forward to Delta
+          (org-forward-heading-same-level 1)
+          (let ((fwd-to-delta (funcall track)))
+            ;; Backward to Beta
+            (org-backward-heading-same-level 1)
+            (let ((back-to-beta (funcall track)))
+              ;; Down to Gamma
+              (org-next-visible-heading 1)
+              (let ((down-to-gamma (funcall track)))
+                ;; Edit: insert under Delta
+                (goto-char (point-min))
+                (search-forward "Delta")
+                (end-of-line)
+                (insert "\n*** Zeta\nBody zeta.\n")
+                ;; Fold Beta subtree
+                (goto-char (point-min))
+                (search-forward "Beta")
+                (beginning-of-line)
+                (org-fold-subtree t)
+                (let ((after-fold (funcall track)))
+                  (list at-gamma
+                        up-to-beta
+                        fwd-to-delta
+                        back-to-beta
+                        down-to-gamma
+                        after-fold
                         (buffer-substring-no-properties
                          (point-min) (point-max))))))))))))"##,
         expect,

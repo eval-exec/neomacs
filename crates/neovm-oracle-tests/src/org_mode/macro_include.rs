@@ -264,6 +264,109 @@ fn org_include_nested_macro_footnote_export_combo() {
 }
 
 #[test]
+fn org_macro_builtin_property_date_env_include_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r##""OK (\"#+TITLE: Main Title\\n#+AUTHOR: Ada\\n#+AUTHOR: Bea\\n#+DATE: <2026-05-27 Wed>\\n#+MACRO: kw (eval (org-macro--find-keyword-value $1 t))\\n#+MACRO: prop {{{property($1,$2)}}}\\n* Target\\n:PROPERTIES:\\n:Owner: LocalOwner\\n:Effort: 1:30\\n:END:\\nDate {{{date(%Y-%m-%d)}}}; authors {{{kw(AUTHOR)}}}; owner {{{prop(Owner,* Target)}}}; missing {{{property(Missing,* Target)}}}.\\n#+INCLUDE: \\\"<root>/env-include.org\\\" :minlevel 2\\n\" \"#+TITLE: Main Title\\n#+AUTHOR: Ada\\n#+AUTHOR: Bea\\n#+DATE: <2026-05-27 Wed>\\n#+MACRO: kw (eval (org-macro--find-keyword-value $1 t))\\n#+MACRO: prop {{{property($1,$2)}}}\\n* Target\\n:PROPERTIES:\\n:Owner: LocalOwner\\n:Effort: 1:30\\n:END:\\nDate {{{date(%Y-%m-%d)}}}; authors {{{kw(AUTHOR)}}}; owner {{{prop(Owner,* Target)}}}; missing {{{property(Missing,* Target)}}}.\\n** Env Head\\n:PROPERTIES:\\n:Owner: EnvOwner\\n:END:\\nEnv body {{{property(Owner,* Env Head)}}}.\\n\" (\"date\" \"title\" \"email\" \"author\" \"kw\" \"prop\" \"keyword\" \"n\" \"property\" \"time\") \"#+TITLE: Main Title\\n#+AUTHOR: Ada\\n#+AUTHOR: Bea\\n#+DATE: <2026-05-27 Wed>\\n#+MACRO: kw (eval (org-macro--find-keyword-value $1 t))\\n#+MACRO: prop {{{property($1,$2)}}}\\n* Target\\n:PROPERTIES:\\n:Owner: LocalOwner\\n:Effort: 1:30\\n:END:\\nDate 2026-05-27; authors Ada Bea; owner LocalOwner; missing .\\n** Env Head\\n:PROPERTIES:\\n:Owner: EnvOwner\\n:END:\\nEnv body EnvOwner.\\n\" \"Ada Bea\" \"(eval (if (org-string-nw-p $1) (org-format-timestamp '(timestamp (:standard-properties [1 nil nil nil 17 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \\\"<2026-05-27 Wed>\\\" :year-start 2026 :month-start 5 :day-start 27 :hour-start nil :minute-start nil :year-end 2026 :month-end 5 :day-end 27 :hour-end nil :minute-end nil)) $1) \\\"<2026-05-27 Wed>\\\"))\" \"LocalOwner\" \"1:30\" (error \"Recursive file inclusion: <root>/loop-a.org\") ((1 \"Target\") (2 \"Env Head\")) \"#+TITLE: Main Title\\n#+AUTHOR: Ada\\n#+AUTHOR: Bea\\n#+DATE: <2026-05-27 Wed>\\n#+MACRO: kw (eval (org-macro--find-keyword-value $1 t))\\n#+MACRO: prop {{{property($1,$2)}}}\\n* Target\\n:PROPERTIES:\\n:Owner: LocalOwner\\n:Effort: 1:30\\n:END:\\nDate 2026-05-27; authors Ada Bea; owner LocalOwner; missing .\\n** Env Head\\n:PROPERTIES:\\n:Owner: EnvOwner\\n:END:\\nEnv body EnvOwner.\\n\")""##
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'ox)
+  (require 'org-macro)
+  (let* ((root (make-temp-file "org-macro-env" t))
+         (inc (expand-file-name "env-include.org" root))
+         (loop-a (expand-file-name "loop-a.org" root))
+         (loop-b (expand-file-name "loop-b.org" root))
+         (old-env (getenv "ORG_ORACLE_INCLUDE_ROOT")))
+    (unwind-protect
+        (progn
+          (setenv "ORG_ORACLE_INCLUDE_ROOT" root)
+          (with-temp-file inc
+            (insert "* Env Head\n")
+            (insert ":PROPERTIES:\n:Owner: EnvOwner\n:END:\n")
+            (insert "Env body {{{property(Owner,* Env Head)}}}.\n"))
+          (with-temp-file loop-a
+            (insert "#+INCLUDE: \"loop-b.org\"\n"))
+          (with-temp-file loop-b
+            (insert "#+INCLUDE: \"loop-a.org\"\n"))
+          (with-temp-buffer
+            (org-mode)
+            (insert "#+TITLE: Main Title\n")
+            (insert "#+AUTHOR: Ada\n")
+            (insert "#+AUTHOR: Bea\n")
+            (insert "#+DATE: <2026-05-27 Wed>\n")
+            (insert "#+MACRO: kw (eval (org-macro--find-keyword-value $1 t))\n")
+            (insert "#+MACRO: prop {{{property($1,$2)}}}\n")
+            (insert "* Target\n")
+            (insert ":PROPERTIES:\n:Owner: LocalOwner\n:Effort: 1:30\n:END:\n")
+            (insert "Date {{{date(%Y-%m-%d)}}}; ")
+            (insert "authors {{{kw(AUTHOR)}}}; ")
+            (insert "owner {{{prop(Owner,* Target)}}}; ")
+            (insert "missing {{{property(Missing,* Target)}}}.\n")
+            (insert (substitute-env-in-file-name
+                     "#+INCLUDE: \"$ORG_ORACLE_INCLUDE_ROOT/env-include.org\" :minlevel 2\n"))
+            (let ((before (replace-regexp-in-string
+                           (regexp-quote root) "<root>"
+                           (buffer-substring-no-properties
+                            (point-min) (point-max))))
+                  expanded recursive-error templates macro-output tree)
+              (goto-char (point-min))
+              (org-export-expand-include-keyword nil "/" nil nil t)
+              (setq expanded
+                    (buffer-substring-no-properties
+                     (point-min) (point-max)))
+              (org-macro-initialize-templates)
+              (setq templates org-macro-templates)
+              (org-macro-replace-all templates)
+              (setq macro-output
+                    (buffer-substring-no-properties
+                     (point-min) (point-max)))
+              (setq tree (org-element-parse-buffer))
+              (with-temp-buffer
+                (org-mode)
+                (insert "#+INCLUDE: \"loop-a.org\"\n")
+                (goto-char (point-min))
+                (setq recursive-error
+                      (condition-case err
+                          (progn
+                            (org-export-expand-include-keyword
+                             nil root nil nil nil)
+                            nil)
+                        (error
+                         (cons
+                          (car err)
+                          (mapcar
+                           (lambda (value)
+                             (if (stringp value)
+                                 (replace-regexp-in-string
+                                  (regexp-quote root) "<root>" value)
+                               value))
+                           (cdr err)))))))
+              (list before
+                    expanded
+                    (mapcar #'car templates)
+                    macro-output
+                    (org-macro--find-keyword-value "AUTHOR" t)
+                    (org-macro--find-date)
+                    (org-macro--get-property "Owner" "* Target")
+                    (org-macro--get-property "Effort" "* Target")
+                    recursive-error
+                    (org-element-map tree 'headline
+                      (lambda (h)
+                        (list (org-element-property :level h)
+                              (org-element-property :raw-value h))))
+                    (buffer-substring-no-properties
+                     (point-min) (point-max))))))
+      (if old-env
+          (setenv "ORG_ORACLE_INCLUDE_ROOT" old-env)
+        (setenv "ORG_ORACLE_INCLUDE_ROOT" nil))
+      (delete-directory root t))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_include_export_environment_reference_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

@@ -32,6 +32,33 @@ fn strict_babel_results_list_table() {
 }
 
 #[test]
+fn strict_timestamp_from_time() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:from-time-ok (active 2026 t)) (:format-short \"15/03\" :format-iso \"2024-03-15\" :format-long \"March 15, 2024 Friday\"))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org) (require 'org-element)
+  (list
+   ;; org-timestamp-from-time
+   (condition-case nil
+       (let* ((ts (org-timestamp-from-time (float-time) nil))
+              (props (list (org-element-property :type ts)
+                           (org-element-property :year-start ts)
+                           (numberp (org-element-property :year-start ts)))))
+         (list :from-time-ok props))
+     (error (list :from-time-error t)))
+   ;; org-timestamp-from-string -> org-timestamp-format roundtrip
+   (let ((ts (org-timestamp-from-string "<2024-03-15 Fri>")))
+     (list :format-short (org-timestamp-format ts "%d/%m")
+           :format-iso (org-timestamp-format ts "%Y-%m-%d")
+           :format-long (org-timestamp-format ts "%B %d, %Y %A")))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn strict_plot_data_extraction() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[

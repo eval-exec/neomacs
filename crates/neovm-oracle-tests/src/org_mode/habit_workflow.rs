@@ -478,6 +478,89 @@ fn org_habit_agenda_past_delay_all_today_combo() {
 }
 
 #[test]
+fn org_habit_graph_properties_text_deep_state_combo() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[r#""OK nil""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-habit)
+  (require 'org-agenda)
+  (let* ((file (make-temp-file "org-habit-deep" nil ".org" ""))
+         (root (file-name-directory file))
+         (org-agenda-files (list file))
+         (org-habit-show-habits t)
+         (org-habit-show-all-today t)
+         (org-habit-following-days 7)
+         (org-habit-preceding-days 14))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "* TODO Exercise :health:\n")
+            (insert "SCHEDULED: <2026-05-27 Wed .+1d/3d>\n")
+            (insert ":PROPERTIES:\n:STYLE: habit\n:Effort: 0:30\n:END:\n")
+            (insert ":LOGBOOK:\n")
+            (insert "- State \"DONE\" from \"TODO\" [2026-05-26 Mon]\n")
+            (insert "- State \"DONE\" from \"TODO\" [2026-05-25 Sun]\n")
+            (insert "- State \"DONE\" from \"TODO\" [2026-05-23 Fri]\n")
+            (insert ":END:\n"))
+          (cl-letf (((symbol-function 'current-time)
+                     (lambda () (encode-time 0 0 9 27 5 2026))))
+            (org-agenda-list nil "2026-05-27" 1)
+            (with-current-buffer org-agenda-buffer-name
+              (let ((agenda-text
+                     (buffer-substring-no-properties
+                      (point-min) (point-max)))
+                    (habit-line
+                     (let ((result nil))
+                       (goto-char (point-min))
+                       (when (re-search-forward "Exercise" nil t)
+                         (beginning-of-line)
+                         (setq result
+                               (buffer-substring-no-properties
+                                (line-beginning-position)
+                                (line-end-position))))
+                       result))
+                    (habit-props
+                     (let ((result nil))
+                       (goto-char (point-min))
+                       (when (re-search-forward "Exercise" nil t)
+                         (beginning-of-line)
+                         (let ((pos (point)))
+                           (while (< pos (line-end-position))
+                             (let ((face (get-text-property pos 'face))
+                                   (help (get-text-property pos 'help-echo)))
+                               (when (or face help)
+                                 (push (list pos face help) result)))
+                             (setq pos (1+ pos)))))
+                       (nreverse result))))
+                (list (replace-regexp-in-string
+                       "org-habit-deep[[:alnum:]]+" "org-habit-deep<TMP>"
+                       (replace-regexp-in-string
+                        (regexp-quote root) "<root>" agenda-text))
+                      (replace-regexp-in-string
+                       "org-habit-deep[[:alnum:]]+" "org-habit-deep<TMP>"
+                       (replace-regexp-in-string
+                        (regexp-quote root) "<root>"
+                        (or habit-line "")))
+                      (mapcar (lambda (p)
+                                (list (nth 0 p)
+                                      (nth 1 p)
+                                      (replace-regexp-in-string
+                                       "org-habit-deep[[:alnum:]]+" "org-habit-deep<TMP>"
+                                       (replace-regexp-in-string
+                                        (regexp-quote root) "<root>"
+                                        (or (nth 2 p) "")))))
+                              habit-props)))))))
+      (when (get-buffer org-agenda-buffer-name)
+        (kill-buffer org-agenda-buffer-name))
+      (delete-file file)))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_habit_done_toggle_graph_urgency_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

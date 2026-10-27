@@ -804,6 +804,62 @@ fn org_cycle_with_todo_state_changes_deep() {
 }
 
 #[test]
+fn org_cycle_with_priority_changes_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((\"Alpha\" 2 1000) (\"Beta\" 2 1000) (\"Gamma\" 2 1000)) ((\"Alpha\" nil 1000) (\"Beta\" 2 1000) (\"Gamma\" 2 1000)) ((\"Alpha\" nil 1000) (\"Beta\" nil 2000) (\"Gamma\" nil 1000)) \"* TODO Alpha\\nBody.\\n\\n** TODO [#A] Beta\\nBody.\\n\\n** TODO Gamma\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* TODO Alpha\nBody.\n\n")
+    (insert "** TODO Beta\nBody.\n\n")
+    (insert "** TODO Gamma\nBody.\n\n")
+    (let ((vis (lambda ()
+                 (mapcar
+                  (lambda (needle)
+                    (save-excursion
+                      (goto-char (point-min))
+                      (if (search-forward needle nil t)
+                          (list needle
+                                (invisible-p (point))
+                                (org-get-priority (buffer-substring-no-properties
+                                                   (line-beginning-position)
+                                                   (line-end-position))))
+                          (list needle 'not-found nil))))
+                  '("Alpha" "Beta" "Gamma")))))
+      ;; Cycle Alpha: overview
+      (goto-char (point-min))
+      (search-forward "Alpha")
+      (beginning-of-line)
+      (org-cycle nil)
+      (let ((v1 (funcall vis)))
+        ;; Cycle: children
+        (org-cycle nil)
+        (let ((v2 (funcall vis)))
+          ;; Set priority on Beta
+          (goto-char (point-min))
+          (search-forward "Beta")
+          (beginning-of-line)
+          (org-priority ?A)
+          ;; Re-cycle
+          (goto-char (point-min))
+          (search-forward "Alpha")
+          (beginning-of-line)
+          (org-cycle nil)
+          (let ((v3 (funcall vis)))
+            (list v1 v2 v3
+                  (buffer-substring-no-properties
+                   (point-min) (point-max)))))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_cycle_with_tag_and_property_changes_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -2001,6 +2057,67 @@ fn org_cycle_mixed_local_global_toggle_deep() {
 }
 
 #[test]
+fn org_cycle_with_fold_subtree_hide_show_between() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" nil) (\"A1\" 2) (\"A2\" nil) (\"B\" 2) (\"B1\" nil)) ((\"A\" nil) (\"A1\" nil) (\"A2\" nil) (\"B\" nil) (\"B1\" nil)) ((\"A\" 2) (\"A1\" 2) (\"A2\" 2) (\"B\" 2) (\"B1\" nil)) ((\"A\" nil) (\"A1\" nil) (\"A2\" nil) (\"B\" nil) (\"B1\" nil)) ((\"A\" nil) (\"A1\" 2) (\"A2\" nil) (\"B\" 2) (\"B1\" nil)) \"* A\\n** A1\\nBody.\\n\\n** A2\\nBody.\\n\\n* B\\n** B1\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* A\n")
+    (insert "** A1\nBody.\n\n")
+    (insert "** A2\nBody.\n\n")
+    (insert "* B\n")
+    (insert "** B1\nBody.\n\n")
+    (let ((vis (lambda ()
+                 (mapcar
+                  (lambda (needle)
+                    (save-excursion
+                      (goto-char (point-min))
+                      (if (search-forward needle nil t)
+                          (list needle (invisible-p (point)))
+                          (list needle 'not-found))))
+                  '("A" "A1" "A2" "B" "B1")))))
+      ;; Cycle A: overview
+      (goto-char (point-min))
+      (search-forward "A\n")
+      (beginning-of-line)
+      (org-cycle nil)
+      (let ((v1 (funcall vis)))
+        ;; Cycle A: children
+        (org-cycle nil)
+        (let ((v2 (funcall vis)))
+          ;; Fold A subtree
+          (goto-char (point-min))
+          (search-forward "A")
+          (beginning-of-line)
+          (org-fold-subtree t)
+          (let ((v3 (funcall vis)))
+            ;; Show A subtree
+            (goto-char (point-min))
+            (search-forward "A")
+            (beginning-of-line)
+            (org-fold-show-subtree)
+            (let ((v4 (funcall vis)))
+              ;; Cycle A: overview
+              (goto-char (point-min))
+              (search-forward "A\n")
+              (beginning-of-line)
+              (org-cycle nil)
+              (let ((v5 (funcall vis)))
+                (list v1 v2 v3 v4 v5
+                      (buffer-substring-no-properties
+                       (point-min) (point-max)))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn org_cycle_with_fold_hide_entry_between() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -2046,6 +2163,62 @@ fn org_cycle_with_fold_hide_entry_between() {
             (org-fold-show-entry)
             (let ((v4 (funcall vis)))
               ;; Cycle A: overview
+              (org-cycle nil)
+              (let ((v5 (funcall vis)))
+                (list v1 v2 v3 v4 v5
+                      (buffer-substring-no-properties
+                       (point-min) (point-max)))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_cycle_with_fold_hide_leaves_between() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" nil) (\"A1\" 2) (\"A2\" nil) (\"A2a\" nil)) ((\"A\" nil) (\"A1\" 2) (\"A2\" nil) (\"A2a\" nil)) ((\"A\" nil) (\"A1\" nil) (\"A2\" nil) (\"A2a\" nil)) ((\"A\" nil) (\"A1\" 2) (\"A2\" nil) (\"A2a\" nil)) ((\"A\" nil) (\"A1\" nil) (\"A2\" nil) (\"A2a\" nil)) \"* A\\n** A1\\nBody.\\n\\n** A2\\nBody.\\n\\n*** A2a\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* A\n")
+    (insert "** A1\nBody.\n\n")
+    (insert "** A2\nBody.\n\n")
+    (insert "*** A2a\nBody.\n\n")
+    (let ((vis (lambda ()
+                 (mapcar
+                  (lambda (needle)
+                    (save-excursion
+                      (goto-char (point-min))
+                      (if (search-forward needle nil t)
+                          (list needle (invisible-p (point)))
+                          (list needle 'not-found))))
+                  '("A" "A1" "A2" "A2a")))))
+      ;; Cycle A: subtree (all visible)
+      (goto-char (point-min))
+      (search-forward "A\n")
+      (beginning-of-line)
+      (org-cycle nil)
+      (org-cycle nil)
+      (org-cycle nil)
+      (let ((v1 (funcall vis)))
+        ;; Hide leaves
+        (outline-hide-leaves)
+        (let ((v2 (funcall vis)))
+          ;; Show all
+          (org-fold-show-all)
+          (let ((v3 (funcall vis)))
+            ;; Cycle A: overview
+            (goto-char (point-min))
+            (search-forward "A\n")
+            (beginning-of-line)
+            (org-cycle nil)
+            (let ((v4 (funcall vis)))
+              ;; Cycle A: children
               (org-cycle nil)
               (let ((v5 (funcall vis)))
                 (list v1 v2 v3 v4 v5
@@ -2559,6 +2732,66 @@ fn org_cycle_with_fold_show_all_from_hidden() {
               (search-forward "A\n")
               (beginning-of-line)
               (org-cycle nil)
+              (org-cycle nil)
+              (let ((v5 (funcall vis)))
+                (list v1 v2 v3 v4 v5
+                      (buffer-substring-no-properties
+                       (point-min) (point-max)))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_cycle_with_fold_hide_subtree_from_children_visible() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" nil) (\"A1\" nil) (\"A2\" nil)) ((\"A\" 2) (\"A1\" 2) (\"A2\" 2)) ((\"A\" nil) (\"A1\" nil) (\"A2\" nil)) ((\"A\" nil) (\"A1\" 2) (\"A2\" nil)) ((\"A\" nil) (\"A1\" nil) (\"A2\" nil)) \"* A\\n** A1\\nBody.\\n\\n** A2\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* A\n")
+    (insert "** A1\nBody.\n\n")
+    (insert "** A2\nBody.\n\n")
+    (let ((vis (lambda ()
+                 (mapcar
+                  (lambda (needle)
+                    (save-excursion
+                      (goto-char (point-min))
+                      (if (search-forward needle nil t)
+                          (list needle (invisible-p (point)))
+                          (list needle 'not-found))))
+                  '("A" "A1" "A2")))))
+      ;; Cycle A: children
+      (goto-char (point-min))
+      (search-forward "A\n")
+      (beginning-of-line)
+      (org-cycle nil)
+      (org-cycle nil)
+      (let ((v1 (funcall vis)))
+        ;; Fold subtree (hide all under A)
+        (goto-char (point-min))
+        (search-forward "A")
+        (beginning-of-line)
+        (org-fold-subtree t)
+        (let ((v2 (funcall vis)))
+          ;; Show subtree
+          (goto-char (point-min))
+          (search-forward "A")
+          (beginning-of-line)
+          (org-fold-show-subtree)
+          (let ((v3 (funcall vis)))
+            ;; Cycle A: overview
+            (goto-char (point-min))
+            (search-forward "A\n")
+            (beginning-of-line)
+            (org-cycle nil)
+            (let ((v4 (funcall vis)))
+              ;; Cycle A: children
               (org-cycle nil)
               (let ((v5 (funcall vis)))
                 (list v1 v2 v3 v4 v5
@@ -3231,6 +3464,115 @@ fn org_cycle_with_outline_previous_visible_heading() {
                     pos-after-prev pos-after-prev2
                     (buffer-substring-no-properties
                      (point-min) (point-max))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_cycle_with_fold_toggle_children_visibility() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((\"P\" nil) (\"P1\" nil) (\"P2\" nil)) ((\"P\" nil) (\"P1\" 2) (\"P2\" nil)) ((\"P\" nil) (\"P1\" nil) (\"P2\" nil)) ((\"P\" nil) (\"P1\" 2) (\"P2\" nil)) ((\"P\" nil) (\"P1\" nil) (\"P2\" nil)) \"* P\\n** P1\\nBody.\\n\\n** P2\\nBody.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* P\n")
+    (insert "** P1\nBody.\n\n")
+    (insert "** P2\nBody.\n\n")
+    (let ((vis (lambda ()
+                 (mapcar
+                  (lambda (needle)
+                    (save-excursion
+                      (goto-char (point-min))
+                      (if (search-forward needle nil t)
+                          (list needle (invisible-p (point)))
+                          (list needle 'not-found))))
+                  '("P" "P1" "P2")))))
+      ;; Show all
+      (org-fold-show-all)
+      (let ((v1 (funcall vis)))
+        ;; Fold hide children
+        (goto-char (point-min))
+        (search-forward "P\n")
+        (beginning-of-line)
+        (org-fold-hide-subtree)
+        (let ((v2 (funcall vis)))
+          ;; Cycle P: overview
+          (goto-char (point-min))
+          (search-forward "P\n")
+          (beginning-of-line)
+          (org-cycle nil)
+          (let ((v3 (funcall vis)))
+            ;; Cycle P: children
+            (org-cycle nil)
+            (let ((v4 (funcall vis)))
+              ;; Cycle P: subtree
+              (org-cycle nil)
+              (let ((v5 (funcall vis)))
+                (list v1 v2 v3 v4 v5
+                      (buffer-substring-no-properties
+                       (point-min) (point-max)))))))))))"##,
+        expect,
+    );
+}
+
+#[test]
+fn org_cycle_with_fold_hide_other_then_show_all() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" nil) (\"Body A\" nil) (\"A1\" nil) (\"B\" nil) (\"Body B\" nil) (\"B1\" nil)) ((\"A\" nil) (\"Body A\" nil) (\"A1\" 2) (\"B\" nil) (\"Body B\" 2) (\"B1\" 2)) ((\"A\" nil) (\"Body A\" nil) (\"A1\" nil) (\"B\" nil) (\"Body B\" nil) (\"B1\" nil)) ((\"A\" nil) (\"Body A\" nil) (\"A1\" nil) (\"B\" nil) (\"Body B\" nil) (\"B1\" nil)) ((\"A\" 2) (\"Body A\" 2) (\"A1\" 2) (\"B\" 2) (\"Body B\" nil) (\"B1\" 2)) \"* A\\nBody A.\\n\\n** A1\\nBody A1.\\n\\n* B\\nBody B.\\n\\n** B1\\nBody B1.\\n\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-fold)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* A\nBody A.\n\n")
+    (insert "** A1\nBody A1.\n\n")
+    (insert "* B\nBody B.\n\n")
+    (insert "** B1\nBody B1.\n\n")
+    (let ((vis (lambda ()
+                 (mapcar
+                  (lambda (needle)
+                    (save-excursion
+                      (goto-char (point-min))
+                      (if (search-forward needle nil t)
+                          (list needle (invisible-p (point)))
+                          (list needle 'not-found))))
+                  '("A" "Body A" "A1" "B" "Body B" "B1")))))
+      ;; Cycle A: children
+      (goto-char (point-min))
+      (search-forward "A\n")
+      (beginning-of-line)
+      (org-cycle nil)
+      (org-cycle nil)
+      (let ((v1 (funcall vis)))
+        ;; Fold hide other (hide everything except current subtree)
+        (outline-hide-other)
+        (let ((v2 (funcall vis)))
+          ;; Show all
+          (org-fold-show-all)
+          (let ((v3 (funcall vis)))
+            ;; Cycle B: children
+            (goto-char (point-min))
+            (search-forward "B\n")
+            (beginning-of-line)
+            (org-cycle nil)
+            (org-cycle nil)
+            (let ((v4 (funcall vis)))
+              ;; Fold hide other
+              (outline-hide-other)
+              (let ((v5 (funcall vis)))
+                (list v1 v2 v3 v4 v5
+                      (buffer-substring-no-properties
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }

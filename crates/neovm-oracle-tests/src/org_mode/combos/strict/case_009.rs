@@ -14,6 +14,54 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
+fn strict_parent_chain_in_caption_title_tag() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((:bold-title-parent-type headline) (:bold-title-secondary :title) (:bold-title-grandparent-type org-data) (:tag-text-parent-type headline) (:caption-italic-parent-type nil) (:caption-italic-secondary nil))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-element)
+  (let ((org-mode-hook nil))
+    (with-temp-buffer (org-mode)
+      (insert "* *bold-title* Heading :*tag-bold*:\n")
+      (insert "#+CAPTION: Table /caption-italic/.\n")
+      (insert "| a | b |\n| 1 | 2 |\n")
+      (goto-char (point-min))
+      (let* ((tree (org-element-parse-buffer))
+             (r '()))
+        ;; bold in headline title
+        (let ((bold-title (car (org-element-map tree 'bold #'identity))))
+          (when bold-title
+            (push (list :bold-title-parent-type
+                        (org-element-type (org-element-property :parent bold-title))) r)
+            (push (list :bold-title-secondary (org-element-secondary-p bold-title)) r)
+            (let ((grandparent (org-element-property :parent
+                                 (org-element-property :parent bold-title))))
+              (push (list :bold-title-grandparent-type (org-element-type grandparent)) r))))
+        ;; bold in headline tags
+        (let ((tag-text (car (org-element-map tree 'plain-text
+                               (lambda (txt) (when (string-match-p "tag-bold" txt) txt))))))
+          (when tag-text
+            (push (list :tag-text-parent-type
+                        (org-element-type (org-element-property :parent tag-text))) r)))
+        ;; italic in caption
+        (let ((cap-italic (car (org-element-map tree 'italic #'identity nil nil nil t))))
+          (when cap-italic
+            (push (list :caption-italic-parent-type
+                        (org-element-type (org-element-property :parent cap-italic))) r)
+            (push (list :caption-italic-secondary (org-element-secondary-p cap-italic)) r)))
+        (nreverse r)))))"##,
+        expect,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Whitespace-only content parsing
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
 fn strict_whitespace_only_content() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[

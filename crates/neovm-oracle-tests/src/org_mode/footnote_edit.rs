@@ -661,3 +661,59 @@ fn org_footnote_insert_sort_normalize_delete_lifecycle_combo() {
         expect,
     );
 }
+#[test]
+fn org_footnote_insert_normalize_sort_delete_multi_edit_deep() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (\"Text with refs[fn:one] and [fn:two] and [fn:three].\\n\\n[fn:one] First footnote.\\n[fn:two] Second footnote.\\n[fn:three] Third footnote.\\n\" \"Text with refs[fn:one] and [fn:two] and [fn:three].[fn:1]\\n\\n[fn:one] First footnote.\\n[fn:two] Second footnote.\\n[fn:three] Third footnote.\\n\\n* Footnotes\\n\\n[fn:1]Fourth footnote body. \\n\" \"Text with refs[fn:1] and [fn:2] and [fn:3].[fn:4]\\n\\n* Footnotes\\n\\n[fn:1] First footnote.\\n\\n[fn:2] Second footnote.\\n\\n[fn:3] Third footnote.\\n\\n[fn:4]Fourth footnote body.\\n\" \"Text with refs[fn:1] and [fn:2] and [fn:3].[fn:4]\\n\\n* Footnotes\\n\\n[fn:1] First footnote.\\n\\n[fn:2] Second footnote.\\n\\n[fn:3] Third footnote.\\n\\n[fn:4]Fourth footnote body.\\n\" \"Text with refs[fn:1] and  and [fn:3].[fn:4]\\n\\n* Footnotes\\n\\n[fn:1] First footnote.\\n\\n[fn:3] Third footnote.\\n\\n[fn:4]Fourth footnote body.\\n\" ok \"Text with refs[fn:1] and  and [fn:3].[fn:4]\\n\\n* Footnotes\\n\\n[fn:1] First footnote.\\n\\n[fn:3] Third footnote.\\n\\n[fn:4]Fourth footnote body.\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'org)
+  (require 'org-footnote)
+  (with-temp-buffer
+    (org-mode)
+    (insert "Text with refs[fn:one] and [fn:two] and [fn:three].\n\n")
+    (insert "[fn:one] First footnote.\n")
+    (insert "[fn:two] Second footnote.\n")
+    (insert "[fn:three] Third footnote.\n")
+    (let ((snap (lambda ()
+                  (buffer-substring-no-properties
+                   (point-min) (point-max)))))
+      (let ((initial (funcall snap)))
+        ;; Insert new footnote
+        (goto-char (point-min))
+        (search-forward "[fn:three]")
+        (end-of-line)
+        (org-footnote-new)
+        (insert "Fourth footnote body.")
+        (let ((after-insert (funcall snap)))
+          ;; Normalize
+          (org-footnote-normalize)
+          (let ((after-normalize (funcall snap)))
+            ;; Sort
+            (org-footnote-sort)
+            (let ((after-sort (funcall snap)))
+              ;; Delete two
+              (org-footnote-delete "2")
+              (let ((after-delete (funcall snap)))
+                ;; Goto footnote action
+                (goto-char (point-min))
+                (search-forward "[fn:1]")
+                (backward-char 1)
+                (let ((action-result
+                       (condition-case nil
+                           (progn (org-footnote-action) 'ok)
+                         (error 'error))))
+                  (list initial
+                        after-insert
+                        after-normalize
+                        after-sort
+                        after-delete
+                        action-result
+                        (buffer-substring-no-properties
+                         (point-min) (point-max))))))))))))"##,
+        expect,
+    );
+}
