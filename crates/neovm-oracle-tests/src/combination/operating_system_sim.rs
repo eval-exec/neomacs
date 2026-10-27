@@ -19,7 +19,7 @@ fn oracle_prop_combination_os_sim_process_table() {
 
     // Manage a process table: create processes with PID, name, priority,
     // state (running/ready/blocked); support kill, state transitions, and listing.
-    let form = r##"(progn
+    let form = r#"(progn
   (fset 'neovm--os-pt-create
     (lambda () (list (make-hash-table :test 'eql) 0)))  ;; (table next-pid)
 
@@ -342,7 +342,7 @@ fn oracle_prop_combination_os_sim_filesystem() {
 
     // Simulate a hierarchical file system with directories and files.
     // Operations: mkdir, touch, ls, find, rm.
-    let form = r#"(progn
+    let form = r##"(progn
   ;; FS node: (name type children content)
   ;; type = 'dir or 'file; children = alist for dirs; content = string for files
   (fset 'neovm--os-fs-create

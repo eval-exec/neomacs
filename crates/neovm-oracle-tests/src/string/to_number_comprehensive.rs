@@ -18,7 +18,7 @@ use crate::common::{assert_ok_eq, assert_oracle_parity, eval_oracle_and_neovm};
 fn oracle_prop_string_to_number_comprehensive_all_bases() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let form = r##"(list
+    let form = r#"(list
   ;; Base 2: binary edge cases
   (string-to-number "0" 2)
   (string-to-number "1" 2)
@@ -345,7 +345,7 @@ fn oracle_prop_string_to_number_comprehensive_extreme_values() {
 fn oracle_prop_string_to_number_comprehensive_degenerate() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let form = r#"(list
+    let form = r##"(list
   ;; Completely non-numeric strings
   (string-to-number "abc")
   (string-to-number "hello world")
@@ -382,7 +382,9 @@ fn oracle_prop_string_to_number_comprehensive_degenerate() {
   (= 0 (string-to-number "abc"))
   (= 0 (string-to-number " "))
   (integerp (string-to-number "abc")))"##;
-    let expect = expect_test::expect![[r#""ERR (void-variable 0x)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (0 0 0 0 0 0 0 0 0 0 0 0 0 0 12 0 4779 0 0 0 0 0 0 0 0 t t t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

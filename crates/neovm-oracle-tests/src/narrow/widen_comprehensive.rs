@@ -18,7 +18,7 @@ use crate::common::{assert_ok_eq, assert_oracle_parity, eval_oracle_and_neovm};
 fn oracle_prop_narrow_widen_boundary_cases() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let form = r###"(with-temp-buffer
+    let form = r#"(with-temp-buffer
   (insert "0123456789ABCDEF")
   ;; Buffer is 16 chars, positions 1..17
   (let ((results nil))
@@ -344,7 +344,7 @@ fn oracle_prop_narrow_buffer_substring_interaction() {
 fn oracle_prop_narrow_accumulate_section_stats() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let form = r#"(with-temp-buffer
+    let form = r###"(with-temp-buffer
   (insert "## Section A\nword1 word2 word3\nfoo bar\n")
   (insert "## Section B\nhello world\ntest data more words here\n")
   (insert "## Section C\na b c d e f g h i j\n")

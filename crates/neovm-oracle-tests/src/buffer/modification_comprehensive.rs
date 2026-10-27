@@ -18,7 +18,7 @@ fn oracle_prop_buffer_mod_insert_multi_strings_and_chars() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     // insert with no args, single string, multiple strings, chars, mixed
-    let form = r##"(with-temp-buffer
+    let form = r#"(with-temp-buffer
   (insert)
   (let ((r1 (buffer-string)))
     (insert "hello")
@@ -439,7 +439,7 @@ fn oracle_prop_buffer_mod_change_functions_side_effects() {
 fn oracle_prop_buffer_mod_structured_document_building() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let form = r#"(with-temp-buffer
+    let form = r##"(with-temp-buffer
   ;; Build a simple key-value config file
   (let ((entries '(("host" . "localhost")
                    ("port" . "8080")

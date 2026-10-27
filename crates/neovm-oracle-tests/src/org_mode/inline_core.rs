@@ -12,10 +12,10 @@ fn org_element_headline_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[
-        r##""OK \"#+begin_src emacs-lisp :results value replace\\n(+ 2 3)\\n#+end_src\\n\\n#+RESULTS:\\n: 5\\n\"""##
+        r#""OK ((1 \"TODO\" \"Task\" (\"work\")) (2 \"DONE\" \"Child\" nil))""#
     ]];
     crate::common::assert_oracle_parity_expect(
-        r##"(progn
+        r#"(progn
   (require 'org)
   (with-temp-buffer
     (org-mode)
@@ -32,6 +32,7 @@ fn org_element_headline_properties() {
                       (org-element-property :tags headline))
                 out)))
       (nreverse out))))"#,
+        expect,
     );
 }
 
@@ -40,7 +41,7 @@ fn org_todo_keyword_edit_preserves_plain_buffer_text() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     assert_oracle_parity(
-        r##"(progn
+        r#"(progn
   (require 'org)
   (with-temp-buffer
     (let ((org-log-done nil)
@@ -140,7 +141,6 @@ fn org_babel_emacs_lisp_result_insertion() {
     (let ((org-confirm-babel-evaluate nil))
       (org-babel-execute-src-block))
     (buffer-substring-no-properties (point-min) (point-max))))"##,
-        expect,
     );
 }
 
