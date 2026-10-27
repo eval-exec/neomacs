@@ -1,5 +1,7 @@
-//! C6 integration checks require the process-wide row-storage knob. Run this
-//! ignored family explicitly with NEOMACS_PRESENT_POINT_ROWS=on or verify.
+//! C6 integration checks require the process-wide row-storage knob.  The knob
+//! is read once per process, so each check re-runs itself in a child process
+//! with `NEOMACS_PRESENT_POINT_ROWS=on`; a run that already has the knob on
+//! executes the body directly.
 use super::*;
 use neovm_core::window::{DisplayPointRows, display_point_rows_mode};
 
@@ -26,6 +28,31 @@ fn shared_count(before: &DisplayPointRows, after: &DisplayPointRows) -> usize {
         .count()
 }
 
+/// Run one of the checks in the environment it requires: the row-storage mode
+/// is process-wide and read once, so a process started without the knob
+/// re-runs exactly this test in a child with `NEOMACS_PRESENT_POINT_ROWS=on`
+/// and returns; the child runs the body.  Returns true when the body should
+/// run in THIS process.
+fn point_rows_mode_enabled(test: &str) -> bool {
+    if display_point_rows_mode().enabled() {
+        return true;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([test, "--test-threads", "1"])
+        .env("NEOMACS_PRESENT_POINT_ROWS", "on")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("re-run the point-row test with NEOMACS_PRESENT_POINT_ROWS=on");
+    assert!(
+        output.status.success(),
+        "point-row child failed under NEOMACS_PRESENT_POINT_ROWS=on: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    false
+}
+
 fn check_fresh(eval: &mut Context, engine: &LayoutEngine, frame: neovm_core::window::FrameId) {
     let actual = selected_window_layout_trace(eval, engine, frame);
     let mut reference = LayoutEngine::new();
@@ -37,8 +64,10 @@ fn check_fresh(eval: &mut Context, engine: &LayoutEngine, frame: neovm_core::win
 }
 
 #[test]
-#[ignore = "run with NEOMACS_PRESENT_POINT_ROWS=on or verify"]
 fn cursor_replay_shares_every_point_row() {
+    if !point_rows_mode_enabled("cursor_replay_shares_every_point_row") {
+        return;
+    }
     assert!(display_point_rows_mode().enabled());
     let (mut eval, frame, _, window) = incr_editing_frame(&LINE.repeat(200), 800, 600);
     let mut engine = LayoutEngine::new();
@@ -65,8 +94,10 @@ fn cursor_replay_shares_every_point_row() {
 }
 
 #[test]
-#[ignore = "run with NEOMACS_PRESENT_POINT_ROWS=on or verify"]
 fn edited_row_is_new_and_unchanged_rows_share_cells() {
+    if !point_rows_mode_enabled("edited_row_is_new_and_unchanged_rows_share_cells") {
+        return;
+    }
     assert!(display_point_rows_mode().enabled());
     let (mut eval, frame, _, window) = incr_editing_frame(&LINE.repeat(200), 800, 600);
     eval.eval_str(&format!("(goto-char {})", 8 * LINE.len() + 4))
@@ -87,8 +118,10 @@ fn edited_row_is_new_and_unchanged_rows_share_cells() {
 }
 
 #[test]
-#[ignore = "run with NEOMACS_PRESENT_POINT_ROWS=on or verify"]
 fn scroll_and_prepared_page_replay_preserve_point_geometry() {
+    if !point_rows_mode_enabled("scroll_and_prepared_page_replay_preserve_point_geometry") {
+        return;
+    }
     assert!(display_point_rows_mode().enabled());
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(500), 800, 600);
     let mut engine = LayoutEngine::new();

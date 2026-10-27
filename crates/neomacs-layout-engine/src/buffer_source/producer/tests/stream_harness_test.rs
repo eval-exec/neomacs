@@ -28,8 +28,9 @@
 //! are renderer-owned today (the invisible checkpoint at row_lifecycle.rs:694+,
 //! `DisplayTabPolicy::advance_from`, special_glyphs.rs). Corpus cases whose
 //! inventory expectation depends on
-//! producer-owned stop state are landed `#[ignore]` naming the rung that will
-//! un-ignore them, so the checklist lives in the code rather than a document.
+//! producer-owned stop state are gated behind the `producer-rung-c6-c7`
+//! feature that the rung implementing them enables, so the checklist lives in
+//! the code rather than a document.
 
 use super::vocabulary::{
     BufferScanPos, ProducedElement, ProducedGlyphProvenance as GlyphProvenance,
@@ -1014,7 +1015,7 @@ fn c6b_extender_at_a_face_seam_stays_in_one_stream() {
 }
 
 #[test]
-#[ignore = "un-ignored by the rung that gives ProducedChar its char class: Wide / ComposedExtender classification and the never-split-a-cluster run seam rule (design section 4.10)"]
+#[cfg(feature = "producer-rung-c6-c7")]
 fn c6_cluster_classes_are_carried_on_the_element() {
     let case = StreamCase::new("C6 classes", "ae\u{301}z\n");
     let stream = producer_stream(&case);
@@ -1041,7 +1042,7 @@ fn c7a_invisible_text_is_not_elided_by_the_producer_today() {
 }
 
 #[test]
-#[ignore = "un-ignored by P4.8: the invisible checkpoint (row_lifecycle.rs) moves into producer stop state, and the scan track then jumps the elided span"]
+#[cfg(feature = "producer-rung-c6-c7")]
 fn c7a_invisible_span_jumps_the_scan_track() {
     let case =
         StreamCase::new("C7a invisible mid-line", "abXXcd\n").with(CaseProperty::invisible(2, 4));

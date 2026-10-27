@@ -3335,10 +3335,10 @@ fn backend_layout_in_context(
 /// pays. Reports via panic! (like the jit_bench_* family) so the line surfaces
 /// under nextest capture; the test "fails" by design. Build needs the jit feature
 /// (a bare neovm-core build is broken on this branch, pre-existing). Run:
-///   cargo nextest run -p neomacs-layout-engine --features neovm-core/jit \
-///     --release --run-ignored ignored-only --no-capture layout_bench_warm
+///   cargo nextest run -p neomacs-layout-engine --features perf-probes \
+///     --release --no-capture layout_bench_warm
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn layout_bench_warm() {
     use std::time::{Duration, Instant};
     let mut eval = Context::new();

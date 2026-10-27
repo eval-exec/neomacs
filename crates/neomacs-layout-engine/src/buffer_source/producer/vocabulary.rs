@@ -18,7 +18,7 @@
 //! today's items into elements to prove the two legs of a walk agree. It is
 //! `#[cfg(test)]` rather than deleted because that harness is the standing
 //! proof for the rungs that will eventually make production produce elements
-//! directly; the `#[ignore]`d harness cases name the rungs still outstanding.
+//! directly; the feature-gated harness cases name the rungs still outstanding.
 
 #[cfg(test)]
 use crate::display_item::{DisplayItem, DisplayItemKind, DisplayStretchWidth, RenderFaceRef};
