@@ -102,14 +102,14 @@ fn read_state_file(state: &TuiTempDirectory, name: &str) -> String {
 // probe, then drives a first input itself) is not part of the default run.
 // Run it explicitly when re-investigating:
 //
-//   cargo nextest run -p neomacs-tui-tests --run-ignored=only \
+//   cargo nextest run -p neomacs-tui-tests --features doom-repro \
 //     -E 'test(doom_minor_mode_order_matches_gnu)' --success-output immediate
 //
 // It settles past the delay before its own first input, so a PASS says both
 // editors took the same deferred path; a FAIL with diverging calls says the
 // race moved again — read the dump before concluding anything.
 #[test]
-#[ignore = "reproduction aid for a live Doom mode-line ordering bug; see the module docs"]
+#[cfg(feature = "doom-repro")]
 fn doom_minor_mode_order_matches_gnu() {
     let Some(doom) = neomacs_infra::DoomEnvironment::open() else {
         eprintln!(

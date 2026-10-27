@@ -20,6 +20,11 @@ name = "tui"
 path = "tests/tui.rs"
 
 
+[features]
+# Diagnostic reproduction aids that drive real editors and settle idle probes.
+# Tools, not part of the default run; kept building by the gate's opt-in check.
+doom-repro = []
+
 [dependencies]
 expect-test = "1.5.1"
 

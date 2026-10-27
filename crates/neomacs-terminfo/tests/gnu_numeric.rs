@@ -97,7 +97,6 @@ fn gnu_unmatched_terminator_control() {
 }
 
 #[test]
-#[ignore = "requires a populated host terminfo database"]
 fn installed_rendering_capabilities_are_accepted() {
     use StringCapability::{Termcap, Terminfo};
     use neomacs_terminfo::{Database, Query, StringCapability};
@@ -113,8 +112,15 @@ fn installed_rendering_capabilities_are_accepted() {
         Terminfo("setrgbb"),
     ];
     let queries: Vec<_> = capabilities.iter().copied().map(Query::String).collect();
-    let entries = Command::new("toe").arg("-a").output().unwrap();
-    assert!(entries.status.success());
+    let entries = match Command::new("toe").arg("-a").output() {
+        Ok(output) if output.status.success() => output,
+        other => {
+            eprintln!(
+                "skipping: requires a populated host terminfo database (`toe -a`): {other:?}"
+            );
+            return;
+        }
+    };
     let mut checked = 0;
     let mut unavailable = Vec::new();
     let mut unique = std::collections::BTreeSet::new();
