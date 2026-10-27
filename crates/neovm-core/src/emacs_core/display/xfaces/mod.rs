@@ -341,15 +341,15 @@ use std::sync::{Arc, OnceLock};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use strum::{EnumIter, EnumString, IntoEnumIterator, IntoStaticStr};
 
-use super::error::{Flow, LispCondition, signal};
+use super::error::{Flow, LispCondition, signal, signal_error_with_arg};
 #[cfg(test)]
 use super::font::alternative_font_registry_alist;
 use super::font::{
     FrameFontRealization, alternative_font_family_alist, default_face_font_attr_affects_frame_font,
-    face_remapping_for_current_buffer, font_name_value, font_string_text, font_value_fields,
-    font_value_text, font_vector_get_flexible, frame_device_designator_p, frame_id_from_designator,
-    frame_parameter_for_face_attribute, is_font, is_font_entity, is_font_spec,
-    live_frame_designator_in_state, live_frame_font_attribute_fallback,
+    face_remapping_for_current_buffer, font_name_value, font_spec_from_name, font_string_text,
+    font_value_fields, font_value_text, font_vector_get_flexible, frame_device_designator_p,
+    frame_id_from_designator, frame_parameter_for_face_attribute, is_font, is_font_entity,
+    is_font_spec, live_frame_designator_in_state, live_frame_font_attribute_fallback,
     opened_font_from_resolved_match, publish_face_attribute_to_frame_parameter,
     replace_alternative_font_registry_alist, resolve_font_match, resolve_live_frame_font_request,
     sync_live_default_face_font_state, sync_live_frame_font_state,
@@ -2540,6 +2540,27 @@ fn is_reset_like_face_attr_value(value: &Value) -> bool {
     })
 }
 
+/// `internal-set-lisp-face-attribute`'s `:font` value check
+/// (GNU `src/xfaces.c:3635-3664`, QCfont arm).  GNU runs it on the
+/// new-frame-defaults pass (`FRAME` t, including the first half of
+/// `FRAME` 0) and on window-system frames; the caller mirrors that guard.
+/// A non-reset value must be a font-spec/entity/object or a name string
+/// that parses into one.  `nil` is a plain non-font value and signals
+/// "Invalid font or font-spec", not a reset.
+fn validate_font_face_attr_value(value: &Value) -> Result<(), Flow> {
+    if is_font(value) {
+        return Ok(());
+    }
+    if value.is_string() {
+        let name = font_string_text(value).unwrap_or_default();
+        if font_spec_from_name(&name).is_some() {
+            return Ok(());
+        }
+        return Err(signal_error_with_arg("Invalid font name", *value));
+    }
+    Err(signal_error_with_arg("Invalid font or font-spec", *value))
+}
+
 pub(crate) fn derived_face_attrs_from_font_value(value: &Value) -> Vec<(LFaceAttr, Value)> {
     if !is_font(value) {
         return Vec::new();
@@ -3309,6 +3330,17 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute(
                     // leaves its Lisp face vector untouched.
                     return Ok(());
                 }
+            }
+
+            // GNU's QCfont arm validates whenever it runs: always on the
+            // new-frame-defaults pass (FRAME t, and the first half of FRAME
+            // 0), and on live frames only when they have a window system --
+            // terminal live frames returned above before touching their
+            // face vector.  This is also why `(set-face-font FACE nil)
+            // signals on a terminal in GNU despite the window-system guard.
+            if canonical_attr == LFaceAttr::Font && !is_reset_like_face_attr_value(&canonical_value)
+            {
+                validate_font_face_attr_value(&canonical_value)?;
             }
 
             set_face_override_id(face_id, canonical_attr, canonical_value, defaults_frame);

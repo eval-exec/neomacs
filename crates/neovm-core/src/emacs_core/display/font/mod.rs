@@ -2113,7 +2113,7 @@ fn font_parse_name(elems: &mut Vec<Value>, name: &str) -> bool {
 
 /// Build a font-spec from a font NAME string (GNU `font_spec_from_name`):
 /// parse NAME, then record it under `:name`.  Returns `None` on parse failure.
-fn font_spec_from_name(name: &str) -> Option<Value> {
+pub(crate) fn font_spec_from_name(name: &str) -> Option<Value> {
     let mut elems = vec![Value::keyword(FONT_SPEC_TAG)];
     if !font_parse_name(&mut elems, name) {
         return None;

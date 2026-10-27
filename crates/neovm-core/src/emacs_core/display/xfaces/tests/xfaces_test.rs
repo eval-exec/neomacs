@@ -382,3 +382,7 @@ fn ensure_startup_compat_variables_reseeds_existing_face_defaults_table() {
 #[cfg(test)]
 #[path = "tsb_face_height.rs"]
 mod tsb_face_height;
+
+#[cfg(test)]
+#[path = "tsb_face_font_validation.rs"]
+mod tsb_face_font_validation;
