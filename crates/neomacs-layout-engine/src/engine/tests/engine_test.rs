@@ -16573,8 +16573,11 @@ fn layout_frame_rust_crops_an_xwidget_in_a_right_hand_split_by_the_windows_width
 #[test]
 fn layout_frame_rust_measures_the_quarter_width_rule_from_the_text_area_not_the_line_numbers() {
     let prefix = "a".repeat(75);
-    // A 200px widget is wider than a quarter of the graphical text
-    // area (776 / 4 = 194), so overflow crops its layout slot.
+    // A 200px widget is wider than a quarter of the graphical text area, so
+    // overflow crops its layout slot.  The area itself is chrome-dependent --
+    // a GUI frame reserves GNU's toolkit scroll bar (16 px, src/xfns.c:2393-
+    // 2438), not a character cell -- so take it from the presentation clip
+    // instead of hardcoding a measurement that moves with the chrome.
     let cropped = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, 200, 40)
         .expect("a wide xwidget after line numbers is cropped, not dropped");
     assert!(
@@ -16586,14 +16589,29 @@ fn layout_frame_rust_measures_the_quarter_width_rule_from_the_text_area_not_the_
         "the overflowing wide widget must be cropped: {cropped:?}"
     );
     assert_eq!(cropped.content.width_px(), 200.0);
+    let text_area_width = cropped
+        .clip_rect
+        .expect("the presentation is clipped to the window text area")
+        .width;
+    let quarter = text_area_width / 4.0;
+    assert!(
+        200.0 > quarter,
+        "the cropping case must exceed the quarter threshold: area={text_area_width}"
+    );
 
-    // 193px is below a quarter of the full text area, but above a
-    // quarter after deducting the line-number prefix. GNU leaves it whole.
-    let whole = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, 193, 40)
+    // Just below that quarter: GNU leaves the advance whole, even though it
+    // is wider than a quarter of what remains after the 75-column prefix
+    // (xdisp.c:32575-32579 compares against `last_visible_x`, not the
+    // remaining width).  Exactly a quarter is not "wider than" a quarter.
+    let whole_width = quarter.floor() as i32;
+    let whole = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, whole_width, 40)
         .expect("GNU retains a narrow overflowing xwidget and clips its presentation");
     assert_eq!(whole.x, cropped.x, "the two widgets start at the same pen");
-    assert_eq!(whole.width, 193.0, "GNU leaves the layout advance whole");
-    assert_eq!(whole.content.width_px(), 193.0);
+    assert_eq!(
+        whole.width, whole_width as f32,
+        "GNU leaves the layout advance whole"
+    );
+    assert_eq!(whole.content.width_px(), whole_width as f32);
     assert_eq!(
         whole.clip_rect, cropped.clip_rect,
         "both presentations are clipped by the same window text area"
