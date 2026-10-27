@@ -4920,27 +4920,31 @@ fn bootstrap_runtime_read_key_sequence_follows_escape_prefix_command() {
 
 #[test]
 fn bootstrap_runtime_read_key_sequence_prioritizes_timer_unread_command_events() {
+    use crate::test_utils::input_wait::{InputGate, InputPublisher, WaitWitness};
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
     eval.eval_str(r#"(run-at-time 0 nil (lambda () (setq unread-command-events (list ?\e))))"#)
         .expect("schedule unread ESC timer");
 
-    let input = crate::test_utils::InputPublisher::install(&mut eval);
-    let sender = input.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        sender
-            .send(crate::keyboard::InputEvent::KeyPress {
-                key: crate::keyboard::KeyEvent::char('x'),
-                emacs_frame_id: 0,
-            })
-            .expect("queue x host input");
-    });
+    let publisher = InputPublisher::install(&mut eval);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
+            crate::keyboard::KeyEvent::char('x'),
+        )],
+    );
+    gate.arm(&mut eval, WaitWitness::InputWaitEntered);
 
-    let (keys, binding) = eval
-        .read_key_sequence()
-        .expect("read timer-requeued ESC before host x");
+    let read = eval.read_key_sequence();
+    assert_eq!(
+        publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::InputWaitEntered
+    );
+    let (keys, binding) = read.expect("read timer-requeued ESC before host x");
     assert_eq!(keys, vec![Value::fixnum(27), Value::fixnum('x' as i64)]);
     assert_eq!(binding, Value::symbol("execute-extended-command"));
 }

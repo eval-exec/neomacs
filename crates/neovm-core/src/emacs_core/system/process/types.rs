@@ -1034,11 +1034,88 @@ impl WaitNotifier {
     }
 }
 
+/// Refusal to observe this fixture's actual pending TCP owner state.
+#[cfg(test)]
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PendingConnectObservationError {
+    #[error("pending connect process missing")]
+    MissingProcess,
+    #[error("Main reached Select after connect was already decoded")]
+    AlreadyDecoded,
+    #[error("expected pending TCP connect")]
+    NotPendingTcp,
+    #[error("pending connect socket missing")]
+    MissingSocket,
+    #[error("expected TCP stream")]
+    NotTcpStream,
+    #[error("pending connect poller missing")]
+    MissingBackend,
+}
+#[cfg(test)]
+static_assertions::assert_impl_all!(PendingConnectObservationError: std::error::Error, Send, Sync);
+
+/// Native-only proof for the one pending TCP connect in a Green test.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct MainConnectPending {
+    process: ProcessId,
+}
+#[cfg(test)]
+impl MainConnectPending {
+    pub(crate) fn process(&self) -> ProcessId {
+        self.process
+    }
+}
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct NativeConnectWritable {
+    process: ProcessId,
+    owner: std::thread::ThreadId,
+}
+#[cfg(test)]
+impl NativeConnectWritable {
+    pub(crate) fn process(&self) -> ProcessId {
+        self.process
+    }
+    pub(crate) fn owner(&self) -> std::thread::ThreadId {
+        self.owner
+    }
+}
+#[cfg(test)]
+struct NativeConnectObserver {
+    process: ProcessId,
+    owner: std::thread::ThreadId,
+    callback: Box<dyn FnOnce(NativeConnectWritable) + Send>,
+}
+#[cfg(test)]
+impl std::fmt::Debug for NativeConnectObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeConnectObserver")
+            .field("process", &self.process)
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+#[cfg(test)]
+static_assertions::assert_impl_all!(NativeConnectObserver: Send, std::fmt::Debug);
+#[cfg(test)]
+static_assertions::assert_not_impl_any!(NativeConnectObserver: Clone, Copy);
+#[cfg(test)]
+static_assertions::assert_impl_all!(MainConnectPending: Send, std::fmt::Debug);
+#[cfg(test)]
+static_assertions::assert_not_impl_any!(MainConnectPending: Clone, Copy);
+#[cfg(test)]
+static_assertions::assert_impl_all!(NativeConnectWritable: Send, std::fmt::Debug);
+#[cfg(test)]
+static_assertions::assert_not_impl_any!(NativeConnectWritable: Clone, Copy);
+
 pub(super) struct ProcessWaitBackend {
     /// A per-backend, one-shot scheduling gate for input-wakeup regressions.
     /// Installation and consumption are synchronized; callbacks own no Lisp state.
     #[cfg(test)]
-    before_next_wait: std::sync::Mutex<Option<Box<dyn FnOnce(Duration) + Send>>>,
+    before_next_wait: std::sync::Mutex<Option<Box<dyn FnOnce(BackendWaitEntry) + Send>>>,
+    #[cfg(test)]
+    native_connect_observer: std::sync::Mutex<Option<NativeConnectObserver>>,
     #[cfg(unix)]
     pub(super) signal_fd: Option<std::os::fd::RawFd>,
     /// I/O multiplexer for process descriptors and cross-thread notifications.
@@ -1059,6 +1136,29 @@ pub(crate) enum ProcessWaitBackendInterest {
     ProcessesOnly,
     NotificationsOnly,
     NotificationsAndProcesses,
+}
+
+/// A native pre-Poller observation, after pending signal/notification checks.
+/// This reports entry to the wait boundary, not proof of a kernel-blocked task.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BackendWaitEntry {
+    requested_timeout: Duration,
+    interest: ProcessWaitBackendInterest,
+}
+
+#[cfg(test)]
+static_assertions::assert_impl_all!(BackendWaitEntry: Send, Sync, Copy, std::fmt::Debug);
+
+#[cfg(test)]
+impl BackendWaitEntry {
+    pub(crate) fn requested_timeout(self) -> Duration {
+        self.requested_timeout
+    }
+
+    pub(crate) fn interest(self) -> ProcessWaitBackendInterest {
+        self.interest
+    }
 }
 
 /// A validated monotonic deadline. An overflowing duration denotes an
@@ -1143,6 +1243,8 @@ impl ProcessWaitBackend {
             poller,
             #[cfg(test)]
             before_next_wait: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            native_connect_observer: std::sync::Mutex::new(None),
             #[cfg(unix)]
             signal_fd,
             notification_pending: Arc::new(AtomicBool::new(false)),
@@ -1193,10 +1295,14 @@ impl ProcessWaitBackend {
             }
 
             #[cfg(test)]
-            {
+            if !timeout.is_zero() {
+                // Nonblocking service polls are not reader wait-entry witnesses.
                 let before_wait = self.before_next_wait.lock().expect("wait gate lock").take();
                 if let Some(before_wait) = before_wait {
-                    before_wait(timeout);
+                    before_wait(BackendWaitEntry {
+                        requested_timeout: timeout,
+                        interest,
+                    });
                 }
             }
 
@@ -6808,7 +6914,7 @@ impl ProcessManager {
     #[cfg(test)]
     pub(crate) fn before_next_backend_wait_for_test(
         &mut self,
-        hook: impl FnOnce(Duration) + Send + 'static,
+        hook: impl FnOnce(BackendWaitEntry) + Send + 'static,
     ) {
         let slot = self
             .wait_backend
@@ -6828,8 +6934,14 @@ impl ProcessManager {
         timeout: std::time::Duration,
         interest: ProcessWaitBackendInterest,
     ) -> Option<ProcessWaitEvents> {
-        self.wait_backend
-            .wait_for_events(&self.processes, timeout, interest)
+        let events = self
+            .wait_backend
+            .wait_for_events(&self.processes, timeout, interest);
+        #[cfg(test)]
+        if let Some(events) = &events {
+            self.observe_native_connect_writable_for_test(events);
+        }
+        events
     }
 
     /// Remove only the filesystem node captured at bind, not a replacement
@@ -7148,6 +7260,252 @@ impl ProcessManager {
             .get(&id)
             .map(|p| &p.status)
             .or_else(|| self.deleted_processes.get(&id).map(|p| &p.status))
+    }
+
+    /// Project only the live owner's actual pending TCP state. This neither
+    /// changes nor claims to inspect the native poller's registration. The
+    /// fixture separately requires the real canonical writable backend event.
+    #[cfg(test)]
+    pub(crate) fn main_connect_pending_for_test(
+        &self,
+        id: ProcessId,
+    ) -> Result<MainConnectPending, PendingConnectObservationError> {
+        let process = self
+            .get(id)
+            .ok_or(PendingConnectObservationError::MissingProcess)?;
+        if ProcessStatusSymbol::from_status_value(process.status)
+            != Some(ProcessStatusSymbol::Connect)
+        {
+            return Err(PendingConnectObservationError::AlreadyDecoded);
+        }
+        match process.live_io.pending_network_connect.as_ref() {
+            Some(PendingNetworkConnect::Tcp { .. }) => {}
+            Some(PendingNetworkConnect::Dns(_)) | None => {
+                return Err(PendingConnectObservationError::NotPendingTcp);
+            }
+            #[cfg(unix)]
+            Some(PendingNetworkConnect::Local) => {
+                return Err(PendingConnectObservationError::NotPendingTcp);
+            }
+        }
+        let socket = process
+            .live_io
+            .network_socket
+            .as_ref()
+            .ok_or(PendingConnectObservationError::MissingSocket)?;
+        match socket {
+            NetworkSocket::TcpStream(_) => {}
+            NetworkSocket::TcpListener(_) | NetworkSocket::UdpSocket(_) => {
+                return Err(PendingConnectObservationError::NotTcpStream);
+            }
+            #[cfg(unix)]
+            NetworkSocket::SeqpacketStream(_)
+            | NetworkSocket::SeqpacketListener(_)
+            | NetworkSocket::UnixStream(_)
+            | NetworkSocket::UnixListener(_)
+            | NetworkSocket::UnixDatagram(_) => {
+                return Err(PendingConnectObservationError::NotTcpStream);
+            }
+        }
+        self.wait_backend
+            .poller()
+            .ok_or(PendingConnectObservationError::MissingBackend)?;
+        Ok(MainConnectPending { process: id })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn after_next_native_connect_writable_for_test(
+        &mut self,
+        id: ProcessId,
+        callback: impl FnOnce(NativeConnectWritable) + Send + 'static,
+    ) {
+        let slot = self
+            .wait_backend
+            .native_connect_observer
+            .get_mut()
+            .expect("connect observer lock");
+        assert!(slot.is_none(), "native connect observer already installed");
+        *slot = Some(NativeConnectObserver {
+            process: id,
+            owner: std::thread::current().id(),
+            callback: Box::new(callback),
+        });
+    }
+
+    #[cfg(test)]
+    fn observe_native_connect_writable_for_test(&self, events: &ProcessWaitEvents) {
+        let observer = {
+            let mut slot = self
+                .wait_backend
+                .native_connect_observer
+                .lock()
+                .expect("connect observer lock");
+            match slot.as_ref() {
+                Some(observer)
+                    if observer.owner == std::thread::current().id()
+                        && events.writable_processes_ref().contains(&observer.process)
+                        && self.get(observer.process).is_some_and(|process| {
+                            process.live_io.pending_network_connect.is_some()
+                                && ProcessStatusSymbol::from_status_value(process.status)
+                                    == Some(ProcessStatusSymbol::Connect)
+                        }) =>
+                {
+                    slot.take()
+                }
+                Some(_) | None => None,
+            }
+        };
+        if let Some(observer) = observer {
+            (observer.callback)(NativeConnectWritable {
+                process: observer.process,
+                owner: std::thread::current().id(),
+            });
+        }
+    }
+
+    /// Observe buffered real child stdout without reading, filtering or reaping it.
+    /// Unix waits on the actual pipe. Windows waits on this retained child's
+    /// process object, then uses the existing non-consuming PeekNamedPipe owner.
+    #[cfg(test)]
+    pub(crate) fn wait_for_child_stdout_readable_for_test(
+        &self,
+        id: ProcessId,
+        timeout: Duration,
+    ) -> std::io::Result<()> {
+        let process = self.get(id).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "readiness child no longer exists",
+            )
+        })?;
+        let stdout = process.live_io.child_stdout.as_ref().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "readiness child has no owned stdout",
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let deadline = Instant::now() + timeout;
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "child stdout readiness witness missing",
+                    ));
+                }
+                let milliseconds = i32::try_from(remaining.as_millis()).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "readiness bound exceeds poll domain",
+                    )
+                })?;
+                let mut descriptor = libc::pollfd {
+                    fd: stdout.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: stdout remains borrowed from its owner for the full
+                // poll; descriptor is initialized, exclusive local storage.
+                let result = unsafe { libc::poll(&mut descriptor, 1, milliseconds) };
+                if result < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                if result == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "child stdout readiness witness missing",
+                    ));
+                }
+                if descriptor.revents & libc::POLLIN == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "child pipe closed or failed without readable output",
+                    ));
+                }
+                let mut available: libc::c_int = 0;
+                // SAFETY: the same owned live pipe is borrowed; available is
+                // writable native integer storage. FIONREAD consumes no bytes.
+                if unsafe { libc::ioctl(stdout.as_raw_fd(), libc::FIONREAD, &mut available) } < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                return if available > 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "readable child pipe contained no buffered output",
+                    ))
+                };
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+            use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+            };
+            let pid = process.live_io.child.pid_if_unreaped().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "readiness child ownership missing",
+                )
+            })?;
+            // The still-owned Windows child handle pins this process object
+            // and PID during the shared ProcessManager borrow. This opens only
+            // SYNCHRONIZE access, never termination or status/reap authority.
+            // SAFETY: native scalar arguments; the returned handle is checked.
+            let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+            if raw.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: OpenProcess returned one successful, exclusively owned handle.
+            let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+            let milliseconds = u32::try_from(timeout.as_millis()).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "readiness bound exceeds Windows wait domain",
+                )
+            })?;
+            // SAFETY: handle stays owned through this bounded, non-reaping wait.
+            match unsafe { WaitForSingleObject(handle.as_raw_handle(), milliseconds) } {
+                WAIT_OBJECT_0 => {}
+                WAIT_TIMEOUT => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "child exit/readiness witness missing",
+                    ));
+                }
+                WAIT_FAILED => return Err(std::io::Error::last_os_error()),
+                _ => {
+                    return Err(std::io::Error::other(
+                        "unexpected process-object wait result",
+                    ));
+                }
+            }
+            match peek_child_output_readiness(stdout)? {
+                Some(available) if available > 0 => Ok(()),
+                Some(_) | None => Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "completed child had no buffered stdout",
+                )),
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (stdout, timeout);
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "no native child-output readiness witness on this platform",
+            ))
+        }
     }
 
     /// Get a process by id.

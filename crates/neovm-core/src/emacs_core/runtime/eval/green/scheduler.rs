@@ -96,10 +96,113 @@ struct ControlState {
     closing: bool,
 }
 
+#[cfg(test)]
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SelectParkObservationError {
+    #[error("select park gate lock poisoned")]
+    GatePoisoned,
+    #[error("MainConnectPending requires the Main owner")]
+    NotMain,
+    #[error("select park gate prepared twice")]
+    AlreadyPrepared,
+    #[error(transparent)]
+    PendingConnect(#[from] crate::emacs_core::process::PendingConnectObservationError),
+}
+#[cfg(test)]
+static_assertions::assert_impl_all!(SelectParkObservationError: std::error::Error, Send, Sync);
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectParkExpectation {
+    Ordinary,
+    MainConnectPending(crate::emacs_core::process::ProcessId),
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) enum SelectParkFacts {
+    Ordinary,
+    MainConnectPending(crate::emacs_core::process::MainConnectPending),
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct SelectParked {
+    owner: ThreadKey,
+    wait_end: Instant,
+    facts: SelectParkFacts,
+}
+
+#[cfg(test)]
+impl SelectParked {
+    pub(crate) fn owner(&self) -> ThreadKey {
+        self.owner
+    }
+    pub(crate) fn wait_end(&self) -> Instant {
+        self.wait_end
+    }
+    pub(crate) fn into_facts(self) -> SelectParkFacts {
+        self.facts
+    }
+}
+
+#[cfg(test)]
+static_assertions::assert_impl_all!(SelectParked: Send, std::fmt::Debug);
+#[cfg(test)]
+static_assertions::assert_not_impl_any!(SelectParked: Clone, Copy);
+
+#[cfg(test)]
+type SelectParkCallback = Box<dyn FnOnce(SelectParked) + Send>;
+
+#[cfg(test)]
+enum SelectParkGate {
+    Armed {
+        owner: ThreadKey,
+        expectation: SelectParkExpectation,
+        callback: SelectParkCallback,
+    },
+    Prepared {
+        owner: ThreadKey,
+        facts: SelectParkFacts,
+        callback: SelectParkCallback,
+    },
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for SelectParkGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Armed {
+                owner,
+                expectation,
+                callback: _,
+            } => f
+                .debug_struct("ArmedSelectParkGate")
+                .field("owner", owner)
+                .field("expectation", expectation)
+                .finish_non_exhaustive(),
+            Self::Prepared {
+                owner,
+                facts,
+                callback: _,
+            } => f
+                .debug_struct("PreparedSelectParkGate")
+                .field("owner", owner)
+                .field("facts", facts)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+#[cfg(test)]
+static_assertions::assert_impl_all!(SelectParkGate: Send, std::fmt::Debug);
+
 /// The scheduler, shared by every thread's seat.
 #[derive(Default)]
 pub(crate) struct Control {
     state: Mutex<ControlState>,
+    #[cfg(test)]
+    after_next_select_park: Mutex<Option<SelectParkGate>>,
     /// An owned I/O handle: the idle scheduler never reads World storage.
     select: OnceLock<Option<GreenSelectHandle>>,
 }
@@ -128,6 +231,154 @@ impl Control {
         // Every update is a few map/queue operations that leave the state
         // consistent; a panic while holding the lock cannot tear it.
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn after_next_select_park_for_test(
+        &self,
+        owner: ThreadKey,
+        expectation: SelectParkExpectation,
+        callback: impl FnOnce(SelectParked) + Send + 'static,
+    ) {
+        let mut slot = self
+            .after_next_select_park
+            .lock()
+            .expect("select park gate lock");
+        assert!(slot.is_none(), "select park gate already installed");
+        *slot = Some(SelectParkGate::Armed {
+            owner,
+            expectation,
+            callback: Box::new(callback),
+        });
+    }
+
+    /// The live owner prepares only native facts immediately before its
+    /// parked-root/Baton transfer. No process operation occurs during that
+    /// transfer; the token itself is minted only after Select is committed.
+    #[cfg(test)]
+    pub(crate) fn prepare_select_park_for_test(
+        &self,
+        owner: ThreadKey,
+        processes: &crate::emacs_core::process::ProcessManager,
+    ) -> Result<(), SelectParkObservationError> {
+        let mut slot = self
+            .after_next_select_park
+            .lock()
+            .map_err(|_| SelectParkObservationError::GatePoisoned)?;
+        let Some(gate) = slot.take() else {
+            return Ok(());
+        };
+        match gate {
+            SelectParkGate::Armed {
+                owner: expected,
+                expectation,
+                callback,
+            } => {
+                if owner != expected {
+                    *slot = Some(SelectParkGate::Armed {
+                        owner: expected,
+                        expectation,
+                        callback,
+                    });
+                    return Ok(());
+                }
+                let facts = match expectation {
+                    SelectParkExpectation::Ordinary => Ok(SelectParkFacts::Ordinary),
+                    SelectParkExpectation::MainConnectPending(id) => match owner {
+                        ThreadKey::Main => processes
+                            .main_connect_pending_for_test(id)
+                            .map(SelectParkFacts::MainConnectPending)
+                            .map_err(SelectParkObservationError::PendingConnect),
+                        ThreadKey::Worker(_) => Err(SelectParkObservationError::NotMain),
+                    },
+                };
+                match facts {
+                    Ok(facts) => {
+                        *slot = Some(SelectParkGate::Prepared {
+                            owner,
+                            facts,
+                            callback,
+                        })
+                    }
+                    Err(error) => {
+                        *slot = Some(SelectParkGate::Armed {
+                            owner: expected,
+                            expectation,
+                            callback,
+                        });
+                        return Err(error);
+                    }
+                }
+            }
+            SelectParkGate::Prepared {
+                owner: expected,
+                facts,
+                callback,
+            } => {
+                *slot = Some(SelectParkGate::Prepared {
+                    owner: expected,
+                    facts,
+                    callback,
+                });
+                if owner == expected {
+                    return Err(SelectParkObservationError::AlreadyPrepared);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn observe_select_park_for_test(&self, owner: ThreadKey, wait_end: Instant) {
+        let callback = {
+            let mut slot = self
+                .after_next_select_park
+                .lock()
+                .expect("select park gate lock");
+            match slot.take() {
+                Some(SelectParkGate::Prepared {
+                    owner: expected,
+                    facts,
+                    callback,
+                }) => {
+                    if owner == expected {
+                        Some((
+                            callback,
+                            SelectParked {
+                                owner,
+                                wait_end,
+                                facts,
+                            },
+                        ))
+                    } else {
+                        *slot = Some(SelectParkGate::Prepared {
+                            owner: expected,
+                            facts,
+                            callback,
+                        });
+                        None
+                    }
+                }
+                Some(SelectParkGate::Armed {
+                    owner,
+                    expectation,
+                    callback,
+                }) => {
+                    *slot = Some(SelectParkGate::Armed {
+                        owner,
+                        expectation,
+                        callback,
+                    });
+                    None
+                }
+                None => None,
+            }
+        };
+        // Never hold Control.state or the gate mutex while waiting for the
+        // native writer's consumed acknowledgement. The Baton stays local.
+        if let Some((callback, witness)) = callback {
+            callback(witness);
+        }
     }
 
     /// Register the main thread, which holds the Baton: its channel.
@@ -392,6 +643,10 @@ impl Control {
             if wait == Wait::Runnable {
                 state.ready.push_back(me);
             }
+        }
+        #[cfg(test)]
+        if let Wait::Select { wait_end } = wait {
+            self.observe_select_park_for_test(me, wait_end);
         }
         let Some(next) = self.pick_next() else {
             self.state().waits.insert(me, Wait::Runnable);

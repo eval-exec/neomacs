@@ -5809,9 +5809,9 @@ fn accept_process_output_drains_ready_output_before_yielding_to_command_input() 
     //
     // This can only be reproduced in Rust, not from elisp/batch: an elisp
     // `sleep-for`/`sit-for` pumps the wait loop and drains the bytes early.  A
-    // plain Rust `sleep` lets the child's output land in the pipe *without*
-    // running the wait loop, so the bytes stay undrained until the
-    // `accept-process-output` under test — exactly the starvation window.
+    // non-consuming native readiness observation proves the child's bytes
+    // are buffered *without* running the wait loop. They remain undrained
+    // until the `accept-process-output` under test — the starvation window.
     crate::test_utils::init_test_tracing();
     let printf = find_bin("printf");
     let mut ev = Context::new();
@@ -5845,11 +5845,11 @@ fn accept_process_output_drains_ready_output_before_yielding_to_command_input() 
     )
     .expect("install ready-output filter");
 
-    // Let the child write its bytes into the pipe WITHOUT running the wait
-    // loop.  A Rust sleep does not pump neomacs's wait loop, so the bytes are
-    // not drained early (an elisp sleep-for WOULD drain them, which is why this
-    // can't be reproduced from elisp/batch).
-    std::thread::sleep(Duration::from_millis(200));
+    // Observe actual buffered pipe output without running the wait loop,
+    // draining bytes or dispatching a filter; only then publish command input.
+    ev.processes
+        .wait_for_child_stdout_readable_for_test(pid, Duration::from_secs(5))
+        .expect("actual undrained READY output before command input");
 
     // Inject pending command input.  Without the fix, this makes
     // `service_wait_request_processes` early-return before draining the ready
@@ -6359,27 +6359,29 @@ fn accept_process_output_request_uses_gnu_wait_deadlines() {
 
 #[test]
 fn wait_scheduler_can_block_until_command_input_arrives() {
+    use crate::test_utils::input_wait::{InputGate, InputPublisher, WaitWitness};
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
-    let notifier = ev.wait_notifier();
-
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(20));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('z'),
-        ))
-        .expect("send delayed keypress");
-        if let Some(notifier) = notifier {
-            notifier.notify().expect("wake command-input wait");
-        }
-    });
+        )],
+    );
+    gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
-    let completion: CommandInputWaitOutcome = ev
-        .wait_for_command_input(Some(std::time::Instant::now() + Duration::from_secs(1)))
-        .expect("wait for command input");
+    let completion =
+        ev.wait_for_command_input(Some(std::time::Instant::now() + Duration::from_secs(1)));
 
+    assert_eq!(
+        publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::InputWaitEntered
+    );
+    let completion: CommandInputWaitOutcome = completion.expect("wait for command input");
     assert_eq!(completion, CommandInputWaitOutcome::InputPending);
     assert_eq!(ev.command_loop.keyboard.pending_input_events.len(), 1);
 }
@@ -7844,6 +7846,7 @@ fn accept_process_output_services_pending_resize_from_shared_wait_request() {
 
 #[test]
 fn accept_process_output_services_resize_arriving_during_wait() {
+    use crate::test_utils::input_wait::{InputGate, InputPublisher, WaitWitness};
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let fid = ev
@@ -7854,24 +7857,27 @@ fn accept_process_output_services_resize_arriving_during_wait() {
         .expect("frame should exist")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
 
-    let tx = crate::test_utils::InputPublisher::install(&mut ev);
-    let sender = tx.clone();
-    let resize_thread = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(5));
-        sender
-            .send(crate::keyboard::InputEvent::Resize {
-                width: 710,
-                height: 820,
-                scale_factor: 1.0,
-                emacs_frame_id: 0,
-            })
-            .expect("queue resize event during wait");
-    });
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::Resize {
+            width: 710,
+            height: 820,
+            scale_factor: 1.0,
+            emacs_frame_id: 0,
+        }],
+    );
+    gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
-    let result = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.05)])
-        .expect("accept-process-output should service resize arriving during wait");
-    resize_thread.join().expect("resize sender thread");
-    drop(tx);
+    let result = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.05)]);
+    assert_eq!(
+        publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::InputWaitEntered
+    );
+    let result = result.expect("accept-process-output should service resize arriving during wait");
 
     let width = crate::emacs_core::frame::builtin_frame_native_width(&mut ev, vec![])
         .expect("frame-native-width should succeed");
@@ -14496,10 +14502,7 @@ fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
                (delete-process p)))"#
     ));
 
-    assert_eq!(
-        result,
-        "OK (:own 0 :own-pid-is-positive t :still-live t)"
-    );
+    assert_eq!(result, "OK (:own 0 :own-pid-is-positive t :still-live t)");
 }
 
 /// GNU's PROCESS argument to `internal-default-signal-process` is a NUMBER
@@ -16384,7 +16387,7 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     let prompt = Duration::from_millis(1500);
 
     // PHASE 1, the assertion: a real child, whose `pidfd` IS registered with
-    // this poller, dies 200ms into a 3s block.
+    // this poller, exits only after the backend commits to a 3s wait.
     let mut eval = Context::new();
     let child = eval.processes.create_process_lisp(
         LispString::from_utf8("pw200-control"),
@@ -16392,18 +16395,42 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
         LispString::from_utf8(&sh),
         vec![
             LispString::from_utf8("-c"),
-            LispString::from_utf8("sleep 0.2; exit 7"),
+            LispString::from_utf8("IFS= read -r release; exit 7"),
         ],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
     eval.processes
         .spawn_child(child, false)
         .expect("spawn child");
+    let mut child_input = eval
+        .processes
+        .get(child)
+        .expect("owned child")
+        .live_io
+        .child
+        .stdin()
+        .expect("owned child gate input")
+        .try_clone()
+        .expect("clone only the gate-input descriptor");
+    let (child_ready, child_wait) = std::sync::mpsc::channel();
+    eval.processes
+        .before_next_backend_wait_for_test(move |entry| {
+            let _ = child_ready.send(entry);
+        });
+    let child_releaser = std::thread::spawn(move || -> std::io::Result<BackendWaitEntry> {
+        let entry = process_only_wait_entry_for_test(child_wait, block)?;
+        std::io::Write::write_all(&mut child_input, b"release\n")?;
+        Ok(entry)
+    });
     let started = Instant::now();
     let events = eval
         .processes
         .wait_for_backend_events(block, ProcessWaitBackendInterest::ProcessesOnly);
     let control_elapsed = started.elapsed();
+    child_releaser
+        .join()
+        .expect("child-control publisher joined")
+        .expect("child released only after actual pre-poll entry");
     assert!(
         control_elapsed < prompt,
         "a child's own `pidfd' must return the block when it dies -- waited \
@@ -16425,24 +16452,58 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     // `ErrorKind::Interrupted` and re-enters (polling-3.11.0/src/lib.rs:
     // 751-764), so even a delivery that DID interrupt the syscall would not
     // shorten the block.
-    let eval = Context::new();
+    let mut eval = Context::new();
     assert_no_sigchld_handler_is_installed();
-    let waker = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(200));
+    let (signal_ready, signal_wait) = std::sync::mpsc::channel();
+    eval.processes
+        .before_next_backend_wait_for_test(move |entry| {
+            let _ = signal_ready.send(entry);
+        });
+    let waker = std::thread::spawn(move || -> std::io::Result<BackendWaitEntry> {
+        let entry = process_only_wait_entry_for_test(signal_wait, block)?;
         // SAFETY: `kill` with this process's own pid and a valid signal.
-        unsafe { libc::kill(libc::getpid(), libc::SIGCHLD) };
+        if unsafe { libc::kill(libc::getpid(), libc::SIGCHLD) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(entry)
     });
     let started = Instant::now();
     let _events = eval
         .processes
         .wait_for_backend_events(block, ProcessWaitBackendInterest::ProcessesOnly);
     let signal_elapsed = started.elapsed();
-    waker.join().expect("waker thread");
+    waker
+        .join()
+        .expect("waker thread")
+        .expect("SIGCHLD sent only after actual pre-poll entry");
     eprintln!(
         "PW208 wake: pidfd returned a {block:?} block in {control_elapsed:?}; \
          a SIGCHLD delivered into the same block left it running \
          {signal_elapsed:?}"
     );
+}
+
+/// Consumes one actual backend-entry token before any signal/child release.
+/// Missing or mismatched witnesses fail without publishing substitute input.
+#[cfg(unix)]
+fn process_only_wait_entry_for_test(
+    receiver: std::sync::mpsc::Receiver<BackendWaitEntry>,
+    requested_timeout: Duration,
+) -> std::io::Result<BackendWaitEntry> {
+    let entry = receiver.recv_timeout(Duration::from_secs(5)).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "actual process pre-poll witness missing",
+        )
+    })?;
+    if entry.interest() != ProcessWaitBackendInterest::ProcessesOnly
+        || entry.requested_timeout() != requested_timeout
+    {
+        return Err(std::io::Error::other(
+            "unexpected process pre-poll interest/timeout",
+        ));
+    }
+    Ok(entry)
 }
 
 /// A signal arriving on another thread must wake a real idle evaluator poll,
@@ -16452,24 +16513,32 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
 #[test]
 #[cfg(all(unix, not(target_os = "android")))]
 fn captured_os_signal_wakes_idle_process_poller() {
-    let eval = Context::new();
+    let mut eval = Context::new();
     let report = crate::emacs_core::os_signal::install();
     crate::emacs_core::os_signal::take_pending();
     crate::emacs_core::os_signal::drain_wake_pipe(report.self_pipe_read_fd().unwrap());
     let (ready, start) = std::sync::mpsc::channel();
-    let sender = std::thread::spawn(move || {
-        start.recv().unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+    eval.processes
+        .before_next_backend_wait_for_test(move |entry| {
+            let _ = ready.send(entry);
+        });
+    let sender = std::thread::spawn(move || -> std::io::Result<BackendWaitEntry> {
+        let entry = process_only_wait_entry_for_test(start, Duration::from_secs(5))?;
         // SAFETY: signal this test process after dispositions are installed.
-        assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGUSR1) }, 0);
+        if unsafe { libc::kill(libc::getpid(), libc::SIGUSR1) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(entry)
     });
-    ready.send(()).unwrap();
     let started = Instant::now();
     let events = eval.processes.wait_for_backend_events(
         Duration::from_secs(5),
         ProcessWaitBackendInterest::ProcessesOnly,
     );
-    sender.join().unwrap();
+    sender
+        .join()
+        .expect("signal producer joined")
+        .expect("USR1 sent only after actual pre-poll entry");
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "signal did not wake idle poll: {events:?}"
@@ -16929,43 +16998,68 @@ fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
 /// not assert an exact wall-clock firing time.
 #[test]
 fn subprocess_output_during_idle_does_not_reset_the_idle_epoch() {
+    use crate::test_utils::input_wait::{
+        InputGate, InputPublisher, Readiness, WaitWitness, install_after_redisplay,
+    };
     crate::test_utils::init_test_tracing();
+    let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
     let mut ev = crate::test_utils::runtime_startup_context();
+    crate::test_utils::input_wait::select_visible_fixture(&mut ev, "*vm-chatter*");
     ev.eval_str(
         r#"(progn
            (setq vm-chatter-idle-fired nil)
            (run-with-idle-timer 0.05 nil
-             (lambda () (setq vm-chatter-idle-fired 'done)))
+             (lambda ()
+               (message "idle timer completed")
+               (setq vm-chatter-idle-fired 'done)))
            (start-process "chatter" "*vm-chatter*"
                           "sh" "-c"
                           "i=0; while [ $i -lt 100 ]; do echo tick; sleep 0.01; i=$((i + 1)); done"))"#,
     )
     .expect("schedule idle timer and chatty subprocess");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
-    let _tx_keepalive = tx.clone();
-    let notifier = ev.wait_notifier();
-    let sender = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(400));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('a'),
-        ))
-        .expect("send keypress");
-        if let Some(notifier) = notifier {
-            notifier.notify().expect("wake command-input wait");
+        )],
+    );
+    install_after_redisplay(&mut ev, gate, |context| {
+        let idle = context.eval_symbol("vm-chatter-idle-fired").ok();
+        let output = context
+            .buffers
+            .find_buffer_by_name("*vm-chatter*")
+            .and_then(|id| context.buffers.get(id))
+            .map(|buffer| buffer.buffer_string());
+        match (idle, output) {
+            (Some(value), Some(output))
+                if value == Value::symbol("done")
+                    && output.lines().any(|line| line.starts_with("tick")) =>
+            {
+                Readiness::Ready(WaitWitness::ProcessOutputAndIdleCompleted)
+            }
+            (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) | (None, None) => {
+                Readiness::Pending
+            }
         }
     });
 
     let event = ev.read_char();
+    let observation = publication.finish();
+    match &observation {
+        Ok(_) => {}
+        Err(_) => ev.quit_requested.clear(),
+    }
     let idle_fired = ev.eval_symbol("vm-chatter-idle-fired");
     let ticks = ev.eval_str(
         r#"(with-current-buffer "*vm-chatter*"
             (count-matches "^tick" (point-min) (point-max)))"#,
     );
-    sender.join().expect("input sender should finish");
     ev.eval_str(r#"(delete-process "chatter")"#)
         .expect("stop and reap the bounded chatter subprocess");
+    let observed = observation.expect("required observed wait publication");
+    assert_eq!(observed.witness, WaitWitness::ProcessOutputAndIdleCompleted);
     let event = event.expect("read_char returns the queued keypress");
     assert_eq!(event, Value::fixnum('a' as i64));
     assert_eq!(

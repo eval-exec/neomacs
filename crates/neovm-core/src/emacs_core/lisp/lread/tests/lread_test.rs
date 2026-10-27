@@ -917,7 +917,11 @@ fn read_event_preserves_existing_command_keys_context() {
 
 #[test]
 fn read_event_echoes_invoking_keys_and_new_event_after_gnu_delay() {
+    use crate::test_utils::input_wait::{
+        InputGate, InputPublisher, Readiness, WaitWitness, install_after_redisplay,
+    };
     crate::test_utils::init_test_tracing();
+    let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
     let mut ev = Context::new();
     ev.assign("noninteractive", Value::NIL);
     ev.assign("echo-keystrokes", Value::make_float(0.005));
@@ -926,22 +930,36 @@ fn read_event_echoes_invoking_keys_and_new_event_after_gnu_delay() {
     ev.assign("help-event-list", Value::list(vec![Value::symbol("help")]));
     ev.set_read_command_keys(vec![Value::fixnum(17)]); // C-q
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
-    let notifier = ev.wait_notifier();
-    let sender = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(30));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    const DECORATED: &str = "C-q- (C-h for help)";
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('1'),
-        ))
-        .expect("send event after the echo delay");
-        if let Some(notifier) = notifier {
-            notifier.notify().expect("wake read-event input wait");
+        )],
+    );
+    install_after_redisplay(&mut ev, gate, |context| {
+        match context.current_message_text() {
+            Some(text) if text == DECORATED => Readiness::Ready(WaitWitness::EchoDecoration(text)),
+            Some(_) | None => Readiness::Pending,
         }
     });
 
-    let event = builtin_read_event(&mut ev, vec![]).expect("read-event");
-    sender.join().expect("input sender");
+    let event = builtin_read_event(&mut ev, vec![]);
+    let observed = publication
+        .finish()
+        .expect("required observed wait publication");
+    let event = event.expect("read-event");
+    assert_eq!(
+        observed.witness,
+        WaitWitness::EchoDecoration(DECORATED.to_owned())
+    );
+    assert!(observed.entry.requested_timeout() > std::time::Duration::ZERO);
+    assert!(matches!(
+        observed.entry.interest(),
+        crate::emacs_core::process::ProcessWaitBackendInterest::NotificationsOnly
+            | crate::emacs_core::process::ProcessWaitBackendInterest::NotificationsAndProcesses
+    ));
 
     assert_eq!(event, Value::fixnum('1' as i64));
     // While read-event waits past `echo-keystrokes', echo_now shows the

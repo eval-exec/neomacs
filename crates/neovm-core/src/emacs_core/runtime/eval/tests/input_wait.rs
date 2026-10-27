@@ -1,6 +1,6 @@
 use super::*;
 use crate::keyboard::{InputEvent, KeyEvent, ReadKeySequenceOptions};
-use crate::test_utils::InputPublisher;
+pub(super) use crate::test_utils::input_wait::InputPublisher;
 
 #[derive(Clone, Copy, Debug)]
 enum InputRead {
@@ -55,7 +55,8 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
             if let Some((gate_tx, published_rx)) = gate.take() {
                 context
                     .processes
-                    .before_next_backend_wait_for_test(move |timeout| {
+                    .before_next_backend_wait_for_test(move |entry| {
+                        let timeout = entry.requested_timeout();
                         assert!(
                             timeout >= Duration::from_secs(60),
                             "last idle timer must leave an unbounded input wait, got {timeout:?}"
@@ -70,14 +71,21 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
     }));
 
     let worker = thread::spawn(move || {
-        let reached = gate_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        match gate_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(()) => {}
+            Err(
+                crossbeam_channel::RecvTimeoutError::Timeout
+                | crossbeam_channel::RecvTimeoutError::Disconnected,
+            ) => {
+                publisher
+                    .cancel_wait()
+                    .expect("cancel missing wait witness");
+                return WakeOutcome::GateNotReached;
+            }
+        }
         publisher
             .send(InputEvent::key_press(KeyEvent::char('a')))
             .expect("publish input");
-        if !reached {
-            rescue.notify().expect("rescue missing gate");
-            return WakeOutcome::GateNotReached;
-        }
         published_tx.send(()).expect("acknowledge publication");
         if completed_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
             WakeOutcome::Published
@@ -95,16 +103,16 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
     };
     let _ = completed_tx.send(());
     let outcome = worker.join().expect("input publisher thread");
+    assert_eq!(
+        outcome,
+        WakeOutcome::Published,
+        "{read:?} needed a rescue wake"
+    );
     let keys = result.expect("read published input");
     assert_eq!(keys, vec![Value::fixnum('a' as i64)]);
     assert_eq!(
         ev.eval_symbol("input-wake-idle-fired").expect("idle flag"),
         Value::symbol("done")
-    );
-    assert_eq!(
-        outcome,
-        WakeOutcome::Published,
-        "{read:?} needed a rescue wake"
     );
 }
 

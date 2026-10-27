@@ -2,6 +2,10 @@
 //!
 //! Provides shared helpers used across all test modules.
 
+#[cfg(test)]
+#[path = "test_utils/input_wait.rs"]
+pub(crate) mod input_wait;
+
 use crate::emacs_core::error::map_flow;
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::symbol::CanonicalAccess;

@@ -8,6 +8,8 @@
 use super::super::world::Baton;
 use super::super::{Context, Flow, Value};
 use super::scheduler::{Control, Handoff, Lifecycle, Peers, ThreadKey, Wait};
+#[cfg(test)]
+use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::signal;
 use crate::emacs_core::intern::SymId;
 use crate::tagged::gc::MarkPhase;
@@ -442,6 +444,12 @@ impl Context {
         let now = Instant::now();
         match control.peers(key, now) {
             Peers::Ready => {
+                #[cfg(test)]
+                control
+                    .prepare_select_park_for_test(key, &self.processes)
+                    .map_err(|error| {
+                        signal(LispCondition::Error, vec![Value::string(error.to_string())])
+                    })?;
                 #[cfg(test)]
                 SELECT_PARKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.green_wait(Wait::Select {

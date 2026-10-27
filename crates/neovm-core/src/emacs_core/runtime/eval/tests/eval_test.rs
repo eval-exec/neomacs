@@ -1966,7 +1966,9 @@ fn read_char_prefers_ready_keypress_over_process_filter_callback() {
     )
     .expect("install process priority filter");
 
-    std::thread::sleep(Duration::from_millis(20));
+    ev.processes
+        .wait_for_child_stdout_readable_for_test(pid, Duration::from_secs(5))
+        .expect("actual undrained child output before ready keypress");
 
     let (tx, rx) = crossbeam_channel::unbounded();
     tx.send(crate::keyboard::InputEvent::key_press(
@@ -2089,6 +2091,7 @@ fn read_char_redisplays_when_resize_arrives_after_pre_block_redisplay() {
 
 #[test]
 fn read_char_respects_inhibit_redisplay_during_input_wait() {
+    use crate::test_utils::input_wait::{InputGate, InputPublisher, WaitWitness};
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     ev.obarray.set_symbol_value("inhibit-redisplay", Value::T);
@@ -2099,25 +2102,21 @@ fn read_char_respects_inhibit_redisplay_during_input_wait() {
         *redisplay_count_in_cb.borrow_mut() += 1;
     }));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
-    let notifier = ev.wait_notifier();
-    // Keep one sender alive: dropping the last tx disconnects the channel,
-    // which the input machinery treats as terminal-gone -> quit (timing flake;
-    // see the sit-for soak fix).
-    let _tx_keepalive = tx.clone();
-    thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(20));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('a'),
-        ))
-        .expect("send keypress");
-        if let Some(notifier) = notifier {
-            notifier.notify().expect("wake command-input wait");
-        }
-    });
+        )],
+    );
+    gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
-    let event = ev.read_char().expect("read_char should return keypress");
+    let event = ev.read_char();
+    let observed = publication
+        .finish()
+        .expect("required observed wait publication");
+    let event = event.expect("read_char should return keypress");
+    assert_eq!(observed.witness, WaitWitness::InputWaitEntered);
     assert_eq!(event, Value::fixnum('a' as i64));
     assert_eq!(*redisplay_count.borrow(), 0);
 }
@@ -3085,13 +3084,17 @@ fn presentation_retirement_does_not_preempt_timer_batches() {
 
 #[test]
 fn retirement_wakeup_returns_to_same_blocking_read_without_redisplay_loop() {
+    use crate::test_utils::input_wait::{
+        InputGate, InputPublisher, Readiness, WaitWitness, install_after_redisplay,
+    };
     crate::test_utils::init_test_tracing();
+    let _policy = RedisplayHookPolicyGuard::legacy();
     let mut ev = Context::new();
-    let tx = crate::test_utils::InputPublisher::install(&mut ev);
+    let publisher = InputPublisher::install(&mut ev);
 
     let redisplays = Rc::new(RefCell::new(0));
     let redisplays_in_callback = Rc::clone(&redisplays);
-    let retirement_tx = tx.clone();
+    let retirement_tx = publisher.clone();
     ev.redisplay_fn = Some(Box::new(move |_| {
         *redisplays_in_callback.borrow_mut() += 1;
         retirement_tx
@@ -3099,18 +3102,25 @@ fn retirement_wakeup_returns_to_same_blocking_read_without_redisplay_loop() {
             .expect("queue renderer acknowledgement");
     }));
 
-    let key_sender = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('x'),
-        ))
-        .expect("queue delayed key");
+        )],
+    );
+    install_after_redisplay(&mut ev, gate, |_| {
+        Readiness::Ready(WaitWitness::RetirementDrained)
     });
 
-    let event = ev
-        .read_char_with_timeout(Some(std::time::Duration::from_secs(1)))
-        .expect("read should succeed");
-    key_sender.join().expect("key sender should finish");
+    let event = ev.read_char_with_timeout(Some(std::time::Duration::from_secs(1)));
+    assert_eq!(
+        publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::RetirementDrained
+    );
+    let event = event.expect("read should succeed");
 
     assert_eq!(event, Some(Value::fixnum('x' as i64)));
     assert_eq!(
@@ -3178,6 +3188,7 @@ fn fire_pending_timers_does_not_service_pending_resize_input() {
 
 #[test]
 fn wait_for_pending_resize_events_blocks_until_resize_and_preserves_keypress() {
+    use crate::test_utils::input_wait::{InputGate, InputPublisher, WaitWitness};
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let fid = ev
@@ -3185,27 +3196,30 @@ fn wait_for_pending_resize_events_blocks_until_resize_and_preserves_keypress() {
         .create_frame("F1", 960, 640, crate::buffer::BufferId(1));
     assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
 
-    let tx = crate::test_utils::InputPublisher::install(&mut ev);
-    // Keep one sender alive: dropping the last tx disconnects the channel,
-    // which the input machinery treats as terminal-gone -> quit (timing flake;
-    // see the sit-for soak fix).
-    let _tx_keepalive = tx.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(20));
-        tx.send(crate::keyboard::InputEvent::Resize {
-            width: 700,
-            height: 800,
-            scale_factor: 1.0,
-            emacs_frame_id: 0,
-        })
-        .expect("send resize");
-        tx.send(crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('r'),
-        ))
-        .expect("send following keypress");
-    });
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![
+            crate::keyboard::InputEvent::Resize {
+                width: 700,
+                height: 800,
+                scale_factor: 1.0,
+                emacs_frame_id: 0,
+            },
+            crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::char('r')),
+        ],
+    );
+    gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
-    assert!(ev.wait_for_pending_resize_events(Duration::from_secs(1)));
+    let resized = ev.wait_for_pending_resize_events(Duration::from_secs(1));
+    assert_eq!(
+        publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::InputWaitEntered
+    );
+    assert!(resized);
     let frame = ev.frames.get(fid).expect("frame should exist");
     assert_eq!(frame.width, 700);
     assert_eq!(frame.height, 800);
@@ -5970,35 +5984,49 @@ fn next_input_wait_timeout_accounts_for_gnu_idle_timer_list_when_idle() {
 
 #[test]
 fn read_char_fires_bootstrapped_gnu_run_with_timer_while_waiting_for_input() {
+    use crate::test_utils::input_wait::{
+        InputGate, InputPublisher, Readiness, WaitWitness, install_after_redisplay,
+    };
     crate::test_utils::init_test_tracing();
+    let _policy = RedisplayHookPolicyGuard::legacy();
     let mut ev = runtime_startup_context();
+    crate::test_utils::input_wait::select_visible_fixture(&mut ev, "*timer-wait*");
 
     ev.eval_str(
         r#"(progn
            (setq vm-timer-fired nil)
            (run-with-timer
             0.01 nil
-            (lambda () (setq vm-timer-fired 'done))))"#,
+            (lambda () (insert "timer completed")
+              (setq vm-timer-fired 'done))))"#,
     )
     .expect("schedule GNU Lisp timer");
 
-    let tx = crate::test_utils::InputPublisher::install(&mut ev);
-    // Keep one sender alive: dropping the last tx disconnects the channel,
-    // which the input machinery treats as terminal-gone -> quit (timing flake;
-    // see the sit-for soak fix).
-    let _tx_keepalive = tx.clone();
-    let sender = thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(100));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('a'),
-        ))
-        .expect("send keypress");
+        )],
+    );
+    install_after_redisplay(&mut ev, gate, |context| {
+        match context.eval_symbol("vm-timer-fired").ok() {
+            Some(value) if value == Value::symbol("done") => {
+                Readiness::Ready(WaitWitness::TimerCompleted)
+            }
+            Some(_) | None => Readiness::Pending,
+        }
     });
 
-    let event = ev
-        .read_char()
-        .expect("read_char should return queued keypress");
-    sender.join().expect("input publisher thread");
+    let event = ev.read_char();
+    assert_eq!(
+        publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::TimerCompleted
+    );
+    let event = event.expect("read_char should return queued keypress");
     assert_eq!(event, Value::fixnum('a' as i64));
     assert_eq!(
         ev.eval_symbol("vm-timer-fired")
@@ -6009,8 +6037,13 @@ fn read_char_fires_bootstrapped_gnu_run_with_timer_while_waiting_for_input() {
 
 #[test]
 fn read_char_fires_bootstrapped_gnu_run_with_idle_timer_while_waiting_for_input() {
+    use crate::test_utils::input_wait::{
+        InputGate, InputPublisher, Readiness, WaitWitness, install_after_redisplay,
+    };
     crate::test_utils::init_test_tracing();
+    let _policy = RedisplayHookPolicyGuard::legacy();
     let mut ev = runtime_startup_context();
+    crate::test_utils::input_wait::select_visible_fixture(&mut ev, "*idle-wait*");
 
     ev.eval_str(
         r#"(progn
@@ -6019,28 +6052,37 @@ fn read_char_fires_bootstrapped_gnu_run_with_idle_timer_while_waiting_for_input(
            (run-with-idle-timer
             0.01 nil
             (lambda ()
+              (insert "timer completed")
               (setq vm-idle-fired 'done)
               (setq vm-idle-snapshot (current-idle-time)))))"#,
     )
     .expect("schedule GNU Lisp idle timer");
 
-    let tx = crate::test_utils::InputPublisher::install(&mut ev);
-    // Keep one sender alive: dropping the last tx disconnects the channel,
-    // which the input machinery treats as terminal-gone -> quit (timing flake;
-    // see the sit-for soak fix).
-    let _tx_keepalive = tx.clone();
-    let sender = thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(100));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('a'),
-        ))
-        .expect("send keypress");
+        )],
+    );
+    install_after_redisplay(&mut ev, gate, |context| {
+        match context.eval_symbol("vm-idle-fired").ok() {
+            Some(value) if value == Value::symbol("done") => {
+                Readiness::Ready(WaitWitness::IdleTimerCompleted)
+            }
+            Some(_) | None => Readiness::Pending,
+        }
     });
 
-    let event = ev
-        .read_char()
-        .expect("read_char should return queued keypress");
-    sender.join().expect("input publisher thread");
+    let event = ev.read_char();
+    assert_eq!(
+        publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::IdleTimerCompleted
+    );
+    let event = event.expect("read_char should return queued keypress");
     assert_eq!(event, Value::fixnum('a' as i64));
     assert_eq!(
         ev.eval_symbol("vm-idle-fired")
@@ -6065,15 +6107,17 @@ fn read_char_fires_bootstrapped_gnu_run_with_idle_timer_while_waiting_for_input(
 /// must fire again after the editing command when Emacs becomes idle.
 #[test]
 fn repeating_idle_timer_rearms_after_user_input_starts_new_idle_epoch() {
+    use crate::test_utils::input_wait::IdleEpoch;
+    use crate::test_utils::input_wait::{
+        InputGate, InputPublisher, Readiness, WaitWitness, install_after_redisplay,
+    };
     crate::test_utils::init_test_tracing();
+    let _policy = RedisplayHookPolicyGuard::legacy();
     let mut ev = runtime_startup_context();
+    crate::test_utils::input_wait::select_visible_fixture(&mut ev, "*repeating-idle-wait*");
 
-    // Retire the dump's first GC cycle (promotion + blackening) before the
-    // timed part: the bootstrap used to run synchronously inside setup eval,
-    // but the concurrent first cycle terminates at a LATER safe point — in a
-    // debug build that ~80ms termination can land inside one of this test's
-    // 80ms idle windows and eat the timer's epoch. This test is about idle
-    // epochs, not GC pause placement.
+    // Retire bootstrap GC before exercising the two idle epochs. Readiness
+    // comes from the timer count in each epoch, never elapsed wall time.
     ev.eval_str("(garbage-collect)")
         .expect("retire bootstrap GC");
     ev.eval_str(
@@ -6082,35 +6126,66 @@ fn repeating_idle_timer_rearms_after_user_input_starts_new_idle_epoch() {
            (run-with-idle-timer
             0.01 t
             (lambda ()
+              (insert "idle epoch completed")
               (setq vm-repeating-idle-count
                     (1+ vm-repeating-idle-count)))))"#,
     )
     .expect("schedule repeating GNU Lisp idle timer");
 
-    let tx = crate::test_utils::InputPublisher::install(&mut ev);
-    let _tx_keepalive = tx.clone();
-    let sender = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(80));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let publisher = InputPublisher::install(&mut ev);
+    let (first, first_publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('a'),
-        ))
-        .expect("send first keypress");
-        thread::sleep(Duration::from_millis(80));
-        tx.send(crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('b'),
-        ))
-        .expect("send second keypress");
+        )],
+    );
+    install_after_redisplay(&mut ev, first, |context| {
+        match context.eval_symbol("vm-repeating-idle-count").ok() {
+            Some(value) if value == Value::fixnum(1) => {
+                Readiness::Ready(WaitWitness::IdleEpoch(IdleEpoch::First))
+            }
+            Some(_) | None => Readiness::Pending,
+        }
     });
-
+    let first_event = ev.read_char();
     assert_eq!(
-        ev.read_char().expect("read first keypress"),
+        first_publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::IdleEpoch(IdleEpoch::First)
+    );
+    assert_eq!(
+        first_event.expect("read first keypress"),
         Value::fixnum('a' as i64)
     );
+
+    let (second, second_publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
+            crate::keyboard::KeyEvent::char('b'),
+        )],
+    );
+    install_after_redisplay(&mut ev, second, |context| {
+        match context.eval_symbol("vm-repeating-idle-count").ok() {
+            Some(value) if value == Value::fixnum(2) => {
+                Readiness::Ready(WaitWitness::IdleEpoch(IdleEpoch::Second))
+            }
+            Some(_) | None => Readiness::Pending,
+        }
+    });
+    let second_event = ev.read_char();
     assert_eq!(
-        ev.read_char().expect("read second keypress"),
+        second_publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::IdleEpoch(IdleEpoch::Second)
+    );
+    assert_eq!(
+        second_event.expect("read second keypress"),
         Value::fixnum('b' as i64)
     );
-    sender.join().expect("input publisher thread");
     assert_eq!(
         ev.eval_symbol("vm-repeating-idle-count")
             .expect("idle timer count should be bound"),
@@ -6132,12 +6207,16 @@ fn repeating_idle_timer_rearms_after_user_input_starts_new_idle_epoch() {
 /// `this-command-keys` (as if a `C-x r s` invocation had just been read),
 /// arms an idle timer that snapshots `(this-command-keys-vector)` while the
 /// nested `read_key_sequence` (continue-echo = nil) is waiting, and delivers
-/// the real key only after a delay so the idle timer fires first. The
-/// snapshot MUST be empty — proving the stale invoking sequence was cleared at
+/// the real key only after observing the idle snapshot and entering the
+/// next positive input wait. The snapshot MUST be empty — proving the stale invoking sequence was cleared at
 /// entry — and the read must still return the freshly delivered key.
 #[test]
 fn read_key_sequence_clears_stale_this_command_keys_at_entry_for_idle_probe() {
+    use crate::test_utils::input_wait::{
+        InputGate, InputPublisher, Readiness, WaitWitness, install_after_redisplay,
+    };
     crate::test_utils::init_test_tracing();
+    let _policy = RedisplayHookPolicyGuard::legacy();
     let mut ev = runtime_startup_context();
     let scratch = ev.buffers.create_buffer("*rks-entry-clear*");
     ev.buffers.set_current(scratch);
@@ -6166,31 +6245,42 @@ fn read_key_sequence_clears_stale_this_command_keys_at_entry_for_idle_probe() {
              (run-with-idle-timer
               0.01 nil
               (lambda ()
+                (insert "command-key snapshot captured")
                 (setq rks-idle-snapshot (this-command-keys-vector)))))"#,
     )
     .expect("arm idle snapshot timer");
 
-    // Deliver the real key only after a delay so the idle timer fires first.
-    let tx = crate::test_utils::InputPublisher::install(&mut ev);
-    let _tx_keepalive = tx.clone();
-    let sender = thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(120));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('a'),
-        ))
-        .expect("send keypress");
+        )],
+    );
+    install_after_redisplay(&mut ev, gate, |context| {
+        match context.eval_symbol("rks-idle-snapshot").ok() {
+            Some(value) if value.is_vector() => {
+                Readiness::Ready(WaitWitness::CommandKeysSnapshotCaptured)
+            }
+            Some(_) | None => Readiness::Pending,
+        }
     });
 
-    let (keys, _binding) = ev
-        .read_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::new(
-            Value::NIL,
-            false, // continue-echo = nil -> clear stale this-command-keys
-            false,
-            false,
-        ))
-        .expect("nested read should return the freshly delivered key");
+    let read = ev.read_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::new(
+        Value::NIL,
+        false, // continue-echo = nil -> clear stale this-command-keys
+        false,
+        false,
+    ));
 
-    sender.join().expect("input publisher thread");
+    assert_eq!(
+        publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::CommandKeysSnapshotCaptured
+    );
+    let (keys, _binding) = read.expect("nested read should return the freshly delivered key");
     assert_eq!(
         keys,
         vec![Value::fixnum('a' as i64)],
@@ -14585,27 +14675,19 @@ fn while_no_input_unwinds_inner_with_selected_window_on_keyboard_input() {
 
 #[test]
 fn sit_for_requeues_delayed_input_after_with_selected_window_cleanup() {
+    use crate::test_utils::input_wait::{InputGate, InputPublisher, WaitWitness};
     crate::test_utils::init_test_tracing();
 
     let mut ev = runtime_startup_context();
     ev.set_variable("noninteractive", Value::NIL);
-    let tx = crate::test_utils::InputPublisher::install(&mut ev);
-
-    // Keep one sender alive for the whole test: dropping the last sender
-    // disconnects the channel, which the input machinery treats as
-    // terminal-gone -> quit. The test models a terminal that stays connected
-    // and delivers one delayed key — without this, any input poll that lands
-    // after the spawned thread exits (timing-dependent; reliably triggered by
-    // JIT compile pauses under NEOVM_JIT_THRESHOLD=1) sees Disconnected and
-    // the whole form signals (quit).
-    let _tx_keepalive = tx.clone();
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(10));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let publisher = InputPublisher::install(&mut ev);
+    let (gate, publication) = InputGate::new(
+        publisher.clone(),
+        vec![crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char_with_mods('n', crate::keyboard::Modifiers::ctrl()),
-        ))
-        .expect("send delayed C-n");
-    });
+        )],
+    );
+    gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
     let result = ev.eval_str(
         r#"(let* ((w1 (selected-window))
@@ -14621,6 +14703,13 @@ fn sit_for_requeues_delayed_input_after_with_selected_window_cleanup() {
                (ignore-errors (delete-window w2))))"#,
     );
 
+    assert_eq!(
+        publication
+            .finish()
+            .expect("required observed wait publication")
+            .witness,
+        WaitWitness::InputWaitEntered
+    );
     assert_eq!(
         crate::emacs_core::error::format_eval_result(&result),
         "OK (nil t t 14)"
