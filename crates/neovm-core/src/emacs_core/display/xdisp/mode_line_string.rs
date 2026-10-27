@@ -1,9 +1,11 @@
-//! GNU's STRING/NOPROP element walk. DISPLAY keeps its native row walker.
+//! Stored STRING/NOPROP/TITLE output and field accounting for the shared walk.
 //!
 //! Entry belongs to a logical `display_mode_element` dispatch, including a
 //! tail transition. Emission never advances the shared ordinal authority.
 
 use super::*;
+#[path = "mode_line_walk_stored.rs"]
+mod stored_walk_policy;
 use crate::emacs_core::Context;
 
 /// GNU's numeric field budget; its unit is selected by the output target.
@@ -53,13 +55,11 @@ enum TargetAccounting {
     Columns,
 }
 
-impl From<&ModeLineTarget<'_>> for TargetAccounting {
-    fn from(target: &ModeLineTarget<'_>) -> Self {
+impl From<&StoredTarget<'_>> for TargetAccounting {
+    fn from(target: &StoredTarget<'_>) -> Self {
         match target {
-            ModeLineTarget::String(_) => Self::Characters,
-            ModeLineTarget::NoProperties
-            | ModeLineTarget::Title { .. }
-            | ModeLineTarget::Display { .. } => Self::Columns,
+            StoredTarget::String(_) => Self::Characters,
+            StoredTarget::NoProperties | StoredTarget::Title { .. } => Self::Columns,
         }
     }
 }
@@ -321,268 +321,16 @@ impl ElementDepth {
     }
 }
 
-/// Specpdl roots unwind on every Result path without shortening the enclosing
-/// accumulator's scratch-root lifetime.
-#[must_use]
-struct WalkRoots<'eval> {
-    eval: &'eval mut Context,
-    saved: crate::emacs_core::eval::SpecpdlRootScopeState,
-}
-
-static_assertions::assert_not_impl_any!(WalkRoots<'static>: Send, Sync);
-
-impl<'eval> WalkRoots<'eval> {
-    fn enter(eval: &'eval mut Context) -> Self {
-        let saved = eval.save_specpdl_roots();
-        Self { eval, saved }
-    }
-}
-
-impl Drop for WalkRoots<'_> {
-    fn drop(&mut self) {
-        self.eval.restore_specpdl_roots(self.saved);
-    }
-}
-
-pub(super) fn format(
+pub(super) fn format_child(
     eval: &mut Context,
-    pctx: &ModeLinePercentContext<'_>,
+    pctx: &ModeLinePercentContext<StoredTarget<'_>>,
     format: &Value,
     result: &mut ModeLineRendered,
     depth: ElementDepth,
-    risk: Risk,
+    controls: StringEmissionControls,
     selection: Option<&mut mode_line_flow_policy::FormatSelection>,
-) -> Result<(), Flow> {
-    format_child(
-        eval,
-        pctx,
-        format,
-        result,
-        depth,
-        StringEmissionControls::unrestricted(risk),
-        selection,
-    )
-    .map(|_| ())
-}
-
-pub(super) fn format_child(
-    eval: &mut Context,
-    pctx: &ModeLinePercentContext<'_>,
-    format: &Value,
-    result: &mut ModeLineRendered,
-    mut depth: ElementDepth,
-    mut controls: StringEmissionControls,
-    mut selection: Option<&mut mode_line_flow_policy::FormatSelection>,
 ) -> Result<FieldBudget, Flow> {
-    let roots = WalkRoots::enter(eval);
-    let eval = &mut *roots.eval;
-    let mut element = *format;
-    let element_root = eval.push_specpdl_root_slot(element);
-    eval.push_specpdl_root(controls.properties.0);
-    result.root_for_walk();
-    // Account at emission, before later Lisp callbacks can change width tables.
-    let mut used = FieldBudget::ZERO;
-
-    loop {
-        if depth.0 > 100 {
-            element = Value::string("*too-deep*");
-            eval.set_specpdl_root_slot(&element_root, element);
-        }
-        pctx.target.enter_element()?;
-        depth = depth.next()?;
-        let symbol_mode = eval.symbol_mode();
-
-        // Canonical SYMBOLP handles positioned symbols before the total
-        // decoded-kind dispatch. Unknown vectorlike inputs remain invalid.
-        if element.is_symbol(symbol_mode) {
-            let Some(name) = element.as_symbol_name(symbol_mode) else {
-                break;
-            };
-            let symbol = pctx.resolve_dynamic_symbol(name);
-            if !symbol.is_risky(&eval.obarray) {
-                controls.risk = Risk::Untrusted;
-            }
-            let Some(value) = symbol.value(eval.variables(), &eval.buffers) else {
-                break;
-            };
-            if value == element {
-                break;
-            }
-            if value.is_string() {
-                controls.literal = ModeLineLiteral::Literal;
-            }
-            element = value;
-            eval.set_specpdl_root_slot(&element_root, element);
-            continue;
-        }
-
-        match element.kind() {
-            ValueKind::String => {
-                used = append_mode_line_string_in_eval_with_controls(
-                    eval,
-                    pctx,
-                    result,
-                    &element,
-                    controls,
-                    depth,
-                    selection.as_deref_mut(),
-                )?;
-                break;
-            }
-            ValueKind::Nil | ValueKind::T | ValueKind::Symbol(_) => break,
-            ValueKind::Cons => {
-                let car = element.cons_car();
-                let cdr = element.cons_cdr();
-                eval.push_specpdl_root(car);
-                eval.push_specpdl_root(cdr);
-
-                if car.is_symbol_named(":eval", symbol_mode) {
-                    match controls.risk {
-                        Risk::Untrusted => break,
-                        Risk::Trusted => {}
-                    }
-                    if cdr.is_cons() {
-                        let form = cdr.cons_car();
-                        eval.push_specpdl_root(form);
-                        if let Some(selection) = selection.as_deref_mut() {
-                            selection.before_eval(eval);
-                        }
-                        let value = mode_line_flow_policy::eval_form(eval, &form)?;
-                        eval.push_specpdl_root(value);
-                        used = format_child(
-                            eval,
-                            pctx,
-                            &value,
-                            result,
-                            depth,
-                            controls,
-                            selection.as_deref_mut(),
-                        )?;
-                    }
-                    break;
-                }
-                if car.is_symbol_named(":propertize", symbol_mode) {
-                    match controls.risk {
-                        Risk::Untrusted => break,
-                        Risk::Trusted => {}
-                    }
-                    if cdr.is_cons() {
-                        let value = cdr.cons_car();
-                        let properties = cdr.cons_cdr();
-                        eval.push_specpdl_root(properties);
-                        used = format_child(
-                            eval,
-                            pctx,
-                            &value,
-                            result,
-                            depth,
-                            StringEmissionControls {
-                                properties: InheritedProperties(properties),
-                                ..controls
-                            },
-                            selection.as_deref_mut(),
-                        )?;
-                    }
-                    break;
-                }
-                if car.is_symbol(symbol_mode) {
-                    if !cdr.is_cons() {
-                        element = Value::string("*invalid*");
-                        eval.set_specpdl_root_slot(&element_root, element);
-                        continue;
-                    }
-                    let truth = car
-                        .as_symbol_name(symbol_mode)
-                        .and_then(|name| {
-                            pctx.resolve_dynamic_symbol(name)
-                                .value(eval.variables(), &eval.buffers)
-                        })
-                        .is_some_and(|value| !value.is_nil());
-                    if truth {
-                        element = cdr.cons_car();
-                    } else {
-                        let rest = cdr.cons_cdr();
-                        if rest.is_nil() {
-                            break;
-                        }
-                        if !rest.is_cons() {
-                            element = Value::string("*invalid*");
-                        } else {
-                            element = rest.cons_car();
-                        }
-                    }
-                    eval.set_specpdl_root_slot(&element_root, element);
-                    continue;
-                }
-                if let Some(limit) = car.as_fixnum() {
-                    controls.limits = controls.limits.numeric(NumericField::try_from(limit)?);
-                    element = cdr;
-                    eval.set_specpdl_root_slot(&element_root, element);
-                    continue;
-                }
-                if car.is_string() || car.is_cons() {
-                    let mut tail = element;
-                    let tail_root = eval.push_specpdl_root_slot(tail);
-                    let checkpoint_root = eval.push_specpdl_root_slot(tail);
-                    let mut cycle = ModeLineTailCycle::new(tail);
-                    while tail.is_cons() {
-                        let mut child = controls.remaining(used);
-                        match child.limits.precision.availability() {
-                            PrecisionAvailability::Exhausted => break,
-                            PrecisionAvailability::Available => {}
-                        }
-                        if tail.cons_cdr().is_cons() {
-                            child.limits.minimum = FieldBudget::ZERO;
-                        }
-                        let value = tail.cons_car();
-                        let child_used = format_child(
-                            eval,
-                            pctx,
-                            &value,
-                            result,
-                            depth,
-                            child,
-                            selection.as_deref_mut(),
-                        )?;
-                        used = used.checked_add(child_used)?;
-                        tail = tail.cons_cdr();
-                        eval.set_specpdl_root_slot(&tail_root, tail);
-                        if cycle.step(tail, |checkpoint| {
-                            eval.set_specpdl_root_slot(&checkpoint_root, checkpoint)
-                        }) {
-                            break;
-                        }
-                    }
-                    break;
-                }
-                element = Value::string("*invalid*");
-                eval.set_specpdl_root_slot(&element_root, element);
-            }
-            ValueKind::Fixnum(_)
-            | ValueKind::Float
-            | ValueKind::Subr(_)
-            | ValueKind::Veclike(_)
-            | ValueKind::Unbound
-            | ValueKind::Unknown => {
-                element = Value::string("*invalid*");
-                eval.set_specpdl_root_slot(&element_root, element);
-            }
-        }
-    }
-
-    let padding = controls.limits.minimum.saturating_sub(used);
-    if padding.get() != 0 {
-        let start = CharPos0::new(result.char_len());
-        result.pad_plain_spaces(padding.get());
-        result.numeric_padding.mark(start.get()..result.char_len());
-        if let ModeLineTarget::String(_) = &pctx.target {
-            result.apply_element_attribution(
-                CharRange::from_start_len(start, CharLen::new(padding.get())),
-                ElementAttribution::SyntheticNumericPadding,
-            );
-        }
-    }
-    used.checked_add(padding)
+    super::mode_line_walk::walk(eval, pctx, format, result, depth, controls, selection)
 }
 
 /// Translate inherited properties at the actual string entry, never after a
@@ -672,7 +420,7 @@ enum EmissionPiece<'source> {
 /// Store one fragment and attribute it using the live shared authority. A
 /// source slice retains the original rooted string without a temporary copy.
 fn emit_piece(
-    pctx: &ModeLinePercentContext<'_>,
+    pctx: &ModeLinePercentContext<StoredTarget<'_>>,
     result: &mut ModeLineRendered,
     piece: EmissionPiece<'_>,
 ) {
@@ -688,7 +436,7 @@ fn emit_piece(
     }
     let range = CharRange::new(begin, CharPos0::new(result.char_len()));
     // An earlier %M may have changed the authority of this same string.
-    if let ModeLineTarget::String(owner) = &pctx.target {
+    if let StoredTarget::String(owner) = &pctx.target {
         result.apply_element_attribution(range, ElementAttribution::FormatElement(owner.current()));
     }
 }
@@ -722,29 +470,15 @@ fn direct_literal_range(
     CharRange::new(range.start(), end)
 }
 
-fn emit_native_piece(
+fn finish_native_piece(
     eval: &mut Context,
-    pctx: &ModeLinePercentContext<'_>,
+    pctx: &ModeLinePercentContext<StoredTarget<'_>>,
     result: &mut ModeLineRendered,
-    value: &Value,
-    mode: ModeLineLiteral,
+    rendered: ModeLineRendered,
     limits: FieldLimits,
     field_width: FieldBudget,
 ) -> Result<FieldBudget, Flow> {
-    match limits.precision.availability() {
-        PrecisionAvailability::Exhausted => return Ok(FieldBudget::ZERO),
-        PrecisionAvailability::Available => {}
-    }
-    let mut rendered = ModeLineRendered::default();
     let accounting = TargetAccounting::from(&pctx.target);
-    super::append_mode_line_string_in_eval_with_field_limit(
-        eval,
-        pctx,
-        &mut rendered,
-        value,
-        mode,
-        NativeFieldPadding { accounting, limits },
-    );
     let kept = accounting
         .stored_range(
             eval,
@@ -771,23 +505,220 @@ fn emit_native_piece(
     Ok(used)
 }
 
-/// Tokenize only the boundary needed to intercept %M. Native spec decoding,
-/// encoding, source properties and width handling remain in the shared helper.
+/// Stored driver for the common scanner. Its source and inherited map have
+/// specpdl roots in the enclosing walk; no source/string borrow crosses %M.
+struct StoredAppendDriver<'eval, 'context, 'scope, 'selection> {
+    eval: &'eval mut Context,
+    pctx: &'context ModeLinePercentContext<StoredTarget<'scope>>,
+    result: &'eval mut ModeLineRendered,
+    prepared: Value,
+    codes: Vec<u32>,
+    controls: StringEmissionControls,
+    depth: ElementDepth,
+    selection: Option<&'selection mut mode_line_flow_policy::FormatSelection>,
+    used: FieldBudget,
+    inherited: InheritedProperties,
+    inherited_root: crate::emacs_core::eval::SpecpdlRootSlot,
+}
+
+impl PercentWidth for FieldBudget {
+    type Error = Flow;
+    const ZERO: Self = Self::ZERO;
+    fn decimal_digit(self, digit: DecimalDigit) -> Result<Self, Self::Error> {
+        self.get()
+            .checked_mul(10)
+            .and_then(|width| width.checked_add(usize::from(digit.value())))
+            .map(Self::new)
+            .ok_or_else(|| signal(LispCondition::OverflowError, vec![]))
+    }
+}
+
+impl PercentAppendDriver for StoredAppendDriver<'_, '_, '_, '_> {
+    type Error = Flow;
+    type Width = FieldBudget;
+    const ZERO: ZeroTerminator = ZeroTerminator::Stop;
+    const TRAILING: TrailingPercent = TrailingPercent::Stop;
+
+    fn code_at(&self, position: CharPos0) -> Option<EmacsChar> {
+        self.codes
+            .get(position.get())
+            .copied()
+            .and_then(EmacsChar::from_code)
+    }
+    fn admit(&mut self) -> Result<AppendAdmission, Flow> {
+        Ok(
+            match self
+                .controls
+                .remaining(self.used)
+                .limits
+                .precision
+                .availability()
+            {
+                PrecisionAvailability::Exhausted => AppendAdmission::Stop,
+                PrecisionAvailability::Available => AppendAdmission::Continue,
+            },
+        )
+    }
+    fn literal(&mut self, range: CharRange) -> Result<(), Flow> {
+        let remaining = self.controls.remaining(self.used);
+        let range = direct_literal_range(self.eval, &self.codes, range, remaining.limits.precision);
+        let used = TargetAccounting::from(&self.pctx.target)
+            .extent(
+                self.eval,
+                &self.codes[range.start().get()..range.end().get()],
+            )?
+            .into_budget();
+        emit_piece(
+            self.pctx,
+            self.result,
+            EmissionPiece::SourceSlice {
+                source: &self.prepared,
+                range,
+            },
+        );
+        self.used = self.used.checked_add(used)?;
+        Ok(())
+    }
+    fn field(
+        &mut self,
+        range: CharRange,
+        spec: Option<EmacsChar>,
+        width: FieldBudget,
+    ) -> Result<(), Flow> {
+        let remaining = StringEmissionControls {
+            properties: self.inherited,
+            ..self.controls.remaining(self.used)
+        };
+        // ASCII codes have identical native/Emacs decoding. For a non-ASCII
+        // unknown spec preserve the old fragment's Emacs-to-lossy conversion
+        // (including raw-unibyte/byte8/22-bit characters), without rescanning
+        // its percent stop or decimal width.
+        let native_spec = match spec {
+            Some(code) if code.code() < 128 => code.as_rust_char(),
+            Some(_) => {
+                let fragment = fragment_value(self.prepared, range);
+                self.eval.push_specpdl_root(fragment);
+                fragment.as_lisp_string().and_then(|string| {
+                    crate::emacs_core::emacs_char::to_utf8_lossy(string.as_bytes())
+                        .chars()
+                        .last()
+                })
+            }
+            None => None,
+        };
+        let mut rendered = ModeLineRendered::default();
+        let action = {
+            let command_loop_depth =
+                ModeLineCommandDepth::from(self.eval.recursive_command_loop_depth());
+            let vars = VariableView::new(&self.eval.obarray, &self.eval.owner);
+            let mut access = mode_line_point::Access::Live(&mut self.eval.frames);
+            // Old stored native fragments created fresh name/column memos.
+            // Retain that ownership; a %M callback cannot leave stale fields.
+            let mut cache = NativeSpecCache::default();
+            let native_width = ModeLineNativeFieldWidth::try_from(CharLen::new(width.get()))
+                .unwrap_or(ModeLineNativeFieldWidth::MAX);
+            decode_one_native_spec::<StoredTarget<'_>, RecursiveGlobal>(
+                NativeSpecInputs {
+                    vars,
+                    dynamic: &[],
+                    buffers: &self.eval.buffers,
+                    processes: &self.eval.processes,
+                    command_loop_depth,
+                    pctx: self.pctx,
+                    point_access: &mut access,
+                    cache: &mut cache,
+                },
+                NativePercentField {
+                    value: &self.prepared,
+                    position: range.start(),
+                    spec: native_spec,
+                    width: native_width,
+                },
+                &mut rendered,
+                &NativeFieldPadding {
+                    accounting: TargetAccounting::from(&self.pctx.target),
+                    limits: remaining.limits,
+                },
+            )
+        };
+        match action {
+            NativeSpecAction::RecurseGlobal(()) => {
+                let global = self
+                    .pctx
+                    .resolve_dynamic_symbol("global-mode-string")
+                    .value(self.eval.variables(), &self.eval.buffers)
+                    .unwrap_or(Value::NIL);
+                self.eval.push_specpdl_root(global);
+                let child_used = format_child(
+                    self.eval,
+                    self.pctx,
+                    &global,
+                    self.result,
+                    self.depth,
+                    StringEmissionControls {
+                        limits: FieldLimits {
+                            minimum: remaining.limits.cap_budget(width),
+                            precision: remaining.limits.precision,
+                        },
+                        literal: ModeLineLiteral::Expand,
+                        ..remaining
+                    },
+                    self.selection.as_deref_mut(),
+                )?;
+                self.used = self.used.checked_add(child_used)?;
+                // Re-read only after callback/rooted child emission completes.
+                self.codes = match self.prepared.as_lisp_string() {
+                    Some(string) => mode_line_string_char_codes(string),
+                    None => Vec::new(),
+                };
+            }
+            NativeSpecAction::Emitted => {
+                let fragment_used = finish_native_piece(
+                    self.eval,
+                    self.pctx,
+                    self.result,
+                    rendered,
+                    remaining.limits,
+                    width,
+                )?;
+                self.used = self.used.checked_add(fragment_used)?;
+                if let StoredTarget::String(owner) = &self.pctx.target {
+                    let position = i64::try_from(range.start().get())
+                        .map_err(|_| signal(LispCondition::OverflowError, vec![]))?;
+                    let properties = crate::emacs_core::textprop::builtin_text_properties_at_2(
+                        self.eval,
+                        Value::fixnum(position),
+                        self.prepared,
+                    )?;
+                    self.eval.push_specpdl_root(properties);
+                    self.inherited = InheritedProperties(
+                        ElementAttribution::FormatElement(owner.current())
+                            .apply_to_inherited(properties)?,
+                    );
+                    self.eval
+                        .set_specpdl_root_slot(&self.inherited_root, self.inherited.0);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn append_mode_line_string_in_eval_with_controls(
     eval: &mut Context,
-    pctx: &ModeLinePercentContext<'_>,
+    pctx: &ModeLinePercentContext<StoredTarget<'_>>,
     result: &mut ModeLineRendered,
     value: &Value,
     controls: StringEmissionControls,
     depth: ElementDepth,
-    mut selection: Option<&mut mode_line_flow_policy::FormatSelection>,
+    selection: Option<&mut mode_line_flow_policy::FormatSelection>,
 ) -> Result<FieldBudget, Flow> {
     let prepared = prepare_string(eval, *value, controls.properties, controls.risk)?;
     eval.push_specpdl_root(prepared);
     let Some(string) = prepared.as_lisp_string() else {
         return Ok(FieldBudget::ZERO);
     };
-    let mut codes = mode_line_string_char_codes(string);
+    let codes = mode_line_string_char_codes(string);
     if matches!(controls.literal, ModeLineLiteral::Literal) {
         let range = TargetAccounting::from(&pctx.target).stored_range(
             eval,
@@ -808,132 +739,20 @@ pub(super) fn append_mode_line_string_in_eval_with_controls(
         );
         return Ok(used);
     }
-    let mut used = FieldBudget::ZERO;
-    let mut cursor = CharPos0::ZERO;
-    let mut inherited = controls.properties;
-    let inherited_root = eval.push_specpdl_root_slot(inherited.0);
-    while cursor.get() < codes.len() {
-        let remaining = StringEmissionControls {
-            properties: inherited,
-            ..controls.remaining(used)
-        };
-        match remaining.limits.precision.availability() {
-            PrecisionAvailability::Exhausted => break,
-            PrecisionAvailability::Available => {}
-        }
-        if codes[cursor.get()] == 0 {
-            break;
-        }
-        let start = cursor;
-        if codes[start.get()] != u32::from('%') {
-            while cursor.get() < codes.len()
-                && codes[cursor.get()] != u32::from('%')
-                && codes[cursor.get()] != 0
-            {
-                cursor = cursor.add_len(CharLen::new(1));
-            }
-            let range = direct_literal_range(
-                eval,
-                &codes,
-                CharRange::new(start, cursor),
-                remaining.limits.precision,
-            );
-            let fragment_used = TargetAccounting::from(&pctx.target)
-                .extent(eval, &codes[range.start().get()..range.end().get()])?
-                .into_budget();
-            emit_piece(
-                pctx,
-                result,
-                EmissionPiece::SourceSlice {
-                    source: &prepared,
-                    // The direct scanner already applied the column cap;
-                    // applying a character cap again loses zero-width text.
-                    range,
-                },
-            );
-            used = used.checked_add(fragment_used)?;
-            continue;
-        }
-        cursor = cursor.add_len(CharLen::new(1));
-        let mut width = FieldBudget::ZERO;
-        while cursor.get() < codes.len()
-            && (u32::from('0')..=u32::from('9')).contains(&codes[cursor.get()])
-        {
-            let next = width
-                .get()
-                .checked_mul(10)
-                .and_then(|n| n.checked_add((codes[cursor.get()] - u32::from('0')) as usize))
-                .ok_or_else(|| signal(LispCondition::OverflowError, vec![]))?;
-            width = FieldBudget::new(next);
-            cursor = cursor.add_len(CharLen::new(1));
-        }
-        let spec = codes.get(cursor.get()).copied();
-        if spec.is_none() || spec == Some(0) {
-            break;
-        }
-        if spec.is_some() {
-            cursor = cursor.add_len(CharLen::new(1));
-        }
-        if spec == Some(u32::from('M')) {
-            let global = pctx
-                .resolve_dynamic_symbol("global-mode-string")
-                .value(eval.variables(), &eval.buffers)
-                .unwrap_or(Value::NIL);
-            eval.push_specpdl_root(global);
-            let child_used = format_child(
-                eval,
-                pctx,
-                &global,
-                result,
-                depth,
-                StringEmissionControls {
-                    limits: FieldLimits {
-                        minimum: remaining.limits.cap_budget(width),
-                        precision: remaining.limits.precision,
-                    },
-                    literal: ModeLineLiteral::Expand,
-                    ..remaining
-                },
-                selection.as_deref_mut(),
-            )?;
-            used = used.checked_add(child_used)?;
-            // %M can invoke Lisp, which may mutate even the unconsumed tail
-            // of this source. Re-read the rooted string before another stop.
-            let Some(string) = prepared.as_lisp_string() else {
-                return Ok(used);
-            };
-            codes = mode_line_string_char_codes(string);
-        } else {
-            let fragment = fragment_value(prepared, CharRange::new(start, cursor));
-            eval.push_specpdl_root(fragment);
-            let fragment_used = emit_native_piece(
-                eval,
-                pctx,
-                result,
-                &fragment,
-                ModeLineLiteral::Expand,
-                remaining.limits,
-                width,
-            )?;
-            used = used.checked_add(fragment_used)?;
-            // GNU's STRING percent arm updates its local PROPS variable.
-            // A following %M inherits this live map, not the entry snapshot.
-            if let ModeLineTarget::String(owner) = &pctx.target {
-                let position = i64::try_from(start.get())
-                    .map_err(|_| signal(LispCondition::OverflowError, vec![]))?;
-                let properties = crate::emacs_core::textprop::builtin_text_properties_at_2(
-                    eval,
-                    Value::fixnum(position),
-                    prepared,
-                )?;
-                eval.push_specpdl_root(properties);
-                inherited = InheritedProperties(
-                    ElementAttribution::FormatElement(owner.current())
-                        .apply_to_inherited(properties)?,
-                );
-                eval.set_specpdl_root_slot(&inherited_root, inherited.0);
-            }
-        }
-    }
-    Ok(used)
+    let inherited_root = eval.push_specpdl_root_slot(controls.properties.0);
+    let mut driver = StoredAppendDriver {
+        eval,
+        pctx,
+        result,
+        prepared,
+        codes,
+        controls,
+        depth,
+        selection,
+        used: FieldBudget::ZERO,
+        inherited: controls.properties,
+        inherited_root,
+    };
+    mode_line_append::append_percent_stops(&mut driver)?;
+    Ok(driver.used)
 }

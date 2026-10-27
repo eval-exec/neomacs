@@ -93,6 +93,7 @@ fn signal_message(form: &Value, data: &crate::emacs_core::error::SignalData) -> 
     )
 }
 
+#[cfg(test)]
 pub(super) fn split_eval_result(form: &Value, result: EvalResult) -> EvalResult {
     if !enabled() || result.is_ok() {
         return result;

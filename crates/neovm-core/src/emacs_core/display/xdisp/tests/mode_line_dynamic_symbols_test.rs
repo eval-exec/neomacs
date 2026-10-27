@@ -29,7 +29,7 @@ fn context() -> Context {
 
 fn render(
     ctx: &mut Context,
-    pctx: &ModeLinePercentContext<'_>,
+    pctx: &ModeLinePercentContext,
     format: Value,
     walker: Walker,
 ) -> String {
@@ -45,7 +45,7 @@ fn render(
 
 fn render_into(
     ctx: &mut Context,
-    pctx: &ModeLinePercentContext<'_>,
+    pctx: &ModeLinePercentContext,
     format: Value,
     walker: Walker,
     rendered: &mut ModeLineRendered,

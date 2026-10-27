@@ -1,6 +1,8 @@
 //! Dynamic symbol identities owned by one mode-line formatter pass.
 
-use super::{ModeLinePercentContext, ModeLineSymbol, Value, VariableView};
+use super::{
+    ModeLinePercentContext, ModeLineSymbol, StoredTarget, TargetPolicy, Value, VariableView,
+};
 use crate::emacs_core::intern::{SymId, intern, symbol_registry_epoch_value};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -109,9 +111,9 @@ impl DynamicSymbols {
     }
 }
 
-static_assertions::assert_not_impl_any!(ModeLinePercentContext<'static>: Sync);
+static_assertions::assert_not_impl_any!(ModeLinePercentContext<StoredTarget<'static>>: Sync);
 
-impl ModeLinePercentContext<'_> {
+impl<T: TargetPolicy> ModeLinePercentContext<T> {
     #[inline]
     pub(super) fn resolve_dynamic_symbol(&self, name: &'static str) -> ResolvedModeLineSymbol {
         self.dynamic_symbols.borrow_mut().resolve(name)

@@ -33,6 +33,7 @@ impl BufferRelation {
 }
 
 pub(super) enum Access<'a> {
+    #[allow(dead_code)] // constructed only by cfg(test) split-state compatibility callers
     Snapshot,
     /// Constructed only for one native expansion. No Lisp may run with this
     /// borrow alive; eval_form remains the walker's sole Lisp boundary.

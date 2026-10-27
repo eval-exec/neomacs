@@ -122,10 +122,10 @@ impl ModeLineOutputScope {
         Ok(eval.mode_line_output_owner().enter(kind))
     }
 
-    pub(super) fn target(&self) -> super::ModeLineTarget<'_> {
+    pub(super) fn target(&self) -> super::StoredTarget<'_> {
         match self.owner.0.target.get() {
-            OutputKind::String => super::ModeLineTarget::String(ModeLineStringTarget(&self.owner)),
-            OutputKind::NoProperties => super::ModeLineTarget::NoProperties,
+            OutputKind::String => super::StoredTarget::String(ModeLineStringTarget(&self.owner)),
+            OutputKind::NoProperties => super::StoredTarget::NoProperties,
         }
     }
 }

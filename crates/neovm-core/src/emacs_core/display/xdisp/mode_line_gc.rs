@@ -2,9 +2,11 @@
 
 use super::{ModeLineRendered, Value};
 use crate::emacs_core::eval::{
-    push_scratch_gc_root, push_scratch_gc_root_slot, restore_scratch_gc_roots,
-    save_scratch_gc_roots, set_scratch_gc_root,
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
+
+#[cfg(test)]
+use crate::emacs_core::eval::{push_scratch_gc_root_slot, set_scratch_gc_root};
 
 // Keep the native root set and its borrowed rendered fields visible at walk
 // entry, including when STRING and DISPLAY share the collector.
@@ -105,11 +107,13 @@ impl ScratchRoots {
         push_scratch_gc_root(value);
     }
 
+    #[cfg(test)]
     #[inline]
     pub(super) fn slot(&self, value: Value) -> usize {
         push_scratch_gc_root_slot(value)
     }
 
+    #[cfg(test)]
     #[inline]
     pub(super) fn set(&self, slot: usize, value: Value) {
         set_scratch_gc_root(slot, value);

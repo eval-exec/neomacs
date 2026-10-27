@@ -81,12 +81,7 @@ fn numeric_padding_prefix_starts_inherited_display_run_at_first_text() {
     let mut field = ModeLineRendered::default();
     append_mode_line_numeric_segment(&mut field, &ModeLineRendered::default(), 5, 0);
     field.append_rendered(&ModeLineRendered::plain("A"));
-    field.apply_propertize_properties(
-        props,
-        &ModeLineTarget::Display {
-            columns: DisplayColumn::new(80),
-        },
-    );
+    field.apply_propertize_properties(props, &DisplayTarget::new(DisplayColumn::new(80)));
     assert_eq!(field.min_width_transitions.len(), 1);
     assert_eq!(field.min_width_transitions[0].output_start, 5);
     assert!(
@@ -109,12 +104,7 @@ fn numeric_padding_prefix_starts_inherited_display_run_at_first_text() {
         Some("outer".into())
     );
     let mut next = ModeLineRendered::plain("B");
-    next.apply_propertize_properties(
-        next_props,
-        &ModeLineTarget::Display {
-            columns: DisplayColumn::new(80),
-        },
-    );
+    next.apply_propertize_properties(next_props, &DisplayTarget::new(DisplayColumn::new(80)));
     field.append_rendered(&next);
     field.realize_display_min_width_transitions();
     assert_eq!(
@@ -137,12 +127,7 @@ fn numeric_padding_only_child_creates_no_inherited_display_run() {
     let next_props = width_props(&mut eval, 2, "next");
     let mut field = ModeLineRendered::default();
     append_mode_line_numeric_segment(&mut field, &ModeLineRendered::default(), 5, 0);
-    field.apply_propertize_properties(
-        props,
-        &ModeLineTarget::Display {
-            columns: DisplayColumn::new(80),
-        },
-    );
+    field.apply_propertize_properties(props, &DisplayTarget::new(DisplayColumn::new(80)));
     assert!(field.min_width_transitions.is_empty());
     assert!(
         field
@@ -151,12 +136,7 @@ fn numeric_padding_only_child_creates_no_inherited_display_run() {
             .is_none()
     );
     let mut next = ModeLineRendered::plain("B");
-    next.apply_propertize_properties(
-        next_props,
-        &ModeLineTarget::Display {
-            columns: DisplayColumn::new(80),
-        },
-    );
+    next.apply_propertize_properties(next_props, &DisplayTarget::new(DisplayColumn::new(80)));
     field.append_rendered(&next);
     field.realize_display_min_width_transitions();
     assert_eq!(
@@ -178,12 +158,7 @@ fn numeric_padding_gaps_keep_same_identity_and_survive_precision() {
     field.append_rendered(&ModeLineRendered::plain("B"));
     append_mode_line_numeric_segment(&mut field, &ModeLineRendered::default(), 4, 0);
     let mut field = field.slice_chars(7);
-    field.apply_propertize_properties(
-        props,
-        &ModeLineTarget::Display {
-            columns: DisplayColumn::new(80),
-        },
-    );
+    field.apply_propertize_properties(props, &DisplayTarget::new(DisplayColumn::new(80)));
     assert_eq!(
         field
             .min_width_transitions
@@ -197,12 +172,7 @@ fn numeric_padding_gaps_keep_same_identity_and_survive_precision() {
         field.min_width_transitions[1].run.width_spec
     );
     let mut next = ModeLineRendered::plain("C");
-    next.apply_propertize_properties(
-        next_props,
-        &ModeLineTarget::Display {
-            columns: DisplayColumn::new(80),
-        },
-    );
+    next.apply_propertize_properties(next_props, &DisplayTarget::new(DisplayColumn::new(80)));
     field.append_rendered(&next);
     field.realize_display_min_width_transitions();
     assert_eq!(
