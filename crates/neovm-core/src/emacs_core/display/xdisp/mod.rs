@@ -928,6 +928,7 @@ pub(crate) fn region_text_metrics_with_display(
     };
 
     let display_sym = Value::symbol("display");
+    let invisible_sym = Value::symbol("invisible");
     // GNU's `FETCH_BYTE (start_bpos) == '\n'`: a newline at FROM takes no place
     // on display, so the walk pretends to start at the next line's origin.
     let origin_is_newline = buf.emacs_byte_at_pos(range.from) == Some(b'\n');
@@ -961,6 +962,25 @@ pub(crate) fn region_text_metrics_with_display(
         // (see `load_overlay_strings`/`get_overlay_strings` in xdisp.c).  Each
         // contributes its own laid-out columns to the running line width.
         process_overlay_strings_at(eval, frame, buf, scan, &display_sym, &mut state);
+
+        // GNU's display iterator elides an `invisible` run
+        // (`handle_invisible_prop`, xdisp.c): the covered characters take no
+        // columns, and a spec element `(PROP . t)` shows one ellipsis glyph
+        // instead.  `org-string-width` depends on this -- a bracketed link's
+        // destination is hidden, so a clocktable cell measures the visible
+        // description rather than the raw markup -- and so do outlines and
+        // folded blocks.
+        if let Some((invisibility, run_end)) =
+            invisible_measure_run(eval, buf, scan, &invisible_sym, end)
+            && run_end > scan
+        {
+            if invisibility.shows_ellipsis() {
+                state.push_ellipsis();
+            }
+            state.last_code = None;
+            scan = run_end;
+            continue;
+        }
 
         // A `display` property (text property or overlay) whose value replaces
         // the text it covers -- a `(space ...)` stretch or an image -- defines
@@ -1181,6 +1201,13 @@ impl ScanState {
     /// End the row at the edge, as GNU's `MOVE_LINE_TRUNCATED` does.
     fn truncate_at_limit(&mut self) {
         self.line.truncated_at = self.edge.map(|edge| edge.x);
+    }
+
+    /// One ellipsis glyph for an ellipsis-bearing invisible run.  GNU shows a
+    /// single ellipsis for the whole run (`handle_invisible_prop`), and the
+    /// display table's default ellipsis is "...", three text cells.
+    fn push_ellipsis(&mut self) {
+        self.advance_columns(3.0);
     }
 
     /// Place a `display` spec's element on the current line, each in its own
@@ -1554,6 +1581,84 @@ fn display_element_run(
     };
 
     Some((element, run_end.min(region_end)))
+}
+
+/// GNU's invisible-run boundary for the measurement walk.
+///
+/// `handle_invisible_prop` (src/xdisp.c) advances the display iterator over
+/// text whose `invisible` property hides it under the buffer's
+/// `buffer-invisibility-spec`; the covered characters produce no glyphs, and
+/// a `(PROP . t)` element produces one ellipsis glyph instead.  The property
+/// resolves like `display_element_run` resolves `display` -- a non-nil
+/// overlay property wins, otherwise the text property applies -- and the run
+/// ends at the overlay's end or at the next property change.
+fn invisible_measure_run(
+    eval: &super::eval::Context,
+    buf: &Buffer,
+    pos: usize,
+    invisible_sym: &Value,
+    region_end: usize,
+) -> Option<(Invisibility, usize)> {
+    let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(pos));
+    let charpos1 = charpos0.get() as i64 + 1;
+    let mut overlay = None;
+    let mut prop = Value::NIL;
+    if let Some((value, ov)) = super::textprop::buffer_overlay_property_at_byte_pos(
+        eval.variables(),
+        &eval.buffers,
+        buf,
+        pos,
+        *invisible_sym,
+        None,
+    ) && !value.is_nil()
+    {
+        prop = value;
+        overlay = Some(ov);
+    }
+    if overlay.is_none()
+        && let Ok(value) = super::textprop::builtin_get_text_property_in_state(
+            eval.variables(),
+            &eval.buffers,
+            &[Value::fixnum(charpos1), *invisible_sym],
+        )
+        && !value.is_nil()
+    {
+        prop = value;
+    }
+    if prop.is_nil() {
+        return None;
+    }
+    // `buffer-invisibility-spec` is a DEFVAR_PER_BUFFER: read the measured
+    // buffer's own binding, and only after a hiding property is present.
+    let spec = eval
+        .variables()
+        .value_in_buffer_by_name(Some(buf), "buffer-invisibility-spec")
+        .unwrap_or(Value::NIL);
+    let invisibility = text_prop_means_invisible(prop, spec);
+    if !invisibility.hides_source() {
+        return None;
+    }
+    let run_end = if let Some(ov) = overlay {
+        buf.overlays
+            .overlay_end_emacs_byte_pos(ov)
+            .map(|p| p.get())
+            .unwrap_or(region_end)
+    } else {
+        let run_end_char1 = super::textprop::builtin_next_single_property_change_in_state(
+            eval.variables(),
+            &eval.buffers,
+            &[Value::fixnum(charpos1), *invisible_sym],
+        )
+        .ok()
+        .and_then(|v| match v.kind() {
+            ValueKind::Fixnum(n) => Some(n),
+            _ => None,
+        })
+        .unwrap_or_else(|| buf.accessible_char_region().end().get() as i64 + 1);
+        buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((run_end_char1 - 1).max(0) as usize))
+            .get()
+    };
+    Some((invisibility, run_end.min(region_end)))
 }
 
 /// The display extent of an image spec, in logical pixels.
@@ -10434,6 +10539,10 @@ pub(crate) fn builtin_buffer_text_pixel_size(
 #[cfg(test)]
 #[path = "tests/xdisp_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/text_measurement_invisible_test.rs"]
+mod text_measurement_invisible_tests;
 
 #[cfg(test)]
 #[path = "tests/mode_line_gc_roots_test.rs"]
