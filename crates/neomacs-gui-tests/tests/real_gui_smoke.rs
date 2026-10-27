@@ -126,6 +126,22 @@ fn static_xwidget_page_survives_renderer_device_replacement() {
     }
 }
 
+/// Whether the runtime under test was built with the Linux WPE backend.
+///
+/// The default production package enables Linux video but not `webview`:
+/// that policy lives in Cargo.toml's production capabilities and
+/// docs/building.md, and `.github/workflows/linux.yml` keeps even the
+/// webview *type-check* best-effort because a runner may not carry the WPE
+/// stack ("the wpe gate is verified locally where the WPE stack is
+/// installed").  A runtime without that feature has no backend to compose a
+/// page with, so the pixel proof is opt-in like NEOMACS_GUI_TEST_BACKEND:
+/// run `cargo xtask fresh-build --release --features webview` and set
+/// NEOMACS_GUI_TEST_WEBVIEW=1 to exercise it.  The oversized-glyph layout
+/// contract below runs either way.
+fn webview_runtime_expected() -> bool {
+    std::env::var_os("NEOMACS_GUI_TEST_WEBVIEW").is_some()
+}
+
 fn assert_oversized_xwidget_page_visible(name: &str, fixture: &str) -> Option<PathBuf> {
     if !cfg!(target_os = "linux") {
         eprintln!("skipping oversized xwidget composition regression; WPE is Linux-only");
@@ -227,12 +243,21 @@ fn assert_oversized_xwidget_page_visible(name: &str, fixture: &str) -> Option<Pa
         .pixels()
         .filter(|pixel| is_webview_magenta(pixel.0))
         .count();
-    assert!(
-        magenta_pixels >= 1024,
-        "the semantic xwidget glyph existed, but its deterministic magenta page \
-         was not visibly composed; found only {magenta_pixels} matching pixels in {}",
-        result.artifacts.png.display()
-    );
+    if webview_runtime_expected() {
+        assert!(
+            magenta_pixels >= 1024,
+            "the semantic xwidget glyph existed, but its deterministic magenta page \
+             was not visibly composed; found only {magenta_pixels} matching pixels in {}",
+            result.artifacts.png.display()
+        );
+    } else {
+        eprintln!(
+            "oversized xwidget layout contract passed; skipping the WPE pixel proof \
+             because NEOMACS_GUI_TEST_WEBVIEW is unset (the default Linux runtime is \
+             built without `webview`): {magenta_pixels} magenta pixels in {}",
+            result.artifacts.png.display()
+        );
+    }
     Some(result.artifacts.stdout)
 }
 

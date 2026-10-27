@@ -37,9 +37,9 @@
                 (error error-data)))
         neo-scroll-bar-oracle-results))
 
-;; Control: the opening state of a GUI frame.  Diverges today in the bar
-;; width (GNU takes the toolkit default, Neomacs the character width) and in
-;; the reported `scroll-bar-width' frame parameter.
+;; Control: the opening state of a GUI frame.  The bar width is the toolkit
+;; default (16), not the character cell, and `frame-parameter' reports that
+;; configured width even though the frame never named one.
 (neo-scroll-bar-oracle--record
  'default-gui
  (lambda () (neo-scroll-bar-oracle--state)))
@@ -52,9 +52,8 @@
    (redisplay t)
    (neo-scroll-bar-oracle--state)))
 
-;; Divergence: GNU reports the normalized `t' and sizes the horizontal bar
-;; from the toolkit default; Neomacs reports the raw `bottom' and sizes it
-;; from the character height.
+;; GNU normalizes the frame parameter to `t' and sizes the horizontal bar
+;; from the toolkit default (16), not the character height.
 (neo-scroll-bar-oracle--record
  'horizontal-bottom
  (lambda ()
@@ -62,9 +61,9 @@
    (redisplay t)
    (neo-scroll-bar-oracle--state)))
 
-;; Divergence: the same height parameter, read back.  GNU's
-;; `frame-scroll-bar-height' answers from the effective area; Neomacs' is a
-;; constant 0 stub while its window-level accessor answers 7.
+;; The same height parameter, read back: `frame-scroll-bar-height' answers
+;; from the effective horizontal area (7 here, FRAME_SCROLL_BAR_AREA_HEIGHT),
+;; while the frame parameter keeps reporting the configured 7.
 (neo-scroll-bar-oracle--record
  'scroll-bar-height-7
  (lambda ()
