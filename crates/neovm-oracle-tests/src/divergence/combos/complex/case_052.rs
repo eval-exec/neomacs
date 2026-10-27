@@ -54,7 +54,9 @@ fn div_cx52_subword_backward_word_then_delete_region_undo_mega() {
 #[test]
 fn div_cx52_process_env_coding_sentinel_exitcode_timer_window_narrow_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" exit-code (let ((p (make-process :name \"neo-cx52-te\" :command '(\"sh\" \"-c\" \"exit 9\") :sentinel (lambda (proc ev) (setq se ev)))) (accept-process-output p 2) (process-exit-status p))) (coding-val (with-temp-buffer (let ((coding-system-for-read 'utf-8-unix)) (call-process \"printf\" nil t nil \"%s\" \"café世界\")) (buffer-string))) (win-val (let ((buf (get-buffer-create \" *neo-cx52-w*\"))) (with-current-buffer buf (insert \"data\")) (set-window-buffer (selected-window) buf) (narrow-to-region 1 3) (let ((r (list (point-min) (point-max) (buffer-string))) (with-current-buffer buf (widen) r)))) (sit-for 0.01) (list timer-fired env-val exit-code coding-val win-val (if se (string-match \"code 9\" se) nil) (if se (string-match \"code 1\" se) nil))))""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" exit-code (let ((p (make-process :name \"neo-cx52-te\" :command '(\"sh\" \"-c\" \"exit 9\") :sentinel (lambda (proc ev) (setq se ev)))) (accept-process-output p 2) (process-exit-status p))) (coding-val (with-temp-buffer (let ((coding-system-for-read 'utf-8-unix)) (call-process \"printf\" nil t nil \"%s\" \"café世界\")) (buffer-string))) (win-val (let ((buf (get-buffer-create \" *neo-cx52-w*\"))) (with-current-buffer buf (insert \"data\")) (set-window-buffer (selected-window) buf) (narrow-to-region 1 3) (let ((r (list (point-min) (point-max) (buffer-string))) (with-current-buffer buf (widen) r)))) (sit-for 0.01) (list timer-fired env-val exit-code coding-val win-val (if se (string-match \"code 9\" se) nil) (if se (string-match \"code 1\" se) nil))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired se)

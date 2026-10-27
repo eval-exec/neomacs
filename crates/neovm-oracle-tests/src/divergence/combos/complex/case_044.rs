@@ -28,7 +28,8 @@ fn div_cx44_subword_transpose_words_then_undo() {
 #[test]
 fn div_cx44_process_exit_code_sentinel_buffer_content_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (\"done\" \"exited abnormally with code 9\\n\" 23)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (\"done\" \"exited abnormally with code 9\\n\" 23)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx44-pe*")) (se nil))
@@ -186,7 +187,9 @@ fn div_cx44_cl_loop_hash_destructuring_for_in_collect_max_mega() {
 #[test]
 fn div_cx44_process_send_region_filter_concat_hash_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK \"3527db1852640d13c8bfa31a198ca119d1ba8dc2599a6196c238fb350094d561\"""#]];
+    let expect = expect_test::expect![[
+        r#""OK \"3527db1852640d13c8bfa31a198ca119d1ba8dc2599a6196c238fb350094d561\"""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (received)
@@ -230,7 +233,9 @@ fn div_cx44_print_circle_gensym_propertized_quoted_struct_mega() {
 #[test]
 fn div_cx44_timer_idle_cancel_process_env_exitcode_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" env-result (let ((process-environment (cons \"NEO_CX44=env\" process-environment))) (string-trim (shell-command-to-string \"echo $NEO_CX44\"))) (exit-code (let ((p (make-process :name \"neo-cx44-te\" :command '(\"sh\" \"-c\" \"exit 11\"))) (accept-process-output p 2) (process-exit-status p)))) (list timer-fired idle-fired env-result exit-code))""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" env-result (let ((process-environment (cons \"NEO_CX44=env\" process-environment))) (string-trim (shell-command-to-string \"echo $NEO_CX44\"))) (exit-code (let ((p (make-process :name \"neo-cx44-te\" :command '(\"sh\" \"-c\" \"exit 11\"))) (accept-process-output p 2) (process-exit-status p)))) (list timer-fired idle-fired env-result exit-code))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired idle-fired)

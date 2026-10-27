@@ -184,7 +184,9 @@ fn div_cx59_weak_hash_all_weakness_types_eviction_marker_key_cons_value_mega() {
 #[test]
 fn div_cx59_subword_superword_toggle_word_ops_undo_marker_overlay_narrow_env_exitcode_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
@@ -309,7 +311,8 @@ fn div_cx59_json_deeply_nested_with_org_xml_dom_struct_hash_secure_print_circle_
 fn div_cx59_set_buffer_multibyte_undo_narrow_widen_marker_overlay_textprop_display_evaporate_env_exitcode_coding_timer_weak_hash_regex_replace_full_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"Changing multibyteness in a narrowed buffer\")""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (error \"Changing multibyteness in a narrowed buffer\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)

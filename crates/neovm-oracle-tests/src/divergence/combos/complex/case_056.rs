@@ -7,7 +7,9 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn div_cx56_process_filter_hash_env_exitcode_coding_narrow_overlay_textprop_evaporate_undo_display_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" exit-code (let ((p (make-process :name \"neo-cx56-ec\" :command '(\"sh\" \"-c\" \"exit 4\"))) (accept-process-output p 2) (process-exit-status p))) (buf (get-buffer-create \" *neo-cx56-fp*\")) (received nil))""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" exit-code (let ((p (make-process :name \"neo-cx56-ec\" :command '(\"sh\" \"-c\" \"exit 4\"))) (accept-process-output p 2) (process-exit-status p))) (buf (get-buffer-create \" *neo-cx56-fp*\")) (received nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
@@ -222,7 +224,8 @@ fn div_cx56_window_register_split_merge_narrow_widen_hscroll_vscroll_margins_fri
 fn div_cx56_set_buffer_multibyte_narrow_overlay_marker_textprop_display_evaporate_undo_env_exitcode_coding_weak_hash_full_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"Changing multibyteness in a narrowed buffer\")""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (error \"Changing multibyteness in a narrowed buffer\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
@@ -267,7 +270,9 @@ fn div_cx56_set_buffer_multibyte_narrow_overlay_marker_textprop_display_evaporat
 fn div_cx56_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_evaporate_superword_subword_env_exitcode_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
@@ -341,7 +346,9 @@ fn div_cx56_print_circle_gensym_struct_vector_propertized_escape_length_level_ba
 fn div_cx56_process_output_decode_encode_hash_overlay_narrow_textprop_evaporate_undo_display_cl_coerce_json_xml_env_exitcode_timer_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" exit-code (let ((p (make-process :name \"neo-cx56-ec\" :command '(\"sh\" \"-c\" \"exit 9\"))) (accept-process-output p 2) (process-exit-status p))) (buf (get-buffer-create \" *neo-cx56-po*\")))""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" exit-code (let ((p (make-process :name \"neo-cx56-ec\" :command '(\"sh\" \"-c\" \"exit 9\"))) (accept-process-output p 2) (process-exit-status p))) (buf (get-buffer-create \" *neo-cx56-po*\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -389,7 +396,9 @@ fn div_cx56_process_output_decode_encode_hash_overlay_narrow_textprop_evaporate_
 fn div_cx56_read_eval_backquote_destructuring_lexical_cl_loop_hash_secure_print_circle_env_exitcode_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val

@@ -181,8 +181,7 @@ fn divergence_timer_duration_functions() {
 fn divergence_process_list_length() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""OK (t t t t t)""#]];
+    let expect = expect_test::expect![[r#""OK (t t t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((before (length (process-list))))

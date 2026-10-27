@@ -253,7 +253,9 @@ fn div_cx58_json_xml_dom_struct_backquote_cl_loop_hash_secure_print_circle_mega(
 fn div_cx58_window_split_merge_marker_overlay_textprop_display_evaporate_undo_narrow_widen_env_exitcode_timer_weak_hash_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -305,7 +307,9 @@ fn div_cx58_window_split_merge_marker_overlay_textprop_display_evaporate_undo_na
 fn div_cx58_regex_casefold_replace_undo_superword_subword_kill_marker_overlay_narrow_display_textprop_env_exitcode_weak_hash_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
@@ -349,7 +353,9 @@ fn div_cx58_regex_casefold_replace_undo_superword_subword_kill_marker_overlay_na
 fn div_cx58_read_eval_backquote_destructuring_lexical_cl_loop_hash_secure_print_circle_env_exitcode_weak_hash_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val

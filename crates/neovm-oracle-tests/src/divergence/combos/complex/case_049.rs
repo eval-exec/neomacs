@@ -351,7 +351,9 @@ fn div_cx49_set_buffer_multibyte_then_char_syntax_high_codepoint() {
 #[test]
 fn div_cx49_process_send_region_filter_hash_coding_env_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (\"prop\" \"39e39120640e9fe47d08803bf8fc5150e47d38d7038484a1e2169120dead8dac\")""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"prop\" \"39e39120640e9fe47d08803bf8fc5150e47d38d7038484a1e2169120dead8dac\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (received env-val)

@@ -195,7 +195,8 @@ fn div_cx54_window_config_register_split_merge_narrow_widen_marker_overlay_textp
 fn div_cx54_set_buffer_multibyte_undo_redo_narrow_widen_marker_overlay_textprop_display_evaporate_env_exitcode_coding_timer_full_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"Changing multibyteness in a narrowed buffer\")""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (error \"Changing multibyteness in a narrowed buffer\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)

@@ -290,7 +290,9 @@ fn div_cx41_timer_cancel_process_exit_sentinel_mega() {
 #[test]
 fn div_cx41_process_send_string_filter_buffer_hash_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK \"0824a8c482dd5ab39c13f09fad098b0f1db4fbd9db8e67c38619dbf7ab1b3850\"""#]];
+    let expect = expect_test::expect![[
+        r#""OK \"0824a8c482dd5ab39c13f09fad098b0f1db4fbd9db8e67c38619dbf7ab1b3850\"""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (received)

@@ -119,7 +119,9 @@ fn div_cx50_json_dom_xml_roundtrip_multibyte_hash_deep_mega() {
 #[test]
 fn div_cx50_coding_env_process_sentinel_timer_undo_window_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (:t \"val\" 6 \"dfda11df060666bcc681d3c5086b4000b9153dda2f5d7918811e9bb571b88135\" 23)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (:t \"val\" 6 \"dfda11df060666bcc681d3c5086b4000b9153dda2f5d7918811e9bb571b88135\" 23)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired se)
@@ -325,7 +327,9 @@ fn div_cx50_subword_capitalize_backward_word_then_forward_marker() {
 #[test]
 fn div_cx50_process_send_region_narrowed_filter_hash_env_exitcode_coding_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" set-process-coding-system p 'utf-8-unix 'utf-8-unix)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" set-process-coding-system p 'utf-8-unix 'utf-8-unix)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (received env-val exit-code)

@@ -7,7 +7,9 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn div_cx55_superword_kill_upcase_undo_marker_overlay_narrow_textprop_display_evaporate_env_exitcode_timer_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -242,7 +244,9 @@ fn div_cx55_weak_hash_key_value_eviction_after_gc_cons_vector_marker_string_symb
 fn div_cx55_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_evaporate_env_exitcode_coding_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((env-val
