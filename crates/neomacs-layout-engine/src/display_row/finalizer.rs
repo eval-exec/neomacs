@@ -151,8 +151,7 @@ impl DisplayRowLineEndFinalizer {
             .iter()
             .find(|face| face.face_id == self.row_break_face_id)
             .map(|face| (face.metrics.line_height_px(), face.metrics.ascent_px()));
-        let (height_px, ascent_px) =
-            break_face_metrics.unwrap_or((row.height_px, row.ascent_px));
+        let (height_px, ascent_px) = break_face_metrics.unwrap_or((row.height_px, row.ascent_px));
         let height_px = height_px.max(1.0);
         let geometry = LineEndFillGeometry {
             content_x: 0.0,
