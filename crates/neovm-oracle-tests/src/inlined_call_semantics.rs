@@ -67,11 +67,11 @@ pub(crate) fn check(form: &str, expect: expect_test::Expect) {
 /// raising below 100. Both a dynamic binding and a global assignment reach
 /// the same call tree; unwinding restores a usable session.
 ///
-/// The finished T1.3/T3.1 base diverges: it exposes 99 after the floor raise,
-/// its JIT hook sees the outer frame, and this hook shape crashes Tier-0.
-/// Keep GNU's exact pin available with nextest's `--run-ignored all`.
+/// The raised floor is GNU's visible `DEFVAR_INT` write
+/// (`src/eval.c:2604-2608`): all four slots read 100 after the failed nesting
+/// attempt, on the JIT-compiled call paths this matrix warms as well as the
+/// interpreter. The signal hook sees the same frame as GNU.
 #[test]
-#[ignore = "inherited GNU divergence: depth-floor forwarding and depth signal-hook frames (Tier-0 crashes)"]
 fn oracle_inline_o5_depth_limit_bound_global_and_floor() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     check(
@@ -119,10 +119,9 @@ fn oracle_inline_o5_depth_limit_bound_global_and_floor() {
 
 /// O6: the adjacent boundaries of recursion through Bcall and Ffuncall
 /// in mapcar1 distinguish `error` from `excessive-lisp-nesting`.
-/// The finished T1.3/T3.1 base still exposes 99 after raising the floor to
-/// 100; retain the exact GNU pin until that inherited divergence is fixed.
+/// The 99 case observes GNU's visible floor: `max-lisp-eval-depth` reads 100
+/// after the depth signal unwinds.
 #[test]
-#[ignore = "inherited GNU divergence: Lisp-visible max-lisp-eval-depth remains 99 after floor raise"]
 fn oracle_inline_o6_mapc_depth_limit_uses_funcall_error() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     check(

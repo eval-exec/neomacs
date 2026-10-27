@@ -132,6 +132,47 @@ fn div_cx57_saveplace_save_restore() {
 }
 
 #[test]
+fn div_cx57_savehist_save_minibuffer() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (t (\"alpha\" \"beta\" \"gamma\") \"(setq minibuffer-history '(\\\"alpha\\\" \\\"beta\\\" \\\"gamma\\\"))\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(progn
+  (require 'savehist)
+  (let* ((dir (make-temp-file "savehist-probe" t))
+         (savehist-file (expand-file-name "history.el" dir))
+         (savehist-save-minibuffer-history t)
+         (savehist-additional-variables nil)
+         (savehist-autosave-interval nil)
+         (history-length 10))
+    (unwind-protect
+        (progn
+          (savehist-mode 1)
+          ;; GNU 31 fills this from real minibuffer sessions; the probe names
+          ;; the variable it saves, as the defcustom documents.
+          (setq savehist-minibuffer-history-variables '(minibuffer-history))
+          (setq minibuffer-history '("alpha" "beta" "gamma"))
+          (savehist-save)
+          (savehist-mode -1)
+          (setq minibuffer-history nil)
+          (savehist-mode 1)
+          (savehist-mode -1)
+          (list (file-exists-p savehist-file)
+                minibuffer-history
+                (with-temp-buffer
+                  (insert-file-contents savehist-file)
+                  (goto-char (point-min))
+                  (search-forward "(setq minibuffer-history" nil t)
+                  (buffer-substring-no-properties
+                   (line-beginning-position) (line-end-position)))))
+      (delete-directory dir t))))"##,
+        expect,
+    );
+}
+
+#[test]
 fn div_cx57_recentf_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

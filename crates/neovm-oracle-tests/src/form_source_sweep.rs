@@ -434,7 +434,7 @@ fn child_modules(path: &Path, src: &str) -> Vec<PathBuf> {
         if code[i] && bytes[i..].starts_with(path_needle) {
             if let Some(eq) = src[i..].find('=') {
                 let after = i + eq + 1;
-                let mut j = skip_ws(bytes, after);
+                let j = skip_ws(bytes, after);
                 if j < bytes.len() && bytes[j] == b'"' {
                     let start = j + 1;
                     if let Some(close) = src[start..].find('"') {
