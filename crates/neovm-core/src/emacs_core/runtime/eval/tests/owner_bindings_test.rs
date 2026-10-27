@@ -298,7 +298,7 @@ fn defvaralias_refuses_an_owner_bound_variable() {
 /// binding). Run with `--ignored` at N = 0 and N under callgrind; the
 /// per-pair cost is the difference over N.
 #[test]
-#[ignore = "callgrind micro; run explicitly"]
+#[cfg(feature = "perf-probes")]
 fn owner_let_pop_micro() {
     let mode = std::env::var("TOB_MICRO").unwrap_or_else(|_| "owner".into());
     let n: i64 = std::env::var("TOB_MICRO_N")

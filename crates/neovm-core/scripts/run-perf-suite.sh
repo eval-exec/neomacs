@@ -4,7 +4,7 @@
 # Runs every in-tree bench + profiler and COLLATES their output into ONE
 # timestamped report, so before/after numbers across future work stop being
 # hand-assembled. It is a THIN ORCHESTRATOR: it invokes the existing bench
-# scripts and the #[ignore] profiler tests UNCHANGED — each already builds in its
+# scripts and the perf-probes-gated profiler tests UNCHANGED — each already builds in its
 # own interleaved-A/B discipline (Hot-vs-Cold, plain-vs-pdump, AOT=0-vs-force),
 # so this script re-implements no bench and just sequences + labels them.
 #
@@ -38,12 +38,12 @@
 # DRY RUN — the exact commands this fans out to (copy/paste to run one in
 # isolation), from the repo root:
 #   scripts/run-jit-bench.sh
-#   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
+#   cargo nextest run -p neovm-core --features perf-probes --release \
 #     --no-fail-fast --no-capture -E 'test(/gc_drain_kinds_profile_(plain|pdump)/)'
-#   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
+#   cargo nextest run -p neovm-core --features perf-probes --release \
 #     --no-fail-fast --no-capture -E 'test(alloc_roundtrip_cost_probe)'
-#   cargo nextest run -p neovm-core --features vm-profile --release \
-#     --run-ignored ignored-only --no-fail-fast --no-capture \
+#   cargo nextest run -p neovm-core --features perf-probes,vm-profile --release \
+#     --no-fail-fast --no-capture \
 #     -E 'test(/vm_subr_mix_(byte_compile|fontlock)/)'
 #   scripts/run-aot-bench.sh [N]
 #
@@ -89,18 +89,18 @@ run_section "1. JIT micro-benches (scripts/run-jit-bench.sh)" \
 
 # 2. GC drain-kinds profile (plain-vs-pdump A/B; plain --release build).
 run_section "2. GC drain-kinds profile (plain + pdump)" \
-    cargo nextest run -p neovm-core --release --run-ignored ignored-only \
+    cargo nextest run -p neovm-core --features perf-probes --release \
     --no-fail-fast --no-capture -E 'test(/gc_drain_kinds_profile_(plain|pdump)/)'
 
 # 3. Alloc round-trip cost probe (reuses the section-2 --release build).
 run_section "3. Alloc round-trip cost probe (per size class)" \
-    cargo nextest run -p neovm-core --release --run-ignored ignored-only \
+    cargo nextest run -p neovm-core --features perf-probes --release \
     --no-fail-fast --no-capture -E 'test(alloc_roundtrip_cost_probe)'
 
 # 4. VM subr-mix profile (Op::Call vs CBSym ranking; own --features vm-profile build).
 run_section "4. VM subr-mix profile (byte-compile + font-lock)" \
-    cargo nextest run -p neovm-core --features vm-profile --release \
-    --run-ignored ignored-only --no-fail-fast --no-capture \
+    cargo nextest run -p neovm-core --features perf-probes,vm-profile --release \
+    --no-fail-fast --no-capture \
     -E 'test(/vm_subr_mix_(byte_compile|fontlock)/)'
 
 # 5. AOT verdict bench (real boot; needs a pre-built release neomacs).

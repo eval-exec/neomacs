@@ -266,7 +266,7 @@ fn local(shape: &str, n: usize) {
 /// Run directly from ONE preserved optimized libtest ELF, not through Cargo
 /// during measurement. See tmp/peer-p1rv/r7/TEST-PLAN.md and run-micro.py.
 #[test]
-#[ignore = "same-binary CPU12 Callgrind micro; run explicitly"]
+#[cfg(feature = "perf-probes")]
 fn rooted_slot_cons_micro() {
     let arm = std::env::var("R2_CONS_MICRO_ARM").unwrap_or_else(|_| "local".into());
     let shape = std::env::var("R2_CONS_MICRO_SHAPE").unwrap_or_else(|_| "resident".into());

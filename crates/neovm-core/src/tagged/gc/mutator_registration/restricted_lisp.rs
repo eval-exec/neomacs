@@ -4612,7 +4612,7 @@ fn tp_row_print(row: &TpRow, generational: bool, tsv: &mut Option<&mut String>) 
 /// NOT arbitrary-Lisp performance: the same restricted executor, one fixed
 /// list-building program per owner.
 #[test]
-#[ignore = "A8 throughput matrix; run pinned under the measurement lock"]
+#[cfg(feature = "perf-probes")]
 fn a8_throughput_rows() {
     let cells: usize = std::env::var("A8_TP_CELLS")
         .ok()

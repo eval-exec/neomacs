@@ -7,7 +7,7 @@
 # exercise neovm-core's JIT.
 #
 # Each bench (jit_bench_* in crates/neovm-core/src/emacs_core/runtime/eval/tests/mod.rs) is an
-# #[ignore] test that pins a Hot copy (set_hot_for_test) against a force-Cold copy
+# perf-probes-gated test that pins a Hot copy (set_hot_for_test) against a force-Cold copy
 # (set_cold_for_test) in ONE process to cancel CPU-frequency variance, warms once
 # (compile is outside the timed loop), then reports min-of-N steady-state run time
 # via a panic! whose message carries the BENCH line — so the tests "FAIL" by
@@ -21,6 +21,6 @@ cd "$(git rev-parse --show-toplevel)"
 # above); without it cargo builds and LTO-links every integration-test binary
 # of neovm-core before the name filter can exclude them — minutes of linking
 # for artifacts the run never executes.
-cargo nextest run -p neovm-core --features jit --release --lib \
-    --run-ignored ignored-only -E 'test(/jit_bench_/)' --no-fail-fast --no-capture \
+cargo nextest run -p neovm-core --features jit,perf-probes --release --lib \
+    -E 'test(/jit_bench_/)' --no-fail-fast --no-capture \
     "$@" 2>&1 | grep 'BENCH '

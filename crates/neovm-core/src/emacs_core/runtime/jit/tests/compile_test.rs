@@ -6179,10 +6179,11 @@ fn jit_matches_interpreter_with_args() {
 // serve as the oracle for the slow path.
 
 /// Phase-8 micro-benchmark: the hot fixnum countdown loop, Tier 0 vs JIT.
-/// `#[ignore]`d (timing does not belong in CI); run explicitly, in release:
-/// `cargo nextest run --cargo-profile release --features jit --run-ignored all jit_bench`
+/// Compiled only under the `perf-probes` feature (timing does not belong in
+/// CI); run explicitly, in release:
+/// `cargo nextest run -p neovm-core --release --features jit,perf-probes jit_bench`
 #[test]
-#[ignore = "manual perf measurement; run in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_countdown_loop() {
     use crate::emacs_core::bytecode::Vm;
     use crate::emacs_core::eval::Context;
@@ -6247,7 +6248,7 @@ fn jit_bench_countdown_loop() {
 /// process. The same Elisp workloads for GNU live in scripts/mir-loop-bench.el.
 /// Compilation and warmup are excluded; alternate order and report medians.
 #[test]
-#[ignore = "manual perf measurement; pin to an idle core"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_mir_loops_against_baseline() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::SymId;

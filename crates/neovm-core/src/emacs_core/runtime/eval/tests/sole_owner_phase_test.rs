@@ -62,7 +62,7 @@ fn sole_owner_plain_tokens_allow_ordinary_activation_transport() {
 }
 
 #[test]
-#[ignore = "compiles separate fixtures; run explicitly after reviewing captured diagnostics"]
+#[cfg(feature = "contract-fixtures")]
 fn sole_owner_compile_contracts() {
     let cases = trybuild::TestCases::new();
     cases.pass("src/emacs_core/runtime/eval/tests/sole_owner_pass/*.rs");

@@ -15216,7 +15216,7 @@ fn exec_path_dirs_empty_when_path_unset() {
 ///   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
 ///     --no-capture -E 'test(alloc_class_profile_replay_nadvice)'
 #[test]
-#[ignore = "profiling aid; run explicitly in release with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn alloc_class_profile_replay_nadvice() {
     use crate::tagged::gc::alloc_probe;
     crate::test_utils::init_test_tracing();

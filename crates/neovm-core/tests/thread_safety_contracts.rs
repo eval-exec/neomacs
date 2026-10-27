@@ -69,7 +69,7 @@ impl FlowRepresentation {
 }
 
 #[test]
-#[ignore = "compiles separate fixtures; run explicitly with the light gates"]
+#[cfg(feature = "contract-fixtures")]
 fn thread_safety_compile_contracts() {
     let cases = trybuild::TestCases::new();
     let target = FixtureTarget::current();

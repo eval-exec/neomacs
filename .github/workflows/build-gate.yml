@@ -91,6 +91,13 @@ jobs:
         if: matrix.label == 'linux-x86_64'
         run: cargo check -p neomacs --no-default-features
 
+      # The perf/measurement probes and trybuild contract suites are compiled
+      # out of the default test suite (no #[ignore] anywhere); keep the opt-in
+      # feature sets building so those tools cannot rot.
+      - name: cargo check opt-in perf and contract test features
+        if: matrix.label == 'linux-x86_64'
+        run: cargo check -p neovm-core --tests --features perf-probes,contract-fixtures
+
       - name: Test SQLite-disabled capability surface
         if: matrix.label == 'linux-x86_64'
         run: >-

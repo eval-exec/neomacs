@@ -1120,7 +1120,7 @@ fn a8_latency_native_owner_shape() {
 
 /// The full A8 latency matrix (measurement runs use `--ignored`).
 #[test]
-#[ignore = "A8 full latency matrix; minutes of wall time"]
+#[cfg(feature = "perf-probes")]
 fn a8_latency_full() {
     let rounds = full_rounds();
     let tsv = tsv_dir();

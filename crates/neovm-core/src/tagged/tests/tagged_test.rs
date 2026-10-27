@@ -667,7 +667,7 @@ fn debug_format() {
 ///   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
 ///     --no-capture -E 'test(alloc_roundtrip_cost_probe)'
 #[test]
-#[ignore = "profiling aid; run explicitly in release with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn alloc_roundtrip_cost_probe() {
     use crate::heap_types::LispString;
     use crate::tagged::gc::TaggedHeap;

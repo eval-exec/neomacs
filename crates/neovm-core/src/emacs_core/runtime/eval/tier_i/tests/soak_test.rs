@@ -79,7 +79,7 @@ fn soak_on_gnu_sources_prints_what_the_tree_walker_prints() {
 /// test binary.  `cargo nextest run -p neovm-core --run-ignored only -E
 /// 'test(/tier_i_bench_workload/)'` with the variables set.
 #[test]
-#[ignore = "a measurement harness, run by hand"]
+#[cfg(feature = "perf-probes")]
 fn tier_i_bench_workload() {
     crate::test_utils::init_test_tracing();
     let mode = crate::emacs_core::eval::parse_tier_i_knob(

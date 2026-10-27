@@ -2591,8 +2591,8 @@ impl TaggedHeap {
 /// counts, a size-class histogram over TOTAL object bytes (fixed struct +
 /// separately-allocated payload storage, via `object_bytes_from_header`),
 /// per-kind byte totals, and the peak `non_cons_object_addrs` population.
-/// Compiled ONLY under `cfg(test)` (the consuming probes are in-crate
-/// `#[ignore]`d tests), so production builds carry zero instrumentation.
+/// Compiled ONLY under `cfg(test)` (the consuming probes are behind the
+/// `perf-probes` feature), so production builds carry zero instrumentation.
 /// Global statics are correct here because nextest runs each probe in its own
 /// process, so the counters observe exactly one workload.
 #[cfg(test)]

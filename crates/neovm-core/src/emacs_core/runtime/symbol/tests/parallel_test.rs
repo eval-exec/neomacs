@@ -112,7 +112,6 @@ fn p3sym_symbol_layout_stays_at_b135_offsets() {
 /// Miri jobs. Never execute these under an ordinary test runner.
 #[cfg(miri)]
 #[test]
-#[ignore = "negative Miri control; process must reject invalid provenance"]
 fn p3sym_miri_negative_exclusive_aggregate_reborrow() {
     fn violate(ob: &mut Obarray, backing: &SymbolBacking, id: SymId) {
         let _ = unsafe { backing.classify(id) };
@@ -132,7 +131,6 @@ fn p3sym_miri_negative_exclusive_aggregate_reborrow() {
 
 #[cfg(miri)]
 #[test]
-#[ignore = "negative Miri control; process must reject freed World backing"]
 fn p3sym_miri_negative_backing_outlives_owner() {
     let mut ob = Obarray::new();
     let id = intern("p3sym-miri-negative-owner");

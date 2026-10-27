@@ -19646,7 +19646,7 @@ fn jit_bench_big_body_value(tier: BenchTier) -> Value {
 /// process-per-test makes the in-test set reliable).
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_big_body_matcher_shape() {
     crate::test_utils::init_test_tracing();
     // SAFETY: single-threaded test process; set before any JIT dispatch.
@@ -19726,7 +19726,7 @@ fn jit_bench_min(
 /// is free of cross-process CPU-frequency variance.
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_fib() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -19751,7 +19751,7 @@ fn jit_bench_fib() {
 
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_loop() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -19830,7 +19830,7 @@ fn jit_bench_call_bound_caller(tier: BenchTier) -> Value {
 
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_call_bound_loop() {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
@@ -19938,7 +19938,7 @@ fn jit_bench_builtin_bound_caller(tier: BenchTier) -> Value {
 
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_builtin_bound_loop() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -19972,7 +19972,7 @@ fn jit_bench_builtin_bound_loop() {
 /// no-warmup throughput the prewarm delivers from call 1).
 #[cfg(all(feature = "jit", target_os = "linux"))]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn aot_bench_compute_loop() {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
@@ -20099,7 +20099,7 @@ fn aot_bench_compute_loop() {
 /// native+spec faster) is the ship/defer signal.
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_call_heavy_fontlock_reweight() {
     use crate::emacs_core::bytecode::opcode::Op;
     use crate::emacs_core::jit::compile;
@@ -20267,7 +20267,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
 /// shows no meaningful win, the re-weight cannot help the realistic shape either.
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_spec_call_dispatch_upper_bound() {
     use crate::emacs_core::jit::compile;
     crate::test_utils::init_test_tracing();
@@ -20365,7 +20365,7 @@ fn jit_bench_spec_call_dispatch_upper_bound() {
 /// in this body, so its `.so` dlopens in the unit-test binary) + inject + force.
 #[cfg(all(feature = "jit", target_os = "linux"))]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn aot_bench_real_algorithm() {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
@@ -20586,7 +20586,7 @@ fn aot_bench_real_algorithm() {
 ///     --run-ignored ignored-only --no-capture vm_op_mix_loop
 #[cfg(all(feature = "jit", feature = "vm-profile"))]
 #[test]
-#[ignore = "profiling aid; run explicitly with --features vm-profile --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn vm_op_mix_loop() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -20617,7 +20617,7 @@ fn vm_op_mix_loop() {
 ///     --run-ignored ignored-only --no-capture vm_op_mix_real_elisp
 #[cfg(feature = "vm-profile")]
 #[test]
-#[ignore = "profiling aid; run explicitly with --features vm-profile --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn vm_op_mix_real_elisp() {
     crate::test_utils::init_test_tracing();
     // SAFETY: nextest runs each test in its own process; this write happens before
@@ -20655,7 +20655,7 @@ fn vm_op_mix_real_elisp() {
 ///     --run-ignored ignored-only --no-capture vm_subr_mix_byte_compile
 #[cfg(feature = "vm-profile")]
 #[test]
-#[ignore = "profiling aid; run explicitly with --features vm-profile --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn vm_subr_mix_byte_compile() {
     crate::test_utils::init_test_tracing();
     // SAFETY: nextest runs each test in its own process; this write happens
@@ -20707,7 +20707,7 @@ fn vm_subr_mix_byte_compile() {
 ///     --run-ignored ignored-only --no-capture vm_subr_mix_fontlock
 #[cfg(feature = "vm-profile")]
 #[test]
-#[ignore = "profiling aid; run explicitly with --features vm-profile --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn vm_subr_mix_fontlock() {
     use crate::emacs_core::bytecode::vm::vm_profile;
     crate::test_utils::init_test_tracing();
@@ -20850,7 +20850,7 @@ fn vm_subr_mix_fontlock() {
 ///     --run-ignored ignored-only --no-capture -E 'test(jit_compile_time_profile)'
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "profiling aid; run explicitly in release with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn jit_compile_time_profile() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
@@ -20992,7 +20992,7 @@ fn vm_bench_min_call(
 ///   cargo nextest run -p neovm-core --release \
 ///     --run-ignored ignored-only --no-capture -E 'test(vm_bench_call_dispatch)'
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn vm_bench_call_dispatch_closure_sym_vs_val() {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
@@ -21095,7 +21095,7 @@ fn vm_bench_varref_loop_caller(var_sym: Value) -> Value {
 ///   cargo nextest run -p neovm-core --release \
 ///     --run-ignored ignored-only --no-capture -E 'test(vm_bench_varref)'
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn vm_bench_varref_localized_vs_plain() {
     crate::test_utils::init_test_tracing();
     // SAFETY: nextest per-process isolation; set before the VM reads the gate.
@@ -21363,7 +21363,7 @@ fn jit_bench_cbsym_value(tier: BenchTier) -> Value {
 
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_cbsym() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -21428,7 +21428,7 @@ fn jit_bench_cbsym_goto_value(tier: BenchTier) -> Value {
 
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_cbsym_goto() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -21497,7 +21497,7 @@ fn jit_bench_subr_value(tier: BenchTier) -> Value {
 
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_subr() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -21577,7 +21577,7 @@ fn jit_bench_many_value(tier: BenchTier) -> Value {
 
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_many() {
     crate::test_utils::init_test_tracing();
     // Call-DOMINATED body (3 Many calls vs 2 arith) — NotProfitable by default,
@@ -21659,7 +21659,7 @@ fn jit_bench_pred_value(tier: BenchTier) -> Value {
 
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_pred() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -21724,7 +21724,7 @@ fn jit_bench_cons_value(tier: BenchTier) -> Value {
 
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_cons() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
@@ -24563,7 +24563,7 @@ fn bench_jit_vs_vm_loop() {
 /// under debug therefore wins in release a fortiori.
 #[cfg(feature = "jit")]
 #[test]
-#[ignore = "manual perf measurement; A/B via NEOVM_JIT_THRESHOLD, one process per value"]
+#[cfg(feature = "perf-probes")]
 fn jit_bench_threshold_economics() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::bytecode::ByteCodeFunction;
@@ -25290,7 +25290,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
 ///   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
 ///     --no-capture -E 'test(gc_drain_kinds_profile_pdump)'
 #[test]
-#[ignore = "profiling aid; run explicitly in release with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn gc_drain_kinds_profile_pdump() {
     gc_drain_kinds_profile(true, 400);
 }
@@ -25300,7 +25300,7 @@ fn gc_drain_kinds_profile_pdump() {
 ///   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
 ///     --no-capture -E 'test(gc_drain_kinds_profile_plain)'
 #[test]
-#[ignore = "profiling aid; run explicitly in release with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn gc_drain_kinds_profile_plain() {
     gc_drain_kinds_profile(false, 400);
 }
@@ -25411,7 +25411,7 @@ fn alloc_class_profile(pdump: bool) {
 ///   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
 ///     --no-capture -E 'test(alloc_class_profile_pdump)'
 #[test]
-#[ignore = "profiling aid; run explicitly in release with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn alloc_class_profile_pdump() {
     alloc_class_profile(true);
 }
@@ -25421,7 +25421,7 @@ fn alloc_class_profile_pdump() {
 ///   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
 ///     --no-capture -E 'test(alloc_class_profile_plain)'
 #[test]
-#[ignore = "profiling aid; run explicitly in release with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn alloc_class_profile_plain() {
     alloc_class_profile(false);
 }
@@ -25468,7 +25468,7 @@ fn bc_isolation_phase(ev: &mut Context, label: &str, defun: &str, call: &str, ou
 ///   cargo nextest run -p neovm-core --run-ignored ignored-only \
 ///     --no-capture -E 'test(alloc_probe_bytecode_hash_isolation)'
 #[test]
-#[ignore = "profiling aid; run explicitly with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn alloc_probe_bytecode_hash_isolation() {
     use crate::tagged::gc::alloc_probe;
     crate::test_utils::init_test_tracing();

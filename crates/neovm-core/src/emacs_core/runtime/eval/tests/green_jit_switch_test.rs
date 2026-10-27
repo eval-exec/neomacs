@@ -1209,7 +1209,7 @@ fn green_jit_switch_preadmission_blv_pointer_diverts_after_peer_kill_and_remake(
 /// Same driver as the 3e JIT-off baseline, with a compiled worker loop and a
 /// native witness that prevents an interpreter fallback from passing.
 #[test]
-#[ignore = "callgrind micro; run explicitly"]
+#[cfg(feature = "perf-probes")]
 fn green_yield_jit_switch_micro() {
     let n: usize = std::env::var("TGY_MICRO_N")
         .ok()
@@ -1304,7 +1304,7 @@ fn worker_micro(context: &mut Context) -> EvalResult {
 /// Exact Lisp workload and driver of the 3e baseline, with JIT enabled.
 /// The separate compiled-loop micro above also proves a native frame survives.
 #[test]
-#[ignore = "callgrind micro; run explicitly"]
+#[cfg(feature = "perf-probes")]
 fn green_yield_jit_enabled_switch_micro() {
     let n: usize = std::env::var("TGY_MICRO_N")
         .ok()
@@ -1634,14 +1634,14 @@ fn throughput_parameters() -> (usize, usize) {
 }
 
 #[test]
-#[ignore = "callgrind throughput micro; run explicitly"]
+#[cfg(feature = "perf-probes")]
 fn green_jit_two_thread_throughput_micro() {
     let (n, stride) = throughput_parameters();
     run_throughput(ThreadingMode::Green, n, stride);
 }
 
 #[test]
-#[ignore = "callgrind throughput micro; run explicitly"]
+#[cfg(feature = "perf-probes")]
 fn sim_jit_two_loop_throughput_micro() {
     let (n, stride) = throughput_parameters();
     run_throughput(ThreadingMode::Sim, n, stride);

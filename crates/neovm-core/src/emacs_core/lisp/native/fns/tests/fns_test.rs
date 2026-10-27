@@ -1485,7 +1485,7 @@ fn eip_bench_ns(rounds: u32, inner: u32, mut f: impl FnMut() -> bool) -> f64 {
 ///   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
 ///     --no-capture equal_including_properties_bench
 #[test]
-#[ignore = "micro benchmark; run explicitly in release with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn equal_including_properties_bench() {
     use crate::buffer::text_props::TextPropertyTable;
     use crate::emacs_core::value::{
@@ -1575,7 +1575,7 @@ fn equal_including_properties_bench() {
 ///   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
 ///     --no-capture equal_including_properties_byte_compile_macro_bench
 #[test]
-#[ignore = "macro benchmark; run explicitly in release with --no-capture"]
+#[cfg(feature = "perf-probes")]
 fn equal_including_properties_byte_compile_macro_bench() {
     crate::test_utils::init_test_tracing();
     // SAFETY: nextest runs each test in its own process; set before the VM

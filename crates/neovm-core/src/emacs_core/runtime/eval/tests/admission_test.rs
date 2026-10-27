@@ -387,7 +387,7 @@ fn rss_kib() -> u64 {
 /// projects, how many own a descriptor, its time and memory. Run inside
 /// `tmp/v10x/sandbox-run.sh` with `--run-ignored only`.
 #[test]
-#[ignore = "inventory probe on the loaded image; run explicitly, sandboxed"]
+#[cfg(feature = "perf-probes")]
 fn admission_inventory_probe() {
     use crate::emacs_core::symbol::AdmissionPlanCell;
 

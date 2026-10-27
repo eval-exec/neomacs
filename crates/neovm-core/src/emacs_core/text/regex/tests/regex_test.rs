@@ -2964,11 +2964,11 @@ fn test_lazy_interval() {
 // regex_bench_* — regex engine recon macro-benchmarks
 // =========================================================================
 //
-// Mirrors the `jit_bench_*` pattern in `eval_test.rs`: `#[ignore]`d
-// bench-style tests that warm up, take min-of-N, and report by panicking
-// with a `BENCH ...` message. Run in release:
+// Mirrors the `jit_bench_*` pattern in `eval_test.rs`: bench-style tests
+// compiled only under the `perf-probes` feature; they warm up, take min-of-N,
+// and report by panicking with a `BENCH ...` message. Run in release:
 //
-//   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
+//   cargo nextest run -p neovm-core --release --features perf-probes \
 //       -E 'test(/regex_bench/)' --no-fail-fast --test-threads 1
 //
 // The `engine` benches drive `regex_emacs::re_search` directly on a byte
@@ -3102,7 +3102,7 @@ fn regex_syntax_class_fusion() {
 /// each plus the speedup.  Fused must be at least as fast; match counts must
 /// be identical (proving semantics-preserving).
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_syntax_fusion_ab() {
     crate::test_utils::init_test_tracing();
     let hay = regex_bench_haystack();
@@ -3188,7 +3188,7 @@ fn regex_bench_engine_scan(cp: &regex_emacs::CompiledPattern, text: &[u8]) -> us
 ///   - the same literal forced through the GNU-bytecode engine (`Exactn`),
 ///   - both case-fold variants.
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_literal_100kb() {
     crate::test_utils::init_test_tracing();
     let hay = regex_bench_haystack();
@@ -3245,7 +3245,7 @@ fn regex_bench_literal_100kb() {
 /// font-lock matcher over the haystack in the `(while (re-search-forward))`
 /// shape. This is the per-fontification cost with zero elisp overhead.
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_fontlock_engine() {
     crate::test_utils::init_test_tracing();
     let hay = regex_bench_haystack();
@@ -3319,7 +3319,7 @@ fn regex_bench_fontlock_engine() {
 /// per-pattern + TOTAL time for both and asserts the MATCH COUNT is
 /// identical (semantics unchanged).  Run explicitly in release.
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_pike_vs_backtracker() {
     crate::test_utils::init_test_tracing();
     let hay = regex_bench_haystack();
@@ -3384,7 +3384,7 @@ fn regex_bench_pike_vs_backtracker() {
 /// vs a `\_>`-terminated pattern (uses_syntax → fastmap disabled →
 /// `re_match` attempted at every char position).
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_fastmap_on_vs_off() {
     crate::test_utils::init_test_tracing();
     let hay = regex_bench_haystack();
@@ -3418,7 +3418,7 @@ fn regex_bench_fastmap_on_vs_off() {
 /// backtracker — anchored at position 0 (`looking-at` shape) so the cost
 /// is the failure-stack churn itself, not the outer scan loop.
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_backtracking() {
     crate::test_utils::init_test_tracing();
     let n = 2048usize;
@@ -3457,7 +3457,7 @@ fn regex_bench_backtracking() {
 /// pattern chars U+2018/U+2019) and a case-folded keyword alternation,
 /// both over the multibyte haystack.
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_casefold_multibyte() {
     crate::test_utils::init_test_tracing();
     let hay = regex_bench_haystack();
@@ -3499,7 +3499,7 @@ fn regex_bench_casefold_multibyte() {
 /// (a cache miss) vs the LRU cache hit path (`compile_lisp_pattern_with_posix`),
 /// vs one engine scan — how hot is compilation relative to matching?
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_compile_cost() {
     crate::test_utils::init_test_tracing();
     let mut report = String::from("BENCH regex compile cost:\n");
@@ -3550,7 +3550,7 @@ fn regex_bench_elisp_escape(text: &str) -> String {
 /// keystroke at the middle) — `with_buffer_emacs_bytes` then copies the
 /// whole accessible region on every `re-search-forward` call (audit #17).
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_fontlock_elisp() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::emacs_core::eval::Context::new();
@@ -3619,7 +3619,7 @@ fn regex_bench_fontlock_elisp() {
 /// small string (per-call fixed costs: cache probe, pattern copy, match-data
 /// conversion) vs a full-scan miss over the big string (throughput).
 #[test]
-#[ignore = "macro benchmark; run explicitly in release"]
+#[cfg(feature = "perf-probes")]
 fn regex_bench_string_match_elisp() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::emacs_core::eval::Context::new();
@@ -4235,7 +4235,7 @@ mod literal_search_linear_equivalence {
 ///   cargo nextest run -p neovm-core -E 'test(match_publish_read_stats_probe)' --run-ignored all --no-capture
 #[test]
 #[cfg(debug_assertions)]
-#[ignore = "measurement probe, not a correctness test"]
+#[cfg(feature = "perf-probes")]
 fn match_publish_read_stats_probe() {
     use std::sync::atomic::Ordering;
     let mut eval = crate::test_utils::runtime_startup_context();

@@ -954,7 +954,7 @@ fn probe_leaf(kind: StoreKind, context: &Context) -> CompiledLeaf {
 }
 
 #[test]
-#[ignore = "supplementary instruction slopes; runner controls kind/count/observation"]
+#[cfg(feature = "perf-probes")]
 fn gen0_observed_collection_store_cost_probe() {
     let name = std::env::var("FX1_STORE_KIND").expect("FX1_STORE_KIND");
     let kind = probe_kind(&name);
