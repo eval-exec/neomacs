@@ -6,7 +6,7 @@ use crate::tagged::header::GcHeader;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Age {
+pub(super) enum Age {
     Young,
     Old,
     Missing,
@@ -34,31 +34,32 @@ struct YoungPublication {
     payload: YoungPayload,
 }
 fn ages(heap: &TaggedHeap, graph: GraphWords) -> [Age; 4] {
-    graph.0.map(|word| {
-        let value = TaggedValue::from_bits(word.0);
-        if !heap.owns_heap_value_for_test(value) {
-            return Age::Missing;
-        }
-        if value.is_cons() {
-            match heap.old_cons_trailer(value) {
-                Some((trailer, index)) => match trailer.is_old(index) {
-                    true => Age::Old,
-                    false => Age::Young,
-                },
-                None => Age::Missing,
-            }
-        } else {
-            let Some(header) = value.gc_heap_ptr() else {
-                return Age::Missing;
-            };
-            // SAFETY: the real stop retains the heap; the membership check
-            // above proved this exact noncons allocation live before this read.
-            match unsafe { &*header.cast::<GcHeader>() }.tenured {
+    graph.0.map(|word| age(heap, word))
+}
+pub(super) fn age(heap: &TaggedHeap, word: WordIdentity) -> Age {
+    let value = TaggedValue::from_bits(word.0);
+    if !heap.owns_heap_value_for_test(value) {
+        return Age::Missing;
+    }
+    if value.is_cons() {
+        match heap.old_cons_trailer(value) {
+            Some((trailer, index)) => match trailer.is_old(index) {
                 true => Age::Old,
                 false => Age::Young,
-            }
+            },
+            None => Age::Missing,
         }
-    })
+    } else {
+        let Some(header) = value.gc_heap_ptr() else {
+            return Age::Missing;
+        };
+        // SAFETY: the real stop retains the heap; the membership check
+        // above proved this exact noncons allocation live before this read.
+        match unsafe { &*header.cast::<GcHeader>() }.tenured {
+            true => Age::Old,
+            false => Age::Young,
+        }
+    }
 }
 fn rebind(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>) -> YoungCredit {
     let (legacy, peer) = {

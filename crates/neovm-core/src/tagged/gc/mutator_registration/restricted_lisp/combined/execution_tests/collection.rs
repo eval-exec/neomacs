@@ -1,5 +1,6 @@
 //! Real independent owners, exact root families, and completed full jobs.
 //! Counterfactual omissions inspect copied ledgers, never a damaged live heap.
+mod fresh;
 mod minor_adapter;
 
 use super::*;
@@ -24,7 +25,7 @@ impl Cohort {
         }
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Role {
     Publisher,
     Caller,
@@ -43,19 +44,28 @@ enum Scenario {
     Noop,
     Unwind,
     MinorAdapter,
+    Fresh,
+    FreshUnwind,
+    FreshNoop,
 }
 enum GraphSetup {
     Empty,
-    Ready(GraphWords),
+    Ready(GraphWords, crate::emacs_core::intern::SymId),
 }
 #[derive(Clone, Copy)]
 enum Command {
     Advance,
     Repark,
     Finish,
+    PrepareFresh,
+    CheckFreshAnswer,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OwnerId(u64);
+enum Ready {
+    Parked(OwnerId),
+    Failed(OwnerId),
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Retention {
     Live,
@@ -80,6 +90,7 @@ struct Ledger {
     tables: Vec<WordIdentity>,
     owners: Vec<(OwnerId, Vec<WordIdentity>)>,
     other_work: Vec<String>,
+    young_owners: Vec<OwnerId>,
 }
 impl Ledger {
     fn without_world(&self) -> impl Iterator<Item = &WordIdentity> {
@@ -174,6 +185,9 @@ fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
             .with_owner_image(key, |image| {
                 image.visit_work(|work| match work {
                     PublishedGcWork::Root(word) => roots.push(WordIdentity(word.value().bits())),
+                    PublishedGcWork::YoungBlock(_) => {
+                        result.young_owners.push(OwnerId(key.owner()))
+                    }
                     PublishedGcWork::Remembered(_)
                     | PublishedGcWork::ConsWrite(_)
                     | PublishedGcWork::MappedOwner(_)
@@ -181,8 +195,9 @@ fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
                     | PublishedGcWork::BlackRegion(_)
                     | PublishedGcWork::SymbolPreimage(_)
                     | PublishedGcWork::SnapshottedOwner(_)
-                    | PublishedGcWork::StringPreimageAddress(_)
-                    | PublishedGcWork::YoungBlock(_) => result.other_work.push(format!("{work:?}")),
+                    | PublishedGcWork::StringPreimageAddress(_) => {
+                        result.other_work.push(format!("{work:?}"))
+                    }
                 });
             })
             .unwrap();
@@ -257,6 +272,9 @@ fn clear_operands() -> Vec<CombinedInstruction> {
 fn program(role: Role, scenario: Scenario) -> CombinedTape {
     match scenario {
         Scenario::Transfer => {}
+        Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
+            return fresh::program(role);
+        }
         Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
             return tape(vec![CombinedInstruction::Safepoint; 4]);
         }
@@ -372,23 +390,23 @@ fn cohort(
             let name = TaggedValue::string(format!("p3sym-c6-cohort-{}", nonce.0));
             let body = TaggedValue::cons(name, TaggedValue::NIL);
             let args = TaggedValue::cons(TaggedValue::NIL, body);
-            let definition = TaggedValue::cons(
-                TaggedValue::from_sym_id(crate::emacs_core::intern::intern("lambda")),
-                args,
-            );
+            let lambda = crate::emacs_core::intern::intern("lambda");
+            let definition = TaggedValue::cons(TaggedValue::from_sym_id(lambda), args);
             obarray.seed_value_id(ids[0], definition);
             for id in ids {
                 obarray.clear_function_silent_id(*id);
             }
-            *setup.borrow_mut() = GraphSetup::Ready(GraphWords(
-                [definition, args, body, name].map(|value| WordIdentity(value.bits())),
-            ));
+            *setup.borrow_mut() = GraphSetup::Ready(
+                GraphWords([definition, args, body, name].map(|value| WordIdentity(value.bits()))),
+                lambda,
+            );
         },
         |era, ids| {
-            let graph = match std::mem::replace(&mut *setup.borrow_mut(), GraphSetup::Empty) {
-                GraphSetup::Empty => panic!("missing serial cohort graph"),
-                GraphSetup::Ready(graph) => graph,
-            };
+            let (graph, lambda) =
+                match std::mem::replace(&mut *setup.borrow_mut(), GraphSetup::Empty) {
+                    GraphSetup::Empty => panic!("missing serial cohort graph"),
+                    GraphSetup::Ready(graph, lambda) => (graph, lambda),
+                };
             let handles: Vec<_> = ids
                 .into_iter()
                 .map(|id| era.admit_plain_symbol(id).unwrap())
@@ -408,6 +426,8 @@ fn cohort(
                     .collect(),
             )
             .unwrap();
+            let preparation = fresh::Preparation::admit(&era, lambda, scenario);
+            let placement = RefCell::new(fresh::Placement::start(&era, scenario));
             let mut permits = Vec::new();
             for (index, _) in cohort.roles().iter().enumerate() {
                 let program =
@@ -420,10 +440,13 @@ fn cohort(
             }
             let (outcome, workers) = std::thread::scope(|scope| {
                 let (ready_tx, ready_rx) = mpsc::channel();
+                let (fresh_tx, fresh_rx) = mpsc::channel();
                 let mut commands = Commands(Vec::new());
                 let mut joins = Vec::new();
                 for (id, program, permit) in permits {
                     let session = session.clone();
+                    let preparation = preparation.clone();
+                    let fresh = fresh_tx.clone();
                     let ready = ready_tx.clone();
                     let (tx, rx) = mpsc::channel();
                     commands.0.push(tx);
@@ -437,8 +460,19 @@ fn cohort(
                                 Retry::Busy => ControlFlow::Continue(failed.into_permit()),
                                 Retry::Refuse => ControlFlow::Break(failed),
                             },
-                        )
-                        .unwrap();
+                        );
+                        let owner = match owner {
+                            Ok(owner) => owner,
+                            Err(failed) => {
+                                let message = format!("cohort activation refused: {:?}", failed.reason);
+                                // No bank exists yet. Release the returned
+                                // permit and notify the controller before join;
+                                // another parked worker must not hide refusal.
+                                drop(failed.into_permit());
+                                let _ = ready.send(Ready::Failed(id));
+                                return Err(Box::new(message) as Box<dyn std::any::Any + Send>);
+                            }
+                        };
                         let receipt = Rc::new(RefCell::new(CleanupReceipt::Pending));
                         let mut guard = Guard {
                             resources: Resources::Resident(Worker {
@@ -466,7 +500,7 @@ fn cohort(
                                     worker
                                         .owner
                                         .with_native_extent(&[], |_| {
-                                            ready.send(id).unwrap();
+                                            ready.send(Ready::Parked(id)).unwrap();
                                             #[cfg(not(miri))]
                                             {
                                                 rx.recv_timeout(SPIN_WAIT)
@@ -484,6 +518,13 @@ fn cohort(
                                 match command {
                                     Command::Finish => break,
                                     Command::Repark => {}
+                                    Command::CheckFreshAnswer => {
+                                        assert_eq!(worker.word(home(1)), WordIdentity(TaggedValue::fixnum(97).bits()), "fresh selected definition returns 97 after replacement and GC");
+                                    }
+                                    Command::PrepareFresh => {
+                                        let facts = preparation.construct(worker);
+                                        fresh.send(facts).unwrap();
+                                    }
                                     Command::Advance => loop {
                                         match worker.step(&session).unwrap() {
                                             ReadyStep::Progress | ReadyStep::Yielded => {}
@@ -496,6 +537,9 @@ fn cohort(
                                 }
                             }
                         }));
+                        if body.is_err() {
+                            let _ = ready.send(Ready::Failed(id));
+                        }
                         drop(guard);
                         assert_eq!(
                             *receipt.borrow(),
@@ -506,14 +550,21 @@ fn cohort(
                     }));
                 }
                 drop(ready_tx);
+                drop(fresh_tx);
                 let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let await_all = || {
                         let mut seen = Vec::new();
                         for _ in cohort.roles() {
                             #[cfg(not(miri))]
-                            seen.push(ready_rx.recv_timeout(SPIN_WAIT).unwrap());
+                            let ready = ready_rx.recv_timeout(SPIN_WAIT).unwrap();
                             #[cfg(miri)]
-                            seen.push(ready_rx.recv().unwrap());
+                            let ready = ready_rx.recv().unwrap();
+                            match ready {
+                                Ready::Parked(id) => seen.push(id),
+                                Ready::Failed(id) => {
+                                    panic!("cohort worker failed before publication: {id:?}")
+                                }
+                            }
                         }
                         seen.sort_by_key(|owner| owner.0);
                         seen.dedup();
@@ -529,6 +580,13 @@ fn cohort(
                             panic!("controlled cohort unwind after native publication")
                         }
                         Scenario::Transfer | Scenario::Noop => {}
+                        Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
+                            fresh::exercise(
+                                &era, cohort, scenario, &commands, &await_all, &fresh_rx,
+                                &placement,
+                            );
+                            return;
+                        }
                         Scenario::MinorAdapter => {
                             minor_adapter::exercise(&era, graph, cohort, &commands, &await_all);
                             return;
@@ -546,7 +604,12 @@ fn cohort(
                         await_all();
                         match scenario {
                             Scenario::Noop => continue,
-                            Scenario::Transfer | Scenario::Unwind | Scenario::MinorAdapter => {}
+                            Scenario::Transfer
+                            | Scenario::Unwind
+                            | Scenario::MinorAdapter
+                            | Scenario::Fresh
+                            | Scenario::FreshUnwind
+                            | Scenario::FreshNoop => {}
                         }
                         match phase {
                             Phase::Selected => {}
@@ -565,7 +628,7 @@ fn cohort(
                                 assert!(second.cycle > first.cycle);
                                 let CollectionReceipt { roots, live, .. } = second;
                                 assert!(
-                                    roots.other_work.is_empty(),
+                                    roots.other_work.is_empty() && roots.young_owners.is_empty(),
                                     "hidden history work: {roots:?}"
                                 );
                                 match phase {
@@ -667,9 +730,18 @@ fn cohort(
                 (body, workers)
             });
             let mut stopped = era.stop().unwrap();
+            placement.borrow_mut().return_for_finish(&era, &stopped);
             stopped.symbols().unwrap().reconcile_functions().unwrap();
-            stopped.trace(|_, _| Ok(())).unwrap();
+            match scenario {
+                Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
+                    era.collect_stopped(&mut stopped).unwrap();
+                }
+                Scenario::Transfer | Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
+                    stopped.trace(|_, _| Ok(())).unwrap();
+                }
+            }
             stopped.complete().unwrap();
+            drop(preparation);
             let (collector, keeper) = era
                 .finish()
                 .expect("cohort finish after all independent banks and journals");
