@@ -1,5 +1,5 @@
 //! Closed C6 mixed tapes; no generic VM, mutable graph or generated-code entry.
-//! Cross-owner collector witnesses and the stopped minor are separate stages.
+//! Actual mixed execution and stop-all collection live in typed child fixtures.
 use super::*;
 use std::num::NonZeroU32;
 
@@ -167,20 +167,8 @@ impl CombinedTape {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MissingCapability {
-    AllOwnerMinor,
-}
-impl MissingCapability {
-    fn name(self) -> &'static str {
-        match self {
-            Self::AllOwnerMinor => "all_owner_stopped_minor",
-        }
-    }
-}
 #[derive(Debug, PartialEq, Eq)]
 enum PreparationError {
-    Missing(MissingCapability),
     Authority(RegistrationError),
     Global(crate::tagged::gc::GlobalError),
 }
@@ -192,20 +180,11 @@ enum RunningRequest {
 enum StoppedRequest {
     Noop,
     KeeperCensus,
-    Minor,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CollectionKind {
-    Major,
-    Minor,
-}
-
-/// These signatures are the C6.1 test surface, not a fallback to a legacy
-/// evaluator. Later commits replace each precise Missing result with the
-/// corresponding sealed implementation. The source audit, not these stubs,
-/// establishes which engine capability is currently absent.
-struct PendingC6;
-impl PendingC6 {
+/// Retained no-op/census fixture checks. Real mixed execution and collection
+/// now use Session and ParallelHeapEra, with no missing-operation fallback.
+struct PreparationChecks;
+impl PreparationChecks {
     fn running<'owner, 'era>(
         request: RunningRequest,
         run: &mut RunAccess<'owner, 'era>,
@@ -213,7 +192,7 @@ impl PendingC6 {
         home: &mut OwnerRootSlot<'era>,
     ) -> Result<(), PreparationError> {
         // Even the no-op uses the real root bank and an actual reader lease;
-        // the fixture must release them on every missing-operation outcome.
+        // the fixture releases them independently of the body outcome.
         run.sym_boundp_into(symbol, home)
             .map_err(PreparationError::Global)?;
         match request {
@@ -236,15 +215,6 @@ impl PendingC6 {
                     .append_current_projection_roots(keeper, &mut roots)
                     .map_err(PreparationError::Authority)
             }
-            StoppedRequest::Minor => {
-                Err(PreparationError::Missing(MissingCapability::AllOwnerMinor))
-            }
-        }
-    }
-    fn collection_kind(request: StoppedRequest) -> CollectionKind {
-        match request {
-            StoppedRequest::Noop | StoppedRequest::KeeperCensus => CollectionKind::Major,
-            StoppedRequest::Minor => CollectionKind::Minor,
         }
     }
 }

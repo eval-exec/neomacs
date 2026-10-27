@@ -2,6 +2,7 @@
 //! Counterfactual omissions inspect copied ledgers, never a damaged live heap.
 mod fresh;
 mod minor_adapter;
+mod name_minor;
 mod relog;
 
 use super::*;
@@ -51,10 +52,17 @@ enum Scenario {
     Relog,
     RelogNoop,
     RelogUnwind,
+    NameMinor,
+    NameMinorNoop,
+    NameMinorUnwind,
 }
 enum GraphSetup {
     Empty,
-    Ready(GraphWords, crate::emacs_core::intern::SymId),
+    Ready(
+        GraphWords,
+        crate::emacs_core::intern::SymId,
+        name_minor::Setup,
+    ),
 }
 #[derive(Clone, Copy)]
 enum Command {
@@ -65,12 +73,14 @@ enum Command {
     CheckFreshAnswer,
     InitializeRelog,
     ReplaceRelog,
+    ObserveName,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OwnerId(u64);
 enum Construction {
     Definition(fresh::FreshGraph),
     Relog(relog::Facts),
+    Winner(name_minor::Winner),
 }
 enum Ready {
     Parked(OwnerId),
@@ -284,7 +294,7 @@ fn clear_operands() -> Vec<CombinedInstruction> {
 }
 fn program(role: Role, scenario: Scenario) -> CombinedTape {
     match scenario {
-        Scenario::Transfer => {}
+        Scenario::Transfer | Scenario::NameMinor | Scenario::NameMinorUnwind => {}
         Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
             return fresh::program(role);
         }
@@ -293,7 +303,8 @@ fn program(role: Role, scenario: Scenario) -> CombinedTape {
         | Scenario::MinorAdapter
         | Scenario::Relog
         | Scenario::RelogNoop
-        | Scenario::RelogUnwind => {
+        | Scenario::RelogUnwind
+        | Scenario::NameMinorNoop => {
             return tape(vec![CombinedInstruction::Safepoint; 4]);
         }
     }
@@ -359,10 +370,17 @@ fn program(role: Role, scenario: Scenario) -> CombinedTape {
                         name: home(1),
                         destination: home(0),
                     },
-                    CombinedInstruction::ClearCache,
-                    CombinedInstruction::ClearActivation,
                 ]);
-                code.extend(clear_operands());
+                match name_minor::Layout::for_scenario(scenario) {
+                    name_minor::Layout::SharedTarget => {
+                        code.extend([
+                            CombinedInstruction::ClearCache,
+                            CombinedInstruction::ClearActivation,
+                        ]);
+                        code.extend(clear_operands());
+                    }
+                    name_minor::Layout::SeparateTarget => {}
+                }
             }
             (Role::Observer, Phase::Interned) => {
                 code.extend([
@@ -384,6 +402,22 @@ fn program(role: Role, scenario: Scenario) -> CombinedTape {
         }
         code.push(CombinedInstruction::Safepoint);
     }
+    match name_minor::Layout::for_scenario(scenario) {
+        name_minor::Layout::SharedTarget => {}
+        name_minor::Layout::SeparateTarget => {
+            match role {
+                Role::Caller => {
+                    code.extend([
+                        CombinedInstruction::ClearCache,
+                        CombinedInstruction::ClearActivation,
+                    ]);
+                    code.extend(clear_operands());
+                }
+                Role::Publisher | Role::Observer => {}
+            }
+            code.push(CombinedInstruction::Safepoint);
+        }
+    }
     tape(code)
 }
 #[must_use = "finish every native worker before leaving the scoped cohort"]
@@ -401,78 +435,120 @@ fn cohort(
     scenario: Scenario,
 ) -> std::thread::Result<()> {
     let setup = RefCell::new(GraphSetup::Empty);
-    Context::with_test_symbol_functions_init_era(
-        backing,
-        |obarray, ids| {
-            let nonce = crate::emacs_core::intern::intern_uninterned("c6-cohort-nonce");
-            let name = TaggedValue::string(format!("p3sym-c6-cohort-{}", nonce.0));
-            let body = TaggedValue::cons(name, TaggedValue::NIL);
-            let args = TaggedValue::cons(TaggedValue::NIL, body);
-            let lambda = crate::emacs_core::intern::intern("lambda");
-            let definition = TaggedValue::cons(TaggedValue::from_sym_id(lambda), args);
-            obarray.seed_value_id(ids[0], definition);
-            for id in ids {
-                obarray.clear_function_silent_id(*id);
-            }
-            *setup.borrow_mut() = GraphSetup::Ready(
-                GraphWords([definition, args, body, name].map(|value| WordIdentity(value.bits()))),
-                lambda,
-            );
-        },
-        |era, ids| {
-            let (graph, lambda) =
-                match std::mem::replace(&mut *setup.borrow_mut(), GraphSetup::Empty) {
-                    GraphSetup::Empty => panic!("missing serial cohort graph"),
-                    GraphSetup::Ready(graph, lambda) => (graph, lambda),
-                };
-            let handles: Vec<_> = ids
-                .into_iter()
-                .map(|id| era.admit_plain_symbol(id).unwrap())
-                .collect();
-            let inputs = [
-                CombinedInput::new(handles[0], CombinedInputRole::NameDefinition),
-                CombinedInput::new(handles[1], CombinedInputRole::ScalarDefinition),
-            ];
-            let session = Session::admit(
-                &era,
-                &handles[0],
-                &inputs,
-                cohort
-                    .roles()
-                    .iter()
-                    .map(|role| program(*role, scenario))
-                    .collect(),
-            )
-            .unwrap();
-            let preparation = fresh::Preparation::admit(&era, lambda, scenario);
-            let placement = RefCell::new(fresh::Placement::start(&era, scenario));
-            let mut permits = Vec::new();
-            for (index, role) in cohort.roles().iter().enumerate() {
-                let program =
-                    ProgramIndex::checked(u16::try_from(index).unwrap(), &session).unwrap();
-                let owner = OwnerId(u64::try_from(index).unwrap() + 1);
-                let roots = relog::ReservedHomes::for_worker(
-                    session.root_capacity(program).unwrap(),
-                    scenario,
-                    *role,
+    let nonce = crate::emacs_core::intern::intern_uninterned("c6-cohort-nonce");
+    let spelling = format!("p3sym-c6-cohort-{}", nonce.0);
+    let layout = name_minor::Layout::for_scenario(scenario);
+    assert!(
+        crate::emacs_core::intern::lookup_interned(&spelling).is_none(),
+        "unique ordinary spelling is not pre-interned"
+    );
+    let initialize = |obarray: &mut crate::emacs_core::symbol::Obarray,
+                      ids: &[crate::emacs_core::intern::SymId]| {
+        let lambda = crate::emacs_core::intern::intern("lambda");
+        let sources = layout.sources(ids);
+        let (name, names) = match layout {
+            name_minor::Layout::SharedTarget => (
+                TaggedValue::string(spelling.clone()),
+                name_minor::Setup::Unused,
+            ),
+            name_minor::Layout::SeparateTarget => {
+                let name = obarray.symbol_value_id_copied(*sources[0]).unwrap();
+                let candidate = obarray.symbol_value_id_copied(*sources[1]).unwrap();
+                assert_ne!(
+                    name.bits(),
+                    candidate.bits(),
+                    "distinct equal name candidates"
                 );
-                let permit = era.register(owner.0, roots.as_usize()).unwrap();
-                permits.push((owner, *role, program, permit));
+                assert_eq!(
+                    name.as_lisp_string().unwrap().as_bytes(),
+                    spelling.as_bytes()
+                );
+                assert_eq!(
+                    candidate.as_lisp_string().unwrap().as_bytes(),
+                    spelling.as_bytes()
+                );
+                let scalar_body = TaggedValue::cons(TaggedValue::fixnum(97), TaggedValue::NIL);
+                let scalar_args = TaggedValue::cons(TaggedValue::NIL, scalar_body);
+                obarray.seed_value_id(
+                    *sources[1],
+                    TaggedValue::cons(TaggedValue::from_sym_id(lambda), scalar_args),
+                );
+                (
+                    name,
+                    name_minor::Setup::Pair {
+                        candidate: WordIdentity(candidate.bits()),
+                        spelling: spelling.clone().into_boxed_str(),
+                    },
+                )
             }
-            let (outcome, workers) = std::thread::scope(|scope| {
-                let (ready_tx, ready_rx) = mpsc::channel();
-                let (fresh_tx, fresh_rx) = mpsc::channel();
-                let mut commands = Commands(Vec::new());
-                let mut joins = Vec::new();
-                for (id, role, program, permit) in permits {
-                    let session = session.clone();
-                    let preparation = preparation.clone();
-                    let fresh = fresh_tx.clone();
-                    let ready = ready_tx.clone();
-                    let (tx, rx) = mpsc::channel();
-                    commands.0.push(tx);
-                    let heap = era.heap_identity();
-                    joins.push(scope.spawn(move || {
+        };
+        let body = TaggedValue::cons(name, TaggedValue::NIL);
+        let args = TaggedValue::cons(TaggedValue::NIL, body);
+        let definition = TaggedValue::cons(TaggedValue::from_sym_id(lambda), args);
+        obarray.seed_value_id(*sources[0], definition);
+        for id in ids {
+            obarray.clear_function_silent_id(*id);
+        }
+        *setup.borrow_mut() = GraphSetup::Ready(
+            GraphWords([definition, args, body, name].map(|value| WordIdentity(value.bits()))),
+            lambda,
+            names,
+        );
+    };
+    let execute = |era: ParallelHeapEra<'_>, ids: Vec<crate::emacs_core::intern::SymId>| {
+        let (graph, lambda, names) =
+            match std::mem::replace(&mut *setup.borrow_mut(), GraphSetup::Empty) {
+                GraphSetup::Empty => panic!("missing serial cohort graph"),
+                GraphSetup::Ready(graph, lambda, names) => (graph, lambda, names),
+            };
+        let handles: Vec<_> = ids
+            .into_iter()
+            .map(|id| era.admit_plain_symbol(id).unwrap())
+            .collect();
+        let sources = layout.sources(&handles);
+        let inputs = [
+            CombinedInput::new(*sources[0], CombinedInputRole::NameDefinition),
+            CombinedInput::new(*sources[1], CombinedInputRole::ScalarDefinition),
+        ];
+        let session = Session::admit(
+            &era,
+            &handles[0],
+            &inputs,
+            cohort
+                .roles()
+                .iter()
+                .map(|role| program(*role, scenario))
+                .collect(),
+        )
+        .unwrap();
+        let preparation = fresh::Preparation::admit(&era, lambda, scenario);
+        let placement = RefCell::new(fresh::Placement::start(&era, scenario));
+        let mut permits = Vec::new();
+        for (index, role) in cohort.roles().iter().enumerate() {
+            let program = ProgramIndex::checked(u16::try_from(index).unwrap(), &session).unwrap();
+            let owner = OwnerId(u64::try_from(index).unwrap() + 1);
+            let roots = relog::ReservedHomes::for_worker(
+                session.root_capacity(program).unwrap(),
+                scenario,
+                *role,
+            );
+            let permit = era.register(owner.0, roots.as_usize()).unwrap();
+            permits.push((owner, *role, program, permit));
+        }
+        let (outcome, workers) = std::thread::scope(|scope| {
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (fresh_tx, fresh_rx) = mpsc::channel();
+            let mut commands = Commands(Vec::new());
+            let mut joins = Vec::new();
+            for (id, role, program, permit) in permits {
+                let session = session.clone();
+                let preparation = preparation.clone();
+                let fresh = fresh_tx.clone();
+                let ready = ready_tx.clone();
+                let (tx, rx) = mpsc::channel();
+                commands.0.push(tx);
+                let heap = era.heap_identity();
+                joins.push(scope.spawn(move || {
                         let owner = retry_owned(
                             Deadline::contention(),
                             permit,
@@ -547,6 +623,9 @@ fn cohort(
                                         let facts = preparation.construct(worker);
                                         fresh.send(Construction::Definition(facts)).unwrap();
                                     }
+                                    Command::ObserveName => {
+                                        fresh.send(Construction::Winner(name_minor::observe(worker))).unwrap();
+                                    }
                                     Command::InitializeRelog => {
                                         let facts = mutation.initialize(&preparation, worker);
                                         fresh.send(Construction::Relog(facts)).unwrap();
@@ -578,234 +657,248 @@ fn cohort(
                         );
                         body
                     }));
-                }
-                drop(ready_tx);
-                drop(fresh_tx);
-                let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let await_all = || {
-                        let mut seen = Vec::new();
-                        for _ in cohort.roles() {
-                            #[cfg(not(miri))]
-                            let ready = ready_rx.recv_timeout(SPIN_WAIT).unwrap();
-                            #[cfg(miri)]
-                            let ready = ready_rx.recv().unwrap();
-                            match ready {
-                                Ready::Parked(id) => seen.push(id),
-                                Ready::Failed(id) => {
-                                    panic!("cohort worker failed before publication: {id:?}")
-                                }
+            }
+            drop(ready_tx);
+            drop(fresh_tx);
+            let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let await_all = || {
+                    let mut seen = Vec::new();
+                    for _ in cohort.roles() {
+                        #[cfg(not(miri))]
+                        let ready = ready_rx.recv_timeout(SPIN_WAIT).unwrap();
+                        #[cfg(miri)]
+                        let ready = ready_rx.recv().unwrap();
+                        match ready {
+                            Ready::Parked(id) => seen.push(id),
+                            Ready::Failed(id) => {
+                                panic!("cohort worker failed before publication: {id:?}")
                             }
                         }
-                        seen.sort_by_key(|owner| owner.0);
-                        seen.dedup();
-                        assert_eq!(
-                            seen.len(),
-                            cohort.roles().len(),
-                            "every independent owner published Native"
+                    }
+                    seen.sort_by_key(|owner| owner.0);
+                    seen.dedup();
+                    assert_eq!(
+                        seen.len(),
+                        cohort.roles().len(),
+                        "every independent owner published Native"
+                    );
+                };
+                await_all();
+                match scenario {
+                    Scenario::Unwind => {
+                        panic!("controlled cohort unwind after native publication")
+                    }
+                    Scenario::Transfer | Scenario::Noop => {}
+                    Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
+                        fresh::exercise(
+                            &era, cohort, scenario, &commands, &await_all, &fresh_rx, &placement,
                         );
-                    };
+                        return;
+                    }
+                    Scenario::Relog | Scenario::RelogNoop | Scenario::RelogUnwind => {
+                        relog::exercise(
+                            &era, cohort, scenario, &commands, &await_all, &fresh_rx, &placement,
+                        );
+                        return;
+                    }
+                    Scenario::NameMinor | Scenario::NameMinorNoop | Scenario::NameMinorUnwind => {
+                        name_minor::exercise(
+                            &era, graph, &names, cohort, scenario, &commands, &await_all, &fresh_rx,
+                        );
+                        return;
+                    }
+                    Scenario::MinorAdapter => {
+                        minor_adapter::exercise(&era, graph, cohort, &commands, &await_all);
+                        return;
+                    }
+                }
+                for phase in [
+                    Phase::Function,
+                    Phase::Selected,
+                    Phase::Replaced,
+                    Phase::Interned,
+                ] {
+                    for tx in &commands.0 {
+                        tx.send(Command::Advance).unwrap();
+                    }
                     await_all();
                     match scenario {
-                        Scenario::Unwind => {
-                            panic!("controlled cohort unwind after native publication")
-                        }
-                        Scenario::Transfer | Scenario::Noop => {}
-                        Scenario::Fresh | Scenario::FreshUnwind | Scenario::FreshNoop => {
-                            fresh::exercise(
-                                &era, cohort, scenario, &commands, &await_all, &fresh_rx,
-                                &placement,
-                            );
-                            return;
-                        }
-                        Scenario::Relog | Scenario::RelogNoop | Scenario::RelogUnwind => {
-                            relog::exercise(
-                                &era, cohort, scenario, &commands, &await_all, &fresh_rx,
-                                &placement,
-                            );
-                            return;
-                        }
-                        Scenario::MinorAdapter => {
-                            minor_adapter::exercise(&era, graph, cohort, &commands, &await_all);
-                            return;
-                        }
+                        Scenario::Noop => continue,
+                        Scenario::Transfer
+                        | Scenario::Unwind
+                        | Scenario::MinorAdapter
+                        | Scenario::Fresh
+                        | Scenario::FreshUnwind
+                        | Scenario::FreshNoop
+                        | Scenario::Relog
+                        | Scenario::RelogNoop
+                        | Scenario::RelogUnwind
+                        | Scenario::NameMinor
+                        | Scenario::NameMinorNoop
+                        | Scenario::NameMinorUnwind => {}
                     }
-                    for phase in [
-                        Phase::Function,
-                        Phase::Selected,
-                        Phase::Replaced,
-                        Phase::Interned,
-                    ] {
-                        for tx in &commands.0 {
-                            tx.send(Command::Advance).unwrap();
-                        }
-                        await_all();
-                        match scenario {
-                            Scenario::Noop => continue,
-                            Scenario::Transfer
-                            | Scenario::Unwind
-                            | Scenario::MinorAdapter
-                            | Scenario::Fresh
-                            | Scenario::FreshUnwind
-                            | Scenario::FreshNoop
-                            | Scenario::Relog
-                            | Scenario::RelogNoop
-                            | Scenario::RelogUnwind => {}
-                        }
-                        match phase {
-                            Phase::Selected => {}
-                            Phase::Function | Phase::Replaced | Phase::Interned => {
-                                // First job drains birth/history work. The second is
-                                // the decisive live-census/omission witness.
-                                let first = round(&era, graph, cohort);
-                                // Each owner applies the first response and
-                                // republishes before the decisive next job.
-                                for tx in &commands.0 {
-                                    tx.send(Command::Repark).unwrap();
-                                }
-                                await_all();
-                                let second = round(&era, graph, cohort);
-                                assert!(second.epoch > first.epoch);
-                                assert!(second.cycle > first.cycle);
-                                let CollectionReceipt { roots, live, .. } = second;
-                                assert!(
-                                    roots.other_work.is_empty()
-                                        && roots.young_owners.is_empty()
-                                        && roots.cons_writes.is_empty(),
-                                    "hidden history work: {roots:?}"
-                                );
-                                match phase {
-                                    Phase::Function => {
-                                        assert_eq!(live, [Retention::Live; 4]);
-                                        assert_eq!(
-                                            roots
-                                                .world
-                                                .iter()
-                                                .filter(|word| **word == graph.definition())
-                                                .count(),
-                                            1
-                                        );
-                                        assert!(
-                                            roots
-                                                .without_world()
-                                                .all(|word| !graph.0.contains(word)),
-                                            "function-only family masked: {roots:?}"
-                                        );
-                                        eprintln!(
-                                            "P3SYM_C6_COHORT_WITNESS omitted_function_family {backing:?} {cohort:?}"
-                                        );
-                                    }
-                                    Phase::Replaced => {
-                                        assert_eq!(live, [Retention::Live; 4]);
-                                        assert!(
-                                            first.before_journal.contains(&graph.definition()),
-                                            "replacement must first journal the actual old definition"
-                                        );
-                                        assert!(
-                                            roots
-                                                .without_owners()
-                                                .all(|word| !graph.0.contains(word)),
-                                            "selected-only family masked: {roots:?}"
-                                        );
-                                        let selected: Vec<_> = roots
-                                            .owners
+                    match phase {
+                        Phase::Selected => {}
+                        Phase::Function | Phase::Replaced | Phase::Interned => {
+                            // First job drains birth/history work. The second is
+                            // the decisive live-census/omission witness.
+                            let first = round(&era, graph, cohort);
+                            // Each owner applies the first response and
+                            // republishes before the decisive next job.
+                            for tx in &commands.0 {
+                                tx.send(Command::Repark).unwrap();
+                            }
+                            await_all();
+                            let second = round(&era, graph, cohort);
+                            assert!(second.epoch > first.epoch);
+                            assert!(second.cycle > first.cycle);
+                            let CollectionReceipt { roots, live, .. } = second;
+                            assert!(
+                                roots.other_work.is_empty()
+                                    && roots.young_owners.is_empty()
+                                    && roots.cons_writes.is_empty(),
+                                "hidden history work: {roots:?}"
+                            );
+                            match phase {
+                                Phase::Function => {
+                                    assert_eq!(live, [Retention::Live; 4]);
+                                    assert_eq!(
+                                        roots
+                                            .world
                                             .iter()
-                                            .filter(|(_, words)| {
-                                                words.iter().any(|word| graph.0.contains(word))
-                                            })
-                                            .collect();
-                                        assert_eq!(selected.len(), 1);
-                                        assert_eq!(selected[0].0, OwnerId(2));
-                                        assert_eq!(
-                                            selected[0]
-                                                .1
-                                                .iter()
-                                                .filter(|word| **word == graph.definition())
-                                                .count(),
-                                            1
-                                        );
-                                        eprintln!(
-                                            "P3SYM_C6_COHORT_WITNESS omitted_selected_owner_family {backing:?} {cohort:?}"
-                                        );
-                                    }
-                                    Phase::Interned => {
-                                        assert_eq!(
-                                            roots
-                                                .names
-                                                .iter()
-                                                .filter(|word| **word == graph.name())
-                                                .count(),
-                                            1
-                                        );
-                                        assert!(
-                                            roots
-                                                .without_names()
-                                                .all(|word| !graph.0.contains(word)),
-                                            "registry-only family masked: {roots:?}"
-                                        );
-                                        assert_eq!(
-                                            live,
-                                            [
-                                                Retention::Reclaimed,
-                                                Retention::Reclaimed,
-                                                Retention::Reclaimed,
-                                                Retention::Live
-                                            ],
-                                            "old definition reclaimed, exact name survives"
-                                        );
-                                        eprintln!(
-                                            "P3SYM_C6_COHORT_WITNESS omitted_exact_name_family old_definition_reclaimed {backing:?} {cohort:?}"
-                                        );
-                                    }
-                                    Phase::Selected => {
-                                        unreachable!("no collection at selection boundary")
-                                    }
+                                            .filter(|word| **word == graph.definition())
+                                            .count(),
+                                        1
+                                    );
+                                    assert!(
+                                        roots.without_world().all(|word| !graph.0.contains(word)),
+                                        "function-only family masked: {roots:?}"
+                                    );
+                                    eprintln!(
+                                        "P3SYM_C6_COHORT_WITNESS omitted_function_family {backing:?} {cohort:?}"
+                                    );
+                                }
+                                Phase::Replaced => {
+                                    assert_eq!(live, [Retention::Live; 4]);
+                                    assert!(
+                                        first.before_journal.contains(&graph.definition()),
+                                        "replacement must first journal the actual old definition"
+                                    );
+                                    assert!(
+                                        roots.without_owners().all(|word| !graph.0.contains(word)),
+                                        "selected-only family masked: {roots:?}"
+                                    );
+                                    let selected: Vec<_> = roots
+                                        .owners
+                                        .iter()
+                                        .filter(|(_, words)| {
+                                            words.iter().any(|word| graph.0.contains(word))
+                                        })
+                                        .collect();
+                                    assert_eq!(selected.len(), 1);
+                                    assert_eq!(selected[0].0, OwnerId(2));
+                                    assert_eq!(
+                                        selected[0]
+                                            .1
+                                            .iter()
+                                            .filter(|word| **word == graph.definition())
+                                            .count(),
+                                        1
+                                    );
+                                    eprintln!(
+                                        "P3SYM_C6_COHORT_WITNESS omitted_selected_owner_family {backing:?} {cohort:?}"
+                                    );
+                                }
+                                Phase::Interned => {
+                                    assert_eq!(
+                                        roots
+                                            .names
+                                            .iter()
+                                            .filter(|word| **word == graph.name())
+                                            .count(),
+                                        1
+                                    );
+                                    assert!(
+                                        roots.without_names().all(|word| !graph.0.contains(word)),
+                                        "registry-only family masked: {roots:?}"
+                                    );
+                                    assert_eq!(
+                                        live,
+                                        [
+                                            Retention::Reclaimed,
+                                            Retention::Reclaimed,
+                                            Retention::Reclaimed,
+                                            Retention::Live
+                                        ],
+                                        "old definition reclaimed, exact name survives"
+                                    );
+                                    eprintln!(
+                                        "P3SYM_C6_COHORT_WITNESS omitted_exact_name_family old_definition_reclaimed {backing:?} {cohort:?}"
+                                    );
+                                }
+                                Phase::Selected => {
+                                    unreachable!("no collection at selection boundary")
                                 }
                             }
                         }
                     }
-                }));
-                drop(commands);
-                let workers = joins
-                    .into_iter()
-                    .map(|join| join.join())
-                    .collect::<Vec<_>>();
-                (body, workers)
-            });
-            let mut stopped = era.stop().unwrap();
-            placement.borrow_mut().return_for_finish(&era, &stopped);
-            stopped.symbols().unwrap().reconcile_functions().unwrap();
-            match scenario {
-                Scenario::Fresh
-                | Scenario::FreshUnwind
-                | Scenario::FreshNoop
-                | Scenario::Relog
-                | Scenario::RelogNoop
-                | Scenario::RelogUnwind => {
-                    era.collect_stopped(&mut stopped).unwrap();
                 }
-                Scenario::Transfer | Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
-                    stopped.trace(|_, _| Ok(())).unwrap();
-                }
+            }));
+            drop(commands);
+            let workers = joins
+                .into_iter()
+                .map(|join| join.join())
+                .collect::<Vec<_>>();
+            (body, workers)
+        });
+        let mut stopped = era.stop().unwrap();
+        placement.borrow_mut().return_for_finish(&era, &stopped);
+        stopped.symbols().unwrap().reconcile_functions().unwrap();
+        match scenario {
+            Scenario::Fresh
+            | Scenario::FreshUnwind
+            | Scenario::FreshNoop
+            | Scenario::Relog
+            | Scenario::RelogNoop
+            | Scenario::RelogUnwind => {
+                era.collect_stopped(&mut stopped).unwrap();
             }
-            stopped.complete().unwrap();
-            drop(preparation);
-            let (collector, keeper) = era
-                .finish()
-                .expect("cohort finish after all independent banks and journals");
-            drop(collector);
-            drop(keeper);
-            eprintln!("P3SYM_C6_COHORT_TEARDOWN_OK {backing:?} {cohort:?}");
-            // Propagate every assertion only after all worker banks, journal,
-            // and the actual era have been released independently.
-            for worker in workers {
-                match worker {
-                    Ok(Ok(())) => {}
-                    Ok(Err(panic)) | Err(panic) => return Err(panic),
-                }
+            Scenario::Transfer
+            | Scenario::Noop
+            | Scenario::Unwind
+            | Scenario::MinorAdapter
+            | Scenario::NameMinor
+            | Scenario::NameMinorNoop
+            | Scenario::NameMinorUnwind => {
+                stopped.trace(|_, _| Ok(())).unwrap();
             }
-            outcome
-        },
-    )
+        }
+        stopped.complete().unwrap();
+        drop(preparation);
+        let (collector, keeper) = era
+            .finish()
+            .expect("cohort finish after all independent banks and journals");
+        drop(collector);
+        drop(keeper);
+        eprintln!("P3SYM_C6_COHORT_TEARDOWN_OK {backing:?} {cohort:?}");
+        // Propagate every assertion only after all worker banks, journal,
+        // and the actual era have been released independently.
+        for worker in workers {
+            match worker {
+                Ok(Ok(())) => {}
+                Ok(Err(panic)) | Err(panic) => return Err(panic),
+            }
+        }
+        outcome
+    };
+    match layout {
+        name_minor::Layout::SharedTarget => {
+            Context::with_test_symbol_functions_init_era(backing, initialize, execute)
+        }
+        name_minor::Layout::SeparateTarget => {
+            Context::with_test_symbol_name_inputs_init_era(backing, &spelling, initialize, execute)
+        }
+    }
 }
 #[test]
 fn p3sym_c6_cohort_two_plain_full_root_transfers() {
@@ -892,4 +985,9 @@ fn p3sym_c6_minor_adapter_four_projected() {
         Scenario::MinorAdapter,
     )
     .unwrap();
+}
+
+// The two original missing-minor rows now drive the real combined collection.
+pub(super) fn minor_case(backing: PlainSymbolBacking) {
+    cohort(backing, Cohort::Two, Scenario::NameMinor).unwrap();
 }

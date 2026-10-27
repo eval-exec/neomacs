@@ -73,7 +73,6 @@ fn classify(error: &PreparationError) -> Retry {
     match error {
         PreparationError::Authority(error) => contention::registration(error),
         PreparationError::Global(error) => contention::global(error),
-        PreparationError::Missing(_) => Retry::Refuse,
     }
 }
 fn running_expected(request: RunningRequest) -> Result<(), PreparationError> {
@@ -85,13 +84,11 @@ fn stopped_expected(request: StoppedRequest) -> Result<(), PreparationError> {
     match request {
         StoppedRequest::Noop => Ok(()),
         StoppedRequest::KeeperCensus => Ok(()),
-        StoppedRequest::Minor => Err(PreparationError::Missing(MissingCapability::AllOwnerMinor)),
     }
 }
 
-/// Both running and stopped request failures finish the same real fixture.
-/// Missing results are checked before teardown; intended-red assertions live
-/// outside this function, after actual roots, owner, stop and era have finished.
+/// Running and stopped no-op/census checks finish the same actual fixture.
+/// The combined collector cases live in execution_tests, without stubs.
 fn fixture(
     backing: PlainSymbolBacking,
     running: RunningRequest,
@@ -155,7 +152,12 @@ fn fixture(
                                 || {
                                     let mut run =
                                         owner.run_access().map_err(PreparationError::Authority)?;
-                                    PendingC6::running(running, &mut run, &symbol, &mut homes[0])
+                                    PreparationChecks::running(
+                                        running,
+                                        &mut run,
+                                        &symbol,
+                                        &mut homes[0],
+                                    )
                                 },
                                 classify,
                             );
@@ -184,15 +186,15 @@ fn fixture(
         let mut stopped = era.stop().unwrap();
         let answer = {
             let symbols = stopped.symbols().unwrap();
-            PendingC6::stopped(stopped_request, &symbols, era.keeper.as_ref().unwrap())
+            PreparationChecks::stopped(stopped_request, &symbols, era.keeper.as_ref().unwrap())
         };
         assert_eq!(
             answer,
             stopped_expected(stopped_request),
             "C6 specific stopped refusal"
         );
-        // Missing capability results never enter a trace callback: even a
-        // pre-image callback error is terminal in the actual stopped protocol.
+        // No-op fixture callbacks succeed. A callback error is terminal,
+        // including before images; expected refusals stay outside callbacks.
         stopped.trace(|_, _| Ok(())).unwrap();
         stopped.complete().unwrap();
         let (collector, keeper) = era
@@ -205,28 +207,6 @@ fn fixture(
     })
 }
 
-fn intended_red(backing: PlainSymbolBacking, missing: MissingCapability) {
-    let (running, stopped) = match missing {
-        MissingCapability::AllOwnerMinor => (RunningRequest::Noop, StoppedRequest::Minor),
-    };
-    let result =
-        fixture(backing, running, stopped, FixtureBody::Request).expect("C6 body completed");
-    assert_eq!(
-        result,
-        Err(PreparationError::Missing(missing)),
-        "C6 exact missing capability"
-    );
-    assert!(result.is_ok(), "C6 missing capability: {}", missing.name());
-}
-macro_rules! red {
-    ($name:ident, $backing:ident, $missing:ident) => {
-        #[test]
-        #[ignore = "C6.1 intended-red: qualify explicitly until its sealed implementation lands"]
-        fn $name() {
-            intended_red(PlainSymbolBacking::$backing, MissingCapability::$missing);
-        }
-    };
-}
 #[test]
 fn p3sym_c6_global_function_plain() {
     super::execution_tests::transfer_case(
@@ -289,8 +269,14 @@ fn p3sym_c6_keeper_census_projected() {
         Ok(())
     );
 }
-red!(p3sym_c6_red_minor_plain, Unprojected, AllOwnerMinor);
-red!(p3sym_c6_red_minor_projected, VoidProjection, AllOwnerMinor);
+#[test]
+fn p3sym_c6_minor_plain() {
+    super::execution_tests::minor_case(PlainSymbolBacking::Unprojected);
+}
+#[test]
+fn p3sym_c6_minor_projected() {
+    super::execution_tests::minor_case(PlainSymbolBacking::VoidProjection);
+}
 
 #[test]
 fn p3sym_c6_noop_control_finishes_plain_and_projected() {
@@ -391,14 +377,6 @@ fn p3sym_c6_typed_tape_refuses_every_excluded_operation() {
     assert_eq!(
         SuccessfulStepBudget::try_from(0),
         Err(TapeError::StepBudget)
-    );
-    assert_eq!(
-        PendingC6::collection_kind(StoppedRequest::Minor),
-        CollectionKind::Minor
-    );
-    assert_eq!(
-        PendingC6::collection_kind(StoppedRequest::Noop),
-        CollectionKind::Major
     );
     assert!(matches!(
         classify(&PreparationError::Global(GlobalError::VoidVariable)),

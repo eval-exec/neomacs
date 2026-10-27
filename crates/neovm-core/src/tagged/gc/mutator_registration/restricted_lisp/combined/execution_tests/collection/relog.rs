@@ -26,7 +26,10 @@ impl Extension {
                 | Scenario::MinorAdapter
                 | Scenario::Fresh
                 | Scenario::FreshNoop
-                | Scenario::FreshUnwind,
+                | Scenario::FreshUnwind
+                | Scenario::NameMinor
+                | Scenario::NameMinorNoop
+                | Scenario::NameMinorUnwind,
                 Role::Publisher | Role::Caller | Role::Observer,
             ) => Self::None,
         }
@@ -418,7 +421,9 @@ fn command(
         .expect("native replacement facts precede publication")
     {
         Construction::Relog(facts) => facts,
-        Construction::Definition(_) => panic!("wrong native construction kind"),
+        Construction::Definition(_) | Construction::Winner(_) => {
+            panic!("wrong native construction kind")
+        }
     }
 }
 fn repark(commands: &Commands, await_all: &impl Fn()) {
@@ -451,7 +456,10 @@ pub(super) fn exercise(
         | Scenario::MinorAdapter
         | Scenario::Fresh
         | Scenario::FreshNoop
-        | Scenario::FreshUnwind => panic!("wrong replacement scenario"),
+        | Scenario::FreshUnwind
+        | Scenario::NameMinor
+        | Scenario::NameMinorNoop
+        | Scenario::NameMinorUnwind => panic!("wrong replacement scenario"),
     }
     let first = match command(commands, cohort, Command::ReplaceRelog, await_all, facts) {
         Facts::Replaced(facts) => facts,
@@ -471,7 +479,10 @@ pub(super) fn exercise(
         | Scenario::MinorAdapter
         | Scenario::Fresh
         | Scenario::FreshNoop
-        | Scenario::FreshUnwind => panic!("wrong replacement scenario"),
+        | Scenario::FreshUnwind
+        | Scenario::NameMinor
+        | Scenario::NameMinorNoop
+        | Scenario::NameMinorUnwind => panic!("wrong replacement scenario"),
     }
     let second = match command(commands, cohort, Command::ReplaceRelog, await_all, facts) {
         Facts::Replaced(facts) => facts,

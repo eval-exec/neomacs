@@ -23,9 +23,13 @@ impl Preparation {
         scenario: Scenario,
     ) -> Self {
         match scenario {
-            Scenario::Transfer | Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
-                Self::Disabled
-            }
+            Scenario::Transfer
+            | Scenario::Noop
+            | Scenario::Unwind
+            | Scenario::MinorAdapter
+            | Scenario::NameMinor
+            | Scenario::NameMinorNoop
+            | Scenario::NameMinorUnwind => Self::Disabled,
             Scenario::Fresh
             | Scenario::FreshUnwind
             | Scenario::FreshNoop
@@ -147,9 +151,13 @@ pub(super) enum Placement {
 impl Placement {
     pub(super) fn start(era: &ParallelHeapEra<'_>, scenario: Scenario) -> Self {
         match scenario {
-            Scenario::Transfer | Scenario::Noop | Scenario::Unwind | Scenario::MinorAdapter => {
-                Self::Unused
-            }
+            Scenario::Transfer
+            | Scenario::Noop
+            | Scenario::Unwind
+            | Scenario::MinorAdapter
+            | Scenario::NameMinor
+            | Scenario::NameMinorNoop
+            | Scenario::NameMinorUnwind => Self::Unused,
             Scenario::Fresh
             | Scenario::FreshUnwind
             | Scenario::FreshNoop
@@ -466,7 +474,9 @@ fn prepare(
         .expect("constructor publishes facts before native acknowledgment")
     {
         Construction::Definition(graph) => graph,
-        Construction::Relog(_) => panic!("wrong native construction kind"),
+        Construction::Relog(_) | Construction::Winner(_) => {
+            panic!("wrong native construction kind")
+        }
     }
 }
 fn sole_world(roots: &Ledger, graph: FreshGraph) {
@@ -506,7 +516,10 @@ pub(super) fn exercise(
         | Scenario::MinorAdapter
         | Scenario::Relog
         | Scenario::RelogNoop
-        | Scenario::RelogUnwind => {
+        | Scenario::RelogUnwind
+        | Scenario::NameMinor
+        | Scenario::NameMinorNoop
+        | Scenario::NameMinorUnwind => {
             panic!("wrong fresh scenario")
         }
     }
@@ -525,7 +538,10 @@ pub(super) fn exercise(
         | Scenario::MinorAdapter
         | Scenario::Relog
         | Scenario::RelogNoop
-        | Scenario::RelogUnwind => {
+        | Scenario::RelogUnwind
+        | Scenario::NameMinor
+        | Scenario::NameMinorNoop
+        | Scenario::NameMinorUnwind => {
             panic!("wrong fresh scenario")
         }
     }

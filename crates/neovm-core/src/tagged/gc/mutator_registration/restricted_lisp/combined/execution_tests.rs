@@ -740,3 +740,7 @@ fn p3sym_c6_mixed_admission_checks_every_program_before_preparing_or_registering
         drop(keeper);
     });
 }
+
+pub(super) fn minor_case(backing: PlainSymbolBacking) {
+    collection::minor_case(backing);
+}
