@@ -250,6 +250,8 @@ jobs:
       # runtime and test archives build, so the tui shards and the MELPA and
       # GUI parity jobs each restore one cached build instead of compiling
       # Emacs twenty-odd times in parallel on a cache miss.
+      - name: Configure fast APT mirror
+        uses: ./.github/actions/configure-apt-mirror
       - name: Install Linux system dependencies
         run: scripts/ci/setup-linux.sh oracle
 
@@ -451,6 +453,8 @@ jobs:
     steps:
       - *checkout
       - *prepare_workspace_tmp
+      - name: Configure fast APT mirror
+        uses: ./.github/actions/configure-apt-mirror
       - name: Install Linux ecosystem dependencies
         run: scripts/ci/setup-linux.sh ecosystem
       - name: Set up Rust tooling
@@ -573,6 +577,8 @@ jobs:
     steps:
       - *checkout
       - *prepare_workspace_tmp
+      - name: Configure fast APT mirror
+        uses: ./.github/actions/configure-apt-mirror
       - name: Install GNU Emacs oracle dependencies
         run: scripts/ci/setup-linux.sh oracle
       - name: Set up GNU Emacs oracle
@@ -625,6 +631,8 @@ jobs:
     steps:
       - *checkout
       - *prepare_workspace_tmp
+      - name: Configure fast APT mirror
+        uses: ./.github/actions/configure-apt-mirror
       - name: Install Linux ecosystem dependencies
         run: scripts/ci/setup-linux.sh ecosystem
       - name: Set up GNU Emacs oracle

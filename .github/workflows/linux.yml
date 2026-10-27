@@ -31,6 +31,9 @@ jobs:
       - name: Prepare workspace temp directory
         run: mkdir -p "$TMPDIR"
 
+      - name: Configure fast APT mirror
+        uses: ./.github/actions/configure-apt-mirror
+
       - name: Install system dependencies (apt)
         run: scripts/ci/setup-linux.sh ecosystem
 

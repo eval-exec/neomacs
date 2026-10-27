@@ -57,6 +57,9 @@ jobs:
             *) echo "unknown shard suite: $SHARD_SUITE" >&2; exit 2 ;;
           esac
 
+      - name: Configure fast APT mirror
+        uses: ./.github/actions/configure-apt-mirror
+
       - name: Install suite dependencies
         run: scripts/ci/setup-linux.sh "$LINUX_PROFILE"
 

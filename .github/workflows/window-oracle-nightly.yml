@@ -60,6 +60,9 @@ jobs:
       - name: Prepare workspace temp directory
         run: mkdir -p "$TMPDIR/nextest"
 
+      - name: Configure fast APT mirror
+        uses: ./.github/actions/configure-apt-mirror
+
       - name: Install Linux system dependencies
         run: scripts/ci/setup-linux.sh oracle
 

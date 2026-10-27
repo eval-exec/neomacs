@@ -56,6 +56,9 @@ jobs:
       RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure fast APT mirror
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/configure-apt-mirror
       - name: Install Linux build and headless display dependencies
         if: runner.os == 'Linux'
         run: scripts/ci/setup-linux.sh ecosystem
