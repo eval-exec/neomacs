@@ -703,6 +703,8 @@ jobs:
         uses: ./.github/actions/configure-apt-mirror
       - name: Install Linux ecosystem dependencies
         run: scripts/ci/setup-linux.sh ecosystem
+      - name: Set up the Weston test compositor
+        run: bash scripts/ci/setup-weston.sh
       - name: Set up GNU Emacs oracle
         uses: ./.github/actions/setup-gnu-emacs
       - name: Set up Rust tooling

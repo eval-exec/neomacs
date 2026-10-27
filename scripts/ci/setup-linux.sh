@@ -109,9 +109,15 @@ case "$profile" in
             sway
             wtype
             grim
+            # native_frame_focus::ime drives a real fcitx5 session through the
+            # XIM entry point; pinyin and the unicode addon are the two inputs
+            # it sends, and fcitx5-remote is how the test switches between them.
+            fcitx5
+            fcitx5-chinese-addons
+            fcitx5-modules
             "${font_packages[@]}"
         )
-        required_commands=(gpg rg Xvfb xauth xdpyinfo xprop xwininfo xkbcomp xdotool wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim)
+        required_commands=(gpg rg Xvfb xauth xdpyinfo xprop xwininfo xkbcomp xdotool wmctrl kwin_x11 dbus-run-session fc-match import weston sway wtype grim fcitx5)
         requires_libfaketime=true
         install_nerd_fonts=true
         ;;
