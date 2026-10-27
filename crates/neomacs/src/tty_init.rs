@@ -12,7 +12,9 @@ use super::terminal_capabilities::StringCapability;
 use super::terminal_capabilities::TerminalCapabilityDatabase;
 use super::{FrontendKind, StartupOptions};
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
-use neomacs_display_runtime::tty_input::{TerminalCellSize, TerminalSizeQuery};
+use neomacs_display_runtime::tty_input::{
+    TerminalCellSize, TerminalColumns, TerminalRows, TerminalSizeQuery,
+};
 use neovm_core::emacs_core::terminal::pure::TerminalRuntimeConfig;
 
 /// Return a TTY terminal runtime configuration for interactive sessions.
@@ -257,29 +259,34 @@ fn parse_positive_u32(value: Option<String>) -> Option<u32> {
 fn terminal_size_from_env_values(
     columns: Option<String>,
     lines: Option<String>,
-) -> Option<(u32, u32)> {
+) -> Option<TerminalCellSize> {
     let cols = parse_positive_u32(columns)?;
     let rows = parse_positive_u32(lines)?;
-    Some((cols, rows))
+    Some(TerminalCellSize::new(
+        TerminalColumns::from(cols),
+        TerminalRows::from(rows),
+    ))
 }
 
-fn terminal_size_from_env() -> Option<(u32, u32)> {
+fn terminal_size_from_env() -> Option<TerminalCellSize> {
     terminal_size_from_env_values(std::env::var("COLUMNS").ok(), std::env::var("LINES").ok())
 }
 
 /// Query the terminal size, retaining the legacy tuple boundary for callers.
 /// Falls back to positive COLUMNS/LINES values after native/platform failure.
 pub fn query_terminal_size_cells() -> Option<(u32, u32)> {
-    query_terminal_size_cells_with(&TerminalSizeQuery::new()).map(Into::into)
+    query_terminal_size_cells_with(&TerminalSizeQuery::new()).map(legacy_terminal_columns_rows)
+}
+
+fn legacy_terminal_columns_rows(size: TerminalCellSize) -> (u32, u32) {
+    (u32::from(size.columns()), u32::from(size.rows()))
 }
 
 /// Query an existing resource without caching the returned dimensions.
 pub(crate) fn query_terminal_size_cells_with(
     query: &TerminalSizeQuery,
 ) -> Option<TerminalCellSize> {
-    terminal_size_or_fallback(query.query(), || {
-        terminal_size_from_env().map(TerminalCellSize::from)
-    })
+    terminal_size_or_fallback(query.query(), terminal_size_from_env)
 }
 
 fn terminal_size_or_fallback(

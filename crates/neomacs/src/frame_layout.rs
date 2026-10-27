@@ -15,7 +15,9 @@ use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
 use neomacs_display_runtime::backend::tty::rif::TtyRif;
 use neomacs_display_runtime::redisplay::RedisplayRuntime;
 pub use neomacs_display_runtime::redisplay::{FrameLayoutPurpose, PreparedFrameDisplay};
-use neomacs_display_runtime::tty_input::{TerminalCellSize, TerminalSizeQuery};
+use neomacs_display_runtime::tty_input::{
+    TerminalCellSize, TerminalColumns, TerminalRows, TerminalSizeQuery,
+};
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::window::{FrameId, RenderFrameScope, RenderFrameVisibility};
 use std::sync::Arc;
@@ -446,8 +448,10 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
     // This callback and TtyRif own the same lifetime. Retain the terminal
     // resource, while every redisplay still samples its current dimensions.
     let terminal_size_query = TerminalSizeQuery::new();
-    let size = tty_init::query_terminal_size_cells_with(&terminal_size_query)
-        .unwrap_or_else(|| TerminalCellSize::from((80_u32, 25_u32)));
+    let size =
+        tty_init::query_terminal_size_cells_with(&terminal_size_query).unwrap_or_else(|| {
+            TerminalCellSize::new(TerminalColumns::from(80_u32), TerminalRows::from(25_u32))
+        });
     let mut tty_rif = TtyRif::new_with_caps(
         u32::from(size.columns()) as usize,
         u32::from(size.rows()) as usize,

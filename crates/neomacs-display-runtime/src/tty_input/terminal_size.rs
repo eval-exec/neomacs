@@ -27,12 +27,28 @@ pub struct TerminalCellSize {
 }
 
 impl TerminalCellSize {
+    pub const fn new(columns: TerminalColumns, rows: TerminalRows) -> Self {
+        Self { columns, rows }
+    }
+
     pub fn columns(self) -> TerminalColumns {
         self.columns
     }
 
     pub fn rows(self) -> TerminalRows {
         self.rows
+    }
+}
+
+impl From<u32> for TerminalColumns {
+    fn from(columns: u32) -> Self {
+        Self(columns)
+    }
+}
+
+impl From<u32> for TerminalRows {
+    fn from(rows: u32) -> Self {
+        Self(rows)
     }
 }
 
@@ -48,33 +64,13 @@ impl From<TerminalRows> for u32 {
     }
 }
 
-// Existing legacy APIs expose (columns, rows); retain the full u32 range of
-// COLUMNS/LINES rather than narrowing it to the native winsize field width.
-impl From<(u32, u32)> for TerminalCellSize {
-    fn from((columns, rows): (u32, u32)) -> Self {
-        Self {
-            columns: TerminalColumns(columns),
-            rows: TerminalRows(rows),
-        }
-    }
-}
-
-impl From<TerminalCellSize> for (u32, u32) {
-    fn from(size: TerminalCellSize) -> Self {
-        (u32::from(size.columns), u32::from(size.rows))
-    }
-}
-
-impl From<(u16, u16)> for TerminalCellSize {
-    fn from((columns, rows): (u16, u16)) -> Self {
-        Self::from((u32::from(columns), u32::from(rows)))
-    }
-}
-
 #[cfg(unix)]
 impl From<libc::winsize> for TerminalCellSize {
     fn from(size: libc::winsize) -> Self {
-        Self::from((size.ws_col, size.ws_row))
+        Self::new(
+            TerminalColumns(u32::from(size.ws_col)),
+            TerminalRows(u32::from(size.ws_row)),
+        )
     }
 }
 
@@ -114,7 +110,7 @@ impl TerminalSizeQuery {
     }
 
     pub fn query(&self) -> io::Result<TerminalCellSize> {
-        self.query_with_fallback(|| crossterm::terminal::size().map(TerminalCellSize::from))
+        self.query_with_fallback(legacy_crossterm_terminal_size)
     }
 
     fn query_with_fallback(
@@ -132,6 +128,16 @@ impl TerminalSizeQuery {
             Self::LegacyFallback => fallback(),
         }
     }
+}
+
+// The external callback exposes a tuple. Name and decode that legacy boundary
+// here; callers inside the workspace only exchange dimensions with their units.
+fn legacy_crossterm_terminal_size() -> io::Result<TerminalCellSize> {
+    let (columns, rows) = crossterm::terminal::size()?;
+    Ok(TerminalCellSize::new(
+        TerminalColumns(u32::from(columns)),
+        TerminalRows(u32::from(rows)),
+    ))
 }
 
 impl Default for TerminalSizeQuery {
@@ -161,6 +167,7 @@ static_assertions::assert_eq_size!(TerminalColumns, u32);
 static_assertions::assert_eq_size!(TerminalRows, u32);
 static_assertions::assert_eq_size!(TerminalCellSize, (u32, u32));
 static_assertions::assert_impl_all!(TerminalSizeQuery: Send, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(TerminalCellSize: From<(u32, u32)>, From<(u16, u16)>);
 
 #[cfg(all(test, unix))]
 #[path = "tests/terminal_size_test.rs"]
