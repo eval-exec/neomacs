@@ -134,7 +134,7 @@ impl RenderApp {
         let surface_usage = surface_readback::surface_usage_for_debug_readback(
             caps.usages,
             &mut self.debug_first_frame_readback_pending,
-            self.debug_surface_readback_frames_remaining > 0,
+            &mut self.debug_surface_readback_frames_remaining,
         );
 
         {
