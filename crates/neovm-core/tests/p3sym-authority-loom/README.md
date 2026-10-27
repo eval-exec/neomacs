@@ -1,5 +1,17 @@
 # Proof 3 symbol authority models — C1
 
+## C6 coherent request snapshot extension
+
+`combined/request_snapshot.rs` adds two unscripted first/next-request polls
+and one forced old-order witness. Request writers hold the registry gate
+while publishing phase and Release word. Observers acquire the same gate
+before their Acquire load. A refused try-lock is a legal Busy observation.
+Sampling before the gate can mix the old word with a new phase and falsely
+refuse publication; the negative witness is `C6 request poll mixed epochs
+across the registry gate`. The scripted negative joins both actors before
+its assertion and supplies no evidence of unscripted scheduling coverage.
+Total:81cases,27negative witnesses (13exhaustive,68bounded at each bound).
+
 ## C6 preparation extension
 
 `tests/combined.rs` contains 16 specification cases (nine positive, seven

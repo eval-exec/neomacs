@@ -8,8 +8,11 @@ impl<'era> Mutator<'era> {
     /// Acquire the real request, never a relaxed attention hint. No wait here.
     pub fn requested_epoch(&self) -> Result<Option<NonZeroU64>, RendezvousError> {
         self.check_thread()?;
-        let request = self.registry.request_epoch.load(Ordering::Acquire);
         let gate = self.registry.lock()?;
+        // request() publishes the phase and word under this same gate. Read
+        // the word only after admission: a pre-gate sample could precede a
+        // new request and falsely refuse its coherent Stopping phase.
+        let request = self.registry.request_epoch.load(Ordering::Acquire);
         let e = entry_state(&self.entry)?;
         match gate.rendezvous.phase {
             Phase::Stopping(epoch) if gate.rendezvous.frozen.contains(&self.entry.key) => {

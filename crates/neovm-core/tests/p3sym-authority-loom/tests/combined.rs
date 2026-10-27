@@ -3,6 +3,8 @@
 //! evidence that the engine ran a minor. Scripted transfer phases isolate root
 //! obligations; the separate ACK model explores publication without that script.
 mod model;
+#[path = "combined/request_snapshot.rs"]
+mod request_snapshot;
 mod support;
 
 use loom::sync::Arc;
